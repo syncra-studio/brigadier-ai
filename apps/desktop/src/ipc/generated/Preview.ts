@@ -2,12 +2,14 @@
 import type { ConversationId } from "./ConversationId";
 import type { PreviewKind } from "./PreviewKind";
 import type { PreviewState } from "./PreviewState";
+import type { TaskId } from "./TaskId";
 
 /**
- * A process the thread started to show its work (a dev server, the app), owned by the daemon
- * and kept across the thread's turns, hibernation, rebirth and fallback (THREAD-PLAN.md Q6).
- * It runs in the session's workspace and stops with the session, its merge, a workspace
- * change, `stop_preview`, the user's Stop and Brigadier's quit.
+ * A process the thread or a worker started to show its work (a dev server, the app), owned by
+ * the daemon and kept across the thread's turns, hibernation, rebirth and fallback
+ * (THREAD-PLAN.md Q6). The thread's runs in the session's workspace and stops with the
+ * session, its merge, a workspace change, `stop_preview`, the user's Stop and Brigadier's
+ * quit; a worker's runs in its own folder and stops with that folder too.
  */
 export type Preview = { 
 /**
@@ -23,7 +25,8 @@ name: string, command: string,
  */
 workdir: string, 
 /**
- * The workspace it belongs to: it stops when the thread's workspace changes.
+ * The workspace it belongs to: a thread's preview stops when the thread's workspace
+ * changes; a worker's runs in the worker's worktree (or scratch folder).
  */
 workspace: string, 
 /**
@@ -38,4 +41,16 @@ log: string | null,
  * A local HTTP URL printed by this preview; never for an app preview, whose window is
  * what the user looks at.
  */
-url?: string, kind: PreviewKind, };
+url?: string, kind: PreviewKind, 
+/**
+ * The worker that started it, in its own worktree or scratch folder; none for the
+ * thread's. A worker's preview stops with its task's folder, not with the thread's
+ * workspace.
+ */
+taskId?: TaskId, 
+/**
+ * While it is starting, its log shows a build under way (compiling, bundling) that
+ * hasn't finished: a dev app built and launched in one command reads Building, then
+ * Starting.
+ */
+building: boolean, };

@@ -555,10 +555,11 @@ pub enum OutputSource {
 
 // ----- previews -----------------------------------------------------------------------------
 
-/// A process the thread started to show its work (a dev server, the app), owned by the daemon
-/// and kept across the thread's turns, hibernation, rebirth and fallback (THREAD-PLAN.md Q6).
-/// It runs in the session's workspace and stops with the session, its merge, a workspace
-/// change, `stop_preview`, the user's Stop and Brigadier's quit.
+/// A process the thread or a worker started to show its work (a dev server, the app), owned by
+/// the daemon and kept across the thread's turns, hibernation, rebirth and fallback
+/// (THREAD-PLAN.md Q6). The thread's runs in the session's workspace and stops with the
+/// session, its merge, a workspace change, `stop_preview`, the user's Stop and Brigadier's
+/// quit; a worker's runs in its own folder and stops with that folder too.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Preview {
@@ -570,7 +571,8 @@ pub struct Preview {
     pub command: String,
     /// The folder it runs in, inside `workspace`.
     pub workdir: String,
-    /// The workspace it belongs to: it stops when the thread's workspace changes.
+    /// The workspace it belongs to: a thread's preview stops when the thread's workspace
+    /// changes; a worker's runs in the worker's worktree (or scratch folder).
     pub workspace: String,
     /// Its process, which leads its own process group.
     #[serde(default)]
@@ -589,6 +591,17 @@ pub struct Preview {
     pub url: Option<String>,
     #[serde(default)]
     pub kind: PreviewKind,
+    /// The worker that started it, in its own worktree or scratch folder; none for the
+    /// thread's. A worker's preview stops with its task's folder, not with the thread's
+    /// workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub task_id: Option<TaskId>,
+    /// While it is starting, its log shows a build under way (compiling, bundling) that
+    /// hasn't finished: a dev app built and launched in one command reads Building, then
+    /// Starting.
+    #[serde(default)]
+    pub building: bool,
 }
 
 /// What a preview shows the user, which decides when it is ready and whether it has a URL.

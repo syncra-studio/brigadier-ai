@@ -1480,6 +1480,9 @@ pub enum WorkerCall {
     CodeRefs(CodeRefs),
     ProjectMap,
     RunCheck(RunCheck),
+    StartPreview(StartPreview),
+    StopPreview(StopPreview),
+    PreviewLog(PreviewLog),
 }
 
 impl WorkerCall {
@@ -1495,6 +1498,9 @@ impl WorkerCall {
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
             Self::RunCheck(_) => "run_check",
+            Self::StartPreview(_) => "start_preview",
+            Self::StopPreview(_) => "stop_preview",
+            Self::PreviewLog(_) => "preview_log",
         }
     }
 }

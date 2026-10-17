@@ -1447,3 +1447,250 @@ async fn user_stops_remove_previews_but_keep_natural_exits() {
     }
     flow.stop().await;
 }
+
+/// The preview `id` a start reply names (`preview-N "name" …`).
+fn started_id(reply: &str) -> String {
+    let at = reply.find("preview-").unwrap_or_else(|| panic!("{reply}"));
+    let digits: String = reply[at + "preview-".len()..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    format!("preview-{digits}")
+}
+
+/// A worker's previews (issue #203): each is recorded with its task, runs past the worker's
+/// report and the thread's next turn, and ends with its task's folder, while another
+/// worker's keep running. A worker stops its own and reaches no other's. A build and its app
+/// launched as one command is an app preview that reads Building while the build runs.
+#[tokio::test]
+async fn a_workers_preview_carries_its_task_and_ends_with_its_folder() {
+    let tmp = scratch("workers");
+    let pids = tmp.join("child.pid");
+    let replies: Replies = Arc::default();
+    let log = replies.clone();
+    let child = pids.clone();
+    let flow = Flow::start(
+        "preview-workers",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            let child = child.clone();
+            async move {
+                let call = |tool: &'static str, args: serde_json::Value| {
+                    let turn = &turn;
+                    let log = log.clone();
+                    async move {
+                        let reply = turn.call(tool, args).await;
+                        assert!(!reply.is_error, "{tool}: {}", reply.text);
+                        log.lock()
+                            .unwrap()
+                            .push((tool.to_owned(), reply.text.clone()));
+                        reply.text
+                    }
+                };
+                if turn.is_orchestrator() {
+                    if turn.earlier == 0 {
+                        for (title, spec) in [("Show the site", "site"), ("Show the app", "app")] {
+                            call(
+                                "delegate_task",
+                                json!({"effort": "high", "title": title, "kind": "implement",
+                                       "spec": spec, "provider": "claude"}),
+                            )
+                            .await;
+                        }
+                    } else if turn.input.contains("Land task-1.") {
+                        call("land_phase", json!({"task": "task-1"})).await;
+                    }
+                    return Reply::text("[quiet]");
+                }
+                let number = turn.task_number().unwrap();
+                if number == 1 {
+                    call(
+                        "start_preview",
+                        json!({"command": server(&child), "name": "site"}),
+                    )
+                    .await;
+                } else {
+                    let app = turn.cwd.join("target/Demo.app/Contents/MacOS/demo");
+                    std::fs::create_dir_all(app.parent().unwrap()).unwrap();
+                    std::fs::write(&app, "#!/bin/sh\nexec sleep 600\n").unwrap();
+                    std::fs::set_permissions(
+                        &app,
+                        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+                    )
+                    .unwrap();
+                    let command = format!(
+                        "echo '   Compiling demo v0.1.0' && sleep 1 && \"{}\"",
+                        app.display()
+                    );
+                    call(
+                        "start_preview",
+                        json!({"command": command, "name": "dev app"}),
+                    )
+                    .await;
+                    let extra = call(
+                        "start_preview",
+                        json!({"command": "echo listening on 8124; sleep 600", "name": "extra"}),
+                    )
+                    .await;
+                    call("stop_preview", json!({"id": started_id(&extra)})).await;
+                }
+                turn.write(&format!("task-{number}.txt"), "shown\n");
+                turn.git(&["add", &format!("task-{number}.txt")]);
+                turn.git(&["commit", "-qm", "Show it"]);
+                call(
+                    "submit_report",
+                    json!({"summary": "Shown.", "changes": [format!("task-{number}.txt")]}),
+                )
+                .await;
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Show the site and the app.").await;
+    let board = flow
+        .until("both workers' previews and reports", |board| {
+            running(board).len() == 2
+                && std::fs::read_to_string(&pids).is_ok_and(|pid| !pid.trim().is_empty())
+                && replies
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(tool, _)| tool == "submit_report")
+                    .count()
+                    == 2
+        })
+        .await;
+    let (one, two) = (
+        Flow::task(&board, 1).id.clone(),
+        Flow::task(&board, 2).id.clone(),
+    );
+    let of = |board: &Board, task: &crate::model::TaskId| -> Preview {
+        board
+            .sorted_previews()
+            .into_iter()
+            .find(|preview| preview.task_id.as_ref() == Some(task))
+            .unwrap()
+    };
+    let site = of(&board, &one);
+    let app = of(&board, &two);
+    assert_eq!(site.name, "site");
+    assert!(site.workspace.contains("task-1"), "{}", site.workspace);
+    assert_eq!(app.kind, crate::work::PreviewKind::App);
+    // The worker's own Stop removed its extra preview; it reached none of the other's.
+    assert_eq!(board.previews.len(), 2, "{:?}", board.previews.keys());
+    let err = flow
+        .manager
+        .stop_preview_tool(&flow.conversation, Some(&site.id), Some(&two))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("not one of your previews"),
+        "{err}"
+    );
+    if crate::manager::preview_ready::SEES_WINDOWS {
+        // Still building (its log's last line compiles), and no window: it reads Building.
+        flow.until("the app to read building", |board| {
+            of(board, &two).building && of(board, &two).state == PreviewState::Starting
+        })
+        .await;
+    }
+    let child = child_pid(&pids);
+
+    // The thread's next turn checks its own workspace: a worker's preview isn't the thread's.
+    flow.say("Hello.").await;
+    flow.settled().await;
+    assert_eq!(running(&flow.board().await).len(), 2);
+
+    // Landing task-1 removes its worktree: its preview ends, and task-2's runs on.
+    flow.say("Land task-1.").await;
+    let board = flow
+        .until("task-1's preview to end", |board| {
+            running(board)
+                .iter()
+                .all(|preview| preview.task_id.as_ref() != Some(&one))
+        })
+        .await;
+    gone(&flow, child).await;
+    assert_eq!(running(&board).len(), 1);
+    assert_eq!(of(&board, &two).id, app.id);
+    flow.stop().await;
+}
+
+/// A task's folder going while its worker starts a preview: the start is refused, so no
+/// preview outlives the folder it runs in.
+#[tokio::test]
+async fn a_start_racing_its_tasks_end_is_refused() {
+    let go = Arc::new(tokio::sync::Notify::new());
+    let replies: Replies = Arc::default();
+    let (log, wait) = (replies.clone(), go.clone());
+    let flow = Flow::start(
+        "preview-worker-race",
+        Options::default(),
+        script(move |turn| {
+            let (log, wait) = (log.clone(), wait.clone());
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.earlier == 0 {
+                        let reply = turn
+                            .call(
+                                "delegate_task",
+                                json!({"effort": "high", "title": "Show it", "kind": "scout",
+                                       "spec": "Show it."}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                    }
+                    return Reply::text("[quiet]");
+                }
+                wait.notified().await;
+                let reply = turn
+                    .call(
+                        "start_preview",
+                        json!({"command": "sleep 600", "name": "late"}),
+                    )
+                    .await;
+                log.lock()
+                    .unwrap()
+                    .push((format!("{}", reply.is_error), reply.text));
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Show it.").await;
+    let board = flow
+        .until("the worker", |board| !board.tasks.is_empty())
+        .await;
+    let task = Flow::task(&board, 1).id.clone();
+    flow.manager
+        .stop_task_previews(&flow.conversation, &task)
+        .await;
+    go.notify_one();
+    flow.until("the refused start", |_| !replies.lock().unwrap().is_empty())
+        .await;
+    let (error, text) = replies.lock().unwrap()[0].clone();
+    assert_eq!(error, "true", "{text}");
+    assert!(text.contains("your task has ended"), "{text}");
+    assert!(flow.board().await.previews.is_empty());
+    flow.stop().await;
+}
+
+/// A preview recorded before workers had previews (no `taskId`, no `building`) still loads.
+#[test]
+fn a_preview_recorded_before_worker_previews_loads() {
+    let preview: Preview = serde_json::from_value(json!({
+        "id": "preview-1",
+        "conversationId": "conv-1",
+        "name": "site",
+        "command": "pnpm dev",
+        "workdir": "",
+        "workspace": "/work/repo",
+        "state": { "type": "running" },
+        "startedAtMs": 0,
+    }))
+    .unwrap();
+    assert_eq!(preview.task_id, None);
+    assert!(!preview.building);
+}

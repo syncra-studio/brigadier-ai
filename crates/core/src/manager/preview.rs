@@ -45,7 +45,7 @@ use brigadier_providers::{Access, Artifact, ProviderKind};
 use tokio_util::sync::CancellationToken;
 
 use super::{OUTPUT_MAX_BYTES, SessionManager, blocking};
-use crate::model::{ConversationId, DomainEvent, Lifecycle};
+use crate::model::{ConversationId, DomainEvent, Lifecycle, TaskId};
 use crate::tools::StartPreview;
 use crate::work::{OutputSource, Preview, PreviewKind, PreviewState};
 use crate::{Error, Result, now_ms};
@@ -61,6 +61,8 @@ const STOP_POLL: Duration = Duration::from_millis(20);
 const START_WATCH: Duration = Duration::from_millis(1500);
 /// How often a starting preview is checked for readiness.
 const READY_POLL: Duration = Duration::from_secs(1);
+/// How much of a starting preview's log end is read for a build under way.
+const BUILD_SCAN: u64 = 16 * 1024;
 /// Lines `preview_log` shows by default, and at most.
 const TAIL_DEFAULT: u32 = 40;
 const TAIL_MAX: u32 = 400;
@@ -76,10 +78,25 @@ pub(crate) fn preview_owner(id: &ConversationId) -> String {
     format!("preview:{id}")
 }
 
+/// Who starts a preview, and where: the thread in the session's workspace, or a worker in its
+/// own worktree (or scratch folder), each with its own access.
+struct Starter {
+    access: Access,
+    /// The folder it belongs to; `workdir` must be inside it (or inside `scratch` for a
+    /// worker).
+    workspace: PathBuf,
+    /// The starter's scratch folder, for its session environment.
+    scratch: PathBuf,
+    /// The worker's task; none for the thread.
+    task: Option<TaskId>,
+}
+
 /// A running preview.
 pub(crate) struct LivePreview {
     conversation: ConversationId,
     id: String,
+    /// The worker that started it; none for the thread.
+    task: Option<TaskId>,
     pid: u32,
     kind: PreviewKind,
     workspace: PathBuf,
@@ -139,6 +156,9 @@ pub(crate) struct Previews {
     /// How many times each conversation's previews were all stopped: a start under way when
     /// that happened is refused ([`SessionManager::stop_previews`]).
     stops: Mutex<HashMap<ConversationId, u64>>,
+    /// Tasks whose folder is going or gone: their worker's starts are refused
+    /// ([`SessionManager::stop_task_previews`]).
+    ended_tasks: Mutex<std::collections::HashSet<TaskId>>,
 }
 
 impl Previews {
@@ -169,6 +189,11 @@ impl Previews {
         stops.get(id).copied().unwrap_or_default()
     }
 
+    fn task_ended(&self, task: &TaskId) -> bool {
+        let ended = self.ended_tasks.lock().unwrap_or_else(|p| p.into_inner());
+        ended.contains(task)
+    }
+
     fn count_stop(&self, id: &ConversationId) {
         let mut stops = self.stops.lock().unwrap_or_else(|p| p.into_inner());
         *stops.entry(id.clone()).or_default() += 1;
@@ -183,21 +208,8 @@ impl SessionManager {
         id: &ConversationId,
         args: StartPreview,
     ) -> Result<String> {
-        if cfg!(windows) {
-            return Err(Error::Invalid(
-                "previews run on macOS and Linux only".into(),
-            ));
-        }
-        self.admit()?;
+        self.check_preview_start(id)?;
         let stops = self.previews.stops_of(id);
-        let command = args.command.trim().to_owned();
-        if command.is_empty() {
-            return Err(Error::Invalid("`command` is empty".into()));
-        }
-        let conversation = self.core.conversation(id)?;
-        if conversation.lifecycle == Lifecycle::Archived || conversation.deleting {
-            return Err(Error::Invalid("this session is closed".into()));
-        }
         let cli = self
             .conv(id)?
             .live_cli()
@@ -218,7 +230,92 @@ impl SessionManager {
                     .into(),
             ));
         }
-        let workdir = preview_workdir(args.workdir.as_deref(), &workspace)?;
+        let starter = Starter {
+            access: launch.access.clone(),
+            workspace,
+            scratch: self.owned_dir("orch", &id.0),
+            task: None,
+        };
+        self.start_preview_as(id, args, starter, stops).await
+    }
+
+    /// A worker's `start_preview`: starts `args.command` in its worktree (or scratch folder),
+    /// with its access. It outlives the worker's report, and stops when its task's folder goes.
+    pub(crate) async fn start_worker_preview(
+        &self,
+        id: &ConversationId,
+        task_id: &TaskId,
+        args: StartPreview,
+    ) -> Result<String> {
+        self.check_preview_start(id)?;
+        let stops = self.previews.stops_of(id);
+        let access = match self.existing_task_live(task_id) {
+            Some(live) => live.tool_access().await,
+            None => None,
+        }
+        .ok_or_else(|| Error::Invalid("the task's worker isn't running".into()))?
+        .access;
+        let workspace = self
+            .task_by_id(id, task_id)
+            .await?
+            .workspace
+            .ok_or_else(|| Error::Invalid("the task has no folder yet".into()))?;
+        let scratch = PathBuf::from(&workspace.scratch);
+        let starter = Starter {
+            access,
+            workspace: workspace
+                .worktree
+                .map_or_else(|| scratch.clone(), PathBuf::from),
+            scratch,
+            task: Some(task_id.clone()),
+        };
+        self.start_preview_as(id, args, starter, stops).await
+    }
+
+    /// Whether a preview may start in conversation `id` now.
+    fn check_preview_start(&self, id: &ConversationId) -> Result<()> {
+        if cfg!(windows) {
+            return Err(Error::Invalid(
+                "previews run on macOS and Linux only".into(),
+            ));
+        }
+        self.admit()?;
+        let conversation = self.core.conversation(id)?;
+        if conversation.lifecycle == Lifecycle::Archived || conversation.deleting {
+            return Err(Error::Invalid("this session is closed".into()));
+        }
+        Ok(())
+    }
+
+    /// Starts `args.command` for `starter`; `stops` is how many times the conversation's
+    /// previews were all stopped when the call came (a start under way then is refused).
+    async fn start_preview_as(
+        &self,
+        id: &ConversationId,
+        args: StartPreview,
+        starter: Starter,
+        stops: u64,
+    ) -> Result<String> {
+        let Starter {
+            access,
+            workspace,
+            scratch,
+            task,
+        } = starter;
+        let command = args.command.trim().to_owned();
+        if command.is_empty() {
+            return Err(Error::Invalid("`command` is empty".into()));
+        }
+        // A worker may also run it in its scratch folder.
+        let workdir =
+            preview_workdir(args.workdir.as_deref(), &workspace).or_else(|err| {
+                match args.workdir.as_deref() {
+                    Some(dir) if task.is_some() && scratch != workspace => {
+                        preview_workdir(Some(dir), &scratch).map_err(|_| err)
+                    }
+                    _ => Err(err),
+                }
+            })?;
         let kind = args
             .kind
             .unwrap_or_else(|| super::preview_ready::infer_kind(&command));
@@ -232,7 +329,6 @@ impl SessionManager {
             .collect::<Vec<_>>();
         check_env(&env, &workdir, &protected)?;
         check_own_repo(&workspace, &env, &command)?;
-        let scratch = self.owned_dir("orch", &id.0);
         let name = args
             .name
             .map(|name| name.trim().to_owned())
@@ -244,6 +340,14 @@ impl SessionManager {
             return Err(Error::Invalid(
                 "the session's previews were stopped while this one was starting, so it was \
                  not started"
+                    .into(),
+            ));
+        }
+        if let Some(task) = &task
+            && self.previews.task_ended(task)
+        {
+            return Err(Error::Invalid(
+                "your task has ended and its folder is going, so the preview was not started"
                     .into(),
             ));
         }
@@ -261,7 +365,7 @@ impl SessionManager {
             )
             .await?;
         #[cfg(target_os = "macos")]
-        let mut data = if launch.access != Access::Full
+        let mut data = if access != Access::Full
             && let Some(value) = env.get(brigadier_sandbox::DATA_DIR_ENV)
         {
             let data = create_preview_data(
@@ -284,7 +388,7 @@ impl SessionManager {
             let mut env = env;
             let mut roots = Vec::new();
             let mut preview_temp = None;
-            if launch.access != Access::Full {
+            if access != Access::Full {
                 let temp = self.preview_temp(&owner).await?;
                 for name in ["TMPDIR", "MAC_CHROMIUM_TMPDIR"] {
                     env.entry(name.into())
@@ -300,7 +404,7 @@ impl SessionManager {
         #[cfg(not(target_os = "macos"))]
         let (writable_roots, preview_temp): (Vec<PathBuf>, Option<PathBuf>) = (Vec::new(), None);
         let mut spec = self.preview_spec(
-            &launch.access,
+            &access,
             &workdir,
             &script(&command, &env),
             &writable_roots,
@@ -354,10 +458,13 @@ impl SessionManager {
             log: None,
             url: None,
             kind,
+            task_id: task.clone(),
+            building: false,
         };
         let live = Arc::new(LivePreview {
             conversation: id.clone(),
             id: preview_id.clone(),
+            task: task.clone(),
             pid,
             kind,
             workspace,
@@ -450,11 +557,19 @@ impl SessionManager {
             }
             PreviewKind::Web => "",
         };
-        Ok(format!(
-            "{preview_id} \"{name}\" {state} (pid {pid}, its own process group) in {}.{app} It \
-             keeps running across your turns until you call stop_preview, and stops when the \
+        let lifetime = if task.is_some() {
+            "It keeps running after you report, until you call stop_preview, and stops when the \
+             user presses Stop, when the session closes, when Brigadier quits and when your task \
+             ends and its folder is removed: a preview you show the user lasts only while your \
+             task is alive"
+        } else {
+            "It keeps running across your turns until you call stop_preview, and stops when the \
              session is merged, archived or deleted, when your workspace changes, when the user \
-             presses Stop and when Brigadier quits. Its output so far:\n{output}",
+             presses Stop and when Brigadier quits"
+        };
+        Ok(format!(
+            "{preview_id} \"{name}\" {state} (pid {pid}, its own process group) in {}.{app} \
+             {lifetime}. Its output so far:\n{output}",
             workdir.display()
         ))
     }
@@ -635,6 +750,11 @@ impl SessionManager {
                 Some(PreviewState::Paused) => continue,
                 _ => return,
             }
+            let path = live.log.clone();
+            let building = blocking(move || Ok(log_building(&read_log_end(&path, BUILD_SCAN))))
+                .await
+                .unwrap_or(false);
+            self.mark_building(&live, building).await;
             // A probe under way (`lsof`, a request) is dropped, and ended, with the preview.
             let url = tokio::select! {
                 () = live.ended.cancelled() => return,
@@ -686,6 +806,24 @@ impl SessionManager {
         None
     }
 
+    /// Records whether a starting preview's log shows a build under way, when that changed.
+    async fn mark_building(&self, live: &LivePreview, building: bool) {
+        let _updating = live.updating.lock().await;
+        let preview = match self.core.board(&live.conversation).await {
+            Ok(board) => board.previews.get(&live.id).cloned(),
+            Err(_) => None,
+        };
+        let Some(mut preview) = preview.filter(|preview| {
+            preview.state == PreviewState::Starting && preview.building != building
+        }) else {
+            return;
+        };
+        preview.building = building;
+        if let Err(err) = self.record_preview(preview).await {
+            tracing::warn!(conversation = %live.conversation, preview = %live.id, error = %err, "could not record a preview's build");
+        }
+    }
+
     /// Records a starting preview as running (with the URL it printed, for a web preview), and
     /// only then says it is ready, so `start_preview` reads the recorded state. False when it
     /// couldn't be recorded (it is checked again).
@@ -703,6 +841,7 @@ impl SessionManager {
         };
         tracing::info!(conversation = %live.conversation, preview = %live.id, "preview ready");
         preview.state = PreviewState::Running;
+        preview.building = false;
         if live.kind == PreviewKind::Web {
             preview.url = preview.url.or(url);
         }
@@ -744,13 +883,20 @@ impl SessionManager {
                 _ => None,
             };
             // An end on its own after the start answered is a failure the thread reports in
-            // the same turn (SESSION-FIXES-PLAN.md Q9): it hears it at once.
+            // the same turn (SESSION-FIXES-PLAN.md Q9): it hears it at once. A worker's
+            // preview is the worker's to watch: the thread only hears of it.
             let answered = {
                 let mut start = live.start_told.lock().unwrap_or_else(|p| p.into_inner());
                 start.ending = true;
                 start.answered
             };
-            if let (PreviewState::Exited { status, .. }, true) = (&state, answered) {
+            let told = match (&live.task, told) {
+                (Some(_), Some(told)) => Some(format!("(a worker's preview) {told}")),
+                (_, told) => told,
+            };
+            if let (PreviewState::Exited { status, .. }, true, None) =
+                (&state, answered, &live.task)
+            {
                 let path = live.log.clone();
                 let last = blocking(move || Ok(read_log(&path).0))
                     .await
@@ -784,6 +930,7 @@ impl SessionManager {
             }
             preview.url = preview.url.or(url);
             preview.state = state;
+            preview.building = false;
             preview.ended_at_ms = Some(now_ms());
             if log.is_some() {
                 preview.log = log;
@@ -871,6 +1018,30 @@ impl SessionManager {
             .record_conversation(&id, vec![DomainEvent::PreviewUpdated { preview }])
             .await
             .map(drop)
+    }
+
+    /// A worker's `preview_log`: [`Self::preview_log`] of one of its own previews (its latest
+    /// by default).
+    pub(crate) async fn worker_preview_log(
+        &self,
+        id: &ConversationId,
+        task: &TaskId,
+        preview: Option<&str>,
+        tail_lines: Option<u32>,
+    ) -> Result<String> {
+        let board = self.core.board(id).await?;
+        let found = match preview.map(str::trim).filter(|wanted| !wanted.is_empty()) {
+            Some(wanted) => own_preview(&board, task, wanted)?.id.clone(),
+            None => match board
+                .sorted_previews()
+                .into_iter()
+                .rfind(|preview| preview.task_id.as_ref() == Some(task))
+            {
+                Some(latest) => latest.id,
+                None => return Ok("You have started no preview.".into()),
+            },
+        };
+        self.preview_log(id, Some(&found), tail_lines).await
     }
 
     /// `preview_log`: the end of a preview's output (the latest preview's by default), with an
@@ -1227,15 +1398,20 @@ impl SessionManager {
     }
 
     /// `stop_preview`: stops one preview, or every running one, and removes what it stopped
-    /// from the user's list (as their Clear finished would); its stored log stays readable.
+    /// from the user's list (as their Clear finished would); its stored log stays readable. A
+    /// worker (`task`) reaches only its own previews.
     pub(crate) async fn stop_preview_tool(
         &self,
         id: &ConversationId,
         preview: Option<&str>,
+        task: Option<&TaskId>,
     ) -> Result<String> {
-        let stopped = self
-            .stop_previews_of(id, preview, "stopped by the thread")
-            .await?;
+        let reason = if task.is_some() {
+            "stopped by its worker"
+        } else {
+            "stopped by the thread"
+        };
+        let stopped = self.stop_previews_of(id, preview, task, reason).await?;
         if stopped.is_empty() {
             return Ok("No preview is running.".into());
         }
@@ -1329,21 +1505,26 @@ impl SessionManager {
             self.core.board(&id).await?;
             self.stop_previews(&id, USER_STOP).await?
         } else {
-            self.stop_previews_of(&id, preview.as_deref(), USER_STOP)
+            self.stop_previews_of(&id, preview.as_deref(), None, USER_STOP)
                 .await?
         };
         self.remove_user_stopped_previews(&id, stopped).await
     }
 
     /// Stops `preview` (every running one when `None`) of conversation `id` for `reason`, and
-    /// returns them as recorded once ended.
+    /// returns them as recorded once ended. With `task`, only that worker's previews.
     async fn stop_previews_of(
         &self,
         id: &ConversationId,
         preview: Option<&str>,
+        task: Option<&TaskId>,
         reason: &str,
     ) -> Result<Vec<Preview>> {
-        let live = match preview.map(str::trim).filter(|wanted| !wanted.is_empty()) {
+        let wanted = preview.map(str::trim).filter(|wanted| !wanted.is_empty());
+        if let (Some(task), Some(wanted)) = (task, wanted) {
+            own_preview(&self.core.board(id).await?, task, wanted)?;
+        }
+        let live = match wanted {
             Some(wanted) => match self.previews.get(id, wanted) {
                 Some(live) => vec![live],
                 None => {
@@ -1357,7 +1538,12 @@ impl SessionManager {
                     };
                 }
             },
-            None => self.previews.of(id),
+            None => self
+                .previews
+                .of(id)
+                .into_iter()
+                .filter(|live| task.is_none() || live.task.as_ref() == task)
+                .collect(),
         };
         stop_all(&live, reason).await;
         let board = self.core.board(id).await;
@@ -1402,22 +1588,48 @@ impl SessionManager {
         // for, so this stop sees every preview there will be.
         self.previews.count_stop(id);
         drop(self.previews.starting.lock().await);
-        self.stop_previews_of(id, None, reason).await
+        self.stop_previews_of(id, None, None, reason).await
     }
 
-    /// Stops the previews of conversation `id` that run in another workspace than the
-    /// thread's now (an overnight run started or ended).
+    /// Stops the thread's previews of conversation `id` that run in another workspace than
+    /// the thread's now (an overnight run started or ended). A worker's preview runs in the
+    /// worker's own folder, not the thread's: it stops only once that folder is gone.
     pub(crate) async fn stop_moved_previews(&self, id: &ConversationId) {
         let running = self.previews.of(id);
         if running.is_empty() {
             return;
         }
         let now = self.recorded_workspace(id).map(|workspace| workspace.path);
-        let moved: Vec<_> = running
+        let (workers, thread): (Vec<_>, Vec<_>) =
+            running.into_iter().partition(|live| live.task.is_some());
+        let moved: Vec<_> = thread
             .into_iter()
             .filter(|live| Some(&live.workspace) != now.as_ref())
             .collect();
+        let gone: Vec<_> = workers
+            .into_iter()
+            .filter(|live| !live.workspace.is_dir())
+            .collect();
         stop_all(&moved, "the thread's workspace changed").await;
+        stop_all(&gone, "its worker's folder was removed").await;
+    }
+
+    /// A task ends and its folder goes: its worker's previews stop first, and a start of its
+    /// still under way is refused or waited for, so none outlives the folder it runs in.
+    pub(crate) async fn stop_task_previews(&self, id: &ConversationId, task: &TaskId) {
+        self.previews
+            .ended_tasks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(task.clone());
+        drop(self.previews.starting.lock().await);
+        let live: Vec<_> = self
+            .previews
+            .of(id)
+            .into_iter()
+            .filter(|live| live.task.as_ref() == Some(task))
+            .collect();
+        stop_all(&live, "its worker's task ended").await;
     }
 
     /// Brigadier quits: every preview stops.
@@ -1441,6 +1653,7 @@ impl SessionManager {
             let live = LivePreview {
                 conversation: id.clone(),
                 id: preview.id.clone(),
+                task: preview.task_id.clone(),
                 pid: preview.pid.unwrap_or_default(),
                 kind: preview.kind,
                 workspace: PathBuf::from(&preview.workspace),
@@ -1908,7 +2121,8 @@ fn log_url(path: &Path) -> Option<String> {
     preview_url(&bytes)
 }
 
-fn preview_url(bytes: &[u8]) -> Option<String> {
+/// A log's text without its terminal escape codes (colours, erased lines).
+fn plain_text(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     let mut plain = String::new();
     let mut chars = text.chars().peekable();
@@ -1924,6 +2138,66 @@ fn preview_url(bytes: &[u8]) -> Option<String> {
             plain.push(ch);
         }
     }
+    plain
+}
+
+/// Whether a log shows a build under way: its latest line of build progress (cargo's
+/// Compiling, Building and Bundling, a bundler building for production) comes after its latest
+/// line saying a build finished (`Finished`, cargo's ``Running `…` ``, `built in`). A dev app
+/// built and launched in one command reads Building until then, and Starting after.
+fn log_building(bytes: &[u8]) -> bool {
+    const PROGRESS: [&str; 9] = [
+        "Compiling ",
+        "Building ",
+        "Bundling ",
+        "Checking ",
+        "Downloading ",
+        "Downloaded ",
+        "Locking ",
+        "Updating crates.io",
+        "Running beforeBuildCommand",
+    ];
+    const BUNDLER: [&str; 3] = [
+        "building for production",
+        "transforming",
+        "rendering chunks",
+    ];
+    let mut building = false;
+    for line in plain_text(bytes).split(['\n', '\r']) {
+        let line = line.trim_start_matches(|c: char| c.is_whitespace() || !c.is_ascii());
+        if line.starts_with("Finished")
+            || line.starts_with("Running `")
+            || line.contains("built in ")
+        {
+            building = false;
+        } else if PROGRESS.iter().any(|start| line.starts_with(start))
+            || BUNDLER.iter().any(|words| line.contains(words))
+        {
+            building = true;
+        }
+    }
+    building
+}
+
+/// The last `max` bytes of a log file (none when it can't be read).
+fn read_log_end(path: &Path, max: u64) -> Vec<u8> {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let size = file.metadata().map(|meta| meta.len()).unwrap_or_default();
+    if file
+        .seek(std::io::SeekFrom::Start(size.saturating_sub(max)))
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let mut bytes = Vec::new();
+    let _ = file.take(max).read_to_end(&mut bytes);
+    bytes
+}
+
+fn preview_url(bytes: &[u8]) -> Option<String> {
+    let plain = plain_text(bytes);
     for (at, _) in plain.match_indices("http") {
         let candidate = plain[at..]
             .split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '\"' | '\'' | '`'))
@@ -2051,6 +2325,29 @@ fn waits_for(kind: PreviewKind) -> &'static str {
     }
 }
 
+/// `wanted`, when it is one of `task`'s previews: a worker reaches only its own.
+fn own_preview<'a>(
+    board: &'a crate::board::Board,
+    task: &TaskId,
+    wanted: &str,
+) -> Result<&'a Preview> {
+    board
+        .previews
+        .get(wanted)
+        .filter(|preview| preview.task_id.as_ref() == Some(task))
+        .ok_or_else(|| {
+            let own = board
+                .sorted_previews()
+                .into_iter()
+                .filter(|preview| preview.task_id.as_ref() == Some(task))
+                .collect::<Vec<_>>();
+            Error::Invalid(format!(
+                "{wanted} is not one of your previews{}",
+                known_ids(&own)
+            ))
+        })
+}
+
 fn known_ids(previews: &[Preview]) -> String {
     if previews.is_empty() {
         return String::new();
@@ -2072,6 +2369,41 @@ fn io_error(path: &Path, err: &std::io::Error) -> Error {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// A dev app built and launched in one command reads Building while its log shows the
+    /// build under way, and no longer once the build finished.
+    #[test]
+    fn a_build_log_reads_building_until_it_finishes() {
+        let steps = [
+            (
+                "> vite build\nvite v6.0.0 building for production...\n",
+                true,
+            ),
+            ("transforming (412) src/main.tsx\n", true),
+            ("\u{2713} built in 3.20s\n", false),
+            ("Running beforeBuildCommand `pnpm build`\n", true),
+            ("   Compiling brigadier-core v0.1.0\n", true),
+            (
+                "    Finished `dev` profile [unoptimized] target(s) in 41.2s\n",
+                false,
+            ),
+            (
+                "    Bundling Brigadier Dev.app (/work/target/debug/bundle)\n",
+                true,
+            ),
+            (
+                "    Finished 1 bundle at:\n        /work/Brigadier Dev.app\n",
+                false,
+            ),
+        ];
+        let mut log = String::new();
+        for (line, building) in steps {
+            log.push_str(line);
+            assert_eq!(log_building(log.as_bytes()), building, "{log}");
+        }
+        assert!(!log_building(b"listening on 8123\n"));
+        assert!(log_building(b"\x1b[1;32m   Compiling\x1b[0m demo v0.1.0\n"));
+    }
 
     #[tokio::test]
     async fn paused_preview_members_survive_ledger_replay_without_their_parent() {
@@ -2107,6 +2439,7 @@ while True: time.sleep(0.03)
         let live = LivePreview {
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
+            task: None,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
@@ -2229,6 +2562,7 @@ while True:
         let live = LivePreview {
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
+            task: None,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
@@ -2298,6 +2632,7 @@ while True:
         let live = LivePreview {
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
+            task: None,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
@@ -2365,6 +2700,7 @@ while True:
         let live = LivePreview {
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
+            task: None,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),

@@ -351,6 +351,28 @@ Brigadier still confines their helpers. Mach rendezvous IDs: ai.brigadier.dev, \
 com.github.Electron, org.chromium.Chromium, com.google.chrome.for.testing; other packaged IDs need \
 a dev identity or Full access. Put browser profiles in writable roots.";
 
+const WORKER_START_PREVIEW: &str = "Start a dev server or app and keep it running, rather \
+than in your shell (never with `&`, nohup or `open`): the user sees it in the session's \
+Activities with its state and a Stop. Run it in the foreground (no trailing `&`). It runs in \
+your worktree (or `workdir` in it or in your scratch folder) with your access, in its own \
+process group, and answers at once with its first output. A dev app is built and launched as \
+one preview with `kind` \"app\", its binary in the foreground (`<build> && \"<the \
+.app>/Contents/MacOS/<binary>\"`): it reads Building while it compiles, then Starting, then \
+Running once its window opens. An app (inferred for `tauri dev`, Electron and an .app's \
+binary) has its own window and no URL. It \
+outlives your report, but stops when your task ends and its folder is removed, when the user \
+presses Stop and when the session closes: a preview you show the user lasts only while your \
+task is alive. Running Brigadier itself, use a new BRIGADIER_DATA_DIR under /tmp and a dev \
+identity, never ai.brigadier.app. preview_log gives its output.";
+
+const WORKER_STOP_PREVIEW: &str = "Stop one of your previews (`id`, e.g. \"preview-1\") or, \
+without an id, every one of yours that runs: SIGTERM, then a kill after a few seconds. It is \
+removed from the user's list; its log stays readable. Returns how each ended.";
+
+const WORKER_PREVIEW_LOG: &str = "The last lines of one of your previews' output (stdout and \
+stderr together; your latest one by default), with its state (starting, running, paused or \
+ended) and an out-… id for its whole log.";
+
 const STOP_PREVIEW: &str = "Stop a preview (`id`, e.g. \"preview-1\") or, without an id, \
 every running one: SIGTERM, then a kill after a few seconds. It is removed from the user's \
 list; its log stays readable with read_artifact. Returns how each ended.";
@@ -627,6 +649,21 @@ fn worker_tools() -> Vec<Tool> {
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
         tool("run_check", RUN_CHECK, input_schema::<RunCheck>()),
+        tool(
+            "start_preview",
+            WORKER_START_PREVIEW,
+            input_schema::<StartPreview>(),
+        ),
+        tool(
+            "stop_preview",
+            WORKER_STOP_PREVIEW,
+            input_schema::<StopPreview>(),
+        ),
+        tool(
+            "preview_log",
+            WORKER_PREVIEW_LOG,
+            input_schema::<PreviewLog>(),
+        ),
     ]
 }
 
@@ -894,6 +931,9 @@ pub fn parse_call(
                 "code_refs" => WorkerCall::CodeRefs(args::<CodeRefs>(name, arguments)?),
                 "project_map" => WorkerCall::ProjectMap,
                 "run_check" => WorkerCall::RunCheck(args::<RunCheck>(name, arguments)?),
+                "start_preview" => WorkerCall::StartPreview(args(name, arguments)?),
+                "stop_preview" => WorkerCall::StopPreview(args(name, arguments)?),
+                "preview_log" => WorkerCall::PreviewLog(args(name, arguments)?),
                 _ => return Err(unknown()),
             };
             Ok(ToolCall::Worker(call))
@@ -1381,12 +1421,30 @@ mod tests {
                     if log.tail_lines == Some(10)
             ));
         }
-        // Workers don't: a preview is the thread's.
-        let names: Vec<String> = tools_for(&worker(false))
-            .iter()
-            .map(|tool| tool.name.to_string())
-            .collect();
-        assert!(!names.iter().any(|name| name.contains("preview")));
+        // Workers too: a dev app or server a worker starts shows in Activities with a Stop.
+        for checks in [false, true] {
+            let names: Vec<String> = tools_for(&worker(checks))
+                .iter()
+                .map(|tool| tool.name.to_string())
+                .collect();
+            for name in ["start_preview", "stop_preview", "preview_log"] {
+                assert!(names.contains(&name.to_owned()), "{name} {checks}");
+            }
+            let arguments = serde_json::json!({ "command": "pnpm dev", "name": "Demo pages" });
+            assert!(matches!(
+                parse_call(&worker(checks), "start_preview", arguments.as_object().cloned()),
+                Ok(ToolCall::Worker(WorkerCall::StartPreview(start)))
+                    if start.name.as_deref() == Some("Demo pages")
+            ));
+            assert!(matches!(
+                parse_call(&worker(checks), "stop_preview", None),
+                Ok(ToolCall::Worker(WorkerCall::StopPreview(stop))) if stop.id.is_none()
+            ));
+            assert!(matches!(
+                parse_call(&worker(checks), "preview_log", None),
+                Ok(ToolCall::Worker(WorkerCall::PreviewLog(_)))
+            ));
+        }
     }
 
     #[test]

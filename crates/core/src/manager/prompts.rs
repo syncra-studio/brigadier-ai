@@ -57,6 +57,10 @@ pub(crate) fn date_of(at_ms: i64) -> String {
 pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: before a long step, one line on what runs, why and about how long. Answer a yes/no or readiness question (\"ready to merge?\") first, with your recommendation and why (list_tasks says where the full checks stand); then, if the choice is theirs, ask_user with options (\"Run the full checks first (~15 min)\" / \"Not yet\"); a merge itself is never a card's answer: the user merges with \"Merge into main\" or in words. Never start a long run silently instead.";
 
 /// How the thread runs what takes long: through Brigadier, whose runs outlive its turn.
+/// How a worker runs a dev server or app: through Brigadier, so it shows in the session's
+/// Activities with a Stop (issue #203).
+pub(crate) const WORKER_PREVIEWS: &str = "Run dev servers and apps with start_preview, never with `&`, nohup or `open`: they show in the session's Activities, with a Stop. Build and launch a desktop app as one start_preview with `kind: \"app\"` (`<build> && \"<the .app>/Contents/MacOS/<binary>\"`, the app in the foreground): it reads Building, then Starting, then Running. A preview you start lasts only while your task is alive: it stops when your task ends and its folder goes.";
+
 pub(crate) const LONG_COMMANDS: &str = "A command still going after a minute goes on in the background by itself (@run, run_check): the call returns its run-N id and its result comes as a message in this request. Never background one yourself (`&`, nohup), and never run the full suite: the full checks run on their own (rerun_checks).";
 
 /// The session thread's role (THREAD-PLAN.md Q1), with the user's preferences from the Personal
@@ -1705,6 +1709,7 @@ Kind: {kind}
 Rules for this task:
 - {alone}{write_rules}
 - Brigadier may suspend your build or test processes while the machine is hot or short on memory and resumes them itself; never send SIGCONT or any other signal to resume them, and simply wait or rerun the check.
+- {WORKER_PREVIEWS}
 - {needs_user}{code_rules}{extra}
 
 The task:
@@ -2537,8 +2542,13 @@ mod tests {
         let dev_app = super::super::context_pack::dev_app_command(&root);
         let _ = std::fs::remove_dir_all(&root);
         let dev_app = dev_app.expect("Brigadier's dev build");
-        assert!(dev_app.contains("`pnpm tauri:debug-app`"), "{dev_app}");
-        assert!(dev_app.contains("Brigadier Dev.app` with the computer tools' launch_app"));
+        assert!(
+            dev_app.contains("one start_preview with `kind: \"app\"`"),
+            "{dev_app}"
+        );
+        assert!(dev_app.contains("`env.BRIGADIER_DATA_DIR` set to a fresh folder under /tmp"));
+        assert!(dev_app.contains("`pnpm tauri:debug-app && \""));
+        assert!(dev_app.contains("Brigadier Dev.app/Contents/MacOS/brigadier\"`"));
 
         let mut ui = task("claude", Some("lead"));
         ui.areas = vec![
@@ -2563,11 +2573,9 @@ mod tests {
         assert!(!scripted_ui(&look));
         let brief = worker_brief(&look, "", &worker_computer(Some(&dev_app)), true);
         assert!(brief.contains("Checking it live (your change shows in an app)"));
-        assert!(
-            brief.contains(
-                "the way the project starts it (here: build it with `pnpm tauri:debug-app`"
-            )
-        );
+        assert!(brief.contains(
+            "the way the project starts it (here: build and open it as one start_preview"
+        ));
         assert!(brief.contains("check each step's effect in the next read"));
         assert!(brief.contains("never /Applications/Brigadier.app"));
         assert!(brief.contains("Act only on windows you launched or the task names"));

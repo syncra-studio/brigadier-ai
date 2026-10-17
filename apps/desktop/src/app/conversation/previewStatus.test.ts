@@ -23,7 +23,7 @@ test("the latest line drops escape codes and progress-bar redraws", () => {
   assert.equal(latestLine(""), "");
 });
 
-const preview = (id: string, state: PreviewState): Preview => ({ id, conversationId: "c", name: id, command: "pnpm dev", workdir: "/w", workspace: "/w", pid: 1, state, startedAtMs: 0, endedAtMs: null, log: null, kind: "web" });
+const preview = (id: string, state: PreviewState): Preview => ({ id, conversationId: "c", name: id, command: "pnpm dev", workdir: "/w", workspace: "/w", pid: 1, state, startedAtMs: 0, endedAtMs: null, log: null, kind: "web", building: false });
 const event = (seq: number, body: EventEnvelope["event"]) => ({ event: body, streamSeq: seq, atMs: seq, seq, stream: "conversation:c" }) as EventEnvelope;
 
 test("Clear finished keeps starting, running and paused previews", () => {

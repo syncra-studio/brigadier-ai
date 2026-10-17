@@ -16,7 +16,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 const LSOF_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The kind of preview `command` starts: an app for the dev commands of Tauri and Electron,
-/// which open their own window (whatever frontend address they print is not the app), a web
+/// which open their own window (whatever frontend address they print is not the app), and for a
+/// macOS app bundle's binary run directly (a dev app built and launched in one command); a web
 /// preview for anything else.
 pub(super) fn infer_kind(command: &str) -> PreviewKind {
     let lower = command.to_lowercase();
@@ -33,6 +34,7 @@ pub(super) fn infer_kind(command: &str) -> PreviewKind {
             || program(word, "electron")
             || (program(word, "electron-forge") && next == "start")
             || (program(word, "electron-vite") && next == "dev")
+            || word.contains(".app/contents/macos/")
     });
     if app {
         PreviewKind::App
@@ -274,6 +276,8 @@ mod tests {
             "./node_modules/.bin/electron main.js --no-sandbox",
             "npx electron-forge start",
             "pnpm exec electron-vite dev",
+            // A dev app built and launched in one command.
+            "cd apps/desktop && pnpm tauri:debug-app && \"/w/target/debug/bundle/macos/Brigadier Dev.app/Contents/MacOS/brigadier-desktop\"",
         ] {
             assert_eq!(infer_kind(app), PreviewKind::App, "{app}");
         }

@@ -661,7 +661,7 @@ impl SessionManager {
                 crate::heap(|| self.start_preview(id, args)).await
             }
             OrchestratorCall::StopPreview(args) => {
-                crate::heap(|| self.stop_preview_tool(id, args.id.as_deref())).await
+                crate::heap(|| self.stop_preview_tool(id, args.id.as_deref(), None)).await
             }
             OrchestratorCall::PreviewLog(args) => {
                 crate::heap(|| self.preview_log(id, args.id.as_deref(), args.tail_lines)).await
@@ -918,6 +918,26 @@ impl SessionManager {
             WorkerCall::RunCheck(args) => {
                 self.run_check_tool(&conversation_id, Some(&task_id), args)
                     .await
+            }
+            WorkerCall::StartPreview(args) => {
+                crate::heap(|| self.start_worker_preview(&conversation_id, &task_id, args)).await
+            }
+            WorkerCall::StopPreview(args) => {
+                crate::heap(|| {
+                    self.stop_preview_tool(&conversation_id, args.id.as_deref(), Some(&task_id))
+                })
+                .await
+            }
+            WorkerCall::PreviewLog(args) => {
+                crate::heap(|| {
+                    self.worker_preview_log(
+                        &conversation_id,
+                        &task_id,
+                        args.id.as_deref(),
+                        args.tail_lines,
+                    )
+                })
+                .await
             }
         };
         match result {

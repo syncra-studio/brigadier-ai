@@ -5152,6 +5152,9 @@ impl SessionManager {
             }
         }
         self.task_ended_waiting(task, state).await;
+        // Its worker's previews run in the folder that goes below.
+        self.stop_task_previews(&task.conversation_id, &task.id)
+            .await;
         let owner = format!("task:{}", task.id);
         self.grants.revoke_owner(&owner);
         // Its CLI's session folder goes with what the task leaves (BUILD-PLAN D2.2).

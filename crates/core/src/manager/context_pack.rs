@@ -602,13 +602,13 @@ pub(crate) fn dev_app_command(worktree: &Path) -> Option<String> {
     .into_iter()
     .find(|(lockfile, _)| worktree.join(lockfile).exists())
     .map_or("npm", |(_, manager)| manager);
-    // The computer tools' launch_app opens the dev build by its bundle's path, not
-    // tools/open-dev-app.sh; a debug build without a data folder of its own opens on a
-    // throwaway one, never the installed app's.
+    // Built and launched as one app preview, so the session's Activities show it Building,
+    // Starting, then Running, with a Stop; its data folder is a scratch one, never the
+    // installed app's, and the dev build has its own identity.
     if scripts.get("tauri:debug-app").is_some() && worktree.join("tools/open-dev-app.sh").exists() {
         let app = worktree.join("target/debug/bundle/macos/Brigadier Dev.app");
         return Some(format!(
-            "here: build it with `{manager} tauri:debug-app`, then open `{}` with the computer tools' launch_app (its name is the bundle's path); a debug build opens on a throwaway data folder of its own",
+            "here: build and open it as one start_preview with `kind: \"app\"`, `env.BRIGADIER_DATA_DIR` set to a fresh folder under /tmp, and the command `{manager} tauri:debug-app && \"{}/Contents/MacOS/brigadier\"`; then find its window with the computer tools' list_windows",
             app.display()
         ));
     }
