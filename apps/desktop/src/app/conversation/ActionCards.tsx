@@ -491,6 +491,8 @@ export type ApprovalStep = { index: number; total: number; onStep: (index: numbe
  * An approval, compact: kind and asker, the reason as the title, the exact command, then
  * [Deny `Esc`] [Allow … for this session] [Allow once]. Esc denies from anywhere in the view;
  * allowing takes a click, or Enter on an Allow the user moved to: a stray Enter never allows.
+ * A message to another session is the exception: like a question card, it takes focus, and
+ * Enter on the focused card sends it (its ⏎ shows while it has focus).
  * Several waiting step "1 of 3" as each is answered. In the composer's place, "Reply…" brings
  * the message field back.
  */
@@ -526,7 +528,16 @@ export function ApprovalAction({
     );
   };
   const deny = () => answer({ type: "deny", message: "" });
-  useCardKeys(approval !== undefined && !action.busy, { escape: deny });
+  const peer = approval?.subject.type === "peerMessage";
+  const card = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (peer && !inField(document.activeElement)) card.current?.focus();
+  }, [peer]);
+  useCardKeys(
+    approval !== undefined && !action.busy,
+    peer ? { enter: () => answer({ type: "allow" }), escape: deny } : { escape: deny },
+    card,
+  );
   if (!approval) return null;
 
   const shown = describe(approval, landingId, inSession);
@@ -534,7 +545,13 @@ export function ApprovalAction({
     approval.subject.type === "cli" ? approval.subject.request : null;
   const grant = request ? sessionGrant(request) : null;
   return (
-    <ActionCard aria-label="Approval" data-action="approval">
+    <ActionCard
+      ref={card}
+      tabIndex={peer ? 0 : undefined}
+      aria-label="Approval"
+      data-action="approval"
+      className="group/approval"
+    >
       <div className="flex min-w-0 flex-col gap-2 px-4 pt-3.5 pb-2.5">
         <div className="text-foreground/65 text-code flex min-w-0 items-center gap-2 leading-5 [&_svg]:size-4.5 [&_svg]:shrink-0">
           {shown.icon}
@@ -609,6 +626,11 @@ export function ApprovalAction({
           onClick={() => answer({ type: "allow" })}
         >
           <span className="truncate">{shown.allow ?? "Allow once"}</span>
+          {peer && (
+            <span className="hidden group-focus-within/approval:contents">
+              <ActionKbd variant="primary">⏎</ActionKbd>
+            </span>
+          )}
         </button>
       </ActionCardActions>
       {footer}

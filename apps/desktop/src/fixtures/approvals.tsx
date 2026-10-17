@@ -43,7 +43,7 @@ mockIPC((command, payload) => {
 });
 
 function Fixture() {
-  const [keyboardOnly, setKeyboardOnly] = useState(false);
+  const [only, setOnly] = useState<string | null>(null);
   useEffect(() => {
     if (!new URLSearchParams(location.search).has("drive")) return;
     const seen: Record<string, unknown> = {};
@@ -64,13 +64,29 @@ function Fixture() {
       seen.overflow = variants.filter(([id]) => card(id).scrollWidth > card(id).clientWidth).map(([id]) => id);
       session("command")?.click();
     });
-    at(1200, () => setKeyboardOnly(true));
+    at(1200, () => setOnly("command"));
     at(1300, () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
     at(1600, () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-    at(1800, () => setKeyboardOnly(false));
+    at(1800, () => setOnly(null));
     at(1900, () => session("network")?.click());
     at(2200, () => session("files")?.click());
+    // The message to another session took focus on mount: a window-wide Enter sends nothing, and
+    // Enter on the focused card sends it. Its ⏎ shows only while it has focus.
+    const peer = () => card("peer").querySelector<HTMLElement>("[data-slot=action-card]")!;
+    const hint = () => getComputedStyle([...peer().querySelectorAll("kbd")].at(-1)!.parentElement!).display;
+    at(2300, () => setOnly("peer"));
+    at(2400, () => {
+      seen.peerFocused = document.activeElement === peer();
+      seen.peerHint = hint();
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
     at(2500, () => {
+      peer().blur();
+      seen.peerHintBlurred = hint();
+      peer().focus();
+      peer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    at(2700, () => {
       seen.calls = calls;
       const result = document.createElement("pre");
       result.id = "approvals-result";
@@ -83,7 +99,7 @@ function Fixture() {
     <main className="bg-background text-foreground min-h-screen p-8">
       <h1 className="mb-6 text-xl font-semibold">Session approval scopes</h1>
       <div className="flex flex-wrap items-start gap-6">
-        {shown.filter((id) => !keyboardOnly || id === "command").map((id) => (
+        {shown.filter((id) => only === null || id === only).map((id) => (
           <div key={id} data-fixture={id} style={{ width: id === "narrow" || id === "long" ? 320 : 680 }} className="bg-composer rounded-xl">
             <ApprovalAction id={id} />
           </div>
