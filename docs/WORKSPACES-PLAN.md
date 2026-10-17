@@ -119,21 +119,27 @@ worktree. We add only grouping, shortcuts, a read-only board and states. No work
 
 ### Data model
 - **Project → Workspace → Tab.**
-  - New `Workspace { id, project_id, title, created_at_ms, updated_at_ms, pinned_at_ms, lifecycle }` in
-    `crates/core/src/model.rs`.
+  - New `Workspace { id, project_id, title, repos, base, created_at_ms, updated_at_ms, pinned_at_ms, lifecycle }`
+    in `crates/core/src/model.rs`. `repos` (the project repositories it works in) and `base` (the branch its tabs
+    start from and merge into) are set when it is created, from the first tab's composer choice. Every new tab is
+    made from them, never from a surviving tab, so closing the first tab changes nothing.
   - New events `WorkspaceCreated`, `WorkspaceRenamed`, `WorkspacePinned` and `WorkspaceArchived`, folded in
     `crates/core/src/projection.rs`.
   - A **tab** is a `Conversation` of kind `Session` (`model.rs:446`) with a new `workspace_id: Option<WorkspaceId>`.
 - **Each tab gets its own worktree.**
-  - A tab opened with ⌘T or ⌘⏎ is always a `NewWorktree` (`model.rs:231`) from the workspace's base branch, made at
-    `M/workers.rs:2484` / `session_worktree_path` `:2514`.
-  - A workspace's first tab keeps today's composer choice. Its default becomes New worktree.
+  - Every new task tab, a workspace's first tab included, is a `NewWorktree` (`model.rs:231`) from the workspace's
+    `base`, made at `M/workers.rs:2484` / `session_worktree_path` `:2514`. Two tabs or two workspaces never share
+    a checkout.
+  - The composer's Local checkout choice goes for new tabs; its branch picker sets the workspace's `base`.
+  - `LocalCheckout` stays only for migrated sessions, which keep working where they are.
 - **A new chat in a project creates a workspace.** Its title comes from the first message (e.g. "Redesigning X"),
   the way session titles are made today. Its first tab is that chat.
 - **Tab order** lives in app state, next to today's per-session tabs (`D/state/sessionTabs.ts`). The daemon knows
   only which workspace each tab belongs to.
 - **Migration.** No event-log rewrite. The projection gives each existing session with no `workspace_id` an
-  implicit workspace of one tab: id `ws-<session id>`, the session's title, pin and archive state. The first change
+  implicit workspace of one tab: id `ws-<session id>`, the session's title, pin and archive state. Its `repos` is
+  the session's repository and its `base` the session environment's `base` (`NewWorktree`) or `branch`
+  (`LocalCheckout`). The first change
   to it records `WorkspaceCreated` with that id. Archived sessions stay archived, as one-tab workspaces.
 - **Naming clash.** Today's "Close workspace…" (`D/app/conversation/ChatActions.tsx:201`, `M/lifecycle.rs:777`)
   removes a session's worktree. It is renamed "Remove worktree…". `Project`'s doc comment "A workspace of one or
@@ -159,6 +165,10 @@ worktree. We add only grouping, shortcuts, a read-only board and states. No work
   - `tab`: the message belongs to a sibling. The thread forwards it when sure. The item moves to that tab, and a
     one-line notice with Undo stays in this tab. When unsure, the thread asks with `ask_user`.
   - If the sibling has already merged, `tab` is refused with that fact, so the thread offers `new_tab` or keeps it.
+- **Rollout (rule R, `docs/research/long-sessions/BUILD-PLAN.md:1147`).** Open sessions keep their cached tool
+  schema, so `RouteFollowUp` (`tools.rs:257`, `deny_unknown_fields` today) takes either `route` or the legacy
+  `joins: bool` (true = `join`, false = `wait`). The new schema reaches a session at its next resume or rebirth,
+  announced by the step's revision note.
 - **Unjudged** follow-ups behave as #248 leaves them.
 - The `[follow-up …]` block (`M/prompts.rs:2288`) lists the siblings' titles and states, so the thread can point the
   message to the right tab.
@@ -182,9 +192,9 @@ worktree. We add only grouping, shortcuts, a read-only board and states. No work
 |---|---|---|
 | Needs you | an open approval, plan, question or quota wait | `ConversationActivity.approvals/questions` (`crates/core/src/work.rs:1778`), `Conversation.quota_wait` |
 | Working | its turn, a worker or a phase runs (Merging, Reviewing, Checking, Watching CI keep their words) | `ConversationActivity.run/tasks/phases` |
-| Ready | idle, and its branch has commits not in base | the board's merge-base count |
-| Merged | its work is in base (merge event, or branch tip reachable from base) | landing events / git |
-| (none) | idle with nothing unmerged | |
+| Ready | idle, and its branch has commits not in base since its last recorded merge | the board's merge-base count |
+| Merged | a recorded merge of this tab's work, and no newer unmerged commits | today's local merge records (`work.rs:2008`); PR merges from phase 3 step 4 |
+| (none) | an untouched tab (no commits, no merge record), or idle with nothing unmerged and no merge | |
 
 - **Phases come from the active turn only (#253).** Fixed in `crates/core/src/board.rs:322-324`.
 - **The tab bar** shows each task tab's state dot and title.
@@ -226,11 +236,17 @@ worktree. We add only grouping, shortcuts, a read-only board and states. No work
      worktrees, with no shared files.
 4. **Board + facts.** `list_sessions` `workspace: true`, the overlap fact and the sibling-merged fact.
    - Done when: `workspace_tests` show an overlap fact once per new overlap, a merged fact once, and no write path.
-5. **Queued-message routes.** `route` on `route_follow_up` and the "Open as a new tab?" offer. Forwarding with Undo.
+5. **Queued-message routes.** `route` on `route_follow_up` (legacy `joins` still accepted) and the "Open as a new
+   tab?" offer. Forwarding with Undo. One revision note.
    - Done when: `workspace_tests` cover join, wait, new_tab (the offer, no auto-open), tab (forward + Undo), and tab
-     to a merged sibling refused. The render test covers the offer.
-6. **States (#253).** The state function in `board.rs`, shared by tab bar and sidebar.
-   - Done when: `board.rs` unit tests cover each row of the table, plus #253's stale-phase case.
+     to a merged sibling refused. A rule-R flow test makes a session at the previous revision, resumes it after the
+     change, and checks the note arrives once and a legacy `joins` call still routes. The render test covers the
+     offer.
+6. **States (#253) and the Ready record.** The state function in `board.rs`, shared by tab bar and sidebar. When a
+   request settles with its tab's branch ahead of base, the engine records `RequestReady { request, head }` (a
+   structured fact for phase 4, not read from the answer's text).
+   - Done when: `board.rs` unit tests cover each row of the table, an untouched new tab with no state (not Merged),
+     #253's stale-phase case, and one `RequestReady` per settled request with unmerged commits.
 7. **UI behind `BRIGADIER_WORKSPACES=1`.** The strip's two groups, ⌘T, ⌘⏎, sidebar workspace rows with states,
    the rename to "Remove worktree…", and #199.
    - Done when: render tests in `D/fixtures/tabbar.tsx` and the sidebar fixtures, and `shortcutCatalog.test.ts`,
@@ -256,10 +272,22 @@ the Revert button. The engine never decides whether a merge may happen.
 - **When on, the tab does the whole job.**
   - With a GitHub remote and a signed-in `gh`, the PR path: push the branch, open a PR, babysit CI and reviews, fix,
     merge on GitHub, then fetch and fast-forward the local base (as w36's #244/#224 does).
+  - **After a PR merge, the session branch is reconciled.** The engine records `Merged { requests, head,
+    merge_commit, pr, auto }`: the session branch's head before the merge and the commit the merge made on base
+    (for squash and rebase merges too, read from `gh pr view --json mergeCommit`). It then moves the session branch
+    onto the new base, as the local merge path already advances it. The tab reads Merged, and its next request
+    starts from base, not from stale commits.
   - Without them, the local path: merge into base via `finish_session` (`M/landing.rs:1437`).
   - The merge needs no user consent when the setting is on. `finish_session` records the origin as `auto`.
 - **When off.** The tab says the work is Ready, and today's consent rule applies (b2a16dd9). A peer's request is not
   the user's yes.
+- **Every auto-merge gets the other vendor's review, small ones included.** A new thread tool,
+  `review_candidate { commit }`, asks the other vendor to review the final candidate. Today the thread's own changes
+  are reviewed only past the size/risk line (`review_range_if_due`, `M/unreviewed.rs:501`) and `review_code` is a
+  worker's tool. `review_candidate` reuses existing coverage: a range already reviewed at that commit isn't reviewed
+  again, only what came after it (#138). If no other-vendor reviewer can take it, or reviews are off
+  (`reviews_on()`), auto-merge is unavailable for that change: the tab says Ready and leaves the merge to the user.
+  No new setting.
 - **The bar lives in the instructions (below).** The engine does not gate merges. The merge result still states where
   checks, CI and the review stand, as w36's #241/#242 leaves it.
 - **Revert.** A one-click Revert on the merge message.
@@ -271,8 +299,9 @@ New revision note and thread rule, active only when `auto_merge` is on:
 
 > Before you merge, all of this holds for the final commit, the one that merges:
 > 1. Its tests and type checks pass, run on that commit after your last change.
-> 2. The other vendor's review has finished, and every finding is fixed or answered in one line. Wait for a running
->    review; never merge past one.
+> 2. The other vendor's review of the final commit has finished (`review_candidate`, which reuses a review that
+>    already covers it), and every finding is fixed or answered in one line. Wait for a running review; never merge
+>    past one.
 > 3. With a PR, its CI is green.
 > 4. A change the user can see: run the dev app in the background (`start_preview`, never in front), use the change
 >    the way the user would, and attach a screenshot or short recording to the merge message.
@@ -286,7 +315,13 @@ New revision note and thread rule, active only when `auto_merge` is on:
 > (filed as issues when the repo is on GitHub). Never drop a finding without saying so.
 
 ### The fresh verifier's exact inputs
-- `start_verifier` (`M/phases.rs:867`) gains `fresh: true`. Its spec then holds only four things:
+- **API change.** `start_verifier` today takes a `TaskRef` and verifies a reported implement task (`verify_task`,
+  `M/phases.rs:806-815`; `start_verifier` `:867`). It becomes `start_verifier { task?, fresh?, commit? }`:
+  - `fresh: true, commit: <sha>` with no task verifies the request and that candidate commit, so work the thread
+    built itself (Q35) gets a fresh verifier too;
+  - `fresh: true` with a task verifies that task's candidate commit the same way;
+  - without `fresh`, it behaves as today.
+- With `fresh: true`, its spec holds only four things:
   1. the original request, verbatim: the user's message that opened the request, plus the follow-ups that joined it;
   2. the standing constraints: the session's `@remember` constraints;
   3. the acceptance criteria: the request's "done when", or the outline's if there was one;
@@ -307,16 +342,23 @@ New revision note and thread rule, active only when `auto_merge` is on:
 1. **#177 router fix.**
    - Done when: a router unit test where the author's model is the only listed reviewer still routes to the other
      vendor.
-2. **Fresh verifier (token doc item 2).**
-   - Done when: a flow test in `phase_acceptance_tests` asserts the fresh spec holds the request, the constraints,
-     the criteria and the sha, and no outline, report or pack text.
-3. **#137 + #138 review economy.**
-   - Done when: `review_tiers_tests` show findings in the check reply, and a re-check scoped to the fix range.
+2. **Fresh verifier (token doc item 2).** The `start_verifier { task?, fresh?, commit? }` change, one revision
+   note (rule R).
+   - Done when: flow tests in `phase_acceptance_tests` assert the fresh spec holds the request, the constraints,
+     the criteria and the sha, and no outline, report or pack text, both for a worker's task and for a request the
+     thread built itself with no task. The old `{ task }` call still works.
+3. **`review_candidate` + #137 + #138.**
+   - Done when: `review_tiers_tests` show a 10-line thread change reviewed through `review_candidate`, a candidate
+     already covered not reviewed again, findings in the check reply, a re-check scoped to the fix range, and with
+     no other-vendor reviewer the call saying so (the thread then says Ready).
 4. **PR plumbing.**
    - `ci_status` (`M/ci.rs:1039`) reports a PR's checks when the branch has one.
    - The `pull_request.rs` doc no longer says Brigadier never creates one; the agent does, with `gh`.
-   - A `Merged { auto, sha, pr }` record feeds the Merged state.
-   - Done when: the `M/ci.rs` tests cover PR checks, and a `merge_by_user_tests` sibling for auto merges passes.
+   - The `Merged { requests, head, merge_commit, pr, auto }` record, local and PR, and the session-branch
+     reconciliation after a PR merge.
+   - Done when: the `M/ci.rs` tests cover PR checks, a `merge_by_user_tests` sibling for auto merges passes, and an
+     `auto_merge_tests` case squash-merges a PR (stub `gh`, local bare remote), then sends a second request in the
+     same tab: the tab read Merged, and the second request starts from the new base with none of the old commits.
 5. **Setting + bar (behind `BRIGADIER_AUTO_MERGE=1`).** The setting, the revision note, and `finish_session`
    accepting `auto`.
    - Done when: flow tests show an auto merge with no consent when on, and consent still needed when off. Prompt tests
@@ -331,8 +373,10 @@ New revision note and thread rule, active only when `auto_merge` is on:
    - Done when: a render test covers the button, and a flow test shows the request sent once and the thread's revert
      landing.
 8. **Flag removed.**
-   - Done when: the phase verifier runs one real small UI task end to end in the dev app against a scratch GitHub
-     repo of the user's (or a local bare remote when none is set): PR, CI, review, proof, merge and Revert.
+   - Done when: the phase verifier runs one small UI task end to end in the dev app against a local bare remote
+     with a stub `gh` (PR, CI, review, proof, merge and Revert), plus one real tiny PR on
+     syncra-studio/brigadier-ai itself for the GitHub path (the user's own repo, Q61). No new GitHub repo is made in
+     the user's name.
 
 ### Checks
 Router unit tests, `phase_acceptance_tests`, `review_tiers_tests`, `M/ci.rs` tests, `merge_by_user_tests`,
@@ -348,7 +392,7 @@ trimming (no prompt or tool-list cuts).
 ### Metrics (all read-only over a data dir and the repo)
 | Metric | Exact definition | Source |
 |---|---|---|
-| First-look merge rate | Merged changes with no user message in the tab between the request's first "Ready" final answer (or, with auto-merge, the request's opening) and the merge, other than the merge go-ahead when auto-merge is off; ÷ every change that reached Ready. | event log: requests, messages, `Merged` records |
+| First-look merge rate | One population for both merge modes: every request with a `RequestReady` record (phase 2 step 6) or named in a `Merged` record's `requests` (phase 3 step 4). A candidate counts as first-look when it is merged and the tab got no user message, card answer or Source-panel git action between its opening message and the merge, the merge go-ahead aside when auto-merge was off. Rate = first-look ÷ population. | event log: `RequestReady`, `Merged`, messages, cards |
 | User touches per merged change | User messages, card answers and Source-panel git actions in that tab from the opening message (excluded) to the merge. | event log |
 | Escaped bugs | Merged changes followed within 7 days, in the same project, by a revert of them, or by a commit touching any of the same files whose subject matches `\bfix` or `Fixes #`. | git log of base + `Merged` records |
 | Wasted quota at reset | Per account window that reset: `100 − used_percent` at the last sample before the reset, weekly and 5-hour reported apart. | `quota_samples` (`crates/core/src/routing/store.rs:27`) |
@@ -396,6 +440,8 @@ trimming (no prompt or tool-list cuts).
    - Done when: a meter unit test marks worker turns, and #139 has a written cause plus a test, or a fix.
 2. **Metrics script.** `tools/ab/bench_metrics.py`, run with `-I`, read-only.
    - Done when: it runs on a fixture data dir with known answers for all five rows, with tests in `tools/ab/checks`.
+     The fixture mixes auto and manual merges, a Ready request never merged, and an auto merge with no Ready
+     record, and the first-look rate counts each exactly once.
 3. **Tripwire report.** Cache share, cause lines, the unattributed line, the invalid-call counter (a small
    `catalog.rs` counter written to `turn_usage` or a sibling table), and tier flags.
    - Done when: a fixture report matches its expected text, and the counter has a unit test.
@@ -431,6 +477,31 @@ signed in on the host. No SSH client of our own, no key handling, no file sync, 
     (`crates/mcp-server/src/lib.rs:1-4`). On a host, the CLI's MCP config points to a forwarded loopback port served
     by the daemon (MCP over streamable HTTP, with the grant as a header).
   - Fallback: a forwarded unix socket.
+- **Forwarding the tools isn't enough: the daemon's own actions must run on the host too.** Most of what a tool
+  call does today runs on this Mac, on local paths and processes. A host tab carries
+  `Place::Host { host, root }` on its environment, and these actions go through one host executor (`ssh <host> --
+  <argv>`, run in the tab's remote worktree):
+  1. **Worktree creation and removal:** `Repo::add_worktree` (`crates/git/src/repo.rs:563`) and cleanup
+     (`M/clean_up.rs`), the thread's scratch included.
+  2. **Checks:** `run_check` and the session's full checks (`M/integrated_checks.rs`) run their commands on the host
+     and stream the output back.
+  3. **Worker landing:** merging a worker's branch into the session branch (`M/landing.rs`), the ref check
+     (`M/refcheck.rs`), and the merge-base counts behind changed files.
+  4. **Reviews:** the reviewer is a worker CLI started on the host like any other, and the range it reviews is read
+     there.
+  5. **Handoffs and rebirth:** the successor CLI starts on the host (`M/rebirth.rs`).
+  6. **Stop:** the remote CLI's pid is recorded at spawn (the wrapper prints it before `exec`), and Stop ends it with
+     `ssh <host> kill <pid>`, never by name. A dropped ssh connection also ends it.
+  7. **Resume:** `Origin::Resume` starts the CLI on the host, where its own session files live.
+  8. **File reads the daemon does:** changed files, diffs, `read_session`'s file links, and the context pack's reads,
+     all with `git` or `cat` over ssh.
+  9. **The provider adapters' local path handling:** Claude's `spec.cwd.canonicalize()`
+     (`crates/providers/src/claude/mod.rs:1093`) and Codex's matching cwd checks are skipped for a host spec. The
+     remote path is passed as it is.
+- **Everything else is capability-gated.** A tool or action not on that list answers on a host tab with one plain
+  fact, "not on a host tab: ‹what›", so the thread can tell the user. Covered: `start_preview` and the live look,
+  computer use, Undo snapshots, the Brain's indexing, mockups and page tools that read local files. The app hides
+  the matching buttons on a host tab.
 - **Brigadier shows it here:** the thread, the worker cards, the states, and the changed files and diff read over ssh
   (`git diff`, read-only).
 
@@ -440,18 +511,24 @@ Source panel's write actions, the Brain's indexing of the host repo, auto-merge'
 for a UI change instead), phone and cloud.
 
 ### Steps
-1. **Spike.**
-   - Done when: Claude Code and Codex on a test host (a local Linux VM, or `ssh localhost` under another user) both
-     list Brigadier's tools over the forward and call one. Its notes are written to `docs/evidence/`.
+1. **Spike, on a real host.** The test host is a Linux VM or another machine, whose repo path does not exist on
+   this Mac, so nothing can silently fall back to local files.
+   - Done when: Claude Code and Codex there both list Brigadier's tools over the forward, call one, and run one
+     `run_check` whose command runs on the host. The notes are written to `docs/evidence/`.
 2. **Hosts setting + Check.**
    - Done when: a unit test parses hosts, the Check runs against a fake `ssh` script, and its page has a render test.
-3. **Host tab engine.** Spawn over ssh, the remote worktree, the forward's lifetime tied to the tab.
-   - Done when: a flow test with a fake `ssh` wrapper that runs locally drives a whole request.
+3. **Host executor + the nine host-aware actions + the gate.**
+   - Done when: `M/flow/ssh_host_tests.rs` uses a fake local `ssh` wrapper that maps the remote root to a temp dir
+     with a different path, and nothing else. It drives a whole request: worktree, check, a worker's landing, a
+     review, Stop, resume and cleanup, with every path the daemon touches under the mapped root. It also shows each
+     gated tool answering "not on a host tab". The adapter test covers no local canonicalize for a host spec.
 4. **Here-side view and Out notice.**
-   - Done when: render tests pass, and the phase verifier runs one real request on the test host.
+   - Done when: render tests pass, and the phase verifier runs on the real host from step 1: one request with a
+     check, a worker landing, Stop and resume.
 
 ### Checks
-The hosts unit tests, the fake-ssh flow test (new `M/flow/ssh_host_tests.rs`), render tests, and the spike notes.
+The hosts unit tests, `ssh_host_tests` (fake wrapper, flow test only), the adapter tests, render tests, the spike
+notes, and the verifier's real-host run.
 
 ## Phase 6 · If time remains: token doc item 4
 
@@ -525,8 +602,25 @@ Everyone rebases on origin/main right before each landing.
   a runaway loop.
 - **With auto-merge off, a peer's request is not merge consent.** Q67 makes a peer's ask equal to the agent's own
   decision, and the agent merges on its own only with auto-merge on.
-- **Every tab after the first is always a new worktree; the first tab keeps the composer's choice, defaulting to New
-  worktree.** Two tabs in one checkout would collide.
+- **Every new task tab, the first included, is a new worktree; Local checkout stays only for migrated sessions.**
+  Two tabs or two workspaces in one checkout would collide (Delegator correction to the first draft).
+- **A workspace stores its repos and base, set at creation; migration takes them from the session.** Tabs never
+  depend on a surviving tab.
+- **Merged needs a recorded merge of that tab's work; an untouched tab has no state.** A new branch's tip is always
+  reachable from base, so reachability alone would lie.
+- **Readiness is the engine's `RequestReady` record (a request settled with unmerged commits), not the answer's
+  text.** It gives the bench one structured population for both merge modes.
+- **`review_candidate` is a new thread tool; with no other-vendor reviewer or with reviews off, the tab says Ready.**
+  Q68 needs a review on every change; no new setting.
+- **After a PR merge the session branch moves onto the new base, with the old head and merge commit recorded.**
+  Squash and rebase merges then still read Merged, and the next request starts clean.
+- **Phase 3's end-to-end runs on a local bare remote with a stub `gh`, plus one tiny real PR on
+  syncra-studio/brigadier-ai.** No new GitHub repo in the user's name.
+- **Rejected: landing each phase whole from a phase branch (Codex review #10).** The user's standing rule (10-16)
+  is land small, land often: each finished step lands on main once its own tests pass, unfinished user-facing work
+  sits behind a flag or stays unwired, and the phase verifier runs the full suite, live smoke and Codex review on
+  the integrated main. Phase 1's prompt steps are each complete on their own; phase 3's bar is active only with
+  auto-merge on, flagged until the phase ends. §0 stays as written.
 - **Tab order is app state; membership is in the daemon.** Same as today's session tabs; no new sync.
 - **Existing sessions become one-tab workspaces by projection, not by rewriting the log.** No risky migration, and
   it is reversible.
@@ -562,5 +656,10 @@ Everyone rebases on origin/main right before each landing.
   installed on the host; the spike proves it first.
 - **SSH host tabs leave Undo, previews, the terminal, computer use and the UI proof out.** That is the smallest form;
   the tab says so.
+- **Host-aware daemon actions are exactly nine (worktrees, checks, landing, reviews, handoffs, Stop, resume, file
+  reads, the adapters' path handling); everything else answers "not on a host tab".** Forwarding the tools alone
+  would run them on this Mac.
+- **The SSH spike and the verifier use a real host whose repo path doesn't exist locally; the fake `ssh` wrapper is
+  only for the flow test.** A local fake would hide local fallbacks.
 - **The dev flags are `BRIGADIER_WORKSPACES=1` and `BRIGADIER_AUTO_MERGE=1`.** A debug env var for unfinished work is
   allowed; it is removed when the phase ends.
