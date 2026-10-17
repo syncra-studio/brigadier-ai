@@ -508,7 +508,9 @@ mod tests {
     #[test]
     fn the_app_never_sets_the_rebirth_override() {
         // Only this file and the measuring tools (`tools/ab`, outside `crates` and `apps`) name
-        // the variable, so nothing the app ships sets it for its daemon.
+        // the variable, so nothing the app ships sets it for its daemon. Source files only: a
+        // built daemon (CI puts one under the desktop app's `binaries/`) holds this file's name
+        // of it.
         fn scan(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap().flatten() {
                 let path = entry.path();
@@ -520,11 +522,34 @@ mod tests {
                     ) {
                         scan(&path, found);
                     }
-                } else if std::fs::read(&path).is_ok_and(|bytes| {
-                    bytes
-                        .windows(b"BRIGADIER_REBIRTH_TOKENS".len())
-                        .any(|window| window == b"BRIGADIER_REBIRTH_TOKENS")
-                }) {
+                } else if path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| {
+                        matches!(
+                            ext,
+                            "rs" | "ts"
+                                | "tsx"
+                                | "js"
+                                | "mjs"
+                                | "json"
+                                | "toml"
+                                | "sh"
+                                | "py"
+                                | "yml"
+                                | "yaml"
+                                | "plist"
+                                | "html"
+                                | "css"
+                                | "md"
+                        )
+                    })
+                    && std::fs::read(&path).is_ok_and(|bytes| {
+                        bytes
+                            .windows(b"BRIGADIER_REBIRTH_TOKENS".len())
+                            .any(|window| window == b"BRIGADIER_REBIRTH_TOKENS")
+                    })
+                {
                     found.push(path);
                 }
             }
