@@ -50,21 +50,18 @@ export function useFamilies(): { families: Map<string, string[]>; error: string 
 export function ChipTrigger({
   label,
   children,
-  large = false,
   className,
   ...props
 }: {
   label: string;
   children: ReactNode;
-  /** The size of the try-order sentence's words. */
-  large?: boolean | undefined;
   className?: string;
 } & Omit<React.ComponentProps<"button">, "children">) {
   return (
     <button
       type="button"
       aria-label={label}
-      className={cn(selectTrigger, "inline-flex gap-1.5 align-middle", large && "h-8 text-sm", className)}
+      className={cn(selectTrigger, "inline-flex gap-1.5 align-middle", className)}
       {...props}
     >
       <span className="min-w-0 truncate">{children}</span>
@@ -79,21 +76,19 @@ export function ChipSelect<T extends string>({
   value,
   options,
   onChange,
-  large,
   disabled,
 }: {
   label: string;
   value: T;
   options: readonly { value: T; label: string }[];
   onChange: (value: T) => void;
-  large?: boolean;
   disabled?: boolean;
 }) {
   const chosen = options.find((option) => option.value === value);
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild disabled={disabled}>
-        <ChipTrigger label={label} large={large}>
+        <ChipTrigger label={label}>
           {chosen?.label}
         </ChipTrigger>
       </DropdownMenuTrigger>
@@ -202,19 +197,17 @@ export function TargetSelect({
   value,
   name,
   onChange,
-  large,
 }: {
   label: string;
   value: OverrideTarget | null;
   /** The value in words; shown when there is one. */
   name: string;
   onChange: (target: OverrideTarget) => void;
-  large?: boolean;
 }) {
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <ChipTrigger label={label} large={large}>
+        <ChipTrigger label={label}>
           {value ? name : "Choose a model"}
         </ChipTrigger>
       </DropdownMenuTrigger>

@@ -147,7 +147,7 @@ function Fixture() {
         const rule = document.querySelector('[data-setting="Never use Claude Sonnet 5.5 for review"]');
         seen.ruleLink = {
           page: useApp.getState().selection,
-          kind: text(document.querySelector('[data-slot="routing-kind"][aria-selected="true"]')),
+          rule: rule?.closest('[data-slot="routing-rules"]') ? "in Rules" : "",
           inView: inView(rule),
         };
         openSettings("providers");

@@ -35,10 +35,10 @@ test("Providers shows a tab per agent, masks emails, and links to Routing for ru
   assert.deepEqual(seen.afterLeaving, masked);
   // The old Usage page's links land on the accounts.
   assert.deepEqual(seen.usageLink, { page: { type: "settings", page: "providers" }, accountsInView: true });
-  // A model's rule tag opens Routing at its kind of work, the rule in view.
+  // A model's rule tag opens Routing at the rule, in view in Rules.
   assert.deepEqual(seen.ruleLink, {
     page: { type: "settings", page: "routing" },
-    kind: "Review changes→ Opus 5.5, then GPT-6",
+    rule: "in Rules",
     inView: true,
   });
   assert.deepEqual(seen.codexModels, [
