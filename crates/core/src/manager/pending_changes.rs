@@ -45,8 +45,11 @@ struct PendingPath {
     requests: Vec<String>,
     /// Why Undo leaves it: someone else changed it during a request too.
     held: Option<String>,
-    /// The user kept some of its changes.
-    kept: bool,
+    /// What the agents left in it last, or the user's Undo of some of its changes: a whole
+    /// file's Undo from anything else would take the user's own later edits with it.
+    last: Option<Blob>,
+    /// The requests whose changes in it the user kept some of.
+    kept: BTreeSet<String>,
 }
 
 /// Which changes a Keep or Undo takes: every file, one file, or some of one file's changes.
@@ -77,6 +80,13 @@ impl ReviewPick {
 
 fn stream(id: &ConversationId) -> String {
     format!("pending:{id}")
+}
+/// Where the review bases are kept from Git's garbage collection, with the request records.
+fn bases_ref(id: &ConversationId) -> String {
+    format!("refs/brigadier/changes/{id}/review")
+}
+fn edited_reason(path: &str) -> String {
+    format!("You changed {path} after the agents did, so undo its changes one at a time.")
 }
 
 /// A file's lines, each with its line ending, as git counts them.
@@ -275,7 +285,7 @@ impl Pending {
             let done = now.get(path).is_some_and(|current| *current == file.base);
             let latest = file.requests.len().saturating_sub(1);
             for (index, request) in file.requests.iter().enumerate() {
-                let state = match (done, file.kept) {
+                let state = match (done, file.kept.contains(request)) {
                     (true, true) => FileReview::Kept,
                     (true, false) => FileReview::Undone,
                     (false, _) if index == latest => FileReview::Pending,
@@ -326,15 +336,25 @@ impl SessionManager {
         mut pending: Pending,
         changed: bool,
     ) -> Result<Pending> {
-        let (git, checkout, paths) = (
+        let (git, checkout, bases, id_owned) = (
             self.git.clone(),
             checkout.to_owned(),
-            pending.files.keys().cloned().collect::<Vec<_>>(),
+            pending
+                .files
+                .iter()
+                .map(|(path, file)| (path.clone(), file.base.clone().map(FileBlob::from)))
+                .collect::<BTreeMap<_, _>>(),
+            id.clone(),
         );
         let now = blocking(move || {
             let repo = git.open(&checkout).map_err(git_error)?;
-            paths
-                .into_iter()
+            // A base Keep made of some changes is in no other record.
+            if changed {
+                repo.retain_files(&bases_ref(&id_owned), "bases", &bases)
+                    .map_err(git_error)?;
+            }
+            bases
+                .into_keys()
                 .map(|path| {
                     let blob = repo.checkout_blob(&path).map_err(git_error)?;
                     Ok((path, blob.map(Blob::from)))
@@ -377,7 +397,7 @@ impl SessionManager {
         if !pending.absorbed.insert(request.to_owned()) {
             return Ok(());
         }
-        for (path, first, held) in record.changed() {
+        for (path, first, last, held) in record.changed() {
             let file = pending
                 .files
                 .entry(path.to_owned())
@@ -385,10 +405,12 @@ impl SessionManager {
                     base: first.cloned(),
                     requests: Vec::new(),
                     held: None,
-                    kept: false,
+                    last: None,
+                    kept: BTreeSet::new(),
                 });
             file.requests.retain(|each| each != request);
             file.requests.push(request.to_owned());
+            file.last = last.cloned();
             if let Some(held) = held {
                 file.held = Some(held.to_owned());
             }
@@ -495,7 +517,7 @@ impl SessionManager {
         for (path, base) in bases {
             if let Some(file) = pending.files.get_mut(&path) {
                 file.base = base;
-                file.kept = true;
+                file.kept.extend(file.requests.iter().cloned());
             }
         }
         self.save_pending(&id, &checkout, pending, true).await?;
@@ -515,31 +537,40 @@ impl SessionManager {
         let lock = self.change_records.lock(&id);
         let mut clock = lock.lock().await;
         self.drain_changes(&id, &checkout, &mut clock).await;
-        let pending = self.pending(&id).await?;
+        let mut pending = self.pending(&id).await?;
         let mut held = Vec::new();
         let mut files = Vec::new();
         for (path, base) in Self::picked_files(&pending, &pick)? {
-            match pending.files.get(&path).and_then(|file| file.held.clone()) {
+            let file = &pending.files[&path];
+            match file.held.clone() {
                 Some(reason) if pick.path().is_some() => return Err(Error::Invalid(reason)),
                 Some(reason) => held.push(HeldPath { path, reason }),
-                None => files.push((path, base)),
+                None => files.push((path, base, file.last.clone().map(FileBlob::from))),
             }
         }
         let some = matches!(pick, ReviewPick::Hunks(..));
-        let names = files
-            .iter()
-            .map(|(path, _)| path.clone())
-            .collect::<Vec<_>>();
         let (git, root) = (self.git.clone(), checkout.clone());
-        let restored = blocking(move || {
+        let (restores, edited) = blocking(move || {
             let repo = git.open(&root).map_err(git_error)?;
             let mut restores = BTreeMap::new();
-            for (path, base) in files {
+            let mut edited = Vec::new();
+            for (path, base, last) in files {
                 let read = Read::of(&repo, &path, base.as_ref())?;
                 let target = match &pick {
                     ReviewPick::Hunks(_, ids) => {
                         let hunks = read.picked(ids)?;
                         read.blob(&repo, &read.undone(&hunks))?
+                    }
+                    // Changes the user hasn't seen are the user's own: the whole file waits.
+                    _ if read.current != last => {
+                        if pick.path().is_some() {
+                            return Err(Error::Invalid(edited_reason(&path)));
+                        }
+                        edited.push(HeldPath {
+                            reason: edited_reason(&path),
+                            path,
+                        });
+                        continue;
                     }
                     _ => read.base.clone(),
                 };
@@ -547,19 +578,28 @@ impl SessionManager {
                     restores.insert(path, target);
                 }
             }
-            let restored = restores.keys().cloned().collect::<Vec<_>>();
             if !restores.is_empty() {
                 land(
                     &repo,
                     branch.as_deref(),
-                    restores,
-                    &format!("Undo changes in {}", restored.join(", ")),
+                    restores.clone(),
+                    &format!(
+                        "Undo changes in {}",
+                        restores.keys().cloned().collect::<Vec<_>>().join(", ")
+                    ),
                 )?;
             }
-            Ok(restored)
+            Ok((restores, edited))
         })
         .await?;
-        self.save_pending(&id, &checkout, pending, false).await?;
+        held.extend(edited);
+        let restored = restores.keys().cloned().collect::<Vec<_>>();
+        for (path, target) in restores {
+            if let Some(file) = pending.files.get_mut(&path) {
+                file.last = target.map(Blob::from);
+            }
+        }
+        self.save_pending(&id, &checkout, pending, true).await?;
         if !restored.is_empty() {
             self.conv(&id)?
                 .note(format!(
@@ -569,7 +609,7 @@ impl SessionManager {
                     } else {
                         "the changes"
                     },
-                    names.join(", ")
+                    restored.join(", ")
                 ))
                 .await;
         }
@@ -682,7 +722,8 @@ mod tests {
                 base: blob("1"),
                 requests: vec!["r1".into(), "r2".into()],
                 held: None,
-                kept: false,
+                last: blob("2"),
+                kept: BTreeSet::new(),
             },
         );
         let touched = pending.settle(&BTreeMap::from([("a".into(), blob("2"))]));
@@ -694,11 +735,11 @@ mod tests {
                 .settle(&BTreeMap::from([("a".into(), blob("2"))]))
                 .is_empty()
         );
-        pending.files.get_mut("a").unwrap().kept = true;
+        pending.files.get_mut("a").unwrap().kept.insert("r1".into());
         pending.files.get_mut("a").unwrap().base = blob("2");
         pending.settle(&BTreeMap::from([("a".into(), blob("2"))]));
         assert!(pending.files.is_empty());
         assert_eq!(pending.reviews["r1"]["a"], FileReview::Kept);
-        assert_eq!(pending.reviews["r2"]["a"], FileReview::Kept);
+        assert_eq!(pending.reviews["r2"]["a"], FileReview::Undone);
     }
 }

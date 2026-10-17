@@ -2534,3 +2534,84 @@ async fn pending_changes_undo_a_committed_change_by_a_commit_and_pass_files_on()
     );
     flow.stop().await;
 }
+
+/// A file the user edited after the agents keeps those edits from a whole file's Undo (refused
+/// for the file, left as it is by Undo All), while its changes still undo one at a time; a base
+/// Keep made of some changes outlasts Git's garbage collection.
+#[tokio::test]
+async fn pending_changes_leave_the_users_later_edits_and_outlast_gc() {
+    let mut flow = Flow::start(
+        "20261017-0213-issues-run-w41-pending-edited",
+        review_options(),
+        edit_a_and_b(),
+    )
+    .await;
+    local(&mut flow).await;
+    reviewed(&flow).await;
+    let id = flow.conversation.clone();
+    let a = flow
+        .manager
+        .pending_changes(id.clone(), Some("a.txt".into()))
+        .await
+        .unwrap()
+        .files
+        .remove(0);
+    flow.manager
+        .keep_changes(
+            id.clone(),
+            Some("a.txt".into()),
+            Some(vec![a.hunks[0].id.clone()]),
+        )
+        .await
+        .unwrap();
+    git(&flow.repo, &["gc", "-q", "--prune=now"]);
+    let mine = format!("{EDITED}mine\n");
+    std::fs::write(flow.repo.join("a.txt"), &mine).unwrap();
+    let error = flow
+        .manager
+        .undo_pending_changes(id.clone(), Some("a.txt".into()), None)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "You changed a.txt after the agents did, so undo its changes one at a time."
+    );
+    let all = flow
+        .manager
+        .undo_pending_changes(id.clone(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(all.restored, ["b.txt"]);
+    assert_eq!(
+        all.held
+            .iter()
+            .map(|held| held.path.as_str())
+            .collect::<Vec<_>>(),
+        ["a.txt"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join("a.txt")).unwrap(),
+        mine
+    );
+    let a = flow
+        .manager
+        .pending_changes(id.clone(), Some("a.txt".into()))
+        .await
+        .unwrap()
+        .files
+        .remove(0);
+    assert_eq!(a.hunks.len(), 1);
+    flow.manager
+        .undo_pending_changes(
+            id.clone(),
+            Some("a.txt".into()),
+            Some(vec![a.hunks[0].id.clone()]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join("a.txt")).unwrap(),
+        "ONE\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n"
+    );
+    flow.stop().await;
+}

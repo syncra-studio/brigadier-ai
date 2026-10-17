@@ -2564,8 +2564,10 @@ pub struct PendingFile {
     pub request_id: String,
     /// Its text at the review base and now (`None`: no file), when both are text small enough
     /// to show. Without them only the whole file can be kept or undone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub current: Option<String>,
     /// Whether its text is shown, whatever `base` and `current` hold.
@@ -2575,6 +2577,7 @@ pub struct PendingFile {
     pub insertions: u32,
     pub deletions: u32,
     /// Why Undo leaves it as it is: someone else changed it too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub held: Option<String>,
 }

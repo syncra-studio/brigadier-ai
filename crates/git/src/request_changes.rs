@@ -204,6 +204,17 @@ impl Repo {
         Ok(record)
     }
 
+    /// Keeps files' blobs from garbage collection under `{prefix}/{name}`, as one tree.
+    pub fn retain_files(
+        &self,
+        prefix: &str,
+        name: &str,
+        files: &BTreeMap<String, Option<FileBlob>>,
+    ) -> Result<()> {
+        let tree = self.blob_tree(None, files)?;
+        self.change_ref(prefix, name, &tree)
+    }
+
     fn change_ref(&self, prefix: &str, name: &str, oid: &Oid) -> Result<()> {
         if !prefix.starts_with("refs/brigadier/changes/") {
             return Err(Error::Invalid("invalid request ref".into()));
