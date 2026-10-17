@@ -99,7 +99,8 @@ function ActionRow({ item }: { item: ActionItem }) {
   if (item.kind === "files" && item.changes.length > 0) {
     const diffs = new Map<string, ReactNode>();
     for (const change of item.changes) {
-      if (change.diff) diffs.set(change.path, <InlineDiff key={change.path} path={change.path} diff={change.diff} />);
+      const path = change.movedTo ?? change.path;
+      if (change.diff) diffs.set(path, <InlineDiff key={path} path={path} diff={change.diff} />);
     }
     return <FileChangeRows files={changeStats(item.changes)} status={item.status} diffs={diffs} />;
   }

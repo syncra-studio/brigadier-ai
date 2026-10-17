@@ -257,6 +257,7 @@ async fn a_turns_own_edits_and_long_command_come_back_whole_as_transcript_items(
             deletions,
             binary: false,
             change: Some(change),
+            from: None,
         };
         let files = vec![
             stat("/w/src/a.rs", 1, 1, FileChangeKind::Update),

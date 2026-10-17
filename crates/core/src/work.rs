@@ -671,6 +671,11 @@ pub struct FileStat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub change: Option<brigadier_providers::FileChangeKind>,
+    /// A renamed file's old path, where a thread's own file change moved it (its row reads
+    /// Renamed); `path` is where it went.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub from: Option<String>,
 }
 
 /// A write task's result as one commit on the current target tip: what is reviewed, verified

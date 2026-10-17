@@ -10,4 +10,9 @@ binary: boolean,
  * Whether the change created, changed or deleted the file, where a thread's own file
  * change says (its row reads Created, Edited or Deleted); absent elsewhere.
  */
-change?: FileChangeKind, };
+change?: FileChangeKind, 
+/**
+ * A renamed file's old path, where a thread's own file change moved it (its row reads
+ * Renamed); `path` is where it went.
+ */
+from?: string, };

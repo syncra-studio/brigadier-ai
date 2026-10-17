@@ -37,6 +37,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     kindIcons: Record<string, string | null>;
     diffDialog: { fits: boolean; files: number; scrolls: boolean; whole: boolean };
     editRow: { closed: string | null; open: string | null };
+    renameRows: (string | null)[];
     tools: Record<string, { json: string | null; text: string | null; empty: string | null; error: boolean; argumentsShown: boolean; raw: string | null }>;
     toolRaw: string | null;
     compaction: (string | null)[];
@@ -118,6 +119,8 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.match(seen.toolRaw ?? "", /lookup.*Input.*"id":7.*Output/);
   // An edit row opened to its diff reads "Edited file".
   assert.deepEqual(seen.editRow, { closed: "Edited math.js", open: "Edited file" });
+  // A Codex rename is a rename row, not "Edited new.rs +0 −0".
+  assert.deepEqual(seen.renameRows, ["Renamed old.rs to new.rs +0 −0", "Moved a.rs +0 −0"]);
   // The turn's diff card: "Edited 5 files +5 −5", Undo and View changes; the first three files, a
   // folder dim before each name; then all five, and a row opens to its own diff.
   const { turnDiff } = seen;

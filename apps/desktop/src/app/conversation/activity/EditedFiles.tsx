@@ -24,14 +24,19 @@ const VERBS: Record<FileChangeKind, [doing: string, done: string]> = {
   delete: ["Deleting", "Deleted"],
 };
 
-/** One changed file's words: "Edited math.js", "Created notes.md", "Rejected a.ts" when declined. */
+/**
+ * One changed file's words: "Edited math.js", "Created notes.md", "Renamed a.rs to b.rs" (a move
+ * that keeps the name "Moved b.rs"), "Rejected a.ts" when declined.
+ */
 export function fileWords(file: FileStat, status: ItemStatus): StepWords {
   const name = basename(file.path);
-  const [doing, done] = VERBS[file.change ?? "update"];
+  const was = file.from ? basename(file.from) : null;
+  const [doing, done] = was === null ? VERBS[file.change ?? "update"] : was === name ? ["Moving", "Moved"] : ["Renaming", "Renamed"];
+  const what = was === null || was === name ? name : `${was} to ${name}`;
   return {
     kind: "edit",
-    doing: `${doing} ${name}`,
-    done: `${status === "declined" ? "Rejected" : done} ${name}`,
+    doing: `${doing} ${what}`,
+    done: `${status === "declined" ? "Rejected" : done} ${what}`,
     object: name,
     paths: [file.path],
   };
@@ -95,7 +100,7 @@ function FileDiff({ conversationId, requestId, kind, path }: { conversationId: s
   if (error && !items) return <p className="text-destructive text-xs">{error}</p>;
   if (!items) return <span className="shimmer text-xs">Loading</span>;
   const item = leadAction(items, kind);
-  const changes = item?.kind === "files" ? item.changes.filter((change) => change.path === path && change.diff) : [];
+  const changes = item?.kind === "files" ? item.changes.filter((change) => (change.movedTo ?? change.path) === path && change.diff) : [];
   if (changes.length === 0) return <InlineDiff path={path} diff={null} />;
   return <>{changes.map((change, index) => <InlineDiff key={index} path={path} diff={change.diff} />)}</>;
 }
@@ -149,7 +154,10 @@ export function EditedFileRows({ step, files, conversationId }: { step: LeadStep
   );
 }
 
-/** A worker's file change's files, counted as the thread's own are: its CLI's counts, else its diff's. */
+/**
+ * A worker's file change's files, counted as the thread's own are: its CLI's counts, else its
+ * diff's; a moved file named where it went, with where it was.
+ */
 export function changeStats(changes: readonly FileChange[]): FileStat[] {
   const byPath = new Map<string, FileStat>();
   for (const change of changes) {
@@ -158,13 +166,16 @@ export function changeStats(changes: readonly FileChange[]): FileStat[] {
       : change.diff
         ? diffCounts(parseDiff(change.diff).rows)
         : { added: 0, removed: 0 };
-    const seen = byPath.get(change.path);
-    byPath.set(change.path, {
-      path: change.path,
+    const path = change.movedTo ?? change.path;
+    const seen = byPath.get(path);
+    const from = seen?.from ?? (change.movedTo ? change.path : undefined);
+    byPath.set(path, {
+      path,
       insertions: (seen?.insertions ?? 0) + counted.added,
       deletions: (seen?.deletions ?? 0) + counted.removed,
       binary: false,
       change: seen?.change ?? change.kind,
+      ...(from === undefined ? {} : { from }),
     });
   }
   return [...byPath.values()];

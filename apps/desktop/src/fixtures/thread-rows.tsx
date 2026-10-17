@@ -30,6 +30,7 @@ import { createRoot } from "react-dom/client";
 
 import { ActivityGroup, type Described, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { describeLeadStep } from "@/app/conversation/activity/LeadStep";
+import { changeStats, FileChangeRows } from "@/app/conversation/activity/EditedFiles";
 import { ShellBox, ToolResult } from "@/app/conversation/activity/StepDetail";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { stepWords } from "@/app/conversation/activity/words";
@@ -287,6 +288,16 @@ function Page() {
             detail={<InlineDiff path="src/math.js" diff={patch} />}
           />
         </Case>
+        <Case id="rename-rows">
+          <FileChangeRows
+            files={changeStats([
+              { path: "/w/src/old.rs", movedTo: "/w/src/new.rs", kind: "update", diff: "", added: 0, removed: 0 },
+              { path: "/w/src/a.rs", movedTo: "/w/lib/a.rs", kind: "update", diff: "", added: 0, removed: 0 },
+            ])}
+            status="completed"
+            diffs={new Map()}
+          />
+        </Case>
         <ViewContext.Provider value={view}>
           <Case id="turn-diff-many">
             <TurnDiff requestIds={["many"]} />
@@ -422,6 +433,8 @@ async function measure(): Promise<object> {
   editRow?.click();
   await wait(400);
   out.editRow = { closed: editClosed, open: text(editRow) };
+  // A Codex rename reads as one: "Renamed old.rs to new.rs", a move keeping its name "Moved a.rs".
+  out.renameRows = all("[data-slot=edited-file]", at("rename-rows")).map((row) => text(one("[role=button]", row) ?? row));
   // The turn's diff card: several files, the first three listed; one file, named in the title, no list.
   const card = (id: string) => ({
     title: text(one("[data-slot=turn-diff-title]", at(id))),

@@ -2854,6 +2854,7 @@ pub(super) fn diff_stat_of(stat: &brigadier_git::DiffStat) -> DiffStat {
                 deletions: file.deletions,
                 binary: file.binary,
                 change: None,
+                from: None,
             })
             .collect(),
         insertions: stat.insertions,

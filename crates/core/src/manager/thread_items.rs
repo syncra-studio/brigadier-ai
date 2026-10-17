@@ -186,7 +186,7 @@ fn is_image_file(path: &str) -> bool {
 }
 
 /// A file change's files with their lines in and out: as its CLI counted them, else from
-/// its diff as kept, else none.
+/// its diff as kept, else none. A moved file is named where it went, with where it was.
 pub(super) fn file_stats(changes: &[FileChange]) -> Vec<FileStat> {
     changes
         .iter()
@@ -200,11 +200,15 @@ pub(super) fn file_stats(changes: &[FileChange]) -> Vec<FileStat> {
                     .unwrap_or_default(),
             };
             FileStat {
-                path: change.path.clone(),
+                path: change
+                    .moved_to
+                    .clone()
+                    .unwrap_or_else(|| change.path.clone()),
                 insertions,
                 deletions,
                 binary: false,
                 change: Some(change.kind),
+                from: change.moved_to.is_some().then(|| change.path.clone()),
             }
         })
         .collect()
@@ -754,6 +758,25 @@ mod tests {
             .map(|stat| (stat.path.as_str(), stat.insertions, stat.deletions))
             .collect();
         assert_eq!(counts, [("a.rs", 7, 2), ("b.rs", 2, 1), ("c.rs", 0, 0)]);
+        assert!(stats.iter().all(|stat| stat.from.is_none()));
+    }
+
+    /// A Codex rename is named where the file went, with where it was: its row reads Renamed,
+    /// not Edited.
+    #[test]
+    fn a_moved_file_is_named_where_it_went_with_where_it_was() {
+        let stats = file_stats(&[FileChange {
+            original: None,
+            path: "/w/a.rs".into(),
+            moved_to: Some("/w/b.rs".into()),
+            kind: FileChangeKind::Update,
+            diff: Some(String::new()),
+            added: Some(0),
+            removed: Some(0),
+        }]);
+        assert_eq!(stats[0].path, "/w/b.rs");
+        assert_eq!(stats[0].from.as_deref(), Some("/w/a.rs"));
+        assert_eq!((stats[0].insertions, stats[0].deletions), (0, 0));
     }
 
     /// Only a digest's header names a stored output; an output that only mentions an alias
