@@ -829,10 +829,14 @@ impl Parser {
                 let running = value
                     .get("tasks")
                     .and_then(Value::as_array)
-                    .map_or(0, Vec::len);
-                out.push(Output::Event(ProviderEvent::BackgroundJobs {
-                    running: u32::try_from(running).unwrap_or(u32::MAX),
-                }));
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .map(|(at, task)| {
+                        str_of(task, "task_id").map_or_else(|| format!("#{at}"), str::to_owned)
+                    })
+                    .collect();
+                out.push(Output::Event(ProviderEvent::BackgroundJobs { running }));
             }
             _ => {}
         }
@@ -2285,7 +2289,7 @@ mod tests {
     #[test]
     fn a_background_jobs_end_starts_a_turn_of_its_own() {
         let mut parser = Parser::live();
-        let jobs = |parser: &mut Parser, tasks: Value| -> Vec<u32> {
+        let jobs = |parser: &mut Parser, tasks: Value| -> Vec<Vec<String>> {
             let line =
                 json!({ "type": "system", "subtype": "background_tasks_changed", "tasks": tasks });
             parser
@@ -2299,14 +2303,17 @@ mod tests {
         };
         let task = json!({ "task_id": "b3dwmq6fl", "task_type": "local_bash",
                            "description": "Sleep 8 seconds then echo finished" });
-        assert_eq!(jobs(&mut parser, json!([task])), [1]);
+        assert_eq!(
+            jobs(&mut parser, json!([task])),
+            [vec!["b3dwmq6fl".to_owned()]]
+        );
         let result = json!({ "type": "result", "subtype": "success", "is_error": false, "result": "waiting" });
         parser.feed(&result.to_string());
         assert!(!parser.turn_active());
         let notification = json!({ "type": "system", "subtype": "task_notification",
                                    "task_id": "b3dwmq6fl", "status": "completed" });
         assert!(parser.feed(&notification.to_string()).is_empty());
-        assert_eq!(jobs(&mut parser, json!([])), [0]);
+        assert_eq!(jobs(&mut parser, json!([])), [Vec::<String>::new()]);
         assert!(!parser.turn_active());
         let reply = json!({ "type": "assistant", "parent_tool_use_id": null,
                             "message": { "id": "m9", "content": [{ "type": "text", "text": "seen" }] } });

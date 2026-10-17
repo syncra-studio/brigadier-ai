@@ -330,7 +330,7 @@ mod tests {
                 false,
             ),
             (json!({"type":"progress","itemId":"c"}), false),
-            (json!({"type":"backgroundJobs","running":1}), false),
+            (json!({"type":"backgroundJobs","running":["job"]}), false),
             (
                 json!({"type":"fileChanges","itemId":"f","changes":[],"status":"completed"}),
                 true,

@@ -245,11 +245,7 @@ impl SessionManager {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
             // The CLI's background jobs it started, until the turn their end starts is over.
-            let jobs = activity
-                .background
-                .as_ref()
-                .filter(|(of, _)| of == id)
-                .map(|(_, running)| *running);
+            let jobs = activity.background.get(id).copied();
             let mut wait = None;
             // Peer waits remain outstanding while the thread works or streams its answer.
             let awaited = self.awaited_peers(&board, id);
@@ -580,10 +576,7 @@ pub(super) fn wakes_later(board: &Board, request: &str) -> bool {
 pub(super) fn request_settled(board: &Board, activity: &RequestActivity, request: &str) -> bool {
     let turn = activity.running.as_deref() == Some(request)
         || activity.carried.contains(request)
-        || activity
-            .background
-            .as_ref()
-            .is_some_and(|(of, _)| of == request);
+        || activity.background.contains_key(request);
     let reviewed = board.reviews.values().any(|review| {
         review.kind == ReviewKind::Code
             && review.state == ReviewState::Running

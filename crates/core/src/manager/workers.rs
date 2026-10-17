@@ -559,8 +559,8 @@ impl TaskLive {
                 (None, None)
             }
             ProviderEvent::BackgroundJobs { running } => {
-                state.background_jobs = *running;
-                if *running == 0 {
+                state.background_jobs = u32::try_from(running.len()).unwrap_or(u32::MAX);
+                if running.is_empty() {
                     state.background_overdue = false;
                 }
                 (None, None)
