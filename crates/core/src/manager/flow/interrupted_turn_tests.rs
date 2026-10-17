@@ -113,3 +113,177 @@ async fn a_crash_mid_turn_leaves_the_request_interrupted_and_continue_picks_it_u
     interrupted_then_continued(&flow, &request, &seen).await;
     flow.stop().await;
 }
+
+/// A quit while the thread's turn is still starting: the request reads interrupted, its time
+/// leaves out the time Brigadier was closed, and Continue sends the message the thread never
+/// got (#81).
+#[tokio::test]
+async fn a_quit_while_the_turn_starts_leaves_it_interrupted_without_the_gap() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut flow = Flow::start(
+        "interrupted-starting",
+        Options::default(),
+        holding(seen.clone()),
+    )
+    .await;
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_start.lock().unwrap() = Some((reached.clone(), release));
+    flow.say("Add a test.").await;
+    reached.notified().await;
+    let request = flow
+        .board()
+        .await
+        .latest_request()
+        .expect("a request")
+        .id
+        .clone();
+    let quit_at = crate::now_ms();
+    // The old start never goes on: that daemon is gone.
+    flow.restart_after(Duration::from_secs(2)).await;
+    let board = flow
+        .until("the request interrupted", |board| {
+            board
+                .requests
+                .get(&request)
+                .is_some_and(|r| super::super::conversation::interrupted_by_quit(&r.state))
+        })
+        .await;
+    assert_eq!(
+        board.requests[&request].state,
+        RequestState::Failed {
+            error: super::super::conversation::INTERRUPTED_BEFORE_START.into()
+        }
+    );
+    let worked = &board.requests[&request].worked;
+    assert!(
+        worked
+            .iter()
+            .all(|span| span.to_ms.is_some_and(|to| to <= quit_at)),
+        "{worked:?} counts the time Brigadier was closed (quit at {quit_at})"
+    );
+    flow.until("the run failed", |board| board.run == RunState::Failed)
+        .await;
+    assert!(seen.lock().unwrap().is_empty());
+    flow.manager
+        .resume(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.until("the request answered", |board| {
+        board
+            .requests
+            .get(&request)
+            .is_some_and(|r| r.state == RequestState::Done)
+    })
+    .await;
+    let inputs = seen.lock().unwrap().clone();
+    assert!(
+        inputs
+            .last()
+            .is_some_and(|input| input.contains("Add a test.")),
+        "{inputs:#?}"
+    );
+    flow.stop().await;
+}
+
+/// A crash mid-turn, then another while Continue's turn starts: the thread had the message
+/// already, so the next Continue carries on from where it stands and sends nothing again.
+#[tokio::test]
+async fn a_crash_while_continue_starts_continues_and_sends_nothing_again() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut flow = Flow::start(
+        "interrupted-continue-starting",
+        Options::default(),
+        holding(seen.clone()),
+    )
+    .await;
+    let request = held_turn(&flow, &seen).await;
+    flow.crash().await;
+    flow.until("the request interrupted", |board| {
+        board
+            .requests
+            .get(&request)
+            .is_some_and(|r| super::super::conversation::interrupted_by_quit(&r.state))
+    })
+    .await;
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_start.lock().unwrap() = Some((reached.clone(), release));
+    flow.manager
+        .resume(flow.conversation.clone())
+        .await
+        .unwrap();
+    reached.notified().await;
+    flow.crash().await;
+    interrupted_then_continued(&flow, &request, &seen).await;
+    assert_eq!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|input| input.contains("Hold."))
+            .count(),
+        1
+    );
+    flow.stop().await;
+}
+
+/// A crash after the CLI took the message but before its turn was seen starting: Continue
+/// sends it again, with a word to check what already happened.
+#[tokio::test]
+async fn a_crash_after_the_send_sends_it_again_with_a_word_to_check() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut flow = Flow::start(
+        "interrupted-after-send",
+        Options::default(),
+        holding(seen.clone()),
+    )
+    .await;
+    // A first answer: the CLI is up and its session known.
+    flow.say("Say hi.").await;
+    flow.until("the first request answered", |board| {
+        board
+            .latest_request()
+            .is_some_and(|r| r.state == RequestState::Done)
+    })
+    .await;
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *flow.behavior.hold_send.lock().unwrap() = Some((reached.clone(), release));
+    flow.say("Add a test.").await;
+    reached.notified().await;
+    let request = flow
+        .board()
+        .await
+        .latest_request()
+        .expect("a request")
+        .id
+        .clone();
+    flow.crash().await;
+    flow.until("the request interrupted", |board| {
+        board
+            .requests
+            .get(&request)
+            .is_some_and(|r| super::super::conversation::interrupted_by_quit(&r.state))
+    })
+    .await;
+    flow.manager
+        .resume(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.until("the request answered", |board| {
+        board
+            .requests
+            .get(&request)
+            .is_some_and(|r| r.state == RequestState::Done)
+    })
+    .await;
+    let inputs = seen.lock().unwrap().clone();
+    assert!(
+        inputs
+            .last()
+            .is_some_and(|input| input.contains("Add a test.")
+                && input.contains("check git status and git log")),
+        "{inputs:#?}"
+    );
+    flow.stop().await;
+}

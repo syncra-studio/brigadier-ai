@@ -103,6 +103,17 @@ impl PeerRecord {
     }
 }
 
+/// A turn a restart cut off (see [`Board::cut_off_request`]).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CutOff {
+    pub(crate) request: String,
+    /// When the conversation last recorded anything before the stop.
+    pub(crate) at_ms: i64,
+    /// A turn of it had begun in the CLI, this one or an earlier (else it was still starting,
+    /// and the thread never had the message).
+    pub(crate) began: bool,
+}
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Board {
     pub(crate) tasks: HashMap<TaskId, Task>,
@@ -122,10 +133,11 @@ pub(crate) struct Board {
     pub(crate) run: RunState,
     /// The request the running turn serves.
     pub(crate) run_request: Option<String>,
-    /// The request whose turn was still running when the daemon last stopped (a quit or a
-    /// crash cut it off): found when the board is first read after a start, and taken once by
-    /// the start-up recovery, which marks it interrupted.
-    pub(crate) cut_off_request: Option<String>,
+    /// The request whose turn was still starting or running when the daemon last stopped (a
+    /// quit or a crash cut it off), and when the conversation last recorded anything, which is
+    /// as far as it is known to have worked: found when the board is first read after a start,
+    /// and taken once by the start-up recovery, which marks it interrupted then.
+    pub(crate) cut_off_request: Option<CutOff>,
     /// The last message of the branch shown, and the stream sequence that set it.
     pub(crate) head: Option<(String, i64)>,
     pub(crate) streaming: Option<StreamingMessage>,

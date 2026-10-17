@@ -481,6 +481,9 @@ pub(crate) struct FakeBehavior {
     /// The next CLI start signals the first and waits for the second before it records
     /// anything.
     pub hold_start: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    /// The next turn's send signals the first once the CLI took its input, and waits for the
+    /// second before its turn starts.
+    pub hold_send: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// The next login check of an extra account signals the first and waits for the second.
     pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// Each CLI start's [`SessionSpec::suggestions`], in order.
@@ -903,6 +906,11 @@ impl ProviderSession for FakeSession {
                 return Err(brigadier_providers::Error::Invalid("the CLI exited".into()));
             };
             transcribe(&self.transcript, true, &input_text(&input));
+            let held = self.behavior.hold_send.lock().unwrap().take();
+            if let Some((reached, release)) = held {
+                reached.notify_one();
+                release.notified().await;
+            }
             // A manager that starts again may resume a session before it is reachable here.
             let host = tokio::time::timeout(PATIENCE, async {
                 loop {
@@ -1515,9 +1523,15 @@ impl Flow {
     /// Quits the manager as a daemon that stops does, and starts a new one on the same data
     /// folder: what was recorded carries on.
     pub async fn restart(&mut self) {
+        self.restart_after(Duration::ZERO).await;
+    }
+
+    /// [`Self::restart`], with Brigadier closed for `closed` in between.
+    pub async fn restart_after(&mut self, closed: Duration) {
         self.manager.shutdown().await;
         // The daemon's quit: nothing more of the old one is written, as its process ends.
         self.core.store().shutdown().await.unwrap();
+        tokio::time::sleep(closed).await;
         let data = self.dir.join("data");
         let store = open_store(&data).await;
         let (manager, core) = boot(

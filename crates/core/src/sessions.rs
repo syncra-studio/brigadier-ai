@@ -1523,6 +1523,33 @@ impl Core {
         waiting_for: Vec<ConversationId>,
         background_jobs: Option<u32>,
     ) -> Result<bool> {
+        self.update_request_at(
+            id,
+            request_id,
+            state,
+            quota_wait,
+            card_wait,
+            waiting_for,
+            background_jobs,
+            now_ms(),
+        )
+        .await
+    }
+
+    /// [`Self::update_request`], as of `at` (a turn a restart cut off ended when it was last
+    /// recorded, not when Brigadier started again).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn update_request_at(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: RequestState,
+        quota_wait: bool,
+        card_wait: bool,
+        waiting_for: Vec<ConversationId>,
+        background_jobs: Option<u32>,
+        at: i64,
+    ) -> Result<bool> {
         let mut boards = self.boards.lock().await;
         if !boards.contains_key(id) {
             let board = self.load_board(id).await?;
@@ -1536,7 +1563,7 @@ impl Core {
             return Ok(false);
         };
         let before = request.clone();
-        request.moved_to(state, quota_wait, card_wait, now_ms());
+        request.moved_to(state, quota_wait, card_wait, at);
         request.waiting_for = waiting_for;
         request.background_jobs = background_jobs;
         if request == before {
@@ -1994,7 +2021,7 @@ impl Core {
 
     /// The request whose turn the daemon's last stop cut off, once (see
     /// [`Board::cut_off_request`]).
-    pub(crate) async fn take_cut_off_request(&self, id: &ConversationId) -> Option<String> {
+    pub(crate) async fn take_cut_off_request(&self, id: &ConversationId) -> Option<board::CutOff> {
         self.board(id).await.ok()?;
         let mut boards = self.boards.lock().await;
         boards.get_mut(id)?.cut_off_request.take()
@@ -2034,8 +2061,17 @@ impl Core {
             }
         }
         let mut board = Board::default();
+        // The requests a turn of which began in the CLI: one cut off while starting again
+        // was given its message before.
+        let mut began = HashSet::new();
         for event in events.iter().rev() {
             board.apply(&decode(event)?, event.stream_seq);
+            if board.run == crate::work::RunState::Running
+                && let Some(request) = &board.run_request
+                && !began.contains(request)
+            {
+                began.insert(request.clone());
+            }
         }
         // The newest message is the head unless the user switched branches after it.
         let newest = self
@@ -2058,9 +2094,29 @@ impl Core {
         {
             board.head = Some((message.id, event.stream_seq));
         }
-        // Nothing runs across a daemon restart: a turn still running then was cut off.
-        if board.run == crate::work::RunState::Running {
-            board.cut_off_request = board.run_request.clone();
+        // Nothing runs across a daemon restart: a turn still starting or running then was cut
+        // off, as of the last thing the conversation recorded (its streamed text too).
+        if matches!(
+            board.run,
+            crate::work::RunState::Starting | crate::work::RunState::Running
+        ) && let Some(request) = board.run_request.clone()
+        {
+            let last = self
+                .store
+                .read_stream(
+                    streams::conversation(id),
+                    StreamPage {
+                        before: None,
+                        kinds: Vec::new(),
+                        limit: 1,
+                    },
+                )
+                .await?;
+            board.cut_off_request = Some(board::CutOff {
+                began: began.contains(&request),
+                request,
+                at_ms: last.first().map_or_else(now_ms, |event| event.at_ms),
+            });
         }
         // A quit may stop the store after the cut-off request was written failed and before
         // its run was: the run failed too.

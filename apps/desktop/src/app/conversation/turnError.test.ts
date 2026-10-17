@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { describeTurnError, newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
+import { describeTurnError, interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
 import type { Notice, UserRequest } from "@/ipc/generated";
 
 const summary = (raw: string, provider?: string) => describeTurnError(raw, provider).summary;
@@ -66,4 +66,11 @@ test("a notice repeating the failed turn's error is dropped, others stay", () =>
 test("a usage limit is said as such, for the thread's divider", () => {
   assert.equal(describeTurnError("You've hit your usage limit", "Claude").limit, true);
   assert.equal(describeTurnError("ECONNRESET", "Claude").limit, undefined);
+});
+
+test("a turn Brigadier quit during reads interrupted, also one still starting, which Continue sends again", () => {
+  assert.equal(summary("Brigadier quit while this was running."), "Interrupted: Brigadier quit while this was running. Continue picks it up where it stands.");
+  assert.equal(summary("Brigadier quit before this started."), "Interrupted: Brigadier quit before this started. Continue sends it again.");
+  assert.equal(interruptedByQuit("Brigadier quit before this started."), true);
+  assert.equal(interruptedByQuit("The CLI session ended unexpectedly."), false);
 });
