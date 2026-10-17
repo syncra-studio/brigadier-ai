@@ -25,3 +25,8 @@ test("an opened edit's diff header stays clear of its group's row as the diff sc
   assert.deepEqual(edits["edit-wide"], clear);
   assert.deepEqual(edits["edit-narrow"], clear);
 });
+
+test("an opened lone row stays open as its group's live line comes and goes", { timeout: 120000 }, async (t) => {
+  const { loneLive } = await seen<{ loneLive: Record<string, boolean> }>(t);
+  assert.deepEqual(loneLive, { opened: true, ended: true, movedOn: true });
+});
