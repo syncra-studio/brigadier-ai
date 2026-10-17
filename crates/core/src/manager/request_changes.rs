@@ -1048,41 +1048,65 @@ impl SessionManager {
     }
 
     /// Of `files` uncommitted in `checkout`, those the thread's own edits left as they are now
-    /// (#88): its newest request record that has the file has it from the thread's edits alone,
-    /// with nobody else's change mixed in, and the file is still as its last edit left it.
+    /// (#88): going back from the file as it is, each request record that has it has it from
+    /// the thread's edits alone, with nobody else's change mixed in, back to the last commit's
+    /// version, so a change the user made before the thread's edits keeps the file theirs.
     pub(super) async fn threads_uncommitted(
         &self,
         id: &ConversationId,
         checkout: &Path,
         files: &[String],
     ) -> BTreeSet<String> {
+        // Evidence the thread reported but not yet applied would leave its edit the user's.
+        if let Some((changes_checkout, _)) = self.changes_checkout(id) {
+            let lock = self.change_records.lock(id);
+            let mut clock = lock.lock().await;
+            self.drain_changes(id, &changes_checkout, &mut clock).await;
+        }
         let Ok(board) = self.core.board(id).await else {
             return BTreeSet::new();
         };
         let mut requests: Vec<_> = board.requests.values().collect();
         requests.sort_by_key(|request| request.started_at_ms);
-        // Each file's last state as the thread's edits alone left it; None: not the thread's.
-        let mut left: BTreeMap<String, Option<Option<Blob>>> = BTreeMap::new();
+        // Each file's part in each request's record, oldest first.
+        let mut chains: BTreeMap<String, Vec<OwnedPath>> = files
+            .iter()
+            .map(|path| (path.clone(), Vec::new()))
+            .collect();
         for request in requests {
             let Ok(Some(record)) = self.change_record(id, &request.id).await else {
                 continue;
             };
-            for path in files {
+            for (path, chain) in &mut chains {
                 if let Some(owned) = record.paths.get(path) {
-                    let edits_only = owned.held.is_none() && owned.by.iter().all(|by| by == "edit");
-                    left.insert(path.clone(), edits_only.then(|| owned.last.clone()));
+                    chain.push(owned.clone());
                 }
             }
         }
         let (git, checkout) = (self.git.clone(), checkout.to_owned());
         blocking(move || {
             let repo = git.open(&checkout).map_err(git_error)?;
-            Ok(left
+            let committed = match repo.resolve("HEAD") {
+                Ok(head) => repo.file_blobs(&head).map_err(git_error)?,
+                Err(_) => BTreeMap::new(),
+            };
+            Ok(chains
                 .into_iter()
-                .filter_map(|(path, last)| {
-                    let last = last?;
-                    let now = repo.checkout_blob(&path).ok()?.map(Blob::from);
-                    (now == last).then_some(path)
+                .filter_map(|(path, chain)| {
+                    let base = committed.get(&path).cloned().map(Blob::from);
+                    let mut expected = repo.checkout_blob(&path).ok()?.map(Blob::from);
+                    for owned in chain.iter().rev() {
+                        let edits_only =
+                            owned.held.is_none() && owned.by.iter().all(|by| by == "edit");
+                        if !edits_only || owned.last != expected {
+                            return None;
+                        }
+                        if owned.first == base {
+                            return Some(path);
+                        }
+                        expected = owned.first.clone();
+                    }
+                    None
                 })
                 .collect())
         })

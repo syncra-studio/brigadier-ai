@@ -1693,7 +1693,8 @@ async fn request_changes_record_a_steered_requests_edits() {
 
 /// On the user's checkout the thread leaves its edit uncommitted; the user has a change of
 /// their own. The question before a worker starts tells them apart: the user's file is theirs,
-/// the thread's is the thread's, never listed as the user's (#88).
+/// the thread's is the thread's, never listed as the user's (#88). A file the user changed
+/// before the thread edited it stays the user's: their change is in it too.
 #[tokio::test]
 async fn the_uncommitted_changes_question_tells_the_threads_edits_from_the_users() {
     let mut flow = Flow::start(
@@ -1715,8 +1716,16 @@ async fn the_uncommitted_changes_question_tells_the_threads_edits_from_the_users
                     "base\nthread b\n",
                 )
                 .await;
-                observed(&turn, 1).await;
-                return Reply::text("Changed 1 file, not committed.");
+                edit(
+                    &turn,
+                    &workspace.join("other.txt"),
+                    "edit-other",
+                    "base\nthe user's\n",
+                    "base\nthe user's\nthread other\n",
+                )
+                .await;
+                observed(&turn, 2).await;
+                return Reply::text("Changed 2 files, not committed.");
             }
             if turn.input.contains("Scout it.") {
                 let reply = turn
@@ -1733,6 +1742,7 @@ async fn the_uncommitted_changes_question_tells_the_threads_edits_from_the_users
     )
     .await;
     local(&mut flow).await;
+    std::fs::write(flow.repo.join("other.txt"), "base\nthe user's\n").unwrap();
     flow.say("Edit b.").await;
     flow.settled().await;
     std::fs::write(flow.repo.join("a.txt"), "the user's\n").unwrap();
@@ -1751,16 +1761,75 @@ async fn the_uncommitted_changes_question_tells_the_threads_edits_from_the_users
     assert_eq!(
         question.kind,
         crate::work::QuestionKind::UncommittedChanges {
-            files: vec!["a.txt".into()],
+            files: vec!["a.txt".into(), "other.txt".into()],
             thread_files: vec!["b.txt".into()],
         }
     );
     assert!(
         question.text.starts_with(
-            "Your checkout has 2 uncommitted changes: 1 of yours and 1 made by the thread."
+            "Your checkout has 3 uncommitted changes: 2 of yours and 1 made by the thread."
         ),
         "{}",
         question.text
+    );
+    flow.stop().await;
+}
+
+/// The thread edits a file and delegates in the same turn, before the edit's snapshot ran: the
+/// question still counts the edit as the thread's, not the user's (#88).
+#[tokio::test]
+async fn an_edit_just_before_the_delegation_is_the_threads_on_the_question() {
+    let mut flow = Flow::start(
+        "20261017-0213-issues-run-w08-same-turn",
+        options(ProviderKind::Claude),
+        script(move |turn| async move {
+            if !turn.is_orchestrator() {
+                std::future::pending::<()>().await;
+                return Reply::text("");
+            }
+            if turn.input.contains("Edit and scout.") {
+                let id = turn.conversation().unwrap();
+                let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+                edit(
+                    &turn,
+                    &workspace.join("b.txt"),
+                    "edit-b",
+                    "base\n",
+                    "base\nthread b\n",
+                )
+                .await;
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        serde_json::json!({"effort": "high", "title": "Look", "kind": "scout", "spec": "Look around."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            Reply::text("Fine.")
+        }),
+    )
+    .await;
+    local(&mut flow).await;
+    flow.say("Edit and scout.").await;
+    let board = flow
+        .until("the uncommitted-changes question", |board| {
+            board.questions.values().any(|question| {
+                matches!(
+                    question.kind,
+                    crate::work::QuestionKind::UncommittedChanges { .. }
+                )
+            })
+        })
+        .await;
+    let question = board.questions.values().next().unwrap();
+    assert_eq!(
+        question.kind,
+        crate::work::QuestionKind::UncommittedChanges {
+            files: vec![],
+            thread_files: vec!["b.txt".into()],
+        }
     );
     flow.stop().await;
 }
