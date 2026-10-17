@@ -547,19 +547,25 @@ fn replace_with_link(
         match place(file, &mut link) {
             Ok(()) => placed += 1,
             Err((reason, moved)) => {
-                // Moved aside but not replaced: it goes back with the rest.
-                if moved {
-                    placed += 1;
-                }
-                failed = Some(ReplaceSkip {
-                    path: file.path.clone(),
-                    reason,
-                });
+                failed = Some((
+                    ReplaceSkip {
+                        path: file.path.clone(),
+                        reason,
+                    },
+                    moved,
+                ));
                 break;
             }
         }
     }
-    if let Some(failed) = failed {
+    if let Some((failed, moved)) = failed {
+        // Moved aside but not replaced: it goes back first, only where nothing took its place.
+        if moved && let Err(reason) = undo_place(&staged[placed], &mut link) {
+            outcome.unrestored.push(ReplaceSkip {
+                path: failed.path.clone(),
+                reason,
+            });
+        }
         for file in staged[..placed].iter().rev() {
             if let Err(reason) = put_back(file, &mut link) {
                 outcome.unrestored.push(ReplaceSkip {
@@ -665,16 +671,8 @@ fn replace_checked_with_link(
             file.hard_links = hard_links;
             interfere();
             place(&file, &mut link).map_err(|(reason, moved)| {
-                // Nothing in its place now is this save's: the file from before goes back only
-                // where nothing is. Where a newer save took its place, that stays; the text
-                // from before goes too when it is just what was checked.
-                if moved && let Err(undo) = restore(&file, &mut link) {
-                    let taken = fs::symlink_metadata(&file.full).is_ok();
-                    if taken && fs::read(&file.aside).is_ok_and(|bytes| hash(&bytes) == file.hash) {
-                        let _ = fs::remove_file(&file.aside);
-                    } else {
-                        return undo;
-                    }
+                if moved && let Err(undo) = undo_place(&file, &mut link) {
+                    return undo;
                 }
                 reason
             })
@@ -802,7 +800,26 @@ fn place(
     })
 }
 
-/// Puts back a file `place` moved aside: its rewrite (if still as written) goes, and the file
+/// Undoes a `place` that failed after moving the file aside. Nothing in its place now is this
+/// write's: the file from before goes back only where nothing is. Where a newer save took its
+/// place, that stays; the text from before goes too when it is just what was checked.
+fn undo_place(
+    file: &Staged,
+    link: &mut impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> std::result::Result<(), String> {
+    let Err(undo) = restore(file, link) else {
+        return Ok(());
+    };
+    let taken = fs::symlink_metadata(&file.full).is_ok();
+    if taken && fs::read(&file.aside).is_ok_and(|bytes| hash(&bytes) == file.hash) {
+        let _ = fs::remove_file(&file.aside);
+        Ok(())
+    } else {
+        Err(undo)
+    }
+}
+
+/// Puts back a file `place` placed: its rewrite (if still as written) goes, and the file
 /// from before comes back. When something else is in its place, both stay: why, and where the
 /// text from before is.
 fn put_back(
@@ -1187,6 +1204,43 @@ mod tests {
         assert!(result.is_err(), "the save didn't go in");
         assert_eq!(held, "from the chat", "the editor's save stays");
         assert_eq!(left, vec!["notes.md".to_owned()], "nothing left beside it");
+    }
+
+    #[test]
+    fn a_replace_all_keeps_a_save_that_took_a_failed_files_place_even_with_the_same_text() {
+        let (dir, listed, eligible) = three_files("20261017-0213-issues-run-w22-same-text");
+        let matcher = Matcher::new(&query("hit")).unwrap();
+        let b = dir.canonicalize().unwrap().join("b.txt");
+        let mut saved = false;
+        let outcome = replace_with_link(
+            &dir,
+            &matcher,
+            "miss",
+            listed,
+            &eligible,
+            |_| {},
+            |from, to| {
+                if to == b.as_path() && !std::mem::replace(&mut saved, true) {
+                    // An editor saves the very same text in the moment b.txt was moved aside.
+                    fs::write(to, "b.txt miss\n").unwrap();
+                }
+                fs::hard_link(from, to)
+            },
+        );
+        let held = (
+            read(&dir, "a.txt"),
+            read(&dir, "b.txt"),
+            read(&dir, "c.txt"),
+        );
+        let left = others(&dir);
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(outcome.files, 0);
+        assert_eq!(outcome.skipped[0].path, "b.txt");
+        assert!(outcome.unrestored.is_empty(), "{:?}", outcome.unrestored);
+        assert_eq!(held.0, "a.txt hit\n", "put back");
+        assert_eq!(held.1, "b.txt miss\n", "the editor's save stays");
+        assert_eq!(held.2, "c.txt hit\n");
+        assert!(left.is_empty(), "nothing left beside them: {left:?}");
     }
 
     #[test]
