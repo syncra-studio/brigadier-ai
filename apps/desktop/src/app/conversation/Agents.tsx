@@ -71,13 +71,13 @@ const AgentRow = memo(function AgentRow({ taskId }: { taskId: string }) {
   const status = workerWorking(task) && first ? first : workerPreview(task);
   return (
     <li>
-      <div ref={ref}>
+      <div ref={ref} className="flex min-w-0 items-start">
       <button
         type="button"
         data-task={`task-${task.number}`}
         aria-label={`${name} ${workerState(task)}`}
         onClick={() => setPanel(task.id)}
-        className="hover:bg-foreground/5 rounded-lg flex min-h-10 w-full items-start gap-3 px-2 py-2 text-start transition-colors"
+        className="hover:bg-foreground/5 rounded-lg flex min-h-10 min-w-0 flex-1 items-start gap-3 px-2 py-2 text-start transition-colors"
       >
         <WorkerGlyph taskId={task.id} className="size-6" />
         <span className="flex min-w-0 flex-1 flex-col">
@@ -98,6 +98,10 @@ const AgentRow = memo(function AgentRow({ taskId }: { taskId: string }) {
           )}
         </span>
       </button>
+      {/* Its Stop on the row, without opening the worker first. */}
+      <span className="flex shrink-0 items-center gap-1 pt-2">
+        <StopWorker taskId={task.id} name={name ?? task.title} />
+      </span>
       </div>
     </li>
   );

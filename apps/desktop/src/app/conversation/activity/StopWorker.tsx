@@ -7,8 +7,8 @@ import { stopTask } from "@/state/actions";
 import { useBoard } from "@/state/board";
 
 /**
- * The user's Stop for one worker while it runs or waits to run (UI audit M4), on its strip row
- * and in its view's header. The thread hears that the user stopped it.
+ * The user's Stop for one worker while it runs or waits to run (UI audit M4), on its strip row,
+ * its Workers list row and in its view's header. The thread hears that the user stopped it.
  */
 export function StopWorker({ taskId, name }: { taskId: string; name: string }) {
   const stoppable = useBoard((s) => {

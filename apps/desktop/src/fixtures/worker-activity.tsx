@@ -34,6 +34,8 @@ function Fixture() {
   const [result, setResult] = useState("");
   const [panel, setPanel] = useState<string | null | undefined>();
   useEffect(() => {
+    // A waiting worker's Stop on its Workers list row, with nothing opened first (#201).
+    const listStop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="worker-list"] button[aria-label="Stop Check blocked"]')?.click(), 50);
     // Open the strip, as a click on its count does.
     const open = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-expanded]')?.click(), 100);
     // The running worker's own Stop, on its strip row (UI audit M4).
@@ -45,12 +47,14 @@ function Fixture() {
       strip: document.querySelector('[data-slot="workers-strip"]')?.textContent,
       stripRows: document.querySelectorAll('[data-slot="workers-strip-row"]').length,
       stripStops: [...document.querySelectorAll<HTMLButtonElement>('[data-slot="workers-strip"] [data-slot="worker-stop"]')].map((button) => button.getAttribute("aria-label")),
+      listStops: [...document.querySelectorAll<HTMLButtonElement>('[data-slot="worker-list"] [data-slot="worker-stop"]')].map((button) => button.getAttribute("aria-label")),
       headerStop: document.querySelector('[data-slot="worker-view"] [data-slot="worker-header"] [data-slot="worker-stop"]')?.getAttribute("aria-label"),
       doneHeaderStop: !!document.querySelector('[data-slot="worker-view-done"] [data-slot="worker-stop"]'),
       sent: sent.filter((call) => call.includes("stopTask")),
       avatars: [...document.querySelectorAll('[data-slot="task-row"] span[aria-hidden] svg')].map((svg) => svg.getBoundingClientRect().width),
     })), 400);
     return () => {
+      clearTimeout(listStop);
       clearTimeout(open);
       clearTimeout(stop);
       clearTimeout(timer);
