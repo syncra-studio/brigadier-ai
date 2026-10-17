@@ -638,7 +638,18 @@ pub(super) fn replace_checked(
     bytes: &[u8],
     interfere: impl FnOnce(),
 ) -> std::result::Result<(), String> {
-    let mut link = |from: &Path, to: &Path| fs::hard_link(from, to);
+    replace_checked_with_link(full, was, bytes, interfere, |from, to| {
+        fs::hard_link(from, to)
+    })
+}
+
+fn replace_checked_with_link(
+    full: &Path,
+    was: &[u8],
+    bytes: &[u8],
+    interfere: impl FnOnce(),
+    mut link: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> std::result::Result<(), String> {
     let mut file = Staged {
         path: String::new(),
         full: full.to_owned(),
@@ -653,11 +664,19 @@ pub(super) fn replace_checked(
         Ok(hard_links) => {
             file.hard_links = hard_links;
             interfere();
-            place(&file, &mut link).or_else(|(reason, moved)| {
-                if moved {
-                    put_back(&file, &mut link)?;
+            place(&file, &mut link).map_err(|(reason, moved)| {
+                // Nothing in its place now is this save's: the file from before goes back only
+                // where nothing is. Where a newer save took its place, that stays; the text
+                // from before goes too when it is just what was checked.
+                if moved && let Err(undo) = restore(&file, &mut link) {
+                    let taken = fs::symlink_metadata(&file.full).is_ok();
+                    if taken && fs::read(&file.aside).is_ok_and(|bytes| hash(&bytes) == file.hash) {
+                        let _ = fs::remove_file(&file.aside);
+                    } else {
+                        return undo;
+                    }
                 }
-                Err(reason)
+                reason
             })
         }
         Err(err) => Err(format!("couldn't prepare to replace it: {err}")),
@@ -803,6 +822,14 @@ fn put_back(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(format!("couldn't undo it: {err}")),
     }
+    restore(file, link)
+}
+
+/// Moves a file moved aside back into its place, refusing anything that took the place.
+fn restore(
+    file: &Staged,
+    link: &mut impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> std::result::Result<(), String> {
     let restored = if file.hard_links {
         link(&file.aside, &file.full).and_then(|()| fs::remove_file(&file.aside))
     } else {
@@ -1129,6 +1156,37 @@ mod tests {
         }
         assert!(others(&dir).is_empty());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_checked_replace_keeps_a_save_that_took_its_place_even_with_the_same_text() {
+        let dir = std::env::temp_dir().join(format!(
+            "20261017-0213-issues-run-w10-same-text-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.md");
+        fs::write(&file, "first").unwrap();
+        let mut saved = false;
+        let result = replace_checked_with_link(
+            &file,
+            b"first",
+            b"from the chat",
+            || {},
+            |from, to| {
+                if to == file.as_path() && !std::mem::replace(&mut saved, true) {
+                    // An editor saves the very same text in the moment the file was moved aside.
+                    fs::write(to, "from the chat").unwrap();
+                }
+                fs::hard_link(from, to)
+            },
+        );
+        let held = fs::read_to_string(&file).unwrap();
+        let left = others(&dir);
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(result.is_err(), "the save didn't go in");
+        assert_eq!(held, "from the chat", "the editor's save stays");
+        assert_eq!(left, vec!["notes.md".to_owned()], "nothing left beside it");
     }
 
     #[test]
