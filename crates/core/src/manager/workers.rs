@@ -1676,7 +1676,7 @@ impl SessionManager {
         };
         let outputs = outputs_dir(&workspace.scratch);
         let mut repo_note = format!(
-            "{repo_note}\nYour outputs folder (files for the thread and the user): {}",
+            "{repo_note}\nYour outputs folder (files for the thread and the user): {}\nLink a file there by its name as outputs/<name> (outputs/notes.md), never by that folder's path, in your report and messages too.",
             outputs.display()
         );
         if provider == ProviderKind::Codex {

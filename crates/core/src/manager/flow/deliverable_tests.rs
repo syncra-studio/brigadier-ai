@@ -44,12 +44,17 @@ fn link_in(text: &str) -> String {
 async fn a_scouts_output_linked_by_its_scratch_path_opens_the_stored_copy_after_the_task_ended() {
     let thread_inputs: Arc<Mutex<Vec<String>>> = Arc::default();
     let worker_link: Arc<Mutex<Option<String>>> = Arc::default();
-    let (heard, written) = (thread_inputs.clone(), worker_link.clone());
+    let worker_brief: Arc<Mutex<Option<String>>> = Arc::default();
+    let (heard, written, brief) = (
+        thread_inputs.clone(),
+        worker_link.clone(),
+        worker_brief.clone(),
+    );
     let flow = Flow::start(
         "deliverable-links",
         Options::default(),
         script(move |turn| {
-            let (heard, written) = (heard.clone(), written.clone());
+            let (heard, written, briefed) = (heard.clone(), written.clone(), brief.clone());
             async move {
                 if turn.is_orchestrator() {
                     heard.lock().unwrap().push(turn.input.clone());
@@ -71,6 +76,7 @@ async fn a_scouts_output_linked_by_its_scratch_path_opens_the_stored_copy_after_
                     return Reply::text(QUIET);
                 }
                 let outputs = outputs_folder(&turn);
+                *briefed.lock().unwrap() = Some(format!("{}\n{}", turn.prompt, turn.input));
                 std::fs::create_dir_all(&outputs).unwrap();
                 let file = outputs.join("rounding.md");
                 std::fs::write(&file, LIST).unwrap();
@@ -105,6 +111,19 @@ async fn a_scouts_output_linked_by_its_scratch_path_opens_the_stored_copy_after_
     flow.until("the scratch folder to go", |_| !scratch.exists())
         .await;
 
+    // Where the brief gives the worker its outputs folder's path, it says how to link a file
+    // there instead (issue #42).
+    let brief = worker_brief.lock().unwrap().clone().unwrap();
+    let named = brief
+        .split("Your outputs folder (files for the thread and the user): ")
+        .nth(1)
+        .and_then(|rest| rest.lines().nth(1))
+        .unwrap_or_default();
+    assert_eq!(
+        named,
+        "Link a file there by its name as outputs/<name> (outputs/notes.md), never by that folder's path, in your report and messages too.",
+        "{brief}"
+    );
     let worker_link = worker_link.lock().unwrap().clone().unwrap();
     let inputs = thread_inputs.lock().unwrap().clone();
     let addendum = inputs
