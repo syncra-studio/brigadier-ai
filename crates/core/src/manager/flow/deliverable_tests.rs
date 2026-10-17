@@ -25,7 +25,7 @@ const LIST: &str = "# Rounding\n\n- round_cents (src/money.ts:12)\n- to_minor (s
 
 /// The worker's outputs folder, as its brief names it.
 fn outputs_folder(turn: &Turn) -> PathBuf {
-    const SAYS: &str = "Your outputs folder (files for the orchestrator and the user): ";
+    const SAYS: &str = "Your outputs folder (files for the thread and the user): ";
     let text = format!("{}\n{}", turn.prompt, turn.input);
     let rest = &text[text.find(SAYS).expect("the brief names the outputs folder") + SAYS.len()..];
     PathBuf::from(rest.lines().next().unwrap().trim())

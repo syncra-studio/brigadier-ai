@@ -35,8 +35,9 @@ export function growthRows(requests: readonly RequestContext[], limit: number): 
       key: request.requestId,
       label: request.preview.trim() || "An earlier request",
       calls: request.calls === 1 ? "1 call" : `${request.calls} calls`,
+      // One report can cover several calls (a Claude turn): its context is read once.
       span:
-        request.calls === 1
+        request.calls === 1 || request.firstTokens === request.lastTokens
           ? formatTokens(request.firstTokens)
           : `${formatTokens(request.firstTokens)} → ${formatTokens(request.lastTokens)}`,
       growth: request.calls === 1 ? "" : formatGrowth(request.growthTokens),
@@ -111,7 +112,7 @@ export function summaryRows(summaries: readonly RequestSummary[], limit: number)
         }),
         steps: summary.steps
           .map((step) => {
-            // Its turns where they are counted (the thread's), and the model calls behind them.
+            // Its turns where they are counted, and the model calls behind them.
             const counts = [
               step.turns > 0 && `${step.turns} ${step.turns === 1 ? "turn" : "turns"}`,
               (step.turns > 0 || step.calls !== 1) && `${step.calls} ${step.calls === 1 ? "call" : "calls"}`,

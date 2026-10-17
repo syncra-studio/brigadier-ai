@@ -6,6 +6,7 @@ import { useLifecycleShortcuts } from "@/app/lifecycleShortcuts";
 import { AddProjectDialog } from "@/app/dialogs/AddProjectDialog";
 import { TrustDialog } from "@/app/dialogs/TrustDialog";
 import { UninstallDialog } from "@/app/dialogs/UninstallDialog";
+import { FeedbackDialog } from "@/app/feedback/FeedbackDialog";
 import { FolderDropZone } from "@/app/FolderDropZone";
 import { ConversationView } from "@/app/ConversationView";
 import { OnboardingDialog } from "@/app/onboarding/OnboardingDialog";
@@ -203,6 +204,7 @@ export function App() {
         <AddProjectDialog />
         <TrustDialog />
         <UninstallDialog />
+        <FeedbackDialog />
         <DeleteDialog />
         <FolderDropZone />
       </SidebarProvider>

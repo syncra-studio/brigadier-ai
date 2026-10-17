@@ -48,7 +48,7 @@ output: string | null, durationMs: number | null,
  * Where the whole output is kept, when `output` is cut or the CLI saved it to a file of
  * its own.
  */
-kept?: KeptOutput, } | { "type": "commandOutputDelta", itemId: string, text: string, } | { "type": "looked", itemId: string, cwd: string | null, reads: Array<FileRead>, searches: Array<FileSearch>, } | { "type": "progress", itemId: string, } | { "type": "backgroundJobs", running: number, } | { "type": "fileChanges", itemId: string, changes: Array<FileChange>, status: ItemStatus, } | { "type": "image", itemId: string, status: ItemStatus, path: string | null, prompt: string | null, } | { "type": "usage", 
+kept?: KeptOutput, } | { "type": "commandOutputDelta", itemId: string, text: string, } | { "type": "looked", itemId: string, cwd: string | null, reads: Array<FileRead>, searches: Array<FileSearch>, } | { "type": "progress", itemId: string, } | { "type": "backgroundJobs", running: Array<string>, } | { "type": "fileChanges", itemId: string, changes: Array<FileChange>, status: ItemStatus, } | { "type": "image", itemId: string, status: ItemStatus, path: string | null, prompt: string | null, } | { "type": "usage", 
 /**
  * Totals for the session so far.
  */

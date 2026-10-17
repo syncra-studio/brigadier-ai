@@ -29,4 +29,7 @@ if a.claude_workers:
 print("settings", req(a.data, {"method": "updateSettings", "settings": s})["status"])
 r = req(a.data, {"method": "addProject", "path": os.path.realpath(a.repo), "name": "", "init": False})
 print(json.dumps(r)[:600])
+# Trusted, as the user answers when they first enter the project; unanswered, it asks first.
+project = r["value"]["project"]["id"]
+print("trust", req(a.data, {"method": "setFolderTrust", "id": project, "path": None, "trusted": True})["status"])
 print("defaultPermission", req(a.data, {"method": "getCatalog"})["value"]["catalog"]["settings"]["defaultPermission"])

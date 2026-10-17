@@ -48,14 +48,18 @@ fn waits_for_its_job(ends: bool, inputs: Arc<Mutex<Vec<String>>>) -> Script {
             }
             let events = turn.events.clone();
             let _ = events
-                .send(ProviderEvent::BackgroundJobs { running: 1 })
+                .send(ProviderEvent::BackgroundJobs {
+                    running: vec!["job".into()],
+                })
                 .await;
             if ends {
                 // The job ends after the turn: its CLI starts a turn of its own.
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     let _ = events
-                        .send(ProviderEvent::BackgroundJobs { running: 0 })
+                        .send(ProviderEvent::BackgroundJobs {
+                            running: Vec::new(),
+                        })
                         .await;
                     let _ = events
                         .send(ProviderEvent::TurnStarted { turn_id: None })
@@ -139,7 +143,9 @@ fn orchestrator_waits_for_its_command(
             }
             let events = turn.events.clone();
             let _ = events
-                .send(ProviderEvent::BackgroundJobs { running: jobs })
+                .send(ProviderEvent::BackgroundJobs {
+                    running: (0..jobs).map(|job| format!("job-{job}")).collect(),
+                })
                 .await;
             tokio::spawn(async move {
                 release.notified().await;
@@ -154,7 +160,9 @@ fn orchestrator_waits_for_its_command(
                     return;
                 }
                 let _ = events
-                    .send(ProviderEvent::BackgroundJobs { running: jobs - 1 })
+                    .send(ProviderEvent::BackgroundJobs {
+                        running: (1..jobs).map(|job| format!("job-{job}")).collect(),
+                    })
                     .await;
                 let _ = events
                     .send(ProviderEvent::TurnStarted { turn_id: None })
@@ -2133,7 +2141,7 @@ async fn a_reviews_news_leaves_a_workers_question_open() {
             board.tasks.values().any(|task| {
                 task.blocked_reason
                     .as_deref()
-                    .is_some_and(|why| why.starts_with("Asked the orchestrator"))
+                    .is_some_and(|why| why.starts_with("Asked the thread"))
             })
         })
         .await;

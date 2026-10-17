@@ -46,6 +46,18 @@ test("storage refreshes, reviews, frees up space and chooses items", { timeout: 
   // By hand: the safe items start picked, each group's box shows whether all of it is; the
   // unmerged branch is never offered.
   assert.equal(seen.chooseTitle, "Choose what to remove");
+  // Compact: a line a group, closed, with how much of it is picked and its size.
+  assert.deepEqual(seen.chooseGroups, [
+    "Finished sessions’ work folders1 of 211.0 GB",
+    "Build files in idle sessions1 item2.0 GB",
+    "Old logs1 item400.0 MB",
+    "Downloaded models0 of 1150.0 MB",
+  ]);
+  assert.equal(seen.chooseItemsAtOpen, 0);
+  assert.ok(Number(seen.chooseHeightAtOpen) <= 400, `choose opens ${String(seen.chooseHeightAtOpen)}px tall`);
+  // Every group open, it never grows past 34rem: its list scrolls.
+  assert.ok(Number(seen.chooseHeight) <= 544, `choose is ${String(seen.chooseHeight)}px tall`);
+  assert.equal(seen.chooseScrolls, true);
   assert.deepEqual(seen.choose, [
     { label: "Finished sessions’ work folders", state: "indeterminate" },
     { label: "Work folder of “Fix login”", state: "checked" },
@@ -65,7 +77,7 @@ test("storage refreshes, reviews, frees up space and chooses items", { timeout: 
     "Old logs.",
     "Goes to the Trash.",
   ]);
-  assert.equal(seen.chooseStatus, "3 of 5 selected · 11.4 GB");
+  assert.equal(seen.chooseStatus, "11.4 GB selected");
   assert.equal(seen.reveals, 1);
   // The group's box picks the rest of it.
   assert.deepEqual(seen.groupPicked, [
@@ -73,7 +85,7 @@ test("storage refreshes, reviews, frees up space and chooses items", { timeout: 
     { label: "Work folder of “Fix login”", state: "checked" },
     { label: "Work folder of “Draft”", state: "checked" },
   ]);
-  assert.equal(seen.chooseStatusAfter, "4 of 5 selected · 13.4 GB");
+  assert.equal(seen.chooseStatusAfter, "13.4 GB selected");
   // The one button goes to the same confirmation as Free up space.
   assert.equal(seen.removeButton, "Review 4 items");
   assert.deepEqual(seen.chosenReview, {

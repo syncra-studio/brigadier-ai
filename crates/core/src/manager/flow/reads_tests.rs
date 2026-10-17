@@ -276,7 +276,7 @@ async fn the_thread_s_reads_and_searches_fill_thread_reads_and_a_worker_s_do_not
             .clone()
             .expect("the worker ran");
         assert!(
-            input.contains("## Files the orchestrator read")
+            input.contains("## Files the thread read")
                 && input.contains("### README.md (lines 1–1 of 1)"),
             "{vendor}: {input}"
         );

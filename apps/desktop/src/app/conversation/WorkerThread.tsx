@@ -17,7 +17,7 @@ import {
 
 import { FileList } from "@/app/conversation/FileList";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
-import { workerDone, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
+import { receivedMessage, workerDone, workerOutcome, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
 import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { changeStats, FileChangeRows } from "@/app/conversation/activity/EditedFiles";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
@@ -121,7 +121,16 @@ function WorkerMarkdown({ text, streaming = false }: { text: string; streaming?:
   return <MarkdownBlock text={useWorkerText(text)} streaming={streaming} />;
 }
 
-function EntryView({ entry }: { entry: ThreadEntry }) {
+/** An earlier report, where the worker sent it: its answer of that turn. */
+function EarlierAnswer({ text }: { text: string }) {
+  return (
+    <div data-slot="worker-earlier-report" className="text-foreground min-w-0 leading-relaxed wrap-anywhere">
+      <WorkerMarkdown text={text} />
+    </div>
+  );
+}
+
+function EntryView({ entry, sent }: { entry: Exclude<ThreadEntry, { kind: "report" }>; sent: readonly string[] }) {
   if (entry.kind === "actions") return <>{entry.items.map((item) => <ActionRow key={item.key} item={item} />)}</>;
   const { item } = entry;
   switch (item.kind) {
@@ -130,8 +139,8 @@ function EntryView({ entry }: { entry: ThreadEntry }) {
       return null;
     case "message":
       return item.role === "user" ? (
-        <div className="bg-secondary rounded-thread min-w-0 max-w-full self-end px-3 py-2 text-sm whitespace-pre-wrap">
-          {item.text}
+        <div data-slot="worker-received" className="bg-secondary rounded-thread min-w-0 max-w-full self-end px-3 py-2 text-sm whitespace-pre-wrap">
+          {receivedMessage(item.text, sent) ?? item.text}
         </div>
       ) : (
         <div className="text-foreground min-w-0 leading-relaxed wrap-anywhere">
@@ -206,7 +215,10 @@ function Brief({ text }: { text: string }) {
   );
 }
 
-/** "Working for 1m 2s" while it works, "Worked for 3m 10s" once done, over a hairline. */
+/**
+ * "Working for 1m 2s" while it works, "Worked for 3m 10s" once done, "Stopped after 3m 10s" when
+ * it was stopped before its work was used, over a hairline.
+ */
 function WorkHeader({ task }: { task: Task }) {
   const done = workerDone(task);
   const now = useNow(done ? null : 1000);
@@ -214,13 +226,16 @@ function WorkHeader({ task }: { task: Task }) {
   const took = formatDuration(Math.max(0, (done ? task.updatedAtMs : now) - start));
   return (
     <div data-slot="worker-work-header" className="text-foreground/50 border-border border-b pb-2 text-sm tabular-nums">
-      {done ? `Worked for ${took}` : `Working for ${took}`}
+      {workerOutcome(task) === "stopped" ? `Stopped after ${took}` : done ? `Worked for ${took}` : `Working for ${took}`}
     </div>
   );
 }
 
-/** The report as the thread's answer, with copy and rate; when it came shows on hover. */
-function Answer({ task, text }: { task: Task; text?: string | undefined }) {
+/**
+ * The report as the thread's answer, with copy and rate; when it came shows on hover. `earlier`:
+ * the worker was sent back to work after it, so it is history, not the answer to open at.
+ */
+function Answer({ task, text, earlier = false }: { task: Task; text?: string | undefined; earlier?: boolean }) {
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   const now = useNow(60_000);
   const subject = `task:${task.id}`;
@@ -233,7 +248,7 @@ function Answer({ task, text }: { task: Task; text?: string | undefined }) {
   const rate = (rating: Rating) =>
     action.run(() => rateMessage(task.conversationId, subject, rating));
   return (
-    <div data-slot="worker-report" className="group/answer flex scroll-mt-4 flex-col gap-2">
+    <div data-slot={earlier ? "worker-earlier-report" : "worker-report"} className="group/answer flex scroll-mt-4 flex-col gap-2">
       <div className="text-foreground min-w-0 leading-relaxed wrap-anywhere">
         <MarkdownBlock text={summary} />
       </div>
@@ -264,6 +279,9 @@ function Answer({ task, text }: { task: Task; text?: string | undefined }) {
   );
 }
 
+/** A message the worker was sent, among its thread's entries. */
+const received = (entry: ThreadEntry) => entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user";
+
 export function WorkerThread({ task }: { task: Task }) {
   const transcript = useBoard((s) => s.board?.transcripts[task.id]);
   const [error, setError] = useState<string | null>(null);
@@ -276,22 +294,34 @@ export function WorkerThread({ task }: { task: Task }) {
   const [folding] = useState(() => new IncrementalFold());
   const raw = transcript?.entries ?? NO_ENTRIES;
   const failed = task.state === "failed";
+  // Of its CLI's input, the thread shows the messages it was sent after its brief, where they came.
   const entries = useMemo(
     () =>
       threadEntries(folding.fold(raw)).filter(
-        (entry) => !(entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user") && !workerCliNotice(entry, failed),
+        (entry) =>
+          !(entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user" && receivedMessage(entry.item.text, task.messages) === null) &&
+          !workerCliNotice(entry, failed),
       ),
-    [folding, raw, failed],
+    [folding, raw, failed, task.messages],
   );
+  // A message shown where it came is not listed again with the previous messages.
+  const unplaced = task.messages.filter((message) => !entries.some((entry) =>
+    entry.kind === "item" && entry.item.kind === "message" && entry.item.role === "user" && receivedMessage(entry.item.text, task.messages) === message));
   const working = workerWorking(task);
+  const done = workerDone(task);
+  // Its latest report is the answer at the bottom once it is done; sent back to work (and maybe
+  // stopped at that), the report stays where it sent it, above the message that sent it back.
+  const reportAt = entries.findLastIndex((entry) => entry.kind === "report");
+  const lastReport = entries[reportAt];
+  const reportInPlace = reportAt >= 0 && (!done || entries.slice(reportAt + 1).some(received));
   // The prompt and early steps belong to the same previous-messages disclosure.
   const tail = entries.at(-1);
   // The report is the answer when there is one; a message after it ("Reported.") stays a message.
-  const finalReply = workerDone(task) && !task.report?.summary && tail?.kind === "item" && tail.item.kind === "message" && tail.item.role === "assistant" ? tail.item.text : undefined;
+  const finalReply = done && !task.report?.summary && tail?.kind === "item" && tail.item.kind === "message" && tail.item.role === "assistant" ? tail.item.text : undefined;
   const visibleEntries = finalReply ? entries.slice(0, -1) : entries;
   const activity = workerActivity(visibleEntries);
   const previous = activity.slice(0, Math.max(0, activity.length - 3));
-  const previousCount = task.messages.length + previous.reduce((count, item) => count + (item.type === "group" ? item.items.length : 1), 0);
+  const previousCount = unplaced.length + previous.reduce((count, item) => count + (item.type === "group" ? item.items.length : 1), 0);
   const recent = activity.slice(previous.length);
   const last = visibleEntries.at(-1);
   // A thought with no words yet is the live line's "Thinking".
@@ -312,8 +342,11 @@ export function WorkerThread({ task }: { task: Task }) {
         }}
         renderStep={(step, key) => <ActionRow key={key} item={step} />}
       />
+    ) : item.entry.kind === "report" ? (
+      item.entry === lastReport ? (reportInPlace ? <Answer key={item.entry.key} task={task} earlier /> : null)
+        : item.entry.summary && <EarlierAnswer key={item.entry.key} text={item.entry.summary} />
     ) : (
-      <EntryView key={item.entry.kind === "actions" ? item.entry.key : item.entry.item.key} entry={item.entry} />
+      <EntryView key={item.entry.kind === "actions" ? item.entry.key : item.entry.item.key} entry={item.entry} sent={task.messages} />
     );
   const [open, setOpen] = useState(false);
 
@@ -361,7 +394,7 @@ export function WorkerThread({ task }: { task: Task }) {
           <CollapsibleContent className="gap-activity flex flex-col py-4">
             {transcript?.hasMore && <Button size="xs" variant="ghost" className="self-start" disabled={transcript.loading}
               onClick={() => void loadEarlierWorkerEntries(task.conversationId, task.id)}>Load earlier</Button>}
-            {task.messages.map((text, index) => <WorkerMarkdown key={index} text={text} />)}
+            {unplaced.map((text, index) => <WorkerMarkdown key={index} text={text} />)}
             {previous.map((item, index) => show(item, index))}
           </CollapsibleContent>
         </Collapsible>}
@@ -373,8 +406,8 @@ export function WorkerThread({ task }: { task: Task }) {
         {recent.map((item, index) => show(item, previous.length + index))}
         {thinking && <ThinkingLine text={thinking.text} />}
         {now && !nowInGroup && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}
-        {!working && !workerDone(task) && <p className="text-foreground/65 text-sm">{workerPreview(task)}</p>}
-        <Answer task={task} text={finalReply} />
+        {!working && !done && <p className="text-foreground/65 text-sm">{workerPreview(task)}</p>}
+        {!reportInPlace && <Answer task={task} text={finalReply} />}
         {task.error && <p className="text-destructive text-sm">{task.error}</p>}
       </div>
       </StoppedBy.Provider>

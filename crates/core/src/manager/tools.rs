@@ -377,10 +377,9 @@ impl SessionManager {
                     .await?;
                     crate::heap(|| self.settle_requests(id)).await;
                 }
-                let (reply, answered) = crate::heap(|| {
-                    self.message_worker(id, &task, args.text.clone(), "the orchestrator")
-                })
-                .await?;
+                let (reply, answered) =
+                    crate::heap(|| self.message_worker(id, &task, args.text.clone(), "the thread"))
+                        .await?;
                 let text = super::brains::cut(args.text.trim(), crate::work::STEP_TEXT_MAX);
                 crate::heap(|| {
                     self.update_task(id, &task.id, |task| messaged(task, args.text, answered))
@@ -1023,7 +1022,7 @@ impl SessionManager {
         }
         if self.repo_trust(id) == Some(false) {
             return Err(Error::Invalid(
-                "The user doesn't trust this project's folder, so this session asks first whatever its level: say in your answer what needs more access; trusting the folder is in the project's settings.".into(),
+                "The user hasn't trusted this project's folder, so this session asks first whatever its level: say in your answer what needs more access; trusting the folder is in the project's settings.".into(),
             ));
         }
         if self.overnight.active.get(id).is_some() {

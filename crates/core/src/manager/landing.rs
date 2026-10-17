@@ -1026,7 +1026,7 @@ impl SessionManager {
         );
         if !subject.messages.is_empty() {
             text.push_str(
-                "\n\nWhat the orchestrator told the worker after that, oldest first (it changes the task where it differs):",
+                "\n\nWhat the thread told the worker after that, oldest first (it changes the task where it differs):",
             );
             for message in &subject.messages {
                 text.push_str(&format!("\n---\n{message}"));

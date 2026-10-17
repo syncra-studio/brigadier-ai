@@ -975,7 +975,7 @@ impl SessionManager {
         // One write: nothing is kept from a call that failed.
         let node_id = blocking(move || {
             match replaces {
-                Some(old) => brain.record_replacing(node, &old, "replaced by the orchestrator"),
+                Some(old) => brain.record_replacing(node, &old, "replaced by the thread"),
                 None => brain.record(node),
             }
             .map_err(brain_error)

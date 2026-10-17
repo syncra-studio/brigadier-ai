@@ -243,7 +243,7 @@ fn brain_lines(hits: &[BrainHit]) -> Option<(String, u32)> {
     (count > 0).then(|| (text.trim_end().to_owned(), count))
 }
 
-const HEADER: &str = "# Context pack\n\nWhat the orchestrator already looked at for this task, so you don't search for it again. It is all here; read more of the files where you need it.\n\n";
+const HEADER: &str = "# Context pack\n\nWhat the thread already looked at for this task, so you don't search for it again. It is all here; read more of the files where you need it.\n\n";
 
 /// The pack's text, at most [`PACK_MAX`] bytes: the thread's searches, the files it read, then
 /// the definitions in the files the task names (`outlines`). Empty when there is nothing.
@@ -450,8 +450,7 @@ fn build(
         outlines_wanted.min(OUTLINES_KEPT) + 64
     };
 
-    const FILES_HEADING: &str =
-        "## Files the orchestrator read (as they are in your worktree now)\n\n";
+    const FILES_HEADING: &str = "## Files the thread read (as they are in your worktree now)\n\n";
     const UNSHOWN_HEADING: &str = "Also read, not shown here (no room left in the pack):\n";
     // Kept for the list of files not shown: its heading and the count of those not named
     // (`UNSHOWN_KEPT`), and some names (`NAMES_KEPT`, while files are shown).

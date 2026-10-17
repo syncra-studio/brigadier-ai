@@ -1280,7 +1280,11 @@ impl SessionManager {
         .await;
         // The full checks' commands are the project's, not a package's to learn.
         let full_checks = caller.task_id.is_none() && caller.low_priority;
-        if ran.status == "exit 0" && !full_checks && !scratch_command(command, &caller.tmp) {
+        if ran.status == "exit 0"
+            && !full_checks
+            && !scratch_command(command, &caller.tmp)
+            && !scratch_command(command, &caller.scratch)
+        {
             self.learn_check(caller, workdir, command).await;
         }
         Ok(CheckDone {
@@ -1581,6 +1585,7 @@ impl SessionManager {
             return BTreeMap::new();
         };
         let brain = brain.brain.clone();
+        let tree = caller.tree.clone();
         let mut folders: BTreeSet<String> = packages.iter().map(|p| p.folder()).collect();
         folders.insert(".".into());
         blocking(move || {
@@ -1589,7 +1594,13 @@ impl SessionManager {
                 if let Ok(Some(node)) =
                     brain.node_by_key(NodeKind::Convention, &learned_key(&folder))
                 {
-                    learned.insert(folder, learned_commands(&node.body));
+                    let mut commands = learned_commands(&node.body);
+                    // A script a worker ran and then deleted is no check any more (#107).
+                    if let Some(tree) = &tree {
+                        let dir = tree.join(&folder);
+                        commands.retain(|command| !script_gone(command, &dir));
+                    }
+                    learned.insert(folder, commands);
                 }
             }
             Ok(learned)
@@ -1998,6 +2009,54 @@ fn scratch_command(command: &str, tmp: &Path) -> bool {
         ]
         .iter()
         .any(|scratch| command.contains(scratch))
+}
+
+/// Whether `command`, run in `dir`, runs a script file that isn't there: a worker's one-off
+/// script, deleted since its check passed, which the full checks would fail on (#107). Only
+/// what its first command runs is looked at (after any `cd`s, from the folder they move to):
+/// `./check`, or the file an interpreter runs (`bash x.sh`, `node /abs/try.js`). A later
+/// command's script may be one an earlier command builds, and a command with quotes, a
+/// subshell or a variable isn't read at all: such a check is kept.
+fn script_gone(command: &str, dir: &Path) -> bool {
+    const INTERPRETERS: &[&str] = &[
+        "bash", "sh", "zsh", "node", "python", "python3", "ruby", "perl", "tsx", "ts-node", "bun",
+    ];
+    if command.contains(['\'', '"', '`', '(', ')', '$', '~', '*', '?', '[', '{', '\\']) {
+        return false;
+    }
+    let mut at = dir.to_path_buf();
+    for segment in command.split([';', '&', '|']) {
+        let words: Vec<&str> = segment.split_whitespace().collect();
+        let Some((first, rest)) = words.split_first() else {
+            continue;
+        };
+        if *first == "cd" {
+            match rest {
+                [folder] => at = at.join(folder),
+                _ => return false,
+            }
+            continue;
+        }
+        let script = if first.starts_with("./") || first.starts_with('/') {
+            Some(*first)
+        } else if INTERPRETERS.contains(first) {
+            // An option may take the next word (`--require x`): only a bare `bash x.sh` is read.
+            rest.first().filter(|word| !word.starts_with('-')).copied()
+        } else {
+            None
+        };
+        // Only a word that reads as a file: `bash -o pipefail …` and `bun test` name none.
+        let file = |word: &str| {
+            word.contains('/')
+                || [
+                    ".sh", ".js", ".mjs", ".cjs", ".ts", ".mts", ".py", ".rb", ".pl",
+                ]
+                .iter()
+                .any(|ext| word.ends_with(ext))
+        };
+        return script.is_some_and(|script| file(script) && !at.join(script).exists());
+    }
+    false
 }
 
 fn learned_body(commands: &[String]) -> String {
@@ -3060,6 +3119,54 @@ mod tests {
             learned_commands(&learned_body(&learned)),
             vec!["npm run check"]
         );
+    }
+
+    /// #107: a learned check whose script was deleted (a worker's one-off, in its worktree or
+    /// its scratch folder) is skipped; one whose script is there, or that runs no script, stays.
+    #[test]
+    fn a_learned_check_whose_script_is_gone_is_skipped() {
+        let dir = Temp::new("script-gone");
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::create_dir_all(dir.join("web")).unwrap();
+        std::fs::write(dir.join("scripts/check.sh"), "").unwrap();
+        std::fs::write(dir.join("web/smoke.mjs"), "").unwrap();
+        for kept in [
+            "npm run check",
+            "cargo test -p brigadier-core",
+            "bash scripts/check.sh",
+            "./scripts/check.sh --fast",
+            "cd web && node smoke.mjs",
+            "node --test 'src/**/*.test.ts'",
+            "npx eslint . --ext .ts",
+            "npm run build && node dist/check.js",
+            "bash 'scripts/check smoke.sh'",
+            "(cd web && node smoke.mjs) && bash scripts/check.sh",
+            "python3 -m pytest tests/x.py",
+            "node -e console.log(1)",
+            "pnpm vitest run src/a.test.ts",
+            "bash -o pipefail scripts/check.sh",
+            "bun test",
+            "node --require assert/strict --test tests/a.test.cjs",
+            "node --test tests/[ab].test.cjs",
+            "node --test tests/?.test.cjs",
+        ] {
+            assert!(!script_gone(kept, &dir), "{kept}");
+        }
+        for gone in [
+            "bash try-fix.sh",
+            "node verify-totals.mjs && npm test",
+            "./check-once",
+            "python3 /Users/me/Library/brigadier/scratch/t1/probe.py",
+            "cd web && node gone.mjs",
+        ] {
+            assert!(script_gone(gone, &dir), "{gone}");
+        }
+        // A worker's scratch folder is no place for a check to learn from.
+        let scratch = Path::new("/Users/me/Library/Application Support/brigadier/scratch/t1");
+        assert!(scratch_command(
+            "node '/Users/me/Library/Application Support/brigadier/scratch/t1/probe.js'",
+            scratch
+        ));
     }
 
     /// `crates/index` used by `crates/core`, used by `crates/daemon`; `crates/other` alone; a

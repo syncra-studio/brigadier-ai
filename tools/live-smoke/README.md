@@ -16,7 +16,7 @@ and five Codex turns, cheap models at low effort, tiny prompts, about 5 minutes.
 
 ## What it does
 
-- Starts its own daemon (this tree's `target/debug/brigadierd`) on `/tmp/live-smoke-<time>-<pid>/data`
+- Starts its own daemon (this tree's `debug/brigadierd`, in `CARGO_TARGET_DIR` when set) on `/tmp/live-smoke-<time>-<pid>/data`
   with a clean environment, onboarded, Fable hidden, reviews and Brain enrichment off.
 - Two throwaway git projects; sessions C1, C2 and C3 (Claude, `sonnet` low) in the first, X
   (Codex, `gpt-6-luna` low) in the second, all Full access in the project's own checkout. A model the

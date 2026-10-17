@@ -502,7 +502,7 @@ impl SessionManager {
                         format!("question:{}:{}", question.id, item.text),
                         format!("{} → {answer}", item.text),
                         format!(
-                            "The orchestrator asked the user: {}\nThe user answered: {answer}",
+                            "The thread asked the user: {}\nThe user answered: {answer}",
                             item.text
                         ),
                     );

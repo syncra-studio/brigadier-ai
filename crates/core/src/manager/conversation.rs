@@ -490,9 +490,7 @@ impl ConvState {
     /// Whether the CLI's own jobs still run past their turn, or one that ended still owes its
     /// turn (see `background` and `lingering_request`).
     fn has_cli_jobs(&self) -> bool {
-        self.background
-            .as_ref()
-            .is_some_and(|jobs| jobs.running > 0 || jobs.request.is_some())
+        self.background.as_ref().is_some_and(Background::waits)
             || !self.lingering.is_empty()
             || self.lingering_request.is_some()
     }
@@ -528,12 +526,20 @@ pub(super) enum PeerReminder {
 
 /// The background jobs of a conversation's CLI (see `ConvState::background`).
 struct Background {
-    /// The request whose turn started them; the turn their end starts serves it too. None once
-    /// the user stopped it, or for jobs no turn of ours was seen starting: still counted, so
-    /// their end revives no request.
-    request: Option<String>,
-    /// How many still run, as the CLI last said.
-    running: u32,
+    /// Those still running, as the CLI last said, by its id for each, with the request whose
+    /// turn started it: the turn its end starts serves that request too. None once the user
+    /// stopped it, or for a job no turn of ours was seen starting: still counted, so its end
+    /// revives no request.
+    running: Vec<(String, Option<String>)>,
+    /// The turns of jobs that ended, the oldest first: each job's end starts one, which serves
+    /// its request (none for a job of no request's).
+    owed: Vec<Option<String>>,
+    /// Turns the CLI started for a job's end before it said which job ended, by the request
+    /// each served: that word owes no turn again.
+    early: Vec<Option<String>>,
+    /// Such turns of jobs of different requests: which job's end each was isn't known, so
+    /// none was adopted.
+    early_unknown: u32,
     /// The CLI that runs them: they end with it.
     cli: std::sync::Weak<Cli>,
 }
@@ -542,6 +548,56 @@ impl Background {
     fn of(&self, cli: &Arc<Cli>) -> bool {
         std::ptr::eq(self.cli.as_ptr(), Arc::as_ptr(cli))
     }
+
+    /// Whether a job still runs or one that ended still owes its request a turn.
+    fn waits(&self) -> bool {
+        !self.running.is_empty() || !self.owed.is_empty()
+    }
+
+    /// Each request the jobs work for, and how many of its jobs still run (none: the turn of
+    /// one's end is still to come).
+    fn requests(&self) -> HashMap<String, u32> {
+        let mut requests: HashMap<String, u32> = self
+            .owed
+            .iter()
+            .flatten()
+            .map(|request| (request.clone(), 0))
+            .collect();
+        for request in self
+            .running
+            .iter()
+            .filter_map(|(_, request)| request.clone())
+        {
+            *requests.entry(request).or_default() += 1;
+        }
+        requests
+    }
+
+    /// The request the turn the CLI starts on its own now serves, which it takes: the oldest
+    /// ended job's, else that of every job still running when they all have the same (the turn
+    /// came before the CLI said which job ended).
+    fn take_turn(&mut self) -> Option<String> {
+        if !self.owed.is_empty() {
+            return self.owed.remove(0);
+        }
+        let mut owners = self.running.iter().map(|(_, request)| request.clone());
+        let first = owners.next()?;
+        if !owners.all(|request| request == first) {
+            self.early_unknown += 1;
+            return None;
+        }
+        self.early.push(first.clone());
+        first
+    }
+
+    /// Every request the jobs' turns serve, to change.
+    fn owners(&mut self) -> impl Iterator<Item = &mut Option<String>> {
+        self.running
+            .iter_mut()
+            .map(|(_, owner)| owner)
+            .chain(self.owed.iter_mut())
+            .chain(self.early.iter_mut())
+    }
 }
 
 /// How long a request waits, once its background jobs have ended, for the turn their end
@@ -549,7 +605,7 @@ impl Background {
 #[cfg(not(test))]
 const BACKGROUND_TURN_GRACE: Duration = Duration::from_secs(60);
 #[cfg(test)]
-const BACKGROUND_TURN_GRACE: Duration = Duration::from_millis(500);
+pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_millis(500);
 
 /// Where a request the orchestrator sent a worker back in stands, while the user has seen no
 /// reply since.
@@ -1190,7 +1246,8 @@ impl ConvLive {
             background: state
                 .background
                 .as_ref()
-                .and_then(|jobs| Some((jobs.request.clone()?, jobs.running))),
+                .map(Background::requests)
+                .unwrap_or_default(),
             reviews_due: self.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0,
         }
     }
@@ -1214,9 +1271,9 @@ pub(super) struct RequestActivity {
     pub outcomes: HashMap<String, RequestState>,
     /// Requests whose last turn left the answer to what wakes the thread next.
     pub deferred: HashSet<String>,
-    /// The request the CLI's background jobs run for, and how many still run (none: their
-    /// end's turn is still to come).
-    pub background: Option<(String, u32)>,
+    /// The requests the CLI's background jobs run for, and how many of each still run (none:
+    /// the turn of one's end is still to come).
+    pub background: HashMap<String, u32>,
     /// A landing's review isn't stored yet.
     pub reviews_due: bool,
 }
@@ -2024,19 +2081,23 @@ impl SessionManager {
             // A request that waits only for the CLI's background jobs ends Stopped; the turn
             // their end starts is the CLI's own again.
             let running = state.busy.then(|| state.request.clone()).flatten();
-            let waits_on_jobs = match &mut state.background {
-                Some(jobs) if jobs.request.is_some() && jobs.request != running => {
-                    jobs.request.take()
+            let mut waits_on_jobs: Vec<String> = Vec::new();
+            if let Some(jobs) = &mut state.background {
+                for owner in jobs.owners() {
+                    if let Some(request) =
+                        owner.take_if(|request| Some(&*request) != running.as_ref())
+                        && !waits_on_jobs.contains(&request)
+                    {
+                        waits_on_jobs.push(request);
+                    }
                 }
-                _ => None,
-            };
+            }
             // So does one that waits for Codex commands its turn left running: their end tells
             // the thread with no request.
             let waits_on_commands = state
                 .lingering_request
                 .take_if(|request| Some(&*request) != running.as_ref());
-            let waits_on_jobs: Vec<String> =
-                waits_on_jobs.into_iter().chain(waits_on_commands).collect();
+            waits_on_jobs.extend(waits_on_commands);
             for request in &waits_on_jobs {
                 state
                     .outcomes
@@ -2125,6 +2186,29 @@ impl SessionManager {
         self.stop_merge_for_stop(&id).await;
         self.settle_requests(&id).await;
         interrupted
+    }
+
+    /// After a start, before any request settles: the requests whose thread left their answer
+    /// to checks or a review still wait for it, as they did before the stop.
+    pub(crate) async fn recover_deferred(&self, id: &ConversationId) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        let deferred: Vec<String> = board
+            .requests
+            .values()
+            .filter(|request| {
+                request.deferred
+                    && matches!(request.state, RequestState::Working | RequestState::Waiting)
+            })
+            .map(|request| request.id.clone())
+            .collect();
+        if deferred.is_empty() {
+            return;
+        }
+        if let Ok(conv) = self.conv(id) {
+            conv.state.lock().await.deferred.extend(deferred);
+        }
     }
 
     /// After a start: the request whose thread turn the daemon's last stop cut off (a quit
@@ -3841,47 +3925,79 @@ impl SessionManager {
 
     /// The conversation CLI's background jobs changed: the request whose turn started them
     /// works on until the turn their end starts is over.
-    async fn background_jobs(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>, running: u32) {
+    async fn background_jobs(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>, running: Vec<String>) {
         let armed = {
             let mut state = conv.state.lock().await;
-            let known = state.background.as_ref().filter(|jobs| jobs.of(cli));
-            let before = known.map_or(0, |jobs| jobs.running);
-            if running == before {
+            let mut jobs = state
+                .background
+                .take_if(|jobs| jobs.of(cli))
+                .unwrap_or_else(|| Background {
+                    running: Vec::new(),
+                    owed: Vec::new(),
+                    early: Vec::new(),
+                    early_unknown: 0,
+                    cli: Arc::downgrade(cli),
+                });
+            let same = jobs.running.len() == running.len()
+                && jobs.running.iter().all(|(job, _)| running.contains(job));
+            if same {
+                state.background = jobs.waits().then_some(jobs);
                 return;
             }
-            // A job started now is the running turn's; one ending is still theirs.
-            let request = match known {
-                Some(jobs) if !(state.busy && running > before) => jobs.request.clone(),
-                _ if state.busy => state.request.clone(),
-                _ => None,
-            };
-            let waits = request.is_some();
-            state.background = Some(Background {
-                request,
-                running,
-                cli: Arc::downgrade(cli),
-            });
+            // Each job keeps the request whose turn started it: a job started now is the
+            // running turn's, and one that ended owes its own request the turn its end starts.
+            let ended: Vec<Option<String>> = jobs
+                .running
+                .extract_if(.., |(job, _)| !running.contains(job))
+                .map(|(_, request)| request)
+                .collect();
+            for request in ended {
+                match jobs.early.iter().position(|early| *early == request) {
+                    Some(at) => {
+                        jobs.early.remove(at);
+                    }
+                    None if jobs.early_unknown > 0 => jobs.early_unknown -= 1,
+                    None => jobs.owed.push(request),
+                }
+            }
+            let owner = state.busy.then(|| state.request.clone()).flatten();
+            for job in running {
+                if !jobs.running.iter().any(|(known, _)| *known == job) {
+                    jobs.running.push((job, owner.clone()));
+                }
+            }
+            let owes = !state.busy && !jobs.owed.is_empty();
+            state.background = jobs.waits().then_some(jobs);
             state.background_timer += 1;
-            (running == 0 && !state.busy && waits).then_some(state.background_timer)
+            owes.then_some(state.background_timer)
         };
         self.settle_requests(&conv.id).await;
         if let Some(timer) = armed {
-            let (manager, conv) = (self.arc(), conv.clone());
-            self.spawn(async move {
-                tokio::time::sleep(BACKGROUND_TURN_GRACE).await;
-                let gone = {
-                    let mut state = conv.state.lock().await;
-                    let gone = !state.busy && state.background_timer == timer;
-                    if gone {
+            self.background_grace(conv, timer);
+        }
+    }
+
+    /// The turns ended background jobs owe that haven't started [`BACKGROUND_TURN_GRACE`]
+    /// after the CLI's word `timer` won't: their requests no longer wait for them.
+    fn background_grace(&self, conv: &Arc<ConvLive>, timer: u64) {
+        let (manager, conv) = (self.arc(), conv.clone());
+        self.spawn(async move {
+            tokio::time::sleep(BACKGROUND_TURN_GRACE).await;
+            let gone = {
+                let mut state = conv.state.lock().await;
+                let gone = !state.busy && state.background_timer == timer;
+                if gone && let Some(jobs) = &mut state.background {
+                    jobs.owed.clear();
+                    if !jobs.waits() {
                         state.background = None;
                     }
-                    gone
-                };
-                if gone {
-                    manager.settle_requests(&conv.id).await;
                 }
-            });
-        }
+                gone
+            };
+            if gone {
+                manager.settle_requests(&conv.id).await;
+            }
+        });
     }
 
     /// Stores the conversation CLI's text, reasoning and tool calls in the thread,
@@ -4030,12 +4146,29 @@ impl SessionManager {
             let mut words: Vec<String> =
                 std::mem::take(&mut state.lingering).into_values().collect();
             words.sort();
-            let count = background.as_ref().map_or(0, |jobs| jobs.running);
-            let request = background
-                .and_then(|jobs| jobs.request)
-                .or(state.lingering_request.take());
-            state.lingering_request = None;
-            let jobs = (!words.is_empty() || count > 0).then_some((words, count, request));
+            // Each request hears of its own jobs; the Codex commands go with the request they
+            // served.
+            let mut counts: Vec<(Option<String>, usize)> = Vec::new();
+            for (_, request) in background.map(|jobs| jobs.running).unwrap_or_default() {
+                match counts.iter_mut().find(|(of, _)| *of == request) {
+                    Some((_, count)) => *count += 1,
+                    None => counts.push((request, 1)),
+                }
+            }
+            let lingering = state.lingering_request.take();
+            let mut jobs: Vec<(Vec<String>, u32, Option<String>)> = Vec::new();
+            if !words.is_empty() {
+                let at = counts.iter().position(|(of, _)| *of == lingering);
+                let count = at.map_or(0, |at| counts.remove(at).1);
+                jobs.push((words, u32::try_from(count).unwrap_or(u32::MAX), lingering));
+            }
+            jobs.extend(counts.into_iter().map(|(request, count)| {
+                (
+                    Vec::new(),
+                    u32::try_from(count).unwrap_or(u32::MAX),
+                    request,
+                )
+            }));
             let was_busy = state.busy;
             state.busy = state.watchdog.recovering();
             state.compacting = false;
@@ -4070,7 +4203,7 @@ impl SessionManager {
         };
         self.end_compaction(&conv, ENDED_UNEXPECTEDLY.into()).await;
         cli.ended.cancel();
-        if let Some((words, count, request)) = jobs {
+        for (words, count, request) in jobs {
             self.deliver_for(&conv.id, cut_jobs_envelope(&words, count), request)
                 .await;
         }
@@ -4303,7 +4436,7 @@ impl SessionManager {
                 self.notice(
                     &conv.id,
                     brigadier_providers::NoticeLevel::Warning,
-                    "The orchestrator ended this request without an answer. Ask it again for one.",
+                    "The thread ended this request without an answer. Ask it again for one.",
                 )
                 .await;
             }
@@ -4877,10 +5010,17 @@ impl SessionManager {
                 let started = {
                     let mut state = conv.state.lock().await;
                     state.landed = true;
-                    let adopted = match &state.background {
-                        Some(jobs) if !state.busy && jobs.of(cli) => jobs.request.clone(),
+                    let own =
+                        !state.busy && state.background.as_ref().is_some_and(|jobs| jobs.of(cli));
+                    let adopted = match &mut state.background {
+                        Some(jobs) if own => jobs.take_turn(),
                         _ => None,
                     };
+                    // A turn of the CLI's own for a job's end, of a request or not: the turns
+                    // still owed wait for its end, which looks again.
+                    if own {
+                        state.background_timer += 1;
+                    }
                     if let Some(request) = adopted {
                         // The CLI began a turn of its own, for its background jobs' end: it
                         // answers the request that started them.
@@ -4959,7 +5099,7 @@ impl SessionManager {
                     &conv.id,
                     OrchestratorEntry::ContractBreach {
                         message: format!(
-                            "The orchestrator's {} CLI compacted its context{}.",
+                            "The thread's {} CLI compacted its context{}.",
                             cli.provider,
                             if *automatic { " on its own" } else { "" }
                         ),
@@ -5214,14 +5354,21 @@ impl SessionManager {
             } else if state.lingering_request.is_none() {
                 state.lingering_request.clone_from(&served);
             }
-            // The turn the background jobs' end started is over, or a stop or failure ended
-            // their request: it no longer waits for them.
+            // A stop or failure ended the request: its jobs' ends revive it no more. The turns
+            // of jobs that ended meanwhile are still to come.
             if let Some(jobs) = state.background.as_mut().filter(|jobs| jobs.of(cli)) {
-                if ended.is_some() && served.is_some() && jobs.request == served {
-                    jobs.request = None;
+                if ended.is_some()
+                    && let Some(served) = &served
+                {
+                    for owner in jobs.owners() {
+                        owner.take_if(|request| request == served);
+                    }
                 }
-                if jobs.running == 0 {
+                if !jobs.waits() {
                     state.background = None;
+                } else if !jobs.owed.is_empty() {
+                    state.background_timer += 1;
+                    self.background_grace(conv, state.background_timer);
                 }
             }
             // An error the request won't show after all (its turn didn't fail) is a notice.
@@ -5315,6 +5462,17 @@ impl SessionManager {
                 unshown,
             )
         };
+        // Whether it left its answer to what wakes the thread next outlives a restart.
+        if let Some(request) = &served {
+            let deferred = conv.state.lock().await.deferred.contains(request);
+            if let Err(err) = self
+                .core
+                .set_request_deferred(&conv.id, request, deferred)
+                .await
+            {
+                crate::logging::private_trace!(conv.private_logs, warn, "could not keep a request's deferred answer"; conversation = %conv.id, error = %err);
+            }
+        }
         if let Some(text) = unshown {
             self.notice(&conv.id, brigadier_providers::NoticeLevel::Warning, &text)
                 .await;

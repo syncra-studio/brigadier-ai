@@ -64,9 +64,9 @@ export type BlockText = {
   commentary?: boolean;
 };
 
-/** Whether a reply is an update line: it starts with "Update:", bold or not. */
+/** Whether a reply is an update line: it starts with "Update:", bold or not ("**Update**:" too). */
 export function isUpdate(text: string): boolean {
-  return /^\s*(\*\*|__)?update:/i.test(text);
+  return /^\s*(\*\*|__)?update(\*\*|__)?:/i.test(text);
 }
 
 /**
@@ -1105,10 +1105,13 @@ export function answerIndex(texts: readonly { update?: boolean }[], done: boolea
  * goes under "Worked for …", though the request may still wait (for another session's reply,
  * say). `null` otherwise, always with a CLI that doesn't say: its work folds once it is done.
  */
-export function answeringIndex(texts: readonly { answerAtMs?: number }[], sequence: readonly SequenceEntry[]): number | null {
+export function answeringIndex(texts: readonly { answerAtMs?: number; update?: boolean }[], sequence: readonly SequenceEntry[]): number | null {
   const newest = sequence.findLast((entry) => entry.kind !== "thinking");
   if (newest?.kind !== "text") return null;
-  return texts[newest.index]?.answerAtMs === undefined ? null : newest.index;
+  // A late event's "Update: …" line goes under the answer it follows, which stays the answer.
+  const answer = texts.findLastIndex((text) => !text.update);
+  const at = texts[newest.index]?.update && answer >= 0 ? answer : newest.index;
+  return texts[at]?.answerAtMs === undefined ? null : at;
 }
 
 /**

@@ -384,9 +384,7 @@ mod tests {
 
     #[test]
     fn a_stopped_app_is_refused_to_that_session_only_and_lapses_with_its_shims() {
-        let home = std::env::temp_dir().join(format!("cu-agent-apps-{}", std::process::id()));
-        std::fs::create_dir_all(&home).unwrap();
-        std::env::set_var(crate::home::HOME_ENV, &home);
+        let home = crate::lifecycle::home();
         let all_alive = |_: u32| true;
         let s = "brigadier-stop-test";
         let other = "brigadier-stop-other";
@@ -451,6 +449,5 @@ mod tests {
             ),
             None
         );
-        std::fs::remove_dir_all(&home).unwrap();
     }
 }

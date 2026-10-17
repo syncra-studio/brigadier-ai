@@ -1,13 +1,14 @@
 import { request } from "@/ipc/client";
 import type { Project } from "@/ipc/generated";
-import { useApp } from "@/state/store";
+import { type AppState, useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
 /*
- * "Do you trust this folder?": the user's answer for a project's folder. Trusted, agents work
+ * "Trust this folder?": the user's answer for a project's folder. Trusted, agents work
  * there as the session's permission level allows; not trusted, every session there runs under
  * Ask for approval. A folder never asked about (a new project, one from before the question,
- * one given another folder) behaves as before and is asked about.
+ * one given another folder) is asked about when the user first enters its project; until then
+ * work there runs as if not trusted.
  */
 
 /** The project's folder: its first repository's, or `null` while it has none. */
@@ -20,21 +21,23 @@ export function folderTrust(project: Project | null | undefined, path: string): 
   return project?.trust.find((folder) => folder.path === path)?.trusted ?? null;
 }
 
-/** The project asked about next: of those whose folder has no answer, the oldest. */
-export function nextToAsk(projects: Iterable<Project>): Project | null {
-  let next: Project | null = null;
-  for (const project of projects) {
-    const folder = projectFolder(project);
-    if (folder === null || folderTrust(project, folder) !== null) continue;
-    if (
-      next === null ||
-      project.createdAtMs < next.createdAtMs ||
-      (project.createdAtMs === next.createdAtMs && project.id < next.id)
-    ) {
-      next = project;
-    }
-  }
-  return next;
+/**
+ * The project asked about now: the one the user is in (its new session, or a chat or session
+ * in it), when its folder has no answer. Each project is asked once, the first time it's used;
+ * adding many at once asks nothing until each is entered.
+ */
+export function toAsk(state: Pick<AppState, "selection" | "projects" | "conversations">): Project | null {
+  const { selection } = state;
+  const id =
+    selection.type === "draft" && selection.kind === "session"
+      ? selection.projectId
+      : selection.type === "conversation"
+        ? state.conversations[selection.id]?.projectId
+        : null;
+  const project = id ? state.projects[id] : undefined;
+  if (!project) return null;
+  const folder = projectFolder(project);
+  return folder !== null && folderTrust(project, folder) === null ? project : null;
 }
 
 /**

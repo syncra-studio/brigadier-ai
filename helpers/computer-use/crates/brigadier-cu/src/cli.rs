@@ -138,8 +138,23 @@ const VALUE_FLAGS: &[&str] = &[
 ];
 
 /// Parse the cursor-overlay flags from argv, over the saved motion defaults.
+/// Brigadier's agents (Brigadier runs setup in its own window) show no agent
+/// cursor on screen.
 pub fn cursor_config() -> cursor_overlay::CursorConfig {
-    cursor_overlay::CursorConfig::from_args()
+    cursor_for(
+        cursor_overlay::CursorConfig::from_args(),
+        crate::bundle::is_env_truthy(crate::lifecycle::EXTERNAL_SETUP_ENV),
+    )
+}
+
+fn cursor_for(
+    mut cursor: cursor_overlay::CursorConfig,
+    brigadier: bool,
+) -> cursor_overlay::CursorConfig {
+    if brigadier {
+        cursor.enabled = false;
+    }
+    cursor
 }
 
 /// Parse the first non-flag positional argument from argv to determine which
@@ -2353,6 +2368,15 @@ mod stdin_bom_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brigadiers_agents_show_no_cursor_on_screen() {
+        let cursor = cursor_overlay::CursorConfig::default();
+        assert!(cursor.enabled);
+        assert!(!cursor_for(cursor.clone(), true).enabled);
+        // A helper started by hand keeps its cursor.
+        assert!(cursor_for(cursor, false).enabled);
+    }
 
     #[cfg(target_os = "macos")]
     fn permission_state_with_panel(

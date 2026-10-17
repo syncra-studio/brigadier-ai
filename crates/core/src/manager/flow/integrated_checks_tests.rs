@@ -1486,3 +1486,83 @@ async fn a_dirty_local_checkouts_review_reads_only_the_requests_change() {
     );
     flow.stop().await;
 }
+
+/// A restart while a request waits quietly on its checks: it still waits after the start, the
+/// cut-off check runs again, and its pass reaches the thread for that request (#13).
+#[tokio::test]
+async fn a_restart_keeps_a_request_waiting_on_its_checks() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (turn_gate, heard) = (gate.clone(), inputs.clone());
+    let mut flow = Flow::start(
+        "integrated-restart-deferred",
+        options(),
+        script(move |turn| {
+            let (gate, heard) = (turn_gate.clone(), heard.clone());
+            async move {
+                heard.lock().unwrap().push(turn.input.clone());
+                if turn.input.starts_with("Wait for checks") {
+                    gate.notified().await;
+                    return Reply::text("[quiet]");
+                }
+                Reply::text("The checks pass.")
+            }
+        }),
+    )
+    .await;
+    std::fs::write(hold(&flow.repo), "").unwrap();
+    flow.say("Wait for checks.").await;
+    let board = flow
+        .until("the first turn", |_| !inputs.lock().unwrap().is_empty())
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    let tip = brigadier_git::Oid(git(&flow.repo, &["rev-parse", "main"]));
+    flow.manager
+        .checks_due(
+            &flow.conversation,
+            &flow.repo,
+            "main",
+            &tip,
+            Some(request.clone()),
+        )
+        .await;
+    gate.notify_one();
+    flow.until("the check to run", |board| {
+        board.run == crate::work::RunState::Idle
+            && board.requests[&request].state == crate::work::RequestState::Working
+            && board
+                .integrated_checks
+                .values()
+                .any(|check| matches!(check.state, IntegratedCheckState::Running { .. }))
+    })
+    .await;
+    flow.restart().await;
+    flow.until("the check to run again", |board| {
+        board
+            .integrated_checks
+            .values()
+            .any(|check| matches!(check.state, IntegratedCheckState::Running { .. }))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        flow.board().await.requests[&request].state,
+        crate::work::RequestState::Working,
+        "it still waits for its checks"
+    );
+    std::fs::remove_file(hold(&flow.repo)).unwrap();
+    let board = flow
+        .until("the request answered", |board| {
+            board.requests[&request].state == crate::work::RequestState::Done
+        })
+        .await;
+    assert!(!board.requests[&request].deferred);
+    let heard = inputs.lock().unwrap().clone();
+    assert!(
+        heard
+            .iter()
+            .any(|input| input.contains("[checks passed at ")),
+        "{heard:#?}"
+    );
+    flow.stop().await;
+}

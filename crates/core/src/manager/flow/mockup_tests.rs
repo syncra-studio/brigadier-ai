@@ -21,7 +21,7 @@ fn outputs(turn: &Turn) -> PathBuf {
         .prompt
         .lines()
         .find_map(|line| {
-            line.strip_prefix("Your outputs folder (files for the orchestrator and the user): ")
+            line.strip_prefix("Your outputs folder (files for the thread and the user): ")
         })
         .expect("the brief names the outputs folder");
     PathBuf::from(line.trim())

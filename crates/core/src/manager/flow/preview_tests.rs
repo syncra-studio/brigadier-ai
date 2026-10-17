@@ -751,7 +751,8 @@ async fn a_sandboxed_preview_gets_a_private_writable_temp_directory() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn preview_data_is_session_owned_and_failed_spawns_leave_no_folder() {
-    let tmp = scratch("data-lifecycle");
+    // Under /tmp, as BRIGADIER_DATA_DIR must be, even when the temp directory isn't.
+    let tmp = Scratch::in_tmp("preview-data-lifecycle");
     let data = tmp.join("app-data");
     let failed = tmp.join("failed-data");
     let replies = Replies::default();

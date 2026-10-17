@@ -21,4 +21,7 @@ done
 
 echo "+ cargo build --locked -p brigadier-daemon --bin brigadierd"
 cargo build --locked -q -p brigadier-daemon --bin brigadierd
-exec python3 tools/live-smoke/smoke.py --daemon "$PWD/target/debug/brigadierd" "$@"
+# Where cargo put it: honours CARGO_TARGET_DIR (relative ones too) and any configured target dir.
+target_dir=$(cargo metadata --locked --format-version 1 --no-deps \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+exec python3 tools/live-smoke/smoke.py --daemon "$target_dir/debug/brigadierd" "$@"

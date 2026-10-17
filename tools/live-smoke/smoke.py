@@ -31,6 +31,33 @@ def protocol_of(src):
     return int(re.search(r"PROTOCOL_VERSION: u32 = (\d+);", text).group(1))
 
 
+def trust_left(root):
+    """The folders under `root` that Claude's or Codex's own settings still trust."""
+    roots = {root, root[len("/private"):] if root.startswith("/private/") else "/private" + root}
+    under = lambda path: any(path == r or path.startswith(r + "/") for r in roots)
+    left = []
+    try:
+        projects = json.load(open(os.path.expanduser("~/.claude.json"))).get("projects", {})
+        left += [p for p, entry in projects.items() if under(p) and entry.get("hasTrustDialogAccepted")]
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, AttributeError):  # unchecked: counts as still there
+        left.append("~/.claude.json (unreadable)")
+    try:
+        table = None  # the `[projects."<folder>"]` table the lines are in (either quote style)
+        for line in open(os.path.expanduser("~/.codex/config.toml")):
+            header = re.match(r"""\s*\[(?:projects\.(?:"([^"]*)"|'([^']*)')|.*)\]\s*(#.*)?$""", line)
+            if header:
+                table = header.group(1) or header.group(2)
+            elif table and under(table) and re.match(r"""\s*trust_level\s*=\s*["']trusted["']""", line):
+                left.append(table)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        left.append("~/.codex/config.toml (unreadable)")
+    return left
+
+
 class Ipc:
     def __init__(self, data):
         self.data, self.proto = data, protocol_of(SRC)
@@ -164,6 +191,7 @@ class Smoke:
         self.proc = None
         self.convs = {}           # name -> conversation id
         self.native = {}          # name -> (provider, CLI session id)
+        self.projects = []        # project ids, removed at cleanup
         self.expected = {}        # conversation -> {request id: [codes]}
         self.ipc = Ipc(self.data)
 
@@ -236,6 +264,10 @@ class Smoke:
         projects = {}
         for name, path in (("A", a), ("B", b)):
             projects[name] = self.ipc.call({"method": "addProject", "path": path, "name": "", "init": False})["project"]["id"]
+            # Trusted, as a user answers on entering the project; the project's removal at cleanup
+            # takes the CLIs' trust entries this writes back out.
+            self.ipc.call({"method": "setFolderTrust", "id": projects[name], "path": None, "trusted": True})
+            self.projects.append(projects[name])
         for name, project, path, provider, model in (("C1", "A", a, "claude", claude), ("C2", "A", a, "claude", claude),
                                                      ("C3", "A", a, "claude", claude),
                                                      ("X", "B", b, "codex", codex)):
@@ -607,6 +639,13 @@ class Smoke:
                     time.sleep(3)
                 except Exception as err:
                     left.append(f"deleting the sessions failed: {err}")
+            for project in self.projects:
+                try:
+                    report = self.ipc.call({"method": "removeProject", "id": project, "deleteBranches": [],
+                                            "keepBrain": True}, timeout=60)["report"]
+                    left += [f"removing a project: {failure}" for failure in report.get("failures", [])]
+                except Exception as err:
+                    left.append(f"removing a project failed (its folder trust may stay in the CLIs' settings): {err}")
             try:
                 self.ipc.call({"method": "shutdown"}, timeout=15)
             except Exception:
@@ -634,7 +673,11 @@ class Smoke:
                 self.codex_delete(thread)
                 files = self.codex_files(thread)
                 left.append(f"Codex thread {thread} was left by the delete" + (f"; still there: {files}" if files else " (deleted now)"))
-        if os.path.isdir(self.root):
+        trusted = trust_left(self.root)
+        if trusted:
+            # Its daemon's records undo that trust: kept, for a daemon on this data folder to finish.
+            left.append(f"the CLIs' settings still trust {trusted}; {self.root} is kept (its records undo that)")
+        elif os.path.isdir(self.root):
             if self.args.keep_report:
                 shutil.copy(self.root + "/daemon.log", self.args.keep_report + ".daemon.log")
             shutil.rmtree(self.root, ignore_errors=True)

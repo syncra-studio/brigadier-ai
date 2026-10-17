@@ -359,7 +359,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "list_tasks" => ToolCall::Orchestrator(O::ListTasks),
         "settle_step" => ToolCall::Orchestrator(O::SettleStep(arg(name, args))),
         "end_run" => ToolCall::Orchestrator(O::EndRun(arg(name, args))),
-        "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
+        "ask_thread" | "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
         "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
         "review_code" => ToolCall::Worker(W::ReviewCode),
@@ -1276,9 +1276,20 @@ pub(crate) struct Scratch {
 impl Scratch {
     /// A fresh folder named for `name`.
     pub fn new(name: &str) -> Self {
+        Self::within(&std::env::temp_dir(), name)
+    }
+
+    /// A fresh folder named for `name` under `/tmp`, whatever the temp directory is, for paths
+    /// that must be there (a preview's `BRIGADIER_DATA_DIR`).
+    #[cfg(target_os = "macos")]
+    pub fn in_tmp(name: &str) -> Self {
+        Self::within(Path::new("/tmp"), name)
+    }
+
+    fn within(root: &Path, name: &str) -> Self {
         sweep_killed_tests();
         let scratch = Self {
-            dir: std::env::temp_dir().join(format!(
+            dir: root.join(format!(
                 "{SCRATCH}{name}-{}-{}",
                 std::process::id(),
                 uuid::Uuid::new_v4().simple()
@@ -1354,10 +1365,15 @@ thread_local! {
 /// Removes the folders of test processes that are gone, once per test process.
 fn sweep_killed_tests() {
     static SWEPT: std::sync::Once = std::sync::Once::new();
-    SWEPT.call_once(|| remove_killed_tests(&std::env::temp_dir()));
+    SWEPT.call_once(|| {
+        remove_killed_tests(&std::env::temp_dir());
+        #[cfg(target_os = "macos")]
+        remove_killed_tests(Path::new("/tmp"));
+    });
 }
 
-/// Removes the folders in `temp` that test processes now gone made with [`Scratch::new`],
+/// Removes the folders in `temp` that test processes now gone made with [`Scratch::new`] (or
+/// [`Scratch::in_tmp`]),
 /// after ending what still runs in them.
 fn remove_killed_tests(temp: &Path) {
     let Ok(platform) = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
@@ -1427,6 +1443,9 @@ pub(crate) struct Options {
     pub behavior: Arc<FakeBehavior>,
     /// Files the repository starts with besides its README (path, contents).
     pub files: Vec<(&'static str, &'static str)>,
+    /// The user's answer to "Trust this folder?" for the repository (trusted by default, as
+    /// the app asks when the project is first entered); `None` leaves it unanswered.
+    pub trusted: Option<bool>,
 }
 
 impl Default for Options {
@@ -1440,6 +1459,7 @@ impl Default for Options {
             thread: ProviderKind::Claude,
             behavior: Arc::default(),
             files: Vec::new(),
+            trusted: Some(true),
         }
     }
 }
@@ -1479,6 +1499,11 @@ impl Flow {
             .create_project("Flow".into(), Some(repo.display().to_string()))
             .await
             .unwrap();
+        if let Some(trusted) = options.trusted {
+            core.set_folder_trust(&project.id, &repo.display().to_string(), trusted)
+                .await
+                .unwrap();
+        }
         let conversation = manager
             .create_conversation(
                 ConversationKind::Session,
@@ -1600,6 +1625,10 @@ impl Flow {
                 let project = self
                     .core
                     .create_project(name.into(), Some(repo.display().to_string()))
+                    .await
+                    .unwrap();
+                self.core
+                    .set_folder_trust(&project.id, &repo.display().to_string(), true)
                     .await
                     .unwrap();
                 (project.id, repo)

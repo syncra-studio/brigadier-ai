@@ -223,7 +223,7 @@ impl SessionManager {
         let found = blocking(move || {
             collect(&places, &listed, &texts).map_err(|problems| {
                 Error::Invalid(format!(
-                    "Your report was not accepted:\n- {}\nFix this and call submit_report again. Files for the orchestrator or the user go in your outputs folder ({}); name them under `artifacts`.",
+                    "Your report was not accepted:\n- {}\nFix this and call submit_report again. Files for the thread or the user go in your outputs folder ({}); name them under `artifacts`.",
                     problems.join("\n- "),
                     outputs.display()
                 ))

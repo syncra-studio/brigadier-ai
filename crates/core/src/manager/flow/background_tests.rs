@@ -464,6 +464,11 @@ async fn the_users_stop_of_one_background_run_tells_the_thread() {
         })
         .await;
     assert_eq!(board.requests.len(), 1, "{:?}", board.requests);
+    // Its time counts from the command's start, its foreground part too (#89).
+    let run = &board.background_runs["run-1"];
+    let ran = run.ended_at_ms.unwrap() - run.started_at_ms;
+    let foreground = crate::manager::background_runs::FOREGROUND.as_millis() as i64;
+    assert!(ran >= foreground, "{ran} ms");
     assert!(
         answers(&flow)
             .await
@@ -481,8 +486,12 @@ async fn the_users_stop_of_one_background_run_tells_the_thread() {
     );
     let inputs = inputs.lock().unwrap().clone();
     assert!(
-        inputs.iter().any(|input| input
-            .contains("[The user stopped run-1 before it finished · run `sleep 60; echo late`: it printed nothing")),
+        inputs
+            .iter()
+            .any(|input| input.contains("[The user stopped run-1 after ")
+                && input.contains(
+                    ", before it finished · run `sleep 60; echo late`: it printed nothing"
+                )),
         "{inputs:#?}"
     );
     flow.stop().await;
@@ -682,12 +691,16 @@ async fn a_cli_job_outliving_its_turn_keeps_the_cli_and_its_end_answers_in_its_r
                 }
                 let events = turn.events.clone();
                 let _ = events
-                    .send(brigadier_providers::ProviderEvent::BackgroundJobs { running: 1 })
+                    .send(brigadier_providers::ProviderEvent::BackgroundJobs {
+                        running: vec!["job".into()],
+                    })
                     .await;
                 tokio::spawn(async move {
                     go.notified().await;
                     for event in [
-                        brigadier_providers::ProviderEvent::BackgroundJobs { running: 0 },
+                        brigadier_providers::ProviderEvent::BackgroundJobs {
+                            running: Vec::new(),
+                        },
                         brigadier_providers::ProviderEvent::TurnStarted { turn_id: None },
                         brigadier_providers::ProviderEvent::Message {
                             item_id: "job-answer".into(),
@@ -906,6 +919,296 @@ async fn a_cli_ending_with_its_job_running_tells_the_thread() {
             .all(|request| request.state == RequestState::Done),
         "{:?}",
         board.requests
+    );
+    flow.stop().await;
+}
+
+/// A stopped request's CLI job runs on while a later request starts one of its own: each job
+/// keeps the request whose turn started it. The stopped one's end answers in no request, and
+/// the later request works until the turn its own job's end starts is over (#3).
+#[tokio::test]
+async fn each_cli_job_keeps_the_request_that_started_it() {
+    use brigadier_providers::ProviderEvent;
+    let events: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let kept = events.clone();
+    let flow = Flow::start(
+        "cli-job-owners",
+        Options::default(),
+        script(move |turn| {
+            let kept = kept.clone();
+            async move {
+                let running: Vec<String> = if turn.input.contains("Start A.") {
+                    vec!["a".into()]
+                } else if turn.input.contains("Start B.") {
+                    vec!["a".into(), "b".into()]
+                } else {
+                    return Reply::text("Noted.");
+                };
+                let _ = turn
+                    .events
+                    .send(ProviderEvent::BackgroundJobs { running })
+                    .await;
+                *kept.lock().unwrap() = Some(turn.events.clone());
+                Reply::text("Started it in the background.")
+            }
+        }),
+    )
+    .await;
+    // The CLI's turn of its own when a job ends: the job's output, then the CLI's jobs left.
+    let job_ended = |left: Vec<String>, text: &str| {
+        let events = events.lock().unwrap().clone().expect("the CLI's events");
+        let text = text.to_owned();
+        async move {
+            for event in [
+                ProviderEvent::BackgroundJobs { running: left },
+                ProviderEvent::TurnStarted { turn_id: None },
+                ProviderEvent::Message {
+                    item_id: uuid::Uuid::new_v4().to_string(),
+                    role: brigadier_providers::Role::Assistant,
+                    text,
+                },
+                ProviderEvent::TurnCompleted {
+                    turn_id: None,
+                    status: brigadier_providers::TurnStatus::Completed,
+                    duration_ms: Some(1),
+                    usage: None,
+                },
+            ] {
+                events.send(event).await.unwrap();
+            }
+        }
+    };
+    flow.say("Start A.").await;
+    rested(&flow).await;
+    let first = flow.board().await.latest_request().unwrap().id.clone();
+    assert_eq!(
+        flow.board().await.requests[&first].state,
+        RequestState::Working
+    );
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.until("the first request stopped", |board| {
+        board.requests[&first].state == RequestState::Stopped
+    })
+    .await;
+    flow.manager
+        .resume_queue(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.say("Start B.").await;
+    let board = flow
+        .until("the second request", |board| board.requests.len() == 2)
+        .await;
+    let second = board.latest_request().unwrap().id.clone();
+    rested(&flow).await;
+    // The stopped request's job ends first: its turn answers in no request.
+    job_ended(vec!["b".into()], "Job a printed a-1.").await;
+    super::eventually_async("the first job's answer", || async {
+        answers_with_requests(&flow)
+            .await
+            .iter()
+            .any(|(text, _)| text == "Job a printed a-1.")
+    })
+    .await;
+    rested(&flow).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let answers = answers_with_requests(&flow).await;
+    assert!(
+        answers.contains(&("Job a printed a-1.".into(), None)),
+        "{answers:?}"
+    );
+    let board = flow.board().await;
+    assert_eq!(board.requests[&first].state, RequestState::Stopped);
+    assert_eq!(
+        board.requests[&second].state,
+        RequestState::Working,
+        "it waits for its own job"
+    );
+    job_ended(Vec::new(), "Job b printed b-2.").await;
+    flow.until("the second request answered", |board| {
+        board.requests[&second].state == RequestState::Done
+    })
+    .await;
+    let answers = answers_with_requests(&flow).await;
+    assert!(
+        answers.contains(&("Job b printed b-2.".into(), Some(second.clone()))),
+        "{answers:?}"
+    );
+    flow.stop().await;
+}
+
+/// The CLI may start a job's turn before it says the job ended: that turn is the job's, and
+/// the word after it owes no second one (#3).
+#[tokio::test]
+async fn a_job_turn_before_the_jobs_word_is_owed_once() {
+    use brigadier_providers::ProviderEvent;
+    let events: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let kept = events.clone();
+    let flow = Flow::start(
+        "cli-job-early-turn",
+        Options::default(),
+        script(move |turn| {
+            let kept = kept.clone();
+            async move {
+                if !turn.input.contains("Start A.") {
+                    return Reply::text("Noted.");
+                }
+                let _ = turn
+                    .events
+                    .send(ProviderEvent::BackgroundJobs {
+                        running: vec!["a".into()],
+                    })
+                    .await;
+                *kept.lock().unwrap() = Some(turn.events.clone());
+                Reply::text("Started it in the background.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start A.").await;
+    rested(&flow).await;
+    let first = flow.board().await.latest_request().unwrap().id.clone();
+    let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    for event in [
+        ProviderEvent::TurnStarted { turn_id: None },
+        ProviderEvent::BackgroundJobs {
+            running: Vec::new(),
+        },
+        ProviderEvent::Message {
+            item_id: "job-a".into(),
+            role: brigadier_providers::Role::Assistant,
+            text: "Job a printed a-1.".into(),
+        },
+        ProviderEvent::TurnCompleted {
+            turn_id: None,
+            status: brigadier_providers::TurnStatus::Completed,
+            duration_ms: Some(1),
+            usage: None,
+        },
+    ] {
+        sender.send(event).await.unwrap();
+    }
+    super::eventually_async("the job's answer", || async {
+        answers_with_requests(&flow)
+            .await
+            .contains(&("Job a printed a-1.".into(), Some(first.clone())))
+    })
+    .await;
+    rested(&flow).await;
+    // Nothing is owed for it once its turn is over, well before a missing turn's grace ends.
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    assert!(conv.request_activity().await.background.is_empty());
+    flow.until("the request answered", |board| {
+        board.requests[&first].state == RequestState::Done
+    })
+    .await;
+    flow.stop().await;
+}
+
+/// A stopped request's job and a later request's job both end; the CLI's turn for the stopped
+/// one's end runs long. The later request still waits for its own job's turn meanwhile, and
+/// that turn answers in it (#3).
+#[tokio::test]
+async fn a_long_turn_for_a_stopped_jobs_end_keeps_the_next_turn_owed() {
+    use brigadier_providers::ProviderEvent;
+    let events: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ProviderEvent>>>> = Arc::default();
+    let kept = events.clone();
+    let flow = Flow::start(
+        "cli-job-long-own-turn",
+        Options::default(),
+        script(move |turn| {
+            let kept = kept.clone();
+            async move {
+                let running: Vec<String> = if turn.input.contains("Start A.") {
+                    vec!["a".into()]
+                } else if turn.input.contains("Start B.") {
+                    vec!["a".into(), "b".into()]
+                } else {
+                    return Reply::text("Noted.");
+                };
+                let _ = turn
+                    .events
+                    .send(ProviderEvent::BackgroundJobs { running })
+                    .await;
+                *kept.lock().unwrap() = Some(turn.events.clone());
+                Reply::text("Started it in the background.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Start A.").await;
+    rested(&flow).await;
+    let first = flow.board().await.latest_request().unwrap().id.clone();
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.until("the first request stopped", |board| {
+        board.requests[&first].state == RequestState::Stopped
+    })
+    .await;
+    flow.manager
+        .resume_queue(flow.conversation.clone())
+        .await
+        .unwrap();
+    flow.say("Start B.").await;
+    let board = flow
+        .until("the second request", |board| board.requests.len() == 2)
+        .await;
+    let second = board.latest_request().unwrap().id.clone();
+    rested(&flow).await;
+    let sender = events.lock().unwrap().clone().expect("the CLI's events");
+    let turn = |text: &str| {
+        [
+            ProviderEvent::Message {
+                item_id: uuid::Uuid::new_v4().to_string(),
+                role: brigadier_providers::Role::Assistant,
+                text: text.to_owned(),
+            },
+            ProviderEvent::TurnCompleted {
+                turn_id: None,
+                status: brigadier_providers::TurnStatus::Completed,
+                duration_ms: Some(1),
+                usage: None,
+            },
+        ]
+    };
+    // Both end; the stopped one's turn comes first and outlasts a missing turn's grace.
+    for event in [
+        ProviderEvent::BackgroundJobs {
+            running: Vec::new(),
+        },
+        ProviderEvent::TurnStarted { turn_id: None },
+    ] {
+        sender.send(event).await.unwrap();
+    }
+    tokio::time::sleep(super::super::conversation::BACKGROUND_TURN_GRACE * 2).await;
+    assert_eq!(
+        flow.board().await.requests[&second].state,
+        RequestState::Working,
+        "it still waits for its own job's turn"
+    );
+    for event in turn("Job a printed a-1.") {
+        sender.send(event).await.unwrap();
+    }
+    sender
+        .send(ProviderEvent::TurnStarted { turn_id: None })
+        .await
+        .unwrap();
+    for event in turn("Job b printed b-2.") {
+        sender.send(event).await.unwrap();
+    }
+    flow.until("the second request answered", |board| {
+        board.requests[&second].state == RequestState::Done
+    })
+    .await;
+    let answers = answers_with_requests(&flow).await;
+    assert!(
+        answers.contains(&("Job b printed b-2.".into(), Some(second.clone())))
+            && answers.contains(&("Job a printed a-1.".into(), None)),
+        "{answers:?}"
     );
     flow.stop().await;
 }

@@ -196,6 +196,9 @@ const UNINSTALL_ITEM: &str = "uninstall";
 /// Menu id of Brigadier › Settings….
 #[cfg(target_os = "macos")]
 const SETTINGS_ITEM: &str = "settings";
+/// Menu id of Help › Send Feedback….
+#[cfg(target_os = "macos")]
+const FEEDBACK_ITEM: &str = "send-feedback";
 /// Menu id of Brigadier › Quit.
 #[cfg(target_os = "macos")]
 const QUIT_ITEM: &str = "app-quit";
@@ -328,6 +331,24 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
     }
     menu.append(&panes)?;
     menu.append(&browser_submenu(app)?)?;
+    // Help › Send Feedback…, in the standard Help menu (last), or a Help menu of its own.
+    let feedback = MenuItemBuilder::with_id(FEEDBACK_ITEM, "Send Feedback…").build(app)?;
+    let mut help = None;
+    for item in menu.items()? {
+        if let Some(submenu) = item.as_submenu()
+            && submenu.text()? == "Help"
+        {
+            help = Some(submenu.clone());
+        }
+    }
+    match help {
+        Some(help) => help.append(&feedback)?,
+        None => {
+            let help = tauri::menu::Submenu::new(app, "Help", true)?;
+            help.append(&feedback)?;
+            menu.append(&help)?;
+        }
+    }
     app.set_menu(menu)?;
     app.on_menu_event(|app, event| {
         if let Some(shortcut) = event.id().as_ref().strip_prefix("pane:") {
@@ -361,6 +382,7 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
             OPEN_FOLDER_ITEM => BridgeEvent::OpenFolderMenu,
             UNINSTALL_ITEM => BridgeEvent::UninstallMenu,
             SETTINGS_ITEM => BridgeEvent::SettingsMenu,
+            FEEDBACK_ITEM => BridgeEvent::FeedbackMenu,
             _ => return,
         };
         show_main(app);

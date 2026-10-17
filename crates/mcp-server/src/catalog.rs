@@ -180,7 +180,7 @@ const REVIEW_CODE: &str = "Start one review of your committed work by a model fr
 vendor, from where your work started to your last commit (uncommitted changes are committed for \
 you first). Returns at once: keep working, and the findings arrive later as a message from \
 Brigadier. Don't wait for them unless your task says so: report once your checks pass and your \
-evidence is in, and findings that arrive after your report go to the orchestrator. Fix what you \
+evidence is in, and findings that arrive after your report go to the thread. Fix what you \
 agree with and commit; for a finding you don't, say why in your report. It is advisory and there \
 are no rounds: call it once.";
 
@@ -412,7 +412,7 @@ conversations (a preference, their role, what they work on), as one short senten
 they state it or clearly imply it holds beyond this chat; never secrets or passing details. The \
 user sees it saved and can remove it.";
 
-const ASK_ORCHESTRATOR: &str = "Ask the orchestrator (who gave you this task) a question you \
+const ASK_THREAD: &str = "Ask the thread (which gave you this task) a question you \
 cannot settle yourself, such as an unclear requirement or a choice outside your task. One \
 question per call, with the options you see and the one you recommend. The call blocks until \
 the answer comes back. Ask only when you cannot sensibly go on without the answer; look things \
@@ -432,16 +432,16 @@ turn. The go-ahead, with any corrections, arrives as your next message; build no
 it. Small work needs no outline: just do it.";
 
 const SUBMIT_REPORT: &str = "Submit your final structured report. Call it exactly once, as \
-your last action, when the task is done or cannot be done. The orchestrator reads only this \
+your last action, when the task is done or cannot be done. The thread reads only this \
 report, never your messages: the summary must hold your findings (or name the artifact that \
-does), never point to text below or in a message. It is final, and the orchestrator reads \
+does), never point to text below or in a message. It is final, and the thread reads \
 about 800 tokens of it inline (a longer one reaches it shortened): keep every field short, and \
 put long material (full findings, logs, command output, notes) in \
 files in your outputs folder, listed under `artifacts`. List every file you changed, created or \
 deleted under `changes`: new files that are not listed are not kept.";
 
 /// The tools `role` may call, in a stable order. The gate role gets none, and a worker that
-/// checks a change or plan no `ask_orchestrator`.
+/// checks a change or plan no `ask_thread`.
 pub fn tools_for(role: &Role) -> &'static [Tool] {
     static ORCHESTRATOR: OnceLock<Vec<Tool>> = OnceLock::new();
     static RUNNER: OnceLock<Vec<Tool>> = OnceLock::new();
@@ -479,7 +479,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
                 .filter(|tool| {
                     !matches!(
                         tool.name.as_ref(),
-                        "ask_orchestrator" | "submit_outline" | "review_code"
+                        "ask_thread" | "submit_outline" | "review_code"
                     )
                 })
                 .collect()
@@ -627,11 +627,7 @@ fn orchestrator_tools() -> Vec<Tool> {
 
 fn worker_tools() -> Vec<Tool> {
     vec![
-        tool(
-            "ask_orchestrator",
-            ASK_ORCHESTRATOR,
-            input_schema::<AskOrchestrator>(),
-        ),
+        tool("ask_thread", ASK_THREAD, input_schema::<AskOrchestrator>()),
         tool(
             "submit_outline",
             SUBMIT_OUTLINE,
@@ -923,7 +919,8 @@ pub fn parse_call(
         }
         Role::Worker { checks, .. } => {
             let call = match name {
-                "ask_orchestrator" if !checks => {
+                // Its name before #66, which a worker that started on it may still call.
+                "ask_thread" | "ask_orchestrator" if !checks => {
                     WorkerCall::AskOrchestrator(args::<AskOrchestrator>(name, arguments)?)
                 }
                 "submit_outline" if !checks => {
@@ -1656,10 +1653,11 @@ mod tests {
                 .map(|tool| tool.name.to_string())
                 .collect()
         };
-        assert!(names(&worker(false)).contains(&"ask_orchestrator".to_owned()));
+        assert!(names(&worker(false)).contains(&"ask_thread".to_owned()));
+        assert!(!names(&worker(false)).contains(&"ask_orchestrator".to_owned()));
         assert!(names(&worker(false)).contains(&"review_code".to_owned()));
         let checker = names(&worker(true));
-        assert!(!checker.contains(&"ask_orchestrator".to_owned()));
+        assert!(!checker.contains(&"ask_thread".to_owned()));
         assert!(!checker.contains(&"review_code".to_owned()));
         assert!(checker.contains(&"submit_report".to_owned()));
         let question = || {
@@ -1667,9 +1665,11 @@ mod tests {
             arguments.insert("question".into(), Value::String("Which file?".into()));
             Some(arguments)
         };
+        // #66: its old name still works for a worker that started on it.
+        assert!(parse_call(&worker(false), "ask_thread", question()).is_ok());
         assert!(parse_call(&worker(false), "ask_orchestrator", question()).is_ok());
         assert!(matches!(
-            parse_call(&worker(true), "ask_orchestrator", question()),
+            parse_call(&worker(true), "ask_thread", question()),
             Err(ParseError::UnknownTool(_))
         ));
     }

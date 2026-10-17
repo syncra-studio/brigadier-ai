@@ -13,8 +13,10 @@
 //!   terminal with Ask's access ([`SessionManager::effective_access`]). A worker at work above
 //!   it is stopped, and the thread told why; an idle one resumes under Ask; the thread's own
 //!   CLI restarts under Ask at its next turn.
-//! - **Not asked yet** (a project from before this question): sessions run as their level
-//!   says, and the app asks.
+//! - **Not asked yet** (a new project, one from before this question, a folder changed in its
+//!   settings): treated as not trusted until the user answers, which the app asks the first
+//!   time they enter the project. Work that starts there before then (a thread handing work to
+//!   it) asks first, as under Don't trust.
 
 use std::path::Path;
 
@@ -36,14 +38,15 @@ fn owner(project: &ProjectId) -> String {
 const ATTEMPTS: usize = 3;
 
 impl SessionManager {
-    /// The user's answer for the folder the session works in, if they were asked.
+    /// Whether the session's folder counts as trusted ([`Project::counts_trusted`]): not until
+    /// the user answers; `None` for a conversation that works in no project folder.
     pub(crate) fn repo_trust(&self, id: &ConversationId) -> Option<bool> {
         let conversation = self.core.conversation(id).ok()?;
         let Some(Setup::Session { repo, .. }) = &conversation.setup else {
             return None;
         };
         let project = self.core.project(conversation.project_id.as_ref()?).ok()?;
-        project.trusts(repo)
+        Some(project.counts_trusted(repo))
     }
 
     /// The access a worker launches with: the task's, or Ask for approval's for its kind

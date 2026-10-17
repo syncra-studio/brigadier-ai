@@ -218,8 +218,7 @@ impl SessionManager {
             && running != request
         {
             return Err(Error::Invalid(
-                "the orchestrator is answering an earlier request; try again when it is done"
-                    .into(),
+                "the thread is answering an earlier request; try again when it is done".into(),
             ));
         }
         let tasks: Vec<_> = board
@@ -235,7 +234,7 @@ impl SessionManager {
             if !conv.wait_idle(STOP_TURN_LIMIT).await {
                 conv.carry(None, None).await;
                 return Err(Error::Invalid(
-                    "the orchestrator did not stop in time; try again".into(),
+                    "the thread did not stop in time; try again".into(),
                 ));
             }
         }
