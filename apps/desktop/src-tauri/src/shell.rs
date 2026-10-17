@@ -656,6 +656,25 @@ mod tests {
         let _ = release.send(());
     }
 
+    /// The main window's page runs while the window is unseen (launched in the background,
+    /// behind other windows): WebKit would otherwise suspend it, and onboarding and the folder
+    /// trust prompt would wait for the window to be brought forward (#134).
+    #[test]
+    fn the_main_window_keeps_running_while_unseen() {
+        for config in [
+            include_str!("../tauri.conf.json"),
+            include_str!("../tauri.macos.conf.json"),
+        ] {
+            let config: serde_json::Value = serde_json::from_str(config).unwrap();
+            let windows = config.pointer("/app/windows").unwrap().as_array().unwrap();
+            let main = windows
+                .iter()
+                .find(|window| window["label"] == super::MAIN_WINDOW)
+                .unwrap();
+            assert_eq!(main["backgroundThrottling"], "disabled");
+        }
+    }
+
     #[test]
     fn the_exit_wait_answers_what_the_task_returns() {
         let runtime = tokio::runtime::Builder::new_multi_thread()

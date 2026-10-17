@@ -21,6 +21,7 @@
         "minHeight": 560,
         "backgroundColor": "#0f0f0e",
         "theme": "Dark",
+        "backgroundThrottling": "disabled",
         "dragDropEnabled": false
       }
     ],

@@ -10,6 +10,7 @@
         "minWidth": 900,
         "minHeight": 560,
         "theme": "Dark",
+        "backgroundThrottling": "disabled",
         "transparent": true,
         "windowEffects": { "effects": ["menu"], "state": "active" },
         "titleBarStyle": "Overlay",
