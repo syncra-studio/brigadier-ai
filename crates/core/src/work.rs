@@ -1596,6 +1596,11 @@ pub struct BackgroundRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub item_id: Option<String>,
+    /// What it is for, in a few words ("Core tests"), as the thread named it; the session's
+    /// Activities fall back to a short form of the command without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
 }
 
 /// Where a background run stands.

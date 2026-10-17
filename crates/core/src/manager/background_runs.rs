@@ -40,6 +40,19 @@ pub(crate) fn background_run_number(id: &str) -> u64 {
 
 /// The cleanup-ledger owner of a session's background runs: they outlive the thread's CLI and
 /// end with the session.
+/// The thread's name for a run, trimmed to at most 40 characters; none when blank.
+fn run_name(name: Option<&str>) -> Option<String> {
+    let name = name?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    if name.chars().count() <= 40 {
+        return Some(name.to_owned());
+    }
+    let cut: String = name.chars().take(39).collect();
+    Some(format!("{}…", cut.trim_end()))
+}
+
 pub(crate) fn background_owner(id: &ConversationId) -> String {
     format!("background:{id}")
 }
@@ -91,13 +104,13 @@ pub(super) fn hold_foreground(id: &ConversationId, gate: std::sync::Arc<tokio::s
 impl SessionManager {
     /// Runs `work`, the thread's `tool` call of `command` (its status and reply), in its tool
     /// call while it ends within [`FOREGROUND`], else in the background: its reply then comes
-    /// as a message.
+    /// as a message. `tool` comes with the short name the thread gave the command, if any.
     /// `cancel` ends the work; the thread's CLI ending (`cli_ended`) cancels it only while it
     /// still holds the call.
     pub(super) async fn in_foreground<F>(
         &self,
         id: &ConversationId,
-        tool: &str,
+        (tool, name): (&str, Option<&str>),
         command: &str,
         cli_ended: CancellationToken,
         cancel: CancellationToken,
@@ -169,6 +182,7 @@ impl SessionManager {
                 ended_at_ms: None,
                 state: BackgroundRunState::Running,
                 item_id: self.own_command_item(id, tool, command).await,
+                name: run_name(name),
             };
             if let Some(item) = &run.item_id
                 && let Ok(conv) = self.conv(id)

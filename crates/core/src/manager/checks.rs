@@ -617,6 +617,7 @@ impl SessionManager {
             return self.affected_checks(&caller).await;
         };
         let call_command = args.command.clone().expect("a check command");
+        let name = args.name.clone();
         if task.is_none() {
             caller.output = Some(self.own_command_output(id, "run_check", &call_command));
         }
@@ -679,8 +680,15 @@ impl SessionManager {
             }
             Ok((status, reply))
         };
-        self.in_foreground(id, "run_check", &call_command, cli_ended, cancel, work)
-            .await
+        self.in_foreground(
+            id,
+            ("run_check", name.as_deref()),
+            &call_command,
+            cli_ended,
+            cancel,
+            work,
+        )
+        .await
     }
 
     /// Runs `command` for `caller` once no run of the same check is under way, unless it

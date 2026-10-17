@@ -362,6 +362,10 @@ pub struct ReadArtifact {
 pub struct RunCommand {
     /// The command, as you would type it in a shell (`/bin/sh -c`).
     pub command: String,
+    /// A short name for what a long command is for ("Core tests", "Desktop build"): the
+    /// session's Activities show it while it runs.
+    #[serde(default)]
+    pub name: Option<String>,
     /// The folder it runs in: the workspace (the default) or a folder inside it, or your own
     /// scratch folder.
     #[serde(default)]
@@ -395,6 +399,10 @@ pub struct RunCheck {
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "Vec<String>")]
     pub inputs: Vec<String>,
+    /// The thread's short name for it, from its `run_check`.
+    #[serde(default)]
+    #[schemars(skip)]
+    pub name: Option<String>,
 }
 
 /// The thread's `run_check`: a worker's, and its change's risk (BUILD-PLAN B2).
@@ -419,6 +427,10 @@ pub struct ThreadRunCheck {
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "Vec<String>")]
     pub inputs: Vec<String>,
+    /// A short name for what a long check is for ("Core tests"): the session's Activities show
+    /// it while it runs.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Why your change for this request is risky, when it is (persistence, security,
     /// migrations, concurrency, deletion, public API): it then gets an other-vendor review
     /// whatever its size.
@@ -448,6 +460,7 @@ impl ThreadRunCheck {
                 timeout_secs: self.timeout_secs,
                 rerun: self.rerun,
                 inputs: self.inputs,
+                name: self.name,
             },
             risky: self.risky,
             commit: self
@@ -464,6 +477,10 @@ impl ThreadRunCheck {
 pub struct RunUnsandboxed {
     /// The command, as you would type it in a shell (`/bin/sh -c`).
     pub command: String,
+    /// A short name for what a long command is for ("Core tests", "Desktop build"): the
+    /// session's Activities show it while it runs.
+    #[serde(default)]
+    pub name: Option<String>,
     /// The folder it runs in: the workspace (the default) or a folder inside it, or your own
     /// scratch folder.
     #[serde(default)]

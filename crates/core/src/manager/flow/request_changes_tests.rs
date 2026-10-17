@@ -896,7 +896,7 @@ async fn request_changes_background_runs_keep_the_starting_item_and_return_the_f
                         tokio::task::yield_now().await;
                     }
                 }).await.unwrap();
-                let reply = turn.host.in_foreground(&id, "run", "controlled output", tokio_util::sync::CancellationToken::new(), tokio_util::sync::CancellationToken::new(), async move {
+                let reply = turn.host.in_foreground(&id, ("run", None), "controlled output", tokio_util::sync::CancellationToken::new(), tokio_util::sync::CancellationToken::new(), async move {
                     release.notified().await;
                     Ok(("exit 0".into(), "é".repeat(160_000)))
                 }).await.unwrap();
@@ -1555,7 +1555,7 @@ async fn request_changes_background_runs_keep_a_late_link_to_their_call() {
                     .host
                     .in_foreground(
                         &id,
-                        "run",
+                        ("run", None),
                         "late output",
                         tokio_util::sync::CancellationToken::new(),
                         tokio_util::sync::CancellationToken::new(),

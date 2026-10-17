@@ -320,7 +320,8 @@ in it, or your scratch folder). Up to 8 KB of output comes back as it is, more a
 exit status, the error and warning lines, the first and last lines) with an out-… id for \
 read_artifact. A command still going after a minute goes on in the background: the call \
 returns its run-N id and the result comes as a message in this request; never wait for it or \
-run it again.";
+run it again. Give a long one a short `name` for what it is for (\"Desktop build\"): the \
+session's Activities show it while it runs.";
 
 const RUN_CHECK: &str = "Run a check (tests, lint, typecheck, build, formatting) in your \
 checkout, rather than in your shell. One that already ran on the same files answers from the \
@@ -328,7 +329,8 @@ cache and says so (`rerun` runs it again). With no `command` it lists the checks
 call for and runs nothing. A pass with a long output comes back as its warnings and last lines, \
 a failure over 8 KB as a digest of its errors, each with where the whole output is. The \
 thread's check still going after a minute goes on in the background: the call returns its \
-run-N id and the result comes as a message in this request.";
+run-N id and the result comes as a message in this request; the thread gives a long one a \
+short `name` for what it is for (\"Core tests\"), which the session's Activities show.";
 
 const RUN_UNSANDBOXED: &str = "Like run, but outside the sandbox, for a command the sandbox \
 blocked (the network, files outside the workspace): it waits for approval first, decided on \

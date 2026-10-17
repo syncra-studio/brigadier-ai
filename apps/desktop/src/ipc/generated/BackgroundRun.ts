@@ -25,4 +25,9 @@ tool: string, command: string, startedAtMs: number, endedAtMs: number | null, st
  * The thread's tool call that started it (its row's `itemId`); absent on runs from
  * before it was kept.
  */
-itemId?: string, };
+itemId?: string, 
+/**
+ * What it is for, in a few words ("Core tests"), as the thread named it; the session's
+ * Activities fall back to a short form of the command without one.
+ */
+name?: string, };

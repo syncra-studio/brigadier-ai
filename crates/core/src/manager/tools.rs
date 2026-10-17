@@ -635,6 +635,7 @@ impl SessionManager {
                         &args.command,
                         args.workdir.as_deref(),
                         args.timeout_secs,
+                        args.name.as_deref(),
                         false,
                     )
                 })
@@ -649,6 +650,7 @@ impl SessionManager {
                         &args.command,
                         args.workdir.as_deref(),
                         args.timeout_secs,
+                        args.name.as_deref(),
                         true,
                     )
                 })

@@ -161,6 +161,7 @@ impl SessionManager {
         command: &str,
         workdir: Option<&str>,
         timeout_secs: Option<u64>,
+        name: Option<&str>,
         unsandboxed: bool,
     ) -> Result<String> {
         if command.trim().is_empty() {
@@ -264,7 +265,7 @@ impl SessionManager {
             };
             Ok((ran.status, reply))
         };
-        self.in_foreground(id, tool, command, cli.ended.clone(), cancel, work)
+        self.in_foreground(id, (tool, name), command, cli.ended.clone(), cancel, work)
             .await
     }
 

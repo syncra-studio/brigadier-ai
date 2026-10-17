@@ -162,6 +162,54 @@ async fn a_long_command_goes_to_the_background_and_its_result_comes_back_to_the_
     flow.stop().await;
 }
 
+/// A long command's short name (what it is for) is kept on its background run, for the
+/// session's Activities; a blank one is none, and a long one is cut.
+#[tokio::test]
+async fn a_background_run_keeps_the_name_the_thread_gave_it() {
+    let flow = Flow::start(
+        "background-names",
+        Options::default(),
+        script(|turn| async move {
+            if turn.input.contains("finished · ") {
+                return Reply::text("Done.");
+            }
+            for (tool, name) in [
+                ("run_check", "  Core tests "),
+                ("run", " "),
+                (
+                    "run",
+                    "The whole desktop app's debug build, bundled for macOS",
+                ),
+            ] {
+                let reply = turn
+                    .call(
+                        tool,
+                        json!({ "command": "sleep 3; echo ran", "name": name }),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{tool}: {}", reply.text);
+            }
+            Reply::text(crate::manager::prompts::QUIET)
+        }),
+    )
+    .await;
+    flow.say("Run them.").await;
+    let board = flow.settled().await;
+    let names: Vec<_> = ["run-1", "run-2", "run-3"]
+        .iter()
+        .map(|id| board.background_runs[*id].name.clone())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            Some("Core tests".to_owned()),
+            None,
+            Some("The whole desktop app's debug build, bu…".to_owned()),
+        ]
+    );
+    flow.stop().await;
+}
+
 /// The same check asked again while the first still runs waits for it in the background too,
 /// and answers from what the first kept.
 #[tokio::test]
@@ -355,7 +403,7 @@ async fn a_dropped_call_ends_its_command() {
     let seen = cancel.clone();
     let call = flow.manager.in_foreground(
         &flow.conversation,
-        "run",
+        ("run", None),
         "sleep 600",
         tokio_util::sync::CancellationToken::new(),
         cancel,
@@ -467,6 +515,7 @@ async fn a_background_run_cut_off_by_a_restart_tells_the_thread() {
                     ended_at_ms: None,
                     state: BackgroundRunState::Running,
                     item_id: None,
+                    name: None,
                 },
             }],
         )

@@ -61,7 +61,7 @@ pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: be
 /// Activities with a Stop (issue #203).
 pub(crate) const WORKER_PREVIEWS: &str = "Run dev servers and apps with start_preview, never with `&`, nohup or `open`: they show in the session's Activities, with a Stop. Build and launch a desktop app as one start_preview with `kind: \"app\"` (`<build> && \"<the .app>/Contents/MacOS/<binary>\"`, the app in the foreground): it reads Building, then Starting, then Running. A preview you start lasts only while your task is alive: it stops when your task ends and its folder goes.";
 
-pub(crate) const LONG_COMMANDS: &str = "A command still going after a minute goes on in the background by itself (@run, run_check): the call returns its run-N id and its result comes as a message in this request. Never background one yourself (`&`, nohup), and never run the full suite: the full checks run on their own (rerun_checks).";
+pub(crate) const LONG_COMMANDS: &str = "A command still going after a minute goes on in the background by itself (@run, run_check): the call returns its run-N id and its result comes as a message in this request. Give a long one a short `name` for what it is for (\"Core tests\"): the session's Activities show it. Never background one yourself (`&`, nohup), and never run the full suite: the full checks run on their own (rerun_checks).";
 
 /// The session thread's role (THREAD-PLAN.md Q1), with the user's preferences from the Personal
 /// Brain. `provider`: the thread's CLI, which picks how it runs long commands; `start_workers`:

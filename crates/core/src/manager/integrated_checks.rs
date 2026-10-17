@@ -1519,6 +1519,7 @@ mod tests {
                 ended_at_ms: None,
                 state: crate::work::BackgroundRunState::Running,
                 item_id: None,
+                name: None,
             },
         );
         assert_eq!(
