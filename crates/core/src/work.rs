@@ -876,6 +876,11 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub told_revision: Option<u32>,
+    /// The latest version a report of it was given for its Brain claims (BUILD-PLAN A11): a
+    /// report after a restart goes on from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub report_version: Option<u64>,
     /// How its CLI ended without a report since it last reported ("signal 9: …"): the first
     /// time it resumes, the second time the task stops (SESSION-FIXES-PLAN.md Q4).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

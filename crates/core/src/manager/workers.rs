@@ -736,7 +736,13 @@ impl TaskLive {
         state.cli.is_some() || state.taken_over
     }
 
+    #[cfg(test)]
     fn new(id: TaskId, conversation_id: ConversationId) -> Self {
+        Self::reported(id, conversation_id, None)
+    }
+
+    /// A live task whose reports went up to `report_version` before.
+    fn reported(id: TaskId, conversation_id: ConversationId, report_version: Option<u64>) -> Self {
         Self {
             id,
             conversation_id,
@@ -745,7 +751,7 @@ impl TaskLive {
             reroute: tokio::sync::Mutex::new(()),
             wait_timer: std::sync::atomic::AtomicU64::new(0),
             watchdog_busy: std::sync::atomic::AtomicBool::new(false),
-            learning: Arc::default(),
+            learning: Arc::new(ReportLearning::after(report_version)),
             turn_end: tokio::sync::Mutex::new(()),
             takeover: tokio::sync::Mutex::new(None),
             reviews_told: std::sync::atomic::AtomicU8::new(REVIEWS_UNKNOWN),
@@ -880,7 +886,11 @@ impl SessionManager {
         self.tasks_lock()
             .entry(task.id.clone())
             .or_insert_with(|| {
-                Arc::new(TaskLive::new(task.id.clone(), task.conversation_id.clone()))
+                Arc::new(TaskLive::reported(
+                    task.id.clone(),
+                    task.conversation_id.clone(),
+                    task.report_version,
+                ))
             })
             .clone()
     }
@@ -1338,6 +1348,7 @@ impl SessionManager {
             rework_rounds: 0,
             native_session: None,
             told_revision,
+            report_version: None,
             deaths: Vec::new(),
             review_hold: None,
             review_settled: false,

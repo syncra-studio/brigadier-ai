@@ -135,7 +135,16 @@ pub(crate) struct ReportLearning {
 }
 
 impl ReportLearning {
-    fn next(&self) -> u64 {
+    /// The order of a task's reports, going on after `version` (kept on the task).
+    pub(crate) fn after(version: Option<u64>) -> Self {
+        let version = version.unwrap_or(0);
+        Self {
+            next: AtomicU64::new(version),
+            stored: tokio::sync::Mutex::new(version),
+        }
+    }
+
+    pub(super) fn next(&self) -> u64 {
         self.next.fetch_add(1, Ordering::Relaxed) + 1
     }
 
@@ -1449,6 +1458,16 @@ impl SessionManager {
         let version = order.as_ref().map(|order| order.next());
         self.spawn(async move {
             let _learning = learning;
+            // Kept before its claims are, so a report after a restart never reuses it.
+            if let Some(version) = version
+                && let Err(err) = manager
+                    .update_task(&task.conversation_id, &task.id, |task| {
+                        task.report_version = task.report_version.max(Some(version));
+                    })
+                    .await
+            {
+                tracing::warn!(task = %task.id, error = %err, "could not keep a report's version");
+            }
             let write = manager.record_report(&task, &report, version);
             let result = match (order, version) {
                 (Some(order), Some(version)) => order.keep(version, write).await,
