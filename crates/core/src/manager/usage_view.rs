@@ -247,7 +247,16 @@ impl SessionManager {
         areas: Vec<Area>,
         author: Option<ProviderKind>,
     ) -> Vec<RoutePreview> {
-        let rankings = self.core.settings().routing_rankings;
+        let settings = self.core.settings();
+        let cross_vendor = ProviderKind::ALL
+            .into_iter()
+            .filter(|kind| {
+                crate::routing::availability::provider_on(&settings, *kind)
+                    && self.runtime.provider_signed_in(*kind)
+            })
+            .count()
+            > 1;
+        let rankings = settings.routing_rankings;
         let mut previews = Vec::new();
         for category in TaskCategory::ALL {
             let (preview, trial_slot) = self
@@ -261,9 +270,10 @@ impl SessionManager {
             )
             .map(|ranking| ranking.id.clone());
             // Asked without an author, a review shows each vendor's change: it goes to the
-            // other vendor when one can take it.
+            // other vendor when one can take it. With one vendor signed in and on, there is no
+            // other vendor to show.
             let mut by_author = Vec::new();
-            if category == TaskCategory::Review && author.is_none() {
+            if category == TaskCategory::Review && author.is_none() && cross_vendor {
                 for provider in ProviderKind::ALL {
                     let (preview, _) = self
                         .preview_one(category, &areas, project.as_ref(), Some(provider))
