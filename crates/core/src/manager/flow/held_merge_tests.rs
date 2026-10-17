@@ -137,10 +137,11 @@ async fn held(name: &str, plan: Plan) -> Held {
                 }
                 if !turn.is_orchestrator() {
                     // A writer: holds until released, then writes its own file. One whose CLI
-                    // a restart closed meanwhile ends there, as a real CLI's turn would.
+                    // a restart closed meanwhile goes no further, as a killed CLI's turn: it
+                    // neither reports nor ends.
                     tokio::select! {
                         () = until_set(&gate) => {}
-                        true = turn.stopped() => return Reply::default(),
+                        true = turn.stopped() => std::future::pending::<()>().await,
                     }
                     let file = if turn.task_number() == Some(1) {
                         "A.md"
