@@ -48,3 +48,20 @@ test("team rows join possessives to names, time stopped work, and omit blank She
     await server.close();
   }
 });
+
+test("a worker the user stopped reads that they stopped it; one the lead stopped keeps its reason", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { TeamStep } = await server.ssrLoadModule("/src/app/conversation/activity/TeamSentence.tsx");
+    const { emptyBoard, BoardStoreContext } = await server.ssrLoadModule("/src/state/board.ts");
+    const task = { id: "t1", number: 1, title: "Add QIF exporter", kind: "implement", state: "stopped",
+      createdAtMs: 1000, updatedAtMs: 9000, attempts: [{ startedAtMs: 5000, endedAtMs: 9000 }] } as unknown as Task;
+    const store = createStore(() => ({ board: { ...emptyBoard("c"), tasks: { t1: task } }, orchestrator: null }));
+    const text = (reason: string) => ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: store },
+      React.createElement(TeamStep, { kind: { type: "stopped", taskId: "t1", reason }, atMs: 9000 }))).replace(/<[^>]+>/g, "");
+    assert.equal(text("Stopped by the user"), "You stopped Add QIF exporter after 4s");
+    assert.equal(text("Enough"), "Stopped Add QIF exporter after 4s");
+  } finally {
+    await server.close();
+  }
+});

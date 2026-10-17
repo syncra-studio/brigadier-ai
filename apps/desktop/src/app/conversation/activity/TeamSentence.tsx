@@ -149,6 +149,9 @@ function lifecycleWordOf(task: Task): ReturnType<typeof lifecycleWord> {
   return state === "is working" ? "started" : state === "is waiting" ? "waiting" : state === "stopped" ? "stopped" : state === "failed" ? "failed" : "finished";
 }
 
+/** The reason the engine files with a worker the user stopped (`USER_STOP_REASON` there). */
+const USER_STOP_REASON = "Stopped by the user";
+
 /** The lead's actions on its team that show as rows. */
 export type TeamStepKind = Extract<OrchestratorStepKind, { type: "messaged" | "answered" | "stopped" | "landed" | "reviewed" }>;
 
@@ -204,11 +207,14 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
         </dl>
       );
       break;
-    case "stopped":
+    case "stopped": {
+      // The user's own Stop (one worker's, or Stop all) says so on the row; the lead's says why.
+      const byUser = kind.reason === USER_STOP_REASON;
       icon = <StopCircle aria-hidden className="size-4 shrink-0" />;
-      line = <>Stopped <WorkerName taskId={kind.taskId} glyph={false} />{stoppedMs >= 1000 && ` after ${formatDuration(stoppedMs)}`}</>;
-      detail = kind.reason ? <Quiet>{kind.reason}</Quiet> : undefined;
+      line = <>{byUser ? "You stopped" : "Stopped"} <WorkerName taskId={kind.taskId} glyph={false} />{stoppedMs >= 1000 && ` after ${formatDuration(stoppedMs)}`}</>;
+      detail = kind.reason && !byUser ? <Quiet>{kind.reason}</Quiet> : undefined;
       break;
+    }
     case "landed":
       icon = <Commit aria-hidden className="size-4 shrink-0" />;
       line =
