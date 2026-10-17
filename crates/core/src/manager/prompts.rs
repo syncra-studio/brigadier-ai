@@ -72,7 +72,11 @@ pub(crate) fn thread(
         Some(Setup::Session { repo, .. }) => repo.as_str(),
         _ => "(none)",
     };
-    let trusted = project.and_then(|project| project.trusts(repo)) != Some(false);
+    // As `repo_trust` counts it.
+    let trusted = match (&conversation.setup, project) {
+        (Some(Setup::Session { .. }), Some(project)) => project.counts_trusted(repo),
+        _ => true,
+    };
     let (environment, permission) = setting_texts(conversation, trusted, run);
     let local = run.is_none()
         && matches!(

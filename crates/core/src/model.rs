@@ -110,6 +110,16 @@ impl Project {
             .find(|folder| folder.path == path)
             .map(|folder| folder.trusted)
     }
+
+    /// Whether sessions on the folder `path` work as their level allows: once the user trusts
+    /// it, never while it's unanswered. A folder no longer the project's (changed before it was
+    /// answered), which the app can't ask about any more, keeps working as its level allows.
+    pub fn counts_trusted(&self, path: &str) -> bool {
+        match self.trusts(path) {
+            Some(trusted) => trusted,
+            None => !self.repos.iter().any(|repo| repo.path == path),
+        }
+    }
 }
 
 /// What answering "Do you trust this folder?" did: the project as it is now, and what could
@@ -2544,6 +2554,40 @@ pub mod streams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_counts_as_trusted_only_once_trusted_unless_it_left_the_project() {
+        let project = Project {
+            id: ProjectId("p".into()),
+            name: "p".into(),
+            created_at_ms: 1,
+            repos: vec![ProjectRepo {
+                path: "/code/now".into(),
+                name: "now".into(),
+            }],
+            prefs: Default::default(),
+            trust: vec![FolderTrust {
+                path: "/code/answered".into(),
+                trusted: false,
+                decided_at_ms: 1,
+            }],
+        };
+        // The project's folder, never answered: asked about, and not trusted until then.
+        assert!(!project.counts_trusted("/code/now"));
+        // An answer stands, wherever the folder is now.
+        assert!(!project.counts_trusted("/code/answered"));
+        // A session left on a folder the project no longer has, never answered: nothing can ask.
+        assert!(project.counts_trusted("/code/before"));
+        let trusted = Project {
+            trust: vec![FolderTrust {
+                path: "/code/now".into(),
+                trusted: true,
+                decided_at_ms: 2,
+            }],
+            ..project
+        };
+        assert!(trusted.counts_trusted("/code/now"));
+    }
 
     #[test]
     fn fresh_settings_use_approve_for_me_and_saved_permissions_stay() {

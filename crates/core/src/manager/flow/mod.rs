@@ -1424,6 +1424,9 @@ pub(crate) struct Options {
     pub behavior: Arc<FakeBehavior>,
     /// Files the repository starts with besides its README (path, contents).
     pub files: Vec<(&'static str, &'static str)>,
+    /// The user's answer to "Trust this folder?" for the repository (trusted by default, as
+    /// the app asks when the project is first entered); `None` leaves it unanswered.
+    pub trusted: Option<bool>,
 }
 
 impl Default for Options {
@@ -1437,6 +1440,7 @@ impl Default for Options {
             thread: ProviderKind::Claude,
             behavior: Arc::default(),
             files: Vec::new(),
+            trusted: Some(true),
         }
     }
 }
@@ -1476,6 +1480,11 @@ impl Flow {
             .create_project("Flow".into(), Some(repo.display().to_string()))
             .await
             .unwrap();
+        if let Some(trusted) = options.trusted {
+            core.set_folder_trust(&project.id, &repo.display().to_string(), trusted)
+                .await
+                .unwrap();
+        }
         let conversation = manager
             .create_conversation(
                 ConversationKind::Session,
@@ -1597,6 +1606,10 @@ impl Flow {
                 let project = self
                     .core
                     .create_project(name.into(), Some(repo.display().to_string()))
+                    .await
+                    .unwrap();
+                self.core
+                    .set_folder_trust(&project.id, &repo.display().to_string(), true)
                     .await
                     .unwrap();
                 (project.id, repo)
