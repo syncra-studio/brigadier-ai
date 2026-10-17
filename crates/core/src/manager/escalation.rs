@@ -14,11 +14,9 @@
 //!
 //! The reviewer is a one-shot session (read-only, no tools, nobody to ask) that reads the
 //! request, with the session's protected set as a rule, and answers in JSON. It allows the
-//! request unless it pushes, publishes or deploys, uses credentials, spends money, or deletes
-//! or writes outside the work. One push it may allow: a CI fix's, to the repository and branch
-//! whose CI the user said yes to watching, while that yes lasts (`ci::live_ci_consents`); it
-//! reads the yes and the folder's push remotes, and judges. Its tokens are metered as their
-//! own step.
+//! request unless it uses credentials, spends money, or deletes or writes outside the work:
+//! pushes, pull requests, publishing and deploying are the agent's call (Q61). Its tokens are
+//! metered as their own step.
 
 use std::path::Path;
 use std::time::Duration;
@@ -49,7 +47,7 @@ pub(crate) const OWN_APPROVAL: &str = "brigadier-escalation:";
 /// Under which owner the reviewer's tokens are counted ([`super::usage`] reads the prefix).
 pub(crate) const ESCALATION_OWNER: &str = "escalation:";
 
-const ROLE: &str = "You review one request of a coding agent to go beyond its sandbox (a shell command to run outside it, files to write, or wider permissions), on the user's behalf, while the user is away. You have no tools: decide from the request alone.\n\nAllow it unless it does any of these: pushes to a remote (unless the user's consent given with the request covers that push), publishes or releases anything, deploys, uses or reads credentials, tokens or keys, spends money, or deletes or writes outside the project's folder and its own temporary folders. Network reads (downloads, package installs), builds, tests and starting local servers are fine.\n\nA consent covers a push only when the user's answer was a yes to watching CI, and the push is a plain push of commits to that same repository (read the folder's push remotes) and to that same branch only: no other branch, no tags, no force push, nothing else on the list. Every other push stays refused, and its reason says only that a push needs the user's yes.\n\nReply with one line of JSON and nothing else: {\"allow\": true or false, \"protected\": true only when you refuse it because a rule below forbids it, \"reason\": \"one short sentence\"}.";
+const ROLE: &str = "You review one request of a coding agent to go beyond its sandbox (a shell command to run outside it, files to write, or wider permissions), on the user's behalf, while the user is away. You have no tools: decide from the request alone.\n\nAllow it unless it does any of these: uses or reads credentials, tokens or keys, spends money, or deletes or writes outside the project's folder and its own temporary folders. Pushing, opening pull requests, publishing and deploying are the agent's own call: allow them. Network reads (downloads, package installs), builds, tests and starting local servers are fine.\n\nReply with one line of JSON and nothing else: {\"allow\": true or false, \"protected\": true only when you refuse it because a rule below forbids it, \"reason\": \"one short sentence\"}.";
 
 #[derive(Deserialize)]
 struct Verdict {

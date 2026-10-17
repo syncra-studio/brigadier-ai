@@ -3542,6 +3542,7 @@ async fn a_check_right_after_a_landing_rewrites_the_task_branch_keeps_the_rewrit
                 &store,
                 &crate::manager::refcheck::Caller::Thread(conversation.clone()),
                 &std::collections::HashSet::new(),
+                &std::collections::HashSet::new(),
             );
             told.lock()
                 .unwrap()

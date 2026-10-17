@@ -1569,7 +1569,7 @@ impl SessionManager {
         };
         let learned = self.learned_checks(caller, &packages).await;
         let plan = affected(&changed, &packages, manager, &learned);
-        Ok(plan.text(changed.len()))
+        Ok(plan.text(changed.len(), caller.task_id.is_some()))
     }
 
     /// What the project's Brain learned of checks per package folder.
@@ -2540,7 +2540,9 @@ struct Group {
 }
 
 impl Plan {
-    fn text(&self, changed: usize) -> String {
+    /// What `run_check` with no command answers. `worker`: a worker is told to leave the whole
+    /// suite to the full checks; the thread judges that itself (#245).
+    fn text(&self, changed: usize, worker: bool) -> String {
         if changed == 0 {
             return "Nothing changed since your base: there are no affected checks.".into();
         }
@@ -2566,9 +2568,13 @@ impl Plan {
         if !self.left.is_empty() {
             text.push_str(&format!(
                 "\nNot listed: {}. The session's full checks cover those once the work lands, \
-                 one run for everyone's work: don't run the whole suite, a workspace-wide \
-                 check or an app build yourself.",
-                self.left.join("; ")
+                 one run for everyone's work{}",
+                self.left.join("; "),
+                if worker {
+                    ": don't run the whole suite, a workspace-wide check or an app build yourself."
+                } else {
+                    "."
+                }
             ));
         }
         if !self.groups.is_empty() {
@@ -3412,10 +3418,14 @@ mod tests {
             plan.left,
             ["the packages that depend on yours (crates/core)"]
         );
-        let text = plan.text(1);
+        let text = plan.text(1, true);
         assert!(text.contains("`cargo test -p brigadier-index`"), "{text}");
         assert!(!text.contains("brigadier-core"), "{text}");
         assert!(text.contains("don't run the whole suite"), "{text}");
+        // The thread judges the whole suite itself (#245).
+        let thread = plan.text(1, false);
+        assert!(!thread.contains("don't run the whole suite"), "{thread}");
+        assert!(thread.contains("one run for everyone's work."), "{thread}");
         // A Node package's dependents through `workspace:` aren't listed either.
         let plan = affected(
             &["packages/ui/src/button.tsx".into()],
@@ -3485,7 +3495,7 @@ mod tests {
                 "{path}: {:?}",
                 plan.left
             );
-            let text = plan.text(2);
+            let text = plan.text(2, true);
             assert!(!text.contains("--workspace"), "{text}");
             assert!(!text.contains("make check"), "{text}");
         }
@@ -3497,7 +3507,7 @@ mod tests {
             &BTreeMap::new(),
         );
         assert!(plan.groups.is_empty());
-        let text = plan.text(1);
+        let text = plan.text(1, true);
         assert!(
             text.contains("None of the changes has checks of its own"),
             "{text}"
@@ -3549,9 +3559,9 @@ mod tests {
         );
         assert!(plan.groups.is_empty());
         assert_eq!(plan.left, ["docs/THREAD-PLAN.md (no package holds it)"]);
-        assert!(!plan.text(1).contains("--workspace"));
+        assert!(!plan.text(1, true).contains("--workspace"));
         assert_eq!(
-            affected(&[], &workspace(), PackageManager::Pnpm, &BTreeMap::new()).text(0),
+            affected(&[], &workspace(), PackageManager::Pnpm, &BTreeMap::new()).text(0, true),
             "Nothing changed since your base: there are no affected checks."
         );
     }

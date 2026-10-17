@@ -1,6 +1,6 @@
 //! The pinned card's pull request row ("Existing pull request"): the GitHub pull
-//! request of a session's branch, looked up with the user's `gh`. Read only: Brigadier never
-//! creates or edits one.
+//! request of a session's branch, looked up with the user's `gh`. Read only: the row never
+//! creates or edits one; the thread opens and updates pull requests itself as it judges (Q61).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};

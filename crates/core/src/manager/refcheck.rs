@@ -2,9 +2,10 @@
 //! the engine owns is recorded with its tip and owner, and checked before each landing (the
 //! caller: the landing task's worker) and after each thread turn (the caller: the thread).
 //! Workers and the thread commit outside the engine, so the check tells their moves from
-//! damage: the caller's own branch and any forward move are recorded; a protected branch
-//! deleted or rewound is restored, and its thread told; the base is never touched, only
-//! reported. The check reads the records and runs under the repository's ref lock, which
+//! damage: the caller's own branch and any forward move are recorded; a session branch is its
+//! thread's to rebase or amend while it is in a turn (#247); any other branch deleted or
+//! rewound is restored, and its thread told; the base is never touched, only reported. The
+//! check reads the records and runs under the repository's ref lock, which
 //! every landing and branch delete takes, and the engine forgets a branch before it deletes
 //! it, so the check never undoes the engine's own move.
 
@@ -109,7 +110,8 @@ pub(crate) enum Verdict {
 }
 
 /// The verdict on a branch recorded at `recorded.tip` that now points at `current` (`None`:
-/// deleted). `forward`: `current` descends from the recorded tip.
+/// deleted). `forward`: `current` descends from the recorded tip. `owner_live`: its owner can
+/// be moving it now (a task's worker runs; the session's thread is in a turn).
 pub(crate) fn judge(
     recorded: &Recorded,
     current: Option<&Oid>,
@@ -127,6 +129,10 @@ pub(crate) fn judge(
         Verdict::Record(current.clone())
     } else if recorded.task.is_some() && owner_live {
         Verdict::RecordRewrite(current.clone())
+    } else if recorded.task.is_none() && owner_live {
+        // The session's thread rebased or amended its branch in a turn, seen at a landing's
+        // check or another session's before its own turn ended.
+        Verdict::Record(current.clone())
     } else {
         Verdict::Restore
     }
@@ -135,13 +141,14 @@ pub(crate) fn judge(
 /// The check on the repository of `repo` for `caller`, its records read and written back
 /// under the repository's ref lock: a branch the engine forgot and deleted a moment earlier
 /// (a landing's, a removal's) is never recreated from a copy taken before. `live`: the tasks
-/// whose worker runs now (its CLI or its terminal). Restores what it must and returns what
-/// each thread is told.
+/// whose worker runs now (its CLI or its terminal); `busy`: the sessions whose thread is in a
+/// turn. Restores what it must and returns what each thread is told.
 pub(crate) fn check_recorded(
     repo: &Repo,
     store: &RefRecords,
     caller: &Caller,
     live: &HashSet<TaskId>,
+    busy: &HashSet<ConversationId>,
 ) -> Vec<Told> {
     repo.with_ref_lock(|| {
         let common = repo.common_dir().to_owned();
@@ -157,7 +164,7 @@ pub(crate) fn check_recorded(
                 }
             }
         }
-        let told = check_locked(repo, &mut records, caller, live);
+        let told = check_locked(repo, &mut records, caller, live, busy);
         // Recorded tips the check moved; a branch forgotten or recorded meanwhile is left be.
         store.with(&common, |now| {
             for (branch, recorded) in records.branches {
@@ -181,6 +188,7 @@ fn check_locked(
     records: &mut RepoRecords,
     caller: &Caller,
     live: &HashSet<TaskId>,
+    busy: &HashSet<ConversationId>,
 ) -> Vec<Told> {
     let mut told = Vec::new();
     for (branch, recorded) in &mut records.branches {
@@ -194,7 +202,10 @@ fn check_locked(
         let forward = current
             .as_ref()
             .is_some_and(|tip| repo.ancestor(&recorded.tip, tip).unwrap_or(false));
-        let owner_live = recorded.task.as_ref().is_some_and(|id| live.contains(id));
+        let owner_live = match &recorded.task {
+            Some(id) => live.contains(id),
+            None => busy.contains(&recorded.conversation),
+        };
         match judge(recorded, current.as_ref(), forward, caller, owner_live) {
             Verdict::Unchanged => {}
             Verdict::Record(tip) => recorded.tip = tip,
@@ -401,16 +412,25 @@ impl SessionManager {
                 live.insert(task.id.clone());
             }
         }
-        let store = self.ref_records.clone();
-        let told = match super::blocking(move || Ok(check_recorded(&repo, &store, &caller, &live)))
-            .await
-        {
-            Ok(told) => told,
-            Err(err) => {
-                tracing::warn!(error = %err, "the ref check failed");
-                return;
+        // The threads in a turn now, which may be rebasing or amending their session branch.
+        let convs: Vec<_> = self.convs_lock().values().cloned().collect();
+        let mut busy = HashSet::new();
+        for conv in convs {
+            if conv.turn_running().await {
+                busy.insert(conv.id.clone());
             }
-        };
+        }
+        let store = self.ref_records.clone();
+        let told =
+            match super::blocking(move || Ok(check_recorded(&repo, &store, &caller, &live, &busy)))
+                .await
+            {
+                Ok(told) => told,
+                Err(err) => {
+                    tracing::warn!(error = %err, "the ref check failed");
+                    return;
+                }
+            };
         for Told { conversation, text } in told {
             self.tell_guard(&conversation, text).await;
         }
@@ -519,7 +539,18 @@ mod tests {
         caller: &Caller,
         live: &HashSet<TaskId>,
     ) -> Vec<Told> {
-        repo.with_ref_lock(|| check_locked(repo, records, caller, live))
+        check_busy(repo, records, caller, live, &HashSet::new())
+    }
+
+    /// [`check_repo`], with the threads of `busy` in a turn.
+    fn check_busy(
+        repo: &Repo,
+        records: &mut RepoRecords,
+        caller: &Caller,
+        live: &HashSet<TaskId>,
+        busy: &HashSet<ConversationId>,
+    ) -> Vec<Told> {
+        repo.with_ref_lock(|| check_locked(repo, records, caller, live, busy))
     }
 
     fn run(cwd: &Path, args: &[&str]) -> String {
@@ -607,6 +638,58 @@ mod tests {
         }));
         // Reported once: main's new tip is the recorded one.
         assert!(check_repo(&s.repo, &mut records, &Caller::Thread(conv("c")), &live).is_empty());
+    }
+
+    /// Issue #247: the thread rebases its session branch, then lands a worker in the same turn.
+    /// The landing's check keeps the rebase; another session's branch rewound is still put back.
+    #[test]
+    fn a_threads_own_rebase_of_its_session_branch_is_kept_and_other_branches_restored() {
+        let s = Scratch::new();
+        s.commit_on("brigadier/aa/session");
+        s.commit_on("brigadier/aa/task-2");
+        s.commit_on("main");
+        let mut records = s.records();
+        let task_2 = records.branches["brigadier/aa/task-2"].tip.clone();
+        // The rebase: the session's work onto main's new tip.
+        let rebased = Oid(s.git(&[
+            "commit-tree",
+            "brigadier/aa/session^{tree}",
+            "-p",
+            "main",
+            "-m",
+            "Work, rebased",
+        ]));
+        s.git(&["update-ref", "refs/heads/brigadier/aa/session", &rebased.0]);
+        // Meanwhile task-2's branch, its worker gone, is forced back.
+        s.git(&["update-ref", "refs/heads/brigadier/aa/task-2", "main~1"]);
+        let live: HashSet<TaskId> = [task("t1")].into();
+        let busy: HashSet<ConversationId> = [conv("c")].into();
+        let told = check_busy(
+            &s.repo,
+            &mut records,
+            &Caller::Task(task("t1")),
+            &live,
+            &busy,
+        );
+        assert_eq!(s.tip("brigadier/aa/session"), Some(rebased.clone()));
+        assert_eq!(records.branches["brigadier/aa/session"].tip, rebased);
+        assert_eq!(s.tip("brigadier/aa/task-2"), Some(task_2));
+        assert_eq!(
+            told.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
+            ["[restored brigadier/aa/task-2: it was moved back outside Brigadier]"]
+        );
+        // The thread's own check at its turn's end has nothing to add.
+        assert!(check_repo(&s.repo, &mut records, &Caller::Thread(conv("c")), &live).is_empty());
+        // Deleted, its thread busy or not, the session branch comes back.
+        s.git(&["branch", "-D", "brigadier/aa/session"]);
+        check_busy(
+            &s.repo,
+            &mut records,
+            &Caller::Task(task("t1")),
+            &live,
+            &busy,
+        );
+        assert_eq!(s.tip("brigadier/aa/session"), Some(rebased));
     }
 
     #[test]
@@ -730,7 +813,13 @@ mod tests {
                 let checker = {
                     let (repo, store) = (s.repo.clone(), store.clone());
                     std::thread::spawn(move || {
-                        check_recorded(&repo, &store, &Caller::Thread(conv("c")), &HashSet::new())
+                        check_recorded(
+                            &repo,
+                            &store,
+                            &Caller::Thread(conv("c")),
+                            &HashSet::new(),
+                            &HashSet::new(),
+                        )
                     })
                 };
                 std::thread::sleep(std::time::Duration::from_millis(200));
@@ -777,10 +866,16 @@ mod tests {
             judge(&session, Some(&b), false, &thread, false),
             Verdict::Record(b.clone())
         );
-        // A worker forcing the session branch back, seen before its landing.
+        // A worker, or another session, forcing the session branch back while its thread is
+        // in no turn.
         assert_eq!(
             judge(&session, Some(&b), false, &me, false),
             Verdict::Restore
+        );
+        // The thread's own rebase, seen at a landing's check during its turn.
+        assert_eq!(
+            judge(&session, Some(&b), false, &me, true),
+            Verdict::Record(b.clone())
         );
         // Another branch rewritten while its worker runs: may be its own amend.
         assert_eq!(

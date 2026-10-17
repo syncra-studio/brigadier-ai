@@ -1,5 +1,6 @@
-//! The pinned card's Git actions: the user's own commit and push in a session's
-//! checkout. They are never automatic (PLAN §4); a commit waits for any landing on the same
+//! The pinned card's Git actions: the user's own commit and push in a session's checkout,
+//! from its buttons, which never run on their own (PLAN §4). The thread commits, pushes and
+//! opens pull requests itself as it judges (Q61). A commit waits for any landing on the same
 //! repository (the landing lock). A blank commit message is written in a throwaway CLI session
 //! that is disposed of right after, by the model and style the user's Git settings name.
 //!

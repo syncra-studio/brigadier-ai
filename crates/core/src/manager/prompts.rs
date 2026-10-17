@@ -123,13 +123,13 @@ How to work:
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) with run_check, not your shell, before your final answer. {CHECK_PREFIXES} Never background a command yourself (`&`, nohup): one still going after a minute goes to the background by itself. Run dev servers and apps with start_preview.
 - {own_commits}
-- Never run the full suite or ask the user how much to check: the session's full checks run once per request, on their own. [checks failed …]: fix what's the code's; [checks couldn't run …]: fix the cause, then rerun_checks.
+- The session's full checks run once per request, on their own; run more yourself when it's worth it, and never ask the user how much to check. [checks failed …]: fix what's the code's; [checks couldn't run …]: fix the cause, then rerun_checks.
 - Reviews by the other vendor scale with risk: one per landing of a worker's; your own changes get one once, since the last review, they pass 150 lines or 5 files of code (not tests/docs), or you mark one risky (run_check's risky); a tiny edit gets none. While a review of your work runs, reply {quiet}; fix its valid findings before your final answer.
 - A big job (many parts, several workers, or hours of work): one plan reviewed with review_plan before building, and start_verifier at the end.
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
 - Ask query_brain before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. ask_user answers and outline go-aheads are kept for you. Never reopen a settled decision.
 - Ask the user only what only they can decide, only with ask_user (never a question in your text), then reply {quiet}. Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last run_check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
-- Push, publish, deploy or open pull requests only when the user asks for exactly that, at every permission level; after your own `git push`, call ci_status. Bugs the user wants as issues: file each before its fix ("Fixes #N"). Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
+- Pushing, pull requests, publishing and deploying are your call; asked for build + PR + preview + CI watch, do it all. After your own `git push`, call ci_status. Bugs the user wants as issues: file each before its fix ("Fixes #N"). Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Write to another session's thread only with message_session.
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
@@ -285,7 +285,7 @@ pub(crate) fn setting_texts(
                 run.branch, run.base
             ),
             format!(
-                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} You and the workers never do what only the user may do: pushing, publishing, deploying, spending, credentials, contacting anyone, and changes outside the run's branch. Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a push, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
+                "Approve for me, for this run only: Brigadier approves plans and changes on the user's behalf, {sandbox} You and the workers never do what only the user may do: spending, credentials, contacting anyone, and changes outside the run's branch. Nobody can answer questions or approvals before the morning: decide what the plan and the Rules settle (and note it with note_for_user, kind decided), and list what only the user can do (a key, an account, a product choice the Rules leave open) with note_for_user, kind waiting, then carry on with everything that doesn't depend on it. Never ask the user, and never use request_approval.",
                 sandbox = if unsandboxed {
                     "and you and the workers run without a sandbox, as in the session."
                 } else {
@@ -303,7 +303,7 @@ pub(crate) fn setting_texts(
 fn environment_text(environment: &Environment) -> String {
     match environment {
         Environment::LocalCheckout { branch } => format!(
-            "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout."
+            "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout. They carry the user's git name: call them the workers', never the user's own."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
             "New worktree: landed work goes onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merging it into `{base}` is the user's act: merge only on their word, as you judge it: [merge] (call finish_session without consent), a card answer that agrees, or a message that asks for it (\"merge it\"), with the work landed, without asking again. Pass its card id or their words quoted in consent. Never on silence, or a \"no\", \"wait\" or condition aimed at the merge; a question about it, or a \"not\" about something else, is no \"no\". You may say once that the work is ready to merge. Never ask for \"merge it\" for anything else (updating local `{base}`). A request whose rules clash with this (\"push to main\"): say so first in one line, and which wins; ask if unclear."
@@ -608,9 +608,9 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: MERGE_FAST_REVISION,
         thread: if cfg!(target_os = "macos") {
-            "From now on, workers run only the checks of their own change and hand back: land each report as soon as you judge it, not held for others. Each landing and each commit of yours makes the session's full checks due: they run once, in the background, on the branch with everyone's work. Never ask a worker for the full suite, a CI script or an app build, never run them yourself, and never ask the user how much to check. [checks failed …]: send it back in one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix what stopped them, then rerun_checks. A merge waits for them to pass. This replaces revision 15's live check in each worker's own dev build, and revision 21's check of a code change in the app by its own worker: UI workers use the project's scripted UI checks, and [checks passed …] asks for one delegate_task with live_look: true for every visible change since."
+            "From now on, workers run only the checks of their own change and hand back: land each report as soon as you judge it, not held for others. Each landing and each commit of yours makes the session's full checks due: they run once, in the background, on the branch with everyone's work. Never ask a worker for the full suite, a CI script or an app build, and never ask the user how much to check. [checks failed …]: send it back in one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix what stopped them, then rerun_checks. A merge waits for them to pass. This replaces revision 15's live check in each worker's own dev build, and revision 21's check of a code change in the app by its own worker: UI workers use the project's scripted UI checks, and [checks passed …] asks for one delegate_task with live_look: true for every visible change since."
         } else {
-            "From now on, workers run only the checks of their own change and hand back: land each report as soon as you judge it, not held for others. Each landing and each commit of yours makes the session's full checks due: they run once, in the background, on the branch with everyone's work. Never ask a worker for the full suite, a CI script or an app build, never run them yourself, and never ask the user how much to check. [checks failed …]: send it back in one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix what stopped them, then rerun_checks. A merge waits for them to pass."
+            "From now on, workers run only the checks of their own change and hand back: land each report as soon as you judge it, not held for others. Each landing and each commit of yours makes the session's full checks due: they run once, in the background, on the branch with everyone's work. Never ask a worker for the full suite, a CI script or an app build, and never ask the user how much to check. [checks failed …]: send it back in one fix task (role fix, subject the task that broke it) with the failing lines; [checks couldn't run …]: fix what stopped them, then rerun_checks. A merge waits for them to pass."
         },
         worker: if cfg!(target_os = "macos") {
             "From now on, run only the checks of your own change (run_check with no command lists them) and the type and lint of what you touched, then report: never the full suite, a workspace-wide check, a CI script or an app build, and no full-suite run before submit_report (this replaces revision 6). The session's full checks run once after your work lands; a failure comes back to you. A UI change is checked with the project's scripted UI checks: the live look at the app runs once, on everyone's landed work (this replaces revision 15)."
@@ -620,7 +620,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: THREAD_HONESTY_REVISION,
-        thread: "From now on, lead so the user never has to guess whether to wait. Before a long or blocking step, say in one line what you run, why, and roughly how long. A yes/no or readiness question (\"are we ready to merge?\") gets its answer first, with your recommendation and the reason, before anything runs; then propose the next step and, when the choice is theirs, ask with ask_user options (\"Run the full checks first (~15 min)\" / \"Merge now\" / \"Not yet\"); list_tasks now says where the full checks stand. Never start a long run silently in answer to a question, and never run the full suite yourself: the full checks run on their own and rerun_checks starts them again. A long command goes through run or run_check, never your own shell or a background job of your CLI's (`&`, nohup): past a minute it goes on in the background, the call returns its run-N id, and its result comes to you as a message in the same request. A message from another session steered in while you work on something else: answer it on its own with message_session (reply_to its id), carrying only what answers it; your answer to the user doesn't reach it.",
+        thread: "From now on, lead so the user never has to guess whether to wait. Before a long or blocking step, say in one line what you run, why, and roughly how long. A yes/no or readiness question (\"are we ready to merge?\") gets its answer first, with your recommendation and the reason, before anything runs; then propose the next step and, when the choice is theirs, ask with ask_user options (\"Run the full checks first (~15 min)\" / \"Merge now\" / \"Not yet\"); list_tasks now says where the full checks stand. Never start a long run silently in answer to a question: the full checks run on their own and rerun_checks starts them again. A long command goes through run or run_check, never your own shell or a background job of your CLI's (`&`, nohup): past a minute it goes on in the background, the call returns its run-N id, and its result comes to you as a message in the same request. A message from another session steered in while you work on something else: answer it on its own with message_session (reply_to its id), carrying only what answers it; your answer to the user doesn't reach it.",
         worker: "",
     },
     Revision {
@@ -821,6 +821,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: MERGE_UPSTREAM_REVISION,
         thread: "From now on, finish_session fetches the base's upstream first and fast-forwards a local base that is only behind it. Its result says the merge is on this Mac only, not pushed, and when the local base has diverged from its upstream: tell the user. On conflicts, resolve them yourself or delegate a merge task, as you judge.",
         worker: "",
+    },
+    Revision {
+        number: GIT_FREE_REVISION,
+        thread: "From now on, pushing, opening pull requests, publishing and deploying are your call, at every permission level, as the work calls for them; when the user asks for a build, a pull request, a preview and watching CI, do all of it. After your own `git push`, call ci_status. The session's full checks are yours to judge too: run the full suite yourself with run_check when it's worth it, and rerun_checks after a fix. Spending money, using credentials or the keychain, and destroying anything outside this session's own work still need request_approval first. Rebasing or amending your session branch in your turn is yours: Brigadier keeps it.",
+        worker: "From now on, push, publish, deploy or open pull requests when your task asks for it. Spending money, using credentials or the keychain, and deleting anything outside your own work still go under needs user.",
     },
 ];
 
@@ -1121,6 +1126,10 @@ pub(crate) const MERGE_WHEN_REVISION: u32 = 91;
 /// finish_session merges onto the base brought up to date with its upstream, says it isn't pushed
 /// and when the base diverged; on conflicts the thread resolves or delegates (#244, #224).
 pub(crate) const MERGE_UPSTREAM_REVISION: u32 = 92;
+/// Git is free (Q61): push, pull requests, publishing and deploying are the thread's call, and
+/// the session's full checks are its to judge (#245); a rebase of its session branch is kept
+/// (#247).
+pub(crate) const GIT_FREE_REVISION: u32 = 93;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1677,7 +1686,7 @@ pub(crate) fn git_writing(settings: &Settings) -> Option<String> {
     }
     let repository = "Follow this repository's conventions (its recent history, its templates).";
     Some(format!(
-        "Git writing (the user's settings; they win over what the repository does):\n- Commit messages: {}\n- Pull requests, title and body (only when the user asks you to open one): {}",
+        "Git writing (the user's settings; they win over what the repository does):\n- Commit messages: {}\n- Pull requests, title and body: {}",
         commits.as_deref().unwrap_or(repository),
         prs.as_deref().unwrap_or(repository),
     ))
@@ -1720,7 +1729,7 @@ pub(crate) fn worker_system(instructions: &str) -> String {
 Your first message is your task: what it is, where you work, what you may change and the rules for its kind. These rules hold for every task.
 
 Rules:
-- Never push, publish, deploy or open pull requests, unless the task says the user asked for exactly that: list such steps under needs user instead. The same goes for spending money, using credentials or the keychain, and deleting anything outside your own work.
+- Push, publish, deploy or open pull requests when your task asks for it. Never spend money, use credentials or the keychain, or delete anything outside your own work: list such steps under needs user instead.
 - If you start subagents, never use a Fable model, and never raise reasoning effort above high.
 - Files meant for the thread or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Your scratch folder goes when the task ends: never link its path; name the output file (outputs/notes.md). Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
 - The thread reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, learned (what the next worker in this area should know that the code doesn't say plainly; each is kept in the project's Brain, with its evidence where you have it: [evidence: path:12-14 `the exact words there`] or [evidence: out-… `the words of that check's output`]), verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{VOICE}{WORKER_VOICE}{instructions}"#
@@ -1954,7 +1963,7 @@ pub(crate) fn environment(env: &WorkerEnvironment<'_>) -> String {
     }
     if let Some(repo) = env.run_repo {
         lines.push(format!(
-            "This is an overnight run and nobody is there to answer before the morning. Leave out what only the user may do (pushing, publishing, releasing or deploying, credentials, signups or spending, contacting anyone) and don't change the user's own checkout ({}); list such steps in the report and finish the rest.",
+            "This is an overnight run and nobody is there to answer before the morning. Leave out what only the user may do (credentials, signups or spending, contacting anyone) and don't change the user's own checkout ({}); list such steps in the report and finish the rest.",
             repo.display()
         ));
         lines.push(format!(
@@ -3186,7 +3195,7 @@ mod environment_tests {
                     assert!(prompt.contains("How to write code:"));
                     // Full checks once per request, reviews scaled with risk, extra care
                     // only for a big job (B1, B2).
-                    assert!(prompt.contains("the session's full checks run once per request"));
+                    assert!(prompt.contains("The session's full checks run once per request"));
                     assert!(prompt.contains("not your shell, before your final answer"));
                     assert!(prompt.contains("Reviews by the other vendor scale with risk"));
                     assert!(prompt.contains("or you mark one risky"));
@@ -3329,7 +3338,7 @@ mod environment_tests {
             assert!(text.contains("clean_up only if the user asks"));
             assert!(text.contains("Never delete branches, worktrees or temp folders by hand"));
             // After its own push, the thread looks at CI (Q1).
-            assert!(text.contains("after your own `git push`, call "));
+            assert!(text.contains("After your own `git push`, call "));
             // How a CI failure is fixed is ci_status's to say (BUILD-PLAN C1).
             assert!(!text.contains("(`main` only through the usual merge into it here)"));
             // It has no computer tools; the live look at the landed work is delegate_task's
@@ -3340,9 +3349,13 @@ mod environment_tests {
             );
             // The full checks run once per request, never by it or a worker (§11, BUILD-PLAN
             // B1); landing at once is in the rules for workers.
-            assert!(text.contains("the session's full checks run once per request, on their own"));
+            assert!(text.contains("The session's full checks run once per request, on their own; run more yourself when it's worth it, and never ask the user how much to check."));
             assert!(WORKER_RULES.contains("each report at once"));
-            assert!(text.contains("Never run the full suite or ask the user how much to check"));
+            assert!(!text.contains("Never run the full suite"));
+            // Git is the thread's call (Q61); the three approvals stay, whoever asks.
+            assert!(!text.contains("only when the user asks for exactly that"));
+            assert!(text.contains("Pushing, pull requests, publishing and deploying are your call; asked for build + PR + preview + CI watch, do it all."));
+            assert!(text.contains("Spending money, using credentials or the keychain, and destroying anything outside this session's own work need "));
             assert!(text.contains("[checks failed …]: fix what's the code's;"));
             assert!(WORKER_RULES.contains(
                 "one fix task (role fix, subject the task that broke it) with the failing lines"
@@ -3384,7 +3397,9 @@ mod environment_tests {
         // start, B4, and the thread doing normal work itself with reviews scaled to risk,
         // B1-B3). The rules for workers, follow-ups and other sessions come when they first
         // apply, and how to brief, preview and fix CI is in their tools (BUILD-PLAN C1).
-        assert!(codex.len() < 11_500, "{}", codex.len());
+        // Raised from 11,500 by the bytes Q61's lines need (git is the thread's call, the full
+        // checks its to judge): tokens are a tripwire, not a gate (Q58), so no trimming.
+        assert!(codex.len() < 11_600, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -3428,6 +3443,47 @@ mod environment_tests {
         assert!(COMPUTER_USE.contains("in one browser window and one tab, navigated from page to page, never a new window per page. Close what you opened at the end."));
         let note = revision_note(PLANNING_GAPS_REVISION - 1, true).unwrap();
         assert!(note.contains("one browser window and one tab"));
+    }
+
+    /// Q61: an overnight run's never-list keeps spending, credentials, contacting anyone and
+    /// changes outside its branch, not pushing; a worker pushes when its task asks; a local checkout's landed commits are the
+    /// workers', never the user's own (#93); old sessions hear it in one note.
+    #[test]
+    fn git_is_the_threads_call_and_the_approvals_stay() {
+        let run = crate::overnight::RunWorkspace {
+            base: "main".into(),
+            base_commit: "abc".into(),
+            branch: "overnight/2026-10-18-x".into(),
+            path: "/tmp/run".into(),
+        };
+        let overnight = setting_texts(&session("approveForMe"), true, Some(&run)).1;
+        assert!(overnight.contains("You and the workers never do what only the user may do: spending, credentials, contacting anyone, and changes outside the run's branch."));
+        assert!(!overnight.contains("pushing"));
+        assert!(!overnight.contains("a push,"));
+        let local = environment_text(&Environment::LocalCheckout {
+            branch: "main".into(),
+        });
+        assert!(local.contains(
+            "They carry the user's git name: call them the workers', never the user's own."
+        ));
+        let note = revision_note(GIT_FREE_REVISION - 1, false).unwrap();
+        assert!(
+            note.contains("pushing, opening pull requests, publishing and deploying are your call")
+        );
+        assert!(note.contains("still need request_approval first"));
+        assert!(note.contains("Rebasing or amending your session branch in your turn is yours"));
+        // A worker pushes or opens a pull request when its task asks; the approvals stay.
+        let worker = worker_system("");
+        assert!(!worker.contains("unless the task says the user asked"));
+        assert!(worker.contains("Push, publish, deploy or open pull requests when your task asks for it. Never spend money, use credentials or the keychain, or delete anything outside your own work"));
+        let note = revision_note(GIT_FREE_REVISION - 1, true).unwrap();
+        assert!(
+            note.contains("push, publish, deploy or open pull requests when your task asks for it")
+        );
+        // Earlier notes no longer forbid the thread the full suite.
+        let all = revision_note(0, false).unwrap();
+        assert!(!all.contains("never run them yourself"));
+        assert!(!all.contains("never run the full suite yourself"));
     }
 
     #[test]
@@ -3548,7 +3604,10 @@ mod environment_tests {
         ));
         let note = revision_note(SAVE_ONLY_REVISION - 1, false).unwrap();
         assert!(note.contains("never offer a card to copy it somewhere (Downloads, the Desktop)"));
-        assert!(revision_note(SAVE_ONLY_REVISION - 1, true).is_none());
+        assert_eq!(
+            revision_note(SAVE_ONLY_REVISION - 1, true),
+            revision_note(SAVE_ONLY_REVISION, true)
+        );
     }
 
     /// A corrected copy of a worker's deliverable is kept as its task's output (issue #27).
@@ -3568,7 +3627,10 @@ mod environment_tests {
         );
         let note = revision_note(STORED_FIX_REVISION - 1, false).unwrap();
         assert!(note.contains("keep your corrected copy with store_output as that task's output"));
-        assert!(revision_note(STORED_FIX_REVISION - 1, true).is_none());
+        assert_eq!(
+            revision_note(STORED_FIX_REVISION - 1, true),
+            revision_note(STORED_FIX_REVISION, true)
+        );
     }
 
     /// The voice is fixed (BUILD-PLAN §1.4): a thread whose instructions had Short replies off
