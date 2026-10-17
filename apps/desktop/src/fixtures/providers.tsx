@@ -37,12 +37,15 @@ useApp.setState((state) => ({
   providers: { ...state.providers, view: { providers: overviews, sessions: [], fixtures: [] } },
 }));
 
+/** The accounts the daemon answers with; a step adds this computer's login again. */
+let listed = accounts;
+
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
     case "getAccounts":
-      return { method: req.method, accounts: { accounts } };
+      return { method: req.method, accounts: { accounts: listed } };
     case "updateSettings":
       return { method: req.method, settings: req.settings };
     case "getRankingsRefresh":
@@ -163,6 +166,22 @@ function Fixture() {
       },
       () => {
         seen.searched = useApp.getState().selection;
+        // This computer's login is also added here (#263): one row, the added one, in use.
+        const [own, ...rest] = accounts;
+        if (!own?.status) return;
+        const status = { ...own.status, email: "STEPHEN.GOLBAN@EXAMPLE.COM" };
+        const twin = { ...own, account: { provider: own.account.provider, account: "acct-twin" }, default: true, status };
+        listed = [{ ...own, default: false }, ...rest, twin];
+        useApp.setState({ accounts: { accounts: listed } });
+        openSettings("providers");
+      },
+      () => {
+        seen.twin = all('[data-slot="account-row"]').map((row) => ({
+          title: text(row.querySelector('[data-slot="account-title"]')),
+          own: text(row).includes("This computer's login"),
+          inUse: text(row).includes("In use"),
+          menu: Boolean(row.querySelector('button[aria-label$=": more"]')),
+        }));
         setResult(JSON.stringify(seen));
       },
     ];

@@ -25,6 +25,7 @@ import {
   accountLabel,
   addAccount,
   makeDefaultAccount,
+  oneRowPerAccount,
   refreshAccounts,
   removeAccount,
   renameAccount,
@@ -128,11 +129,13 @@ export function ProviderAccounts({
     (signed.checkedAtMs ?? 0) >= signing.exitedAtMs - SIGN_IN_SLACK_MS;
   const active = finished ? null : signing;
   // A new account shows in the list only once it is signed in.
-  const shown = (views ?? []).filter(
-    (view) =>
-      !(active?.fresh && view.account.account === active.id && view.status?.loggedIn !== true),
+  const shown = oneRowPerAccount(
+    (views ?? []).filter(
+      (view) =>
+        !(active?.fresh && view.account.account === active.id && view.status?.loggedIn !== true),
+    ),
   );
-  const anySignedIn = shown.some((view) => view.status?.loggedIn === true);
+  const anySignedIn = shown.some(({ view }) => view.status?.loggedIn === true);
 
   const close = () => {
     const current = signing;
@@ -159,10 +162,11 @@ export function ProviderAccounts({
         <SettingsRow label="Reading the accounts…" />
       )
     ) : (
-      shown.map((view) => (
+      shown.map(({ view, ownLogin }) => (
         <AccountRow
           key={revealKey(view)}
           view={view}
+          ownLogin={ownLogin}
           now={now}
           busy={active !== null}
           wide={wide}
@@ -255,6 +259,7 @@ export function accountNames(
  */
 function AccountRow({
   view,
+  ownLogin,
   now,
   busy,
   wide,
@@ -263,6 +268,8 @@ function AccountRow({
   onSignIn,
 }: {
   view: AccountView;
+  /** It is this computer's login, itself or an account added here that is the same one. */
+  ownLogin: boolean;
   now: number;
   busy: boolean;
   /** Settings › Providers' row: who on the start, every window's usage across, Use on the end. */
@@ -292,7 +299,7 @@ function AccountRow({
     if (status.plan) details.push(capitalize(status.plan));
     if (view.quotaAtMs === null) details.push("usage not read yet");
   }
-  if (own) details.push("your terminal's login");
+  if (ownLogin) details.push("your terminal's login");
 
   const eye = hidden && (
     <Button
@@ -380,7 +387,7 @@ function AccountRow({
       if (status.plan) wideDetails.push(`${capitalize(status.plan)} plan`);
       if (view.quotaAtMs === null) wideDetails.push("usage not read yet");
     }
-    if (own) wideDetails.push("This computer's login");
+    if (ownLogin) wideDetails.push("This computer's login");
     else if (wideTitle !== title) wideDetails.push(title);
     const all = signedIn && view.quota ? ordered(view.quota) : [];
     return (

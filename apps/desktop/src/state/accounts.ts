@@ -89,6 +89,43 @@ export function accountLabel(view: AccountView): string {
   return view.name || view.status?.email || "New account";
 }
 
+/** Who a signed-in account is: its email (any case) in its organization; `null` until known. */
+function loginOf(view: AccountView): string | null {
+  const email = view.status?.loggedIn ? view.status.email : undefined;
+  return email ? `${email.toLowerCase()}\u0000${view.status?.organization ?? ""}` : null;
+}
+
+/** An account's row: the account, and whether it is this computer's login too. */
+export type AccountRowView = { view: AccountView; ownLogin: boolean };
+
+/**
+ * One row per account. When this computer's login is signed in to an account also added here,
+ * the two are one row in the login's place: the added account's, saying it is this computer's
+ * login, in use when either is.
+ */
+export function oneRowPerAccount(views: readonly AccountView[]): AccountRowView[] {
+  const twins = new Map<AccountView, AccountView>();
+  for (const own of views.filter((view) => view.account.account === undefined)) {
+    const login = loginOf(own);
+    const twin = login
+      ? views.find(
+          (view) =>
+            view.account.account !== undefined &&
+            view.account.provider === own.account.provider &&
+            loginOf(view) === login,
+        )
+      : undefined;
+    if (twin) twins.set(own, twin);
+  }
+  const merged = new Set(twins.values());
+  return views.flatMap((view) => {
+    if (merged.has(view)) return [];
+    const twin = twins.get(view);
+    if (!twin) return [{ view, ownLogin: view.account.account === undefined }];
+    return [{ view: { ...twin, default: twin.default || view.default }, ownLogin: true }];
+  });
+}
+
 /** The accounts of `provider`, the user's own login first. */
 export function accountsOf(
   views: readonly AccountView[] | undefined,

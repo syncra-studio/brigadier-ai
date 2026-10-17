@@ -53,6 +53,13 @@ test("Providers shows a tab per agent, masks emails, and links to Routing for ru
   });
   // Routing's old name finds its page.
   assert.deepEqual(seen.searched, { type: "settings", page: "routing" });
+  // The same account as this computer's login and added here is one row: the added one, saying
+  // it is this computer's login, in use when either is (#263).
+  assert.deepEqual(seen.twin, [
+    { title: "STE•••••@•••••.COM", own: true, inUse: true, menu: true },
+    { title: masked[1], own: false, inUse: false, menu: true },
+    { title: masked[2], own: false, inUse: false, menu: true },
+  ]);
 });
 
 /** An extra Claude account named `name`, signed in as `email`. */
