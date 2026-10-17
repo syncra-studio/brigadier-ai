@@ -2110,9 +2110,10 @@ async fn request_changes_own_a_run_commands_edit() {
     }
 }
 
-/// A move's two ends go together: a quoted name is still the command's, the end of a move its
-/// words don't name holds the other, and two moves in a row through a file no snapshot saw
-/// hold each other's files, so Undo never takes the only copy of a file away (#87).
+/// A move's two ends go together: a quoted name is still the command's, a move whose names the
+/// shell makes stays the user's, two moves in a row through a file no snapshot saw hold each
+/// other's files, and so does a move of a file of the user's no snapshot keeps, so Undo never
+/// takes the only copy of a file away (#87).
 #[tokio::test]
 async fn request_changes_never_split_a_shell_move() {
     const GLOBBED: &str = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\n";
@@ -2124,6 +2125,7 @@ async fn request_changes_never_split_a_shell_move() {
                 ("old name.txt", MOVED),
                 ("g1.txt", GLOBBED),
                 ("c.txt", "base\n"),
+                (".gitignore", "*.tmp\n"),
             ],
             ..Default::default()
         },
@@ -2168,6 +2170,15 @@ async fn request_changes_never_split_a_shell_move() {
             .await;
             shell_reported(&turn, "bash-5", move_new).await;
             observed(&turn, 4).await;
+            // An ignored file of the user's, moved where the checkout keeps it.
+            std::fs::write(workspace.join("scratch.tmp"), "scratch\n").unwrap();
+            let move_ignored = "mv scratch.tmp result.txt";
+            shell(&turn, "bash-6", move_ignored, |dir| {
+                std::fs::rename(dir.join("scratch.tmp"), dir.join("result.txt")).unwrap();
+            })
+            .await;
+            shell_reported(&turn, "bash-6", move_ignored).await;
+            observed(&turn, 5).await;
             Reply::text("Moved the files.")
         }),
     )
@@ -2192,6 +2203,7 @@ async fn request_changes_never_split_a_shell_move() {
             "g1.txt",
             "h.txt",
             "moved.txt",
+            "result.txt",
             "user-new.txt"
         ]
     );
@@ -2208,5 +2220,6 @@ async fn request_changes_never_split_a_shell_move() {
     assert_eq!(read("h.txt").as_deref(), Some(GLOBBED));
     assert_eq!(read("e.txt"), Some(format!("user\n{MOVED}")));
     assert_eq!(read("moved.txt"), Some(format!("yours\n{GLOBBED}")));
+    assert_eq!(read("result.txt").as_deref(), Some("scratch\n"));
     flow.stop().await;
 }

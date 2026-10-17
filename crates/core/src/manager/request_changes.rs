@@ -746,6 +746,9 @@ impl SessionManager {
                     Step::Shell(shell, after_command) => {
                         let mut group = BTreeMap::new();
                         let mut together = BTreeSet::new();
+                        // An ignored file of the user's the command moved, removed or changed:
+                        // no record keeps it, so the command's files stay as they are with it.
+                        let mut hold_with = None;
                         for (path, before, after) in shell.changes {
                             let previous_blob = previous.get(&path).cloned().map(Blob::from);
                             let current_blob = current.get(&path).cloned().map(Blob::from);
@@ -759,11 +762,15 @@ impl SessionManager {
                             // command's files as they are with it.
                             if previous_blob.is_none() && current_blob.is_none() {
                                 let unseen = record.unseen.insert(path.clone(), after.clone());
-                                if before.is_some()
-                                    && made_before.as_ref() != Some(&before)
-                                    && unseen.as_ref() != Some(&before)
-                                    && !repo.is_ignored(&path).unwrap_or(true)
+                                if before.is_none()
+                                    || made_before.as_ref() == Some(&before)
+                                    || unseen.as_ref() == Some(&before)
                                 {
+                                    continue;
+                                }
+                                if repo.is_ignored(&path).unwrap_or(true) {
+                                    hold_with = Some(path);
+                                } else {
                                     record.own(
                                         &path,
                                         before.clone(),
@@ -792,6 +799,15 @@ impl SessionManager {
                                 after_command,
                             );
                             group.insert(path, (before, after));
+                        }
+                        if let Some(ignored) = hold_with {
+                            for path in group.keys() {
+                                if let Some(owned) = record.paths.get_mut(path)
+                                    && owned.held.is_none()
+                                {
+                                    owned.held = Some(together_reason(path, &ignored));
+                                }
+                            }
                         }
                         if together.len() > 1 {
                             record.together.push(together);

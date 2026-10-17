@@ -174,8 +174,10 @@ impl ShellCaptures {
 }
 
 /// A command's words as the shell reads them: a quoted span or an escaped space stays in its
-/// word (`mv 'old name.txt' new.txt`), and the shell's operators end one.
-fn shell_words(command: &str) -> Vec<String> {
+/// word (`mv 'old name.txt' new.txt`), and the shell's operators end one. None when the shell
+/// makes names of its own from it (a glob, a variable, a brace list, a command's output, or
+/// `xargs`): which files the command touched can't be told then.
+fn shell_words(command: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut chars = command.chars();
@@ -186,20 +188,22 @@ fn shell_words(command: &str) -> Vec<String> {
                 while let Some(c) = chars.next() {
                     match c {
                         '"' => break,
+                        '$' | '`' => return None,
                         '\\' => word.extend(chars.next()),
                         c => word.push(c),
                     }
                 }
             }
             '\\' => word.extend(chars.next()),
-            c if c.is_whitespace() || ";|&<>(){}".contains(c) => {
+            '*' | '?' | '[' | '{' | '}' | '$' | '`' => return None,
+            c if c.is_whitespace() || ";|&<>()".contains(c) => {
                 words.push(std::mem::take(&mut word));
             }
             c => word.push(c),
         }
     }
     words.push(word);
-    words
+    (!words.iter().any(|word| word == "xargs")).then_some(words)
 }
 
 /// The checkout's files a command names, relative to its root `root`: each word of the command
@@ -207,12 +211,15 @@ fn shell_words(command: &str) -> Vec<String> {
 /// names a script inside it writes), read from `cwd` or a folder the command goes to
 /// (`cd <dir> && …`), that is a file in the checkout, or a new file's name in one of its
 /// folders (`echo x > new.md`). Folders, `.git` and places outside the checkout (a symlinked
-/// folder that leads out) are left out.
+/// folder that leads out) are left out. None of a command the shell makes names for
+/// (`mv u*.txt all.txt`): what it changed stays the user's to keep.
 pub(super) fn named_files(command: &str, cwd: &Path, root: &Path) -> Vec<String> {
     let Ok(root) = root.canonicalize() else {
         return Vec::new();
     };
-    let words = shell_words(command);
+    let Some(words) = shell_words(command) else {
+        return Vec::new();
+    };
     let mut dirs = vec![cwd.to_owned()];
     for pair in words.windows(2) {
         if matches!(pair[0].as_str(), "cd" | "pushd") {
@@ -452,6 +459,16 @@ mod tests {
             &root,
         );
         assert_eq!(left_out, ["ls"], "only a word that could be a new file");
+        for command in [
+            "mv n*.md all.md",
+            "mv \"$SRC\" notes.md",
+            "cp notes.{md,txt} .",
+            "ls | xargs -I x mv x notes.md",
+            "mv `cat list` notes.md",
+        ] {
+            assert_eq!(named(command, &root), [] as [String; 0], "{command}");
+        }
+        assert!(names("echo '$x *' >> notes.md", &root, "notes.md"));
         std::fs::write(root.join("old name.txt"), "x").unwrap();
         for command in [
             "mv 'old name.txt' new.txt",
