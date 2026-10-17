@@ -126,7 +126,7 @@ impl Processes for MacProcesses {
         u64::try_from(ticks * u128::from(numer) / u128::from(denom) / 1_000_000).ok()
     }
     fn in_dir(&self, dir: &Path) -> Result<Vec<u32>> {
-        let dir = dir.canonicalize()?;
+        let dir = unix::search_root(dir)?;
         let own = std::process::id();
         Ok(all_pids()?
             .into_iter()
@@ -1351,6 +1351,38 @@ mod tests {
             Some(vec!["cargo".to_owned(), "test".to_owned()])
         );
         assert_eq!(parse_procargs(&[1, 0]), None);
+    }
+
+    #[test]
+    fn in_dir_refuses_a_link_planted_at_the_folder_s_own_path() {
+        let base = std::env::temp_dir().join(format!("brigadier-in-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("elsewhere")).unwrap();
+        let base = Temp(base);
+        let child = Reaped(
+            Command::new("/bin/sleep")
+                .arg("30")
+                .current_dir(base.join("elsewhere"))
+                .spawn()
+                .unwrap(),
+        );
+        let pid = child.0.id();
+        // The real folder is searched, reached through `/tmp`'s own link.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !MacProcesses
+            .in_dir(&base.join("elsewhere"))
+            .unwrap()
+            .contains(&pid)
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never found the child"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // A link at the searched path itself is refused, never followed.
+        std::os::unix::fs::symlink(base.join("elsewhere"), base.join("scratch")).unwrap();
+        assert!(MacProcesses.in_dir(&base.join("scratch")).is_err());
     }
 
     #[test]

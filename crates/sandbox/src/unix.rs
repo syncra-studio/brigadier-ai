@@ -83,6 +83,23 @@ pub(crate) fn piped_command(spec: &SpawnSpec) -> Command {
 /// The niceness of low-priority processes.
 const LOW_PRIORITY_NICE: libc::c_int = 10;
 
+/// `dir` as [`crate::Processes::in_dir`] may search it: its parent's links resolved (`/tmp` is
+/// one on macOS), but never a link at `dir` itself. A link planted at the folder's own path
+/// would aim the search, and the cleanup that ends what it finds, at whatever it points to.
+pub(crate) fn search_root(dir: &Path) -> io::Result<std::path::PathBuf> {
+    if fs::symlink_metadata(dir)?.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is a link, not a folder", dir.display()),
+        ));
+    }
+    match (dir.parent(), dir.file_name()) {
+        (Some(parent), Some(name)) => Ok(parent.canonicalize()?.join(name)),
+        // The root, or a path ending in `..`: nothing to plant a link at.
+        _ => dir.canonicalize(),
+    }
+}
+
 pub(crate) fn is_alive(pid: u32) -> bool {
     let Some(pid) = to_pid(pid) else {
         return false;
