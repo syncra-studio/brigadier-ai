@@ -128,7 +128,7 @@ How to work:
 - Push, publish, deploy or open pull requests only when the user asks for exactly that, at every permission level; after your own `git push`, call ci_status. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Write to another session's thread only with message_session.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
-- Never give the user a scratch path, nor point them at a file you haven't just seen exist. Hand a file over with its task card's Save, the Save… under your answer, or an ask_user card asking where it goes; never copy it to the Desktop, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
+- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a file over with its task card's Save, the Save… under your answer, or an ask_user card asking where it goes; a document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
 
 How to talk to the user:
@@ -762,6 +762,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "",
         worker: "From now on, ask the thread a question that blocks you with ask_thread (it was ask_orchestrator).",
     },
+    Revision {
+        number: HANDOVER_REVISION,
+        thread: "From now on, never link a throwaway file for the user (a worker's one-off script or log, even one kept with its report), in your answer's Details too. Before you write a document the user asks for yourself, ask_user where it goes unless they said, then link it by its full path.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1027,6 +1032,9 @@ pub(crate) const THREAD_NAME_REVISION: u32 = 80;
 /// A worker's instructions and tools name the thread, never "the orchestrator": its question
 /// tool is ask_thread (issue #66).
 pub(crate) const ASK_THREAD_REVISION: u32 = 81;
+/// No throwaway file is handed to the user, and a document the thread writes itself asks where
+/// it goes and is linked (issues #108, #52).
+pub(crate) const HANDOVER_REVISION: u32 = 82;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -2989,7 +2997,11 @@ mod environment_tests {
         assert!(!system.to_lowercase().contains("orchestrator"), "{system}");
         let note = revision_note(ASK_THREAD_REVISION - 1, true).unwrap();
         assert!(note.contains("with ask_thread (it was ask_orchestrator)"));
-        assert!(revision_note(ASK_THREAD_REVISION - 1, false).is_none());
+        assert!(
+            !revision_note(ASK_THREAD_REVISION - 1, false)
+                .unwrap_or_default()
+                .contains("ask_thread")
+        );
     }
 
     /// Rule R for B1-B3: an open thread hears the new way of working once, in plain words,
@@ -3358,6 +3370,27 @@ mod environment_tests {
         let chat = Current::chat(Vec::new());
         assert_eq!(chat.told().contract, Some(1));
         assert!(notes(&chat.told(), &chat).is_empty());
+    }
+
+    /// #108, #52: no throwaway file goes to the user, Details included, and a document the
+    /// thread writes itself is asked about and linked; an open thread hears it once.
+    #[test]
+    fn a_thread_hands_over_no_throwaway_file_and_asks_where_a_document_goes() {
+        let prompt = thread(
+            &session("fullAccess"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Claude,
+            true,
+        );
+        assert!(prompt.contains("Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too"));
+        assert!(prompt.contains("a document they ask you to write: ask where it goes first unless they said, then link its full path"));
+        let note = revision_note(HANDOVER_REVISION - 1, false).unwrap();
+        assert!(note.contains("never link a throwaway file for the user"));
+        assert!(note.contains("ask_user where it goes unless they said"));
+        assert!(revision_note(HANDOVER_REVISION - 1, true).is_none());
     }
 
     /// The voice is fixed (BUILD-PLAN §1.4): a thread whose instructions had Short replies off
