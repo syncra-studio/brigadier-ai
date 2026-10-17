@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   acceptConflict,
   conflictCount,
+  editorSegments,
   mergedResult,
   parseConflicts,
   toggleSide,
@@ -75,4 +76,29 @@ test("the merge editor's result starts from the common version and takes the sid
   assert.equal(mergedResult(segments, [removed]), "a\nbase\nc\n");
   // A conflict written back keeps its markers and labels.
   assert.equal(acceptConflict(merged + merged, 1, "current"), merged + "a\nmain\nc\n");
+});
+
+test("markers as long as .gitattributes sets them read and write back at that length", () => {
+  const long = "<<<<<<<<<< HEAD\nmine\n=======\nstill mine\n==========\ntheirs\n>>>>>>>>>> feature\nend\n";
+  const segments = parseConflicts(long);
+  assert.equal(conflictCount(segments), 1);
+  const conflict = segments[0] as Conflict;
+  assert.deepEqual([conflict.current, conflict.incoming, conflict.size], [["mine\n", "=======\n", "still mine\n"], ["theirs\n"], 10]);
+  assert.equal(acceptConflict(long, 0, "incoming"), "theirs\nend\n");
+  // An untouched conflict keeps its own marker length.
+  assert.equal(acceptConflict(long + long, 1, "current"), long + "mine\n=======\nstill mine\nend\n");
+  // A closing marker of another length doesn't close it, nor does a longer run of < open one.
+  assert.equal(conflictCount(parseConflicts("<<<<<<< HEAD\na\n==========\nb\n>>>>>>>>>> x\n")), 0);
+  assert.equal(conflictCount(parseConflicts("<<<<<<<< not a marker\n")), 0);
+});
+
+test("the merge editor keeps the working file's edits and takes each conflict's common version from git", () => {
+  const working = "edited top\n<<<<<<< HEAD\nmain\n=======\nfeature\n>>>>>>> feature\nc\n";
+  const merged = "a\n<<<<<<< Current\nmain\n||||||| Base\nbase\n=======\nfeature\n>>>>>>> Incoming\nc\n";
+  const segments = editorSegments(working, merged)!;
+  assert.equal(mergedResult(segments, [UNTOUCHED]), "edited top\nbase\nc\n");
+  assert.equal(mergedResult(segments, [toggleSide(UNTOUCHED, "incoming")]), "edited top\nfeature\nc\n");
+  // Once a conflict was accepted in place the two no longer pair: no merge editor.
+  assert.equal(editorSegments(acceptConflict(working + working, 0, "current"), merged + merged), null);
+  assert.equal(editorSegments("no conflicts\n", merged), null);
 });

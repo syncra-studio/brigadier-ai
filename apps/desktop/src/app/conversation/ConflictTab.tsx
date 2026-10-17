@@ -7,6 +7,7 @@ import {
   type Conflict,
   conflictCount,
   conflictIndices,
+  editorSegments,
   mergedResult,
   parseConflicts,
   type Pick,
@@ -53,7 +54,13 @@ export function ConflictTab({ conversationId, tab }: { conversationId: string; t
   return tab.view === "compare" ? (
     <CompareView path={tab.path} file={file} />
   ) : tab.view === "merge" ? (
-    <MergeEditor target={target} conversationId={conversationId} tab={tab} file={file} />
+    editorSegments(file.text, file.merged) ? (
+      <MergeEditor target={target} conversationId={conversationId} tab={tab} file={file} />
+    ) : (
+      <div data-slot="merge-editor" className="text-muted-foreground flex min-h-0 flex-1 items-center justify-center p-4 text-sm">
+        This file&apos;s conflicts changed since git marked them. Resolve the rest in the file itself.
+      </div>
+    )
   ) : (
     <ConflictView target={target} conversationId={conversationId} path={tab.path} file={file} onWritten={load} />
   );
@@ -251,7 +258,7 @@ const ConflictView: FC<{
       ) : (
         <Code rows={rows} />
       )}
-      {count > 0 && file.merged !== null && (
+      {editorSegments(file.text, file.merged) && (
         <Button size="sm" className="absolute end-4 bottom-4" onClick={() => openConflictTab(conversationId, path, "merge")}>
           Resolve in Merge Editor
         </Button>
@@ -263,17 +270,17 @@ const ConflictView: FC<{
 /** A conflict's lines as git marked them, each side tinted. */
 function markedRows(conflict: Conflict): Row[] {
   return [
-    { kind: "line", text: `<<<<<<< ${conflict.currentLabel}`, tint: "currentHead", muted: "(Current Change)" },
+    { kind: "line", text: `${"<".repeat(conflict.size)} ${conflict.currentLabel}`, tint: "currentHead", muted: "(Current Change)" },
     ...conflict.current.map((text): Row => ({ kind: "line", text, tint: "current" })),
     ...(conflict.base
       ? [
-          { kind: "line" as const, text: `||||||| ${conflict.baseLabel}`.trimEnd(), tint: "base" as const },
+          { kind: "line" as const, text: `${"|".repeat(conflict.size)} ${conflict.baseLabel}`.trimEnd(), tint: "base" as const },
           ...conflict.base.map((text): Row => ({ kind: "line", text, tint: "base" })),
         ]
       : []),
-    { kind: "line", text: "=======" },
+    { kind: "line", text: "=".repeat(conflict.size) },
     ...conflict.incoming.map((text): Row => ({ kind: "line", text, tint: "incoming" })),
-    { kind: "line", text: `>>>>>>> ${conflict.incomingLabel}`, tint: "incomingHead", muted: "(Incoming Change)" },
+    { kind: "line", text: `${">".repeat(conflict.size)} ${conflict.incomingLabel}`, tint: "incomingHead", muted: "(Incoming Change)" },
   ];
 }
 
@@ -299,7 +306,8 @@ const MergeEditor: FC<{
   const root = useRef<HTMLDivElement>(null);
   // The versions as the editor opened them: a change on disk meanwhile doesn't reset the picks.
   const [opened] = useState(file);
-  const segments = useMemo(() => parseConflicts(opened.merged ?? ""), [opened.merged]);
+  // The working file, so edits and accepts made before opening the editor stay in the result.
+  const segments = useMemo(() => editorSegments(opened.text, opened.merged) ?? [], [opened.text, opened.merged]);
   const count = conflictCount(segments);
   const [picks, setPicks] = useState<Pick[]>(() => Array.from({ length: count }, () => UNTOUCHED));
   const [asking, setAsking] = useState(false);

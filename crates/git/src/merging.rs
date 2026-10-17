@@ -213,13 +213,14 @@ impl Repo {
         Ok(())
     }
 
-    /// Pulls the checked-out branch from its upstream as `git pull` does, the user's own pull
-    /// settings and all. Returns whether it stopped on merge conflicts.
+    /// Pulls the checked-out branch from its upstream as `git pull` does, always merging (the
+    /// panel shows a merge's conflicts, not a rebase's), so a `pull.rebase` setting is passed
+    /// over. Returns whether it stopped on merge conflicts.
     pub fn pull(&self) -> Result<bool> {
         let lock = self.landing_lock();
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         self.refuse_busy()?;
-        let args = ["pull", "--no-edit", "--no-autostash"];
+        let args = ["pull", "--no-rebase", "--no-edit", "--no-autostash"];
         let out = self.run(&args, false)?;
         self.stopped_on_conflicts(&args, &out)
     }
@@ -563,6 +564,25 @@ mod tests {
             Some("feature")
         );
         assert!(!repo.pull().unwrap(), "up to date");
+    }
+
+    #[test]
+    fn a_pull_merges_even_when_the_user_set_pull_rebase() {
+        let (dir, repo, root) = conflicting("merge-pull-rebase");
+        let remote = dir.join("remote.git");
+        let (root_str, remote_str) = (root.to_str().unwrap(), remote.to_str().unwrap());
+        repo.cmd(&["clone", "-q", "--bare", root_str, remote_str], false)
+            .unwrap();
+        repo.cmd(&["remote", "add", "origin", remote_str], false)
+            .unwrap();
+        repo.fetch().unwrap();
+        repo.cmd(&["branch", "--set-upstream-to=origin/feature"], false)
+            .unwrap();
+        repo.cmd(&["config", "pull.rebase", "true"], false).unwrap();
+        assert!(repo.pull().expect("the pull"), "it stops on conflicts");
+        assert!(repo.merging().unwrap().is_some(), "as a merge");
+        assert!(!root.join(".git/rebase-merge").exists());
+        assert!(!root.join(".git/rebase-apply").exists());
     }
 
     #[test]

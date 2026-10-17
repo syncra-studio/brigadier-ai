@@ -14,6 +14,8 @@ export type Conflict = {
   currentLabel: string;
   baseLabel: string;
   incomingLabel: string;
+  /** How many characters each marker has: 7 unless `.gitattributes` sets `conflict-marker-size`. */
+  size: number;
 };
 
 export type Segment = { type: "common"; lines: string[] } | Conflict;
@@ -26,7 +28,8 @@ export function parseConflicts(text: string): Segment[] {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i]!;
-    const conflict = line.startsWith("<<<<<<<") ? readConflict(lines, i) : null;
+    const size = markerSize(line, "<");
+    const conflict = size > 0 ? readConflict(lines, i, size) : null;
     if (!conflict) {
       common.push(line);
       i += 1;
@@ -42,7 +45,7 @@ export function parseConflicts(text: string): Segment[] {
 }
 
 /** A conflict starting at `start`, and the line after it; null when its markers don't close. */
-function readConflict(lines: string[], start: number): { conflict: Conflict; next: number } | null {
+function readConflict(lines: string[], start: number, size: number): { conflict: Conflict; next: number } | null {
   const current: string[] = [];
   const incoming: string[] = [];
   let base: string[] | null = null;
@@ -50,26 +53,27 @@ function readConflict(lines: string[], start: number): { conflict: Conflict; nex
   let part: "current" | "base" | "incoming" = "current";
   for (let i = start + 1; i < lines.length; i += 1) {
     const line = lines[i]!;
-    if (part === "current" && line.startsWith("|||||||")) {
+    if (part === "current" && markerSize(line, "|") === size) {
       part = "base";
       base = [];
-      baseLabel = label(line);
-    } else if (part !== "incoming" && line.startsWith("=======") && line.trimEnd() === "=======") {
+      baseLabel = label(line, size);
+    } else if (part !== "incoming" && markerSize(line, "=") === size && line.trimEnd().length === size) {
       part = "incoming";
-    } else if (part === "incoming" && line.startsWith(">>>>>>>")) {
+    } else if (part === "incoming" && markerSize(line, ">") === size) {
       return {
         conflict: {
           type: "conflict",
           current,
           base,
           incoming,
-          currentLabel: label(lines[start]!),
+          currentLabel: label(lines[start]!, size),
           baseLabel,
-          incomingLabel: label(line),
+          incomingLabel: label(line, size),
+          size,
         },
         next: i + 1,
       };
-    } else if (line.startsWith("<<<<<<<")) {
+    } else if (markerSize(line, "<") === size) {
       return null;
     } else {
       (part === "current" ? current : part === "base" ? base! : incoming).push(line);
@@ -78,8 +82,17 @@ function readConflict(lines: string[], start: number): { conflict: Conflict; nex
   return null;
 }
 
-function label(marker: string): string {
-  return marker.slice(7).trim();
+/** The length of the run of `mark` that starts `line` when it is a marker (7 or more, then a space or the line's end), else 0. */
+function markerSize(line: string, mark: string): number {
+  let size = 0;
+  while (line[size] === mark) size += 1;
+  if (size < 7) return 0;
+  const after = line[size];
+  return after === undefined || after === " " || after === "\n" || after === "\r" ? size : 0;
+}
+
+function label(marker: string, size: number): string {
+  return marker.slice(size).trim();
 }
 
 /** The text's lines, each with its own line ending kept, so a file writes back as it was. */
@@ -117,13 +130,14 @@ export function acceptConflict(text: string, index: number, choice: Choice): str
 
 /** A conflict written out again as git marked it. */
 function markedLines(conflict: Conflict): string[] {
+  const marker = (mark: string, text = "") => `${mark.repeat(conflict.size)} ${text}`.trimEnd() + "\n";
   return [
-    `<<<<<<< ${conflict.currentLabel}\n`,
+    marker("<", conflict.currentLabel),
     ...conflict.current,
-    ...(conflict.base ? [`||||||| ${conflict.baseLabel}`.trimEnd() + "\n", ...conflict.base] : []),
-    "=======\n",
+    ...(conflict.base ? [marker("|", conflict.baseLabel), ...conflict.base] : []),
+    marker("="),
     ...conflict.incoming,
-    `>>>>>>> ${conflict.incomingLabel}\n`,
+    marker(">", conflict.incomingLabel),
   ];
 }
 
@@ -174,4 +188,24 @@ export function toggleSide(pick: Pick, side: Side, alsoOther = false): Pick {
   }
   const order: Side[] = alsoOther ? [side, other] : [...pick.order, side];
   return { order: order.filter((entry, index) => order.indexOf(entry) === index), handled: true };
+}
+
+/**
+ * The merge editor's parts: the working file as it is now (so lines the user already edited
+ * stay), each conflict taking the common version from git's three-way marked text `merged`.
+ * Null when the two no longer pair up conflict for conflict (a conflict was already accepted in
+ * place, or edited away), since each conflict's common version is then unknown.
+ */
+export function editorSegments(text: string | null, merged: string | null): Segment[] | null {
+  if (text === null || merged === null) return null;
+  const working = parseConflicts(text);
+  const bases = parseConflicts(merged).flatMap((segment) => (segment.type === "conflict" ? [segment.base] : []));
+  const count = conflictCount(working);
+  if (count === 0 || count !== bases.length) return null;
+  let seen = -1;
+  return working.map((segment) => {
+    if (segment.type === "common") return segment;
+    seen += 1;
+    return { ...segment, base: bases[seen] ?? null };
+  });
 }
