@@ -1859,6 +1859,11 @@ pub enum OrchestratorStepKind {
         name: String,
         detail: Option<String>,
         status: brigadier_providers::ItemStatus,
+        /// It failed only because the user's Stop ended it (its process killed with the
+        /// turn): its row reads stopped, not failed.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(as = "Option<bool>", optional)]
+        stopped: bool,
         // Latest folded update: concurrent view replay must not regress this call.
         #[serde(default)]
         through_position: i64,

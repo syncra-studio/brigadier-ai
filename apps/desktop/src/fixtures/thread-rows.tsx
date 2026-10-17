@@ -167,6 +167,12 @@ const search: OrchestratorStep = {
   kind: { type: "searchedWeb", query: "node lts release site:nodejs.org" },
 } as OrchestratorStep;
 
+/** A command whose failure came with the user's Stop (its process killed): marked stopped. */
+const stoppedFailed: OrchestratorStep = {
+  requestId: "r1", position: 2, atMs: now - 5000,
+  kind: { type: "tool", itemId: "bash-1", name: "Bash", detail: "npm test", status: "failed", stopped: true, exit: 143, endedAtMs: now - 1000, throughPosition: 0 },
+} as OrchestratorStep;
+
 const group: { key: string; described: Described }[] = [
   { key: "read-done", described: { words: stepWords({ name: "Read", detail: "/repo/src/math.js", status: "completed" }), status: "completed" } },
   { key: "test", described: command("npm test", "inProgress", { startedAtMs: now - 3200 }) },
@@ -222,6 +228,12 @@ function Page() {
               detail={<ShellBox command="sleep 30" output="" status="inProgress" exit={null} />}
             />
           </StoppedBy.Provider>
+        </Case>
+        <Case id="stopped-failed">
+          <StepRow
+            {...describeLeadStep(stoppedFailed)}
+            detail={<ShellBox command="npm test" output="" status="failed" exit={143} stopped={describeLeadStep(stoppedFailed).stopped} />}
+          />
         </Case>
         <Case id="group">
           <ActivityGroup
@@ -401,6 +413,12 @@ async function measure(): Promise<object> {
   one<HTMLElement>("[role=button]", at("stopped"))?.click();
   await wait(400);
   out.stoppedShell = shell("stopped").ending;
+  // A call failing with the Stop reads stopped too, with no error mark, in its row and Shell box.
+  const stoppedFailedRow = one("[data-step-state]", at("stopped-failed"));
+  out.stoppedFailed = { row: text(stoppedFailedRow), state: stoppedFailedRow?.getAttribute("data-step-state") ?? null, icon: one("[data-icon]", at("stopped-failed"))?.getAttribute("data-icon") ?? null };
+  one<HTMLElement>("[role=button]", at("stopped-failed"))?.click();
+  await wait(400);
+  out.stoppedFailedShell = shell("stopped-failed").ending;
   // The open live group: its child rows.
   const trigger = one<HTMLElement>("[data-slot=work-group] button", at("group"));
   out.groupRow = text(trigger);

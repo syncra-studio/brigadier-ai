@@ -13,7 +13,12 @@ import type { ThreadItemKind } from "./ThreadItemKind";
  * What the orchestrator (or a Chat's model) did that the thread tells as a grey row, in
  * its own words. What already shows by itself (a worker's own row, a card) has none.
  */
-export type OrchestratorStepKind = { "type": "tool", itemId: string, name: string, detail: string | null, status: ItemStatus, throughPosition: number, 
+export type OrchestratorStepKind = { "type": "tool", itemId: string, name: string, detail: string | null, status: ItemStatus, 
+/**
+ * It failed only because the user's Stop ended it (its process killed with the
+ * turn): its row reads stopped, not failed.
+ */
+stopped?: boolean, throughPosition: number, 
 /**
  * When the call finished (any status but in progress); the step's `at_ms` is when it
  * started.

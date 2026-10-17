@@ -812,6 +812,12 @@ impl ConvLive {
         state.holding.is_empty().then(|| state.take_held())?
     }
 
+    /// Whether a call that ended `status` was stopped: it failed after the user's Stop (its
+    /// process killed with the turn), so its row reads "Stopped npm test after 4s", not failed.
+    async fn stopped_call(&self, status: ItemStatus) -> bool {
+        status == ItemStatus::Failed && self.state.lock().await.interrupted
+    }
+
     /// Tracks the thread's command `item` by its `status` (see `ConvState::commands`).
     async fn running_command(&self, item: &str, status: ItemStatus) {
         let mut state = self.state.lock().await;
@@ -4712,6 +4718,7 @@ impl SessionManager {
                         name: name.to_owned(),
                         detail,
                         status: *status,
+                        stopped: conv.stopped_call(*status).await,
                         through_position: 0,
                         ended_at_ms,
                         exit,
@@ -4773,6 +4780,7 @@ impl SessionManager {
                         name: "shell".into(),
                         detail: Some(command.chars().take(240).collect()),
                         status: *status,
+                        stopped: conv.stopped_call(*status).await,
                         through_position: 0,
                         ended_at_ms: (*status != ItemStatus::InProgress).then(now_ms),
                         exit: *exit_code,
@@ -4805,6 +4813,7 @@ impl SessionManager {
                         name: "apply_patch".into(),
                         detail,
                         status: *status,
+                        stopped: false,
                         through_position: 0,
                         ended_at_ms: (*status != ItemStatus::InProgress).then(now_ms),
                         exit: None,

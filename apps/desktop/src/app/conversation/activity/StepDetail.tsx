@@ -112,7 +112,7 @@ export function ShellBox({ command, output, status, exit, stopped = false, notes
   status: ItemStatus;
   exit: number | null;
   /** The user's Stop ended it. */
-  stopped?: boolean;
+  stopped?: boolean | undefined;
   /** What Brigadier did after the command, each on a line under its output: the commit a check made. */
   notes?: string[];
 }) {
@@ -294,16 +294,16 @@ const SHELLS = new Set(["Bash", "run", "run_unsandboxed", "shell", "exec_command
 const EDITS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit", "apply_patch"]);
 
 /** A call's detail from what it was given and what it gave back. */
-export function callDetail(name: string, status: ItemStatus, call: { input: string | null; output: string | null; exit: number | null; command?: string | null }): ReactNode {
+export function callDetail(name: string, status: ItemStatus, call: { input: string | null; output: string | null; exit: number | null; command?: string | null; stopped?: boolean | undefined }): ReactNode {
   const short = toolName(name);
   if (SHELLS.has(short)) {
     const given = parsedInput(call.input)?.["command"];
     const command = call.command ?? (typeof given === "string" ? given : "");
     if (command && OWN_RUNS.has(short)) {
       const own = ownRunOutput(call.output);
-      return <ShellBox command={command} output={own.output} status={status} exit={call.exit ?? own.exit} notes={own.notes} />;
+      return <ShellBox command={command} output={own.output} status={status} exit={call.exit ?? own.exit} stopped={call.stopped} notes={own.notes} />;
     }
-    if (command) return <ShellBox command={command} output={call.output} status={status} exit={call.exit} />;
+    if (command) return <ShellBox command={command} output={call.output} status={status} exit={call.exit} stopped={call.stopped} />;
   }
   if (EDITS.has(short)) {
     const hunks = editHunks(name, call.input);
@@ -370,7 +370,7 @@ function LeadToolDetail({ conversationId, kind }: { conversationId: string; kind
   if (EDITS.has(short) && !item.input && item.output) return <Diffs files={fileDiffs(item.output)} />;
   // A CLI's own command gives its command line as plain text, not a call's JSON.
   const command = SHELLS.has(short) && parsedInput(item.input) === null ? item.input || kind.detail : null;
-  const detail = callDetail(kind.name, kind.status, { input: item.input, output: item.output, exit: item.exit ?? kind.exit ?? null, command });
+  const detail = callDetail(kind.name, kind.status, { input: item.input, output: item.output, exit: item.exit ?? kind.exit ?? null, command, stopped: kind.stopped });
   if (detail) return <>{detail}</>;
   // A search with no results kept: nothing more to show than its row.
   if (short === "WebSearch" || short === "web_search") return null;
@@ -428,12 +428,12 @@ function LeadItemDetail({ conversationId, requestId, kind }: { conversationId: s
     const short = toolName(item.name);
     // A CLI's own command gives its command line as plain text, not a call's JSON.
     const command = SHELLS.has(short) && parsedInput(item.input) === null ? item.input || kind.detail : null;
-    const detail = callDetail(item.name, kind.status, { input: item.input, output: item.output, exit: kind.exit ?? null, command });
+    const detail = callDetail(item.name, kind.status, { input: item.input, output: item.output, exit: kind.exit ?? null, command, stopped: kind.stopped });
     if (detail) return <>{detail}</>;
     if (short === "WebSearch" || short === "web_search") return null;
     return <span className="text-muted-foreground text-xs">Nothing more was kept of this step.</span>;
   }
-  if (item.kind === "command") return <ShellBox command={item.command || (kind.detail ?? "")} output={item.output || null} status={kind.status} exit={item.exitCode ?? kind.exit ?? null} />;
+  if (item.kind === "command") return <ShellBox command={item.command || (kind.detail ?? "")} output={item.output || null} status={kind.status} exit={item.exitCode ?? kind.exit ?? null} stopped={kind.stopped} />;
   return <>{actionDetail(item)}</>;
 }
 

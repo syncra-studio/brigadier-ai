@@ -17,6 +17,8 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     commandClicked: boolean;
     stopped: { row: string | null; state: string | null; shimmer: boolean };
     stoppedShell: string | null;
+    stoppedFailed: { row: string | null; state: string | null; icon: string | null };
+    stoppedFailedShell: string | null;
     groupRow: string | null;
     children: (string | null)[];
     search: { row: string | null; opens: boolean };
@@ -76,6 +78,9 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   // A command the user's Stop cut: "Stopped … after 4s", no shimmer; its box ends "Stopped".
   assert.deepEqual(seen.stopped, { row: "Stopped sleep 30 after 4s", state: "stopped", shimmer: false });
   assert.equal(seen.stoppedShell, "Stopped");
+  // A call that failed as the Stop killed it reads stopped, not failed.
+  assert.deepEqual(seen.stoppedFailed, { row: "Stopped npm test after 4s", state: "stopped", icon: "stop" });
+  assert.equal(seen.stoppedFailedShell, "Stopped");
   // Opened while live: the running command ticks, the read still running is left out.
   assert.equal(seen.groupRow, "Reading round.js");
   assert.equal(seen.children.length, 2);

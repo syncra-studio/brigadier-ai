@@ -1258,6 +1258,98 @@ async fn a_stop_during_a_command_ends_it_and_the_next_message_resumes() {
     flow.stop().await;
 }
 
+/// A call whose failure comes with the user's Stop (the CLI reports it failed because its
+/// process was killed) was stopped: its row is marked so and reads stopped, not failed, for a
+/// Claude tool call and a Codex command alike, its end kept as it came. One that failed before
+/// the Stop still reads failed.
+#[tokio::test]
+async fn a_call_failing_with_the_stop_reads_stopped_not_failed() {
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    let bash = |id: &str, status: ItemStatus, output: Option<&str>| ProviderEvent::ToolCall {
+        item_id: id.into(),
+        name: "Bash".into(),
+        input: Some(json!({ "command": "npm test" }).to_string()),
+        status,
+        output: output.map(str::to_owned),
+        kept: None,
+    };
+    let command = |status: ItemStatus, exit_code: Option<i32>| ProviderEvent::Command {
+        item_id: "cmd-1".into(),
+        command: "cargo build".into(),
+        cwd: None,
+        status,
+        exit_code,
+        output: None,
+        duration_ms: None,
+        kept: None,
+    };
+    let flow = Flow::start(
+        "thread-stop-failed-call",
+        Options::default(),
+        script(move |turn| async move {
+            if turn.input.contains("Run the tests.") {
+                turn.emit(bash("bash-0", ItemStatus::InProgress, None))
+                    .await;
+                turn.emit(bash(
+                    "bash-0",
+                    ItemStatus::Failed,
+                    Some("Exit code 1\nfailed"),
+                ))
+                .await;
+                turn.emit(bash("bash-1", ItemStatus::InProgress, None))
+                    .await;
+                turn.emit(command(ItemStatus::InProgress, None)).await;
+                assert!(turn.stopped().await, "the user stops it");
+                turn.emit(bash("bash-1", ItemStatus::Failed, Some("Exit code 143\n")))
+                    .await;
+                turn.emit(command(ItemStatus::Failed, Some(143))).await;
+                return Reply::text("");
+            }
+            Reply::text("Done.")
+        }),
+    )
+    .await;
+    let row = |board: &crate::board::Board, id: &str| {
+        board
+            .orchestrator_steps
+            .iter()
+            .find_map(|step| match &step.kind {
+                OrchestratorStepKind::Tool {
+                    item_id,
+                    status,
+                    stopped,
+                    exit,
+                    ..
+                } if item_id == id => Some((*status, *stopped, *exit)),
+                _ => None,
+            })
+    };
+    flow.say("Run the tests.").await;
+    flow.until("the calls to run", |board| {
+        row(board, "bash-0").is_some_and(|(status, ..)| status == ItemStatus::Failed)
+            && row(board, "cmd-1").is_some()
+    })
+    .await;
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    let board = flow.settled().await;
+    assert_eq!(
+        row(&board, "bash-0"),
+        Some((ItemStatus::Failed, false, Some(1)))
+    );
+    assert_eq!(
+        row(&board, "bash-1"),
+        Some((ItemStatus::Failed, true, Some(143)))
+    );
+    assert_eq!(
+        row(&board, "cmd-1"),
+        Some((ItemStatus::Failed, true, Some(143)))
+    );
+    flow.stop().await;
+}
+
 /// A preview the thread started holds nothing up: its answer is done while the preview runs.
 /// A review of its own change does (BUILD-PLAN B2): the request keeps working until the
 /// findings came and the thread took them in, in the same request.

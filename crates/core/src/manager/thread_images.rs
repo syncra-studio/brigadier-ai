@@ -103,6 +103,7 @@ impl SessionManager {
                 name: "imagegen".into(),
                 detail: prompt.clone(),
                 status: *status,
+                stopped: false,
                 through_position: 0,
                 ended_at_ms: (*status != ItemStatus::InProgress).then(crate::now_ms),
                 exit: None,

@@ -25,7 +25,7 @@ export function describeLeadStep(step: LeadStep, tasks: Readonly<Record<string, 
       const words = toolStepWords(kind, tasks);
       // A file change names its files: its summary counts them.
       const paths = kind.item === "files" ? kind.files?.map((file) => file.path) : undefined;
-      return { words: paths?.length ? { ...words, paths } : words, status: kind.status, exit: kind.exit ?? null, startedAtMs: step.atMs, endedAtMs: kind.endedAtMs };
+      return { words: paths?.length ? { ...words, paths } : words, status: kind.status, exit: kind.exit ?? null, startedAtMs: step.atMs, endedAtMs: kind.endedAtMs, stopped: kind.stopped };
     }
     case "searchedWeb":
       return { words: webSearchWords(kind.query), status: "completed" };

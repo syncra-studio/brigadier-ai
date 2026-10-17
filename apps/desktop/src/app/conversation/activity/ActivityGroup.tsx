@@ -18,7 +18,11 @@ import { cn } from "@/lib/utils";
  * A step's words and how it stands, as a group reads them; a command's exit code when it says;
  * when it started and ended, when that is known.
  */
-export type Described = { words: StepWords; status: ItemStatus; exit?: number | null; startedAtMs?: number | undefined; endedAtMs?: number | undefined };
+export type Described = {
+  words: StepWords; status: ItemStatus; exit?: number | null; startedAtMs?: number | undefined; endedAtMs?: number | undefined;
+  /** It failed only because the user's Stop ended it: it reads stopped, not failed. */
+  stopped?: boolean | undefined;
+};
 
 /** After a step ends, the live group still says it this long, so a quick read is seen, not "Thinking". */
 export const STEP_LINGERS_MS = 1000;
@@ -75,7 +79,7 @@ export function stoppedLabel(words: StepWords, startedAtMs: number | undefined, 
  * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test" ("in 41s" inside an opened group); the verb shimmers while it
  * runs. It opens to `detail` when there is one, also while it runs.
  */
-export function StepRow({ words: said, status, exit = null, startedAtMs, detail, suffix, slot, objectNode, trail }: Described & {
+export function StepRow({ words: said, status, exit = null, startedAtMs, endedAtMs, stopped: stoppedCall = false, detail, suffix, slot, objectNode, trail }: Described & {
   detail?: ReactNode;
   /** After the words: "in 41s". */
   suffix?: ReactNode;
@@ -90,8 +94,9 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, detail,
   const opened = open && said.kind === "edit" && status === "completed" && said.object;
   const words = opened ? { kind: said.kind, doing: said.doing, done: `${said.done.slice(0, said.done.indexOf(" "))} file` } : said;
   const stoppedBy = useContext(StoppedBy);
-  // Still running when the user's Stop ended its thread: it was stopped, not running.
-  const stopped = status === "inProgress" && stoppedBy !== null;
+  // Still running when the user's Stop ended its thread, or failing as it did: it was stopped,
+  // not running or failed.
+  const stopped = (status === "inProgress" && stoppedBy !== null) || stoppedCall;
   const running = status === "inProgress" && !stopped;
   const inGroup = useContext(InGroup);
   // Inside an opened group, a running command says how long it has run; the group's own row names it.
@@ -110,7 +115,7 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, detail,
       <StepIcon words={words} stopped={stopped} />
       <span className={cn("min-w-0 truncate", running && "shimmer")}>
         {stopped ? (
-          <Words words={words} label={stoppedLabel(words, startedAtMs, stoppedBy.atMs)} />
+          <Words words={words} label={stoppedLabel(words, startedAtMs, stoppedCall ? (endedAtMs ?? null) : (stoppedBy?.atMs ?? null))} />
         ) : ticking ? (
           <RunningFor startedAtMs={startedAtMs} />
         ) : running ? (
