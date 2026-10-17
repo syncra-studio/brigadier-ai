@@ -266,7 +266,8 @@ async fn an_open_thread_resumes_with_record_findings_and_its_note() {
 /// commits and records nothing; a passing one commits the fix with the Fixes trailer and records
 /// those findings fixed, checked by that check, with no git commit or record_findings call of
 /// the thread's own. The finding it didn't name stays unrecorded, and so does one a passing check
-/// names without a commit; an id that is no finding is refused before anything runs.
+/// names without a commit; an id that is no finding, or one in `high` but not in `fixes`, is
+/// refused before anything runs, and one in `high` is marked high.
 #[tokio::test]
 async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
     // Every run_check reply and every later thread input, so a check's result is there
@@ -297,7 +298,10 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                     return Reply::text("Added NOTES.md.");
                 }
                 seen.lock().unwrap().push(turn.input.clone());
-                if turn.input.contains("[review of your commits · Codex found 3") {
+                // The first review's findings; the re-check of the high one's fix comes after.
+                if turn.input.contains("[review of your commits · Codex found 3")
+                    && workspace_seen.lock().unwrap().is_none()
+                {
                     assert!(turn.input.contains("run_check's `commit` and `fixes`"));
                     let workspace = turn.add_dirs[0].clone();
                     *workspace_seen.lock().unwrap() = Some(workspace.clone());
@@ -320,11 +324,27 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                         super::git(&workspace, &["status", "--porcelain"]).trim(),
                         "M notes.txt"
                     );
-                    for (command, fixes) in [("false", json!(["r1.1", "R1.2"])), ("true", json!("R1.1, R1.2"))] {
+                    // `high` names only some of `fixes`.
+                    let refused = turn
+                        .call(
+                            "run_check",
+                            json!({"command": "true", "commit": "Fix the notes", "fixes": ["R1.2"], "high": ["R1.1"]}),
+                        )
+                        .await;
+                    assert!(refused.is_error, "{}", refused.text);
+                    assert!(
+                        refused.text.contains("R1.1 is in `high` but not in `fixes`: nothing ran or was committed."),
+                        "{}",
+                        refused.text
+                    );
+                    for (command, fixes, high) in [
+                        ("false", json!(["r1.1", "R1.2"]), json!([])),
+                        ("true", json!("R1.1, R1.2"), json!("r1.1")),
+                    ] {
                         let reply = turn
                             .call(
                                 "run_check",
-                                json!({"command": command, "commit": "Fix the notes", "fixes": fixes}),
+                                json!({"command": command, "commit": "Fix the notes", "fixes": fixes, "high": high}),
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
@@ -411,6 +431,15 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
     assert!(body.starts_with("Fix the notes"), "{body}");
     assert!(body.contains("Brigadier-Author: thread"), "{body}");
     assert!(body.contains("Brigadier-Fixes: R1.1, R1.2"), "{body}");
+    // R1.1 was marked high, so its fix commit gets the one targeted re-check.
+    let fix = super::git(&workspace, &["rev-parse", "HEAD"]);
+    flow.until("the high finding's re-check", move |board| {
+        board
+            .reviews
+            .values()
+            .any(|review| review.number == 2 && review.tip == fix)
+    })
+    .await;
     // The board's reviews are a map: take the first review's, R1.
     let review = board
         .reviews
@@ -431,6 +460,8 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                     checked.starts_with("`true` passed after the fix [evidence: out-"),
                     "{checked}"
                 );
+                // The one named in `high` is marked high, so its fix gets its re-check.
+                assert_eq!(item.high, item.id == "R1.1", "{}", item.id);
             }
             ("R1.3", FindingStatus::New) => {}
             (id, status) => panic!("{id}: {status:?}"),

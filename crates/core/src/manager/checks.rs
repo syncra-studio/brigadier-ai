@@ -594,6 +594,7 @@ impl SessionManager {
             risky,
             commit,
             fixes,
+            high,
         } = args.split();
         if let Some(why) = &risky {
             self.mark_risky(id, why).await;
@@ -603,7 +604,7 @@ impl SessionManager {
             Some(_) if self.local_checkout(id).is_some() => (None, true),
             commit => (commit, false),
         };
-        self.check_and_commit(id, None, args, commit, fixes)
+        self.check_and_commit(id, None, args, commit, fixes, high)
             .await
             .map(|reply| {
                 if local {
@@ -623,7 +624,7 @@ impl SessionManager {
         task: Option<&TaskId>,
         args: RunCheck,
     ) -> Result<String> {
-        self.check_and_commit(id, task, args, None, Vec::new())
+        self.check_and_commit(id, task, args, None, Vec::new(), Vec::new())
             .await
     }
 
@@ -639,6 +640,7 @@ impl SessionManager {
         args: RunCheck,
         commit: Option<String>,
         fixes: Vec<String>,
+        high: Vec<String>,
     ) -> Result<String> {
         let mut caller = self.check_caller(id, task).await?;
         let unknown = self.unknown_findings(id, &fixes).await?;
@@ -649,6 +651,17 @@ impl SessionManager {
             return Err(Error::Invalid(format!(
                 "{} is no review finding of this session: nothing ran or was committed. Give `fixes` only the ids its review findings show (R1.2), or leave it out.",
                 unknown.join(", ")
+            )));
+        }
+        let stray: Vec<&str> = high
+            .iter()
+            .filter(|id| !fixes.contains(id))
+            .map(String::as_str)
+            .collect();
+        if !stray.is_empty() {
+            return Err(Error::Invalid(format!(
+                "{} is in `high` but not in `fixes`: nothing ran or was committed. `high` names those of `fixes` of high severity.",
+                stray.join(", ")
             )));
         }
         let command = args
@@ -763,6 +776,7 @@ impl SessionManager {
                     .record_fixed_by_check(
                         &conversation,
                         &fixes,
+                        &high,
                         not_fixed.as_deref(),
                         &words,
                         &alias,

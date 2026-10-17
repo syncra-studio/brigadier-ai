@@ -1666,7 +1666,7 @@ impl SessionManager {
                 .to_owned()
         } else {
             format!(
-                "Commit a fix of yours with run_check's `commit` and `fixes` (their ids): on a pass it commits with `--trailer \"{FIXES_TRAILER}: <their ids>\"` and records them fixed, checked by that check; such a commit gets no review of its own."
+                "Commit a fix of yours with run_check's `commit` and `fixes` (their ids; `high` names those that lose data or break a build or a security boundary, whose fix then gets one re-check): on a pass it commits with `--trailer \"{FIXES_TRAILER}: <their ids>\"` and records them fixed, checked by that check; such a commit gets no review of its own."
             )
         };
         let text = match (review.kind, &review.state, text) {
@@ -1872,12 +1872,13 @@ impl SessionManager {
 
     /// `run_check`'s `fixes` (BUILD-PLAN O4): the review findings the thread's check fixes,
     /// recorded fixed and checked by that check (`command`, its output `alias`) when it passed
-    /// and, on a session branch, its commit was made; `not_fixed` says why not otherwise. What
-    /// became of them, in one line.
+    /// and, on a session branch, its commit was made; `not_fixed` says why not otherwise. Those
+    /// in `high` are marked high. What became of them, in one line.
     pub(crate) async fn record_fixed_by_check(
         &self,
         conversation_id: &ConversationId,
         fixes: &[String],
+        high: &[String],
         not_fixed: Option<&str>,
         command: &str,
         alias: &str,
@@ -1896,7 +1897,8 @@ impl SessionManager {
                     "`{command}` passed after the fix [evidence: {alias}]"
                 )),
                 why: None,
-                high: None,
+                // Marked high, its fix gets one targeted re-check (SESSION-FIXES-PLAN.md Q6.1).
+                high: high.contains(id).then_some(true),
             })
             .collect();
         match self

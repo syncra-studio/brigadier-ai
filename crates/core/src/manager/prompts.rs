@@ -740,7 +740,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: SHORT_START_REVISION,
-        thread: "From now on, a review's findings message says how to judge and record its findings, and finish_session and the [merge …] messages say how a merge goes: where they say more than your instructions, follow them. run_check takes `fixes`, the ids of the review findings your change fixes: when it passes, its commit carries their Fixes trailer and they are recorded fixed, checked by it, with no record_findings call of their own. On a Claude thread, your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context.",
+        thread: "From now on, a review's findings message says how to judge and record its findings, and finish_session and the [merge …] messages say how a merge goes: where they say more than your instructions, follow them. run_check takes `fixes`, the ids of the review findings your change fixes: when it passes, its commit carries their Fixes trailer and they are recorded fixed, checked by it, with no record_findings call of their own; its `high` names those that lose data or break a build or a security boundary, whose fix then gets one re-check. On a Claude thread, your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context.",
         worker: "",
     },
     Revision {

@@ -434,15 +434,21 @@ pub struct ThreadRunCheck {
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "Vec<String>")]
     pub fixes: Vec<String>,
+    /// Those of `fixes` of high severity (it loses data, breaks a build or a security
+    /// boundary): their fix gets one targeted re-check.
+    #[serde(default, deserialize_with = "lines")]
+    #[schemars(with = "Vec<String>")]
+    pub high: Vec<String>,
 }
 
 /// The parts of the thread's `run_check`: the check, the risk it marks, the commit it asks
-/// for on a pass and the review findings that pass fixes.
+/// for on a pass, the review findings that pass fixes and those of them that are high.
 pub struct ThreadCheckParts {
     pub check: RunCheck,
     pub risky: Option<String>,
     pub commit: Option<String>,
     pub fixes: Vec<String>,
+    pub high: Vec<String>,
 }
 
 impl ThreadRunCheck {
@@ -460,15 +466,20 @@ impl ThreadRunCheck {
                 .commit
                 .map(|message| message.trim().to_owned())
                 .filter(|message| !message.is_empty()),
-            fixes: self
-                .fixes
-                .iter()
-                .flat_map(|ids| ids.split([',', ' ']))
-                .map(|id| id.trim().to_ascii_uppercase())
-                .filter(|id| !id.is_empty())
-                .collect(),
+            fixes: finding_ids(&self.fixes),
+            high: finding_ids(&self.high),
         }
     }
+}
+
+/// Finding ids as given, one per entry or several split by commas or spaces, uppercased.
+fn finding_ids(given: &[String]) -> Vec<String> {
+    given
+        .iter()
+        .flat_map(|ids| ids.split([',', ' ']))
+        .map(|id| id.trim().to_ascii_uppercase())
+        .filter(|id| !id.is_empty())
+        .collect()
 }
 
 /// `run_unsandboxed`: the same, outside the sandbox, once approved.
