@@ -326,6 +326,13 @@ each with where the whole output is. One still going after a minute goes on in t
 the call returns its run-N id and the result comes as a message in this request. Give a long \
 one a short `name` for what it is for (\"Core tests\"): the session's Activities show it.";
 
+/// A worker's check always answers in the call, and its schema has no `name`.
+const WORKER_RUN_CHECK: &str = "Run a check (tests, lint, typecheck, build, formatting) in your \
+checkout. One that already ran on the same files answers from the cache (`rerun` runs it again); \
+with no `command` it lists the checks your changes call for and runs nothing. A long passing \
+output comes back as its warnings and last lines, a failure over 8 KB as a digest of its errors, \
+each with where the whole output is.";
+
 const RUN_UNSANDBOXED: &str = "Like run, but outside the sandbox, for a command the sandbox \
 blocked (the network, files outside the workspace): it waits for approval first, decided on \
 your `justification`. Try run first; use this only when the sandbox is what stopped it.";
@@ -644,7 +651,7 @@ fn worker_tools() -> Vec<Tool> {
         tool("code_search", CODE_SEARCH, input_schema::<CodeSearch>()),
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
-        tool("run_check", RUN_CHECK, input_schema::<RunCheck>()),
+        tool("run_check", WORKER_RUN_CHECK, input_schema::<RunCheck>()),
         tool(
             "start_preview",
             WORKER_START_PREVIEW,
