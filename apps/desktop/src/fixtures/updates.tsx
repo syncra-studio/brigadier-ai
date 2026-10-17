@@ -20,7 +20,8 @@ import { useApp } from "@/state/store";
  * the list, and has one fail to start, writing what it saw to #updates-result
  * (SidebarUpdatesRender.test.ts reads it). ?narrow=1 narrows the sidebar as far as it goes, with
  * the two updates and a nightly update waiting, and writes whether "Restart to update" shortens its
- * words inside it. Without either, the page shows two updates, for screenshots.
+ * words inside it. ?usage=1 opens the usage menu and follows its link, writing the link's words
+ * and where it led. Without any, the page shows two updates, for screenshots.
  */
 const params = new URLSearchParams(location.search);
 
@@ -105,6 +106,19 @@ function Fixture() {
       );
     }, 1000);
     return () => window.clearTimeout(timer);
+  }, []);
+  useEffect(() => {
+    if (!params.has("usage")) return;
+    void (async () => {
+      await wait(300);
+      q('button[aria-label="Usage"]')?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+      await wait(300);
+      const link = all('[role="menuitem"]').at(-1);
+      const words = text(link);
+      link?.click();
+      await wait(300);
+      setResult(JSON.stringify({ link: words, selection: useApp.getState().selection }));
+    })();
   }, []);
   useEffect(() => {
     if (!params.has("drive")) return;

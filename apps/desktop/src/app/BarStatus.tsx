@@ -167,7 +167,7 @@ export function UsageMenu() {
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => openSettings("providers")}>
           <Usage />
-          Open Providers
+          Open the Providers page
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

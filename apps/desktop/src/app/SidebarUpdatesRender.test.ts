@@ -33,3 +33,9 @@ test("sidebar: Restart to update fits a narrow sidebar", { timeout: 60000 }, asy
   const seen = JSON.parse(await renderFixtureLive(t, "updates.html?narrow=1", "updates-result")) as Record<string, unknown>;
   assert.deepEqual(seen, { open: "expanded", inside: true, shortened: true });
 });
+
+// The usage menu's link names the page it opens: Settings > Providers.
+test("sidebar: the usage menu opens the Providers page", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "updates.html?usage=1", "updates-result", 10000)) as Record<string, unknown>;
+  assert.deepEqual(seen, { link: "Open the Providers page", selection: { type: "settings", page: "providers" } });
+});
