@@ -160,15 +160,33 @@ pub(crate) fn image_path(name: &str, input: Option<&str>) -> Option<String> {
 }
 
 /// What a web search looked for or a page read opened: Claude's `WebSearch` query and
-/// `WebFetch` URL, Codex's `web_search` query (given as it is).
+/// `WebFetch` URL, Codex's `web_search` query (given as it is) or the page it opened.
 pub(crate) fn web_target(name: &str, input: Option<&str>) -> Option<String> {
     let input = input?;
     match crate::digest::bare_tool_name(name) {
         "WebSearch" => json_field(input, "query"),
         "WebFetch" => json_field(input, "url"),
-        "web_search" => Some(json_field(input, "query").unwrap_or_else(|| input.to_owned())),
+        "web_search" => Some(
+            json_field(input, "query")
+                .or_else(|| json_field(input, "url"))
+                .unwrap_or_else(|| input.to_owned()),
+        ),
         _ => None,
     }
+}
+
+/// A Chat's web search or page read, as a row for its answer: a Codex page open is a page
+/// read, named by its URL as its call's row is; its find in a page has no row of its own.
+pub(super) fn web_step(tool: &str, input: Option<&str>) -> Option<OrchestratorStepKind> {
+    let target = web_target(tool, input)?;
+    let action = input.and_then(|input| json_field(input, "action"));
+    Some(match (tool, action.as_deref()) {
+        ("WebFetch", _) | ("web_search", Some("openPage")) => {
+            OrchestratorStepKind::ReadPage { url: target }
+        }
+        (_, Some(_)) => return None,
+        _ => OrchestratorStepKind::SearchedWeb { query: target },
+    })
 }
 
 fn json_field(input: &str, key: &str) -> Option<String> {
@@ -714,6 +732,40 @@ mod tests {
             Some("rust 2027 edition")
         );
         assert_eq!(web_target("Read", Some(fetch)), None);
+    }
+
+    /// A Chat's web rows: a page read by its URL, from Claude's `WebFetch` and a Codex page open
+    /// alike (not a search for the open's JSON), a search by its query; a find in a page has
+    /// none (its call's row says it).
+    #[test]
+    fn a_codex_page_open_is_a_page_read_not_a_search_for_its_json() {
+        let url = "https://blog.rust-lang.org/";
+        let fetch = serde_json::json!({ "url": url, "prompt": "What's new?" }).to_string();
+        let open = serde_json::json!({ "action": "openPage", "url": url }).to_string();
+        let find = serde_json::json!({ "action": "findInPage", "url": url, "pattern": "1.95" })
+            .to_string();
+        let search = serde_json::json!({ "query": "rust 1.95" }).to_string();
+        let read = |tool: &str, input: &str| match web_step(tool, Some(input)) {
+            Some(OrchestratorStepKind::ReadPage { url }) => Some(format!("read {url}")),
+            Some(OrchestratorStepKind::SearchedWeb { query }) => Some(format!("search {query}")),
+            _ => None,
+        };
+        assert_eq!(read("WebFetch", &fetch), Some(format!("read {url}")));
+        assert_eq!(read("web_search", &open), Some(format!("read {url}")));
+        assert_eq!(read("web_search", &find), None);
+        assert_eq!(
+            read("web_search", &search).as_deref(),
+            Some("search rust 1.95")
+        );
+        assert_eq!(
+            read("WebSearch", &search).as_deref(),
+            Some("search rust 1.95")
+        );
+        // Its call's row names the same page, so the thread shows one row for it.
+        assert_eq!(
+            step_detail(&serde_json::from_str(&open).unwrap()).as_deref(),
+            Some(url)
+        );
     }
 
     /// Commands (with or without the MCP prefix), edits and other tools.

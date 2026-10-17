@@ -134,6 +134,27 @@ test("deduplication needs the matching authored result in this call's window", (
   );
 });
 
+/** A page read the board has: the result of the call that read `page`. */
+const readPage = (at: number, page: string) => ({ requestId: "request", position: at, kind: { type: "readPage", url: page } });
+
+test("a page read alongside other calls is one row: its result is the call's by its page, not by what came next", () => {
+  const url = "https://blog.rust-lang.org/2026/10/01/Rust-1.95.0.html";
+  const first = call("WebFetch", "completed", url);
+  const second = { requestId: "request", position: 11, kind: { type: "tool" } };
+  // Two pages read at once: the first ends after the second started, and its result still hides it.
+  assert.equal(toolHasOwnResult(first, [second, readPage(12, url), readPage(13, "https://docs.rs")], "request", 10), true);
+  // Another page's result is not its own.
+  assert.equal(toolHasOwnResult(first, [second, readPage(13, "https://docs.rs")], "request", 10), false);
+  assert.equal(toolHasOwnResult(first, [readPage(12, url)], "other", 10), false);
+  assert.equal(toolHasOwnResult(first, [readPage(9, url)], "request", 10), false);
+  // A search the same: by its query.
+  const search = call("WebSearch", "completed", "rust 1.95");
+  const searched = { requestId: "request", position: 12, kind: { type: "searchedWeb", query: "rust 1.95" } };
+  assert.equal(toolHasOwnResult(search, [second, searched], "request", 10), true);
+  // A Codex search call that opened a page: its result is that page's read.
+  assert.equal(toolHasOwnResult(call("web_search", "completed", url), [second, readPage(12, url)], "request", 10), true);
+});
+
 test("a command reads as the call it was however it ended; another tool that failed says so", () => {
   const ran = toolStepWords(call("Bash", "completed", "pnpm test"));
   assert.equal(stepLabel(ran, "completed", 0), "Ran pnpm test");

@@ -392,6 +392,16 @@ const OWN_RESULT: Record<string, string> = {
   web_fetch: "readPage",
 };
 
+/**
+ * What a web call's own result read or looked for, as its row's detail says it (the daemon cuts
+ * that at 240 characters): its page's URL, its search's query.
+ */
+function webTarget(kind: { type: string }): string | null {
+  const { url, query } = kind as { url?: unknown; query?: unknown };
+  const target = typeof url === "string" ? url : typeof query === "string" ? query : null;
+  return target === null ? null : Array.from(target).slice(0, 240).join("");
+}
+
 export function toolHasOwnResult(
   kind: ToolStep,
   results?: readonly {
@@ -404,6 +414,18 @@ export function toolHasOwnResult(
 ): boolean {
   const result = OWN_RESULT[toolName(kind.name)];
   if (kind.status !== "completed" || !result) return false;
+  // A web call's result names its page or query: it is that call's, however many calls ran
+  // alongside it (several pages read at once each end apart, after the others started).
+  // A Codex search's call can open a page: its result is then a page read.
+  if (result === "readPage" || result === "searchedWeb") {
+    return !!kind.detail && !!results?.some(
+      (step) =>
+        step.requestId === requestId &&
+        (step.kind.type === "readPage" || step.kind.type === "searchedWeb") &&
+        step.position >= position &&
+        webTarget(step.kind) === kind.detail,
+    );
+  }
   // The board may be replayed one event at a time. Keep the call until its result arrives.
   const nextCall =
     results?.find(

@@ -4735,7 +4735,7 @@ impl SessionManager {
                 .await;
                 if conv.kind == ConversationKind::Chat
                     && *status == ItemStatus::Completed
-                    && let Some(kind) = web_step(name, input.as_deref())
+                    && let Some(kind) = super::thread_items::web_step(name, input.as_deref())
                 {
                     self.orchestrator_step(&conv.id, kind).await;
                 }
@@ -7154,16 +7154,6 @@ pub(crate) fn safe_file_name(name: &str) -> String {
     } else {
         trimmed.chars().take(80).collect()
     }
-}
-
-/// A Chat's web search or page read, as a row for its answer.
-fn web_step(tool: &str, input: Option<&str>) -> Option<OrchestratorStepKind> {
-    // Codex gives the query itself.
-    let target = super::thread_items::web_target(tool, input)?;
-    Some(match tool {
-        "WebFetch" => OrchestratorStepKind::ReadPage { url: target },
-        _ => OrchestratorStepKind::SearchedWeb { query: target },
-    })
 }
 
 /// What a conversation whose model hit `limit` waits for, when no model can stand in: what
