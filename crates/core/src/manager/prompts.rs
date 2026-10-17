@@ -129,7 +129,7 @@ How to work:
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
 - Ask query_brain before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. ask_user answers and outline go-aheads are kept for you. Never reopen a settled decision.
 - Ask the user only what only they can decide, only with ask_user (never a question in your text), then reply {quiet}. Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last run_check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
-- Push, publish, deploy or open pull requests only when the user asks for exactly that, at every permission level; after your own `git push`, call ci_status. When a request's rules clash with this session's setup ("push to main" from a session branch), say so in one line first, and which you follow; ask when unclear. Bugs the user wants filed as issues: file each before its fix, which closes it ("Fixes #N"). Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
+- Push, publish, deploy or open pull requests only when the user asks for exactly that, at every permission level; after your own `git push`, call ci_status. Bugs the user wants as issues: file each before its fix ("Fixes #N"). Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Write to another session's thread only with message_session.
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
@@ -306,7 +306,7 @@ fn environment_text(environment: &Environment) -> String {
             "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: landed work goes onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merging it into `{base}` is the user's act: merge only on [merge] (call finish_session without user_words) or the user's own words: when their latest message asks for it (\"merge it\"), call finish_session with their words once the work has landed, without asking. Never on silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), nor on an earlier yes. You may say once, in plain text, that the work is ready to merge; never ask it on a card. \"merge it\" is for this merge only: offer anything else, such as updating the user's local `{base}`, in plain words."
+            "New worktree: landed work goes onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merging it into `{base}` is the user's act: merge only on [merge] (call finish_session without user_words) or the user's own words: when their latest message asks for it (\"merge it\"), call finish_session with their words once the work has landed, without asking. Never on silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), nor on an earlier yes. You may say once, in plain text, that the work is ready to merge; never ask it on a card. Never ask for \"merge it\" for anything else (updating local `{base}`). A request whose rules clash with this (\"push to main\"): say so first in one line, and which wins; ask if unclear."
         ),
     }
 }
@@ -3340,15 +3340,21 @@ mod environment_tests {
             ProviderKind::Claude,
             true,
         );
-        assert!(prompt.contains("When a request's rules clash with this session's setup (\"push to main\" from a session branch), say so in one line first, and which you follow; ask when unclear."));
-        assert!(prompt.contains("Bugs the user wants filed as issues: file each before its fix, which closes it (\"Fixes #N\")."));
+        assert!(
+            prompt.contains(
+                "Bugs the user wants as issues: file each before its fix (\"Fixes #N\")."
+            )
+        );
         let worktree = environment_text(&Environment::NewWorktree {
             base: "main".into(),
             branch: "brigadier/flow".into(),
             path: None,
             start: None,
         });
-        assert!(worktree.contains("\"merge it\" is for this merge only: offer anything else, such as updating the user's local `main`, in plain words."));
+        assert!(
+            worktree
+                .contains("Never ask for \"merge it\" for anything else (updating local `main`). A request whose rules clash with this (\"push to main\"): say so first in one line, and which wins; ask if unclear.")
+        );
         let note = revision_note(PLANNING_GAPS_REVISION - 1, false).unwrap();
         assert!(note.contains("say so in one line at the start"));
         assert!(note.contains("split along a data contract"));
