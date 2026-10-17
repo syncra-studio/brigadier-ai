@@ -71,4 +71,9 @@ test("Routing shows each kind's order, ranking, rules and the models' ratings, a
   // Nothing over the page's top takes a click meant for what scrolled under it (#260).
   assert.equal(seen.addRuleNearTop, true);
   assert.equal(seen.addRuleHit, true);
+  // A model switched off, or its agent, is out of the ratings; switched back on, it returns (#261).
+  assert.deepEqual(seen.ratingRowsModelOff, ["Opus 5.5", "Sonnet 5.5", "GPT-6", "GPT-5.5", "GPT-6 Luna"]);
+  assert.deepEqual(seen.ratingRowsAgentOff, ["Opus 5.5", "Sonnet 5.5"]);
+  assert.ok((seen.bestAgentOff as number) > 0);
+  assert.deepEqual(seen.ratingRowsBack, ["Opus 5.5", "Sonnet 5.5", "Opus 4.6", "GPT-6", "GPT-5.5", "GPT-6 Luna"]);
 });

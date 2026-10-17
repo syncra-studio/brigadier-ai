@@ -11,6 +11,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { accounts, overviews, previewRoutes, projects, rankings, rules, usageView } from "@/fixtures/routingData";
 import type { Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
+import { setModelAvailable, setProviderOn } from "@/state/providers";
 import { useApp } from "@/state/store";
 
 /*
@@ -176,6 +177,21 @@ function Fixture() {
         const hit = box ? document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) : null;
         seen.addRuleNearTop = Boolean(box && box.top < 60);
         seen.addRuleHit = Boolean(add && hit && add.contains(hit));
+        // A model switched off on Providers, then its whole agent, leave the ratings.
+        void setModelAvailable({ provider: "claude", id: "claude-opus-4-6" }, false);
+      },
+      () => {
+        seen.ratingRowsModelOff = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
+        void setProviderOn("codex", false);
+      },
+      () => {
+        seen.ratingRowsAgentOff = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
+        seen.bestAgentOff = all('[data-slot="rating-row"] .text-success').length;
+        void setProviderOn("codex", true);
+        void setModelAvailable({ provider: "claude", id: "claude-opus-4-6" }, true);
+      },
+      () => {
+        seen.ratingRowsBack = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
         setResult(JSON.stringify(seen));
       },
     ];

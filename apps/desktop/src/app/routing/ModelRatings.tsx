@@ -47,6 +47,7 @@ import {
   VENDOR_LABELS,
 } from "@/lib/routing";
 import { cn } from "@/lib/utils";
+import { modelAvailable } from "@/state/providers";
 import type { RankingsRefreshView } from "@/state/rankings";
 import { useApp } from "@/state/store";
 
@@ -172,7 +173,11 @@ export function ModelRatings({
   now: number;
 }) {
   const [open, setOpen] = useState<string | null>(null);
-  const routed = (models ?? []).filter((model) => !model.excluded);
+  const availability = useApp((s) => s.settings);
+  // Models switched off on Providers (or whose agent is) get no work, so they aren't rated here.
+  const routed = (models ?? []).filter(
+    (model) => !model.excluded && modelAvailable(availability, { provider: model.provider, id: model.id }),
+  );
   const curated = routed.filter((model) => model.status === "curated");
   const others = routed.filter((model) => model.status !== "curated");
   const best = bestScores(routed);
