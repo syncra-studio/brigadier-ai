@@ -212,6 +212,7 @@ impl SessionManager {
                         steered_after: None,
                         undo: None,
                         waited: Vec::new(),
+                        closed: Vec::new(),
                         worked: vec![crate::work::WorkSpan {
                             from_ms: now,
                             to_ms: None,

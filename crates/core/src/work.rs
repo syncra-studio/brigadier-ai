@@ -2398,6 +2398,11 @@ pub struct UserRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<WorkSpan>>", optional)]
     pub waited: Vec<WorkSpan>,
+    /// When Brigadier quit mid-turn and it stood interrupted, oldest first: each from its last
+    /// record before the quit to its Continue. The Inspector's times leave these out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<WorkSpan>>", optional)]
+    pub closed: Vec<WorkSpan>,
     /// It is `Waiting` only for quota (a worker paused until a model is free), not for the
     /// user.
     #[serde(default)]
@@ -2488,6 +2493,16 @@ impl UserRequest {
         }
         track(&mut self.worked, works, now);
         track(&mut self.waited, on_card, now);
+        // Continued after a quit cut it off: it stood still from its last record until now.
+        if works
+            && crate::manager::interrupted_by_quit(&self.state)
+            && let Some(from_ms) = self.ended_at_ms
+        {
+            self.closed.push(WorkSpan {
+                from_ms,
+                to_ms: Some(now.max(from_ms)),
+            });
+        }
         if self.state != state {
             self.ended_at_ms = (state != RequestState::Working).then_some(now);
         }

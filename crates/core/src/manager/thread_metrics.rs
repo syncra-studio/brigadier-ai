@@ -354,7 +354,18 @@ pub(crate) fn request_summaries(rows: &[TurnUsage], board: &Board) -> Vec<Reques
         .map(|request| {
             let id = request.id.as_str();
             let start = request.started_at_ms;
-            let after = |at: i64| (at - start).max(0);
+            // Time Brigadier was closed while a quit had cut it off doesn't count.
+            let closed = |at: i64| -> i64 {
+                request
+                    .closed
+                    .iter()
+                    .map(|span| {
+                        let to = span.to_ms.unwrap_or(at).min(at);
+                        (to - span.from_ms.max(start)).max(0)
+                    })
+                    .sum()
+            };
+            let after = |at: i64| (at - start - closed(at)).max(0);
             let ours: Vec<&TurnUsage> = rows
                 .iter()
                 .filter(|row| row.request_id.as_deref() == Some(id))
@@ -820,6 +831,62 @@ mod tests {
             })),
             Some(RequestEnd::Interrupted)
         );
+    }
+
+    /// Brigadier quit mid-turn and the user pressed Continue a day later: the Inspector's times
+    /// leave out the time it was closed (#197).
+    #[test]
+    fn a_requests_times_leave_out_the_time_brigadier_was_closed() {
+        use crate::work::{OrchestratorStep, TaskId};
+        let mut request: UserRequest = serde_json::from_value(serde_json::json!({
+            "id": "r1",
+            "conversationId": "c",
+            "preview": "Fix the login",
+            "state": { "type": "working" },
+            "startedAtMs": 1_000,
+            "endedAtMs": null,
+        }))
+        .expect("a request");
+        const DAY: i64 = 86_400_000;
+        // Last recorded at 11 s, marked interrupted on the next start, continued a day later.
+        let interrupted = RequestState::Failed {
+            error: super::super::conversation::INTERRUPTED_BY_QUIT.into(),
+        };
+        request.moved_to(interrupted, false, false, 11_000);
+        request.moved_to(RequestState::Working, false, false, 11_000 + DAY);
+        request.moved_to(RequestState::Done, false, false, 31_000 + DAY);
+        assert_eq!(
+            request.closed,
+            [crate::work::WorkSpan {
+                from_ms: 11_000,
+                to_ms: Some(11_000 + DAY)
+            }]
+        );
+        let mut board = Board::default();
+        board.requests.insert("r1".into(), request);
+        board.orchestrator_steps = vec![OrchestratorStep {
+            request_id: Some("r1".into()),
+            kind: OrchestratorStepKind::Landed {
+                task_ids: vec![TaskId("t1".into())],
+                commits: 1,
+                branch: "main".into(),
+                head: "abc".into(),
+            },
+            at_ms: 25_000 + DAY,
+            position: 0,
+        }];
+        let mut first = row(Some("r1"), None, 10, 100);
+        first.at_ms = 4_000;
+        first.step = Some(StepKind::Thread);
+        let mut review = row(Some("r1"), None, 5, 0);
+        review.at_ms = 41_000 + DAY;
+        review.step = Some(StepKind::Review);
+        let summary = &request_summaries(&[first, review], &board)[0];
+        assert_eq!(summary.first_event_ms, Some(3_000));
+        assert_eq!(summary.landed_ms, Some(24_000));
+        assert_eq!(summary.answer_ms, Some(30_000));
+        assert_eq!(summary.settled_ms, Some(40_000));
+        assert_eq!(summary.ended, None);
     }
 
     /// One Claude session's stream through the parser and the meter (BUILD-PLAN B0): each

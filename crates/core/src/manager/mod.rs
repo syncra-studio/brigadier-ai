@@ -138,6 +138,7 @@ pub(crate) use background_runs::background_run_number;
 pub use brains::{BrainCounters, IndexRunStats};
 pub use closing::Turn;
 pub use conversation::SendOutcome;
+pub(crate) use conversation::interrupted_by_quit;
 pub(crate) use integrated_checks::integrated_check_number;
 pub(crate) use landing::held_merge;
 pub use side_chat::BrowserPage;

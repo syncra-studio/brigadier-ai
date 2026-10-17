@@ -49,6 +49,11 @@ worked: Array<WorkSpan>,
  */
 waited?: Array<WorkSpan>, 
 /**
+ * When Brigadier quit mid-turn and it stood interrupted, oldest first: each from its last
+ * record before the quit to its Continue. The Inspector's times leave these out.
+ */
+closed?: Array<WorkSpan>, 
+/**
  * It is `Waiting` only for quota (a worker paused until a model is free), not for the
  * user.
  */

@@ -268,6 +268,7 @@ impl Core {
                         steered_after: None,
                         undo: None,
                         waited: Vec::new(),
+                        closed: Vec::new(),
                         worked: vec![WorkSpan {
                             from_ms: message.created_at_ms,
                             to_ms: None,

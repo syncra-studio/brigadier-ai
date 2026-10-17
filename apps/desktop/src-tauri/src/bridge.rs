@@ -807,6 +807,7 @@ mod tests {
                 undo: None,
                 worked: Vec::new(),
                 waited: Vec::new(),
+                closed: Vec::new(),
                 quota_wait: false,
                 waiting_for: Vec::new(),
                 from_peer: None,
