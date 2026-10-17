@@ -29,14 +29,35 @@ function noteOf(line: string): string | null {
 }
 
 /**
+ * A reply that came as an MCP content array (`[{"type":"text","text":"…"}]`, a Codex MCP call's),
+ * or as the tool result holding one (`{"content":[…],"isError":false}`), as its text blocks'
+ * text, one per line; any other reply as it is.
+ */
+export function contentText(reply: string): string {
+  const first = reply.trimStart()[0];
+  if (first !== "[" && first !== "{") return reply;
+  let value: unknown;
+  try {
+    value = JSON.parse(reply);
+  } catch {
+    return reply;
+  }
+  const blocks: unknown = Array.isArray(value) ? value : (value as { content?: unknown } | null)?.content;
+  if (!Array.isArray(blocks) || blocks.length === 0) return reply;
+  const texts = blocks.map((block) => (block as { type?: unknown; text?: unknown } | null)?.type === "text" ? (block as { text?: unknown }).text : undefined);
+  return texts.every((text) => typeof text === "string") ? texts.join("\n") : reply;
+}
+
+/**
  * An own command's reply as its exit code, what it printed, and what Brigadier said about it
  * after the output (the commit `run_check` made or didn't, a review it started), in plain words:
  * the `[exit N]` line or a digest's `exit N [full output: …]` header is read, not shown, and the
  * `[evidence: out-…]` line that ends a check's output is the model's, not shown. Any other first
  * line (`[killed by signal 9]`) stays, as what there is to say.
  */
-export function ownRunOutput(output: string | null): { exit: number | null; output: string | null; notes: string[] } {
-  if (!output) return { exit: null, output, notes: [] };
+export function ownRunOutput(given: string | null): { exit: number | null; output: string | null; notes: string[] } {
+  if (!given) return { exit: null, output: given, notes: [] };
+  const output = contentText(given);
   // Brigadier's lines come last, in any order, blank lines between: taken off from the end, the
   // first line (how the command ended) always left.
   const lines = output.split("\n");

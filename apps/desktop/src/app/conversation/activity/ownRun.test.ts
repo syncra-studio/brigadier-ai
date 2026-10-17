@@ -90,3 +90,15 @@ test("the evidence line a check's output ends with is the model's, not shown", (
   // The command's own line that cites one in passing stays output.
   assert.deepEqual(ownRunOutput("[exit 0]\nsee [evidence: out-1] above\n"), { exit: 0, output: "see [evidence: out-1] above\n", notes: [] });
 });
+
+test("a Codex MCP reply that comes as a JSON content array reads as its text", () => {
+  const committed = 'Committed 1a2b3c4 "Fix" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.';
+  const text = `[exit 0]\nok\n${committed}`;
+  const expected = { exit: 0, output: "ok\n", notes: ['Committed 1a2b3c4 "Fix": 1 file changed (a.js). Nothing is left uncommitted.'] };
+  assert.deepEqual(ownRunOutput(JSON.stringify([{ type: "text", text }])), expected);
+  // As the tool result its script printed, and in several text blocks.
+  assert.deepEqual(ownRunOutput(JSON.stringify({ content: [{ type: "text", text }], isError: false })), expected);
+  assert.deepEqual(ownRunOutput(JSON.stringify([{ type: "text", text: "[exit 1]\nFAIL a.test.js" }, { type: "text", text: "more" }])), { exit: 1, output: "FAIL a.test.js\nmore", notes: [] });
+  // Output that is itself JSON stays as it is.
+  assert.deepEqual(ownRunOutput('[1, 2]'), { exit: null, output: "[1, 2]", notes: [] });
+});

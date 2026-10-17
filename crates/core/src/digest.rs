@@ -169,19 +169,9 @@ pub(crate) fn is_shell_tool(name: &str) -> bool {
 /// The exit code a shell tool's result names on its first line: `[exit N]` (a short `run`
 /// result), `exit N [full output: …]` (a digest), or `Exit code N` (Claude's failed `Bash`).
 /// A result inside a JSON content array (`[{"type":"text","text":"…"}]`, a Codex MCP call's)
-/// is read from its first text block.
+/// is read from its text ([`content_text`]).
 pub(crate) fn exit_of(output: &str) -> Option<i32> {
-    let inner = serde_json::from_str::<serde_json::Value>(output)
-        .ok()
-        .and_then(|value| {
-            value.as_array()?.iter().find_map(|block| {
-                block
-                    .get("text")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-        });
-    let text = inner.as_deref().unwrap_or(output);
+    let text = content_text(output);
     let first = text.lines().next()?.trim_start();
     let rest = first
         .strip_prefix("[exit ")
@@ -192,6 +182,37 @@ pub(crate) fn exit_of(output: &str) -> Option<i32> {
         .find(|&(at, c)| !(c.is_ascii_digit() || (at == 0 && c == '-')))
         .map_or(rest.len(), |(at, _)| at);
     rest[..end].parse().ok()
+}
+
+/// A result that came as a JSON content array (`[{"type":"text","text":"…"}]`, a Codex MCP
+/// call's), or as the tool result holding one (`{"content":[…],"isError":false}`), as its text
+/// blocks' text, one per line; any other result as it is.
+pub(crate) fn content_text(output: &str) -> std::borrow::Cow<'_, str> {
+    let starts = output.trim_start().starts_with(['[', '{']);
+    let value = starts
+        .then(|| serde_json::from_str::<serde_json::Value>(output).ok())
+        .flatten();
+    let blocks = value.as_ref().and_then(|value| {
+        value
+            .as_array()
+            .or_else(|| value.get("content")?.as_array())
+    });
+    let texts: Option<Vec<&str>> = blocks
+        .filter(|blocks| !blocks.is_empty())
+        .and_then(|blocks| {
+            blocks
+                .iter()
+                .map(|block| {
+                    (block.get("type")?.as_str()? == "text")
+                        .then(|| block.get("text")?.as_str())
+                        .flatten()
+                })
+                .collect()
+        });
+    match texts {
+        Some(texts) => texts.join("\n").into(),
+        None => output.into(),
+    }
 }
 
 /// Brigadier's own command tools, whose reply starts with how the command ended.
@@ -229,8 +250,11 @@ fn reply_notes(reply: &str) -> &str {
 
 /// An own command's reply that came as a digest, with its whole output in the digest's place:
 /// its first line (how the command ended), the whole output, then what the reply said after
-/// the output, so the thread's Shell box reads all three.
+/// the output, so the thread's Shell box reads all three. A reply that came as a JSON content
+/// array is read from its text.
 pub(crate) fn whole_reply(reply: &str, whole: &str) -> String {
+    let reply = content_text(reply);
+    let reply = reply.as_ref();
     let header = reply.lines().next().unwrap_or_default();
     let mut text = format!("{header}\n{whole}");
     let notes = reply_notes(reply);
@@ -425,6 +449,31 @@ mod tests {
             "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\n\n[review running] Claude Code reviews your change for this request in the background."
         );
         assert!(own_run("mcp__brigadier__run_check") && own_run("run") && !own_run("Bash"));
+    }
+
+    /// A Codex MCP reply that comes as a JSON content array (or the tool result holding one)
+    /// reads as its text: the whole reply keeps its header and notes around the whole output,
+    /// and its exit code is read. JSON that holds no text blocks stays as it is.
+    #[test]
+    fn a_json_content_array_reply_reads_as_its_text() {
+        let reply = "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\n[the last 1 lines, 2 before them left out]\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.";
+        let whole = "exit 0 [full output: read_artifact out-1a2b3c4d, 3 lines, 30 bytes]\none\ntwo\npassed\nCommitted 1a2b3c4 \"Fix\" with your trailer: 1 file changed (a.js). Nothing is left uncommitted.";
+        let array = serde_json::json!([{ "type": "text", "text": reply }]).to_string();
+        assert_eq!(whole_reply(&array, "one\ntwo\npassed\n"), whole);
+        let result =
+            serde_json::json!({ "content": [{ "type": "text", "text": reply }], "isError": false })
+                .to_string();
+        assert_eq!(whole_reply(&result, "one\ntwo\npassed\n"), whole);
+        assert_eq!(exit_of(&result), Some(0));
+        let blocks = serde_json::json!([
+            { "type": "text", "text": "[exit 1]\nFAIL" },
+            { "type": "text", "text": "more" },
+        ])
+        .to_string();
+        assert_eq!(content_text(&blocks), "[exit 1]\nFAIL\nmore");
+        assert_eq!(content_text("[1, 2]"), "[1, 2]");
+        assert_eq!(content_text("{\"a\": 1}"), "{\"a\": 1}");
+        assert_eq!(content_text("plain"), "plain");
     }
 
     fn passing_log(lines: usize) -> String {
