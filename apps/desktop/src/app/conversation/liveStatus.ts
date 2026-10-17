@@ -60,8 +60,8 @@ function commandWords(command: string): string {
 
 /**
  * A long run these requests wait on while the thread rests: a command of its own gone to the
- * background, else the session's full checks on its landed work. The request works until its
- * result comes, so the line says what runs and for how long rather than "Thinking".
+ * background, else the session's full checks on its landed work, running or due. The request
+ * works until its result comes, so the line says what runs and for how long rather than "Thinking".
  */
 function runningHead({ board, requestIds }: StatusInput): StatusHead | null {
   const run = Object.values(board.backgroundRuns)
@@ -70,9 +70,12 @@ function runningHead({ board, requestIds }: StatusInput): StatusHead | null {
   if (run) {
     return { text: `Running ${commandWords(run.command)}`, tone: "busy", sinceMs: run.startedAtMs };
   }
-  const check = Object.values(board.integratedChecks)
-    .find((each) => (each.state.type === "due" || each.state.type === "running") && each.requests.some((id) => requestIds.includes(id)));
-  if (check) return { text: "Running the full checks", tone: "busy", sinceMs: check.startedAtMs ?? check.dueAtMs };
+  // Due ones haven't started (they wait for the work to settle), so they're never "Running":
+  // the thread, told they're due, says they haven't run.
+  const checks = Object.values(board.integratedChecks).filter((each) => each.requests.some((id) => requestIds.includes(id)));
+  const running = checks.find((each) => each.state.type === "running");
+  if (running) return { text: "Running the full checks", tone: "busy", sinceMs: running.startedAtMs ?? running.dueAtMs };
+  if (checks.some((each) => each.state.type === "due")) return { text: "Waiting to run the full checks", tone: "still" };
   return null;
 }
 
