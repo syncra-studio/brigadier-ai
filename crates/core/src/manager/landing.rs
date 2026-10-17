@@ -1509,38 +1509,20 @@ impl SessionManager {
                 .map(|t| format!("task-{}", t.number))
                 .collect();
             return Ok(format!(
-                "[merge held] Merging after {} worker{} finish ({}). Nothing is merged yet, and the user's consent holds: Brigadier tells you [merge due] once they have landed, or [merge stopped] if one fails or a finding you record stays open or is fixed unverified. Tell the user in one line, then reply {} while they work.",
+                "[merge held] Merging after {} worker{} finish ({}). Nothing is merged yet, and the user's consent holds: Brigadier tells you [merge due] once they have landed, or [merge stopped] if one fails. Tell the user in one line, then reply {} while they work.",
                 writing.len(),
                 if writing.len() == 1 { "" } else { "s" },
                 names.join(", "),
                 super::prompts::QUIET,
             ));
         }
-        if let Some(held) = &pending {
-            match held_gate(held, &tasks, &board, &conv, self.reviews_on()) {
-                Gate::Stop(reason) => {
-                    self.stop_held_merge(id, &conv, held, &reason).await;
-                    return Err(Error::Invalid(stopped_text(&reason)));
-                }
-                // A review of the session's work still runs: an open finding it brings
-                // would stop the merge, so it waits for the review's end.
-                Gate::Wait(new) if new.is_empty() => {
-                    // A [merge due] told before that review started is told again at its end.
-                    *conv.merge_told.lock().unwrap() = Some((held.asked_in.clone(), "waiting"));
-                    return Err(Error::Invalid(
-                        "[not merged] A review of the session's work still runs, and the user's held merge waits for it: Brigadier tells you [merge due] when it ends, or [merge stopped]. Nothing was merged; reply [quiet] meanwhile.".into(),
-                    ));
-                }
-                Gate::Wait(_) | Gate::Due => {}
-            }
-        }
-        // Every finding on the session's work is recorded before it merges (Q3, Q7).
-        let unrecorded = findings_now(&board).new;
-        if !unrecorded.is_empty() {
-            return Err(Error::Invalid(format!(
-                "[not merged] Record the findings {} with record_findings first (fixed, open, or dismissed and why); then call finish_session again. Nothing was merged.",
-                unrecorded.join(", ")
-            )));
+        // Review findings and a review still running inform the merge; its result lists them
+        // (#242).
+        if let Some(held) = &pending
+            && let Gate::Stop(reason) = held_gate(held, &tasks)
+        {
+            self.stop_held_merge(id, &conv, held, &reason).await;
+            return Err(Error::Invalid(stopped_text(&reason)));
         }
         let message = self.commit_message(
             message
@@ -1699,7 +1681,10 @@ impl SessionManager {
                 if !open.is_empty() {
                     self.settle_requests(id).await;
                 }
-                merged_findings(&board)
+                merged_findings(
+                    &board,
+                    conv.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0,
+                )
             }
             Err(_) => String::new(),
         };
@@ -1759,21 +1744,10 @@ impl SessionManager {
                 *told = Some((held.asked_in.clone(), kind));
                 again
             };
-            match held_gate(&held, &tasks, &board, &conv, self.reviews_on()) {
+            match held_gate(&held, &tasks) {
                 Gate::Stop(reason) => {
                     self.stop_held_merge(id, &conv, &held, &reason).await;
                     stopped_text(&reason)
-                }
-                // A review still runs: its end looks again.
-                Gate::Wait(new) if new.is_empty() => return,
-                Gate::Wait(new) => {
-                    if told("waiting") {
-                        return;
-                    }
-                    format!(
-                        "[merge waiting] The workers have finished, and the user's merge waits on the findings {}: record each with record_findings (fixed, open, or dismissed and why). Brigadier tells you when it is due; an open one, or one fixed without `checked`, stops it.",
-                        new.join(", ")
-                    )
                 }
                 // A message the user wrote since waits to be read: it decides first, and the
                 // thread's turn on it looks again when it ends.
@@ -2514,14 +2488,12 @@ fn used(board: &crate::board::Board, asked: &str) -> bool {
         })
 }
 
-/// What a held merge does once no worker writes (SESSION-FIXES-PLAN.md Q3 step 3).
+/// What a held merge does once no worker writes (SESSION-FIXES-PLAN.md Q3 step 3). Review
+/// findings, and a review still running, don't hold it: the merge's result lists them (#242).
 #[derive(Debug, PartialEq)]
 pub(super) enum Gate {
-    /// Nothing merges: a writer failed or was stopped, or a finding is recorded open or fixed
-    /// unverified.
+    /// Nothing merges: a writer failed or was stopped.
     Stop(String),
-    /// A review still runs, or findings wait to be recorded (their ids).
-    Wait(Vec<String>),
     Due,
 }
 
@@ -2554,15 +2526,8 @@ impl Drop for ReviewDue {
     }
 }
 
-/// [`Gate`] of `held` with every write task final. With reviews off (`reviews_on` false) a
-/// review still running is waited for no more; findings already in still are.
-pub(super) fn held_gate(
-    held: &PendingMerge,
-    tasks: &[Task],
-    board: &crate::board::Board,
-    conv: &super::conversation::ConvLive,
-    reviews_on: bool,
-) -> Gate {
+/// [`Gate`] of `held` with every write task final.
+pub(super) fn held_gate(held: &PendingMerge, tasks: &[Task]) -> Gate {
     let ended = tasks.iter().find(|task| {
         task.kind.writes()
             && (held.waiting.contains(&task.id) || task.created_at_ms >= held.at_ms)
@@ -2579,74 +2544,13 @@ pub(super) fn held_gate(
             None => format!("task-{} {how}.", task.number),
         });
     }
-    let findings = findings_now(board);
-    if !findings.open.is_empty() {
-        let open: Vec<String> = findings
-            .open
-            .iter()
-            .map(|(id, title)| format!("{id} is open: {title}"))
-            .collect();
-        return Gate::Stop(format!("{}.", open.join("; ")));
-    }
-    // A fix never checked in the merged code is no fix the merge can count on (#11).
-    if !findings.unverified.is_empty() {
-        let unverified: Vec<String> = findings
-            .unverified
-            .iter()
-            .map(|(id, title)| format!("{id} is recorded fixed but unverified (never checked in the merged code): {title}"))
-            .collect();
-        return Gate::Stop(format!("{}.", unverified.join("; ")));
-    }
-    // A landing whose review isn't stored yet waits like a running review.
-    let review_due = conv.reviews_due.load(std::sync::atomic::Ordering::SeqCst) > 0;
-    if (reviews_on && (findings.running || review_due)) || !findings.new.is_empty() {
-        return Gate::Wait(findings.new);
-    }
     Gate::Due
 }
 
 fn stopped_text(reason: &str) -> String {
     format!(
-        "[merge stopped] {reason} Nothing was merged, and the user's consent is spent: tell them why, and ask what to do."
+        "[merge stopped] {reason} Nothing was merged, and the user's consent isn't spent: tell them why, and judge what follows."
     )
-}
-
-/// The code reviews of the session's work since its previous merge, as the thread recorded
-/// their findings.
-pub(super) struct FindingsNow {
-    /// One still runs.
-    pub running: bool,
-    /// Recorded open: id and title.
-    pub open: Vec<(String, String)>,
-    /// Recorded fixed without a check in the merged code: id and title.
-    pub unverified: Vec<(String, String)>,
-    /// Not recorded yet: ids.
-    pub new: Vec<String>,
-}
-
-pub(super) fn findings_now(board: &crate::board::Board) -> FindingsNow {
-    use crate::work::{FindingStatus, ReviewState};
-    let reviews = reviews_since_merge(board);
-    let items = reviews.iter().flat_map(|review| &review.items);
-    FindingsNow {
-        running: reviews
-            .iter()
-            .any(|review| review.state == ReviewState::Running),
-        open: items
-            .clone()
-            .filter(|item| matches!(item.status, FindingStatus::Open { .. }))
-            .map(|item| (item.id.clone(), item.title.clone()))
-            .collect(),
-        unverified: items
-            .clone()
-            .filter(|item| super::review_runs::unverified(&item.status))
-            .map(|item| (item.id.clone(), item.title.clone()))
-            .collect(),
-        new: items
-            .filter(|item| item.status == FindingStatus::New)
-            .map(|item| item.id.clone())
-            .collect(),
-    }
 }
 
 /// The code reviews the thread hears, started since the session's previous merge.
@@ -2690,18 +2594,25 @@ fn wrote_meanwhile() -> Error {
 /// What the code reviews of the work merged now say, for the thread to tell the user: those it
 /// hears, started since the session's previous merge. It counts only what the thread recorded
 /// (`record_findings`), never a sum of reviews, and lists the open findings in its words.
-pub(super) fn merged_findings(board: &crate::board::Board) -> String {
+///
+/// `review_due`: a landing's review isn't stored yet, so it counts as running.
+pub(super) fn merged_findings(board: &crate::board::Board, review_due: bool) -> String {
     use crate::work::{FindingStatus, ReviewState};
     let reviews = reviews_since_merge(board);
-    if reviews.is_empty() {
+    if reviews.is_empty() && !review_due {
         return String::new();
     }
-    if reviews
-        .iter()
-        .any(|review| review.state == ReviewState::Running)
+    // A review still running doesn't hold the merge (#242): it is said, with what the others
+    // found.
+    let running = if review_due
+        || reviews
+            .iter()
+            .any(|review| review.state == ReviewState::Running)
     {
-        return " Its review still runs; if it finds anything, you hear it as a [review …] message: record its findings and tell the user then.".into();
-    }
+        " Its review still runs, so this work isn't reviewed yet: tell the user. Its findings come as a [review …] message; record them and tell the user then."
+    } else {
+        ""
+    };
     // A review stored before findings were items has a count and no items: its findings were
     // never recorded one by one, so they can't count as fixed.
     let untracked: u32 = reviews
@@ -2719,7 +2630,10 @@ pub(super) fn merged_findings(board: &crate::board::Board) -> String {
     };
     let items: Vec<_> = reviews.iter().flat_map(|review| &review.items).collect();
     if items.is_empty() && !untracked.is_empty() {
-        return untracked;
+        return format!("{running}{untracked}");
+    }
+    if items.is_empty() && !running.is_empty() {
+        return running.into();
     }
     if items.is_empty() {
         return if reviews
@@ -2747,7 +2661,7 @@ pub(super) fn merged_findings(board: &crate::board::Board) -> String {
         .map(|item| item.id.as_str())
         .collect();
     let unverified = unverified_findings(&items);
-    let mut text = String::new();
+    let mut text = running.to_owned();
     if !open.is_empty() {
         text.push_str(&format!(
             " Open review findings, as you recorded them (not fixed): {}. Tell the user, as a list.",
@@ -2763,8 +2677,12 @@ pub(super) fn merged_findings(board: &crate::board::Board) -> String {
     if !unverified.is_empty() {
         text.push_str(&unverified_text(&unverified));
     }
-    if text.is_empty() {
-        text.push_str(" Its review's findings are all fixed or dismissed, as you recorded them.");
+    if open.is_empty() && new.is_empty() && unverified.is_empty() {
+        text.push_str(if running.is_empty() {
+            " Its review's findings are all fixed or dismissed, as you recorded them."
+        } else {
+            " The findings of its finished reviews are all fixed or dismissed, as you recorded them."
+        });
     }
     text.push_str(&untracked);
     text
@@ -3055,6 +2973,98 @@ mod tests {
         // spent.
         step(&mut board, held("d"));
         assert!(pending_merge(&board).is_none());
+    }
+
+    /// #242: a review still running and the findings of those that ended inform the merge,
+    /// and its result says all of them; none hides another.
+    #[test]
+    fn a_merge_result_names_a_running_review_with_the_open_unrecorded_and_unverified_findings() {
+        use crate::work::{Finding, FindingStatus, ReviewFor, ReviewKind, ReviewRun, ReviewState};
+        let finding = |id: &str, status: FindingStatus| Finding {
+            id: id.into(),
+            severity: Some("P2".into()),
+            title: format!("Problem {id}"),
+            location: None,
+            status,
+            high: false,
+        };
+        let review = |number: u32, state: ReviewState, items: Vec<Finding>| ReviewRun {
+            id: format!("review-{number}"),
+            conversation_id: ConversationId("c".into()),
+            request_id: None,
+            task_id: None,
+            kind: ReviewKind::Code,
+            base: "a".into(),
+            tip: "b".into(),
+            author: brigadier_providers::ProviderKind::Claude,
+            reviewer: brigadier_providers::ProviderKind::Codex,
+            reviewer_model: None,
+            notify: ReviewFor::Orchestrator,
+            state,
+            started_at_ms: i64::from(number),
+            ended_at_ms: None,
+            findings: None,
+            number,
+            items,
+            landing: None,
+            answer_waits: false,
+        };
+        let mut board = crate::board::Board::default();
+        board.reviews.insert(
+            "review-1".into(),
+            review(
+                1,
+                ReviewState::Findings { count: 3 },
+                vec![
+                    finding("R1.1", FindingStatus::Open { why: None }),
+                    finding("R1.2", FindingStatus::New),
+                    finding(
+                        "R1.3",
+                        FindingStatus::Fixed {
+                            task: None,
+                            why: None,
+                            checked: None,
+                        },
+                    ),
+                ],
+            ),
+        );
+        board.reviews.insert(
+            "review-2".into(),
+            review(2, ReviewState::Running, Vec::new()),
+        );
+        let text = merged_findings(&board, false);
+        assert!(
+            text.contains("Its review still runs, so this work isn't reviewed yet"),
+            "{text}"
+        );
+        assert!(text.contains("Open review findings"), "{text}");
+        assert!(text.contains("R1.1 Problem R1.1"), "{text}");
+        assert!(
+            text.contains("Findings you haven't recorded: R1.2"),
+            "{text}"
+        );
+        assert!(text.contains("(unverified): R1.3"), "{text}");
+        // Only the running review: it says so, never that the review is clean.
+        board.reviews.remove("review-1");
+        let text = merged_findings(&board, false);
+        assert!(
+            text.contains("still runs") && !text.contains("clean"),
+            "{text}"
+        );
+        // A landing's review not stored yet runs too, though only a clean one is in.
+        board.reviews.remove("review-2");
+        board
+            .reviews
+            .insert("review-3".into(), review(3, ReviewState::Clean, Vec::new()));
+        assert_eq!(merged_findings(&board, false), " Its review is clean.");
+        let text = merged_findings(&board, true);
+        assert!(
+            text.contains("still runs") && !text.contains("clean"),
+            "{text}"
+        );
+        board.reviews.clear();
+        assert!(merged_findings(&board, true).contains("still runs"));
     }
 
     #[test]

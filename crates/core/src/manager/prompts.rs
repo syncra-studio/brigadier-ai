@@ -807,6 +807,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, the session's full checks inform a merge, never hold it: finish_session merges whatever they say, and its result states where they stand at that tip. [checks failed …] names failing tests that open issues name; you judge what follows.",
         worker: "",
     },
+    Revision {
+        number: FINDINGS_INFORM_REVISION,
+        thread: "From now on, review findings and a review still running inform a merge, never stop or hold it: finish_session merges, and its result lists open, unrecorded and unverified findings and a review still running, for you to tell the user. A held merge is due once its workers land.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1097,6 +1102,9 @@ pub(crate) const STORED_FIX_REVISION: u32 = 88;
 /// The session's full checks inform a merge instead of holding it, and a failure names the
 /// failing tests open issues name (#241).
 pub(crate) const CHECKS_INFORM_REVISION: u32 = 89;
+/// Review findings, and a review still running, inform a merge instead of stopping or holding
+/// it (#242).
+pub(crate) const FINDINGS_INFORM_REVISION: u32 = 90;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:

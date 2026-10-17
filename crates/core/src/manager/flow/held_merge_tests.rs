@@ -1,7 +1,8 @@
 //! The merge said while workers write (SESSION-FIXES-PLAN.md Q3): it is held, stored, until
 //! they land, then the thread is told it is due and merges on the held consent without a new
-//! question; a failed or stopped writer, or an open finding, stops it; an unrecorded finding
-//! holds it; the user's Cancel spends the consent for good, under the landing lock. The
+//! question; a failed or stopped writer stops it; review findings and a review still running
+//! never stop or hold it, and its result names them (#242); the user's Cancel spends the
+//! consent for good, under the landing lock. The
 //! thread's own commit that names the findings it fixes is covered by the held consent too.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -243,7 +244,10 @@ async fn held(name: &str, plan: Plan) -> Held {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
+                    // A merge due in the same turn goes ahead: findings don't hold it (#242).
+                    if !turn.input.contains("[merge due]") {
+                        return Reply::text("[quiet]");
+                    }
                 }
                 if turn.input.contains("[merge due]") {
                     let reply = turn.call("finish_session", json!({})).await;
@@ -504,63 +508,70 @@ async fn a_request_to_merge_with_a_not_elsewhere_merges() {
     flow.stop().await;
 }
 
-#[tokio::test]
-async fn an_open_finding_stops_the_held_merge_at_medium_severity() {
-    let held = held(
-        "held-merge-open",
-        Plan {
-            finds: true,
-            records: Some("open"),
-            ..Plan::default()
-        },
-    )
-    .await;
-    writing(&held).await;
-    held.release.store(true, Ordering::SeqCst);
-    stopped(&held).await;
-    assert_eq!(
-        held.logged(&format!(
-            "[merge stopped] {} is open: The second note has no title",
-            held.finding()
-        )),
-        1
-    );
-    assert!(!held.merged());
-    held.flow.stop().await;
+/// Waits for the held merge to be done.
+async fn merged_step(held: &Held) {
+    held.flow
+        .until("the merge", |board| {
+            board
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+        })
+        .await;
 }
 
-/// A fix recorded with no check in the merged code is no fix a held merge counts on: it stops
-/// like an open finding, before anything reaches main (#11).
-#[tokio::test]
-async fn an_unverified_fix_stops_the_held_merge() {
+/// #242: a finding recorded open, or fixed without a check, never stops the held merge.
+async fn a_finding_recorded(name: &str, status: &'static str) {
     let held = held(
-        "held-merge-unverified",
+        name,
         Plan {
             finds: true,
-            records: Some("fixed"),
+            records: Some(status),
             ..Plan::default()
         },
     )
     .await;
     writing(&held).await;
     held.release.store(true, Ordering::SeqCst);
-    stopped(&held).await;
-    assert_eq!(
-        held.logged(&format!(
-            "[merge stopped] {} is recorded fixed but unverified (never checked in the merged code): The second note has no title",
-            held.finding()
-        )),
-        1,
+    merged_step(&held).await;
+    held.flow
+        .until("the finding recorded", |board| {
+            board.reviews.values().any(|review| {
+                review
+                    .items
+                    .iter()
+                    .any(|item| item.status != crate::work::FindingStatus::New)
+            })
+        })
+        .await;
+    let board = held.flow.settled().await;
+    assert!(held.merged());
+    assert!(
+        !board
+            .orchestrator_steps
+            .iter()
+            .any(|step| matches!(step.kind, OrchestratorStepKind::MergeStopped { .. })),
         "{:#?}",
         held.log.lock().unwrap()
     );
-    assert_eq!(held.logged("[merge due] The workers"), 0);
-    assert!(!held.merged());
+    assert_eq!(held.logged("[merge waiting]"), 0);
     held.flow.stop().await;
 }
 
 #[tokio::test]
-async fn an_unrecorded_finding_holds_the_merge_until_recorded() {
+async fn an_open_finding_doesnt_stop_the_held_merge() {
+    a_finding_recorded("held-merge-open", "open").await;
+}
+
+#[tokio::test]
+async fn an_unverified_fix_doesnt_stop_the_held_merge() {
+    a_finding_recorded("held-merge-unverified", "fixed").await;
+}
+
+/// #242: a finding the thread hasn't recorded doesn't hold the merge, and finish_session
+/// merges with it: no "record them first".
+#[tokio::test]
+async fn an_unrecorded_finding_doesnt_hold_the_merge() {
     let held = held(
         "held-merge-unrecorded",
         Plan {
@@ -572,66 +583,11 @@ async fn an_unrecorded_finding_holds_the_merge_until_recorded() {
     .await;
     writing(&held).await;
     held.release.store(true, Ordering::SeqCst);
-    held.flow
-        .until("both to land", |board| {
-            board
-                .tasks
-                .values()
-                .filter(|task| task.state == TaskState::Landed)
-                .count()
-                == 2
-        })
-        .await;
-    let log = held.log.clone();
-    held.flow
-        .until("the merge to wait", move |_| {
-            log.lock()
-                .unwrap()
-                .iter()
-                .any(|line| line.contains("[merge waiting]"))
-        })
-        .await;
+    merged_step(&held).await;
     held.flow.settled().await;
-    assert_eq!(held.logged("[merge waiting]"), 1);
-    assert_eq!(held.logged("[merge due] The workers"), 0);
-    // finish_session itself refuses while a finding is unrecorded.
-    let refused = held
-        .flow
-        .manager
-        .finish_session(&held.flow.conversation, "", None)
-        .await
-        .unwrap_err()
-        .to_string();
-    let id = held.finding();
-    assert!(
-        refused.contains(&format!("Record the findings {id}")),
-        "{refused}"
-    );
-    assert!(!held.merged());
-    // Recorded fixed: the merge is due.
-    let reply = held
-        .flow
-        .manager
-        .record_findings(
-            &held.flow.conversation,
-            serde_json::from_value(
-                json!({"items": [{"id": id, "status": "fixed", "task": "task-2",
-                               "checked": "read B.md at the tip"}]}),
-            )
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(reply.contains("Recorded"), "{reply}");
-    held.flow
-        .until("the merge", |board| {
-            board
-                .orchestrator_steps
-                .iter()
-                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
-        })
-        .await;
     assert!(held.merged());
+    assert_eq!(held.logged("[merge waiting]"), 0);
+    assert_eq!(held.logged("Record the findings"), 0);
     held.flow.stop().await;
 }
 
@@ -705,10 +661,10 @@ async fn the_held_merge_survives_a_restart() {
     held.flow.stop().await;
 }
 
-/// The last writer landed, but its review still runs: the held merge waits for it even when
-/// the thread calls finish_session early, since the review may bring an open finding.
+/// #242: the last writer landed and its review still runs: the held merge doesn't wait for it,
+/// and its result says the work isn't reviewed yet.
 #[tokio::test]
-async fn a_held_merge_waits_for_the_last_landings_review_even_when_called_early() {
+async fn a_review_still_running_doesnt_hold_the_merge_and_its_result_says_so() {
     let held = held(
         "held-merge-review-runs",
         Plan {
@@ -719,88 +675,39 @@ async fn a_held_merge_waits_for_the_last_landings_review_even_when_called_early(
     .await;
     writing(&held).await;
     held.release.store(true, Ordering::SeqCst);
+    merged_step(&held).await;
+    assert!(held.merged());
+    let board = held.flow.board().await;
+    assert!(
+        board
+            .reviews
+            .values()
+            .any(|review| review.state == crate::work::ReviewState::Running),
+        "task-2's review still runs"
+    );
+    let log = held.log.clone();
     held.flow
-        .until("both to land with task-2's review running", |board| {
-            board
-                .tasks
-                .values()
-                .filter(|task| task.state == TaskState::Landed)
-                .count()
-                == 2
-                && crate::manager::landing::findings_now(board).running
+        .until("the merge's result", move |_| {
+            log.lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.starts_with("finish_session: [finished]"))
         })
         .await;
-    let refused = held
-        .flow
-        .manager
-        .finish_session(&held.flow.conversation, "", None)
-        .await
-        .unwrap_err()
-        .to_string();
+    let result = held
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|line| line.starts_with("finish_session: [finished]"))
+        .cloned()
+        .unwrap();
     assert!(
-        refused.contains("A review of the session's work still runs"),
-        "{refused}"
+        result.contains("Its review still runs, so this work isn't reviewed yet"),
+        "{result}"
     );
-    assert!(!held.merged());
     held.review.store(true, Ordering::SeqCst);
-    held.flow
-        .until("the merge", |board| {
-            board
-                .orchestrator_steps
-                .iter()
-                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
-        })
-        .await;
-    assert!(held.merged());
-    held.flow.stop().await;
-}
-
-/// The last writer is landed, so final, a moment before its review is stored: a merge in that
-/// moment waits for the review as for a running one.
-#[tokio::test]
-async fn a_held_merge_waits_for_a_landings_review_not_started_yet() {
-    let held = held("held-merge-review-due", Plan::default()).await;
-    writing(&held).await;
-    // The first landing's review starts; the second's waits at the pause.
-    let conv = held.flow.manager.conv(&held.flow.conversation).unwrap();
-    let reached = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
-    *conv.review_pause.lock().unwrap() = Some((1, reached.clone(), release.clone()));
-    held.release.store(true, Ordering::SeqCst);
-    reached.notified().await;
-    held.flow
-        .until("both landed, no review running", |board| {
-            board
-                .tasks
-                .values()
-                .filter(|task| task.state == TaskState::Landed)
-                .count()
-                == 2
-                && !crate::manager::landing::findings_now(board).running
-        })
-        .await;
-    let refused = held
-        .flow
-        .manager
-        .finish_session(&held.flow.conversation, "", None)
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(
-        refused.contains("A review of the session's work still runs"),
-        "{refused}"
-    );
-    assert!(!held.merged());
-    release.notify_one();
-    held.flow
-        .until("the merge", |board| {
-            board
-                .orchestrator_steps
-                .iter()
-                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
-        })
-        .await;
-    assert!(held.merged());
+    held.flow.settled().await;
     held.flow.stop().await;
 }
 
@@ -933,6 +840,9 @@ async fn fixed_by_the_thread(
     let log: Arc<Mutex<Vec<String>>> = Arc::default();
     let reviews: Arc<Mutex<Vec<String>>> = Arc::default();
     let merge_held = Arc::new(AtomicBool::new(false));
+    // The thread waits for the landing's review before it merges: the review doesn't hold the
+    // merge (#242), the thread judges it does here.
+    let due = Arc::new(AtomicBool::new(false));
     let (said, read, gate) = (log.clone(), reviews.clone(), merge_held.clone());
     let flow = Flow::start(
         name,
@@ -952,7 +862,7 @@ async fn fixed_by_the_thread(
             ..Options::default()
         },
         script(move |turn| {
-            let (said, gate) = (said.clone(), gate.clone());
+            let (said, gate, due) = (said.clone(), gate.clone(), due.clone());
             async move {
                 if turn.is_review() {
                     return Reply::text("No findings.");
@@ -1029,12 +939,17 @@ async fn fixed_by_the_thread(
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    return Reply::text("[quiet]");
-                }
-                if turn.input.contains("[merge due]") {
+                    if !due.load(Ordering::SeqCst) && !turn.input.contains("[merge due]") {
+                        return Reply::text("[quiet]");
+                    }
                     let reply = turn.call("finish_session", json!({})).await;
                     log(&format!("finish_session: {}", reply.text));
                     return Reply::text("Merged.");
+                }
+                if turn.input.contains("[merge due]") {
+                    // Not before the landing's review is in and its finding fixed.
+                    due.store(true, Ordering::SeqCst);
+                    return Reply::text("[quiet]");
                 }
                 Reply::text("Noted.")
             }

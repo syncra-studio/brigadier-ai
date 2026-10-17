@@ -2491,7 +2491,7 @@ mod tests {
             checked: Some("a:3 at the tip guards it now".into()),
         };
         board.reviews.insert(first.id.clone(), first);
-        let merged = super::super::landing::merged_findings(&board);
+        let merged = super::super::landing::merged_findings(&board, false);
         assert_eq!(
             merged,
             " Open review findings, as you recorded them (not fixed): R1.1 One; R1.2 Two (needs the user's call). Tell the user, as a list."
@@ -2515,7 +2515,7 @@ mod tests {
         second.state = ReviewState::Findings { count: 2 };
         second.items = items_of(2, "- [P2] Four — a:4\n- [P2] Five — a:5");
         board.reviews.insert(second.id.clone(), second);
-        let merged = super::super::landing::merged_findings(&board);
+        let merged = super::super::landing::merged_findings(&board, false);
         assert_eq!(
             merged,
             " Findings you haven't recorded: R2.1, R2.2. Record them with record_findings, and tell the user which stay open."
@@ -2531,7 +2531,7 @@ mod tests {
             why: "by design".into(),
         };
         assert_eq!(
-            super::super::landing::merged_findings(&board),
+            super::super::landing::merged_findings(&board, false),
             " Recorded fixed but never checked in the merged code (unverified): R2.1 Four. Tell the user plainly that these are unverified, never that the review is clean; or check each in the merged code and record it again with `checked`."
         );
         // Checked in the merged code: nothing open.
@@ -2542,7 +2542,7 @@ mod tests {
             checked: Some("ran its test at the tip: passes".into()),
         };
         assert_eq!(
-            super::super::landing::merged_findings(&board),
+            super::super::landing::merged_findings(&board, false),
             " Its review's findings are all fixed or dismissed, as you recorded them."
         );
         // A review stored before findings were items is never reported clean.
@@ -2551,12 +2551,12 @@ mod tests {
         legacy.state = ReviewState::Findings { count: 2 };
         board.reviews.insert(legacy.id.clone(), legacy.clone());
         assert_eq!(
-            super::super::landing::merged_findings(&board),
+            super::super::landing::merged_findings(&board, false),
             " Its review's findings are all fixed or dismissed, as you recorded them. A review from before findings were recorded found 2 things, never recorded: tell the user they may still be open."
         );
         board.reviews.retain(|id, _| id == "legacy");
         assert_eq!(
-            super::super::landing::merged_findings(&board),
+            super::super::landing::merged_findings(&board, false),
             " A review from before findings were recorded found 2 things, never recorded: tell the user they may still be open."
         );
     }
