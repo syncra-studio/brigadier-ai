@@ -1694,3 +1694,66 @@ fn a_preview_recorded_before_worker_previews_loads() {
     assert_eq!(preview.task_id, None);
     assert!(!preview.building);
 }
+
+/// A stopped task's previews stop before its unfinished work is kept (review R21.1): what a
+/// preview writes as it stops is in the kept commit, and nothing writes after it.
+#[tokio::test]
+async fn a_stopped_tasks_preview_stops_before_its_work_is_kept() {
+    let flow = Flow::start(
+        "preview-worker-kept",
+        Options::default(),
+        script(move |turn| async move {
+            if turn.is_orchestrator() {
+                if turn.earlier == 0 {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Build it", "kind": "implement",
+                                   "spec": "Build it.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                return Reply::text("[quiet]");
+            }
+            if turn.earlier == 0 {
+                let reply = turn
+                    .call(
+                        "start_preview",
+                        json!({"command": "trap 'echo stopped > stopped.txt; exit 0' TERM; \
+                                           echo building; while :; do sleep 1; done",
+                               "name": "build", "kind": "app"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+            }
+            Reply::text("Still building.")
+        }),
+    )
+    .await;
+    flow.say("Build it.").await;
+    let board = flow
+        .until("the worker's preview", |board| {
+            board
+                .sorted_previews()
+                .iter()
+                .any(|preview| preview.task_id.is_some() && preview.state.is_live())
+        })
+        .await;
+    let task = Flow::task(&board, 1).id.clone();
+    flow.manager.stop_task(task).await.unwrap();
+    let board = flow
+        .until("task-1 stopped", |board| {
+            Flow::task(board, 1).state == crate::work::TaskState::Stopped
+        })
+        .await;
+    let Some(crate::work::KeptWork::Branch { commit, .. }) = &Flow::task(&board, 1).kept else {
+        panic!("kept on its branch: {:?}", Flow::task(&board, 1).kept);
+    };
+    assert_eq!(
+        super::git(&flow.repo, &["show", &format!("{commit}:stopped.txt")]).trim(),
+        "stopped"
+    );
+    assert!(running(&board).is_empty());
+    flow.stop().await;
+}

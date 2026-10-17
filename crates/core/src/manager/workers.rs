@@ -5118,6 +5118,10 @@ impl SessionManager {
         if let Some(live) = self.existing_task_live(&task.id) {
             live.close_cli().await;
         }
+        // Its worker's previews run in the folder that goes below: they stop before its
+        // unfinished work is kept, so none writes into the kept commit.
+        self.stop_task_previews(&task.conversation_id, &task.id)
+            .await;
         let (kept, drop_branch) = match state {
             TaskState::Stopped | TaskState::Failed => self.keep_unfinished(task).await,
             // A write task that ends done changed nothing that could land.
@@ -5152,9 +5156,6 @@ impl SessionManager {
             }
         }
         self.task_ended_waiting(task, state).await;
-        // Its worker's previews run in the folder that goes below.
-        self.stop_task_previews(&task.conversation_id, &task.id)
-            .await;
         let owner = format!("task:{}", task.id);
         self.grants.revoke_owner(&owner);
         // Its CLI's session folder goes with what the task leaves (BUILD-PLAN D2.2).
