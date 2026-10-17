@@ -66,9 +66,13 @@ pub struct RankingsRefresh {
     pub changes: Vec<RatingChange>,
     /// Research failures and reasons individual patches were dropped.
     pub errors: Vec<String>,
-    /// Whether the saved overlay matches the effective curated revision.
+    /// Whether the saved overlay matches the effective curated revision. Worked out when read,
+    /// never saved: overlay.json keeps the job without it.
+    #[serde(default)]
     pub overlay_applied: bool,
-    /// When the saved overlay was researched, even if superseded; null when absent.
+    /// When the saved overlay was researched, even if superseded; null when absent. Worked out
+    /// when read, like `overlay_applied`.
+    #[serde(default)]
     pub overlay_at_ms: Option<i64>,
 }
 
@@ -255,7 +259,7 @@ impl RegistryHolder {
                 patches: kept,
                 job: state.refresh.clone(),
             };
-            let saved = serde_json::to_vec_pretty(&overlay)
+            let saved = saved_overlay(&overlay)
                 .map_err(std::io::Error::other)
                 .and_then(|bytes| self.write_atomic("overlay.json", &bytes));
             match saved {
@@ -295,6 +299,17 @@ impl RegistryHolder {
         state.overlay = None;
         Ok(())
     }
+}
+
+/// overlay.json's bytes: the job without what is worked out when read (whether the overlay
+/// applies depends on the registry in use then, so a saved answer would go stale).
+fn saved_overlay(overlay: &Overlay) -> serde_json::Result<Vec<u8>> {
+    let mut value = serde_json::to_value(overlay)?;
+    if let Some(job) = value.get_mut("job").and_then(|job| job.as_object_mut()) {
+        job.remove("overlayApplied");
+        job.remove("overlayAtMs");
+    }
+    serde_json::to_vec_pretty(&value)
 }
 
 fn running(state: &super::State, id: &str) -> bool {
@@ -665,5 +680,25 @@ mod tests {
         // Its own vendor lowers the other's raise, still above the registry's value.
         assert_eq!(run(codex, bundled + 0.5), bundled + 0.5);
         assert_eq!(run(codex, bundled - 2.0), bundled - 2.0);
+    }
+
+    #[test]
+    fn the_saved_overlay_leaves_out_what_is_worked_out_when_read() {
+        let cache = Cache::new();
+        let holder = cache.holder();
+        commit(&holder);
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(holder.dir.join("overlay.json")).unwrap())
+                .unwrap();
+        assert!(saved["job"].get("overlayApplied").is_none(), "{saved}");
+        assert!(saved["job"].get("overlayAtMs").is_none(), "{saved}");
+        // What the app applies, read back after a restart.
+        let restarted = cache.holder();
+        assert!(restarted.rankings_refresh().overlay_applied);
+        assert_eq!(
+            restarted.rankings_refresh().overlay_at_ms,
+            holder.state().overlay.as_ref().map(|o| o.at_ms)
+        );
+        assert_eq!(restarted.rating_snapshot().1, holder.rating_snapshot().1);
     }
 }

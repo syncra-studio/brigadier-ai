@@ -44,10 +44,12 @@ changes: Array<RatingChange>,
  */
 errors: Array<string>, 
 /**
- * Whether the saved overlay matches the effective curated revision.
+ * Whether the saved overlay matches the effective curated revision. Worked out when read,
+ * never saved: overlay.json keeps the job without it.
  */
 overlayApplied: boolean, 
 /**
- * When the saved overlay was researched, even if superseded; null when absent.
+ * When the saved overlay was researched, even if superseded; null when absent. Worked out
+ * when read, like `overlay_applied`.
  */
 overlayAtMs: number | null, };
