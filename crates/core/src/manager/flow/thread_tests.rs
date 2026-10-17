@@ -1347,6 +1347,100 @@ async fn a_call_failing_with_the_stop_reads_stopped_not_failed() {
     flow.stop().await;
 }
 
+/// A step left running under a reply the user stopped (the quit came before the Stop closed
+/// it) reads stopped after a restart, not failed; one left under a reply that ended otherwise
+/// still reads failed (#184).
+#[tokio::test]
+async fn a_step_left_running_under_a_stopped_reply_reads_stopped_after_a_restart() {
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    let mut flow = Flow::start(
+        "20261017-0213-issues-run-w49-stopped-restart",
+        Options::default(),
+        script(move |turn| async move {
+            if turn.input.contains("Run the tests.") {
+                turn.emit(ProviderEvent::ToolCall {
+                    item_id: "bash-0".into(),
+                    name: "Bash".into(),
+                    input: Some(json!({ "command": "npm test" }).to_string()),
+                    status: ItemStatus::InProgress,
+                    output: None,
+                    kept: None,
+                })
+                .await;
+                assert!(turn.stopped().await, "the user stops it");
+                return Reply::text("");
+            }
+            Reply::text("Done.")
+        }),
+    )
+    .await;
+    let row = |board: &crate::board::Board, id: &str| {
+        board
+            .orchestrator_steps
+            .iter()
+            .find_map(|step| match &step.kind {
+                OrchestratorStepKind::Tool {
+                    item_id,
+                    status,
+                    stopped,
+                    ..
+                } if item_id == id => Some((*status, *stopped)),
+                _ => None,
+            })
+    };
+    flow.say("Hello.").await;
+    let done = flow.settled().await.latest_request().unwrap().id.clone();
+    flow.say("Run the tests.").await;
+    flow.until("the call to run", |board| row(board, "bash-0").is_some())
+        .await;
+    flow.manager
+        .interrupt(flow.conversation.clone())
+        .await
+        .unwrap();
+    let board = flow.settled().await;
+    let stopped = board.latest_request().unwrap().id.clone();
+    // The Stop closes its turn's calls itself (#61).
+    assert_eq!(row(&board, "bash-0"), Some((ItemStatus::Failed, true)));
+    // What a quit before that close leaves: a row still running under each reply.
+    let step = board
+        .orchestrator_steps
+        .iter()
+        .find(|step| matches!(&step.kind, OrchestratorStepKind::Tool { item_id, .. } if item_id == "bash-0"))
+        .unwrap();
+    for (id, request) in [("bash-1", &stopped), ("bash-2", &done)] {
+        let mut kind = step.kind.clone();
+        if let OrchestratorStepKind::Tool {
+            item_id,
+            status,
+            stopped,
+            ended_at_ms,
+            turn,
+            ..
+        } = &mut kind
+        {
+            *item_id = id.into();
+            *status = ItemStatus::InProgress;
+            *stopped = false;
+            *ended_at_ms = None;
+            *turn = None;
+        }
+        flow.manager
+            .orchestrator_step_in(&flow.conversation, Some(request.clone()), kind)
+            .await;
+    }
+    flow.restart().await;
+    let board = flow
+        .until("the cut-off rows to end", |board| {
+            [row(board, "bash-1"), row(board, "bash-2")]
+                .iter()
+                .all(|row| row.is_some_and(|(status, _)| status != ItemStatus::InProgress))
+        })
+        .await;
+    assert_eq!(row(&board, "bash-1"), Some((ItemStatus::Failed, true)));
+    assert_eq!(row(&board, "bash-2"), Some((ItemStatus::Failed, false)));
+    flow.stop().await;
+}
+
 /// A preview the thread started holds nothing up: its answer is done while the preview runs.
 /// A review of its own change does (BUILD-PLAN B2): the request keeps working until the
 /// findings came and the thread took them in, in the same request.

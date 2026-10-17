@@ -30,7 +30,7 @@ use crate::model::{
     Conversation, ConversationId, ConversationKind, Environment, Lifecycle, Setup, streams,
 };
 use crate::overnight::OvernightRun;
-use crate::work::{InjectionKind, OrchestratorStepKind, Task, TaskState};
+use crate::work::{InjectionKind, OrchestratorStepKind, RequestState, Task, TaskState};
 use crate::{Error, Result, now_ms};
 
 /// How often idle conversations are checked for hibernation.
@@ -303,6 +303,7 @@ impl SessionManager {
             let mut kind = step.kind.clone();
             if let OrchestratorStepKind::Tool {
                 status: status @ ItemStatus::InProgress,
+                stopped,
                 through_position,
                 ended_at_ms,
                 exit,
@@ -310,6 +311,12 @@ impl SessionManager {
             } = &mut kind
             {
                 *status = ItemStatus::Failed;
+                // A call the user's Stop ended still reads stopped (#75, #184).
+                *stopped = step
+                    .request_id
+                    .as_ref()
+                    .and_then(|request| board.requests.get(request))
+                    .is_some_and(|request| request.state == RequestState::Stopped);
                 *through_position = 0;
                 // When it ended isn't known: it ran no further than it is recorded.
                 *ended_at_ms = Some(step.at_ms);
