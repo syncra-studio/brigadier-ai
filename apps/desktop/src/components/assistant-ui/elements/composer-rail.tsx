@@ -21,11 +21,12 @@ export const ComposerRail: FC<ComponentProps<"div">> = ({ className, ...props })
 
 /**
  * One item of the rail. `controls` is the utility bar (a darker tab, no border); `card` is a
- * framed card (the queue, /status, the workers strip). Items open to their height as they
- * appear.
+ * framed card (the queue, /status, the workers strip); `decision` is a card waiting for the
+ * user, which at the rail's bottom shows its whole frame a small gap above the composer instead
+ * of tucking under it. Items open to their height as they appear.
  */
 export const ComposerRailItem: FC<{
-  variant?: "controls" | "card";
+  variant?: "controls" | "card" | "decision";
   label?: string;
   className?: string;
   children: ReactNode;
@@ -36,11 +37,13 @@ export const ComposerRailItem: FC<{
     aria-label={label}
     className={cn(
       "animate-rail-open grid grid-rows-1 motion-reduce:animate-none",
+      "first:rounded-t-rail",
       // The tuck under the card is padding, so the last item's content never hides behind it.
-      "first:rounded-t-rail last:pb-rail-tuck",
+      variant !== "decision" && "last:pb-rail-tuck",
       variant === "controls"
         ? "bg-rail-controls"
         : "bg-rail/70 border-foreground/10 border-x border-t backdrop-blur-sm",
+      variant === "decision" && "last:rounded-b-rail last:mb-rail-clear last:border-b",
       className,
     )}
   >

@@ -245,7 +245,7 @@ export function PendingActionCard({
     </p>
   ) : null;
   return (
-    <ComposerRailItem label="Waiting for you">{card()}</ComposerRailItem>
+    <ComposerRailItem variant="decision" label="Waiting for you">{card()}</ComposerRailItem>
   );
 
   function card() {

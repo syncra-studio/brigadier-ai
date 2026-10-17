@@ -51,6 +51,7 @@
  *                                             ease-rail (the hovered lines growing)
  *               size-attachment-thumb, w-attachment-card  an image attachment, a file attachment
  *               mx-rail-inset, -mb-rail-tuck  the composer rail: its side inset, the tuck under the card
+ *               mb-rail-clear                 a decision card's room under it: the tuck and a small gap
  *               {px,py,gap,size,h}-notice-*   the Full access card (nine tenths of a card), with
  *                                             text-notice, text-notice-button
  *   Layout      w-sidebar, min-w-sidebar-min, max-w-sidebar-max  the sidebar panel: default
@@ -299,6 +300,8 @@
   /* The composer rail: inset from the card's sides, tucked under its top edge. */
   --spacing-rail-inset: 0.8125rem;
   --spacing-rail-tuck: 0.25rem;
+  /* A decision card ends this far up the rail: out of the tuck, a small gap above the card. */
+  --spacing-rail-clear: calc(var(--spacing-rail-tuck) + 0.5rem);
   /* The sidebar panel: its width, and how far it resizes. */
   --spacing-sidebar: 18rem;
   --spacing-sidebar-thread-min: 20rem;
