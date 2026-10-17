@@ -139,6 +139,8 @@ impl SessionManager {
     where
         F: Future<Output = Result<(String, String)>> + Send + 'static,
     {
+        // When the command really started: a run's time counts its foreground minute too.
+        let started_at_ms = now_ms();
         // Whose answer it serves: the turn's request, taken before the call can outlive it.
         let request = match self.conv(id) {
             Ok(conv) => conv.running_request().await,
@@ -198,7 +200,7 @@ impl SessionManager {
                 request_id: request,
                 tool: tool.to_owned(),
                 command: command.to_owned(),
-                started_at_ms: now_ms(),
+                started_at_ms,
                 ended_at_ms: None,
                 state: BackgroundRunState::Running,
                 item_id: self.own_command_item(id, tool, command).await,

@@ -416,6 +416,11 @@ async fn the_users_stop_of_one_background_run_tells_the_thread() {
         })
         .await;
     assert_eq!(board.requests.len(), 1, "{:?}", board.requests);
+    // Its time counts from the command's start, its foreground part too (#89).
+    let run = &board.background_runs["run-1"];
+    let ran = run.ended_at_ms.unwrap() - run.started_at_ms;
+    let foreground = crate::manager::background_runs::FOREGROUND.as_millis() as i64;
+    assert!(ran >= foreground, "{ran} ms");
     assert!(
         answers(&flow)
             .await
