@@ -28,6 +28,15 @@
  * objects (pure layout, e.g. a progress fraction), timing values ([animation-delay:150ms]),
  * and template literals whose numbers come from expressions, e.g. a virtualizer's
  * `translateY(${start}px)`: the quasi "px)" carries no number of its own.
+ *
+ * `brigadier/thread-scroll-helper` keeps auto-follow right (thread-scroll.ts): code that scrolls
+ * the thread's view on the user's behalf first says so with `jumpInThread(target)` (or the
+ * scroller's own `release()`), or the scroller reads the move as the browser's and undoes it
+ * while the view follows the bottom. A scroll (`scrollIntoView`, `scrollTo`, `scrollBy`, a
+ * `scrollTop` set) counts as the thread's when it scrolls a `viewport`, or anywhere in a file
+ * that works with the thread's view (it imports thread-scroll.ts or names the thread viewport's
+ * slot); it passes once one of those calls came before it in its function or one around it.
+ * A scroll there of something else (a list of its own) says why in a disable comment.
  */
 
 const LENGTH_UNITS =
@@ -319,10 +328,79 @@ const noRawDesignValues = {
   },
 };
 
+const SCROLL_CALLS = new Set(["scrollIntoView", "scrollTo", "scrollBy"]);
+const FUNCTIONS = ["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"];
+
+/** The name a member chain starts from: `viewport` for `viewport.scrollTo`, `a` for `a.b?.c()`. */
+function rootName(node) {
+  let at = node;
+  for (;;) {
+    if (at.type === "ChainExpression") at = at.expression;
+    else if (at.type === "MemberExpression") at = at.object;
+    else if (at.type === "CallExpression") at = at.callee;
+    else if (at.type === "TSNonNullExpression") at = at.expression;
+    else break;
+  }
+  return at.type === "Identifier" ? at.name : null;
+}
+
+const memberName = (member) =>
+  member?.type === "MemberExpression" && !member.computed && member.property.type === "Identifier"
+    ? member.property.name
+    : null;
+
+const threadScrollHelper = {
+  meta: {
+    type: "problem",
+    docs: {
+      description: "Scrolling the thread's view on the user's behalf goes through jumpInThread() or the scroller's release() first.",
+    },
+    schema: [],
+  },
+  create(context) {
+    const filename = context.filename ?? context.getFilename?.() ?? "";
+    // The scroller itself moves the view as it decides.
+    if (filename.endsWith("thread-scroll.ts")) return {};
+    const text = (context.sourceCode ?? context.getSourceCode()).text;
+    const threadFile = text.includes("assistant-ui/thread-scroll") || text.includes("aui_thread-viewport");
+    // Whether each function around the current node has said it jumps, innermost last.
+    const frames = [{ jumped: false }];
+    const enter = () => frames.push({ jumped: false });
+    const exit = () => frames.pop();
+    const check = (node, scrolled) => {
+      if (!threadFile && rootName(scrolled) !== "viewport") return;
+      if (frames.some((frame) => frame.jumped)) return;
+      context.report({
+        node,
+        message:
+          "Scrolling the thread's view: call jumpInThread(target) (or the scroller's release()) first, so auto-follow reads the move as the user's, not the browser's.",
+      });
+    };
+    const handlers = {
+      CallExpression(node) {
+        const callee = node.callee.type === "ChainExpression" ? node.callee.expression : node.callee;
+        if (callee.type === "Identifier" && callee.name === "jumpInThread") frames.at(-1).jumped = true;
+        const name = memberName(callee);
+        if (name === "release" && node.arguments.length === 0) frames.at(-1).jumped = true;
+        if (name && SCROLL_CALLS.has(name)) check(node, callee.object);
+      },
+      AssignmentExpression(node) {
+        if (memberName(node.left) === "scrollTop") check(node, node.left.object);
+      },
+    };
+    for (const type of FUNCTIONS) {
+      handlers[type] = enter;
+      handlers[`${type}:exit`] = exit;
+    }
+    return handlers;
+  },
+};
+
 const plugin = {
   meta: { name: "brigadier" },
   rules: {
     "no-raw-design-values": noRawDesignValues,
+    "thread-scroll-helper": threadScrollHelper,
   },
 };
 

@@ -415,6 +415,7 @@ const Rail: FC<{
     if (!list || hover || !(marker instanceof HTMLElement)) return;
     const top = marker.offsetTop;
     if (top < list.scrollTop || top + marker.offsetHeight > list.scrollTop + list.clientHeight) {
+      // oxlint-disable-next-line brigadier/thread-scroll-helper -- the rail's own list, not the thread.
       list.scrollTop = top - list.clientHeight / 2;
     }
   }, [firstInView, hover]);

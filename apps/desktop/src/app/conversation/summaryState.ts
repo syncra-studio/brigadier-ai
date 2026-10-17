@@ -53,11 +53,11 @@ function reveal(elementId: () => string): void {
       // The Plan section may be folded.
       const section = target.closest<HTMLElement>("[data-slot=summary-section][data-folded]");
       section?.querySelector<HTMLButtonElement>(":scope > header > button[aria-expanded]")?.click();
+      jumpInThread(target);
       // Its top, in its own card; then that card, in the column.
       const scroller = target.closest("[data-slot=summary-card]")?.firstElementChild;
       if (scroller && target.offsetHeight > scroller.clientHeight)
         scroller.scrollTop += target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      jumpInThread(target);
       target.scrollIntoView({ block: "nearest" });
       target.focus({ preventScroll: true });
     }),

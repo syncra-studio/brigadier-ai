@@ -51,7 +51,8 @@
         "src/**/*.{ts,tsx}"
       ],
       "rules": {
-        "brigadier/no-raw-design-values": "error"
+        "brigadier/no-raw-design-values": "error",
+        "brigadier/thread-scroll-helper": "error"
       }
     },
     {
@@ -61,6 +62,15 @@
       "rules": {
         "jsx-a11y/heading-has-content": "off",
         "jsx-a11y/anchor-has-content": "off"
+      }
+    },
+    {
+      "files": [
+        "src/fixtures/**",
+        "src/**/*.test.ts"
+      ],
+      "rules": {
+        "brigadier/thread-scroll-helper": "off"
       }
     }
   ]

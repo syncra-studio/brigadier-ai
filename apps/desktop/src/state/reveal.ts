@@ -104,6 +104,7 @@ function centre(scroller: HTMLElement, element: HTMLElement): void {
   const box = scroller.getBoundingClientRect();
   const rect = element.getBoundingClientRect();
   const off = rect.top + rect.height / 2 - (box.top + box.height / 2);
+  // oxlint-disable-next-line brigadier/thread-scroll-helper -- `land` said it jumps before it centres.
   scroller.scrollTop = Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + off));
 }
 
