@@ -6,7 +6,9 @@
 //! `debug/<id>.txt`. Nothing else is touched.
 //!
 //! In the working directory, Claude Code stages its writes in `.claude/.cc-writes`; the part of
-//! that path which did not exist before the session is removed with it, while it holds no files.
+//! that path which did not exist before the session is removed with it, while it holds no files,
+//! and already when the last of our CLIs in that directory exits, while it is empty
+//! ([`CliInFolder`]).
 //!
 //! Claude also keeps per-session temp files in `<temp>/claude-<uid>/<encoded cwd>/<id>/`
 //! (`<temp>` is `CLAUDE_CODE_TMPDIR`, else `/tmp` on macOS and the system temp directory
@@ -16,8 +18,10 @@
 //! location; for the others the session's folder is removed with it, and the per-cwd folder
 //! too when it is empty and belonged to a project directory the session created.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::model::Artifact;
 use crate::{Error, Result};
@@ -55,6 +59,66 @@ pub(super) fn staging_dirs(cwd: &Path) -> [PathBuf; 2] {
     let claude = cwd.join(".claude");
     let staging = claude.join(STAGING_DIR);
     [claude, staging]
+}
+
+/// Our live CLIs per working directory, and the outermost staging directory one of them
+/// created there.
+static LIVE: Mutex<BTreeMap<PathBuf, Live>> = Mutex::new(BTreeMap::new());
+
+struct Live {
+    clis: usize,
+    ours: Option<PathBuf>,
+}
+
+/// A CLI of ours about to start in `cwd`, registered before it is spawned; `ours`: the staging
+/// directory it records as created by us (`.claude`, or `.claude/.cc-writes` under a `.claude`
+/// that was there), if any. Dropped once it exited (or failed to start): see [`CliInFolder`].
+pub(super) fn cli_started(cwd: &Path, ours: Option<PathBuf>) -> CliInFolder {
+    let mut live = LIVE.lock().unwrap_or_else(|p| p.into_inner());
+    let entry = live.entry(cwd.to_path_buf()).or_insert(Live {
+        clis: 0,
+        ours: None,
+    });
+    entry.clis += 1;
+    // `.claude` itself wins over the folder in it.
+    if let Some(ours) = ours
+        && entry
+            .ours
+            .as_ref()
+            .is_none_or(|known| !ours.starts_with(known))
+    {
+        entry.ours = Some(ours);
+    }
+    CliInFolder(cwd.to_path_buf())
+}
+
+/// One of our CLIs in a folder, from before it is spawned until it exited. The last one there
+/// to go removes the staging directories ours while they are empty: an empty
+/// `.claude/.cc-writes` is not left in the workspace until the session is deleted. They are
+/// removed under the registry's lock, so no CLI starts there meanwhile; and only with `rmdir`:
+/// a file staged by anyone else keeps its folder.
+pub(super) struct CliInFolder(PathBuf);
+
+impl Drop for CliInFolder {
+    fn drop(&mut self) {
+        let cwd = &self.0;
+        let mut live = LIVE.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(entry) = live.get_mut(cwd) else {
+            return;
+        };
+        entry.clis = entry.clis.saturating_sub(1);
+        if entry.clis > 0 {
+            return;
+        }
+        let Some(ours) = live.remove(cwd).and_then(|entry| entry.ours) else {
+            return;
+        };
+        let [claude, staging] = staging_dirs(cwd);
+        let _ = std::fs::remove_dir(&staging);
+        if ours == claude {
+            let _ = std::fs::remove_dir(&claude);
+        }
+    }
 }
 
 pub(super) fn remove(config: &Path, artifacts: &[Artifact]) -> Result<()> {
@@ -556,4 +620,47 @@ fn socket_data_dir(content: &str) -> Option<PathBuf> {
             .filter(|dir| !dir.is_empty())
             .map(PathBuf::from)
     })
+}
+
+#[cfg(test)]
+mod staging_tests {
+    use super::*;
+
+    /// The last of our CLIs in a folder takes the empty staging folders it made there; one
+    /// still running, a staged file, or a `.claude` that was there before keeps them (issue #67).
+    #[test]
+    fn the_last_cli_in_a_folder_takes_the_empty_staging_folders_it_made() {
+        let root = std::env::temp_dir().join(format!("brigadier-staging-{}", std::process::id()));
+        let (fresh, kept) = (root.join("fresh"), root.join("kept"));
+        let [claude, staging] = staging_dirs(&fresh);
+        std::fs::create_dir_all(&fresh).unwrap();
+        let first = cli_started(&fresh, Some(claude.clone()));
+        let second = cli_started(&fresh, Some(staging.clone()));
+        std::fs::create_dir_all(&staging).unwrap();
+        drop(first);
+        assert!(staging.is_dir(), "a CLI still runs there");
+        drop(second);
+        assert!(!claude.exists(), "both folders were ours and empty");
+
+        // A staged file keeps its folder.
+        let cli = cli_started(&fresh, Some(claude.clone()));
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("write.tmp"), "x").unwrap();
+        drop(cli);
+        assert!(staging.join("write.tmp").is_file());
+
+        // `.claude` was there: only the folder made in it goes.
+        let [claude, staging] = staging_dirs(&kept);
+        std::fs::create_dir_all(&claude).unwrap();
+        let cli = cli_started(&kept, Some(staging.clone()));
+        std::fs::create_dir_all(&staging).unwrap();
+        drop(cli);
+        assert!(claude.is_dir() && !staging.exists());
+
+        // Nothing made by us: nothing goes.
+        std::fs::create_dir_all(&staging).unwrap();
+        drop(cli_started(&kept, None));
+        assert!(staging.is_dir());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
