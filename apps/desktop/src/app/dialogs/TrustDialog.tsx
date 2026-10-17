@@ -5,7 +5,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -13,20 +12,20 @@ import type { Project } from "@/ipc/generated";
 import { useRevealed } from "@/lib/splash";
 import { useOnboarding } from "@/state/onboarding";
 import { useApp } from "@/state/store";
-import { nextToAsk, projectFolder, setFolderTrust } from "@/state/trust";
+import { projectFolder, setFolderTrust, toAsk } from "@/state/trust";
 
 /**
- * "Do you trust this folder?", for each project whose folder has no answer, oldest first: every
- * way of adding a project ends here, as do projects from before the question and a folder
- * changed in a project's settings. One of the two answers must be picked; both are safe.
+ * "Trust this folder?", for the project the user is in when its folder has no answer: a new
+ * project, one from before the question, or a folder changed in its settings, each asked once
+ * when first used. One of the two answers must be picked; both are safe.
  */
 export function TrustDialog() {
   const catalogLoaded = useApp((s) => s.catalogLoaded);
   const onboarding = useApp((s) => !s.settings.onboarded);
   const smoke = useApp((s) => s.info?.smoke ?? false);
   const reopened = useOnboarding((s) => s.reopened);
-  const project = useApp((s) => nextToAsk(Object.values(s.projects)));
-  // Not under the startup screen, and after the first-run setup, whose projects it then asks about.
+  const project = useApp(toAsk);
+  // Not under the startup screen, nor during the first-run setup.
   const revealed = useRevealed();
   const folder = project && projectFolder(project);
   const open = revealed && catalogLoaded && !smoke && !onboarding && !reopened && folder !== null;
@@ -35,7 +34,7 @@ export function TrustDialog() {
       <DialogContent
         data-testid="trust-dialog"
         showCloseButton={false}
-        className="max-w-md"
+        className="rounded-question max-w-question shadow-menu p-5"
         onInteractOutside={(event) => event.preventDefault()}
         onEscapeKeyDown={(event) => event.preventDefault()}
       >
@@ -52,35 +51,42 @@ export function TrustForm({ project, folder }: { project: Project; folder: strin
   const action = useAction();
   const answer = (trusted: boolean) => action.run(() => setFolderTrust(project.id, folder, trusted));
   return (
-    <div className="grid gap-4">
-      <DialogHeader>
-        <DialogTitle>Do you trust this folder?</DialogTitle>
-        <DialogDescription className="text-foreground font-mono text-xs break-all">
-          {folder}
+    <div className="grid gap-4 text-center">
+      <DialogHeader className="gap-4">
+        <DialogTitle className="text-xl leading-snug font-semibold">Trust this folder?</DialogTitle>
+        <p className="text-muted-foreground break-all select-text">{folder}</p>
+        <DialogDescription>
+          Agents can read, edit and run the files here, and the folder's own settings can run code
+          without being asked. Continue only if you trust these files.
         </DialogDescription>
       </DialogHeader>
-      <p>
-        Agents will read the files in this folder and run commands in it. Only trust folders
-        whose contents you know.
-      </p>
-      <p className="text-muted-foreground text-xs">
-        If you don't trust it, every session here asks before doing anything. You can change this
-        in the project's settings.
-      </p>
       <ErrorLine error={action.error} />
-      <DialogFooter>
+      <div className="grid gap-3 pt-3">
         <Button
           type="button"
-          variant="outline"
+          size="lg"
+          className="rounded-capsule w-full"
+          autoFocus
+          disabled={action.busy}
+          onClick={() => answer(true)}
+        >
+          Trust folder
+        </Button>
+        <Button
+          type="button"
+          size="lg"
+          variant="ghost"
+          className="rounded-capsule ring-foreground/10 w-full ring-1"
           disabled={action.busy}
           onClick={() => answer(false)}
         >
           Don't trust
         </Button>
-        <Button type="button" disabled={action.busy} onClick={() => answer(true)}>
-          Trust
-        </Button>
-      </DialogFooter>
+      </div>
+      <p className="text-muted-foreground text-xs">
+        If you don't trust it, every session here asks before it does anything. You can change this
+        in the project's settings.
+      </p>
     </div>
   );
 }
