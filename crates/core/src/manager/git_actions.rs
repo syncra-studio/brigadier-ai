@@ -13,10 +13,13 @@ use std::time::Duration;
 
 use brigadier_git::{Oid, Repo, SourceEntry, SourceKind};
 use brigadier_providers::{
-    Access, Origin, ProviderEvent, ProviderKind, Role, SessionSpec, Started, ToolSet, TurnInput,
+    Access, ModelInfo, Origin, ProviderEvent, ProviderKind, Role, SessionSpec, Started, ToolSet,
+    TurnInput,
 };
 
-use brigadier_router::{Decision, Exclusion, Needs, Pin, Routed, TaskCategory};
+use brigadier_router::{
+    Decision, Exclusion, MergedModel, Needs, Pin, QualityTier, Routed, TaskCategory,
+};
 
 use super::landing::diff_stat_of;
 use super::routing::{Ask, Trial};
@@ -622,9 +625,8 @@ impl SessionManager {
         written
     }
 
-    /// The provider's cheapest model for a one-off chore, at low effort where it has efforts.
-    /// Only a model the user left available, and never one the registry keeps for one kind of
-    /// work (Haiku 5.5, for operating apps): when its list has none, the chore isn't done.
+    /// The provider's cheapest model for a one-off chore, at low effort where it has efforts:
+    /// see [`chore_model`]. When its list has none, the chore isn't done.
     pub(super) fn cheapest(&self, provider: ProviderKind) -> Result<(String, Option<String>)> {
         let family = match provider {
             ProviderKind::Claude => "haiku",
@@ -640,36 +642,50 @@ impl SessionManager {
             .map(|catalog| catalog.models)
             .unwrap_or_default();
         let registry = self.runtime.registry().current();
-        let merged = brigadier_router::merge(&registry, &[(provider, &listed)], &[], &[]);
-        let models: Vec<_> = listed
-            .iter()
-            .zip(&merged)
-            .filter(|(_, merged)| merged.only.is_none())
-            .map(|(model, _)| model)
-            .collect();
         // Before its list is read, the family's alias stands in for it.
         let model = if listed.is_empty() {
             available(family).then(|| family.to_owned())
         } else {
-            models
-                .iter()
-                .find(|model| model.id.contains(family) && available(&model.id))
-                .or_else(|| {
-                    models
-                        .iter()
-                        .find(|model| !model.legacy && available(&model.id))
-                })
-                .map(|model| model.id.clone())
+            let merged = brigadier_router::merge(&registry, &[(provider, &listed)], &[], &[]);
+            let model = chore_model(&listed, &merged, family, available);
+            if model.is_none() {
+                tracing::debug!(provider = %provider, "no light or standard model available for chores");
+            }
+            model
         };
         let model = model.ok_or_else(|| {
             Error::Invalid(format!(
-                "{} has no model available. Turn one on in Settings › Providers.",
+                "{} has no small model on for this. Turn one on in Settings › Providers.",
                 provider.label()
             ))
         })?;
         let effort = (provider == ProviderKind::Codex).then(|| "low".to_owned());
         Ok((model, effort))
     }
+}
+
+/// The model a chore runs on from a provider's `listed` models (with their `merged` entries):
+/// the lowest registry tier the user left available, light then standard, never strong or
+/// frontier, nor an unrated model or one the registry keeps for one kind of work (Haiku 5.5,
+/// for operating apps). Within a tier, the `family` word first, then current models, in the
+/// CLI's order.
+fn chore_model(
+    listed: &[ModelInfo],
+    merged: &[MergedModel],
+    family: &str,
+    available: impl Fn(&str) -> bool,
+) -> Option<String> {
+    listed
+        .iter()
+        .zip(merged)
+        .filter(|(model, merged)| {
+            merged.only.is_none()
+                && !merged.excluded
+                && matches!(merged.tier, QualityTier::Light | QualityTier::Standard)
+                && available(&model.id)
+        })
+        .min_by_key(|(model, merged)| (merged.tier, !model.id.contains(family), model.legacy))
+        .map(|(model, _)| model.id.clone())
 }
 
 /// The writer's instructions, by the user's commit style: the repository's latest
@@ -753,4 +769,89 @@ fn clean_message(reply: &str) -> String {
         .trim_matches(|c| c == '"' || c == '`')
         .trim()
         .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(id: &str, resolved: Option<&str>) -> ModelInfo {
+        ModelInfo {
+            id: id.to_owned(),
+            display_name: id.to_owned(),
+            description: String::new(),
+            resolved: resolved.map(str::to_owned),
+            efforts: Vec::new(),
+            default_effort: None,
+            is_default: false,
+            input_modalities: vec!["text".into()],
+            fast: None,
+            legacy: false,
+        }
+    }
+
+    fn chore(provider: ProviderKind, listed: &[ModelInfo], hidden: &[&str]) -> Option<String> {
+        let registry = brigadier_router::Registry::bundled();
+        let merged = brigadier_router::merge(&registry, &[(provider, listed)], &[], &[]);
+        let family = match provider {
+            ProviderKind::Claude => "haiku",
+            ProviderKind::Codex => "luna",
+        };
+        chore_model(listed, &merged, family, |id| !hidden.contains(&id))
+    }
+
+    /// The `haiku` alias resolving to Haiku 5.5 (kept for operating apps) leaves no small
+    /// Claude model: the chore is skipped, not run on the CLI's first model, Opus.
+    #[test]
+    fn a_chore_never_falls_back_to_a_strong_or_frontier_model() {
+        let claude = [
+            info("opus", Some("claude-opus-5-5")),
+            info("sonnet", Some("claude-sonnet-5-5")),
+            info("haiku", Some("claude-haiku-5-5")),
+        ];
+        assert_eq!(chore(ProviderKind::Claude, &claude, &[]), None);
+
+        let mut with_standard = claude.to_vec();
+        with_standard.push(info("claude-sonnet-4-6", None));
+        assert_eq!(
+            chore(ProviderKind::Claude, &with_standard, &[]).as_deref(),
+            Some("claude-sonnet-4-6")
+        );
+    }
+
+    #[test]
+    fn a_chore_takes_the_lowest_tier_the_user_left_on() {
+        let claude = [
+            info("opus", Some("claude-opus-5-5")),
+            info("claude-sonnet-4-6", None),
+            info("haiku", Some("claude-haiku-4-5-20251001")),
+        ];
+        assert_eq!(
+            chore(ProviderKind::Claude, &claude, &[]).as_deref(),
+            Some("haiku")
+        );
+        assert_eq!(
+            chore(ProviderKind::Claude, &claude, &["haiku"]).as_deref(),
+            Some("claude-sonnet-4-6")
+        );
+
+        let codex = [
+            info("gpt-6-astra", None),
+            info("gpt-6.1-sol", None),
+            info("gpt-6-luna", None),
+            info("gpt-5.6-luna", None),
+        ];
+        assert_eq!(
+            chore(ProviderKind::Codex, &codex, &[]).as_deref(),
+            Some("gpt-5.6-luna")
+        );
+        assert_eq!(
+            chore(ProviderKind::Codex, &codex, &["gpt-5.6-luna"]).as_deref(),
+            Some("gpt-6-luna")
+        );
+        assert_eq!(
+            chore(ProviderKind::Codex, &codex, &["gpt-5.6-luna", "gpt-6-luna"]),
+            None
+        );
+    }
 }
