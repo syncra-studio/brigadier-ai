@@ -132,6 +132,7 @@ export type { ExcludedFile } from "./ExcludedFile";
 export type { Explanation } from "./Explanation";
 export type { Factor } from "./Factor";
 export type { FaultTarget } from "./FaultTarget";
+export type { FeedbackKind } from "./FeedbackKind";
 export type { FileChange } from "./FileChange";
 export type { FileChangeKind } from "./FileChangeKind";
 export type { FileRead } from "./FileRead";

@@ -2,12 +2,14 @@
 //! arrive later as envelopes. Every reply the orchestrator reads is logged as a context
 //! injection.
 
+use std::collections::HashSet;
+
 use brigadier_providers::{FileSearch, ProviderKind, SearchKind};
 
 use super::SessionManager;
 use super::prompts;
 use super::workers::route_label;
-use crate::model::{ConversationId, DomainEvent, Environment, PermissionLevel, Setup};
+use crate::model::{ConversationId, DomainEvent, Environment, MessageRole, PermissionLevel, Setup};
 use crate::tools::{NoteKind, OrchestratorCall, ToolReply, WorkerCall};
 use crate::work::{
     ApprovalSubject, ArtifactRef, AttachmentRef, DecisionSource, InjectionKind, MockupPart,
@@ -579,6 +581,9 @@ impl SessionManager {
             OrchestratorCall::SuggestFullAccess(args) => {
                 crate::heap(|| self.suggest_full_access(id, &args.reason)).await
             }
+            OrchestratorCall::OfferFeedback(args) => {
+                crate::heap(|| self.offer_feedback(id, args)).await
+            }
             OrchestratorCall::SettleStep(args) => crate::heap(|| self.settle_step(id, args)).await,
             OrchestratorCall::EndRun(args) => crate::heap(|| self.end_run_now(id, args)).await,
             OrchestratorCall::ProposeOvernight(args) => {
@@ -1056,6 +1061,136 @@ impl SessionManager {
         )
         .await;
         Ok("Showed the user a notice with a button that switches this session to Full access. Say in a line what waits on it, and carry on with what doesn't need it; if they switch, a [settings] note tells you.".into())
+    }
+
+    /// `offer_feedback`: a card in the thread with a report to Brigadier's developers, which
+    /// the user sends or dismisses (the thread judges they are annoyed; this only plumbs).
+    /// One offer per incident: none while the session's last offer is unanswered or after the
+    /// user dismissed one, none twice in a request, and none in an overnight run. An offer
+    /// from an attempt the user asked to redo, or from a message they edited away, counts for nothing.
+    pub(crate) async fn offer_feedback(
+        &self,
+        id: &ConversationId,
+        args: crate::tools::OfferFeedback,
+    ) -> Result<String> {
+        let (title, body) = (args.title.trim(), args.body.trim());
+        if title.is_empty() || body.is_empty() {
+            return Err(Error::Invalid(
+                "`title` and `body` must both be written".into(),
+            ));
+        }
+        if self.overnight.active.get(id).is_some() {
+            return Err(Error::Invalid(
+                "An overnight run is going and nobody is there to send it: don't offer feedback now.".into(),
+            ));
+        }
+        let request = self.request_for(id, None).await;
+        let conv = self.conv(id)?;
+        let _offer = conv.feedback_offer.lock().await;
+        let board = self.core.board(id).await?;
+        let messages = match &board.head {
+            Some((head, _)) => self.core.branch(id, head).await?,
+            None => self.core.all_messages(id).await?,
+        };
+        let shown: HashSet<String> = messages
+            .into_iter()
+            .filter(|message| message.role == MessageRole::User)
+            .map(|message| message.request_id.unwrap_or(message.id))
+            .collect();
+        let mut last = None;
+        // An offer from a request's earlier attempt (before a Try again) or from a message the
+        // user edited away is out of view: it counts for nothing, as the thread shows it.
+        let current = |step: &&crate::work::OrchestratorStep| match &step.request_id {
+            Some(request) => {
+                shown.contains(request)
+                    && board
+                        .requests
+                        .get(request)
+                        .is_none_or(|request| step.at_ms >= request.started_at_ms)
+            }
+            None => true,
+        };
+        for step in board.orchestrator_steps.iter().filter(current) {
+            match &step.kind {
+                OrchestratorStepKind::FeedbackOffered { id, .. } => {
+                    if step.request_id == request {
+                        return Err(Error::Invalid(
+                            "Feedback was already offered for this request: don't offer it again."
+                                .into(),
+                        ));
+                    }
+                    last = Some((id.clone(), None));
+                }
+                OrchestratorStepKind::FeedbackAnswered { id, sent } => {
+                    if let Some((offered, answer)) = &mut last
+                        && offered == id
+                    {
+                        *answer = Some(*sent);
+                    }
+                }
+                _ => {}
+            }
+        }
+        match last {
+            Some((_, None)) => {
+                return Err(Error::Invalid(
+                    "The user hasn't answered the feedback already offered in this session: don't offer another.".into(),
+                ));
+            }
+            Some((_, Some(false))) => {
+                return Err(Error::Invalid(
+                    "The user dismissed the feedback offered earlier in this session: don't offer it again.".into(),
+                ));
+            }
+            _ => {}
+        }
+        self.orchestrator_step_in(
+            id,
+            request,
+            OrchestratorStepKind::FeedbackOffered {
+                id: uuid::Uuid::now_v7().to_string(),
+                kind: args.kind,
+                title: title.to_owned(),
+                body: body.to_owned(),
+            },
+        )
+        .await;
+        Ok("The user sees the report as a card under your answer, to send or dismiss. Don't mention it again; carry on with your answer.".into())
+    }
+
+    /// The user's answer to the feedback offer `offer_id` in this conversation: sent (opened
+    /// on GitHub) or dismissed. Once only.
+    pub async fn answer_feedback_offer(
+        &self,
+        id: &ConversationId,
+        offer_id: &str,
+        sent: bool,
+    ) -> Result<()> {
+        let conv = self.conv(id)?;
+        let _offer = conv.feedback_offer.lock().await;
+        let board = self.core.board(id).await?;
+        let offer = board.orchestrator_steps.iter().find(|step| {
+            matches!(&step.kind, OrchestratorStepKind::FeedbackOffered { id, .. } if id == offer_id)
+        });
+        let Some(offer) = offer else {
+            return Err(Error::NotFound(format!("feedback offer {offer_id}")));
+        };
+        if board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, OrchestratorStepKind::FeedbackAnswered { id, .. } if id == offer_id)
+        }) {
+            return Err(Error::Invalid("this feedback was already answered".into()));
+        }
+        let request = offer.request_id.clone();
+        self.orchestrator_step_in(
+            id,
+            request,
+            OrchestratorStepKind::FeedbackAnswered {
+                id: offer_id.to_owned(),
+                sent,
+            },
+        )
+        .await;
+        Ok(())
     }
 
     /// The user's attachments in this conversation, by id.

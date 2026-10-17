@@ -338,22 +338,48 @@ const DEFAULT_WINDOW: i64 = 200_000;
 
 /// A Claude window that holds the big thresholds below (SESSION-FIXES-PLAN Q5).
 const BIG_WINDOW: i64 = 500_000;
-/// On a big window a Claude orchestrator prepares its rebirth here …
-const BIG_PREPARE_TOKENS: i64 = 400_000;
-/// … and swaps here.
-const BIG_SWAP_TOKENS: i64 = 450_000;
+/// On a big window a Claude orchestrator prepares its rebirth here (400k until the earlier-rebirth
+/// experiment, BUILD-PLAN Phase X A10: 300k kept every answer for 35% fewer tokens; the user's
+/// go-ahead, 2026-10-17) …
+const BIG_PREPARE_TOKENS: i64 = 300_000;
+/// … and swaps here, a quarter above, as A10 ran it.
+const BIG_SWAP_TOKENS: i64 = 375_000;
 
 /// When an orchestrator on `provider` with a `window`-token model prepares its rebirth and when
-/// it must happen: on a Claude window of 500k or more at 400k and 450k (SESSION-FIXES-PLAN
-/// Q5), otherwise at about 150–190k tokens or a share of a smaller window (PLAN.md §6 Phase 4).
+/// it must happen: on a Claude window of 500k or more at 300k and 375k (SESSION-FIXES-PLAN
+/// Q5, moved by A10), otherwise at about 150–190k tokens or a share of a smaller window (PLAN.md §6 Phase 4).
 ///
 /// Claude's auto-compact is off for orchestrators, so only the window bounds the swap. Codex
 /// compacts on its own at 90% of the window whatever it is told, so a Codex orchestrator is
 /// reborn well below that, with room left for one large turn.
 ///
 /// A debug build takes `BRIGADIER_REBIRTH_TOKENS` as the prepare threshold (the swap follows a
-/// quarter above it), so rebirths can be tried on a small budget.
+/// quarter above it), both capped at the thresholds above, so rebirths can be tried on a small
+/// budget (the earlier-rebirth experiment, A10, ran its 200k arm so). A release build ignores it.
 pub fn rebirth_thresholds(provider: ProviderKind, window: Option<i64>) -> RebirthThresholds {
+    let value = std::env::var("BRIGADIER_REBIRTH_TOKENS").ok();
+    thresholds_with(
+        provider,
+        window,
+        rebirth_override(cfg!(debug_assertions), value.as_deref()),
+    )
+}
+
+/// The prepare threshold `BRIGADIER_REBIRTH_TOKENS` asks for: only in a `debug` build, and only
+/// a positive number.
+fn rebirth_override(debug: bool, value: Option<&str>) -> Option<i64> {
+    value
+        .filter(|_| debug)
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|tokens| *tokens > 0)
+}
+
+/// The thresholds of [`rebirth_thresholds`], with `tokens` from the debug override.
+fn thresholds_with(
+    provider: ProviderKind,
+    window: Option<i64>,
+    tokens: Option<i64>,
+) -> RebirthThresholds {
     let size = window.filter(|size| *size > 0).unwrap_or(DEFAULT_WINDOW);
     let (prepare_share, swap_share) = match provider {
         ProviderKind::Claude => (0.75, 0.90),
@@ -368,12 +394,7 @@ pub fn rebirth_thresholds(provider: ProviderKind, window: Option<i64>) -> Rebirt
                 190_000.min((size as f64 * swap_share) as i64),
             )
         };
-    if cfg!(debug_assertions)
-        && let Some(tokens) = std::env::var("BRIGADIER_REBIRTH_TOKENS")
-            .ok()
-            .and_then(|value| value.trim().parse::<i64>().ok())
-            .filter(|tokens| *tokens > 0)
-    {
+    if let Some(tokens) = tokens {
         prepare_tokens = tokens.min(prepare_tokens);
         swap_tokens = (tokens + tokens / 4).min(swap_tokens);
     }
@@ -445,19 +466,18 @@ mod tests {
     }
 
     #[test]
-    fn a_claude_thread_on_a_big_window_is_reborn_at_400k() {
-        if std::env::var_os("BRIGADIER_REBIRTH_TOKENS").is_some() {
-            return;
-        }
+    fn a_claude_thread_on_a_big_window_is_reborn_at_300k() {
+        // Without the debug override, whatever this process's environment says: what the
+        // shipped app does.
         let at = |provider, window| {
-            let thresholds = rebirth_thresholds(provider, window);
+            let thresholds = thresholds_with(provider, window, None);
             (thresholds.prepare_tokens, thresholds.swap_tokens)
         };
         assert_eq!(
             at(ProviderKind::Claude, Some(1_000_000)),
-            (400_000, 450_000)
+            (300_000, 375_000)
         );
-        assert_eq!(at(ProviderKind::Claude, Some(500_000)), (400_000, 450_000));
+        assert_eq!(at(ProviderKind::Claude, Some(500_000)), (300_000, 375_000));
         // A window that doesn't hold them keeps the shares.
         assert_eq!(at(ProviderKind::Claude, Some(200_000)), (150_000, 180_000));
         assert_eq!(at(ProviderKind::Claude, Some(400_000)), (150_000, 190_000));
@@ -465,6 +485,62 @@ mod tests {
         // Codex compacts on its own at 90%: its lower shares stay.
         assert_eq!(at(ProviderKind::Codex, Some(1_000_000)), (150_000, 190_000));
         assert_eq!(at(ProviderKind::Codex, Some(200_000)), (130_000, 160_000));
+    }
+
+    #[test]
+    fn only_a_debug_build_moves_the_rebirth() {
+        // A release build passes `debug: false`, so the variable changes nothing there.
+        assert_eq!(rebirth_override(false, Some("200000")), None);
+        assert_eq!(rebirth_override(true, Some(" 200000 ")), Some(200_000));
+        assert_eq!(rebirth_override(true, Some("0")), None);
+        assert_eq!(rebirth_override(true, Some("soon")), None);
+        assert_eq!(rebirth_override(true, None), None);
+        // The swap a quarter above, never past production's 300k and 375k.
+        let at = |tokens| {
+            let thresholds = thresholds_with(ProviderKind::Claude, Some(1_000_000), Some(tokens));
+            (thresholds.prepare_tokens, thresholds.swap_tokens)
+        };
+        assert_eq!(at(200_000), (200_000, 250_000));
+        assert_eq!(at(300_000), (300_000, 375_000));
+        assert_eq!(at(400_000), (300_000, 375_000));
+    }
+
+    #[test]
+    fn the_app_never_sets_the_rebirth_override() {
+        // Only this file and the measuring tools (`tools/ab`, outside `crates` and `apps`) name
+        // the variable, so nothing the app ships sets it for its daemon.
+        fn scan(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                let name = entry.file_name();
+                if path.is_dir() {
+                    if !matches!(
+                        name.to_str(),
+                        Some("target" | "node_modules" | "dist" | "gen" | ".git")
+                    ) {
+                        scan(&path, found);
+                    }
+                } else if std::fs::read(&path).is_ok_and(|bytes| {
+                    bytes
+                        .windows(b"BRIGADIER_REBIRTH_TOKENS".len())
+                        .any(|window| window == b"BRIGADIER_REBIRTH_TOKENS")
+                }) {
+                    found.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut found = Vec::new();
+        for dir in ["crates", "apps"] {
+            scan(&root.join(dir), &mut found);
+        }
+        let this = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/knowledge.rs");
+        let this = this.canonicalize().unwrap();
+        let others: Vec<_> = found
+            .iter()
+            .filter(|path| path.canonicalize().ok().as_ref() != Some(&this))
+            .collect();
+        assert!(others.is_empty(), "{others:?}");
     }
 
     #[test]

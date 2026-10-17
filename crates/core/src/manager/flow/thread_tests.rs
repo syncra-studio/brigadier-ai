@@ -2273,6 +2273,237 @@ async fn the_users_stop_reaches_the_running_turn_and_the_stopped_worker_is_refus
     flow.stop().await;
 }
 
+/// The thread offers a drafted report to Brigadier's developers once per incident: once in a
+/// request, none while the last offer is unanswered, again after the user sent it, never after
+/// they dismissed one. The user's answer is kept once.
+#[tokio::test]
+async fn the_thread_offers_feedback_once_per_incident() {
+    let replies: Arc<Mutex<Vec<(bool, String)>>> = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "thread-offer-feedback",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    let call = || {
+                        turn.call(
+                            "offer_feedback",
+                            json!({
+                                "kind": "bug",
+                                "title": "Stop leaves the tab spinning",
+                                "body": "After Stop the tab keeps its spinner.",
+                            }),
+                        )
+                    };
+                    let (first, second) = tokio::join!(call(), call());
+                    for reply in [first, second] {
+                        log.lock().unwrap().push((reply.is_error, reply.text));
+                    }
+                }
+                Reply::text("Sorry about that.")
+            }
+        }),
+    )
+    .await;
+    let taken =
+        |replies: &Arc<Mutex<Vec<(bool, String)>>>| std::mem::take(&mut *replies.lock().unwrap());
+    let offers = |board: &crate::board::Board| -> Vec<String> {
+        board
+            .orchestrator_steps
+            .iter()
+            .filter_map(|step| match &step.kind {
+                OrchestratorStepKind::FeedbackOffered {
+                    id,
+                    kind,
+                    title,
+                    body,
+                } => {
+                    assert_eq!(*kind, crate::work::FeedbackKind::Bug);
+                    assert_eq!(title, "Stop leaves the tab spinning");
+                    assert_eq!(body, "After Stop the tab keeps its spinner.");
+                    assert!(step.request_id.is_some(), "under the user's request");
+                    Some(id.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+
+    flow.say("Stop is broken again.").await;
+    let board = flow.settled().await;
+    let first = taken(&replies);
+    assert_eq!(
+        first.iter().filter(|reply| !reply.0).count(),
+        1,
+        "{first:?}"
+    );
+    assert!(
+        first
+            .iter()
+            .any(|reply| reply.0 && reply.1.contains("already offered for this request")),
+        "{first:?}"
+    );
+    let shown = offers(&board);
+    assert_eq!(shown.len(), 1);
+
+    // Unanswered: no new offer.
+    flow.say("Still broken.").await;
+    let board = flow.settled().await;
+    let second = taken(&replies);
+    assert!(
+        second
+            .iter()
+            .all(|reply| reply.0 && reply.1.contains("hasn't answered")),
+        "{second:?}"
+    );
+    assert_eq!(offers(&board).len(), 1);
+
+    // Sent: a later incident may be offered again; the answer is kept once.
+    flow.manager
+        .answer_feedback_offer(&flow.conversation, &shown[0], true)
+        .await
+        .unwrap();
+    assert!(
+        flow.manager
+            .answer_feedback_offer(&flow.conversation, &shown[0], false)
+            .await
+            .is_err()
+    );
+    assert!(
+        flow.manager
+            .answer_feedback_offer(&flow.conversation, "nope", false)
+            .await
+            .is_err()
+    );
+    flow.say("And now the composer is stuck.").await;
+    let board = flow.settled().await;
+    let third = taken(&replies);
+    assert_eq!(
+        third.iter().filter(|reply| !reply.0).count(),
+        1,
+        "{third:?}"
+    );
+    let shown = offers(&board);
+    assert_eq!(shown.len(), 2);
+    assert!(board.orchestrator_steps.iter().any(|step| matches!(
+        &step.kind,
+        OrchestratorStepKind::FeedbackAnswered { id, sent: true } if *id == shown[0]
+    )));
+
+    // Dismissed: none again in this session.
+    flow.manager
+        .answer_feedback_offer(&flow.conversation, &shown[1], false)
+        .await
+        .unwrap();
+    flow.say("Ugh.").await;
+    let board = flow.settled().await;
+    let fourth = taken(&replies);
+    assert!(
+        fourth
+            .iter()
+            .all(|reply| reply.0 && reply.1.contains("dismissed")),
+        "{fourth:?}"
+    );
+    assert_eq!(offers(&board).len(), 2);
+    flow.stop().await;
+}
+
+/// An offer from an attempt the user asked to redo is out of view, so it blocks no new one: the
+/// new attempt may offer again.
+#[tokio::test]
+async fn a_feedback_offer_from_a_redone_attempt_blocks_nothing() {
+    let replies: Arc<Mutex<Vec<bool>>> = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "thread-offer-feedback-redo",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    let reply = turn
+                        .call(
+                            "offer_feedback",
+                            json!({"kind": "idea", "title": "Pin chats", "body": "Let me pin a chat."}),
+                        )
+                        .await;
+                    log.lock().unwrap().push(reply.is_error);
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    flow.say("I can't pin chats, annoying.").await;
+    let board = flow.settled().await;
+    let request = board
+        .orchestrator_steps
+        .iter()
+        .find(|step| matches!(step.kind, OrchestratorStepKind::FeedbackOffered { .. }))
+        .and_then(|step| step.request_id.clone())
+        .expect("an offer under the request");
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    flow.core
+        .restart_request(&flow.conversation, &request)
+        .await
+        .unwrap();
+    flow.say("Still can't pin chats.").await;
+    flow.settled().await;
+    assert_eq!(*replies.lock().unwrap(), vec![false, false]);
+    flow.stop().await;
+}
+
+/// An unanswered offer under a message the user then edits leaves the thread with the edit:
+/// it blocks nothing there.
+#[tokio::test]
+async fn a_feedback_offer_from_an_edited_message_blocks_nothing() {
+    let replies: Arc<Mutex<Vec<bool>>> = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "thread-offer-feedback-edit",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    let reply = turn
+                        .call(
+                            "offer_feedback",
+                            json!({"kind": "idea", "title": "Pin chats", "body": "Let me pin a chat."}),
+                        )
+                        .await;
+                    log.lock().unwrap().push(reply.is_error);
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    flow.say("I can't pin chats, annoying.").await;
+    flow.settled().await;
+    let messages = flow.core.all_messages(&flow.conversation).await.unwrap();
+    let original = messages
+        .iter()
+        .rfind(|message| message.role == crate::model::MessageRole::User)
+        .unwrap()
+        .id
+        .clone();
+    flow.manager
+        .edit_message(
+            flow.conversation.clone(),
+            original,
+            "Still can't pin chats.".into(),
+            None,
+        )
+        .await
+        .unwrap();
+    flow.settled().await;
+    assert_eq!(*replies.lock().unwrap(), vec![false, false]);
+    flow.stop().await;
+}
+
 /// When the sandbox stops what the user asked for, the thread shows a notice once per request,
 /// with its reason, under the request it serves; at Full access it is refused. Changing the
 /// default level leaves a started session's own level alone.

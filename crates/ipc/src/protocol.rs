@@ -737,6 +737,13 @@ pub enum Request {
         conversation_id: ConversationId,
         card_id: CardId,
     },
+    /// The user's answer to the thread's feedback offer (`offer_feedback`): opened on GitHub
+    /// (`sent`) or dismissed.
+    AnswerFeedbackOffer {
+        conversation_id: ConversationId,
+        offer_id: String,
+        sent: bool,
+    },
     /// The user clicked "Merge into main" on the side panel: the session branch merges into
     /// its base on this click, once.
     MergeSession {
@@ -1483,6 +1490,7 @@ pub enum Response {
     AnswerQuestion,
     DecidePlan,
     PutOffPlan,
+    AnswerFeedbackOffer,
     /// What became of the Cancel, for the user.
     CancelMerge {
         text: String,

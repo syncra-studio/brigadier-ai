@@ -158,7 +158,8 @@ def seams_forced(start, briefs, log, steps_ms, last_plant_ms, probe_ms):
     return 0
 
 
-def score(run):
+def score(run, probe=None):
+    """`probe`: the step whose answer is scored (by default the battery's first `probe` step)."""
     start = json.load(open(os.path.join(run, "start.json")))
     b = load_battery(os.path.join(run, "battery.md"))
     steps, harness, items = b["steps"], b["harness"], b["items"]
@@ -169,7 +170,7 @@ def score(run):
     sent = dict(zip(start["steps"], start["sent_ms"]))
     rid = dict(zip(start["steps"], start["requests"]))
     text = {s["id"]: s["text"] for s in steps}
-    probe = next((s["id"] for s in steps if s["role"] == "probe"), None)
+    probe = probe or next((s["id"] for s in steps if s["role"] == "probe"), None)
     completed = not start.get("timed_out") and probe in sent and all(
         (rec.requests.get(r) or {}).get("state", {}).get("type") in ("done", "waiting") for r in start["requests"])
     plants = [s["id"] for s in steps if s["role"] in ("plant", "worker")]

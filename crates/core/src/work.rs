@@ -416,6 +416,15 @@ pub struct Report {
     pub submitted_at_ms: i64,
 }
 
+/// What a report to Brigadier's developers is: something wrong, or an idea. Each opens its own
+/// form in Brigadier's repository (the bug report, the proposal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum FeedbackKind {
+    Bug,
+    Idea,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum ReviewVerdict {
@@ -867,6 +876,11 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub told_revision: Option<u32>,
+    /// The latest version a report of it was given for its Brain claims (BUILD-PLAN A11): a
+    /// report after a restart goes on from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub report_version: Option<u64>,
     /// How its CLI ended without a report since it last reported ("signal 9: …"): the first
     /// time it resumes, the second time the task stops (SESSION-FIXES-PLAN.md Q4).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1985,6 +1999,17 @@ pub enum OrchestratorStepKind {
     /// A notice that something the user asked for needs more than the session's sandbox
     /// allows (`suggest_full_access`), with a button that switches the session to Full access.
     FullAccessSuggested { reason: String },
+    /// A report to Brigadier's developers the thread drafted when the user seemed annoyed with
+    /// Brigadier (`offer_feedback`), for them to send, edit first or dismiss. Open until a
+    /// `FeedbackAnswered` with its `id`.
+    FeedbackOffered {
+        id: String,
+        kind: FeedbackKind,
+        title: String,
+        body: String,
+    },
+    /// The user's answer to the feedback offer `id`: opened on GitHub (`sent`) or dismissed.
+    FeedbackAnswered { id: String, sent: bool },
     /// The user's merge, held until no worker writes (SESSION-FIXES-PLAN.md Q3): "Merging
     /// after N workers finish". Pending until a `Merged`, `MergeCancelled` or `MergeStopped`
     /// step with the same `asked_in`.

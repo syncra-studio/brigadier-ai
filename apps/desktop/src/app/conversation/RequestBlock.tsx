@@ -25,6 +25,7 @@ import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { ImagesRow, MadeImages } from "@/app/conversation/activity/ImageRows";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
+import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type Activity, type LeadStep, joinExchanges, thinkingLabel, turnActivity } from "@/app/conversation/activity/group";
@@ -782,6 +783,8 @@ export const RequestBlock: FC = () => {
       {!phase && <ModelChanged model={meta.texts[last]?.model ?? null} picked={meta.picked} />}
       {/* A step still running when the user stopped the turn reads "Stopped …". */}
       <StoppedBy.Provider value={meta.state === "stopped" ? { atMs: meta.endedAtMs } : null}>
+      {/* A feedback offer waits until nothing of the request runs: never mid-turn. */}
+      <TurnEnded.Provider value={!live}>
       <div ref={body} data-slot="request-body" className="flex min-w-0 flex-col">
         {before.length > 0 && (
           <div data-slot="request-leading-steers" className="gap-activity pb-activity flex min-w-0 flex-col">
@@ -881,6 +884,7 @@ export const RequestBlock: FC = () => {
           </>
         )}
       </div>
+      </TurnEnded.Provider>
       </StoppedBy.Provider>
       {/* A run's work is merged from its card, never undone behind the run's back. */}
       {!live && <MadeImages steps={meta.orchestratorSteps} />}

@@ -472,12 +472,14 @@ export function buildBlocks(
       segment, atMs: segment.startedAtMs });
   }
   const authoredResults = [
-    ...board.orchestratorSteps.filter((step) => step.kind.type === "tool" || (!ON_TASK_ROW.has(step.kind.type) && !isRunRequest(step.requestId))),
+    ...board.orchestratorSteps.filter((step) => step.kind.type === "tool" || (!ON_TASK_ROW.has(step.kind.type) && step.kind.type !== "feedbackAnswered" && !isRunRequest(step.requestId))),
     ...board.decisions.filter(judgementCall).map((decision) => ({
       requestId: decision.requestId, position: decision.position, kind: { type: "decided" },
     })),
   ].toSorted((a, b) => a.position - b.position);
   for (const step of board.orchestratorSteps) {
+    // The user's answer to a feedback offer shows on the offer itself.
+    if (step.kind.type === "feedbackAnswered") continue;
     // A plan being written shows as its card, "Writing plan", until the plan itself arrives.
     if (step.kind.type === "tool" && toolName(step.kind.name) === "propose_plan") {
       const written = Object.values(board.plans).some(
@@ -1142,12 +1144,13 @@ export function endsWithPlan(sequence: readonly SequenceEntry[]): boolean {
 
 /**
  * Whether an entry of a finished block folds under "Worked for …": everything but its answer
- * and the cards and access notices that stay in view (decisions, failures, what needs the user).
+ * and the cards, access notices and feedback offers that stay in view (decisions, failures, what
+ * needs the user).
  */
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested" || step.kind.type === "feedbackOffered")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 

@@ -20,8 +20,8 @@ import { useApp } from "@/state/store";
  * the list, and has one fail to start, writing what it saw to #updates-result
  * (SidebarUpdatesRender.test.ts reads it). ?narrow=1 narrows the sidebar as far as it goes, with
  * the two updates and a nightly update waiting, and writes whether "Restart to update" shortens its
- * words inside it. ?usage=1 opens the usage menu and follows its link, writing the link's words
- * and where it led. Without any, the page shows two updates, for screenshots.
+ * words inside it, clear of the updates pill. ?usage=1 opens the usage menu and follows its link,
+ * writing the link's words and where it led. Without any, the page shows two updates, for screenshots.
  */
 const params = new URLSearchParams(location.search);
 
@@ -95,12 +95,17 @@ function Fixture() {
     // Past the sidebar's and the item's own motion.
     const timer = window.setTimeout(() => {
       const restart = q('button[aria-label="Restart to update"]');
+      const chip = q('button[aria-label$="updates available"]');
       const sidebar = restart?.closest(".sidebar-panel-width")?.getBoundingClientRect();
       const words = restart ? q(".truncate", restart) : null;
+      const at = restart?.getBoundingClientRect();
+      const beside = chip?.getBoundingClientRect();
       setResult(
         JSON.stringify({
           open: wrapper?.dataset.state,
-          inside: Boolean(restart && sidebar && restart.getBoundingClientRect().right <= sidebar.right + 0.5),
+          inside: Boolean(at && beside && sidebar && Math.max(at.right, beside.right) <= sidebar.right + 0.5),
+          // Not on top of the updates pill: after it on its line, or on a line below.
+          apart: Boolean(at && beside && (at.left >= beside.right - 0.5 || at.top >= beside.bottom - 0.5)),
           shortened: Boolean(words && words.scrollWidth > words.clientWidth),
         }),
       );

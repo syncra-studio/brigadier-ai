@@ -12,8 +12,11 @@ import { useApp } from "@/state/store";
  * `openFeedback` (with a draft, from elsewhere) and `sendFeedback` are what other places use.
  */
 
-/** What the dialog opens with: a kind and a text already written, to read and change. */
-export type FeedbackDraft = { kind: FeedbackKind; text: string };
+/**
+ * What the dialog opens with: a kind and a text already written, to read and change, and what
+ * to do once it is sent.
+ */
+export type FeedbackDraft = { kind: FeedbackKind; text: string; onSent?: () => void };
 
 export const useFeedbackUi = create<{ open: boolean; draft: FeedbackDraft | null }>(() => ({
   open: false,

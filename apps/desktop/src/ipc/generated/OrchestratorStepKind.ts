@@ -3,6 +3,7 @@ import type { AnswerOrigin } from "./AnswerOrigin";
 import type { CiConsent } from "./CiConsent";
 import type { CiRun } from "./CiRun";
 import type { ConversationId } from "./ConversationId";
+import type { FeedbackKind } from "./FeedbackKind";
 import type { FileStat } from "./FileStat";
 import type { ItemStatus } from "./ItemStatus";
 import type { MergeCondition } from "./MergeCondition";
@@ -65,7 +66,7 @@ text?: string, } | { "type": "stopped", taskId: TaskId, reason: string, } | { "t
 /**
  * The user message whose words asked for it: it asks for no other merge.
  */
-askedIn: string | null, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "mergeHeld", branch: string, base: string, 
+askedIn: string | null, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "mergeHeld", branch: string, base: string, 
 /**
  * The user message, or "Merge into main" click (a merge card's, before BUILD-PLAN
  * A4), whose consent it holds.

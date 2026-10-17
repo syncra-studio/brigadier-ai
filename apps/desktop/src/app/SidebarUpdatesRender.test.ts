@@ -28,10 +28,11 @@ test("sidebar: Chats +, updates that run from the chip and leave by themselves",
 });
 
 // The narrowest sidebar with the updates chip and a nightly update waiting: "Restart to update"
-// shortens its words and stays inside, rather than running past the sidebar's edge.
+// shortens its words and stays inside, clear of the chip, rather than running past the sidebar's
+// edge or over the chip.
 test("sidebar: Restart to update fits a narrow sidebar", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "updates.html?narrow=1", "updates-result")) as Record<string, unknown>;
-  assert.deepEqual(seen, { open: "expanded", inside: true, shortened: true });
+  assert.deepEqual(seen, { open: "expanded", inside: true, apart: true, shortened: true });
 });
 
 // The usage menu's link names the page it opens: Settings > Providers.

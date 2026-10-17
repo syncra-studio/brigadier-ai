@@ -131,6 +131,7 @@ How to work:
 - Ask the user only what only they can decide, only with ask_user (never a question in your text), then reply {quiet}. Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last run_check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
 - Push, publish, deploy or open pull requests only when the user asks for exactly that, at every permission level; after your own `git push`, call ci_status. When a request's rules clash with this session's setup ("push to main" from a session branch), say so in one line first, and which you follow; ask when unclear. Bugs the user wants filed as issues: file each before its fix, which closes it ("Fixes #N"). Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Write to another session's thread only with message_session.
+- When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
 - Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a file over with its task card's Save, the Save… under your answer, or an ask_user card asking where it goes; a document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
@@ -772,6 +773,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         worker: "",
     },
     Revision {
+        number: FEEDBACK_OFFER_REVISION,
+        thread: "From now on, when the user seems annoyed with Brigadier itself (not their project), call offer_feedback once: it shows them a drafted report to its developers, to send or dismiss.",
+        worker: "",
+    },
+    Revision {
         number: PLANNING_GAPS_REVISION,
         thread: "From now on: when a request's own rules clash with this session's setup (\"push to main\" from a session branch), say so in one line at the start, and which one you follow; ask when it's unclear. A long job across back end and UI goes to one worker per layer, split along a data contract (the field names) written into both briefs. When the user wants bugs filed as issues, file each before fixing it, and let its fix close it (\"Fixes #N\"). \"merge it\" is for the session's merge only: offer anything else, such as updating the user's local main, in plain words.",
         worker: "From now on, a look or demo shows pages in the app it is about when it can; else in one browser window and one tab, navigated from page to page, never a new window per page. Close what you opened at the end.",
@@ -1044,10 +1050,13 @@ pub(crate) const ASK_THREAD_REVISION: u32 = 81;
 /// No throwaway file is handed to the user, and a document the thread writes itself asks where
 /// it goes and is linked (issues #108, #52).
 pub(crate) const HANDOVER_REVISION: u32 = 82;
+/// A thread offers the user a drafted report to Brigadier's developers when they seem annoyed
+/// with Brigadier (issue #219).
+pub(crate) const FEEDBACK_OFFER_REVISION: u32 = 83;
 /// The thread flags a request that clashes with its setup, splits a two-layer job along a
 /// data contract, files issues before fixes when asked, and keeps "merge it" for the merge;
 /// a look or demo uses one browser window and tab (#228, #229).
-pub(crate) const PLANNING_GAPS_REVISION: u32 = 83;
+pub(crate) const PLANNING_GAPS_REVISION: u32 = 84;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:

@@ -24,7 +24,7 @@ where
 const MARKER: &str = "quasarxylophone";
 /// Only the read file's path says it.
 const READ_MARKER: &str = "nebulapangolin";
-/// Past the 400k prepare and 450k swap lines of a 1M window.
+/// Past the 300k prepare and 375k swap lines of a 1M window.
 const FULL: i64 = 460_000;
 
 /// 20 KiB of output with `MARKER` 1 KiB in.

@@ -486,3 +486,79 @@ async fn claims_carry_their_evidence_with_reviews_on() {
 async fn claims_carry_their_evidence_with_reviews_off() {
     claims_carry_their_evidence(false).await;
 }
+
+/// A worker's report after a restart goes on from its report's version before: the version is
+/// kept on the task, and the task's live state after a restart hands out the next one, so two
+/// reports of the same task never carry the same version (BUILD-PLAN A11).
+#[tokio::test]
+async fn a_report_after_a_restart_goes_on_from_the_version_before() {
+    const FIRST: &str = "Retries stop after three tries";
+    let mut flow = Flow::start(
+        "report-version",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("Look at retries.") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "medium", "title": "Look at retries",
+                                   "kind": "scout", "spec": "Say how retries stop."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                return Reply::text("Noted.");
+            }
+            let reply = turn
+                .call(
+                    "submit_report",
+                    json!({"summary": "Looked.", "learned": [FIRST]}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id
+        .unwrap();
+    flow.say("Look at retries.").await;
+    flow.settled().await;
+    let mut version = None;
+    for _ in 0..100 {
+        let brain = flow
+            .manager
+            .project_brain(&project)
+            .await
+            .unwrap()
+            .brain
+            .clone();
+        version = brain
+            .nodes(&NodeFilter::default())
+            .unwrap()
+            .into_iter()
+            .find(|node| node.title == FIRST)
+            .and_then(|node| node.provenance.claim)
+            .and_then(|claim| claim.report_version);
+        if version.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(version, Some(1));
+    flow.restart().await;
+    let tasks = flow.core.tasks(&flow.conversation).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.title == "Look at retries")
+        .unwrap();
+    assert_eq!(task.report_version, Some(1));
+    assert_eq!(flow.manager.task_live(task).learning.next(), 2);
+    flow.stop().await;
+}
