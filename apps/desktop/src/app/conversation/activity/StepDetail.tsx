@@ -127,7 +127,7 @@ export function ShellBox({ command, output, status, exit, stopped = false, notes
     exit = cli.exit;
   }
   const { kept, more } = clippedOutput(output?.trimEnd() ?? "");
-  const printed = kept.trimEnd();
+  const printed = kept.replace(/^(?:[^\S\r\n]*\r?\n)+/, "").trimEnd();
   const end = ending(status, exit, stopped);
   const shown = unwrapCommand(command);
   return (
