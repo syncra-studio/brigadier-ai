@@ -7,10 +7,10 @@
  *
  * Each activity is a task card (`./task-card`, a mockup-only port of assistant-ui's Task Card).
  *
- * Query `view=`: `today` (the card as it is), `build` (a worker builds; the thread's "Running"
- * section kept), `build-merged` (the same, merged into Activities), `starting` and `running` (the
- * build done, the dev app starting, then running), `open` (`build-merged` with the build's card
- * opened), `folded` (the section folded, with its count).
+ * Query `view=`: `today` (the card as it is), `build` (a worker builds the dev app; the thread's
+ * "Running" section kept), `build-merged` (the same, merged into Activities), `starting` and
+ * `running` (the dev app starting, then running), `open` (`build-merged` with the dev app's and the
+ * demo pages' rows opened), `folded` (the section folded, with its count).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { type ReactNode, useEffect, useState } from "react";
@@ -118,59 +118,42 @@ mockIPC((command, payload) => {
 /** One thing running for the session, as a task card shows it. */
 type Item = {
   id: string;
-  /** What it is doing, in plain words. */
+  /** What it is for: "Dev app", "Demo pages". */
   label: string;
-  /** "web" or "app" for the thread's previews, the worker's name for a worker's. */
-  meta?: string;
+  /** Its state in a word: Building, Starting, Running, Showing. */
+  status: string;
   state: TaskCardState;
   startedAtMs: number;
-  endedAtMs?: number;
-  /** Open (a web preview's address) and Stop, while it runs. */
-  open?: string;
-  stop?: boolean;
-  /** Under the card: the latest output line while it starts, or how it ended. */
-  result?: string;
-  /** In the opened card: the raw command and its output's last lines. */
+  /** Open (a page's address) and Stop. */
+  open?: boolean;
+  /** Opened: the command running now, on one line. */
   command: string;
-  tail: string;
 };
 const DEV = "pnpm tauri dev --config src-tauri/tauri.dev.conf.json";
 const items: Item[] = [
-  ...(later ? [{ id: "app", label: "Brigadier Dev", meta: "Demo of the fixes", state: "working" as const, stop: true,
-    startedAtMs: now - (view === "starting" ? 0.7 : 1.5) * MIN, command: DEV,
-    ...(view === "starting"
-      ? { result: "Starting: compiling brigadier-core (521 of 731)", tail: "VITE ready in 286 ms\nCompiling brigadier-ipc v0.1.0\nBuilding [======> ] 521/731: brigadier-core" }
-      : { tail: "VITE ready in 286 ms\nFinished `dev` profile in 41.2s\nRunning `target/debug/brigadier`" }) }] : []),
-  { id: "build", label: "Building the dev app", meta: "Demo of the fixes", state: later ? "done" : "working",
-    startedAtMs: now - 4 * MIN, ...(later ? { endedAtMs: now - 1.5 * MIN + 30_000, result: "Built Brigadier Dev.app" } : {}),
-    command: BUILD, tail: later
-      ? "Finished `debug` profile in 3m 02s\nBundling Brigadier Dev.app (target/debug/bundle/macos)\nFinished 1 bundle"
-      : "Compiling brigadier-core v0.1.0\nCompiling brigadier-daemon v0.1.0\nBuilding [=====>  ] 612/731: brigadier-daemon" },
-  ...(merged ? [{ id: "tests", label: "Running the core tests", state: "working" as const, stop: true, startedAtMs: now - 2 * MIN,
-    command: TESTS, tail: "running 412 tests\ntest manager::preview::starts_and_stops ... ok\ntest manager::landing::rebases_onto_main ... ok" }] : []),
-  { id: "preview", label: "fix demo pages", meta: "web", state: "working", stop: true, open: "http://localhost:5199/", startedAtMs: now - 12 * MIN,
-    command: "pnpm dev --port 5199", tail: "VITE v8.3.0  ready in 412 ms\nLocal: http://localhost:5199/\npage reload fixtures/context-card.html" },
+  // One row for the dev app, from its build to the app running: the build is how it starts.
+  later
+    ? { id: "app", label: "Dev app", status: view === "starting" ? "Starting" : "Running", state: "working",
+        startedAtMs: now - 5.5 * MIN, command: DEV, open: view === "running" }
+    : { id: "app", label: "Dev app", status: "Building", state: "working", startedAtMs: now - 4 * MIN, command: BUILD },
+  ...(merged ? [{ id: "tests", label: "Core tests", status: "Running", state: "working" as const, startedAtMs: now - 2 * MIN, command: TESTS }] : []),
+  { id: "preview", label: "Demo pages", status: "Showing", state: "working", open: true, startedAtMs: now - 12 * MIN, command: "pnpm dev --port 5199" },
 ];
-const time = (item: Item) => elapsedWords((item.endedAtMs ?? now) - item.startedAtMs);
+const time = (item: Item) => elapsedWords(now - item.startedAtMs);
 const running = items.filter((item) => item.state !== "done");
 
 // The section sits alone in its wrapper here, so it keeps the hairline a first section has.
 const HAIRLINE = "last:pb-2 last:after:block";
 
 function ActivityCard({ item }: { item: Item }) {
-  const [open, setOpen] = useState(view === "open" && item.id === "build");
+  const [open, setOpen] = useState(view === "open" && item.id !== "tests");
   return (
-    <TaskCard label={item.label} meta={item.meta} state={item.state} elapsed={time(item)} open={open} onOpenChange={setOpen}
-      result={item.result}
-      actions={(item.open || item.stop) && (
-        <div className="flex flex-wrap items-center gap-1">
-          {item.open && <Button variant="outline" size="xs">Open</Button>}
-          {item.stop && <Button variant="ghost" size="xs">Stop</Button>}
-          {item.open && <span className="text-muted-foreground min-w-0 truncate text-xs">{item.open.replace(/^http:\/\/|\/$/g, "")}</span>}
-        </div>
-      )}>
-      <code className="text-foreground/90 font-mono text-xs break-words">{item.command}</code>
-      <pre className="bg-muted/50 text-muted-foreground rounded-control overflow-auto p-2 font-mono text-xs whitespace-pre-wrap break-words">{item.tail}</pre>
+    <TaskCard label={item.label} meta={item.status} state={item.state} elapsed={time(item)} open={open} onOpenChange={setOpen}
+      actions={<>
+        {item.open && <Button variant="ghost" size="xs">Open</Button>}
+        <Button variant="ghost" size="xs">Stop</Button>
+      </>}>
+      <code className="text-muted-foreground min-w-0 flex-1 truncate font-mono text-xs">{item.command}</code>
     </TaskCard>
   );
 }
@@ -180,7 +163,7 @@ function ActivityCards() {
   return (
     <SummarySection data-activities foldKey="activities-mockup" title="Activities" className={HAIRLINE} count={items.length} defaultFolded={view === "folded"}
       summary={view === "folded" ? `${running.length} running` : undefined}>
-      <div className="flex flex-col gap-1.5 py-1">
+      <div className="flex flex-col gap-0.5">
         {items.map((item) => <ActivityCard key={item.id} item={item} />)}
       </div>
     </SummarySection>

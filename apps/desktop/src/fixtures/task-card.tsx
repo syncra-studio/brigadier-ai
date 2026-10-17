@@ -1,10 +1,12 @@
 // Ported from assistant-ui’s standalone registry (MIT); see THIRD_PARTY_NOTICES.md.
 // A mockup component for the Activities mockup only: icons map to the app's, raw sizes and
-// colours to its tokens, and the meta sits under the label rather than beside it.
+// colours to its tokens. Shaped as a context-card row rather than a card: no surface or border, the
+// row's height and wash, the meta as a second line under the label, and opened, one line of
+// detail with its actions inline where the original stacks actions and a transcript.
 
 import { Children, type ComponentProps, type ReactNode, useState } from "react";
 import { Check as CheckIcon, ChevronRight as ChevronRightIcon, StopCircle as Ban, X as XIcon } from "@openai/apps-sdk-ui/components/Icon";
-import { mono, paper } from "@/components/assistant-ui/elements/surfaces";
+import { summaryRowInteractive } from "@/components/assistant-ui/elements/summary-section";
 import { Spinner as Loader2Icon } from "@/components/glyphs/spinner";
 import { cn } from "@/lib/utils";
 
@@ -111,11 +113,7 @@ export function TaskCard({
     <div
       data-slot="task-card"
       data-state={state}
-      className={cn(
-        paper,
-        "flex w-full max-w-sm flex-col overflow-hidden rounded-2xl",
-        className,
-      )}
+      className={cn("flex w-full min-w-0 flex-col", className)}
       {...props}
     >
       <button
@@ -123,23 +121,24 @@ export function TaskCard({
         aria-expanded={hasTranscript ? isOpen : undefined}
         disabled={!hasTranscript || inert}
         onClick={toggle}
-        className="hover:enabled:bg-foreground/5 flex items-center gap-2.5 px-3.5 py-2.5 text-start transition-colors disabled:cursor-default"
+        data-state={isOpen ? "open" : "closed"}
+        className={cn(
+          summaryRowInteractive,
+          "relative isolate flex min-h-row-sm w-full min-w-0 items-center gap-2 py-1 text-start text-label disabled:cursor-default",
+        )}
       >
-        <TaskStateIcon state={state} />
+        <span className="flex min-w-icon-md shrink-0 items-center justify-center">
+          <TaskStateIcon state={state} />
+        </span>
         <span className="sr-only">{state}</span>
-        {/* Meta goes under the label: beside it, in the context card's column, both truncate. */}
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate text-label">{label}</span>
+          <span className="truncate">{label}</span>
           {meta !== undefined && (
-            <span className={cn(mono, "text-muted-foreground truncate")}>
-              {meta}
-            </span>
+            <span className="text-muted-foreground truncate text-xs">{meta}</span>
           )}
         </span>
         {elapsed !== undefined && (
-          <span
-            className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}
-          >
+          <span className="text-muted-foreground/70 shrink-0 text-xs tabular-nums">
             {elapsed}
           </span>
         )}
@@ -153,28 +152,28 @@ export function TaskCard({
           />
         )}
       </button>
-      {isRenderable(actions) && (
-        <div
-          data-slot="task-card-actions"
-          className="border-border/60 border-t px-3.5 py-2.5"
-        >
-          {actions}
-        </div>
-      )}
       {hasTranscript && isOpen && (
         <div
           data-slot="task-card-transcript"
-          className="border-border/60 flex flex-col gap-2 border-t px-3.5 py-2.5"
+          className="flex min-w-0 items-center gap-2 pb-1"
         >
+          {/* Under the label, past the state icon's slot. */}
+          <span aria-hidden className="min-w-icon-md shrink-0" />
           {children}
+          {isRenderable(actions) && (
+            <div data-slot="task-card-actions" className="flex shrink-0 items-center gap-0.5">
+              {actions}
+            </div>
+          )}
         </div>
       )}
       {isRenderable(result) && (
         <div
           data-slot="task-card-result"
-          className="border-border/60 text-foreground/70 border-t px-3.5 py-2 text-xs leading-relaxed"
+          className="text-muted-foreground flex min-w-0 gap-2 pb-1 text-xs"
         >
-          {result}
+          <span aria-hidden className="min-w-icon-md shrink-0" />
+          <span className="min-w-0 truncate">{result}</span>
         </div>
       )}
     </div>
