@@ -765,3 +765,94 @@ async fn an_idle_threads_leftover_temp_files_are_listed_and_swept() {
     assert!(tmp.is_dir());
     flow.stop().await;
 }
+
+/// A preview's data folder goes with its session, never as an Inspector session's leftover.
+#[tokio::test]
+async fn preview_data_folders_go_with_their_session() {
+    let (flow, _, _) = session("disk-preview-data").await;
+    let ledger = flow.manager.runtime.ledger();
+    let folder = |name: &str| {
+        let dir = Path::new("/tmp").join(format!(
+            "brigadier-disk-preview-{name}-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        std::fs::write(dir.join("data"), vec![1u8; 4096]).unwrap();
+        dir
+    };
+    let live = folder("live");
+    let gone = folder("gone");
+    for (owner, dir) in [
+        (format!("preview-data:{}", flow.conversation), &live),
+        ("preview-data:01a1-gone-session".to_owned(), &gone),
+    ] {
+        ledger
+            .record(
+                &owner,
+                Artifact::ScratchDir {
+                    path: dir.to_string_lossy().into_owned(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let (items, _) = scan(&flow, context()).await;
+    let listed = labels(&items);
+    assert!(
+        !listed
+            .iter()
+            .any(|label| label.contains("Inspector session")),
+        "{listed:?}"
+    );
+    let row = named(&items, "a session that is gone");
+    assert!(
+        matches!(&row.action, Action::Dispose { owners } if owners.len() == 1 && owners[0].0 == "preview-data:01a1-gone-session"),
+        "{:?}",
+        row.action
+    );
+    assert_eq!(
+        listed
+            .iter()
+            .filter(|label| label.contains("that is gone") || label.contains("that are gone"))
+            .count(),
+        1,
+        "{listed:?}"
+    );
+    for dir in [&live, &gone] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    flow.stop().await;
+}
+
+/// The site icon cache is listed, left unpicked, and goes when picked.
+#[tokio::test]
+async fn the_site_icon_cache_is_listed_and_cleared() {
+    let (flow, _, _) = session("disk-site-icons").await;
+    let icons = flow.manager.data_dir.join("site-icons");
+    let (items, _) = scan(&flow, context()).await;
+    assert!(
+        !labels(&items)
+            .iter()
+            .any(|label| label.contains("Site icons")),
+        "{:?}",
+        labels(&items)
+    );
+    std::fs::create_dir_all(&icons).unwrap();
+    std::fs::write(icons.join("a.icon"), vec![1u8; 8 * 1024]).unwrap();
+    std::fs::write(icons.join("b.miss"), "").unwrap();
+    let (items, _) = scan(&flow, context()).await;
+    let listed = named(&items, "Site icons of links");
+    assert_eq!(listed.item.category, CleanCategory::Temporary);
+    assert!(listed.item.selectable && !listed.item.checked);
+    assert!(listed.item.bytes >= 8 * 1024, "{}", listed.item.bytes);
+    let cleaned = flow
+        .manager
+        .clean_storage(listed.action.clone(), context())
+        .await
+        .unwrap();
+    assert!(cleaned.failures.is_empty(), "{cleaned:?}");
+    assert!(cleaned.reclaimed >= 8 * 1024, "{cleaned:?}");
+    assert_eq!(std::fs::read_dir(&icons).unwrap().count(), 0);
+    flow.stop().await;
+}

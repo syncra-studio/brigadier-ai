@@ -37,7 +37,7 @@ pub enum Role {
         conversation_id: ConversationId,
         task_id: TaskId,
         /// It checks a change or plan in a gate: it decides from what it was given and its
-        /// own evidence alone, so it has no `ask_orchestrator`.
+        /// own evidence alone, so it has no `ask_thread`.
         checks: bool,
     },
     /// A Brain job (skeleton pass, enrichment) of a project: it reads and records nodes.
@@ -241,7 +241,7 @@ pub struct MessageWorker {
     pub attachments: Vec<String>,
 }
 
-/// `answer_worker`: answer the question a worker waits on (`ask_orchestrator`).
+/// `answer_worker`: answer the question a worker waits on (`ask_thread`).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AnswerWorker {
@@ -1241,11 +1241,11 @@ impl OrchestratorCall {
 
 // ----- worker tools ----------------------------------------------------------------------
 
-/// `ask_orchestrator`: a blocking question. The call returns the orchestrator's answer.
+/// `ask_thread`: a blocking question. The call returns the thread's answer.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AskOrchestrator {
-    /// The question, with the context the orchestrator needs to answer it.
+    /// The question, with the context the thread needs to answer it.
     pub question: String,
     /// What it is about: `operational` (a choice your task leaves to you: which file, which
     /// test, an order of steps), `consent` (merging, deleting, pushing, spending, anything
@@ -1525,7 +1525,7 @@ impl WorkerCall {
     /// The MCP tool name.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::AskOrchestrator(_) => "ask_orchestrator",
+            Self::AskOrchestrator(_) => "ask_thread",
             Self::SubmitOutline(_) => "submit_outline",
             Self::ReviewCode => "review_code",
             Self::SubmitReport(_) => "submit_report",

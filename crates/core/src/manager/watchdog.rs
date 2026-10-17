@@ -1079,7 +1079,9 @@ mod tests {
                 ProviderEvent::Progress {
                     item_id: "heartbeat".into(),
                 },
-                ProviderEvent::BackgroundJobs { running: 1 },
+                ProviderEvent::BackgroundJobs {
+                    running: vec!["job".into()],
+                },
             ] {
                 if evidence.observe(&event, minute * MIN) {
                     watch.last_event_ms = minute * MIN;

@@ -4,7 +4,7 @@ import React from "react";
 import ReactDOMServer from "react-dom/server";
 import { createServer } from "vite";
 
-test("the trust question names the folder and offers exactly Trust and Don't trust", async () => {
+test("the trust question names the folder and offers exactly Trust folder, then Don't trust", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { TrustForm } = await server.ssrLoadModule("/src/app/dialogs/TrustDialog.tsx");
@@ -14,12 +14,12 @@ test("the trust question names the folder and offers exactly Trust and Don't tru
       React.createElement(Dialog, { open: true },
         React.createElement(TrustForm, { project, folder: "/code/p" })),
     );
-    assert.match(html, />Do you trust this folder\?</);
+    assert.match(html, />Trust this folder\?</);
     assert.match(html, />\/code\/p</);
-    assert.match(html, /Only trust folders whose contents you know\./);
+    assert.match(html, /Continue only if you trust these files\./);
     assert.match(html, /You can change this in the project(&#x27;|')s settings\./);
     const buttons = [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
-    assert.deepEqual(buttons, ["Don&#x27;t trust", "Trust"]);
+    assert.deepEqual(buttons, ["Trust folder", "Don&#x27;t trust"]);
   } finally {
     await server.close();
   }

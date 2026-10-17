@@ -293,7 +293,7 @@ async fn a_worker_opens_in_a_terminal_and_reports_what_was_done_there() {
                 &task.conversation_id,
                 &task,
                 "Also add a title.".into(),
-                "the orchestrator",
+                "the thread",
             )
             .await
             .unwrap();
@@ -507,7 +507,7 @@ async fn a_restart_ends_the_terminal_and_hands_back_or_finishes_the_stop() {
                     &task.conversation_id,
                     &task,
                     "Also add a title.".into(),
-                    "the orchestrator",
+                    "the thread",
                 )
                 .await
                 .unwrap();
@@ -701,7 +701,7 @@ async fn messages_held_while_a_terminal_fails_to_open_reach_the_worker() {
             &task.conversation_id,
             &task,
             "Also add a title.".into(),
-            "the orchestrator",
+            "the thread",
         )
         .await
         .unwrap();

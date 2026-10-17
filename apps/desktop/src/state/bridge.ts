@@ -27,6 +27,7 @@ import { startPagesFlush } from "@/state/pagesFlush";
 import { applyUpdateEvents, loadUpdates } from "@/state/updates";
 import { applyUsageEvents } from "@/state/usage";
 import { onDictationDisconnected, onDictationUpdate } from "@/state/dictation";
+import { openFeedback } from "@/state/feedback";
 import { openUninstall } from "@/state/storage";
 import { emitTerminalOutput } from "@/state/terminalPlaces";
 
@@ -159,6 +160,9 @@ function onBridgeEvent(message: BridgeEvent) {
       break;
     case "settingsMenu":
       toggleSettings();
+      break;
+    case "feedbackMenu":
+      openFeedback();
       break;
   }
 }

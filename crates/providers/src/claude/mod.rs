@@ -1130,16 +1130,22 @@ impl Provider for Claude {
                     cwd: Some(cwd.display().to_string()),
                 })
                 .await?;
+            let mut staging = None;
             for path in files::staging_dirs(&cwd) {
                 let artifact = Artifact::ClaudeStagingDir {
                     path: path.display().to_string(),
                 };
                 if !path.exists() || ledger.holds(&artifact) {
                     ledger.record(artifact).await?;
+                    staging = Some(path);
                     // Its parent is either ours as well, or was there before.
                     break;
                 }
             }
+
+            // Registered before it can start: a CLI of ours ending in this folder meanwhile leaves
+            // its staging folders to this one.
+            let in_folder = files::cli_started(&cwd, staging);
 
             let recorder = match &spec.record_to {
                 Some(path) => Some(Arc::new(Recorder::create(
@@ -1226,6 +1232,7 @@ impl Provider for Claude {
                 shared.clone(),
                 parser_rx,
                 !spec.auto_compact,
+                in_folder,
             ));
             let session = Arc::new(ClaudeSession {
                 native_id: native_id.clone(),
@@ -1726,13 +1733,15 @@ impl ProviderSession for ClaudeSession {
 }
 
 /// Reads Claude's output until it exits: forwards events, pairs control responses, keeps
-/// permission requests until they are answered.
+/// permission requests until they are answered. Once it exited, `in_folder` goes: the staging
+/// folders it may have left empty are tidied ([`files::CliInFolder`]).
 async fn read_loop(
     process: Arc<CliProcess>,
     mut stdout: mpsc::Receiver<String>,
     shared: Arc<Shared>,
     mut commands: mpsc::UnboundedReceiver<ParserCommand>,
     refuses_compaction: bool,
+    in_folder: files::CliInFolder,
 ) {
     let mut parser = Parser::live();
     parser.refuses_compaction = refuses_compaction;
@@ -1795,6 +1804,7 @@ async fn read_loop(
     }
 
     let exit = process.exited().await;
+    drop(in_folder);
     lock(&shared.pending).clear();
     shared.turn_active.store(false, Ordering::Release);
     shared

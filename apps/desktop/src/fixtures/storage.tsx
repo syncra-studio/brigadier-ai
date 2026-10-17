@@ -133,15 +133,20 @@ const button = (name: string, root: ParentNode = document) =>
   all<HTMLButtonElement>("button", root).find(
     (element) => text(element) === name || element.getAttribute("aria-label") === name,
   );
-/** The Choose dialog's lines: each group's, then its items'. */
+/** The Choose dialog's lines: each group's, then its items' (those of the groups opened). */
+const PICK_LINES = '[data-slot="storage-pick-group"], [data-slot="storage-pick"]';
+const pickLabel = (line: Element) =>
+  line.matches('[data-slot="storage-pick-group"]')
+    ? (line.querySelector('button[role="checkbox"]')?.getAttribute("aria-label") ?? "")
+    : text(line.querySelector("label > span > span"));
 const picks = () =>
-  all('[data-slot="storage-pick"]', dialog() ?? document).map((line) => ({
-    label: text(line.querySelector("label > span > span")),
+  all(PICK_LINES, dialog() ?? document).map((line) => ({
+    label: pickLabel(line),
     state: line.querySelector('button[role="checkbox"]')?.getAttribute("data-state"),
   }));
 const pickBox = (label: string) =>
-  all('[data-slot="storage-pick"]', dialog() ?? document)
-    .find((line) => text(line.querySelector("label > span > span")) === label)
+  all(PICK_LINES, dialog() ?? document)
+    .find((line) => pickLabel(line) === label)
     ?.querySelector<HTMLButtonElement>('button[role="checkbox"]');
 const row = (label: string) => all('[data-slot="settings-row"]').find((element) => element.dataset.setting === label);
 
@@ -196,6 +201,20 @@ function Fixture() {
       () => {
         const open = dialog();
         seen.chooseTitle = text(q("h2", open ?? document));
+        // It opens with its groups closed: a line each.
+        seen.chooseGroups = all('[data-slot="storage-pick-group"]', open ?? document).map(text);
+        seen.chooseItemsAtOpen = all('[data-slot="storage-pick"]', open ?? document).length;
+        seen.chooseHeightAtOpen = Math.round(open?.getBoundingClientRect().height ?? 0);
+        for (const group of all<HTMLButtonElement>('[data-slot="storage-pick-group"] button[aria-expanded]', open ?? document)) {
+          group.click();
+        }
+      },
+      () => {
+        const open = dialog();
+        // All open, it stays its own height and its list scrolls instead.
+        const list = q('[data-slot="storage-choose-list"]', open ?? document);
+        seen.chooseHeight = Math.round(open?.getBoundingClientRect().height ?? 0);
+        seen.chooseScrolls = (list?.scrollHeight ?? 0) > (list?.clientHeight ?? 0);
         seen.choose = picks();
         seen.chooseNotes = all('[data-slot="storage-pick"] label > span.text-xs', open ?? document).map(text);
         seen.chooseStatus = text(q('[role="status"]', open ?? document));

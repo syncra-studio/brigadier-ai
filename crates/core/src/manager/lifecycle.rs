@@ -109,6 +109,8 @@ impl SessionManager {
             if conversation.deleting {
                 continue;
             }
+            // A request that left its answer to its checks or a review still waits for it.
+            self.recover_deferred(&conversation.id).await;
             // The thread's turn the restart cut off ran its calls no further, and its request
             // reads interrupted, not answered.
             self.end_cut_off_calls(&conversation.id).await;

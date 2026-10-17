@@ -148,6 +148,7 @@ impl SessionManager {
                             background_jobs: None,
                             changes: None,
                             suggestion: None,
+                            deferred: false,
                         },
                     }],
                 )

@@ -587,7 +587,7 @@ impl SessionManager {
         let dir = PathBuf::from(&workspace.scratch).join("handoff");
         let mut spec = format!("# task-{}: {}\n\n{}\n", task.number, task.title, task.spec);
         if !task.messages.is_empty() {
-            spec.push_str("\n## Later instructions from the orchestrator, oldest first\n");
+            spec.push_str("\n## Later instructions from the thread, oldest first\n");
             for message in &task.messages {
                 let _ = write!(spec, "\n- {}", message.replace('\n', "\n  "));
             }

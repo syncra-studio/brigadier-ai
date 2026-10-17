@@ -1,0 +1,141 @@
+/**
+ * The folder trust question over a faked shell and daemon: four projects, `invoice-service` and
+ * `ops-scripts` never asked about, `invoice-service` open in its new session. ?density=compact
+ * for the compact sizes. ?drive=1 moves between a plain chat, an answered project and the two
+ * unanswered ones, answers both and comes back, and writes what it saw to #trust-result
+ * (TrustDialogRender.test.ts reads it). Without it the page stays as it opens, for screenshots.
+ */
+import { mockIPC } from "@tauri-apps/api/mocks";
+import { Folder } from "@openai/apps-sdk-ui/components/Icon";
+import { useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+
+import { TrustDialog } from "@/app/dialogs/TrustDialog";
+import type { Conversation, Project, Request } from "@/ipc/generated";
+import { revealApp } from "@/lib/splash";
+import { type Selection, useApp } from "@/state/store";
+
+const params = new URLSearchParams(location.search);
+document.documentElement.dataset.density = params.get("density") === "compact" ? "compact" : "normal";
+if (params.has("drive")) {
+  const still = document.createElement("style");
+  still.textContent =
+    "*, *::before, *::after { animation: none !important; transition: none !important; backdrop-filter: none !important; }";
+  document.head.append(still);
+}
+
+const names = ["brigadier-ai", "landing-site", "invoice-service", "ops-scripts"];
+const unanswered = new Set(["invoice-service", "ops-scripts"]);
+const folderOf = (name: string) => `/Users/you/Development/${name}`;
+const projects: Project[] = names.map((name, index) => ({
+  id: `p${index}`,
+  name,
+  createdAtMs: index + 1,
+  repos: [{ path: folderOf(name), name }],
+  prefs: {} as Project["prefs"],
+  trust: unanswered.has(name) ? [] : [{ path: folderOf(name), trusted: true, decidedAtMs: 1 }],
+}));
+// A session in `invoice-service`, the newest project.
+const session = { id: "s1", projectId: "p2", title: "Add invoice export" } as Conversation;
+
+useApp.setState((state) => ({
+  catalogLoaded: true,
+  settings: { ...state.settings, onboarded: true },
+  projects: Object.fromEntries(projects.map((project) => [project.id, project])),
+  conversations: { [session.id]: session },
+  selection: { type: "draft", kind: "session", projectId: "p2" },
+}));
+
+/** The answers sent, as "project trusted". */
+const answers: string[] = [];
+mockIPC((command, payload) => {
+  if (command !== "ipc_request") return null;
+  const req = (payload as { request: Request }).request;
+  if (req.method !== "setFolderTrust") return null;
+  answers.push(`${req.id} ${req.trusted}`);
+  const project = useApp.getState().projects[req.id]!;
+  const path = req.path ?? project.repos[0]!.path;
+  return {
+    method: req.method,
+    report: { project: { ...project, trust: [{ path, trusted: req.trusted, decidedAtMs: 2 }] }, failures: [] },
+  };
+});
+void revealApp();
+
+// Timers only: the test's Chrome runs on virtual time, where frames may never come.
+const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
+
+/** What the dialog shows now, or `null` when it's closed. */
+function dialog() {
+  const card = document.querySelector<HTMLElement>("[data-testid=trust-dialog]");
+  if (!card) return null;
+  const first = card.querySelector("button")!;
+  return {
+    title: card.querySelector("h2")?.textContent,
+    path: card.querySelector("h2 + p")?.textContent,
+    buttons: [...card.querySelectorAll("button")].map((button) => button.textContent),
+    focused: document.activeElement?.textContent,
+    width: card.getBoundingClientRect().width,
+    radius: parseFloat(getComputedStyle(card).borderRadius),
+    // A pill: its corners round off its whole height.
+    pill: parseFloat(getComputedStyle(first).borderRadius) >= first.getBoundingClientRect().height / 2,
+  };
+}
+
+async function visit(selection: Selection) {
+  useApp.setState({ selection });
+  await settle();
+  return dialog();
+}
+
+async function answer(label: string) {
+  [...document.querySelectorAll<HTMLButtonElement>("[data-testid=trust-dialog] button")]
+    .find((button) => button.textContent === label)
+    ?.click();
+  for (let i = 0; i < 50 && dialog(); i++) await settle();
+}
+
+async function drive(): Promise<string> {
+  const seen: Record<string, unknown> = {};
+  seen.chat = await visit({ type: "draft", kind: "chat" });
+  seen.answered = await visit({ type: "draft", kind: "session", projectId: "p0" });
+  seen.session = await visit({ type: "conversation", id: "s1" });
+  await answer("Trust folder");
+  seen.afterTrust = dialog();
+  seen.newSession = await visit({ type: "draft", kind: "session", projectId: "p3" });
+  await answer("Don't trust");
+  seen.backAgain = await visit({ type: "draft", kind: "session", projectId: "p2" });
+  seen.answers = answers;
+  return JSON.stringify(seen);
+}
+
+function Shell() {
+  const [result, setResult] = useState<string | null>(null);
+  useEffect(() => {
+    if (params.has("drive")) void drive().then(setResult);
+  }, []);
+  return (
+    <div className="flex h-screen">
+      <nav className="bg-sidebar text-sidebar-foreground w-sidebar grid content-start gap-1 p-3">
+        <p className="text-muted-foreground px-2 pb-1 text-xs">Projects</p>
+        {names.map((name) => (
+          <div
+            key={name}
+            className={`rounded-control flex items-center gap-2 px-2 py-1.5 ${name === "invoice-service" ? "bg-accent" : ""}`}
+          >
+            <Folder className="size-icon-md text-muted-foreground" />
+            {name}
+          </div>
+        ))}
+      </nav>
+      <main className="grid flex-1 place-content-center gap-1 text-center">
+        <p className="text-xl">New session in invoice-service</p>
+        <p className="text-muted-foreground">Describe what to build in this project</p>
+      </main>
+      <TrustDialog />
+      {result && <pre id="trust-result">{result}</pre>}
+    </div>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(<Shell />);

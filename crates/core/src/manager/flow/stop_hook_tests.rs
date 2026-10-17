@@ -140,14 +140,18 @@ async fn a_worker_waiting_on_its_background_job_or_its_outline_ends_its_turn() {
                     log.lock().unwrap().push(("no job".into(), alone));
                     // The job's count reaches the task through its event pump.
                     let t = &turn;
-                    turn.emit(ProviderEvent::BackgroundJobs { running: 1 })
-                        .await;
+                    turn.emit(ProviderEvent::BackgroundJobs {
+                        running: vec!["job".into()],
+                    })
+                    .await;
                     super::eventually_async("the job to let the turn end", || async move {
                         t.stop_decision(false).await.is_none()
                     })
                     .await;
-                    turn.emit(ProviderEvent::BackgroundJobs { running: 0 })
-                        .await;
+                    turn.emit(ProviderEvent::BackgroundJobs {
+                        running: Vec::new(),
+                    })
+                    .await;
                     super::eventually_async(
                         "the job's end to hold the turn again",
                         || async move { t.stop_decision(false).await.is_some() },

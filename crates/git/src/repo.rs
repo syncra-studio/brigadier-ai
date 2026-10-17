@@ -427,7 +427,7 @@ impl Repo {
         let temp = TempIndex::new()?;
         let index = self.git_path("index")?;
         if index.exists() {
-            fs::copy(index, &temp.path)?;
+            copy_index(&index, &temp.path)?;
         } else {
             self.index_cmd(&temp, &["read-tree", "--empty"])?;
         }
@@ -1152,7 +1152,7 @@ impl Repo {
         let temp = TempIndex::new()?;
         let index = self.git_path("index")?;
         if index.exists() {
-            fs::copy(index, &temp.path)?;
+            copy_index(&index, &temp.path)?;
         } else {
             self.index_cmd(&temp, &["read-tree", "--empty"])?;
         }
@@ -1736,6 +1736,20 @@ fn absolute(path: &Path) -> Result<PathBuf> {
 
 /// The author, committer and date of a commit Brigadier makes for itself and no ref names, so
 /// the same files on the same parent always give the same commit.
+/// A private copy of the real index `from`, with its time. Git trusts an entry's cached stat
+/// only when the entry is older than the index file; a copy timed now would pass a file
+/// rewritten to the same size in the index's own second (git compares whole seconds on Linux)
+/// as unchanged, its old content.
+fn copy_index(from: &Path, to: &Path) -> Result<()> {
+    fs::copy(from, to)?;
+    let modified = fs::metadata(from)?.modified()?;
+    fs::File::options()
+        .write(true)
+        .open(to)?
+        .set_modified(modified)?;
+    Ok(())
+}
+
 fn fixed_identity() -> Environment {
     let date: std::ffi::OsString = "2000-01-01T00:00:00+0000".into();
     ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"]
@@ -1916,6 +1930,44 @@ mod tests {
         assert_eq!(repo.on_base(&before, &after).unwrap(), linked);
         assert_eq!(repo.on_base(&head, &after).unwrap(), after);
         assert_eq!(repo.resolve("HEAD").unwrap(), head);
+    }
+
+    /// A file rewritten to the same size within the second the index was written in reads as
+    /// changed: the snapshot's private copy of the index keeps the real one's time, so git
+    /// checks such a racily clean entry's content instead of trusting its stat.
+    #[test]
+    fn a_snapshot_reads_a_same_size_rewrite_in_the_index_s_own_second() {
+        let (dir, git) = test_git("racy");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        // Only the size and the whole second of the times count, as on a git built without
+        // nanoseconds (Linux distributions' own).
+        repo.cmd(&["config", "core.checkStat", "minimal"], false)
+            .unwrap();
+        repo.cmd(&["config", "core.trustctime", "false"], false)
+            .unwrap();
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let touch = |path: &std::path::Path| {
+            fs::File::options()
+                .write(true)
+                .open(path)
+                .and_then(|file| file.set_modified(at))
+                .unwrap();
+        };
+        let file = root.join("config.txt");
+        fs::write(&file, "mode = a\n").unwrap();
+        touch(&file);
+        let head = repo.commit_changes("Base", true).unwrap();
+        touch(&repo.git_path("index").unwrap());
+        fs::write(&file, "mode = b\n").unwrap();
+        touch(&file);
+        let snapshot = repo.snapshot_files().unwrap();
+        assert_ne!(snapshot, head, "the rewrite was missed");
+        let shown = repo
+            .cmd(&["show", &format!("{}:config.txt", snapshot.0)], true)
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&shown), "mode = b\n");
     }
 
     #[test]
@@ -2184,7 +2236,7 @@ mod tests {
             .commit_changes("Trim a\n\nBrigadier-Author: Thread", true)
             .expect("a commit");
         let stat = repo
-            .trailer_stat(&start, &tip, "Brigadier-Author", "thread")
+            .trailer_stat(&start, &tip, "Brigadier-Author", "thread", &[])
             .unwrap();
         assert_eq!(
             stat,
@@ -2195,9 +2247,28 @@ mod tests {
             }
         );
         assert_eq!(
-            repo.trailer_stat(&tip, &tip, "Brigadier-Author", "thread")
+            repo.trailer_stat(&tip, &tip, "Brigadier-Author", "thread", &[])
                 .unwrap(),
             crate::TrailerStat::default()
+        );
+        // A commit known to be the thread's without the trailer (the user's own checkout)
+        // counts too.
+        let unmarked = repo.resolve(&format!("{}~1", tip.0)).unwrap();
+        let before = repo.resolve(&format!("{}~2", tip.0)).unwrap();
+        assert_eq!(
+            repo.trailer_stat(
+                &start,
+                &tip,
+                "Brigadier-Author",
+                "thread",
+                &[(before, unmarked)]
+            )
+            .unwrap(),
+            crate::TrailerStat {
+                commits: 3,
+                added: 8,
+                removed: 2,
+            }
         );
     }
 }

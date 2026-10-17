@@ -76,11 +76,40 @@ fn trust_records(flow: &Flow, project: &ProjectId) -> Vec<Artifact> {
 
 const BOTH: [TrustCli; 2] = [TrustCli::Claude, TrustCli::Codex];
 
+/// A session (under Full access) in a folder the user wasn't asked about yet.
+fn unanswered() -> Options {
+    Options {
+        trusted: None,
+        ..Options::default()
+    }
+}
+
+/// A folder never answered is not trusted yet: its session asks first whatever its level (as
+/// work a thread hands to a project the user hasn't entered does), until the user trusts it.
+#[tokio::test]
+async fn an_unanswered_folder_asks_first_until_trusted() {
+    let flow = Flow::start("trust-unanswered", unanswered(), super::no_findings()).await;
+    let project = project_of(&flow);
+    assert_eq!(
+        flow.manager.permission(&flow.conversation),
+        PermissionLevel::AskForApproval
+    );
+    flow.core
+        .set_folder_trust(&project, &flow.repo.display().to_string(), true)
+        .await
+        .unwrap();
+    assert_eq!(
+        flow.manager.permission(&flow.conversation),
+        PermissionLevel::FullAccess
+    );
+    flow.stop().await;
+}
+
 /// Trust writes both CLIs' entries for the repository, recorded first; Don't trust and the
 /// project's removal put both files back byte for byte.
 #[tokio::test]
 async fn a_trusted_folder_is_answered_for_both_clis_until_untrusted_or_removed() {
-    let flow = Flow::start("trust-both", Options::default(), super::no_findings()).await;
+    let flow = Flow::start("trust-both", unanswered(), super::no_findings()).await;
     let home = Home::new();
     home.serve(&flow);
     let project = project_of(&flow);
@@ -138,7 +167,7 @@ async fn a_trusted_folder_is_answered_for_both_clis_until_untrusted_or_removed()
 /// another folder's answer or a CLI not set up here touches nothing.
 #[tokio::test]
 async fn trust_the_user_gave_a_cli_is_never_recorded_or_removed() {
-    let flow = Flow::start("trust-theirs", Options::default(), super::no_findings()).await;
+    let flow = Flow::start("trust-theirs", unanswered(), super::no_findings()).await;
     let home = Home::new();
     let repo = flow.repo.display().to_string();
     let theirs = CLAUDE.replace("/elsewhere", &repo);
@@ -166,7 +195,7 @@ async fn trust_the_user_gave_a_cli_is_never_recorded_or_removed() {
 /// still trusted; an entry no answer stands behind any more is put back.
 #[tokio::test]
 async fn a_restart_finishes_or_undoes_folder_trust_by_the_answers() {
-    let flow = Flow::start("trust-reconcile", Options::default(), super::no_findings()).await;
+    let flow = Flow::start("trust-reconcile", unanswered(), super::no_findings()).await;
     let home = Home::new();
     home.serve(&flow);
     let project = project_of(&flow);
@@ -214,12 +243,7 @@ async fn a_restart_finishes_or_undoes_folder_trust_by_the_answers() {
 /// replaces the one that remembered no entry.
 #[tokio::test]
 async fn removal_puts_back_the_value_the_user_set_since() {
-    let flow = Flow::start(
-        "trust-theirs-since",
-        Options::default(),
-        super::no_findings(),
-    )
-    .await;
+    let flow = Flow::start("trust-theirs-since", unanswered(), super::no_findings()).await;
     let home = Home::new();
     home.serve(&flow);
     let project = project_of(&flow);
@@ -271,7 +295,7 @@ async fn removal_puts_back_the_value_the_user_set_since() {
 /// checkout, so that is the entry written (and removed), not the worktree's.
 #[tokio::test]
 async fn a_linked_worktree_project_trusts_its_main_checkout() {
-    let flow = Flow::start("trust-linked", Options::default(), super::no_findings()).await;
+    let flow = Flow::start("trust-linked", unanswered(), super::no_findings()).await;
     let home = Home::new();
     home.serve(&flow);
     let linked = home.0.join("linked");
@@ -330,7 +354,7 @@ async fn a_linked_worktree_project_trusts_its_main_checkout() {
 /// Tests that set no home write nothing at all.
 #[tokio::test]
 async fn without_a_scratch_home_tests_write_no_cli_settings() {
-    let flow = Flow::start("trust-nowhere", Options::default(), super::no_findings()).await;
+    let flow = Flow::start("trust-nowhere", unanswered(), super::no_findings()).await;
     let project = project_of(&flow);
     let report = flow
         .manager

@@ -95,6 +95,8 @@ const OTHER: Record<string, [doing: string, done: string]> = {
   review_code: ["Asking for a review", "Asked for a review"],
   review_plan: ["Asking for a review", "Asked for a review"],
   request_approval: ["Asking for approval", "Asked for approval"],
+  ask_thread: ["Asking a question", "Asked a question"],
+  // Its name before #66, in older transcripts.
   ask_orchestrator: ["Asking a question", "Asked a question"],
   submit_outline: ["Sending an outline", "Sent an outline"],
   list_sessions: ["Looking for sessions", "Looked for sessions"],

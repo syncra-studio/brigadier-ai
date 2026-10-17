@@ -12,7 +12,7 @@ use tokio::sync::Notify;
 
 use super::super::phases::WAITING_FOR_GO_AHEAD;
 use super::super::review_runs::WAITING_FOR_REVIEW;
-use super::super::workers::ASKED_THE_ORCHESTRATOR;
+use super::super::workers::ASKED_THE_THREAD;
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::work::TaskState;
 
@@ -170,7 +170,7 @@ async fn a_worker_waiting_on_its_question_is_asked_again_and_resumes_after_a_kil
         board.tasks.values().any(|task| {
             task.blocked_reason
                 .as_deref()
-                .is_some_and(|why| why.starts_with(ASKED_THE_ORCHESTRATOR))
+                .is_some_and(|why| why.starts_with(ASKED_THE_THREAD))
         })
     })
     .await;

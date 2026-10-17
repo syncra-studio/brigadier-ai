@@ -9,7 +9,7 @@ The `computer` tools let you read and drive apps on the user's Mac while the use
 
 ## The loop for every run
 
-Brigadier already gives your run its own session and visible agent cursor, so don't call `start_session` or `end_session`, and leave out `session`.
+Brigadier already gives your run its own session, so don't call `start_session` or `end_session`, and leave out `session`.
 
 1. **`launch_app`** with `bundle_id` (preferred, for example `com.apple.TextEdit`) or `name`. It is safe to call even when the app is already running, and it returns the `pid` plus a `windows` array, the newest window first. Pick the `window_id` from there. Call `list_windows` with `pid` only for long-running apps or when you need another window.
 2. **`get_window_state`** with `pid` and `window_id`. You get the Accessibility tree, one row per element (`[N] role "label" …`), and a screenshot of the window. The answer starts with a `snapshot_id` such as `s0000002a`; the element in row `[11]` is the `element_token` `"s0000002a:11"`.

@@ -3,10 +3,10 @@ import { afterEach, beforeEach, test } from "node:test";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import type { RequestOf } from "@/ipc/client";
-import type { FolderTrust, Project } from "@/ipc/generated";
-import { useApp } from "@/state/store";
+import type { Conversation, FolderTrust, Project } from "@/ipc/generated";
+import { type AppState, useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";
-import { folderTrust, nextToAsk, setFolderTrust, trustFailureText } from "@/state/trust";
+import { folderTrust, setFolderTrust, toAsk, trustFailureText } from "@/state/trust";
 
 function project(id: string, createdAtMs: number, path: string | null, trust: FolderTrust[] = []): Project {
   return {
@@ -21,30 +21,37 @@ function project(id: string, createdAtMs: number, path: string | null, trust: Fo
 
 const answer = (path: string, trusted: boolean): FolderTrust => ({ path, trusted, decidedAtMs: 1 });
 
-test("the oldest project whose folder has no answer is asked about next", () => {
-  const older = project("older", 1, "/code/older");
-  const newer = project("newer", 2, "/code/newer");
-  assert.equal(nextToAsk([newer, older])?.id, "older");
-  assert.equal(nextToAsk([newer, { ...older, trust: [answer("/code/older", false)] }])?.id, "newer");
+/** The state with these projects and the user at `selection`; `s1` is a session in `a`. */
+function at(selection: AppState["selection"], ...projects: Project[]) {
+  return {
+    selection,
+    projects: Object.fromEntries(projects.map((p) => [p.id, p])),
+    conversations: { s1: { id: "s1", projectId: "a" } as Conversation },
+  };
+}
+
+test("only the project the user is in is asked about, in its new session or a chat in it", () => {
+  const a = project("a", 2, "/code/a");
+  const b = project("b", 1, "/code/b");
+  assert.equal(toAsk(at({ type: "draft", kind: "session", projectId: "a" }, a, b))?.id, "a");
+  assert.equal(toAsk(at({ type: "conversation", id: "s1" }, a, b))?.id, "a");
+  // Many unanswered projects ask nothing while the user is elsewhere.
+  assert.equal(toAsk(at({ type: "draft", kind: "chat" }, a, b)), null);
+  assert.equal(toAsk(at({ type: "none" }, a, b)), null);
+  assert.equal(toAsk(at({ type: "conversation", id: "gone" }, a, b)), null);
 });
 
-test("no project is asked about when every folder has an answer, or a project has no folder", () => {
-  assert.equal(
-    nextToAsk([
-      project("a", 1, "/code/a", [answer("/code/a", true)]),
-      project("b", 2, "/code/b", [answer("/code/b", false)]),
-      project("c", 0, null),
-    ]),
-    null,
-  );
-  assert.equal(nextToAsk([]), null);
+test("a project is asked about once: not when its folder has an answer, nor when it has no folder", () => {
+  const answered = project("a", 1, "/code/a", [answer("/code/a", false)]);
+  assert.equal(toAsk(at({ type: "conversation", id: "s1" }, answered)), null);
+  assert.equal(toAsk(at({ type: "draft", kind: "session", projectId: "c" }, project("c", 1, null))), null);
 });
 
 test("a project given another folder is asked about again", () => {
-  const moved = project("moved", 1, "/code/new", [answer("/code/old", true)]);
+  const moved = project("a", 1, "/code/new", [answer("/code/old", true)]);
   assert.equal(folderTrust(moved, "/code/old"), true);
   assert.equal(folderTrust(moved, "/code/new"), null);
-  assert.equal(nextToAsk([moved])?.id, "moved");
+  assert.equal(toAsk(at({ type: "draft", kind: "session", projectId: "a" }, moved))?.id, "a");
 });
 
 test("a failure names the agent that may ask again, in plain words", () => {
@@ -86,7 +93,7 @@ test("answering records the folder's trust and stores the project, so it is not 
   await setFolderTrust("p", "/code/p", false);
   assert.deepEqual(sent, [{ method: "setFolderTrust", id: "p", path: "/code/p", trusted: false }]);
   assert.equal(folderTrust(useApp.getState().projects.p, "/code/p"), false);
-  assert.equal(nextToAsk(Object.values(useApp.getState().projects)), null);
+  assert.equal(toAsk({ ...useApp.getState(), selection: { type: "draft", kind: "session", projectId: "p" } }), null);
   assert.deepEqual(useToasts.getState().toasts, []);
 });
 
@@ -105,5 +112,5 @@ test("a failed request leaves the folder unanswered, so it is still asked about"
     throw new Error("daemon unreachable");
   });
   await assert.rejects(setFolderTrust("p", "/code/p", true), /daemon unreachable/);
-  assert.equal(nextToAsk(Object.values(useApp.getState().projects))?.id, "p");
+  assert.equal(toAsk({ ...useApp.getState(), selection: { type: "draft", kind: "session", projectId: "p" } })?.id, "p");
 });

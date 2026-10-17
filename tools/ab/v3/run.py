@@ -624,14 +624,74 @@ def cmd_ab(a):
                 attempt(roots[name], ask, a.regime, a.brain, r, name, list(roots.values()))
 
 
+def trust_left(root):
+    """The folders under `root` that Claude's or Codex's own settings still trust."""
+    roots = {root, root[len("/private"):] if root.startswith("/private/") else "/private" + root}
+    under = lambda path: any(path == r or path.startswith(r + "/") for r in roots)
+    left = []
+    try:
+        projects = json.load(open(os.path.expanduser("~/.claude.json"))).get("projects", {})
+        left += [p for p, entry in projects.items() if under(p) and entry.get("hasTrustDialogAccepted")]
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, AttributeError):  # unchecked: counts as still there
+        left.append("~/.claude.json (unreadable)")
+    try:
+        table = None  # the `[projects."<folder>"]` table the lines are in (either quote style)
+        for line in open(os.path.expanduser("~/.codex/config.toml")):
+            header = re.match(r"""\s*\[(?:projects\.(?:"([^"]*)"|'([^']*)')|.*)\]\s*(#.*)?$""", line)
+            if header:
+                table = header.group(1) or header.group(2)
+            elif table and under(table) and re.match(r"""\s*trust_level\s*=\s*["']trusted["']""", line):
+                left.append(table)
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        left.append("~/.codex/config.toml (unreadable)")
+    return left
+
+
+def untrust(root):
+    """Takes back the folder trust the template's setup wrote in the CLIs' settings: the arm's
+    daemon stops any work it resumed and removes its project (its Brain kept), which undoes that
+    trust from its own records. False when that failed, so the root (and those records) stays."""
+    if not trust_left(root):
+        return True
+    if not (os.path.exists(os.path.join(root, "arm", "data")) and os.path.exists(os.path.join(root, "build.json"))):
+        return False
+    try:
+        arm = Arm(root, os.path.join(root, "untrust", "rec"), os.path.join(root, "untrust"))
+    except SystemExit as err:
+        log("folder trust not undone:", err); return False
+    try:
+        cat = req(arm.data, {"method": "getCatalog"})["value"]["catalog"]
+        for c in cat["conversations"]:
+            req(arm.data, {"method": "interrupt", "conversationId": c["id"]})
+        for p in cat["projects"]:
+            for _ in range(30):  # removal is refused while one of its conversations still works
+                r = req(arm.data, {"method": "removeProject", "id": p["id"], "deleteBranches": [], "keepBrain": True})
+                if r["status"] == "ok":
+                    break
+                time.sleep(2)
+            failures = r["value"]["report"]["failures"] if r["status"] == "ok" else [r["error"]]
+            log("project removed, its folder trust undone" if not failures else "folder trust not undone:", failures or "")
+    finally:
+        arm.close()
+    return not trust_left(root)
+
+
 def cmd_cleanup(a):
-    """Stops anything this root started, exports the evidence (optional), deletes the Codex threads
-    the root's runs made, the Claude project folders named after the root, Brigadier's temp folders
-    owned by its data dirs, and then the root itself."""
+    """Stops anything this root started, exports the evidence (optional), takes back the folder
+    trust its setup wrote, deletes the Codex threads the root's runs made, the Claude project
+    folders named after the root, Brigadier's temp folders owned by its data dirs, and then the
+    root itself."""
     root = check_root(a.root)
     pidf = os.path.join(root, "pids")
     if os.path.exists(pidf):
         stop([p for p in (int(x) for x in open(pidf).read().split()) if names_root(p, root)])
+    if not untrust(root):
+        sys.exit(f"cleanup: the folder trust its setup wrote is still in the CLIs' settings; {root} is kept "
+                 "(its records undo it): see untrust/daemon.log and run cleanup again")
     if a.export:
         os.makedirs(a.export, exist_ok=True)
         for run in sorted(glob.glob(os.path.join(root, "runs", "*"))):

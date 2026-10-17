@@ -9,7 +9,7 @@ export type RequestContext = { requestId: string,
  */
 preview: string, startedAtMs: number, 
 /**
- * The thread's model calls (Claude: turns) for it.
+ * The thread's model calls for it, counted as the request's summary counts them.
  */
 calls: number, firstTokens: number, lastTokens: number, 
 /**
