@@ -2,7 +2,6 @@
 /** Production chat/panel fixture with stored worker events. No live workers or daemon. */
 import { leadTranscript, workerPatch } from "@/fixtures/flow";
 import type { Message, ProviderEvent, RawEntry, Report, Task } from "@/ipc/generated";
-import { showPlanDoc } from "@/state/planDoc";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
@@ -157,25 +156,8 @@ if (stress && !query.has("manual")) {
     const toggled = !find('[data-slot="worker-details"]');
     const noMenu = !button("Worker actions");
     const noTabs = !find('[role="tablist"][aria-label="Right panel"]');
-    showPlanDoc(id, { type: "plan", id: "fixture-plan" });
-    await wait();
-    button("Plan")!.focus();
-    button("Plan")!.click();
-    await ready('[data-pane="plan"]');
-    const plan = !!find('[data-pane="plan"]');
-    const planFocused = document.activeElement === find("#right-sidebar-plan");
-    find("#right-sidebar-workers")!.focus();
-    find("#right-sidebar-workers")!.click();
-    await ready('[data-slot="worker-thread"]');
-    const back = await ready('[data-slot="worker-header"] button');
-    const workerFocused = document.activeElement === back;
-    button("Plan")!.focus();
-    button("Plan")!.click();
-    await ready("#right-sidebar-plan");
-    const planFocusedAgain = document.activeElement === find("#right-sidebar-plan");
-    find("#right-sidebar-plan")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    await ready('[data-slot="worker-header"] button');
-    const workerKeyFocused = document.activeElement === find('[data-slot="worker-header"] button');
+    // Plans open in their own tab: the right panel has no Plan, even beside a worker.
+    const noPlan = !find("#right-sidebar-plan") && !button("Plan");
     find('[data-slot="worker-header"] button')!.click();
     await ready('[role="tablist"][aria-label="Right panel"]');
     await wait(300);
@@ -216,7 +198,7 @@ if (stress && !query.has("manual")) {
     else localStorage.setItem("brigadier.rightSidebarWidth", previousWidth);
     result.textContent = JSON.stringify({ region, hiddenBy, wide, narrow, expanded, minimum, details, toggled, tooltip, noMenu, noTabs,
       closeInHeader: closeRect.top >= headerRect.top && closeRect.bottom <= headerRect.bottom && closeRect.right <= headerRect.right,
-      listClose, closed, workerClosed, headerFits, plan, planFocused, workerFocused, planFocusedAgain, workerKeyFocused, shortWide, shortNarrow, shortWideBounds, shortMetrics });
+      listClose, closed, workerClosed, headerFits, noPlan, shortWide, shortNarrow, shortWideBounds, shortMetrics });
   })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
 }
 

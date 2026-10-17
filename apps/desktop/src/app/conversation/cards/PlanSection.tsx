@@ -1,9 +1,8 @@
 import { Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
-import { memo, useContext, useId, useState } from "react";
+import { memo, useId, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { planStepStatus, planProgress, stepStates } from "@/app/conversation/planProgress";
-import { RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { taskState } from "@/app/conversation/rowWords";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { useAction } from "@/app/conversation/useAction";
@@ -14,7 +13,9 @@ import { Input } from "@/components/ui/input";
 import type { Plan, TaskState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
-import { showPlanDoc } from "@/state/planDoc";
+import { usePlanOpens } from "@/state/planDoc";
+import { openPlanTab } from "@/state/sessionTabs";
+
 import { useApp } from "@/state/store";
 import { decidePlan } from "@/state/actions";
 
@@ -131,6 +132,7 @@ export const PlanSection = memo(function PlanSection({
       }),
     ),
   );
+  const opens = usePlanOpens(plan?.conversationId ?? null);
   // Who decides a proposed plan: the user under Ask for approval or in plan mode.
   const decider = useApp((s) => {
     const conversation = plan ? s.conversations[plan.conversationId] : null;
@@ -139,7 +141,6 @@ export const PlanSection = memo(function PlanSection({
     return setup.permission === "askForApproval" || setup.planMode ? "user" : "brigadier";
   });
   const request = useBoard((s) => (plan?.requestId ? s.board?.requests[plan.requestId]?.state.type : undefined));
-  const rightSidebar = useContext(RightSidebarContext);
   if (!plan) return null;
 
   const states = stepStates(
@@ -184,14 +185,13 @@ export const PlanSection = memo(function PlanSection({
             </button>
           </p>
         )}
-        {plan.body ? (
-          // A plan written as a document opens it in the right sidebar's Plan tab.
+        {plan.body && opens ? (
+          // A plan written as a document opens it in its own tab.
           <button
             type="button"
             title={plan.title}
             onClick={() => {
-              showPlanDoc(plan.conversationId, { type: "plan", id: plan.id });
-              rightSidebar?.openTab("plan");
+              openPlanTab(plan.conversationId, { type: "plan", id: plan.id }, plan.title);
             }}
             className={cn(summaryRowInteractive, "relative isolate flex min-w-0 items-start gap-2 py-1 text-start text-label")}
           >

@@ -1,4 +1,4 @@
-import { Archive, Chat, ChatCompose, Dock, Globe, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, ChatCompose, Dock, Globe, Lightbulb, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -73,6 +73,7 @@ export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "sideChat") return sideChatName(tab, tabs);
   if (tab.kind === "page") return tab.title || "Untitled page";
   if (tab.kind === "mockup") return "Mockup";
+  if (tab.kind === "plan") return tab.title || "Plan";
   return baseName(tab.path);
 }
 
@@ -424,7 +425,8 @@ export function SessionTabBar({
                         : tab.kind === "terminal" ? <Dock className="size-icon-sm shrink-0" />
                         : tab.kind === "sideChat" ? <ChatCompose className="size-icon-sm shrink-0" />
                         : tab.kind === "page" ? <Document className="size-icon-sm shrink-0" />
-                        : tab.kind === "mockup" ? <MockupTabIcon conversationId={id} /> : (
+                        : tab.kind === "mockup" ? <MockupTabIcon conversationId={id} />
+                        : tab.kind === "plan" ? <Lightbulb className="size-icon-sm shrink-0" /> : (
                         <DiffGlyph className="size-icon-sm shrink-0" />
                       )}
                       <span className={cn("session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap", tab.kind === "file" && tab.preview && "italic")}>
@@ -561,6 +563,7 @@ const BrowserTab = lazy(() => import("./BrowserTab").then((module) => ({ default
 const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ default: module.SideChatTab })));
 const MainTerminalTab = lazy(() => import("./MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
 const MockupView = lazy(() => import("./MockupTab").then((module) => ({ default: module.MockupView })));
+const PlanTab = lazy(() => import("./PlanTab").then((module) => ({ default: module.PlanTab })));
 const PageTabView = lazy(() => import("./pages/PageTabView").then((module) => ({ default: module.PageTabView })));
 const TabWithChat = lazy(() => import("./TabChat").then((module) => ({ default: module.TabWithChat })));
 
@@ -610,6 +613,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
               ) : tab.kind === "terminal" ? (
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
               ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
+                : tab.kind === "plan" ? <PlanTab plan={tab.plan} />
                 : (
                   <TabWithChat conversationId={conversationId} tab={tab}>
                     <PageTabView conversationId={conversationId} tab={tab} active={shown} />

@@ -46,6 +46,7 @@ import type {
 import { answerHtml } from "@/app/conversation/RequestBlock";
 import { loadConversation, openConversation } from "@/state/actions";
 import { type Board, type ShownApproval, useBoard } from "@/state/board";
+import { closeTab, sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -486,7 +487,19 @@ async function drivePlan(): Promise<object> {
   await settle();
   app.render(<Page />);
   await settle(600);
-  return { ended, closed, remounted: seen() };
+  const remounted = seen();
+  // Full screen, the plan is its own tab in the tab bar, never the right panel.
+  [...document.querySelectorAll<HTMLButtonElement>("[data-slot=plan-card] button")].find((button) => text(button) === "Open full screen")?.click();
+  await settle();
+  const tabs = sessionTabs(ID);
+  const panel = one('[role=tabpanel][aria-label="Round half-up"] [data-slot=plan-tab]');
+  const opened = {
+    canOpen: one("[data-slot=plan-card] [role=button]") !== null,
+    active: tabs.active, kinds: tabs.tabs.map((tab) => tab.kind), shown: text(panel)?.includes("Add a test.") ?? false,
+    tab: text(one('[role=tab][aria-selected=true]')), rightPanel: one('[data-slot="right-sidebar"] [data-pane="plan"]') !== null,
+  };
+  if (tabs.active !== "chat") closeTab(ID, tabs.active);
+  return { ended, closed, remounted, opened };
 }
 
 /** A finished turn with a call the user denied: "1 denied action" in its header shows it. */

@@ -1,5 +1,5 @@
-import { Lightbulb, X } from "@openai/apps-sdk-ui/components/Icon";
-import { type CSSProperties, createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { X } from "@openai/apps-sdk-ui/components/Icon";
+import { type CSSProperties, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { WORKERS_LABEL, WorkersTab } from "@/app/conversation/Agents";
@@ -11,12 +11,8 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { rightSidebarFolds, type RightSidebarTab, selectRightSidebarTab, setRightSidebarOpen, useRightSidebarState } from "@/state/rightSidebar";
 import { useBoard } from "@/state/board";
-import { usePlanTab } from "@/state/planDoc";
 
-const PlanTab = lazy(() => import("@/app/conversation/PlanTab").then((m) => ({ default: m.PlanTab })));
-const TABS = [{ id: "workers", title: WORKERS_LABEL, Icon: null }] as const;
-/** Plan joins the tabs only after the user opens a plan. */
-const WITH_PLAN = [...TABS, { id: "plan", title: "Plan", Icon: Lightbulb }] as const;
+const TABS = [{ id: "workers", title: WORKERS_LABEL }] as const;
 
 export function useRightSidebar(conversationId: string | null, enabled: boolean) {
   const left = useSidebar();
@@ -61,7 +57,7 @@ export function useRightSidebar(conversationId: string | null, enabled: boolean)
 export const RightSidebarContext = createContext<ReturnType<typeof useRightSidebar> | null>(null);
 
 /**
- * The Workers and Plan column, below the titlebar: its tabs and close in a row at its top.
+ * The Workers column, below the titlebar: its tabs and close in a row at its top.
  * Closing reveals no strip and installs no hover trigger.
  */
 export function RightSidebar({ conversationId }: { conversationId: string }) {
@@ -71,26 +67,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
   const workerHeader = panel?.active === "workers" && !!selectedWorker;
   const content = useRef<HTMLDivElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
-  const [tabFocus, setTabFocus] = useState<RightSidebarTab | null>(null);
-  const selectTab = (tab: RightSidebarTab) => {
-    setTabFocus(tab);
-    panel?.selectTab(tab);
-  };
-  // Switching to a worker removes the tabs; switching to Plan removes its header button.
-  // Focus the replacement only after React has mounted it.
-  useLayoutEffect(() => {
-    const tab = tabFocus;
-    if (tab === null) return;
-    const target = content.current?.querySelector<HTMLElement>(
-      workerHeader ? '[data-slot="worker-header"] button' : `#right-sidebar-${tab}`,
-    );
-    if (target) {
-      target.focus({ preventScroll: true });
-      setTabFocus(null);
-    }
-  }, [tabFocus, workerHeader]);
   const column = useRef<HTMLDivElement>(null);
-  const tabs: readonly (typeof WITH_PLAN)[number][] = usePlanTab((s) => s.shown[conversationId] !== undefined) ? WITH_PLAN : TABS;
   // Finished workers leave the composer's strip once answered; they stay here, counted.
   // "1 done · 1 stopped": a stopped worker never counts as done (BUILD-PLAN A7).
   const finished = useBoard((s) =>
@@ -138,28 +115,19 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
         <div ref={content} className="right-sidebar-panel-width flex h-full flex-col">
           {!workerHeader && <div role="tablist" aria-label="Right panel" className="h-page-toolbar bg-background flex shrink-0 items-center gap-1 px-2">
             <TitlebarTips>
-              {tabs.map(({ id, title, Icon }, index) => (
+              {TABS.map(({ id, title }) => (
                 <TitlebarButton
                   key={id}
                   role="tab"
                   id={`right-sidebar-${id}`}
                   aria-controls="right-sidebar-content"
                   aria-selected={panel.active === id}
-                  className={cn("aria-selected:bg-toolbar-pressed aria-selected:text-foreground", id === "workers" && "w-auto px-2 text-label")}
+                  className="aria-selected:bg-toolbar-pressed aria-selected:text-foreground w-auto px-2 text-label"
                   tabIndex={panel.active === id ? 0 : -1}
-                  tooltip={id === "workers" && finished ? `${title} · ${finished}` : title}
-                  onClick={() => selectTab(id)}
-                  onKeyDown={(event) => {
-                    const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
-                      : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
-                        : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
-                    if (next === null) return;
-                    event.preventDefault();
-                    const tab = tabs[next]!;
-                    selectTab(tab.id);
-                  }}
+                  tooltip={finished ? `${title} · ${finished}` : title}
+                  onClick={() => panel.selectTab(id)}
                 >
-                  {Icon ? <Icon /> : title}
+                  {title}
                 </TitlebarButton>
               ))}
             </TitlebarTips>
@@ -179,12 +147,9 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
               panel.open ? "opacity-100" : "opacity-0",
             )}
           >
-            {mounted && <Suspense fallback={null}>
-              {panel.active === "plan" ? <PlanTab conversationId={conversationId} /> : <WorkersTab conversationId={conversationId} headerActions={<TitlebarTips>
-                {tabs.length > 1 && <TitlebarButton tooltip="Plan" onClick={() => selectTab("plan")}><Lightbulb /></TitlebarButton>}
-                <TitlebarButton tooltip="Close right panel" onClick={() => panel.setOpen(false)}><X /></TitlebarButton>
-              </TitlebarTips>} />}
-            </Suspense>}
+            {mounted && <WorkersTab conversationId={conversationId} headerActions={<TitlebarTips>
+              <TitlebarButton tooltip="Close right panel" onClick={() => panel.setOpen(false)}><X /></TitlebarButton>
+            </TitlebarTips>} />}
           </div>
         </div>
       </SidebarReveal>

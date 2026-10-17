@@ -1,19 +1,19 @@
-import { Check, CollapseSm, Copy, ExpandSm, Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
-import { type ComponentProps, type ReactNode, useContext, useLayoutEffect, useRef, useState } from "react";
+import { Check, Copy, ExpandSm, Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
+import { type ComponentProps, type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
-import { type PlanDoc, type PlanDocRef, planDoc, showPlanDoc, usePlanTab } from "@/state/planDoc";
+import { type PlanDoc, type PlanDocRef, planDoc, usePlanOpens } from "@/state/planDoc";
+import { openPlanTab } from "@/state/sessionTabs";
 
 /**
  * A plan as a document (THREAD-PARITY-PLAN.md §6): a card in the thread with "Plan" and a bulb
  * in its header, Copy and Open on the right, and the start of the plan under it, clipped with a
- * fade. A click opens the whole plan in the side panel's Plan tab.
+ * fade. A click opens the whole plan in its own tab.
  */
 
 /** The plan a reference points to, kept stable while its words don't change. */
@@ -130,16 +130,10 @@ export function PlanDocCard({ docRef }: { docRef: PlanDocRef }) {
     const state = docRef.type === "plan" ? s.board?.plans[docRef.id]?.state.type : null;
     return state === "rejected" || state === "superseded";
   });
-  const rightSidebar = useContext(RightSidebarContext);
-  // While the right sidebar shows this plan, its card here is only its header.
-  const tabRef = usePlanTab((s) => (conversationId ? s.shown[conversationId] : undefined));
-  const inPanel =
-    !!rightSidebar?.open && rightSidebar.active === "plan" && tabRef?.type === docRef.type && tabRef.id === docRef.id;
+  const opens = usePlanOpens(conversationId);
   if (!doc) return null;
   const open = () => {
-    if (!conversationId) return;
-    showPlanDoc(conversationId, docRef);
-    rightSidebar?.openTab("plan");
+    if (conversationId && opens) openPlanTab(conversationId, docRef, doc.title);
   };
   return (
     <PlanFrame
@@ -148,34 +142,32 @@ export function PlanDocCard({ docRef }: { docRef: PlanDocRef }) {
       actions={
         <>
           <CopyPlan markdown={doc.markdown} />
-          <TooltipIconButton
-            tooltip={inPanel ? "Close right panel" : "Open in right panel"}
+          {opens && <TooltipIconButton
+            tooltip="Open full screen"
             side="top"
             className="text-foreground/50 hover:text-foreground [&_svg]:size-icon-sm"
-            onClick={inPanel ? () => rightSidebar?.setOpen(false) : open}
+            onClick={open}
           >
-            {inPanel ? <CollapseSm /> : <ExpandSm />}
-          </TooltipIconButton>
+            <ExpandSm />
+          </TooltipIconButton>}
         </>
       }
     >
       {/* The plan's text holds headings and lists, which a button can't: a div acts as one. */}
-      {!inPanel && (
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label={`Open the plan: ${doc.title}`}
-          onClick={open}
-          onKeyDown={(event) => {
-            if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-            event.preventDefault();
-            open();
-          }}
-          className="focus-visible:ring-ring rounded-b-plan cursor-pointer px-5 pb-4 text-start outline-none focus-visible:ring-2"
-        >
-          <PlanClip markdown={doc.markdown} />
-        </div>
-      )}
+      {opens ? <div
+        role="button"
+        tabIndex={0}
+        aria-label={`Open the plan: ${doc.title}`}
+        onClick={open}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+          event.preventDefault();
+          open();
+        }}
+        className="focus-visible:ring-ring rounded-b-plan cursor-pointer px-5 pb-4 text-start outline-none focus-visible:ring-2"
+      >
+        <PlanClip markdown={doc.markdown} />
+      </div> : <div className="px-5 pb-4"><PlanClip markdown={doc.markdown} /></div>}
     </PlanFrame>
   );
 }

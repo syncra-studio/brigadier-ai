@@ -24,7 +24,7 @@ test("only Workers survives launch; old Files, Source and Running never reopen t
     assert.equal(isRightSidebarTab("workers"), true);
     for (const tab of ["files", "source", "running", "plan", "browser"]) assert.equal(isRightSidebarTab(tab), false);
     selectRightSidebarTab("a", "workers");
-    selectRightSidebarTab("b", "plan");
+    selectRightSidebarTab("b", "plan" as "workers");
     setRightSidebarOpen(true);
     const saved = data.get("brigadier.rightSidebar")!;
     state.setState({ open: false, tabs: {} });

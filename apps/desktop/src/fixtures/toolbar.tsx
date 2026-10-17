@@ -21,7 +21,6 @@ import { TitlebarTips } from "@/components/titlebar-button";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import type { Conversation, EventEnvelope, Request } from "@/ipc/generated";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
-import { showPlanDoc } from "@/state/planDoc";
 import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { emitWorkspaceChanged } from "@/state/workspaceCache";
@@ -168,8 +167,7 @@ function Fixture() {
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB", metaKey: true, altKey: true, bubbles: true, cancelable: true }));
       click("Context worker");
     });
-    at(4000, () => { seen.contextWorkerRight = right(); click("Open plan"); });
-    at(4300, () => { seen.planTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); });
+    at(4000, () => { seen.contextWorkerRight = right(); click("Close right panel"); });
     const chip = () => document.querySelector<HTMLButtonElement>('[data-slot="summary-card"] [data-slot="preview-chip"]');
     const arrival = (previewId: string, conversationId = id) => {
       const events = [{ stream: `conversation:${conversationId}`, event: { type: "previewUpdated", preview: { ...previews.preview!, id: previewId, conversationId } } }] as EventEnvelope[];
@@ -321,7 +319,6 @@ function Fixture() {
                 <button aria-label="Thread worker" onClick={() => agents.setPanel("worker")}>Thread worker</button>
                 <button aria-label="Composer worker" onClick={() => agents.setPanel("worker")}>Composer worker</button>
                 <button aria-label="Context worker" onClick={() => agents.setPanel(null)}>Context worker</button>
-                <button aria-label="Open plan" onClick={() => { showPlanDoc(id, { type: "plan", id: "plan" }); panel.openTab("plan"); }}>Open plan</button>
               </SummaryPane>
             </div>
         </main>

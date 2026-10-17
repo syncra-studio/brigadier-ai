@@ -1,6 +1,5 @@
-import { create } from "zustand";
-
 import type { Board } from "@/state/board";
+import { useApp } from "@/state/store";
 
 /**
  * A plan the user reads as a document (THREAD-PARITY-PLAN.md §6): the thread's own proposal
@@ -9,11 +8,9 @@ import type { Board } from "@/state/board";
  */
 export type PlanDocRef = { type: "plan" | "outline"; id: string };
 
-/** The plan each session's Plan tab (in its right sidebar) shows, kept only while the app runs. */
-export const usePlanTab = create<{ shown: Record<string, PlanDocRef> }>(() => ({ shown: {} }));
-
-export function showPlanDoc(conversationId: string, ref: PlanDocRef): void {
-  usePlanTab.setState(({ shown }) => ({ shown: { ...shown, [conversationId]: ref } }));
+/** Whether a plan in this conversation opens full screen: only a session has tabs to open it in. */
+export function usePlanOpens(conversationId: string | null): boolean {
+  return useApp((s) => !!conversationId && s.conversations[conversationId]?.kind === "session");
 }
 
 export type PlanDoc = { title: string; markdown: string };

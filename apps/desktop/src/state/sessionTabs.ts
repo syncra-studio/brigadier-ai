@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 
 import { notePaneClose } from "@/state/closedPanes";
 import { discardDocument, documentIsSaved } from "@/state/documentDrafts";
+import type { PlanDocRef } from "@/state/planDoc";
 
 /**
  * A session's tabs over its main area: Chat (the conversation, always first and never
@@ -88,7 +89,13 @@ export type LegacyDocumentTab = {
   savedPath: string | null; relativePath: string | null;
 };
 export type MockupTabState = { kind: "mockup"; id: typeof MOCKUP_TAB; opener: string | null };
-export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | NewTabState;
+/** A plan read full screen, opened from its card: one tab per plan. */
+export type PlanTabState = {
+  kind: "plan"; id: string; opener: string | null; plan: PlanDocRef;
+  /** The plan's title as last seen, for the tab before the plan loads. */
+  title: string;
+};
+export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState;
 export type NewTabKind = "newTab" | "terminal" | "browser" | "sideChat" | "page";
 
 export type SessionTabs = {
@@ -452,6 +459,15 @@ export function showMockupTab(conversationId: string, moment: string): void {
     tabs: current.tabs.some((tab) => tab.id === MOCKUP_TAB) ? current.tabs
       : [...current.tabs, { kind: "mockup", id: MOCKUP_TAB, opener: CHAT_TAB }],
   });
+}
+
+/** Shows plan `plan` in its own tab: the tab already showing it, else a new one after the tab in front. */
+export function openPlanTab(conversationId: string, plan: PlanDocRef, title: string): string {
+  const id = `plan:${plan.type}:${plan.id}`;
+  update(conversationId, (current) => current.tabs.some((tab) => tab.id === id)
+    ? { ...current, active: id, tabs: current.tabs.map((tab) => tab.id === id && tab.kind === "plan" ? { ...tab, title } : tab) }
+    : { tabs: insertAfterActive(current, { kind: "plan", id, opener: current.active, plan, title }), active: id });
+  return id;
 }
 
 export function selectTab(conversationId: string, id: string): void {
