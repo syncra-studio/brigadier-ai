@@ -11,9 +11,10 @@ use crate::model::{
 };
 use crate::overnight::OvernightRun;
 use crate::work::{
-    Approval, CardId, CardState, Compaction, ConversationActivity, Decision, MessageQueue,
-    OrchestratorStep, Plan, PlanState, Question, ReviewRun, RunState, Task, TaskId, UserRequest,
-    WaitingItem, WorkerStep,
+    Approval, BackgroundRunState, CardId, CardState, Compaction, ConversationActivity, Decision,
+    IntegratedCheckState, MessageQueue, OrchestratorStep, OrchestratorStepKind, Plan, PlanState,
+    Question, ReviewRun, ReviewState, RunState, SessionPhase, Task, TaskId, TaskKind, TaskState,
+    UserRequest, WaitingItem, WorkerStep,
 };
 
 /// Notices kept per conversation.
@@ -249,15 +250,92 @@ impl Board {
             .map(|question| question.id.clone())
             .collect();
         let running = matches!(self.run, RunState::Starting | RunState::Running);
-        (running || !tasks.is_empty() || !approvals.is_empty() || !questions.is_empty()).then(
-            || ConversationActivity {
-                conversation_id: id.clone(),
-                run: self.run,
-                tasks,
-                approvals,
-                questions,
-            },
-        )
+        let phases = self.phases(running);
+        (running
+            || !tasks.is_empty()
+            || !approvals.is_empty()
+            || !questions.is_empty()
+            || !phases.is_empty())
+        .then(|| ConversationActivity {
+            conversation_id: id.clone(),
+            run: self.run,
+            tasks,
+            approvals,
+            questions,
+            phases,
+        })
+    }
+
+    /// What the conversation is busy with that its sidebar row names, keyed as
+    /// [`ConversationActivity::phases`] says; its thread's calls count only while `running`, in
+    /// the request its turn serves.
+    fn phases(&self, running: bool) -> Vec<(String, SessionPhase)> {
+        let tasks = self.tasks.values().filter_map(|task| {
+            let works = matches!(
+                task.state,
+                TaskState::Queued
+                    | TaskState::Starting
+                    | TaskState::Running
+                    | TaskState::Blocked
+                    | TaskState::Landing
+            );
+            let phase = match task.kind {
+                TaskKind::Merge => SessionPhase::Merging,
+                TaskKind::Review => SessionPhase::Reviewing,
+                TaskKind::Verify => SessionPhase::Checking,
+                _ => return None,
+            };
+            works.then(|| (format!("task:{}", task.id), phase))
+        });
+        let reviews = self
+            .reviews
+            .values()
+            .filter(|review| review.state == ReviewState::Running)
+            .map(|review| (format!("review:{}", review.id), SessionPhase::Reviewing));
+        let checks = self
+            .integrated_checks
+            .values()
+            .filter(|check| matches!(check.state, IntegratedCheckState::Running { .. }))
+            .map(|check| (format!("check:{}", check.id), SessionPhase::Checking));
+        let runs = self
+            .background_runs
+            .values()
+            .filter(|run| run.tool == "run_check" && run.state == BackgroundRunState::Running)
+            .map(|run| (format!("run:{}", run.id), SessionPhase::Checking));
+        let steps = self.orchestrator_steps.iter().filter_map(|step| match &step.kind {
+            OrchestratorStepKind::CiWatch {
+                repo,
+                branch,
+                sha,
+                result: None,
+                ..
+            } => Some((format!("ci:{repo} {branch} {sha}"), SessionPhase::WatchingCi)),
+            OrchestratorStepKind::Tool {
+                item_id,
+                name,
+                status: brigadier_providers::ItemStatus::InProgress,
+                ..
+            } if running && step.request_id == self.run_request => {
+                let phase = match name.rsplit("__").next().unwrap_or(name) {
+                    "run_check" => SessionPhase::Checking,
+                    "finish_session" => SessionPhase::Merging,
+                    _ => return None,
+                };
+                Some((format!("tool:{item_id}"), phase))
+            }
+            _ => None,
+        });
+        let merge = crate::manager::held_merge(self)
+            .map(|asked_in| (format!("merge:{asked_in}"), SessionPhase::Merging));
+        let mut phases: Vec<_> = tasks
+            .chain(reviews)
+            .chain(checks)
+            .chain(runs)
+            .chain(steps)
+            .chain(merge)
+            .collect();
+        phases.sort_by(|a, b| a.0.cmp(&b.0));
+        phases
     }
 
     /// Applies an event stored at `stream_seq` in the conversation's stream. An object's
@@ -911,6 +989,22 @@ mod ci_tests {
             ]
         );
     }
+
+    /// An idle session watching CI still shows in the sidebar, as "Watching CI" (#234).
+    #[test]
+    fn a_running_ci_watch_is_the_sessions_phase_until_it_ends() {
+        let id = ConversationId("c1".into());
+        let mut board = Board::default();
+        board.apply(&watch("o/n", None), 1);
+        let activity = board.activity(&id).expect("a watch keeps the session active");
+        assert_eq!(
+            activity.phases,
+            [("ci:o/n main 97c298d5".to_owned(), crate::work::SessionPhase::WatchingCi)]
+        );
+        board.apply(&watch("o/n", Some("passed")), 2);
+        assert_eq!(board.activity(&id), None);
+    }
+
     /// A reopened conversation's board shows a watch's result for a moment after it ended, as
     /// the live one does: its row takes the time of the result, not of the watch's start.
     #[test]

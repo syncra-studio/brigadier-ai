@@ -4,7 +4,10 @@ import { request } from "@/ipc/client";
 import type {
   ConversationActivity,
   EventEnvelope,
+  OrchestratorStepKind,
   RunState,
+  SessionPhase,
+  TaskKind,
   TaskState,
 } from "@/ipc/generated";
 
@@ -17,9 +20,17 @@ type Activity = {
   approvals: ReadonlySet<string>;
   /** Unanswered questions. */
   questions: ReadonlySet<string>;
+  /** What it is busy with that its row names, keyed by what runs it (`ci:`, `merge:`, …). */
+  phases: Readonly<Record<string, SessionPhase>>;
 };
 
-const IDLE: Activity = { run: "idle", tasks: {}, approvals: new Set(), questions: new Set() };
+const IDLE: Activity = {
+  run: "idle",
+  tasks: {},
+  approvals: new Set(),
+  questions: new Set(),
+  phases: {},
+};
 
 const FINAL: ReadonlySet<TaskState> = new Set(["landed", "done", "rejected", "stopped", "failed"]);
 const WORKING: ReadonlySet<TaskState> = new Set([
@@ -31,6 +42,19 @@ const WORKING: ReadonlySet<TaskState> = new Set([
 ]);
 /** A task that waits for the user to approve its landing. */
 const LANDING: ReadonlySet<TaskState> = new Set(["readyToLand"]);
+/** The phase a working task of each kind puts its conversation in. */
+const TASK_PHASES: Partial<Record<TaskKind, SessionPhase>> = {
+  merge: "merging",
+  review: "reviewing",
+  verify: "checking",
+};
+/** The thread's calls that put its conversation in a phase while they run. */
+const TOOL_PHASES: Readonly<Record<string, SessionPhase>> = {
+  run_check: "checking",
+  finish_session: "merging",
+};
+/** Which phase a row names when several run, first first. */
+const PHASE_ORDER: readonly SessionPhase[] = ["merging", "reviewing", "checking", "watchingCi"];
 
 export const useActivity = create<{ byConversation: Record<string, Activity> }>(() => ({
   byConversation: {},
@@ -42,6 +66,7 @@ function fromSnapshot(activity: ConversationActivity): Activity {
     tasks: Object.fromEntries(activity.tasks),
     approvals: new Set(activity.approvals),
     questions: new Set(activity.questions),
+    phases: Object.fromEntries(activity.phases),
   };
 }
 
@@ -63,21 +88,94 @@ function toggled(set: ReadonlySet<string>, id: string, on: boolean): ReadonlySet
   return next;
 }
 
+/** `current` with the phase under `key` set, or cleared when `phase` is none. */
+function phased(current: Activity, key: string, phase: SessionPhase | undefined): Activity {
+  if (current.phases[key] === phase) return current;
+  const { [key]: _old, ...phases } = current.phases;
+  return { ...current, phases: phase ? { ...phases, [key]: phase } : phases };
+}
+
+/** `current` without the phases whose key starts with `prefix`. */
+function unphased(current: Activity, prefix: string): Activity {
+  const keys = Object.keys(current.phases).filter((key) => key.startsWith(prefix));
+  if (keys.length === 0) return current;
+  const phases = { ...current.phases };
+  for (const key of keys) delete phases[key];
+  return { ...current, phases };
+}
+
+function stepped(current: Activity, kind: OrchestratorStepKind): Activity {
+  switch (kind.type) {
+    case "ciWatch":
+      return phased(
+        current,
+        `ci:${kind.repo} ${kind.branch} ${kind.sha}`,
+        kind.result == null ? "watchingCi" : undefined,
+      );
+    case "mergeHeld":
+      // Only the latest hold is pending: a fresh consent replaces the one held before.
+      return phased(unphased(current, "merge:"), `merge:${kind.askedIn}`, "merging");
+    case "merged":
+      return unphased(current, "merge:");
+    case "mergeCancelled":
+    case "mergeStopped":
+      return phased(current, `merge:${kind.askedIn}`, undefined);
+    case "tool": {
+      const phase = TOOL_PHASES[kind.name.split("__").at(-1) ?? ""];
+      return phase
+        ? phased(current, `tool:${kind.itemId}`, kind.status === "inProgress" ? phase : undefined)
+        : current;
+    }
+    default:
+      return current;
+  }
+}
+
 function apply(current: Activity, { event }: EventEnvelope): Activity {
   switch (event.type) {
-    case "runStateChanged":
-      return { ...current, run: event.state };
-    case "taskUpdated": {
-      const { id, state } = event.task;
-      if (FINAL.has(state)) {
-        if (!(id in current.tasks)) return current;
-        const { [id]: _over, ...tasks } = current.tasks;
-        return { ...current, tasks };
-      }
-      return current.tasks[id] === state
-        ? current
-        : { ...current, tasks: { ...current.tasks, [id]: state } };
+    case "runStateChanged": {
+      const next = { ...current, run: event.state };
+      // A call the turn left in progress isn't running any more.
+      return event.state === "running" || event.state === "starting"
+        ? next
+        : unphased(next, "tool:");
     }
+    case "taskUpdated": {
+      const { id, state, kind } = event.task;
+      const next = phased(
+        current,
+        `task:${id}`,
+        WORKING.has(state) ? TASK_PHASES[kind] : undefined,
+      );
+      if (FINAL.has(state)) {
+        if (!(id in next.tasks)) return next;
+        const { [id]: _over, ...tasks } = next.tasks;
+        return { ...next, tasks };
+      }
+      return next.tasks[id] === state ? next : { ...next, tasks: { ...next.tasks, [id]: state } };
+    }
+    case "reviewUpdated":
+      return phased(
+        current,
+        `review:${event.review.id}`,
+        event.review.state.type === "running" ? "reviewing" : undefined,
+      );
+    case "integratedCheckUpdated":
+      return phased(
+        current,
+        `check:${event.check.id}`,
+        event.check.state.type === "running" ? "checking" : undefined,
+      );
+    case "backgroundRunUpdated":
+      return event.run.tool === "run_check"
+        ? phased(
+            current,
+            `run:${event.run.id}`,
+            event.run.state.type === "running" ? "checking" : undefined,
+          )
+        : current;
+    case "orchestratorStepped":
+      return stepped(current, event.step.kind);
     case "approvalUpdated":
       return {
         ...current,
@@ -102,8 +200,16 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
   }
 }
 
-function conversationOf({ event }: EventEnvelope): string | null {
+function conversationOf({ stream, event }: EventEnvelope): string | null {
   switch (event.type) {
+    case "orchestratorStepped":
+      return stream.startsWith("conversation:") ? stream.slice("conversation:".length) : null;
+    case "reviewUpdated":
+      return event.review.conversationId;
+    case "integratedCheckUpdated":
+      return event.check.conversationId;
+    case "backgroundRunUpdated":
+      return event.run.conversationId;
     case "runStateChanged":
       return event.conversationId;
     case "taskUpdated":
@@ -136,10 +242,17 @@ export function applyActivityEvents(batch: readonly EventEnvelope[]): void {
   if (changed) useActivity.setState({ byConversation: changed });
 }
 
-/** What a sidebar row shows: a spinner while it runs, a pill while it waits for the user. */
-export type RowActivity = { running: boolean; awaiting: "approval" | "input" | null };
+/**
+ * What a sidebar row shows: a pill while it waits for the user, else a spinner while it runs or
+ * is in a phase, with the phase's name.
+ */
+export type RowActivity = {
+  running: boolean;
+  awaiting: "approval" | "input" | null;
+  phase: SessionPhase | null;
+};
 
-const QUIET: RowActivity = { running: false, awaiting: null };
+const QUIET: RowActivity = { running: false, awaiting: null, phase: null };
 
 export function rowActivity(activity: Activity | undefined): RowActivity {
   if (!activity) return QUIET;
@@ -154,7 +267,9 @@ export function rowActivity(activity: Activity | undefined): RowActivity {
       : activity.questions.size > 0
         ? "input"
         : null;
-  return running || awaiting ? { running, awaiting } : QUIET;
+  const phases = new Set(Object.values(activity.phases));
+  const phase = PHASE_ORDER.find((each) => phases.has(each)) ?? null;
+  return running || awaiting || phase ? { running, awaiting, phase } : QUIET;
 }
 
 /** The row activity of one conversation; re-renders only when it changes. */
@@ -168,5 +283,6 @@ export function runningConversations(byConversation: Record<string, Activity>): 
 export function useRowActivity(conversationId: string): RowActivity {
   const running = useActivity((s) => rowActivity(s.byConversation[conversationId]).running);
   const awaiting = useActivity((s) => rowActivity(s.byConversation[conversationId]).awaiting);
-  return running || awaiting ? { running, awaiting } : QUIET;
+  const phase = useActivity((s) => rowActivity(s.byConversation[conversationId]).phase);
+  return running || awaiting || phase ? { running, awaiting, phase } : QUIET;
 }

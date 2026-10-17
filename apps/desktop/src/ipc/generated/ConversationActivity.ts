@@ -2,6 +2,7 @@
 import type { CardId } from "./CardId";
 import type { ConversationId } from "./ConversationId";
 import type { RunState } from "./RunState";
+import type { SessionPhase } from "./SessionPhase";
 import type { TaskId } from "./TaskId";
 import type { TaskState } from "./TaskState";
 
@@ -21,4 +22,9 @@ approvals: Array<CardId>,
 /**
  * Questions not answered yet.
  */
-questions: Array<CardId>, };
+questions: Array<CardId>, 
+/**
+ * What it is busy with that its row names, keyed by what runs it: `task:`, `review:`,
+ * `check:`, `run:`, `tool:`, `merge:` or `ci:` and its id.
+ */
+phases: Array<[string, SessionPhase]>, };

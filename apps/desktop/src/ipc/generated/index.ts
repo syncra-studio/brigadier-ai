@@ -375,6 +375,7 @@ export type { SearchUpdate } from "./SearchUpdate";
 export type { SendOutcome } from "./SendOutcome";
 export type { SendShortcut } from "./SendShortcut";
 export type { ServerFrame } from "./ServerFrame";
+export type { SessionPhase } from "./SessionPhase";
 export type { Settings } from "./Settings";
 export type { Setup } from "./Setup";
 export type { SetupRequest } from "./SetupRequest";

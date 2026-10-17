@@ -206,10 +206,10 @@ async function drive(): Promise<Record<string, unknown>> {
   await until(() => inFront('[data-slot="tab-chat"]') === null && button() !== null);
   seen.hidden = { view: chatOf(PAGE_TAB)!.view, button: button(), pageFull: halves().content === halves().whole };
   // While hidden, the dot shows while the chat works, and for what came since it was seen.
-  useActivity.setState((state) => ({ byConversation: { ...state.byConversation, [chat.id]: { run: "running", tasks: {}, approvals: new Set(), questions: new Set() } } }));
+  useActivity.setState((state) => ({ byConversation: { ...state.byConversation, [chat.id]: { run: "running", tasks: {}, approvals: new Set(), questions: new Set(), phases: {} } } }));
   await until(() => button()?.dot === true, 2000);
   seen.dotWorking = button()?.dot;
-  useActivity.setState((state) => ({ byConversation: { ...state.byConversation, [chat.id]: { run: "idle", tasks: {}, approvals: new Set(), questions: new Set() } } }));
+  useActivity.setState((state) => ({ byConversation: { ...state.byConversation, [chat.id]: { run: "idle", tasks: {}, approvals: new Set(), questions: new Set(), phases: {} } } }));
   await until(() => button()?.dot === false, 2000);
   seen.dotIdle = button()?.dot;
   useApp.setState((state) => ({ conversations: { ...state.conversations, [chat.id]: { ...state.conversations[chat.id]!, updatedAtMs: (chatOf(PAGE_TAB)!.seenAt ?? 0) + 1000 } } }));

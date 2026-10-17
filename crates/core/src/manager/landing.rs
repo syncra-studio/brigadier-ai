@@ -2515,6 +2515,11 @@ fn wrote_since(board: &crate::board::Board, at_ms: i64) -> bool {
         .any(|item| item.queued_at_ms.max(item.edited_at_ms.unwrap_or(0)) >= at_ms)
 }
 
+/// The consent (`asked_in`) of the merge held now, if any, for the sidebar's "Merging".
+pub(crate) fn held_merge(board: &crate::board::Board) -> Option<String> {
+    pending_merge(board).map(|held| held.asked_in)
+}
+
 /// The pending merge, if any: the latest `MergeHeld` whose consent isn't spent.
 pub(super) fn pending_merge(board: &crate::board::Board) -> Option<PendingMerge> {
     let steps = &board.orchestrator_steps;

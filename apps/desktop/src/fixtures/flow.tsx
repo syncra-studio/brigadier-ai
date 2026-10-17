@@ -452,6 +452,7 @@ useActivity.setState({
       tasks: Object.fromEntries(Object.values(tasks).map((each) => [each.id, each.state])),
       approvals: new Set(Object.keys(pending)),
       questions: new Set(),
+      phases: {},
     },
   },
 });

@@ -1784,6 +1784,24 @@ pub struct ConversationActivity {
     pub approvals: Vec<CardId>,
     /// Questions not answered yet.
     pub questions: Vec<CardId>,
+    /// What it is busy with that its row names, keyed by what runs it: `task:`, `review:`,
+    /// `check:`, `run:`, `tool:`, `merge:` or `ci:` and its id.
+    pub phases: Vec<(String, SessionPhase)>,
+}
+
+/// What a conversation is busy with, as its sidebar row names it ("Watching CI").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionPhase {
+    /// A held merge, a merge worker, or the thread's `finish_session`.
+    Merging,
+    /// A review by the other vendor, or a review worker.
+    Reviewing,
+    /// The thread's `run_check` (in its turn or the background), the session's full checks,
+    /// or a verifier.
+    Checking,
+    /// A CI watch of a push.
+    WatchingCi,
 }
 
 // ----- worker steps -----------------------------------------------------------------------

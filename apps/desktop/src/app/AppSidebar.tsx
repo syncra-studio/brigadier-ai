@@ -61,7 +61,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { openFolder } from "@/ipc/client";
-import type { Conversation, Project } from "@/ipc/generated";
+import type { Conversation, Project, SessionPhase } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import {
   archive,
@@ -824,17 +824,26 @@ const ProjectRow = memo(function ProjectRow({
   );
 });
 
+/** What a row says next to its spinner while its conversation is in a phase. */
+const PHASE_WORDS: Record<SessionPhase, string> = {
+  merging: "Merging",
+  reviewing: "Reviewing",
+  checking: "Checking",
+  watchingCi: "Watching CI",
+};
+
 /**
  * At the end of a row, showing a chat's state: a green "Awaiting approval" or "Needs input"
- * pill while it waits for the user, else a spinner while it runs, else a small dot when it
- * finished something since the user last had it open. The row's actions take its place on hover.
+ * pill while it waits for the user, else a spinner while it runs, named by its phase when it is
+ * in one ("Watching CI"), else a small dot when it finished something since the user last had
+ * it open. The row's actions take its place on hover.
  */
 function RowStatus({ conversationId }: { conversationId: string }) {
-  const { running, awaiting } = useRowActivity(conversationId);
+  const { running, awaiting, phase } = useRowActivity(conversationId);
   const seen = useLastOpened((s) => s.at[conversationId]);
   const finishedAtMs = useApp((s) => lastFinished(s.conversations[conversationId]));
   const open = useApp((s) => s.selection.type === "conversation" && s.selection.id === conversationId);
-  if (!running && !awaiting) {
+  if (!running && !awaiting && !phase) {
     if (!unread(finishedAtMs, seen, open)) return null;
     return (
       <span
@@ -860,15 +869,28 @@ function RowStatus({ conversationId }: { conversationId: string }) {
       </span>
     );
   }
+  const spinner = "size-icon-sm shrink-0 animate-spin motion-reduce:animate-none";
+  if (phase) {
+    return (
+      <span
+        data-slot="row-status"
+        data-status={phase}
+        className={cn(
+          "text-muted-foreground flex shrink-0 items-center gap-1 text-2xs whitespace-nowrap",
+          hideOnRowHover,
+        )}
+      >
+        <Spinner className={spinner} />
+        {PHASE_WORDS[phase]}
+      </span>
+    );
+  }
   return (
     <Spinner
       data-slot="row-status"
       data-status="running"
       aria-label="Running"
-      className={cn(
-        "text-muted-foreground size-icon-sm shrink-0 animate-spin motion-reduce:animate-none",
-        hideOnRowHover,
-      )}
+      className={cn("text-muted-foreground", spinner, hideOnRowHover)}
     />
   );
 }

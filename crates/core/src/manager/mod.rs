@@ -135,6 +135,7 @@ pub use brains::{BrainCounters, IndexRunStats};
 pub use closing::Turn;
 pub use conversation::SendOutcome;
 pub(crate) use integrated_checks::integrated_check_number;
+pub(crate) use landing::held_merge;
 pub use side_chat::BrowserPage;
 pub use takeover::{HostedTerminal, TerminalHost, WorkerTerminal};
 pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES, STOP_GRANT_ENV};
