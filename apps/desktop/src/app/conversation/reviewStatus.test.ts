@@ -55,11 +55,15 @@ test("the review line says the review runs, then what the thread recorded, in pl
   );
 });
 
-test("two reviews, 3 + 2 findings, 4 fixed and 1 dismissed, read clean; one left open reads 1 open", () => {
+test("two reviews, 3 + 2 findings, 4 fixed and 1 dismissed, read so, never clean; one left open reads 1 open", () => {
   const fixedIn = (id: string): Finding => item(id, { type: "fixed", task: "task-7", why: null, checked: "read at the tip" });
   const first = found("1", 1, [fixedIn("R1.1"), fixedIn("R1.2"), fixedIn("R1.3")]);
   const second = found("2", 2, [fixedIn("R2.1"), item("R2.2", { type: "dismissed", why: "by design" })]);
-  assert.equal(reviewStatus([first, second]), "Review: clean");
+  assert.equal(reviewStatus([first, second]), "Review: 4 fixed · 1 dismissed");
+  // Findings the thread left unfixed (dismissed) never read clean either.
+  const left = found("3", 3, ["R3.1", "R3.2", "R3.3", "R3.4"].map((id) => item(id, { type: "dismissed", why: "left for later" })));
+  assert.equal(reviewStatus([left]), "Review: 4 dismissed");
+  assert.equal(reviewStatus([first]), "Review: 3 fixed");
   const leftOpen = found("2", 2, [fixedIn("R2.1"), item("R2.2", { type: "open", why: null })]);
   assert.equal(reviewStatus([first, leftOpen]), "Review: 1 open");
   // Not recorded yet: "new", never the reviews' raw count.
@@ -108,9 +112,9 @@ test("after a merge, the line counts only that merge's open findings, never acro
     merged: "Merged · 1 open (not fixed)",
     current: null,
   });
-  const clean = found("3", 50, [fixed("R3.1")]);
-  assert.deepEqual(text(reviewLines([merged(20), merged(40), merged(60)], [first, second, clean])), {
-    merged: "Merged · review clean",
+  const fixedOnly = found("3", 50, [fixed("R3.1")]);
+  assert.deepEqual(text(reviewLines([merged(20), merged(40), merged(60)], [first, second, fixedOnly])), {
+    merged: "Merged · 1 fixed",
     current: null,
   });
   assert.equal(reviewLines([merged(20)], [first]).merged?.findings.length, 3);
@@ -156,15 +160,18 @@ test("the lines count the reviews of what landed and of the thread's own commits
 });
 
 test("merged work and work since, both clean, read as one row: Review: clean", () => {
-  const before = found("1", 10, [fixed("R1.1")]);
+  const before = review("1", 10, { type: "clean" });
   const after = review("2", 30, { type: "clean" });
   const row = reviewRow(reviewLines([merged(20)], [before, after]));
   assert.equal(row?.text, "Review: clean");
   // The list still keeps each batch apart, with what the thread recorded of each.
   assert.deepEqual(row?.sections.map((section) => [section.label, section.outcome, section.findings.length]), [
-    ["Merged work", "clean", 1],
+    ["Merged work", "clean", 0],
     ["Since the merge", "clean", 0],
   ]);
+  // A fix that landed is said, never folded into clean.
+  const fixedBefore = reviewRow(reviewLines([merged(20)], [found("1", 10, [fixed("R1.1")]), after]));
+  assert.equal(fixedBefore?.text, "Merged: 1 fixed · Since the merge: clean");
   assert.equal(reviewRow(reviewLines([], [])), null);
 });
 

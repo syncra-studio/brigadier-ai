@@ -35,7 +35,7 @@ import {
   useOvernightCards,
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
-import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
+import { contextPlanId, latestPlanRequest } from "@/app/conversation/planProgress";
 import { PreviewChip } from "@/app/conversation/PreviewChip";
 import { ChecksRow, ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
@@ -844,7 +844,7 @@ function SessionSummaryContent({
   const plans = planIds.filter((id) => !overnight.some((card) => card.run.planId === id));
   const currentPlanId = useBoard((s) => {
     if (s.board?.conversationId !== conversation.id) return null;
-    return contextPlanId(s.board.plans, plans, activePlanRequest(s.board.requests));
+    return contextPlanId(s.board.plans, plans, latestPlanRequest(s.board.requests));
   });
   // A plan the thread asked to see (an earlier plan's "View plan"), until another plan takes over.
   const shownPlan = useSummary((s) => s.plan);

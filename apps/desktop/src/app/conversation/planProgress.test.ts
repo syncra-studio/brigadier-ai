@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { activePlanRequest, capsuleMode, contextPlanId, currentRequestPlan, planProgress, planStepStatus, stepStates } from "@/app/conversation/planProgress";
+import { activePlanRequest, capsuleMode, contextPlanId, currentRequestPlan, latestPlanRequest, planProgress, planStepStatus, stepStates } from "@/app/conversation/planProgress";
 import type { Plan, PlanState, TaskState, UserRequest } from "@/ipc/generated";
 
 function plan(state: PlanState, id = "plan", createdAtMs = 1): Plan {
@@ -124,15 +124,25 @@ test("the context card keeps the latest session plan after requests end, without
   const plans = { older, latest };
   const ids = [older.id, latest.id];
   for (const state of [{ type: "done" }, { type: "stopped" }, { type: "failed", error: "failure" }] as const) {
-    const active = activePlanRequest({ request: request(state) });
-    assert.equal(contextPlanId(plans, ids, active), latest.id);
-    assert.equal(capsuleMode(false, false, active, latest), null);
+    const ended = latestPlanRequest({ request: request(state) });
+    assert.equal(contextPlanId(plans, ids, ended), latest.id, "kept after its request ends");
+    assert.equal(capsuleMode(false, false, activePlanRequest({ request: request(state) }), latest), null);
   }
   assert.equal(contextPlanId(plans, ids, null), latest.id);
   assert.equal(contextPlanId(plans, ids, request({ type: "working" })), latest.id);
   for (const state of [{ type: "working" }, { type: "waiting" }] as const) {
     assert.equal(contextPlanId(plans, ids, request(state, "newer", 3)), null);
   }
+  // A newer request without a plan clears it, while it works and after it ends: the earlier
+  // request's plan never comes back.
+  for (const state of [{ type: "working" }, { type: "done" }, { type: "stopped" }] as const) {
+    const latestRequest = latestPlanRequest({ request: request({ type: "done" }), newer: request(state, "newer", 3) });
+    assert.equal(latestRequest?.id, "newer");
+    assert.equal(contextPlanId(plans, ids, latestRequest), null);
+  }
+  // A request steered into another speaks through it.
+  const steered = { ...request({ type: "done" }, "steered", 4), steeredInto: "request" };
+  assert.equal(latestPlanRequest({ request: request({ type: "done" }), steered })?.id, "request");
   assert.equal(contextPlanId(plans, [], null), null);
   assert.equal(contextPlanId(plans, [older.id], request({ type: "working" })), null);
 });
