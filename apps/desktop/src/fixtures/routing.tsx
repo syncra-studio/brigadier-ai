@@ -158,6 +158,19 @@ function Fixture() {
       },
       () => {
         seen.formAfterCancel = Boolean(document.querySelector('[data-slot="routing-rule-form"]'));
+        // Scrolled so Add rule sits just under the page's top edge: a click there reaches it.
+        const add = button("Add rule");
+        const scroller = add?.closest(".overflow-y-auto");
+        if (add && scroller) {
+          scroller.scrollTop += add.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8;
+        }
+      },
+      () => {
+        const add = button("Add rule");
+        const box = add?.getBoundingClientRect();
+        const hit = box ? document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) : null;
+        seen.addRuleNearTop = Boolean(box && box.top < 60);
+        seen.addRuleHit = Boolean(add && hit && add.contains(hit));
         setResult(JSON.stringify(seen));
       },
     ];

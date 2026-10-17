@@ -47,7 +47,6 @@ const twMerge = extendTailwindMerge({
         "settings-control",
         "page-toolbar",
         "settings-band",
-        "settings-top",
         "titlebar",
         "titlebar-chevron",
         "titlebar-nav-end",

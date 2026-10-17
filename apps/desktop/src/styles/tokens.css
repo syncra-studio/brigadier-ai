@@ -34,8 +34,7 @@
  *                                             an on/off switch
  *               min-w-settings-control        the room a Settings row keeps for its control
  *               h-page-toolbar                the strip atop a Settings page
- *               h-settings-band, pt-settings-top  the band atop a Settings page, under the
- *                                             titlebar, that it scrolls under; where its title starts
+ *               h-settings-band               the band atop a Settings page, under the titlebar
  *               max-h-action-list             a worker's expanded run of actions (9 rows)
  *               max-h-command-list            the composer's / menu (10 rows and a half, then scrolls)
  *               h-kbd, min-w-kbd              keyboard hints
@@ -336,10 +335,9 @@
   --spacing-switch-travel: calc(var(--spacing-switch-width) - var(--spacing-switch-thumb) - 0.125rem);
   /* The strip atop a Settings page, over its title. */
   --spacing-page-toolbar: 2.875rem;
-  /* The band over a Settings page that drags the window: the titlebar's strip and the page's;
-     the page scrolls under it, and its title starts 16px below it. */
+  /* The band atop a Settings page, over its title, that drags the window; it scrolls away with
+     the page. */
   --spacing-settings-band: var(--spacing-page-toolbar);
-  --spacing-settings-top: calc(var(--spacing-settings-band) + var(--spacing) * 4);
   /* A Settings row keeps at least this much room for its control. */
   --spacing-settings-control: min(10rem, 40cqw);
   /* Window chrome: top bars, room for the macOS traffic lights. */

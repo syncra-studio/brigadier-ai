@@ -68,20 +68,14 @@ export function SettingsPage({
         )}
       >
         {/* The band at the page's top, under the titlebar and over the title, for dragging the
-            window. Scrolling, the page passes under it up to the titlebar's bottom edge; the
-            wheel over it still scrolls the page. */}
-        <div
-          data-tauri-drag-region
-          className={cn(
-            "h-settings-band shrink-0",
-            scrollable && "sticky top-0 z-20 -mb-settings-band",
-          )}
-        />
+            window. It scrolls away with the page: lying over it, it would take the clicks on
+            whatever scrolls under it. */}
+        <div data-tauri-drag-region className="h-settings-band shrink-0" />
         <div
           className={cn(
-            "mx-auto flex w-full flex-col px-5",
+            "mx-auto flex w-full flex-col px-5 pt-4",
             wide ? "max-w-settings-wide" : "max-w-settings",
-            scrollable ? "pt-settings-top pb-12" : "min-h-0 flex-1 pt-4",
+            scrollable ? "pb-12" : "min-h-0 flex-1",
           )}
         >
           {back && (
