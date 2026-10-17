@@ -141,3 +141,18 @@ test("A jump opens the other session at the exact message, both ways, and the si
   assert.deepEqual(seen.afterArrival, { ...none, "peer-docs": true });
   assert.deepEqual(seen.afterReopen, none);
 });
+
+
+test("a second send mid-wait has its own Sending row until its wait arrives or the turn ends", { timeout: 120000 }, async (t) => {
+  const rows = async (state: string) => JSON.parse(await renderFixtureLive(t,
+    `peer-messages.html?drive=live&live=second${state}`, "peer-result", 90000)) as { state: string; label: string }[];
+  const sending = await rows("");
+  assert.equal(sending.length, 2);
+  assert.deepEqual(sending[1], { state: "sending", label: "Sending message to Release notes" });
+  const waiting = await rows("-wait");
+  assert.equal(waiting.length, 1);
+  assert.equal(waiting[0]?.state, "waiting");
+  const ended = await rows("-done");
+  assert.equal(ended.length, 1);
+  assert.match(ended[0]?.label ?? "", /^Sent messages to Docs and Release notes, waited/);
+});

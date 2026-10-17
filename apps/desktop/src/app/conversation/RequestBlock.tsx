@@ -27,7 +27,7 @@ import { ImagesRow, MadeImages } from "@/app/conversation/activity/ImageRows";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
-import { type Activity, type LeadStep, thinkingLabel, turnActivity } from "@/app/conversation/activity/group";
+import { type Activity, type LeadStep, joinExchanges, thinkingLabel, turnActivity } from "@/app/conversation/activity/group";
 import { deniedCall } from "@/app/conversation/activity/words";
 import { waitingWords, went } from "@/app/conversation/activity/peerWords";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
@@ -524,14 +524,14 @@ const ActivityItems: FC<{
   summary: boolean;
   /** The header's "{n} denied actions" was clicked: the groups holding them open. */
   revealDenied: boolean;
-}> = ({ activity, live, thought, streaming, commentary, requestIds, summary, revealDenied }) => {
+}> = ({ activity: unjoined, live, thought, streaming, commentary, requestIds, summary, revealDenied }) => {
   const head = useThreadStatusHead(live);
   // Under a message just steered in, with what ran before it summed up, it thinks: even while that still runs.
   const line: (StatusHead & { thought?: boolean }) | null = !live
     ? null
-    : (head ?? (thought === null ? (activity.length === 0 ? { text: "Thinking", tone: "busy" } : null) : { text: thinkingLabel(thought) || "Thinking", tone: "busy", thought: true }));
+    : (head ?? (thought === null ? (unjoined.length === 0 ? { text: "Thinking", tone: "busy" } : null) : { text: thinkingLabel(thought) || "Thinking", tone: "busy", thought: true }));
   // A message to another session says how its exchange stands itself: the line stays under it.
-  const newest = activity.at(-1);
+  const newest = unjoined.at(-1);
   const lastStep = newest?.type === "group" ? newest.items.findLast((item) => item.type === "step") : undefined;
   const inGroup = lastStep?.type === "step" && lastStep.step.kind.type !== "peerSent" && lastStep.step.kind.type !== "messageRefused";
   // A message the running lead just sent, with nothing after it yet: its row still reads as
@@ -545,7 +545,7 @@ const ActivityItems: FC<{
   const approvals = useBoard((s) => s.board?.approvals);
   const revealing = useRevealing(useViewConversation()?.id ?? null);
   const peers = usePeerLookup(
-    activity.flatMap((item) => (item.type === "group" ? item.items.flatMap((step) => (step.type === "step" ? [step.step] : [])) : [])),
+    unjoined.flatMap((item) => (item.type === "group" ? item.items.flatMap((step) => (step.type === "step" ? [step.step] : [])) : [])),
   );
   const sentStep = newest?.type === "group" && lastStep !== undefined && newest.items.at(-1) === lastStep
     && lastStep.type === "step" && lastStep.step.kind.type === "peerSent" ? lastStep.step : null;
@@ -553,6 +553,8 @@ const ActivityItems: FC<{
     && sentStep.kind.waits.length === 0 && sentStep.kind.messageIds.length > 0
     && sentStep.kind.messageIds.every((id) => { const record = peers.records[id]; return !!record && went(record.state); })
     ? sentStep : null;
+  const activity = unjoined.map((item) => item.type === "group"
+    ? { ...item, items: joinExchanges(item.items, going) } : item);
   // What waits on the user, or a retry stalling the turn, still shows.
   const shownLine = going && line?.tone !== "needsYou" && !RETRYING.has(line?.text ?? null) ? null : line;
   // A call the user's Deny stopped reads as declined, not failed.
@@ -729,7 +731,8 @@ export const RequestBlock: FC = () => {
   const answer = answering ?? (endsWithPlan(sequence) ? null : answerIndex(meta.texts, finished && !phase));
   const answerAtMs = answer === null ? undefined : meta.texts[answer]?.answerAtMs;
   const updates = updateIndices(meta.texts, answer);
-  const activity = turnActivity(sequence);
+  // Decide which peer send is still in flight where the live row state is known.
+  const activity = turnActivity(sequence, false);
   // The answer, kept cards and access notices stay outside the fold.
   const folded = activity.filter((item) => item.type === "group" || foldsAway(item.entry, answer));
   const kept = sequence.filter((entry) => entry.kind !== "text" && !foldsAway(entry, answer));
