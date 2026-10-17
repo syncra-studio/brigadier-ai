@@ -2,8 +2,9 @@
 //! [`IDLE_EXIT`] and nothing runs (no turn or worker, Brain job, index scan, download,
 //! terminal or dictation, and keeping awake isn't set to "Always"). The daemon keeps running
 //! when the window closes so that unattended work goes on (PLAN.md §3), but once that work is
-//! done and the app is gone (quit, or crashed), nothing would ever end it. The app launches it
-//! again when it starts.
+//! done and the app is gone (quit, or crashed), nothing would ever end it. An app that went
+//! without quitting it (killed, or crashed) isn't waited for: the daemon quits as soon as
+//! nothing runs. The app launches it again when it starts.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -62,14 +63,32 @@ pub async fn exit_when_idle(daemon: Arc<Daemon>, stop: CancellationToken) -> any
             return Ok(());
         }
         let since = *alone_since.get_or_insert_with(Instant::now);
-        if since.elapsed() < wait || !running(&daemon).await.is_empty() {
+        let platform = daemon.runtime.platform();
+        let gone = app_gone(daemon.metrics.last_app(), |pid| {
+            platform.processes().is_alive(pid)
+        });
+        if !due(since.elapsed(), wait, gone) || !running(&daemon).await.is_empty() {
             continue;
         }
-        let _ = daemon
-            .quit
-            .try_send("no app connected for a while and nothing running");
+        let _ = daemon.quit.try_send(if gone {
+            "the app is gone and nothing is running"
+        } else {
+            "no app connected for a while and nothing running"
+        });
         return Ok(());
     }
+}
+
+/// Whether the app that last used the daemon has gone without asking it to quit (killed, or
+/// crashed): no app comes back until one is started anew.
+fn app_gone(last_app: Option<u32>, alive: impl Fn(u32) -> bool) -> bool {
+    last_app.is_some_and(|pid| !alive(pid))
+}
+
+/// Whether the daemon, with no app connected for `alone` and nothing running, quits now: after
+/// `wait`, or at once when the app is gone, rather than outliving it as an orphan.
+fn due(alone: Duration, wait: Duration, app_gone: bool) -> bool {
+    app_gone || alone >= wait
 }
 
 /// [`IDLE_EXIT`], or in a debug build `BRIGADIER_IDLE_EXIT_SECS` (to verify it without
@@ -83,4 +102,49 @@ fn idle_exit() -> Duration {
         return Duration::from_secs(secs.max(1));
     }
     IDLE_EXIT
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{app_gone, due};
+
+    #[cfg(unix)]
+    fn alive(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    /// An app killed by its process id leaves no orphan daemon: with nothing running, the
+    /// daemon quits at once instead of waiting half an hour for an app (#99).
+    #[cfg(unix)]
+    #[test]
+    fn a_daemon_quits_at_once_when_its_app_was_killed() {
+        let wait = Duration::from_secs(30 * 60);
+        let mut app = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = app.id();
+        assert!(!app_gone(Some(pid), alive));
+        assert!(!due(Duration::ZERO, wait, app_gone(Some(pid), alive)));
+        app.kill().unwrap();
+        app.wait().unwrap();
+        assert!(app_gone(Some(pid), alive));
+        assert!(due(Duration::ZERO, wait, app_gone(Some(pid), alive)));
+    }
+
+    /// With no app ever connected (started on its own), or once the wait is over, it goes as
+    /// before.
+    #[test]
+    fn without_an_app_the_daemon_waits_as_before() {
+        let wait = Duration::from_secs(30 * 60);
+        assert!(!app_gone(None, |_| false));
+        assert!(!due(Duration::from_secs(60), wait, false));
+        assert!(due(wait, wait, false));
+    }
 }

@@ -21,6 +21,8 @@ const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 const HEARTBEAT: Duration = Duration::from_millis(50);
 /// Heartbeat samples kept for the scheduler-delay summary (10 s at 50 ms).
 const HEARTBEAT_WINDOW: usize = 200;
+/// The name the desktop app connects under (its bridge).
+const APP_CLIENT: &str = "Brigadier";
 
 struct ProcessSample {
     pid: u32,
@@ -42,6 +44,8 @@ pub struct Metrics {
     latest: watch::Sender<DaemonMetrics>,
     connections: AtomicU32,
     clients: Mutex<HashMap<u64, ClientInfo>>,
+    /// The process of the app that connected last, kept once it disconnects.
+    last_app: Mutex<Option<u32>>,
     heartbeat: Mutex<VecDeque<f64>>,
     system: Arc<Mutex<System>>,
     /// Where the Brain counters come from.
@@ -65,6 +69,7 @@ impl Metrics {
             latest: watch::channel(DaemonMetrics::default()).0,
             connections: AtomicU32::new(0),
             clients: Mutex::new(HashMap::new()),
+            last_app: Mutex::new(None),
             heartbeat: Mutex::new(VecDeque::with_capacity(HEARTBEAT_WINDOW)),
             system: Arc::new(Mutex::new(System::new())),
             sessions: Arc::downgrade(sessions),
@@ -132,7 +137,15 @@ impl Metrics {
         self.clients.lock().unwrap_or_else(|p| p.into_inner()).len()
     }
 
+    /// The process of the app that connected last, still connected or not.
+    pub fn last_app(&self) -> Option<u32> {
+        *self.last_app.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     pub fn connection_opened(&self, id: u64, client: ClientInfo) {
+        if client.name == APP_CLIENT {
+            *self.last_app.lock().unwrap_or_else(|p| p.into_inner()) = Some(client.pid);
+        }
         self.connections.fetch_add(1, Ordering::Relaxed);
         self.clients
             .lock()
