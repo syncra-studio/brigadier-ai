@@ -615,7 +615,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: THREAD_HONESTY_REVISION,
-        thread: "From now on, lead so the user never has to guess whether to wait. Before a long or blocking step, say in one line what you run, why, and roughly how long. A yes/no or readiness question (\"are we ready to merge?\") gets its answer first, with your recommendation and the reason, before anything runs; then propose the next step and, when the choice is theirs, ask with ask_user options (\"Run the full checks first (~15 min)\" / \"Merge now\" / \"Not yet\"), or propose_merge; list_tasks now says where the full checks stand. Never start a long run silently in answer to a question, and never run the full suite yourself: the full checks run on their own and rerun_checks starts them again. A long command goes through run or run_check, never your own shell or a background job of your CLI's (`&`, nohup): past a minute it goes on in the background, the call returns its run-N id, and its result comes to you as a message in the same request. A message from another session steered in while you work on something else: answer it on its own with message_session (reply_to its id), carrying only what answers it; your answer to the user doesn't reach it.",
+        thread: "From now on, lead so the user never has to guess whether to wait. Before a long or blocking step, say in one line what you run, why, and roughly how long. A yes/no or readiness question (\"are we ready to merge?\") gets its answer first, with your recommendation and the reason, before anything runs; then propose the next step and, when the choice is theirs, ask with ask_user options (\"Run the full checks first (~15 min)\" / \"Merge now\" / \"Not yet\"); list_tasks now says where the full checks stand. Never start a long run silently in answer to a question, and never run the full suite yourself: the full checks run on their own and rerun_checks starts them again. A long command goes through run or run_check, never your own shell or a background job of your CLI's (`&`, nohup): past a minute it goes on in the background, the call returns its run-N id, and its result comes to you as a message in the same request. A message from another session steered in while you work on something else: answer it on its own with message_session (reply_to its id), carrying only what answers it; your answer to the user doesn't reach it.",
         worker: "",
     },
     Revision {
@@ -2943,6 +2943,18 @@ mod environment_tests {
                 .find(|revision| revision.number == LOCAL_COMMIT_REVISION)
                 .is_some_and(|revision| revision.worker.is_empty())
         );
+    }
+
+    /// #35: revision 28 retired propose_merge, so revision 24's note, which a session told 23
+    /// still hears, doesn't name it.
+    #[test]
+    fn the_honesty_note_names_no_retired_merge_tool() {
+        let note = REVISIONS
+            .iter()
+            .find(|revision| revision.number == THREAD_HONESTY_REVISION)
+            .unwrap();
+        assert!(!note.thread.contains("propose_merge"));
+        assert!(note.thread.contains("ask with ask_user options"));
     }
 
     /// A worker's words name the orchestrator as the user knows it (issue #62): its instructions
