@@ -114,7 +114,7 @@ Verdicts: **have** = already in Brigadier; **partly**; **missing**; **rejected**
 | 1 | Meter every call: per task, agent and owner, with cached tokens on their own line | T Art. I, W, R5 | `turn_usage` per task, step, account and request (`crates/core/src/routing/store.rs:36`, columns at `:79`–`:136`, `StepKind` `:152`) | have | 61 live rows with `write_1h`, `write_5m`, `missed`, `cause` |
 | 2 | Judge by cost per successful outcome, not token totals | W, T, R4, R5 | Q58: tokens per merged change, first-look merge rate | partly | Decided 10-17; no code yet (no "first look" measure in `crates/`) |
 | 3 | Budgets, fiscal ceilings, session or loop caps, `--max-turns`, degrade at 90% | T Art. IV, W | none | n/a (rule) | The user rejected caps and budgets of every kind (PLAN §7 Rules) |
-| 4 | Route each kind of work to the cheapest model that is good enough | T, W, R1, R2, R4, R5 | Per-category floors (`crates/router/src/decide.rs:164`); the cheaper of near-equal models for scout and verify (`:188`); cheapest first for git text (`:181`); Brain jobs and model research on `cheapest()` (`crates/core/src/manager/git_actions.rs:587`); the commit writer on `writer_route()` (`:411`) | have, with a bug | `cheapest()` falls back to the CLI's first model (`git_actions.rs:619`): Brain jobs on `opus` (table above). Issue #258, proposal 1 |
+| 4 | Route each kind of work to the cheapest model that is good enough | T, W, R1, R2, R4, R5 | Per-category floors (`crates/router/src/decide.rs:164`); the cheaper of near-equal models for scout and verify (`:188`); cheapest first for git text (`:181`); Brain jobs and model research on `cheapest()` (`crates/core/src/manager/git_actions.rs:628`); the commit writer on `writer_route()` (`:452`) | have, with a bug | `cheapest()` falls back to the CLI's first model (`git_actions.rs:660`): Brain jobs on `opus` (table above). Issue #258, proposal 1 |
 | 5 | Cheap first, escalate when a quality check fails, log each escalation | T (cascade), R3 | Fallback only on limits and errors (`crates/core/src/manager/fallback.rs:74`); a failed model is excluded from the retry (`decide.rs:239`); outcome learning (`crates/core/src/manager/outcomes.rs:1`) | partly | No escalation on a failed check. Proposal 4 |
 | 6 | A frontier call needs a logged reason | T Art. II | Routing explains each pick (`decide.rs:1993` `score_why`) | have | |
 | 7 | Move most calls to open-weight models | R5 | Only through CLIs Brigadier supports; local models are Phase 7 (`docs/PLAN.md:322`) | n/a now | Subscription CLIs only, no proxy |
@@ -137,7 +137,7 @@ Verdicts: **have** = already in Brigadier; **partly**; **missing**; **rejected**
 | 24 | Subagents return conclusions, not raw dumps | R1, T | Report "about 800 tokens at most", longer parts as artifacts (`prompts.rs:1678`); envelope cap with `read_report` for the rest (`workers.rs:97`) | have | Subagent results: median 5.4k characters, about 179k tokens in 14 days |
 | 25 | Structured memory instead of re-explaining | T, R2 | Brain, `remember`, evidence re-read on each use (`crates/core/src/manager/evidence.rs:1`) | have | |
 | 26 | Clear task boundaries; brief has paths, the check and done-when | R2, T Claude Code page | `delegate_task` spec with `include_request` (`crates/core/src/tools.rs:148`, `:190`) | have | |
-| 27 | Small specialised roles | R2 | Thread, workers, Brain jobs on a read-only tool set (`crates/providers/src/claude/mod.rs:84`), commit-message writer (`git_actions.rs:411`) | have | The writer isn't metered (proposal 1) |
+| 27 | Small specialised roles | R2 | Thread, workers, Brain jobs on a read-only tool set (`crates/providers/src/claude/mod.rs:84`), commit-message writer (`git_actions.rs:452`) | have | The writer isn't metered (proposal 1) |
 | 28 | Improve the process from real failures | R2 | Q58 measures, GitHub issues, outcome learning | have | |
 | 29 | Skip unneeded calls: batching, no detours | R4, W | Quiet envelopes batched for 15 s (`crates/core/src/manager/conversation.rs:184`); review only after a passing check (`crates/core/src/manager/unreviewed.rs:95`); the thread does small work itself (`prompts.rs:121`–`122`) | have | Phase O: calls at or under plain |
 | 30 | Usage grows to fill what's saved | R4 | Q58 reports tokens per merged change | n/a (observation) | |
@@ -184,8 +184,8 @@ input. The post claims −82% tokens on a three-turn analytics task with a small
   use it (`delegate_task`, `message_worker`) carry prose, not data.
 
 **Verdict:** don't build `$var`. If a future task does show a tool forwarding big stored output, the cheap form is
-to let `delegate_task` accept `out-<id>` and report ids next to `attachments`. Re-measure first with
-`probe2.py` (below).
+to let `delegate_task` accept `out-<id>` and report ids next to `attachments`. Re-measure first with the copy
+measure in "How the numbers were made".
 
 ## The proposals in detail
 
@@ -193,9 +193,9 @@ to let `delegate_task` accept `out-<id>` and report ids next to `attachments`. R
 
 Issue: [#258](https://github.com/syncra-studio/brigadier-ai/issues/258).
 
-- **What's wrong:** `cheapest()` (`crates/core/src/manager/git_actions.rs:587`) looks for the family word (`haiku`
+- **What's wrong:** `cheapest()` (`crates/core/src/manager/git_actions.rs:628`) looks for the family word (`haiku`
   or `luna`) among the listed models that the registry doesn't reserve for one kind of work.
-  - If none matches, it takes `models.iter().find(|m| !m.legacy && available(&m.id))` (`:617`–`:619`), which is the
+  - If none matches, it takes `models.iter().find(|m| !m.legacy && available(&m.id))` (`:657`–`:660`), which is the
     first model in the CLI's list.
   - For Claude that is `opus`, the CLI's default (`cache/models-claude.json`: opus, fable, sonnet, haiku, …).
   - The recorded model of every Brain job from 23:46 on 10-16 is exactly `opus`.
@@ -205,9 +205,9 @@ Issue: [#258](https://github.com/syncra-studio/brigadier-ai/issues/258).
   - Its callers are Brain jobs (`crates/core/src/manager/brain_jobs.rs:391`) and model research
     (`crates/core/src/manager/research.rs:212`). Codex model research ran on a frontier-tier model the same night;
     that cause isn't pinned down.
-- **Commit messages are separate.** The commit writer uses `writer_route()` (`git_actions.rs:411`), not
+- **Commit messages are separate.** The commit writer uses `writer_route()` (`git_actions.rs:452`), not
   `cheapest()`, so this fix doesn't touch it.
-  - `run_writer()` (`:488`) drops the session's usage events, and `StepKind` (`crates/core/src/routing/store.rs:152`)
+  - `run_writer()` (`:529`) drops the session's usage events, and `StepKind` (`crates/core/src/routing/store.rs:152`)
     has no kind for it. So commit writing is not in `turn_usage` at all.
   - Change: meter it as its own step. If the user has chosen the writer model in settings, that is their choice
     and is never flagged as a routing mistake.
@@ -311,7 +311,7 @@ Nothing in proposals 1–4 changes a settled decision. Proposal 2 applies Q68 as
 ## Paste-ready for the Workspaces/auto-merge Delegator prompt
 
 > Fold in these items from `docs/research/token-sources-2026-10-17.md`:
-> 1. Fix issue #258: `cheapest()` (`crates/core/src/manager/git_actions.rs:587`), used by Brain jobs and model
+> 1. Fix issue #258: `cheapest()` (`crates/core/src/manager/git_actions.rs:628`), used by Brain jobs and model
 >    research, picks the lowest registry tier available (light, then standard), never strong or frontier, and
 >    skips with a log line otherwise. Add tests for an alias that resolves into a reserved entry and for a list that
 >    starts with a frontier model.
@@ -338,7 +338,7 @@ Nothing in proposals 1–4 changes a settled decision. Proposal 2 applies Q68 as
 
 ## How the numbers were made
 
-Read-only scripts, kept outside the repo during the review:
+Read-only scripts, run outside the repo and deleted afterwards. Each is described here so it can be rebuilt:
 - `probe.py`: weighted usage, cache shares, prefix rewrites by idle gap, tool-result sizes and errors, and model mix
   over `~/.claude/projects`, deduplicated by message id.
 - `probe2.py`: the same split by entrypoint, plus copied lines (a line of 40 or more characters in a tool call's
