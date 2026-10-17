@@ -24,10 +24,10 @@ const QUICK_LIFT_MS = 300;
 /**
  * The welcome's title, a line at a time: the first shorter than the second. Others to try
  * (swap one in):
- *   ["Meet the", "brigadier, march on!"]
+ *   ["Meet the", "brigadier, march!"]
  *   ["Let Brigadier", "command your fleet."]
  */
-const TITLE = ["Meet the", "brigadier, march!"] as const;
+const TITLE = ["Brigadier,", "at your command."] as const;
 
 /** A time token from tokens.css ("2.2s", "450ms") in milliseconds. */
 function tokenMs(name: string): number {
