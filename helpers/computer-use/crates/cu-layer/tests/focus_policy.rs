@@ -131,6 +131,27 @@ fn path_1_a_launch_only_sends_back_what_it_launched() {
 }
 
 #[test]
+fn path_1_an_action_sends_back_a_running_app_it_handed_off_to() {
+    let _serial = serial();
+    set_idle(60.0);
+    set_app(OTHER, "com.apple.Preview", true, 600);
+    // The driver's watch around an action: a wildcard entry for any app but the user's.
+    let lease = focus_steal::begin_suppression(None, USER_APP, "WindowChangeDetector.snapshot");
+    assert_eq!(
+        FocusStealPreventer::restores_for_activation(OTHER),
+        vec![USER_APP],
+        "an app that was already running and came forward from the action"
+    );
+    set_idle(0.2);
+    assert!(
+        FocusStealPreventer::restores_for_activation(OTHER).is_empty(),
+        "R2: the user's own switch stays"
+    );
+    drop(lease);
+    set_idle(60.0);
+}
+
+#[test]
 fn path_2_a_self_activated_target_asks_the_policy() {
     let _serial = serial();
     set_app(TARGET, "com.apple.TextEdit", true, 600);

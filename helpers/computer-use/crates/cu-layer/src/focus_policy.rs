@@ -7,9 +7,11 @@
 //! and a target window rising above the user's. A restore is left out when
 //! it would undo something that is not the agent's doing:
 //!
-//! - R1: an action that doesn't know its target's pid yet (a launch) only
-//!   sends back an app launched since the action began, never an app that
-//!   was already running, so the user's own switch to it stays;
+//! - R1: a launch that doesn't know its app's pid yet only sends back an app
+//!   launched since it began, never an app that was already running, so the
+//!   user's own switch to it stays. An action's own watch (a click, a key)
+//!   does send back an app that was already running: one the action handed
+//!   a document or a link to, which macOS brought forward;
 //! - R2: nothing is sent back right after the user's own keyboard, pointer
 //!   or trackpad input, unless the action itself launched the app;
 //! - R3: system prompts and panels (a password or Touch ID prompt, a
@@ -55,7 +57,12 @@ pub struct Restore {
     pub target_pid: Option<i32>,
     /// When the action or launch began.
     pub began: SystemTime,
+    /// A launch's watch, as opposed to an action's.
+    pub launch: bool,
 }
+
+/// The origin the driver and [`crate::launch`] give a launch's suppression.
+const LAUNCH_ORIGIN: &str = "LaunchAppTool.";
 
 /// Where the facts come from: the running system, or a test's fakes.
 pub trait Facts: Send + Sync {
@@ -74,7 +81,7 @@ pub fn refusal(
     let launched_by_action = app
         .launched_at
         .is_some_and(|launched| launched >= restore.began);
-    if restore.target_pid.is_none() && !launched_by_action {
+    if restore.launch && restore.target_pid.is_none() && !launched_by_action {
         return Some("already running before the action");
     }
     if app
@@ -101,6 +108,7 @@ fn request_restore(request: &platform_macos::focus_steal::RestoreRequest) -> Res
         began: SystemTime::now()
             .checked_sub(elapsed)
             .unwrap_or(SystemTime::UNIX_EPOCH),
+        launch: request.origin.starts_with(LAUNCH_ORIGIN),
     }
 }
 
@@ -200,10 +208,18 @@ mod tests {
         }
     }
 
-    fn action(target_pid: Option<i32>, began_secs_ago: u64) -> Restore {
+    fn launch(target_pid: Option<i32>, began_secs_ago: u64) -> Restore {
         Restore {
             target_pid,
             began: SystemTime::now() - Duration::from_secs(began_secs_ago),
+            launch: true,
+        }
+    }
+
+    fn action(target_pid: Option<i32>, began_secs_ago: u64) -> Restore {
+        Restore {
+            launch: false,
+            ..launch(target_pid, began_secs_ago)
         }
     }
 
@@ -212,11 +228,19 @@ mod tests {
         let older = regular("com.apple.TextEdit", 600);
         let fresh = regular("com.apple.TextEdit", 1);
         assert_eq!(
-            refusal(&action(None, 5), &older, 60.0),
+            refusal(&launch(None, 5), &older, 60.0),
             Some("already running before the action")
         );
-        assert_eq!(refusal(&action(None, 5), &fresh, 60.0), None);
-        assert_eq!(refusal(&action(Some(7), 5), &older, 60.0), None);
+        assert_eq!(refusal(&launch(None, 5), &fresh, 60.0), None);
+        assert_eq!(refusal(&launch(Some(7), 5), &older, 60.0), None);
+    }
+
+    #[test]
+    fn r1_an_action_sends_back_a_running_app_it_handed_a_document() {
+        let preview = regular("com.apple.Preview", 600);
+        assert_eq!(refusal(&action(None, 1), &preview, 60.0), None);
+        // The user's own switch right then still stays (R2).
+        assert_eq!(refusal(&action(None, 1), &preview, 0.2), Some("user input"));
     }
 
     #[test]
@@ -229,7 +253,7 @@ mod tests {
         assert_eq!(refusal(&action(Some(7), 5), &older, 1.5), None);
         // An app the action launched itself may be sent back at once.
         let fresh = regular("com.apple.TextEdit", 1);
-        assert_eq!(refusal(&action(None, 5), &fresh, 0.0), None);
+        assert_eq!(refusal(&launch(None, 5), &fresh, 0.0), None);
         assert_eq!(refusal(&action(Some(7), 5), &fresh, 0.0), None);
     }
 
@@ -242,7 +266,7 @@ mod tests {
                 "{bundle}"
             );
             assert_eq!(
-                refusal(&action(None, 5), &regular(bundle, 1), 60.0),
+                refusal(&launch(None, 5), &regular(bundle, 1), 60.0),
                 Some("system prompt"),
                 "{bundle}"
             );
