@@ -1728,7 +1728,8 @@ async fn a_stopped_tasks_preview_stops_before_its_work_is_kept() {
                     .call(
                         "start_preview",
                         json!({"command": "trap 'echo stopped > stopped.txt; exit 0' TERM; \
-                                           echo building; while :; do sleep 1; done",
+                                           echo building > building.txt; \
+                                           while :; do sleep 1; done",
                                "name": "build", "kind": "app"}),
                     )
                     .await;
@@ -1739,12 +1740,18 @@ async fn a_stopped_tasks_preview_stops_before_its_work_is_kept() {
     )
     .await;
     flow.say("Build it.").await;
+    // Stopped once its shell set its trap: a SIGTERM before that ends it writing nothing.
     let board = flow
-        .until("the worker's preview", |board| {
+        .until("the worker's preview to set its trap", |board| {
             board
                 .sorted_previews()
                 .iter()
                 .any(|preview| preview.task_id.is_some() && preview.state.is_live())
+                && Flow::task(board, 1)
+                    .workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.worktree.as_ref())
+                    .is_some_and(|worktree| Path::new(worktree).join("building.txt").exists())
         })
         .await;
     let task = Flow::task(&board, 1).id.clone();
