@@ -1,6 +1,6 @@
 //! The user's own source control in a checkout: staging, unstaging and discarding files.
 //! Every change takes the landing lock and is refused while the checkout is busy, as a commit
-//! is. Paths go to git NUL separated on stdin and are read literally.
+//! is; a merge in progress isn't busy here, its conflicts are resolved and staged with these. Paths go to git NUL separated on stdin and are read literally.
 
 use std::{collections::BTreeSet, fs};
 
@@ -141,7 +141,7 @@ impl Repo {
         }
         let lock = self.landing_lock();
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(what) = self.busy()? {
+        if let Some(what) = self.busy_besides_merge()? {
             return Err(crate::Error::Invalid(format!(
                 "the checkout is busy ({what})"
             )));

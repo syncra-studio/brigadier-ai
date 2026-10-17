@@ -2572,6 +2572,82 @@ pub struct SourceState {
     /// The files against the index, untracked and conflicted files included, sorted by path.
     /// A partly staged file is in both lists.
     pub changes: Vec<SourceFile>,
+    /// The merge in progress, if any.
+    #[serde(default)]
+    pub merging: Option<SourceMerge>,
+}
+
+/// A merge in progress in a checkout, for the Source panel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceMerge {
+    /// What is being merged in: a branch's name, else its commit's short id.
+    pub incoming: String,
+    /// The message git prepared for the merge commit.
+    pub message: String,
+}
+
+/// A branch the Source panel can merge from or switch to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceBranch {
+    /// `main`, or `origin/main` for a remote branch.
+    pub name: String,
+    pub remote: bool,
+    /// When its tip was committed, in ms since the Unix epoch.
+    pub at_ms: i64,
+    /// Its tip's author and subject.
+    pub author: String,
+    pub subject: String,
+}
+
+/// A conflicted file's versions, for its conflict and merge editor tabs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictFile {
+    /// The file as it is now, conflict markers and all; absent when it was deleted.
+    pub text: Option<String>,
+    /// The checkout's own version; absent when its side deleted it.
+    pub current: Option<String>,
+    /// The incoming version; absent when that side deleted it.
+    pub incoming: Option<String>,
+    /// Both versions merged again with every conflict marked `<<<<<<< Current`,
+    /// `||||||| Base`, `=======`, `>>>>>>> Incoming`; absent when a side deleted the file.
+    pub merged: Option<String>,
+    /// The two sides: the checkout's commit and branch, the incoming commit and name.
+    pub current_label: String,
+    pub incoming_label: String,
+}
+
+/// One of the Source panel's git actions on a checkout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SourceAction {
+    /// Merges a branch (local, or remote as `origin/main`) into the checked-out one.
+    Merge {
+        branch: String,
+    },
+    /// Aborts the merge in progress.
+    AbortMerge,
+    /// Switches to a branch; a remote one to the local branch of its name.
+    Checkout {
+        branch: String,
+    },
+    Pull,
+    Push,
+    Fetch,
+    /// Writes a conflicted file as the user resolved it, only while it is still `expected`
+    /// (absent: deleted); with `stage`, marks it resolved.
+    Resolve {
+        path: String,
+        expected: Option<String>,
+        text: String,
+        stage: bool,
+    },
 }
 
 /// One file of the Source panel.

@@ -1795,9 +1795,16 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             message,
             include_unstaged,
             push,
+            amend,
         } => Response::CommitChanges {
             outcome: heap(|| {
-                sessions.commit_changes(&conversation_id, message, include_unstaged, push)
+                sessions.commit_changes(
+                    &conversation_id,
+                    message,
+                    include_unstaged,
+                    push,
+                    amend.unwrap_or(false),
+                )
             })
             .await?,
         },
@@ -1855,12 +1862,32 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             message,
             include_unstaged,
             push,
+            amend,
         } => Response::CommitProjectChanges {
             outcome: heap(|| {
-                sessions.commit_project_changes(&project_id, message, include_unstaged, push)
+                sessions.commit_project_changes(
+                    &project_id,
+                    message,
+                    include_unstaged,
+                    push,
+                    amend.unwrap_or(false),
+                )
             })
             .await?,
         },
+        Request::ListSourceBranches { target } => Response::ListSourceBranches {
+            branches: heap(|| sessions.source_branches(&target)).await?,
+        },
+        Request::SourceAction { target, action } => Response::SourceAction {
+            state: heap(|| sessions.source_action(&target, action)).await?,
+        },
+        Request::GetConflictFile { target, path } => Response::GetConflictFile {
+            file: heap(|| sessions.conflict_file(&target, path)).await?,
+        },
+        Request::WriteCommitMessage { target } => {
+            let (message, note) = heap(|| sessions.write_source_message(&target)).await?;
+            Response::WriteCommitMessage { message, note }
+        }
         Request::GetReviewDiff {
             conversation_id,
             scope,

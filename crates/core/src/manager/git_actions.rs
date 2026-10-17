@@ -26,7 +26,8 @@ use crate::model::{
     ConversationId, Environment, GitStyle, ModelChoice, ProjectId, Settings, Setup,
 };
 use crate::work::{
-    CommitOutcome, GitState, SourceChange, SourceFile, SourceScope, SourceState, SourceStatus,
+    CommitOutcome, GitState, SourceChange, SourceFile, SourceMerge, SourceScope, SourceState,
+    SourceStatus,
 };
 use crate::{Error, Result};
 
@@ -202,19 +203,21 @@ impl SessionManager {
     }
 
     /// The user's commit of the checkout's changes (with `include_unstaged`, every change),
-    /// then, with `push`, a push of the branch. A blank `message` is written for them.
+    /// then, with `push`, a push of the branch. A blank `message` is written for them; during
+    /// a merge it is git's merge message, and with `amend` the last commit's own.
     pub async fn commit_changes(
         &self,
         id: &ConversationId,
         message: Option<String>,
         include_unstaged: bool,
         push: bool,
+        amend: bool,
     ) -> Result<CommitOutcome> {
         self.admit()?;
         let _fence = self.enter(id)?;
         let (path, _) = self.checkout(id)?;
         let project = self.core.conversation(id)?.project_id;
-        self.commit_at(path, project, message, include_unstaged, push)
+        self.commit_at(path, project, message, include_unstaged, push, amend)
             .await
     }
 
@@ -226,11 +229,19 @@ impl SessionManager {
         message: Option<String>,
         include_unstaged: bool,
         push: bool,
+        amend: bool,
     ) -> Result<CommitOutcome> {
         self.admit()?;
         let path = self.project_checkout(project)?;
-        self.commit_at(path, Some(project.clone()), message, include_unstaged, push)
-            .await
+        self.commit_at(
+            path,
+            Some(project.clone()),
+            message,
+            include_unstaged,
+            push,
+            amend,
+        )
+        .await
     }
 
     async fn commit_at(
@@ -240,9 +251,25 @@ impl SessionManager {
         message: Option<String>,
         include_unstaged: bool,
         push: bool,
+        amend: bool,
     ) -> Result<CommitOutcome> {
+        let merging = {
+            let git = self.git.clone();
+            let path = path.clone();
+            blocking(move || {
+                git.open(&path)
+                    .and_then(|repo| repo.merging())
+                    .map_err(git_error)
+            })
+            .await?
+        };
         let (message, note) = match message.map(|text| text.trim().to_owned()) {
             Some(text) if !text.is_empty() => (text, None),
+            // A merge commits with git's own message, an amend keeps the last commit's.
+            _ if merging.is_some() => {
+                (merging.map(|merge| merge.message).unwrap_or_default(), None)
+            }
+            _ if amend => (String::new(), None),
             _ => {
                 let patch = self.pending_patch(&path, include_unstaged).await?;
                 self.write_commit_message(project.as_ref(), &path, &patch)
@@ -264,7 +291,7 @@ impl SessionManager {
                 .current_branch
                 .ok_or_else(|| Error::Invalid("the checkout is not on a branch".into()))?;
             let commit = repo
-                .commit_changes(&text, include_unstaged)
+                .commit_with(&text, include_unstaged, amend)
                 .map_err(git_error)?;
             if push {
                 repo.push(&branch).map_err(git_error)?;
@@ -300,7 +327,11 @@ impl SessionManager {
     }
 
     /// The patch a commit would record, for the message writer.
-    async fn pending_patch(&self, path: &Path, include_unstaged: bool) -> Result<String> {
+    pub(super) async fn pending_patch(
+        &self,
+        path: &Path,
+        include_unstaged: bool,
+    ) -> Result<String> {
         let git = self.git.clone();
         let path = path.to_owned();
         blocking(move || {
@@ -325,7 +356,7 @@ impl SessionManager {
     /// for git text) and style. A model at its usage limit hands the message to routing's next
     /// pick (another account, then the other provider). With it, why the user's model didn't
     /// write it, when it didn't.
-    async fn write_commit_message(
+    pub(super) async fn write_commit_message(
         &self,
         project: Option<&ProjectId>,
         path: &Path,
@@ -659,7 +690,7 @@ fn choice_name(provider: ProviderKind, model: Option<&str>) -> String {
 }
 
 /// A checkout's Source panel state.
-fn source_state_of(repo: &Repo) -> Result<SourceState> {
+pub(super) fn source_state_of(repo: &Repo) -> Result<SourceState> {
     let (changes, branch) = repo.source_status().map_err(git_error)?;
     let remote = match &branch {
         Some(branch) => Some(repo.remote_state(branch).map_err(git_error)?),
@@ -691,6 +722,10 @@ fn source_state_of(repo: &Repo) -> Result<SourceState> {
         ahead: remote.map_or(0, |state| state.ahead),
         staged: files(changes.staged),
         changes: files(changes.changes),
+        merging: repo.merging().map_err(git_error)?.map(|merge| SourceMerge {
+            incoming: merge.incoming,
+            message: merge.message,
+        }),
     })
 }
 

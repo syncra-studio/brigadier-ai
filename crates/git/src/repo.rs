@@ -920,11 +920,23 @@ impl Repo {
     }
 
     pub(crate) fn busy(&self) -> Result<Option<String>> {
+        if let Some(what) = self.busy_besides_merge()? {
+            return Ok(Some(what));
+        }
+        let dir = parse::path_line(&self.cmd(&["rev-parse", "--absolute-git-dir"], true)?)?;
+        Ok(dir
+            .join("MERGE_HEAD")
+            .try_exists()?
+            .then(|| "MERGE_HEAD".to_owned()))
+    }
+
+    /// What keeps the checkout busy other than a merge in progress, which the user's own
+    /// staging and commit go on through.
+    pub(crate) fn busy_besides_merge(&self) -> Result<Option<String>> {
         let dir = parse::path_line(&self.cmd(&["rev-parse", "--absolute-git-dir"], true)?)?;
         for name in [
             "index.lock",
             "HEAD.lock",
-            "MERGE_HEAD",
             "rebase-merge",
             "rebase-apply",
             "CHERRY_PICK_HEAD",
@@ -1337,22 +1349,54 @@ impl Repo {
     /// The user's commit of the checkout's changes on its current branch: what is staged, or
     /// with `include_unstaged` every non-ignored change. Runs the repository's hooks as
     /// `git commit` does, under the landing lock so no landing moves the branch meanwhile.
+    ///
+    /// During a merge it commits the merge, once no file is left conflicted; `amend` instead
+    /// rewrites the last commit with what is staged, keeping its message when `message` is
+    /// blank.
     pub fn commit_changes(&self, message: &str, include_unstaged: bool) -> Result<Oid> {
+        self.commit_with(message, include_unstaged, false)
+    }
+
+    /// [`Self::commit_changes`], or with `amend` the last commit rewritten.
+    pub fn commit_with(&self, message: &str, include_unstaged: bool, amend: bool) -> Result<Oid> {
         let lock = self.landing_lock();
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(what) = self.busy()? {
+        if let Some(what) = self.busy_besides_merge()? {
             return Err(Error::Invalid(format!("the checkout is busy ({what})")));
+        }
+        if self.merging()?.is_some() {
+            if include_unstaged || amend {
+                return Err(Error::Invalid(
+                    "finish or abort the merge in progress first".into(),
+                ));
+            }
+            if !self.cmd(&["ls-files", "--unmerged"], true)?.is_empty() {
+                return Err(Error::Invalid(
+                    "resolve the merge conflicts and stage those files first".into(),
+                ));
+            }
         }
         if include_unstaged {
             self.cmd(&["add", "-A", "--", "."], false)?;
         }
-        self.git.checked(
-            Some(&self.root),
-            &["commit", "--quiet", "--file=-"],
-            false,
-            &[],
-            Some(message.as_bytes()),
-        )?;
+        let mut args = vec!["commit", "--quiet"];
+        if amend {
+            args.push("--amend");
+        }
+        if amend && message.trim().is_empty() {
+            args.push("--no-edit");
+            self.git
+                .checked(Some(&self.root), &args, false, &[], None)?;
+        } else {
+            args.push("--file=-");
+            self.git.checked(
+                Some(&self.root),
+                &args,
+                false,
+                &[],
+                Some(message.as_bytes()),
+            )?;
+        }
         self.resolve("HEAD")
     }
 
@@ -1870,13 +1914,13 @@ pub(crate) fn vanished(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::vanished;
     use crate::{Git, Oid};
     use std::{ffi::OsString, fs, path::PathBuf};
 
     /// A folder in the temp directory, removed when dropped however the test ends.
-    struct Temp(PathBuf);
+    pub(crate) struct Temp(PathBuf);
 
     impl std::ops::Deref for Temp {
         type Target = std::path::Path;
@@ -1893,7 +1937,7 @@ mod tests {
     }
 
     /// Git in a fresh temp folder, kept from the user's own config; the folder too.
-    fn test_git(name: &str) -> (Temp, Git) {
+    pub(crate) fn test_git(name: &str) -> (Temp, Git) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_nanos());

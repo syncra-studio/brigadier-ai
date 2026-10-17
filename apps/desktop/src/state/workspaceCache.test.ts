@@ -59,7 +59,7 @@ afterEach(() => {
   else Reflect.deleteProperty(globalThis, "window");
 });
 const target = { type: "conversation", conversationId: "s" } as const;
-const source = { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes: [] };
+const source = { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes: [], merging: null };
 
 test("archive and restore at the same path discard the earlier generation; ordinary updates keep it", () => {
   const initial = workspaceKey(target);

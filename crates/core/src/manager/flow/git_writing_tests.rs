@@ -109,7 +109,7 @@ async fn automatic_writes_with_routings_pick_in_the_repositorys_style() {
     staged_change(&flow).await;
     let outcome = flow
         .manager
-        .commit_changes(&flow.conversation, None, false, false)
+        .commit_changes(&flow.conversation, None, false, false, false)
         .await
         .unwrap();
     assert_eq!(outcome.message, "Add the notes");
@@ -142,7 +142,7 @@ async fn a_writer_at_its_limit_hands_the_message_to_the_other_provider() {
     staged_change(&flow).await;
     let outcome = flow
         .manager
-        .commit_changes(&flow.conversation, None, false, false)
+        .commit_changes(&flow.conversation, None, false, false, false)
         .await
         .unwrap();
     assert_eq!(outcome.message, "Add the notes");
@@ -175,7 +175,7 @@ async fn a_chosen_writer_is_used_and_an_unavailable_one_falls_back_with_a_note()
     .await;
     let outcome = flow
         .manager
-        .commit_changes(&flow.conversation, None, false, false)
+        .commit_changes(&flow.conversation, None, false, false, false)
         .await
         .unwrap();
     assert_eq!(outcome.note, None);
@@ -201,7 +201,7 @@ async fn a_chosen_writer_is_used_and_an_unavailable_one_falls_back_with_a_note()
     .await;
     let outcome = flow
         .manager
-        .commit_changes(&flow.conversation, None, false, false)
+        .commit_changes(&flow.conversation, None, false, false, false)
         .await
         .unwrap();
     assert_eq!(
@@ -239,7 +239,7 @@ async fn the_commit_style_reaches_the_writer() {
     })
     .await;
     flow.manager
-        .commit_changes(&flow.conversation, None, false, false)
+        .commit_changes(&flow.conversation, None, false, false, false)
         .await
         .unwrap();
     std::fs::write(checkout.join("more.txt"), "more\n").unwrap();
@@ -250,14 +250,20 @@ async fn the_commit_style_reaches_the_writer() {
     })
     .await;
     flow.manager
-        .commit_changes(&flow.conversation, None, false, false)
+        .commit_changes(&flow.conversation, None, false, false, false)
         .await
         .unwrap();
     std::fs::write(checkout.join("typed.txt"), "typed\n").unwrap();
     git(&checkout, &["add", "typed.txt"]);
     let typed = flow
         .manager
-        .commit_changes(&flow.conversation, Some("Typed by me".into()), false, false)
+        .commit_changes(
+            &flow.conversation,
+            Some("Typed by me".into()),
+            false,
+            false,
+            false,
+        )
         .await
         .unwrap();
     assert_eq!(typed.message, "Typed by me");
@@ -533,7 +539,7 @@ async fn a_chosen_writers_account_at_its_limit_hands_it_to_another_account() {
     .await;
     let outcome = flow
         .manager
-        .commit_changes(&flow.conversation, None, false, false)
+        .commit_changes(&flow.conversation, None, false, false, false)
         .await
         .unwrap();
     assert_eq!(outcome.message, "Add the notes");
@@ -582,7 +588,7 @@ async fn a_chosen_writer_at_its_limit_notes_the_model_that_wrote_it() {
     .await;
     let outcome = flow
         .manager
-        .commit_changes(&flow.conversation, None, false, false)
+        .commit_changes(&flow.conversation, None, false, false, false)
         .await
         .unwrap();
     assert_eq!(outcome.message, "Add the notes");
@@ -670,7 +676,7 @@ async fn a_project_folder_lists_stages_and_commits_before_a_session_starts() {
         .await
         .unwrap();
     let outcome = manager
-        .commit_project_changes(&project, None, false, false)
+        .commit_project_changes(&project, None, false, false, false)
         .await
         .unwrap();
     assert_eq!(outcome.message, "Add the draft");
@@ -746,9 +752,177 @@ async fn a_project_folder_stays_inside_itself() {
     );
     assert!(
         manager
-            .commit_project_changes(&missing, Some("x".into()), false, false)
+            .commit_project_changes(&missing, Some("x".into()), false, false, false)
             .await
             .is_err()
     );
+    flow.stop().await;
+}
+
+/// The Source panel merges a branch in: the merge stops on its conflict, the conflicted file's
+/// versions and sides come back, the user's resolution is written and staged, and the merge
+/// commits with git's own message (no writer). A commit message is written into the box on
+/// its own, and a session's panel lists its own checkout's branches.
+#[tokio::test]
+async fn the_source_panel_merges_resolves_and_commits_with_the_merge_message() {
+    use crate::work::{SourceAction, SourceStatus, WorkspaceTarget};
+
+    let writes = Writes::default();
+    let flow = Flow::start(
+        "git-writer-merge",
+        Options::default(),
+        writing(&writes, |_| Reply::text("Add the draft")),
+    )
+    .await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id
+        .expect("a session has a project");
+    let target = WorkspaceTarget::Project {
+        project_id: project.clone(),
+    };
+    let manager = &flow.manager;
+    let repo = &flow.repo;
+    git(repo, &["checkout", "-q", "-b", "feature"]);
+    std::fs::write(repo.join("README.md"), "# Feature\n").unwrap();
+    git(repo, &["commit", "-qam", "Feature"]);
+    git(repo, &["checkout", "-q", "main"]);
+    std::fs::write(repo.join("README.md"), "# Main\n").unwrap();
+    git(repo, &["commit", "-qam", "Main"]);
+
+    let branches = manager.source_branches(&target).await.unwrap();
+    let feature = branches
+        .iter()
+        .find(|b| b.name == "feature")
+        .expect("feature");
+    assert_eq!(feature.subject, "Feature");
+    assert!(feature.at_ms > 1_000_000_000_000, "ms: {}", feature.at_ms);
+
+    let state = manager
+        .source_action(
+            &target,
+            SourceAction::Merge {
+                branch: "feature".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let merging = state.merging.clone().expect("a merge in progress");
+    assert_eq!(merging.incoming, "feature");
+    assert!(
+        state
+            .changes
+            .iter()
+            .any(|f| f.path == "README.md" && f.status == SourceStatus::Conflicted)
+    );
+    let file = manager
+        .conflict_file(&target, "README.md".into())
+        .await
+        .unwrap();
+    assert!(
+        file.current_label.ends_with(" • main"),
+        "{}",
+        file.current_label
+    );
+    assert!(
+        file.incoming_label.ends_with(" • feature"),
+        "{}",
+        file.incoming_label
+    );
+    assert_eq!(file.incoming.as_deref(), Some("# Feature\n"));
+    let text = file.text.expect("the marked file");
+    let refused = manager
+        .source_action(
+            &target,
+            SourceAction::Merge {
+                branch: "feature".into(),
+            },
+        )
+        .await;
+    assert!(refused.is_err(), "one merge at a time");
+    let state = manager
+        .source_action(
+            &target,
+            SourceAction::Resolve {
+                path: "README.md".into(),
+                expected: Some(text),
+                text: "# Both\n".into(),
+                stage: true,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(state.changes.is_empty(), "{:?}", state.changes);
+    let outcome = manager
+        .commit_project_changes(&project, None, false, false, false)
+        .await
+        .unwrap();
+    assert_eq!(outcome.message, merging.message);
+    assert!(writes.lock().unwrap().is_empty(), "a merge needs no writer");
+    assert_eq!(
+        git(repo, &["rev-list", "--parents", "-n1", "HEAD"])
+            .split_whitespace()
+            .count(),
+        3
+    );
+    let state = manager.project_source_state(&project).await.unwrap();
+    assert!(state.merging.is_none());
+
+    // A merge given up goes back to where it started.
+    git(repo, &["checkout", "-q", "-b", "other", "HEAD~1"]);
+    std::fs::write(repo.join("README.md"), "# Other\n").unwrap();
+    git(repo, &["commit", "-qam", "Other"]);
+    git(repo, &["checkout", "-q", "main"]);
+    let state = manager
+        .source_action(
+            &target,
+            SourceAction::Merge {
+                branch: "other".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(state.merging.is_some());
+    let state = manager
+        .source_action(&target, SourceAction::AbortMerge)
+        .await
+        .unwrap();
+    assert!(state.merging.is_none() && state.changes.is_empty());
+    // Git's refusal comes back in its own words.
+    let error = manager
+        .source_action(&target, SourceAction::Push)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(!error.contains("failed (Some("), "{error}");
+
+    std::fs::write(repo.join("draft.txt"), "draft\n").unwrap();
+    git(repo, &["add", "draft.txt"]);
+    let (message, _) = manager.write_source_message(&target).await.unwrap();
+    assert_eq!(message, "Add the draft");
+    assert_eq!(
+        git(repo, &["log", "-1", "--format=%s"]).trim(),
+        "Merge branch 'feature'",
+        "writing a message commits nothing"
+    );
+
+    staged_change(&flow).await;
+    let session = WorkspaceTarget::Conversation {
+        conversation_id: flow.conversation.clone(),
+    };
+    let branches = manager.source_branches(&session).await.unwrap();
+    assert!(branches.iter().any(|b| b.name == "main"), "{branches:?}");
+    // A session's landings go to its own branch: it never switches away.
+    let refused = manager
+        .source_action(
+            &session,
+            SourceAction::Checkout {
+                branch: "main".into(),
+            },
+        )
+        .await;
+    assert!(refused.is_err());
     flow.stop().await;
 }

@@ -11,6 +11,7 @@ import type { CheckoutFile } from "./CheckoutFile";
 import type { CleanReport } from "./CleanReport";
 import type { CommitOutcome } from "./CommitOutcome";
 import type { ComputerUseStatus } from "./ComputerUseStatus";
+import type { ConflictFile } from "./ConflictFile";
 import type { ConventionsExport } from "./ConventionsExport";
 import type { Conversation } from "./Conversation";
 import type { ConversationActivity } from "./ConversationActivity";
@@ -56,6 +57,7 @@ import type { ReviewDiff } from "./ReviewDiff";
 import type { RoutePreview } from "./RoutePreview";
 import type { SendOutcome } from "./SendOutcome";
 import type { Settings } from "./Settings";
+import type { SourceBranch } from "./SourceBranch";
 import type { SourceState } from "./SourceState";
 import type { StorageReport } from "./StorageReport";
 import type { StoredCopy } from "./StoredCopy";
@@ -117,7 +119,11 @@ bytes: number, } | { "method": "getReviewDiff", review: ReviewDiff, } | { "metho
 /**
  * Whether a watch runs now (false when stopped, or the target has no checkout).
  */
-watching: boolean, } | { "method": "startSearch", id: number, } | { "method": "cancelSearch" } | { "method": "replaceInFiles", outcome: ReplaceOutcome, } | { "method": "getProjectSourceState", state: SourceState, } | { "method": "changeProjectSource", state: SourceState, } | { "method": "commitProjectChanges", outcome: CommitOutcome, } | { "method": "answerCard" } | { "method": "answerQuestion" } | { "method": "decidePlan" } | { "method": "putOffPlan" } | { "method": "answerFeedbackOffer" } | { "method": "cancelMerge", text: string, } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
+watching: boolean, } | { "method": "startSearch", id: number, } | { "method": "cancelSearch" } | { "method": "replaceInFiles", outcome: ReplaceOutcome, } | { "method": "getProjectSourceState", state: SourceState, } | { "method": "changeProjectSource", state: SourceState, } | { "method": "commitProjectChanges", outcome: CommitOutcome, } | { "method": "listSourceBranches", branches: Array<SourceBranch>, } | { "method": "sourceAction", state: SourceState, } | { "method": "getConflictFile", file: ConflictFile, } | { "method": "writeCommitMessage", message: string, 
+/**
+ * Why the user's chosen model didn't write it, when it didn't.
+ */
+note: string | null, } | { "method": "answerCard" } | { "method": "answerQuestion" } | { "method": "decidePlan" } | { "method": "putOffPlan" } | { "method": "answerFeedbackOffer" } | { "method": "cancelMerge", text: string, } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
 /**
  * Absent before the run has a branch, and for a finished run with nothing verified.
  */

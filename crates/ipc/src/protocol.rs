@@ -14,17 +14,18 @@ use brigadier_core::storage::{
 };
 use brigadier_core::{
     AccountEntry, AccountsView, AttachmentRef, BrainJobKind, BrainOverview, CardId, Catalog,
-    CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus, ConventionsExport,
-    Conversation, ConversationActivity, ConversationId, ConversationKind, ConversationStatus,
-    ConversationView, DiffStat, FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitState,
-    Mention, Message, MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId,
-    ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView,
-    PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
-    ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview,
-    SearchQuery, SearchUpdate, Settings, Setup, SetupRequest, SourceChange, SourceScope,
-    SourceState, StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome,
-    UpdateTarget, UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
-    WorkspaceTarget, WorkspaceTree,
+    CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus, ConflictFile,
+    ConventionsExport, Conversation, ConversationActivity, ConversationId, ConversationKind,
+    ConversationStatus, ConversationView, DiffStat, FolderCheck, FolderListing, FolderTrustReport,
+    ForkPlace, GitState, Mention, Message, MessagePage, MessageQueue, OrchestratorPage,
+    OvernightRun, OvernightRunId, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch,
+    ProposedPlan, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage,
+    RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff,
+    ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, Setup, SetupRequest,
+    SourceAction, SourceBranch, SourceChange, SourceScope, SourceState, StoredCopy, TaskId,
+    ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
+    UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
+    WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -679,6 +680,10 @@ pub enum Request {
         message: Option<String>,
         include_unstaged: bool,
         push: bool,
+        /// Rewrites the last commit instead (a blank message keeps its own).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        amend: Option<bool>,
     },
     /// The user's push of a session checkout's branch.
     PushChanges {
@@ -725,6 +730,29 @@ pub enum Request {
         message: Option<String>,
         include_unstaged: bool,
         push: bool,
+        /// Rewrites the last commit instead (a blank message keeps its own).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        amend: Option<bool>,
+    },
+    /// The branches a Source panel can merge from or switch to.
+    ListSourceBranches {
+        target: WorkspaceTarget,
+    },
+    /// One of a Source panel's git actions: merge, abort the merge, switch branch, pull,
+    /// push, fetch, or write a conflicted file as the user resolved it.
+    SourceAction {
+        target: WorkspaceTarget,
+        action: SourceAction,
+    },
+    /// A conflicted file's versions, for its conflict and merge editor tabs.
+    GetConflictFile {
+        target: WorkspaceTarget,
+        path: String,
+    },
+    /// A commit message for what is staged, written for the Source panel's box.
+    WriteCommitMessage {
+        target: WorkspaceTarget,
     },
     /// Answers an approval card.
     AnswerCard {
@@ -1502,6 +1530,20 @@ pub enum Response {
     },
     CommitProjectChanges {
         outcome: CommitOutcome,
+    },
+    ListSourceBranches {
+        branches: Vec<SourceBranch>,
+    },
+    SourceAction {
+        state: SourceState,
+    },
+    GetConflictFile {
+        file: ConflictFile,
+    },
+    WriteCommitMessage {
+        message: String,
+        /// Why the user's chosen model didn't write it, when it didn't.
+        note: Option<String>,
     },
     AnswerCard,
     AnswerQuestion,

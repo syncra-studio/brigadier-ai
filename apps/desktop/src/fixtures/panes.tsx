@@ -241,7 +241,7 @@ mockIPC(
     if (req.method === "getSourceState")
       return { method: req.method, state: {
         branch: "sidebar-redesign", remote: null, upstream: null, ahead: 0, staged: [],
-        changes: [{ path: "src/app.tsx", oldPath: null, status: "modified" }],
+        changes: [{ path: "src/app.tsx", oldPath: null, status: "modified" }], merging: null,
       } };
     if (req.method === "listWorkerEvents")
       return { method: req.method, page: { entries: [], hasMore: false } };

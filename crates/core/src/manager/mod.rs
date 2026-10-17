@@ -90,6 +90,7 @@ mod secrets;
 mod shell_changes;
 mod side_chat;
 mod sidecars;
+mod source_actions;
 mod status;
 mod takeover;
 mod thread;

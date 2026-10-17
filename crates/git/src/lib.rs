@@ -7,6 +7,7 @@
 
 mod command;
 pub mod litter;
+mod merging;
 mod parse;
 mod refname;
 mod repo;
@@ -18,6 +19,7 @@ mod worktree;
 use std::{ffi::OsString, path::PathBuf};
 
 pub use command::{FoundRepo, Git};
+pub use merging::{BranchRef, ConflictFile, MergeState};
 pub use refname::{branch_name_problem, branch_prefix_problem};
 pub use repo::Repo;
 pub use request_changes::FileBlob;
