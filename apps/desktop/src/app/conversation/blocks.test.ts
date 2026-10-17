@@ -807,6 +807,19 @@ test("a block still at work answers with the reply its CLI called the final answ
   assert.equal(answeringIndex([{}], [text(0, 1)]), null);
 });
 
+test("a late update line written while the request still works stays under the answer it follows (#55)", () => {
+  const texts = [{}, { answerAtMs: 50 }, { answerAtMs: 90, update: true }];
+  const late = { kind: "orchestrator", steps: [], position: 4 } as unknown as SequenceEntry;
+  // The answer stays the answer, its time stopping where it started; the update shows under it.
+  const answering = answeringIndex(texts, [text(0, 1), text(1, 3), late, text(2, 5)]);
+  assert.equal(answering, 1);
+  assert.deepEqual(updateIndices(texts, answering), [2]);
+  // A block of update lines alone answers with its newest.
+  assert.equal(answeringIndex([{ answerAtMs: 1, update: true }], [text(0, 1)]), 0);
+  // "**Update**:" is an update line too.
+  assert.equal(isUpdate("**Update**: CI passed on c9cb8b3."), true);
+});
+
 test("a request that works again after its answer reads as reopened, not as still answering", () => {
   // Answered at 5s while its span ran on (a review it waits for): still the answer's own work.
   assert.equal(reopenedSince([{ fromMs: 1_000, toMs: null }], 5_000), false);
