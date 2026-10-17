@@ -153,14 +153,14 @@ impl ShellCaptures {
             all.remove(id);
         }
         let after = capture.after?;
-        let changes: Vec<_> = capture
-            .before
-            .into_iter()
-            .filter_map(|(path, before)| {
-                let after = after.get(&path)?.clone();
-                (after != before).then_some((path, before, after))
-            })
-            .collect();
+        // A file not read at its end leaves the command without evidence.
+        let mut changes = Vec::new();
+        for (path, before) in capture.before {
+            let after = after.get(&path)?.clone();
+            if after != before {
+                changes.push((path, before, after));
+            }
+        }
         (!changes.is_empty()).then(|| ShellEvidence {
             item: item.to_owned(),
             changes,
@@ -197,14 +197,18 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
             '\\' => word.extend(chars.next()),
             '~' if word.is_empty() => return None,
             '*' | '?' | '[' | '{' | '}' | '$' | '`' => return None,
-            c if c.is_whitespace() || ";|&<>()".contains(c) => {
-                words.push(std::mem::take(&mut word));
+            c if c.is_whitespace() => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
             }
+            // An operator ends a word, and shows as an empty one (`cd;` goes nowhere named).
+            c if ";|&<>()".contains(c) => words.push(std::mem::take(&mut word)),
             c => word.push(c),
         }
     }
     words.push(word);
-    (!words.iter().any(|word| word == "xargs")).then_some(words)
+    (!words.iter().any(|word| word == "xargs" || word == "popd")).then_some(words)
 }
 
 /// The checkout's files a command names, relative to its root `root`: each word of the command
@@ -222,15 +226,24 @@ pub(super) fn named_files(command: &str, cwd: &Path, root: &Path) -> Vec<String>
     let Some(words) = shell_words(command) else {
         return Vec::new();
     };
+    // Each folder the command goes to, which must be one: else where its names lead is unknown.
     let mut dirs = vec![cwd.to_owned()];
-    for pair in words.windows(2) {
-        if matches!(pair[0].as_str(), "cd" | "pushd") {
-            let dir = dirs.last().unwrap().join(&pair[1]);
-            if dir.is_dir() {
-                dirs.push(dir);
+    for (at, word) in words.iter().enumerate() {
+        if matches!(word.as_str(), "cd" | "pushd") {
+            let dir = match words.get(at + 1) {
+                Some(to) if !to.is_empty() => dirs.last().unwrap().join(to),
+                _ => return Vec::new(),
+            };
+            if !dir.is_dir() {
+                return Vec::new();
             }
+            dirs.push(dir);
         }
     }
+    let split = command
+        .split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}[]=,$".contains(c))
+        .map(str::to_owned);
+    let words: Vec<String> = words.into_iter().chain(split).collect();
     let outside = |word: &String| {
         dirs.iter().any(|dir| {
             dir.join(word)
@@ -241,11 +254,8 @@ pub(super) fn named_files(command: &str, cwd: &Path, root: &Path) -> Vec<String>
     if words.iter().any(|word| !word.is_empty() && outside(word)) {
         return Vec::new();
     }
-    let split = command
-        .split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}[]=,$".contains(c))
-        .map(str::to_owned);
     let mut found = BTreeSet::new();
-    for word in words.into_iter().chain(split) {
+    for word in words {
         let word = word.as_str();
         if word.is_empty() || word.starts_with('-') || word.contains("://") || word.len() > 1024 {
             continue;
@@ -329,6 +339,8 @@ impl SessionManager {
             command.to_owned(),
             cwd.map_or_else(|| checkout.clone(), Path::to_owned),
         );
+        // Every file named, or none: a source left unread (too big, or not a file now) could
+        // be where a file the command made came from.
         let read = blocking(move || {
             let repo = git.open(&checkout).map_err(git_error)?;
             let named = named.unwrap_or_else(|| named_files(&command, &cwd, repo.root()));
@@ -337,23 +349,24 @@ impl SessionManager {
                 if std::fs::symlink_metadata(repo.root().join(&path))
                     .is_ok_and(|metadata| metadata.len() > MOST_BYTES)
                 {
-                    continue;
+                    return Ok(BTreeMap::new());
                 }
-                // One that isn't a file now (a folder) has no evidence.
-                if let Ok(blob) = repo.checkout_blob(&path) {
-                    files.insert(path, blob.map(Blob::from));
+                match repo.checkout_blob(&path) {
+                    Ok(blob) => {
+                        files.insert(path, blob.map(Blob::from));
+                    }
+                    // A word that only looked like a new file's name.
+                    Err(_) if std::fs::symlink_metadata(repo.root().join(&path)).is_err() => {}
+                    Err(err) => return Err(git_error(err)),
                 }
             }
             Ok(files)
         })
         .await;
-        let files = match read {
-            Ok(files) => files,
-            Err(err) => {
-                tracing::debug!(conversation = %id, error = %err, "could not read a command's files");
-                return None;
-            }
-        };
+        let files = read.unwrap_or_else(|err| {
+            tracing::debug!(conversation = %id, error = %err, "could not read a command's files");
+            BTreeMap::new()
+        });
         match ended {
             Some(call) => {
                 shells.end(id, &key, call, files);
@@ -481,12 +494,21 @@ mod tests {
             "ls | xargs -I x mv x notes.md",
             "mv `cat list` notes.md",
             "mv ~/x.md notes.md",
+            "cd; mv x.md notes.md",
+            "cd nowhere && mv x.md notes.md",
         ] {
             assert_eq!(named(command, &root), [] as [String; 0], "{command}");
         }
         assert!(names("echo '$x *' >> notes.md", &root, "notes.md"));
         let away = format!("mv {} notes.md", outside.join("x.md").display());
         assert_eq!(named(&away, &root), [] as [String; 0]);
+        let script = format!(
+            "python3 -c 'import shutil; shutil.move(\"{}\", \"notes.md\")'",
+            outside.join("x.md").display()
+        );
+        assert_eq!(named(&script, &root), [] as [String; 0]);
+        let spaced = format!("cd  {} && mv x.md notes.md", outside.display());
+        assert_eq!(named(&spaced, &root), [] as [String; 0]);
         assert!(names("echo x > /dev/null; cat notes.md", &root, "notes.md"));
         std::fs::write(root.join("old name.txt"), "x").unwrap();
         for command in [
