@@ -1666,7 +1666,7 @@ impl SessionManager {
                 .to_owned()
         } else {
             format!(
-                "Commit a fix of yours with run_check's `commit` and `fixes` (their ids; `high` names those that lose data or break a build or a security boundary, whose fix then gets one re-check): on a pass it commits with `--trailer \"{FIXES_TRAILER}: <their ids>\"` and records them fixed, checked by that check; such a commit gets no review of its own."
+                "Commit a fix of yours, with nothing else in it, with run_check's `commit` and `fixes` (their ids; `high` names those that lose data or break a build or a security boundary, whose fix then gets one re-check): on a pass it commits with `--trailer \"{FIXES_TRAILER}: <their ids>\"` and records them fixed, checked by that check; such a commit gets no review of its own."
             )
         };
         let text = match (review.kind, &review.state, text) {

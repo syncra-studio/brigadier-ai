@@ -429,8 +429,9 @@ pub struct ThreadRunCheck {
     /// checkout.
     #[serde(default)]
     pub commit: Option<String>,
-    /// The review findings this change fixes, by id (`R1.2`): when the check passes they are
-    /// recorded fixed, checked by it, and its `commit` carries their Fixes trailer.
+    /// The review findings this change fixes, by id (`R1.2`), when it does nothing else: when
+    /// the check passes they are recorded fixed, checked by it, and its `commit` carries their
+    /// Fixes trailer, so it gets no review of its own.
     #[serde(default, deserialize_with = "lines")]
     #[schemars(with = "Vec<String>")]
     pub fixes: Vec<String>,
