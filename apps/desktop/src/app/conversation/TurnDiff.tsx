@@ -302,13 +302,14 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
   const more = diff.files.length - FIRST_FILES;
   const waiting = diff.files.filter((file) => review[file.path] === "pending").map((file) => file.path);
   const tally = (state: FileReview) => Object.values(review).filter((each) => each === state).length;
-  // Undo All and Keep All take this card's files that wait, one after another.
+  // Undo All and Keep All take this card's files that wait, one after another; one refused
+  // (its toast says why) leaves the rest to go on.
   const each = (what: "keep" | "undo", paths: readonly string[]) => {
     setBusy(true);
     void paths
-      .reduce<Promise<boolean>>(
-        (before, path) => before.then((ok) => ok && (what === "keep" ? keepChanges(conversationId, path) : undoChanges(conversationId, path))),
-        Promise.resolve(true),
+      .reduce<Promise<unknown>>(
+        (before, path) => before.then(() => (what === "keep" ? keepChanges(conversationId, path) : undoChanges(conversationId, path))),
+        Promise.resolve(),
       )
       .finally(() => setBusy(false));
   };

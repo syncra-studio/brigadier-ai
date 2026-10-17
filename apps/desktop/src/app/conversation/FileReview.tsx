@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, useEffect, useState } from "react";
+import { type FC, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { DiffView, type DiffNote } from "@/app/conversation/diffView";
 import { shortcutKeys } from "@/app/shortcutCatalog";
@@ -34,6 +34,8 @@ export type FileReviewState = {
   setCurrent: (index: number) => void;
   /** Brings the change after (1) or before (-1) the one in view, or `from`, into view. */
   step: (by: 1 | -1, from?: number) => void;
+  /** The tab's diff, where its changes are found. */
+  box: RefObject<HTMLDivElement | null>;
   busy: boolean;
   act: (what: "keep" | "undo", hunk?: number) => void;
   keepAll: () => void;
@@ -99,11 +101,12 @@ export function useFileReview(conversationId: string, path: string, again: numbe
           : (others.toReversed().find((each) => each < path) ?? others.at(-1));
     if (next) openFileTab(conversationId, next);
   };
+  const box = useRef<HTMLDivElement>(null);
   const step = (by: 1 | -1, from = at) => {
     if (count === 0) return;
     const next = (from + by + count) % count;
     setCurrent(next);
-    reveal(next);
+    changeBar(box.current, next)?.scrollIntoView({ block: "center" });
   };
   const shown = pending || (reviewed && paths.length > 0);
   const mac = useApp((s) => s.info?.platform === "macos");
@@ -124,7 +127,7 @@ export function useFileReview(conversationId: string, path: string, again: numbe
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
-  return { conversationId, path, paths, file, shown, current: at, setCurrent, step, busy, act, keepAll, move };
+  return { conversationId, path, paths, file, shown, current: at, setCurrent, step, box, busy, act, keepAll, move };
 }
 
 /** Up and down (or back and forth) around "1 of 2". */
@@ -149,9 +152,35 @@ const Steps: FC<{ label: string; words: string; onStep: (step: 1 | -1) => void; 
   );
 };
 
-/** Brings a change's own bar into view. */
-function reveal(index: number) {
-  document.querySelector(`[data-slot="review-change"][data-index="${index}"]`)?.scrollIntoView({ block: "center" });
+/** A change's own bar in this tab's diff. */
+function changeBar(box: HTMLElement | null, index: number): HTMLElement | null {
+  return box?.querySelector<HTMLElement>(`[data-slot="review-change"][data-index="${index}"]`) ?? null;
+}
+
+/**
+ * The change the keys act on once the user scrolls: the current one while its bar is in view,
+ * else the first in view.
+ */
+function changeInView(box: HTMLElement, current: number): number | null {
+  const { top, bottom } = box.getBoundingClientRect();
+  const seen = (bar: HTMLElement) => {
+    const at = bar.getBoundingClientRect().top;
+    return at >= top && at < bottom;
+  };
+  const now = changeBar(box, current);
+  if (now && seen(now)) return current;
+  const bars = [...box.querySelectorAll<HTMLElement>("[data-slot=review-change]")];
+  const bar = bars.find(seen) ?? bars.find((each) => each.getBoundingClientRect().top >= top) ?? bars.at(-1);
+  return bar ? Number(bar.dataset.index) : null;
+}
+
+/** A line of the file as it is now, in the diff's lines. */
+function fileLine(box: HTMLElement, line: number): Element | null {
+  for (const host of box.querySelectorAll("diffs-container")) {
+    const found = host.shadowRoot?.querySelector(`[data-content] > [data-line="${line}"]:not([data-line-type=change-deletion])`);
+    if (found) return found;
+  }
+  return null;
 }
 
 /** The review's part of the file tab's bar, at its right. */
@@ -240,9 +269,30 @@ const ChangeBar: FC<{ review: FileReviewState; index: number }> = ({ review, ind
   );
 };
 
-/** The file's inline diff: its old lines above its new ones, each change with its own Undo and Keep. */
-export const FileReviewBody: FC<{ review: FileReviewState }> = ({ review }) => {
+/**
+ * The file's inline diff: its old lines above its new ones, each change with its own Undo and
+ * Keep. Scrolling makes the change in view the one the keys act on; a line asked for (a search
+ * result, a link) is brought into view.
+ */
+export const FileReviewBody: FC<{ review: FileReviewState; line: number | null; reveal: number }> = ({ review, line, reveal }) => {
   const file = review.file!;
+  const { box, setCurrent, current } = review;
+  // Asked again (`reveal`), the same line is brought into view again.
+  const asked = useMemo(() => (line === null ? null : { line, reveal }), [line, reveal]);
+  useLayoutEffect(() => {
+    const element = box.current;
+    if (asked === null || !element) return;
+    let tries = 0;
+    let frame = 0;
+    // The diff draws its lines after it loads.
+    const find = () => {
+      const found = fileLine(element, asked.line);
+      if (found) found.scrollIntoView({ block: "center" });
+      else if (tries++ < 120) frame = requestAnimationFrame(find);
+    };
+    find();
+    return () => cancelAnimationFrame(frame);
+  }, [box, asked]);
   if (!file.text) {
     return <p className="text-muted-foreground p-4 text-sm">This change can't be shown: keep or undo the whole file</p>;
   }
@@ -251,7 +301,15 @@ export const FileReviewBody: FC<{ review: FileReviewState }> = ({ review }) => {
   }
   const notes: DiffNote<number>[] = file.hunks.map((hunk, index) => ({ ...changeLine(hunk), metadata: index }));
   return (
-    <div data-slot="file-review" className="min-h-0 flex-1 overflow-auto py-2">
+    <div
+      ref={box}
+      data-slot="file-review"
+      className="min-h-0 flex-1 overflow-auto py-2"
+      onScroll={(event) => {
+        const index = changeInView(event.currentTarget, current);
+        if (index !== null) setCurrent(index);
+      }}
+    >
       <DiffView<number>
         source={{ kind: "patch", patch: reviewPatch(file.path, file.base ?? null, file.current ?? null, file.hunks) }}
         look={{ numbered: true, split: false, wrap: false, words: true }}

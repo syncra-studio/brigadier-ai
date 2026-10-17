@@ -23,15 +23,17 @@ const query = new URLSearchParams(location.search);
 const CHAT = "file-review";
 const PATH = "src/cart.ts";
 
-const BASE = "export const rate = 0.2;\n\nexport function tax(amount: number): number {\n  return amount * rate;\n}\n";
-const AFTER = "export const RATE = 0.2;\n\nexport function tax(amount: number): number {\n  return amount * RATE;\n}\n\nexport const zero = 0;\n";
+/** Lines 2 to 61, long enough that the last change scrolls out of view of the first. */
+const MIDDLE = Array.from({ length: 60 }, (_, index) => `// note ${index + 1}\n`).join("");
+const BASE = `export const rate = 0.2;\n${MIDDLE}export function tax(amount: number): number {\n  return amount * rate;\n}\n`;
+const AFTER = `export const RATE = 0.2;\n${MIDDLE}export function tax(amount: number): number {\n  return amount * RATE;\n}\n\nexport const zero = 0;\n`;
 
 /** What the engine holds: the file's base and its changes left, by id. */
 let base = BASE;
 let hunks = [
   { id: "h1", oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: "export const RATE = 0.2;\n" },
-  { id: "h2", oldStart: 4, oldLines: 1, newStart: 4, newLines: 1, lines: "  return amount * RATE;\n" },
-  { id: "h3", oldStart: 5, oldLines: 0, newStart: 6, newLines: 2, lines: "\nexport const zero = 0;\n" },
+  { id: "h2", oldStart: 63, oldLines: 1, newStart: 63, newLines: 1, lines: "  return amount * RATE;\n" },
+  { id: "h3", oldStart: 64, oldLines: 0, newStart: 65, newLines: 2, lines: "\nexport const zero = 0;\n" },
 ];
 let current = AFTER;
 const asked: string[] = [];
@@ -118,6 +120,13 @@ async function measure() {
   const out: Record<string, unknown> = {};
   await until(() => changes().length === 3);
   out.first = look();
+  // Scrolled to the end, the change in view is the first one there; back at the top, the first again.
+  const box = document.querySelector<HTMLElement>("[data-slot=file-review]")!;
+  box.scrollTop = box.scrollHeight;
+  await until(() => look().current !== 0, 2000);
+  out.scrolled = look().current;
+  box.scrollTop = 0;
+  await until(() => look().current === 0, 2000);
   window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyY", key: "y", metaKey: true, bubbles: true }));
   await until(() => changes().length === 2);
   out.kept = look();
@@ -136,6 +145,7 @@ async function measure() {
   out.asked = asked;
   out.base = base;
   out.current = current;
+  out.expected = `export const RATE = 0.2;\n${MIDDLE}export function tax(amount: number): number {\n  return amount * RATE;\n}\n`;
   return out;
 }
 

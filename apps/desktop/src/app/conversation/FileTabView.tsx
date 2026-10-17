@@ -159,7 +159,7 @@ export function FileTabView({
         </TooltipIconButton>
       </header>
       {review.file ? (
-        <FileReviewBody review={review} />
+        <FileReviewBody review={review} line={tab.line} reveal={tab.reveal} />
       ) : read.state === "gone" ? (
         <p className="text-muted-foreground m-auto p-4 text-sm">This file was deleted or moved</p>
       ) : read.state === "failed" ? (
