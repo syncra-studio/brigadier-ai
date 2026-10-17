@@ -10,6 +10,7 @@ import {
   questionAnswers,
   questionRound,
   questionRowWords,
+  uncommittedCard,
 } from "@/app/conversation/cards/questionRound";
 import type { Question } from "@/ipc/generated";
 
@@ -47,6 +48,30 @@ test("a conflicted merge card preserves its warning and resolution choice", () =
     ...question, answer: "Merge & resolve conflicts", answers: ["Merge & resolve conflicts"], answeredAtMs: 2,
   }), ["Merge & resolve conflicts"]);
   assert.deepEqual(questionAnswers({ ...question, answer: "Not yet", answers: ["Not yet"], answeredAtMs: 2 }), ["Not yet"]);
+});
+
+test("the uncommitted-changes card lists the user's files as theirs and the thread's as the thread's", () => {
+  const question: Question = {
+    id: "uncommitted", conversationId: "c", taskId: null, requestId: null, position: 1,
+    kind: { type: "uncommittedChanges", files: ["a.txt"], threadFiles: ["b.txt"] },
+    text: "Your checkout has 2 uncommitted changes: 1 of yours and 1 made by the thread.",
+    options: ["Yes, show them to workers", "No, use the last commit"], recommended: null, items: [],
+    answer: null, answers: [], createdAtMs: 1, answeredAtMs: null,
+  };
+  assert.deepEqual(uncommittedCard(question), {
+    title: "Should workers see your uncommitted changes?",
+    files: [{ path: "a.txt", threads: false }, { path: "b.txt", threads: true }],
+  });
+  // Only the thread's: the title doesn't call them the user's.
+  assert.deepEqual(uncommittedCard({ ...question, kind: { type: "uncommittedChanges", files: [], threadFiles: ["b.txt"] } }), {
+    title: "Should workers see the thread's uncommitted changes?",
+    files: [{ path: "b.txt", threads: true }],
+  });
+  // A card stored before the thread's were told apart.
+  assert.deepEqual(uncommittedCard({ ...question, kind: { type: "uncommittedChanges", files: ["a.txt"] } })?.files, [
+    { path: "a.txt", threads: false },
+  ]);
+  assert.equal(uncommittedCard(watch), null);
 });
 
 const watch: Question = {

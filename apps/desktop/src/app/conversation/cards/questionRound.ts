@@ -12,6 +12,27 @@ export function questionRound(question: Question): QuestionItem[] {
   ];
 }
 
+/**
+ * The uncommitted-changes card's title and files: the user's own, then those the thread's
+ * edits left, marked as the thread's and never as the user's (#88). Null for another card.
+ */
+export function uncommittedCard(
+  question: Question,
+): { title: string; files: { path: string; threads: boolean }[] } | null {
+  if (question.kind.type !== "uncommittedChanges") return null;
+  const { files, threadFiles = [] } = question.kind;
+  return {
+    title:
+      files.length === 0 && threadFiles.length > 0
+        ? "Should workers see the thread's uncommitted changes?"
+        : "Should workers see your uncommitted changes?",
+    files: [
+      ...files.map((path) => ({ path, threads: false })),
+      ...threadFiles.map((path) => ({ path, threads: true })),
+    ],
+  };
+}
+
 /** The answers given, one per question; empty while it waits or once withdrawn. */
 export function questionAnswers(question: Question): string[] {
   if (question.answers.length > 0) return question.answers;

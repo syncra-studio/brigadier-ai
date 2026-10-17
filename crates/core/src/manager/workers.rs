@@ -2749,7 +2749,10 @@ impl SessionManager {
         }
         let see = match workers_see_uncommitted {
             Some(see) => see,
-            None if may_ask => self.ask_about_uncommitted(conversation_id, dirty).await?,
+            None if may_ask => {
+                self.ask_about_uncommitted(conversation_id, repo, dirty)
+                    .await?
+            }
             None => {
                 return Err(Error::Invalid(
                     "the user hasn't said whether workers see uncommitted changes".into(),
@@ -2771,10 +2774,12 @@ impl SessionManager {
         .await
     }
 
-    /// Asks once whether workers see the user's uncommitted changes; tasks wait for it.
+    /// Asks once whether workers see the checkout's uncommitted changes; tasks wait for it.
+    /// The user's own are told apart from those the thread's edits left (#88).
     async fn ask_about_uncommitted(
         &self,
         conversation_id: &ConversationId,
+        repo: &Path,
         files: Vec<String>,
     ) -> Result<bool> {
         // Only one card at a time: later tasks wait for the same answer.
@@ -2785,16 +2790,33 @@ impl SessionManager {
         let rx = match open {
             Some(question) => self.waiters_for_question(question.id.clone()),
             None => {
-                let shown: Vec<String> = files.iter().take(50).cloned().collect();
+                let threads = self
+                    .threads_uncommitted(conversation_id, repo, &files)
+                    .await;
+                let (thread_files, yours): (Vec<String>, Vec<String>) = files
+                    .iter()
+                    .cloned()
+                    .partition(|file| threads.contains(file));
+                let changes =
+                    |n: usize| format!("{n} uncommitted change{}", if n == 1 { "" } else { "s" });
+                let whose = match (yours.len(), thread_files.len()) {
+                    (_, 0) => changes(yours.len()),
+                    (0, theirs) => format!("{}, all made by the thread", changes(theirs)),
+                    (mine, theirs) => format!(
+                        "{}: {mine} of yours and {theirs} made by the thread",
+                        changes(mine + theirs)
+                    ),
+                };
                 let (_, rx) = self
                     .open_question(
                         conversation_id,
                         None,
-                        QuestionKind::UncommittedChanges { files: shown },
+                        QuestionKind::UncommittedChanges {
+                            files: yours.into_iter().take(50).collect(),
+                            thread_files: thread_files.into_iter().take(50).collect(),
+                        },
                         format!(
-                            "Your checkout has {} uncommitted change{}. Should workers see them? They are never committed either way.",
-                            files.len(),
-                            if files.len() == 1 { "" } else { "s" }
+                            "Your checkout has {whose}. Should workers see them? They are never committed either way."
                         ),
                         vec!["Yes, show them to workers".into(), "No, use the last commit".into()],
                         None,

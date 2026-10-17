@@ -1037,8 +1037,14 @@ pub struct Approval {
 pub enum QuestionKind {
     /// The orchestrator asks something only the user can answer (`ask_user`).
     Orchestrator,
-    /// Local checkout with uncommitted changes: should workers start from them?
-    UncommittedChanges { files: Vec<String> },
+    /// Local checkout with uncommitted changes: should workers start from them? `files` are
+    /// the user's own; `thread_files` those the thread's own edits left uncommitted (#88).
+    UncommittedChanges {
+        files: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(as = "Option<Vec<String>>", optional)]
+        thread_files: Vec<String>,
+    },
     /// A merge card from before BUILD-PLAN A4 (`propose_merge`, retired): none is made any
     /// more, and no answer on one is consent. Kept so stored cards still load.
     Merge {

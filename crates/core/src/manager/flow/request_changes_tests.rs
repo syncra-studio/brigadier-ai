@@ -1690,3 +1690,77 @@ async fn request_changes_record_a_steered_requests_edits() {
     );
     flow.stop().await;
 }
+
+/// On the user's checkout the thread leaves its edit uncommitted; the user has a change of
+/// their own. The question before a worker starts tells them apart: the user's file is theirs,
+/// the thread's is the thread's, never listed as the user's (#88).
+#[tokio::test]
+async fn the_uncommitted_changes_question_tells_the_threads_edits_from_the_users() {
+    let mut flow = Flow::start(
+        "20261017-0213-issues-run-w03-uncommitted",
+        options(ProviderKind::Claude),
+        script(move |turn| async move {
+            if !turn.is_orchestrator() {
+                std::future::pending::<()>().await;
+                return Reply::text("");
+            }
+            if turn.input.contains("Edit b.") {
+                let id = turn.conversation().unwrap();
+                let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+                edit(
+                    &turn,
+                    &workspace.join("b.txt"),
+                    "edit-b",
+                    "base\n",
+                    "base\nthread b\n",
+                )
+                .await;
+                observed(&turn, 1).await;
+                return Reply::text("Changed 1 file, not committed.");
+            }
+            if turn.input.contains("Scout it.") {
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        serde_json::json!({"effort": "high", "title": "Look", "kind": "scout", "spec": "Look around."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            Reply::text("Fine.")
+        }),
+    )
+    .await;
+    local(&mut flow).await;
+    flow.say("Edit b.").await;
+    flow.settled().await;
+    std::fs::write(flow.repo.join("a.txt"), "the user's\n").unwrap();
+    flow.say("Scout it.").await;
+    let board = flow
+        .until("the uncommitted-changes question", |board| {
+            board.questions.values().any(|question| {
+                matches!(
+                    question.kind,
+                    crate::work::QuestionKind::UncommittedChanges { .. }
+                )
+            })
+        })
+        .await;
+    let question = board.questions.values().next().unwrap();
+    assert_eq!(
+        question.kind,
+        crate::work::QuestionKind::UncommittedChanges {
+            files: vec!["a.txt".into()],
+            thread_files: vec!["b.txt".into()],
+        }
+    );
+    assert!(
+        question.text.starts_with(
+            "Your checkout has 2 uncommitted changes: 1 of yours and 1 made by the thread."
+        ),
+        "{}",
+        question.text
+    );
+    flow.stop().await;
+}

@@ -29,7 +29,7 @@ import { useShallow } from "zustand/react/shallow";
 import { pendingActionKeys, type PendingAction } from "@/app/conversation/pendingActions";
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
-import { questionRound } from "@/app/conversation/cards/questionRound";
+import { questionRound, uncommittedCard } from "@/app/conversation/cards/questionRound";
 import { revealOvernight } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
 import { ViewContext } from "@/app/conversation/viewContext";
@@ -989,8 +989,7 @@ function QuestionAction({
   const round = questionRound(question);
   const at = Math.min(page, round.length - 1);
   const item = round[at]!;
-  const uncommitted =
-    question.kind.type === "uncommittedChanges" ? question.kind.files : null;
+  const uncommitted = uncommittedCard(question);
   // Back to any question answered so far, or on to the first one still open.
   const reachable = (to: number) =>
     to >= 0 && to < round.length && to <= answers.filter((answer) => answer !== null).length;
@@ -1029,12 +1028,12 @@ function QuestionAction({
       name="question"
       title={
         uncommitted
-          ? "Should workers see your uncommitted changes?"
+          ? uncommitted.title
           : <CodeSpans text={item.text} />
       }
       detail={
         uncommitted ? (
-          "Brigadier asks once, before the first worker starts. They are never committed either way."
+          "Brigadier asks once, before a worker starts from them. They are never committed either way."
         ) : askerId === null ? undefined : (
           <>
             <WorkerChip taskId={askerId} /> waits for this
@@ -1043,8 +1042,15 @@ function QuestionAction({
       }
       extra={
         uncommitted &&
-        uncommitted.length > 0 && (
-          <ActionFileList files={uncommitted.map((path) => ({ path }))} />
+        uncommitted.files.length > 0 && (
+          <ActionFileList
+            files={uncommitted.files.map(({ path, threads }) => ({
+              path,
+              trailing: threads && (
+                <span className="text-muted-foreground shrink-0 text-xs">the thread's</span>
+              ),
+            }))}
+          />
         )
       }
       choices={item.options.map((option, index) => ({

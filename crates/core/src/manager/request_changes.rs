@@ -1047,6 +1047,49 @@ impl SessionManager {
         });
     }
 
+    /// Of `files` uncommitted in `checkout`, those the thread's own edits left as they are now
+    /// (#88): its newest request record that has the file has it from the thread's edits alone,
+    /// with nobody else's change mixed in, and the file is still as its last edit left it.
+    pub(super) async fn threads_uncommitted(
+        &self,
+        id: &ConversationId,
+        checkout: &Path,
+        files: &[String],
+    ) -> BTreeSet<String> {
+        let Ok(board) = self.core.board(id).await else {
+            return BTreeSet::new();
+        };
+        let mut requests: Vec<_> = board.requests.values().collect();
+        requests.sort_by_key(|request| request.started_at_ms);
+        // Each file's last state as the thread's edits alone left it; None: not the thread's.
+        let mut left: BTreeMap<String, Option<Option<Blob>>> = BTreeMap::new();
+        for request in requests {
+            let Ok(Some(record)) = self.change_record(id, &request.id).await else {
+                continue;
+            };
+            for path in files {
+                if let Some(owned) = record.paths.get(path) {
+                    let edits_only = owned.held.is_none() && owned.by.iter().all(|by| by == "edit");
+                    left.insert(path.clone(), edits_only.then(|| owned.last.clone()));
+                }
+            }
+        }
+        let (git, checkout) = (self.git.clone(), checkout.to_owned());
+        blocking(move || {
+            let repo = git.open(&checkout).map_err(git_error)?;
+            Ok(left
+                .into_iter()
+                .filter_map(|(path, last)| {
+                    let last = last?;
+                    let now = repo.checkout_blob(&path).ok()?.map(Blob::from);
+                    (now == last).then_some(path)
+                })
+                .collect())
+        })
+        .await
+        .unwrap_or_default()
+    }
+
     pub(super) async fn recover_change_records(&self, id: &ConversationId) {
         let Ok(board) = self.core.board(id).await else {
             return;
