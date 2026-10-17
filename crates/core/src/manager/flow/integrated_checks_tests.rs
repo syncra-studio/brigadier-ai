@@ -1256,8 +1256,27 @@ async fn a_review_fix_on_the_local_checkout_stays_uncommitted() {
                     let workspace = workspace.unwrap();
                     let title: String = (1..=40).map(|n| format!("# Title {n}\n")).collect();
                     std::fs::write(workspace.join("a.txt"), format!("{title}a.txt\n")).unwrap();
-                    let check = turn.call("run_check", json!({"command": "true"})).await;
+                    // A check that changes a file while it runs didn't check what is there
+                    // now: its `fixes` aren't recorded (Phase O Codex review 3).
+                    let check = turn
+                        .call(
+                            "run_check",
+                            json!({"command": "echo more >> b.txt", "fixes": ["R1.1"]}),
+                        )
+                        .await;
+                    assert!(
+                        check.text.contains(
+                            "Not recorded fixed: R1.1, as b.txt changed while the check ran, so it didn't check them."
+                        ),
+                        "{}",
+                        check.text
+                    );
+                    // On the user's own checkout a pass records them, with nothing committed.
+                    let check = turn
+                        .call("run_check", json!({"command": "true", "fixes": ["R1.1"]}))
+                        .await;
                     assert!(!check.text.contains("[review running]"), "{}", check.text);
+                    assert!(check.text.contains("Recorded: R1.1 fixed"), "{}", check.text);
                     return Reply::text("Fixed R1.1. Changed 1 file, not committed.");
                 }
                 Reply::text("[quiet]")
@@ -1324,8 +1343,18 @@ async fn a_review_fix_on_the_local_checkout_stays_uncommitted() {
             .unwrap()
             .starts_with("# Title 1\n")
     );
-    // One review: the fix got none of its own.
+    // One review: the fix got none of its own. Its finding is fixed, checked by the check.
     assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
+    let review = board.reviews.values().next().unwrap();
+    assert!(
+        matches!(
+            &review.items[0].status,
+            crate::work::FindingStatus::Fixed { checked: Some(checked), .. }
+                if checked.starts_with("`true` passed after the fix")
+        ),
+        "{:?}",
+        review.items[0].status
+    );
     flow.stop().await;
 }
 

@@ -231,6 +231,42 @@ fn last_said(output: &[u8]) -> String {
 }
 
 impl SessionManager {
+    /// The files of `tree` changed since the check started on `checked` (its tree's id): those
+    /// the check started with, and those new since. The check didn't see either.
+    async fn changed_since_check(
+        &self,
+        tree: &Path,
+        checked: String,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let (git, root) = (self.git.clone(), tree.to_owned());
+        blocking(move || {
+            let paths = git
+                .open_worktree(&root)
+                .and_then(|worktree| {
+                    worktree.paths_changed_since(&brigadier_git::Oid(checked.clone()))
+                })
+                .map_err(git_error)?;
+            if paths.is_empty() {
+                return Ok((paths, Vec::new()));
+            }
+            // Which of them the check started with: the rest are new since.
+            let mut args = vec!["ls-tree", "-r", "-z", "--name-only", &checked, "--"];
+            args.extend(paths.iter().map(String::as_str));
+            let listed = git
+                .open(&root)
+                .and_then(|repo| repo.read_only(&args))
+                .map_err(git_error)?;
+            let had: std::collections::HashSet<&str> =
+                listed.split('\0').filter(|path| !path.is_empty()).collect();
+            let (had, new): (Vec<String>, Vec<String>) = paths
+                .iter()
+                .cloned()
+                .partition(|path| had.contains(path.as_str()) || !root.join(path).exists());
+            Ok((had, new))
+        })
+        .await
+    }
+
     /// `run_check`'s `commit` (BUILD-PLAN C9): on a pass, everything changed in `tree` is
     /// committed with `message` and the thread's trailer, run as `caller`'s check ran; on a
     /// failure nothing is. Nor is anything when a file of `checked` (a
@@ -252,33 +288,7 @@ impl SessionManager {
         }
         let mut made = Vec::new();
         if let Some(checked) = checked {
-            let (git, root) = (self.git.clone(), tree.to_owned());
-            let changed = blocking(move || {
-                let paths = git
-                    .open_worktree(&root)
-                    .and_then(|worktree| {
-                        worktree.paths_changed_since(&brigadier_git::Oid(checked.clone()))
-                    })
-                    .map_err(git_error)?;
-                if paths.is_empty() {
-                    return Ok((paths, Vec::new()));
-                }
-                // Which of them the check started with: the rest are new since.
-                let mut args = vec!["ls-tree", "-r", "-z", "--name-only", &checked, "--"];
-                args.extend(paths.iter().map(String::as_str));
-                let listed = git
-                    .open(&root)
-                    .and_then(|repo| repo.read_only(&args))
-                    .map_err(git_error)?;
-                let had: std::collections::HashSet<&str> =
-                    listed.split('\0').filter(|path| !path.is_empty()).collect();
-                let (had, new): (Vec<String>, Vec<String>) = paths
-                    .iter()
-                    .cloned()
-                    .partition(|path| had.contains(path.as_str()) || !root.join(path).exists());
-                Ok((had, new))
-            })
-            .await;
+            let changed = self.changed_since_check(tree, checked).await;
             match changed {
                 Ok((paths, new)) if paths.is_empty() => made = new,
                 Ok((paths, _)) => {
@@ -702,33 +712,55 @@ impl SessionManager {
                 .await?;
             let passed = status == "exit 0";
             let mut not_fixed = if !passed {
-                Some("the check didn't pass")
+                Some("the check didn't pass".to_owned())
             } else if fixes_need_commit {
-                Some(
-                    "nothing was committed: on this branch a fix counts once run_check's `commit` commits it",
-                )
+                Some("nothing was committed: on this branch a fix counts once run_check's `commit` commits it".to_owned())
             } else {
                 None
             };
-            if let (Some(message), Some(tree)) = (commit, tree) {
+            if let (Some(message), Some(tree)) = (commit, tree.as_deref()) {
                 let checked = under_way.tree().map(str::to_owned);
                 let note = manager
-                    .commit_on_pass(&caller, &tree, passed, checked, &message, &fixes)
+                    .commit_on_pass(&caller, tree, passed, checked, &message, &fixes)
                     .await;
                 if passed && !note.starts_with("Not committed") {
                     not_fixed = None;
                 } else if passed {
-                    not_fixed = Some("nothing was committed");
+                    not_fixed = Some("nothing was committed".to_owned());
                 }
                 reply = if note.starts_with("Committed") {
                     format!("{reply}\n{note} {AFTER_COMMIT}")
                 } else {
                     format!("{reply}\n{note}")
                 };
+            } else if let (true, None, Some(tree), Some(checked)) = (
+                !fixes.is_empty(),
+                &not_fixed,
+                tree.as_deref(),
+                under_way.tree(),
+            ) {
+                // The user's own checkout, uncommitted: the fix counts only if the check saw
+                // the files as they are now.
+                not_fixed = match manager.changed_since_check(tree, checked.to_owned()).await {
+                    Ok((had, _)) if had.is_empty() => None,
+                    Ok((had, _)) => Some(format!(
+                        "{} changed while the check ran, so it didn't check them",
+                        listed(&had)
+                    )),
+                    Err(err) => Some(format!(
+                        "git could not tell whether files changed while the check ran: {err}"
+                    )),
+                };
             }
             if !fixes.is_empty() {
                 let note = manager
-                    .record_fixed_by_check(&conversation, &fixes, not_fixed, &words, &alias)
+                    .record_fixed_by_check(
+                        &conversation,
+                        &fixes,
+                        not_fixed.as_deref(),
+                        &words,
+                        &alias,
+                    )
                     .await;
                 reply = format!("{reply}\n{note}");
             }
