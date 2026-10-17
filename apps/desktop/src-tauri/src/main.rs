@@ -202,16 +202,28 @@ fn open_folders(app: &tauri::AppHandle, paths: impl IntoIterator<Item = std::pat
     }
 }
 
+/// The app's options whose value is the next argument: that value is never a folder to open
+/// (a relaunch with `--brigadier-data-dir` offered its own data folder as a project).
+const VALUE_OPTIONS: [&str; 2] = ["--brigadier-data-dir", "--overnight-notification"];
+
 /// The folders among a launch's arguments, relative ones resolved against `cwd`.
 fn folder_args(
     args: impl IntoIterator<Item = String>,
     cwd: &std::path::Path,
 ) -> Vec<std::path::PathBuf> {
-    args.into_iter()
-        .filter(|arg| !arg.starts_with('-'))
-        .map(|arg| cwd.join(arg))
-        .filter(|path| path.is_dir())
-        .collect()
+    let mut args = args.into_iter();
+    let mut folders = Vec::new();
+    while let Some(arg) = args.next() {
+        if VALUE_OPTIONS.contains(&arg.as_str()) {
+            args.next();
+        } else if !arg.starts_with('-') {
+            let path = cwd.join(arg);
+            if path.is_dir() {
+                folders.push(path);
+            }
+        }
+    }
+    folders
 }
 
 /// Saves an artifact where the user picks in the system save dialog, offering `file_name`.
@@ -846,4 +858,30 @@ fn main() {
     }
     // The code the quit asked for, so smoke failures reach CI.
     std::process::exit(shell::exit_code());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::folder_args;
+
+    /// A folder named on the command line is opened; the data folder given with
+    /// `--brigadier-data-dir` is not (issues #67, #97).
+    #[test]
+    fn the_data_dir_option_s_value_is_no_folder_to_open() {
+        let root =
+            std::env::temp_dir().join(format!("brigadier-folder-args-{}", std::process::id()));
+        let (data, repo) = (root.join("data"), root.join("repo"));
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let args = [
+            "--brigadier-data-dir",
+            data.to_str().unwrap(),
+            "repo",
+            "--smoke",
+        ]
+        .map(String::from);
+        let folders = folder_args(args, &root);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(folders, vec![repo]);
+    }
 }
