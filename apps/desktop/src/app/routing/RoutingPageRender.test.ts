@@ -9,6 +9,17 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("Routing shows each kind's order, ranking, rules and the models' ratings, and edits the order", { timeout: 60000 }, async (t) => {
   const dump = await renderFixtureLive(t, "routing.html?drive=1", "routing-result", 30000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
+  // How a model is picked, the ranking, overrides and ratings wait under a closed Advanced, which
+  // opens when Settings search brings one of them into view.
+  assert.equal(seen.advancedClosed, true);
+  assert.equal(seen.advancedRevealed, true);
+  assert.deepEqual(seen.steps, [
+    "1. Skip what can't run",
+    "2. Follow your rules",
+    "3. Keep important work on strong models",
+    "4. Use your order",
+    "5. Otherwise, the best score",
+  ]);
   assert.deepEqual(seen.kinds, [
     "Explore the code→ Automatic · GPT-6 now",
     "Research→ Automatic · Opus 5.5 now",
@@ -40,7 +51,11 @@ test("Routing shows each kind's order, ranking, rules and the models' ratings, a
     "Don't give Codex GPT-6 Luna work",
     "Never use Claude Sonnet 5.5 for review",
   ]);
-  assert.equal(seen.overrides, 0);
+  // Every kind's area overrides are listed together under Advanced.
+  assert.deepEqual(seen.overrides, [
+    "In All projects, Use apps touchingfrontendtriesGPT-6, thenOpus 5.5, andwaitsif neither can run.",
+  ]);
+  assert.equal(seen.rankingFor, "Review changes");
   assert.deepEqual(seen.unrevealable, []);
   // A review is ranked as if Claude wrote the change, then as Codex did once asked.
   assert.deepEqual(seen.authors, ["claude"]);

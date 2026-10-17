@@ -96,6 +96,15 @@ function Fixture() {
     const seen: Record<string, unknown> = {};
     const steps: (() => void)[] = [
       () => {
+        // Advanced starts closed; search bringing one of its rows into view opens it.
+        seen.advancedClosed = !document.querySelector('[data-slot="ranking-now"]');
+        revealSetting(ROUTING_PAGE_ROWS.ratings.label);
+      },
+      () => {
+        seen.advancedRevealed = Boolean(document.querySelector('[data-slot="ranking-now"]'));
+        seen.steps = all('[data-setting]')
+          .map((row) => row.dataset.setting ?? "")
+          .filter((label) => /^\d\. /.test(label));
         seen.kinds = all('[data-slot="routing-kind"]').map(text);
         seen.selected = text(document.querySelector('[data-slot="routing-kind"][aria-selected="true"]'));
         all<HTMLButtonElement>('[data-slot="routing-kind"]').find((element) => text(element).startsWith("Review changes"))?.click();
@@ -107,12 +116,17 @@ function Fixture() {
         seen.blocked = all('[data-slot="blocked-candidate"]').length;
         seen.more = text(all('[data-slot="ranking-now"] button').find((element) => text(element).includes("more")));
         seen.rules = all('[data-slot="routing-rule"]').map((row) => row.dataset.setting);
-        seen.overrides = all('[data-slot="area-override"]').length;
+        seen.overrides = all('[data-slot="area-override"]').map(text);
+        seen.rankingFor = text(button("The kind of work the ranking is for"));
         // Every searchable row without a replacement has a place search can bring into view.
         seen.unrevealable = Object.values(ROUTING_PAGE_ROWS)
           .filter((row) => !("target" in row))
           .map((row) => row.label)
-          .filter((label) => !all("[data-setting]").some((element) => element.dataset.setting === label));
+          .filter(
+            (label) =>
+              !all("[data-setting]").some((element) => element.dataset.setting === label) &&
+              !all("section[aria-labelledby] h2").some((heading) => text(heading) === label),
+          );
         seen.authors = asked.filter((question) => question.author !== null).map((question) => question.author);
         press(button("Who wrote the change under review"));
       },

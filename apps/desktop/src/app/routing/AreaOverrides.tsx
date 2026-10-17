@@ -3,7 +3,8 @@ import { DotsHorizontal, Plus } from "@openai/apps-sdk-ui/components/Icon";
 import { useAction } from "@/app/conversation/useAction";
 import { ChipSelect, ChipTrigger, TargetItems } from "@/app/routing/pickers";
 import { noneCan, placeKey } from "@/app/routing/TryOrder";
-import { areaOverrides, rowRanking, shortPlaceName } from "@/app/routing/words";
+import { areaOverrides, ROUTED_KINDS, rowRanking, shortPlaceName } from "@/app/routing/words";
+import { SettingsButton, SettingsSection } from "@/app/settings/parts";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +14,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { Area, OverrideTarget, Ranking, RoutePreview, TaskCategory } from "@/ipc/generated";
@@ -24,28 +28,35 @@ import { useApp } from "@/state/store";
 /** The places a new override starts with when the kind has no order: what routing picks first. */
 const SEEDED_PLACES = 2;
 
+/** The Area overrides row, for the page and Settings search. */
+export const AREA_OVERRIDES_ROW = {
+  label: "Area overrides",
+  description: "A different order for work that touches frontend, backend, infra, docs or tests",
+} as const;
+
 /**
  * Area overrides: for tasks of a kind touching some areas, an order of their own, each as a
  * sentence ("In Brigadier, Use apps touching [frontend] tries [GPT-6], then [Opus 5.5], and
- * [waits] if neither can run."). Each can be turned off (its order is kept) or removed.
+ * [waits] if neither can run."), every kind of work's in one list. Each can be turned off (its
+ * order is kept) or removed.
  */
 export function AreaOverrides({
-  category,
   scope,
-  route,
+  routes,
   groups,
 }: {
-  category: TaskCategory;
   scope: string | null;
-  route: RoutePreview | null;
+  /** What routing picks now for each kind, in this scope: a new override starts from it. */
+  routes: readonly RoutePreview[] | null;
   groups: readonly ModelGroup[];
 }) {
   const rankings = useApp((s) => s.settings.routingRankings);
-  const overrides = areaOverrides(rankings, category, scope);
-  const row = rowRanking(rankings, category, scope);
+  const overrides = ROUTED_KINDS.flatMap((category) => areaOverrides(rankings, category, scope));
   const action = useAction();
-  const add = (area: Area) =>
-    action.run(() =>
+  const add = (category: TaskCategory, area: Area) => {
+    const row = rowRanking(rankings, category, scope);
+    const route = routes?.find((found) => found.category === category) ?? null;
+    return action.run(() =>
       changeRanking("", (created) => created, () => ({
         id: newRankingId(),
         category,
@@ -66,41 +77,52 @@ export function AreaOverrides({
         updatedAtMs: Date.now(),
       })),
     );
+  };
   return (
-    <section data-setting="Area overrides" data-slot="area-overrides" className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">Area overrides</h3>
+    <SettingsSection
+      title={AREA_OVERRIDES_ROW.label}
+      description={AREA_OVERRIDES_ROW.description}
+      actions={
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
-            <button type="button" className="text-link flex items-center gap-1 text-xs hover:underline">
-              <Plus aria-hidden className="size-icon-xs" />
+            <SettingsButton>
+              <Plus />
               Add override
-            </button>
+            </SettingsButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuLabel>An order for tasks touching</DropdownMenuLabel>
-            {AREAS.map((area) => (
-              <DropdownMenuItem key={area} onSelect={() => add(area)}>
-                {AREA_LABELS[area]}
-              </DropdownMenuItem>
+            <DropdownMenuLabel>An order for</DropdownMenuLabel>
+            {ROUTED_KINDS.map((category) => (
+              <DropdownMenuSub key={category}>
+                <DropdownMenuSubTrigger>{PLAIN_KIND_NAMES[category]}</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <DropdownMenuLabel>Touching</DropdownMenuLabel>
+                  {AREAS.map((area) => (
+                    <DropdownMenuItem key={area} onSelect={() => add(category, area)}>
+                      {AREA_LABELS[area]}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+      }
+    >
+      <div data-setting={AREA_OVERRIDES_ROW.label} data-slot="area-overrides" className="flex flex-col gap-2">
+        {overrides.length === 0 && (
+          <p className="text-muted-foreground text-xs">None: tasks touching any area follow their kind's order.</p>
+        )}
+        {overrides.map((override) => (
+          <AreaOverride key={override.id} ranking={override} category={override.category} groups={groups} />
+        ))}
+        {action.error && (
+          <p role="alert" className="text-destructive text-xs">
+            {action.error}
+          </p>
+        )}
       </div>
-      {overrides.length === 0 && (
-        <p className="text-muted-foreground text-xs">
-          None: tasks touching any area follow the order above.
-        </p>
-      )}
-      {overrides.map((override) => (
-        <AreaOverride key={override.id} ranking={override} category={category} groups={groups} />
-      ))}
-      {action.error && (
-        <p role="alert" className="text-destructive text-xs">
-          {action.error}
-        </p>
-      )}
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -197,7 +219,7 @@ function AreaOverride({
           onChange={(value) => edit((current) => ({ ...current, only: value === "wait" }))}
         />
         if {noneCan(entries.length)} run.
-        {!ranking.manual && <span className="text-muted-foreground basis-full text-xs">Off: these tasks follow the order above.</span>}
+        {!ranking.manual && <span className="text-muted-foreground basis-full text-xs">Off: these tasks follow the kind's order.</span>}
       </p>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>

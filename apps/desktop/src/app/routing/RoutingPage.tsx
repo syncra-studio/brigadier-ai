@@ -2,9 +2,9 @@ import { Clock, InfoCircle, Undo } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { AreaOverrides } from "@/app/routing/AreaOverrides";
+import { AREA_OVERRIDES_ROW, AreaOverrides } from "@/app/routing/AreaOverrides";
 import { ModelRatings, RATINGS_ROWS } from "@/app/routing/ModelRatings";
-import { ChipSelect, useScopeOptions } from "@/app/routing/pickers";
+import { useScopeOptions } from "@/app/routing/pickers";
 import { RankingNow, type RankingQuestion } from "@/app/routing/RankingNow";
 import { ruleCovers, RoutingRules } from "@/app/routing/RoutingRules";
 import { TryOrder } from "@/app/routing/TryOrder";
@@ -18,7 +18,15 @@ import {
   rowRanking,
   shortModelName,
 } from "@/app/routing/words";
-import { SettingsButton, SettingsPage } from "@/app/settings/parts";
+import {
+  SettingsAdvanced,
+  SettingsButton,
+  SettingsCard,
+  SettingsPage,
+  SettingsRow,
+  SettingsSection,
+  SettingsSelect,
+} from "@/app/settings/parts";
 import { useReveal } from "@/app/settings/reveal";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { Badge } from "@/components/ui/badge";
@@ -42,7 +50,11 @@ export const ROUTING_PAGE_ROWS = {
   },
   steps: {
     label: "How a model is picked",
-    description: "Hard limits, rules, tier floors, your order, then the score",
+    description: "What can't run is skipped, then your rules, the tier floor, your order, then the best score",
+  },
+  scope: {
+    label: "Settings for",
+    description: "A project can have its own orders and rules; the others follow All projects",
   },
   order: {
     label: "Order",
@@ -57,23 +69,33 @@ export const ROUTING_PAGE_ROWS = {
     label: "Rules",
     description: "Never use a model for some work, don't give it work at all, prefer it, or only use it",
   },
-  overrides: {
-    label: "Area overrides",
-    description: "A different order for work that touches frontend, backend, infra, docs or tests",
-  },
+  overrides: AREA_OVERRIDES_ROW,
   ratings: RATINGS_ROWS.ratings,
   refresh: { ...RATINGS_ROWS.refresh, target: RATINGS_ROWS.ratings.label },
 } as const;
 
-/** The steps routing narrows the models by, in order. */
-const STEPS: readonly [string, string | null][] = [
-  ["Hard limits", "logged out, at a limit, just failed, can't read images"],
-  ["Never · only rules", null],
-  ["Tier floor", "Frontier for code, review, merge"],
-  ["Manual list", "skips the floor"],
-  ["Prefer rules", null],
-  ["Orchestrator pin", null],
-  ["Score", "strength + learned − quota − load"],
+/** The steps routing narrows the models by, in order, in plain words. */
+const STEPS: readonly [string, string][] = [
+  ["Skip what can't run", "Signed out, at a limit, just failed, or can't handle what the work needs, like images"],
+  ["Follow your rules", "A model you said never to use for this is left out; when you said to use only some, only those are left"],
+  [
+    "Keep important work on strong models",
+    "Writing code, reviewing changes and resolving conflicts need a Frontier model; your order may go below that",
+  ],
+  ["Use your order", "When the kind of work has one: the first model in it that can run"],
+  [
+    "Otherwise, the best score",
+    "A model you prefer first; else strength for the work plus what Brigadier learned, less a model near its limit or busy",
+  ],
+];
+
+/** The Advanced rows Settings search may bring into view, which open it. */
+const ADVANCED_LABELS = [
+  ROUTING_PAGE_ROWS.steps.label,
+  ROUTING_PAGE_ROWS.scope.label,
+  ROUTING_PAGE_ROWS.ranking.label,
+  ROUTING_PAGE_ROWS.overrides.label,
+  ROUTING_PAGE_ROWS.ratings.label,
 ];
 
 /**
@@ -158,21 +180,14 @@ export function RoutingPage() {
                 ))}
               </div>
             </section>
-            <div className="bg-divider h-px" />
-            <HowPicked />
           </aside>
           <div className="flex min-w-0 flex-1 flex-col gap-7 p-6">
             <KindHead category={kind} scope={scope} rankings={rankings} />
-            <p className="text-foreground/65 -mt-3 flex flex-wrap items-center gap-2 text-sm">
-              In
-              <ChipSelect
-                label="Where these settings apply"
-                value={scope ?? ""}
-                options={scopes}
-                onChange={(value) => changeScope(value === "" ? null : value)}
-              />
-              — applies {scopeName ? `in ${scopeName}` : "everywhere"} unless an area override says otherwise.
-            </p>
+            {scopeName && (
+              <p className="text-foreground/65 -mt-3 text-xs">
+                In {scopeName}: other projects follow All projects. Change which under Advanced.
+              </p>
+            )}
             {kind === "gitText" && <GitWriterNote groups={groups} />}
             <TryOrder
               category={kind}
@@ -182,22 +197,47 @@ export function RoutingPage() {
               route={routeOf(kind, routes)}
               groups={groups}
             />
-            {ranked.error && (
-              <p role="alert" className="text-destructive text-xs">
-                {ranked.error}
-              </p>
-            )}
-            <RankingNow
-              category={kind}
-              route={routeOf(kind, ranked.routes)}
-              question={question}
-              onQuestion={setQuestion}
-              groups={groups}
-            />
             <RoutingRules category={kind} scope={scope} groups={groups} />
-            <AreaOverrides category={kind} scope={scope} route={routeOf(kind, routes)} groups={groups} />
           </div>
         </div>
+      </div>
+      <SettingsAdvanced
+        description="How a model is picked, settings for a project, the ranking right now, area overrides and every model's ratings"
+        labels={ADVANCED_LABELS}
+      >
+        <SettingsSection title={ROUTING_PAGE_ROWS.steps.label} description="Each step narrows what the next one sees">
+          <SettingsCard>
+            {STEPS.map(([step, hint], index) => (
+              <SettingsRow key={step} label={`${index + 1}. ${step}`} description={hint} />
+            ))}
+          </SettingsCard>
+        </SettingsSection>
+        <SettingsCard>
+          <SettingsRow label={ROUTING_PAGE_ROWS.scope.label} description={ROUTING_PAGE_ROWS.scope.description}>
+            <SettingsSelect
+              label="Where these settings apply"
+              value={scope ?? ""}
+              options={scopes}
+              onChange={(value) => changeScope(value === "" ? null : value)}
+            />
+          </SettingsRow>
+        </SettingsCard>
+        <div className="flex flex-col gap-2">
+          {ranked.error && (
+            <p role="alert" className="text-destructive text-xs">
+              {ranked.error}
+            </p>
+          )}
+          <RankingNow
+            category={kind}
+            route={routeOf(kind, ranked.routes)}
+            question={question}
+            onQuestion={setQuestion}
+            onCategory={setKind}
+            groups={groups}
+          />
+        </div>
+        <AreaOverrides scope={scope} routes={routes} groups={groups} />
         <ModelRatings
           models={view?.models ?? null}
           learned={view && view.projectId === question.projectId ? view.learned : []}
@@ -208,7 +248,7 @@ export function RoutingPage() {
           candidates={routeOf(kind, ranked.routes)?.candidates ?? []}
           now={now}
         />
-      </div>
+      </SettingsAdvanced>
     </SettingsPage>
   );
 }
@@ -293,34 +333,6 @@ function KindItem({
         <span className="text-muted-foreground truncate text-xs">{line}</span>
       </span>
     </button>
-  );
-}
-
-/** The steps routing narrows the models by. */
-function HowPicked() {
-  return (
-    <section data-setting={ROUTING_PAGE_ROWS.steps.label} className="flex flex-col gap-1 px-2">
-      <h2 className="text-sm font-medium">{ROUTING_PAGE_ROWS.steps.label}</h2>
-      <p className="text-muted-foreground text-xs">Each step narrows what the next one sees.</p>
-      <ol className="flex flex-col gap-2 pt-2">
-        {STEPS.map(([name, hint], index) => (
-          <li key={name} className="flex gap-2.5">
-            <span
-              className={cn(
-                "flex size-5 shrink-0 items-center justify-center rounded-xs font-mono text-2xs",
-                index === STEPS.length - 1 ? "bg-foreground text-background" : "bg-foreground/8 text-foreground/65",
-              )}
-            >
-              {index + 1}
-            </span>
-            <span className="flex flex-col">
-              <span className="text-label">{name}</span>
-              {hint && <span className="text-muted-foreground text-2xs">{hint}</span>}
-            </span>
-          </li>
-        ))}
-      </ol>
-    </section>
   );
 }
 

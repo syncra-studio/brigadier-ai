@@ -2,14 +2,14 @@ import { Check, ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
 import { ChipSelect, useScopeOptions } from "@/app/routing/pickers";
-import { formatPart, scoreParts, shortModelName, spacing } from "@/app/routing/words";
+import { formatPart, ROUTED_KINDS, scoreParts, shortModelName, spacing } from "@/app/routing/words";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Badge } from "@/components/ui/badge";
 import { useNow } from "@/hooks/use-now";
 import type { Area, ProviderKind, RouteCandidate, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
-import { AREA_LABELS, AREAS, TIER_LABELS } from "@/lib/routing";
+import { AREA_LABELS, AREAS, PLAIN_KIND_NAMES, TIER_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 
 /** Blocked models shown before "N more". */
@@ -48,12 +48,14 @@ export function RankingNow({
   route,
   question,
   onQuestion,
+  onCategory,
   groups,
 }: {
   category: TaskCategory;
   route: RoutePreview | null;
   question: RankingQuestion;
   onQuestion: (question: RankingQuestion) => void;
+  onCategory: (category: TaskCategory) => void;
   groups: readonly ModelGroup[];
 }) {
   const scopes = useScopeOptions();
@@ -70,7 +72,14 @@ export function RankingNow({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium">Ranking right now</h3>
         <span className="text-muted-foreground flex flex-wrap items-center gap-1.5 text-xs">
-          Scored for
+          For
+          <ChipSelect
+            label="The kind of work the ranking is for"
+            value={category}
+            options={ROUTED_KINDS.map((kind) => ({ value: kind, label: PLAIN_KIND_NAMES[kind] }))}
+            onChange={onCategory}
+          />
+          · scored for
           <ChipSelect
             label="The project the ranking is scored for"
             value={question.projectId ?? ""}
