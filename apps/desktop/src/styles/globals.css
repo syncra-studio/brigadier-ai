@@ -122,10 +122,10 @@
   height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-composer-gap));
 }
 
-/* Behind the floating footer and the scroll button's strip above it the background is solid,
-   then fades out above that: text never shows under the button. */
+/* Behind the floating footer the background is solid; right above it the text fades out, and
+   the scroll button floats over it there. */
 @utility thread-bottom-fade {
-  height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-scroll-strip) + var(--spacing-thread-fade-bottom));
+  height: calc(var(--thread-footer-height, 0px) + var(--spacing-thread-fade-bottom));
   background-image: linear-gradient(
     to top,
     var(--color-background) 0%,
@@ -140,9 +140,9 @@
   background-image: linear-gradient(to bottom, var(--color-background), transparent);
 }
 
-/* 1.5rem above the floating footer's column: its composer, and what sits above it. */
+/* 1rem above the floating footer's column: its composer, and what sits above it. */
 @utility above-composer {
-  bottom: calc(100% + 1.5rem);
+  bottom: calc(100% + 1rem);
 }
 
 /* The sidebar panel's width: where the user dragged it (--sidebar-width, set by the sidebar)

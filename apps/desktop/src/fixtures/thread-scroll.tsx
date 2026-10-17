@@ -287,7 +287,7 @@ async function open(id: string): Promise<void> {
 const lastGap = () => round(stackTop() - rows().at(-1)!.getBoundingClientRect().bottom);
 
 /** The gap kept between the content's end and the floating footer. */
-const COMPOSER_GAP = 84;
+const COMPOSER_GAP = 32;
 
 /** How far down the view a sent turn's end settles: the view's height above the gap, less the room. */
 function turnLine(): number {
@@ -414,16 +414,16 @@ const steps = {
       // How far the fades reach: under the top bar, and above the floating footer.
       topFade: fade(".thread-top-fade"),
       bottomFade: round(fade(".thread-bottom-fade") - footer),
-      // Where the solid background starts above the composer (the fade's top plus its gradient), against the scroll button's top.
-      buttonOnSolid: round($(".aui-thread-scroll-to-bottom")!.getBoundingClientRect().top - ($(".thread-bottom-fade")!.getBoundingClientRect().top + 20)),
+      // How far the scroll button reaches above the fade's top, over the text.
+      buttonOverText: round($(".thread-bottom-fade")!.getBoundingClientRect().top - $(".aui-thread-scroll-to-bottom")!.getBoundingClientRect().top),
     };
   },
   /** The button's threshold and place: the last row 7px (within the 8px allowed, clear of sub-pixel rounding), then 9px, under the composer's top. */
   async button() {
-    await userScroll(max() - 84 - 7);
+    await userScroll(max() - COMPOSER_GAP - 7);
     await settle(250);
     const at8 = buttonState();
-    await userScroll(max() - 84 - 9);
+    await userScroll(max() - COMPOSER_GAP - 9);
     await settle(250);
     const at9 = buttonState();
     return { at8, at9 };
