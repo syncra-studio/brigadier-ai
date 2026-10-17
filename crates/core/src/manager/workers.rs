@@ -215,8 +215,6 @@ struct TaskLiveState {
     terminal: Option<ToolAccess>,
     /// Tool calls and commands it finished that its task's Brain counters don't hold yet.
     brain_calls: u32,
-    /// Whether it needs the Brain-first steer was decided (SESSION-FIXES-PLAN.md Q6.6).
-    brain_steer_decided: bool,
 }
 
 /// What a worker's tool calls that run commands (`run_check`) run with: its headless CLI's, or
@@ -438,16 +436,9 @@ impl TaskLive {
         self.state.lock().await.window
     }
 
-    /// Counts a finished tool call or command: the calls its task's counters don't hold yet,
-    /// and whether the Brain-first steer is still to be decided.
-    pub(crate) async fn count_call(&self) -> (u32, bool) {
-        let mut state = self.state.lock().await;
-        state.brain_calls += 1;
-        (state.brain_calls, !state.brain_steer_decided)
-    }
-
-    pub(crate) async fn brain_steer_decided(&self) {
-        self.state.lock().await.brain_steer_decided = true;
+    /// Counts a finished tool call or command, which its task's counters don't hold yet.
+    pub(crate) async fn count_call(&self) {
+        self.state.lock().await.brain_calls += 1;
     }
 
     /// The counted calls its task's counters don't hold yet; they are added now.
@@ -3098,7 +3089,7 @@ impl SessionManager {
             .ok();
         }
         if finished_call {
-            self.note_worker_call(live, cli).await;
+            self.note_worker_call(live).await;
         }
         if let Some(status) = completed {
             self.save_worker_calls(live).await;
@@ -3815,8 +3806,8 @@ impl SessionManager {
         if self.held_by_plan_mode(&task).await {
             return Err(Error::Invalid(super::phases::PLAN_MODE_HOLD.into()));
         }
-        // A new file no report names would be left out of the landing: the worker decides
-        // whether it belongs to the work, before anything of the report is stored.
+        // A new file no report names is left out of the landing, and a [met] with no evidence
+        // is a claim: the report is taken, each marked for the thread to judge (#249).
         let unreported = self
             .unreported_files(&task, &input.changes)
             .await
@@ -3824,36 +3815,24 @@ impl SessionManager {
                 tracing::warn!(error = %err, "could not look for new files the report leaves out");
                 Vec::new()
             });
-        if !unreported.is_empty() {
-            return Err(Error::Invalid(format!(
-                "These new files are not in your report: {}. Nothing was reported. List each one that belongs to the work under `changes` by its path (or its folder's), or delete it (`git rm` it if you committed it), then call submit_report again.",
-                unreported
-                    .iter()
-                    .map(|path| format!("`{path}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )));
-        }
-        // A criterion is [met] only with its evidence (BUILD-PLAN E2): the worker adds it in
-        // this same turn, as it lists a new file.
         let unevidenced = crate::heap(|| self.unevidenced_met(&task, &input.done_when)).await;
-        if !unevidenced.is_empty() {
-            return Err(Error::Invalid(format!(
-                "Nothing was reported: a \"done when\" is [met] only with its evidence. These have none:\n{}\nGive each the out-… id its check's result ends with ([evidence: out-…]), or the lines that show it as path:12-14 followed by the exact words in backticks; list every criterion by its id (p2-c1) when you verify a phase; mark what you didn't check [not checked]. Then call submit_report again.",
-                unevidenced
-                    .iter()
-                    .map(|line| format!("- {line}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )));
+        let mut input = input;
+        let marks: Vec<String> = unreported
+            .iter()
+            .map(|path| format!("new file not named: `{path}` (left out of the landing)"))
+            .collect();
+        input.risks.splice(0..0, marks);
+        // A criterion the report doesn't list goes under its risks: its "done when" lines stay
+        // the worker's own, as the phase's acceptance reads them.
+        for line in unevidenced {
+            match input.done_when.iter_mut().find(|item| **item == line) {
+                Some(item) => item.push_str(" [unevidenced]"),
+                None => input.risks.push(format!("{line} [unevidenced]")),
+            }
         }
         // A development build's planted `learned` line (the continuity battery's false claim).
         #[cfg(debug_assertions)]
-        let input = {
-            let mut input = input;
-            input.learned.extend(self.planted_learned(conversation_id));
-            input
-        };
+        input.learned.extend(self.planted_learned(conversation_id));
         // Everything it names is stored now, before its folders can go.
         let texts: Vec<String> = std::iter::once(&input.summary)
             .chain(&input.decisions)

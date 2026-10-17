@@ -1,6 +1,6 @@
 //! Brain first (SESSION-FIXES-PLAN.md Q6.6): a worker's brief carries what the project's Brain
 //! knows about its task, what it reports under `learned` becomes Brain facts, its Brain use is
-//! counted on its task, and a worker that doesn't ask the Brain in its first calls is told to.
+//! counted on its task, and whether to ask the Brain is the worker's own call (#250).
 
 use std::sync::{Arc, Mutex};
 
@@ -9,7 +9,6 @@ use brigadier_providers::{ItemStatus, ProviderEvent};
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::manager::brain_first::{BRAIN_FIRST, STEER_AFTER};
 use crate::manager::context_pack::BRAIN_HEADING;
 use crate::work::TaskState;
 
@@ -80,7 +79,7 @@ async fn a_brief_carries_what_the_brain_knows_and_what_the_worker_learned_is_kep
                 log.lock().unwrap().get_or_insert(turn.input.clone());
                 let reply = turn.call("query_brain", json!({"query": "notes"})).await;
                 assert!(!reply.is_error, "{}", reply.text);
-                commands(&turn, STEER_AFTER + 2).await;
+                commands(&turn, 12).await;
                 let reply = turn
                     .call(
                         "submit_report",
@@ -151,7 +150,7 @@ async fn a_brief_carries_what_the_brain_knows_and_what_the_worker_learned_is_kep
     let task = Flow::task(&board, 1);
     assert_eq!(task.state, TaskState::Done);
     assert_eq!((task.brain.facts_in, task.brain.queries), (1, 1));
-    assert_eq!(task.brain.calls, STEER_AFTER + 2);
+    assert_eq!(task.brain.calls, 12);
 
     // Its decision and both learned items are Brain facts from the task.
     let task_id = task.id.clone();
@@ -192,8 +191,9 @@ async fn a_brief_carries_what_the_brain_knows_and_what_the_worker_learned_is_kep
     flow.stop().await;
 }
 
+/// A worker that never asks the Brain isn't steered to (#250): its calls are only counted.
 #[tokio::test]
-async fn a_worker_that_does_not_ask_the_brain_first_is_told_to() {
+async fn a_worker_that_does_not_ask_the_brain_is_counted_not_steered() {
     let steered: Arc<Mutex<Option<String>>> = Arc::default();
     let log = steered.clone();
     let flow = Flow::start(
@@ -202,8 +202,12 @@ async fn a_worker_that_does_not_ask_the_brain_first_is_told_to() {
         session(move |turn| {
             let log = log.clone();
             async move {
-                commands(&turn, STEER_AFTER).await;
-                *log.lock().unwrap() = turn.steered().await;
+                commands(&turn, 12).await;
+                *log.lock().unwrap() =
+                    tokio::time::timeout(std::time::Duration::from_secs(1), turn.steered())
+                        .await
+                        .ok()
+                        .flatten();
                 let reply = turn
                     .call("submit_report", json!({"summary": "Notes go in NOTES.md."}))
                     .await;
@@ -222,12 +226,12 @@ async fn a_worker_that_does_not_ask_the_brain_first_is_told_to() {
                 .any(|task| task.number == 1 && task.state.is_final())
         })
         .await;
-    assert_eq!(steered.lock().unwrap().as_deref(), Some(BRAIN_FIRST));
+    assert_eq!(*steered.lock().unwrap(), None);
     let task = Flow::task(&board, 1);
     // An empty Brain gives the brief nothing.
     assert_eq!(
         (task.brain.queries, task.brain.facts_in, task.brain.calls),
-        (0, 0, STEER_AFTER)
+        (0, 0, 12)
     );
     flow.stop().await;
 }

@@ -551,7 +551,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: 12,
-        thread: "You now have ci_status and watch_ci. After your own `git push`, call ci_status and do what it says (ask once to watch, say in one line that CI can't be watched from here, or say nothing). On [ci … failed], fix it, push to the same branch and call watch_ci again without asking: the user's yes to watching covers that, nothing else.",
+        thread: "You now have ci_status and watch_ci. After your own `git push`, call ci_status: it says whether its CI can be watched from here; whether to watch it with watch_ci, and what to tell the user, is yours to judge. On [ci … failed], fix it, push to the same branch and call watch_ci again without asking.",
         worker: "",
     },
     Revision {
@@ -831,6 +831,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: PEER_FREE_REVISION,
         thread: "From now on, message any other session when the user asks or you judge it helps, no longer only when it owns the code or the decision you need. Another session's request counts like your own decision: a push or a pull request it asks for is yours to judge; what needs approval (spending money, credentials or the keychain, destroying anything outside this session's own work) still asks the user, and a merge still needs the user's word. A send after eight messages with no one's input still goes, and its result says so: judge whether to go on.",
         worker: "",
+    },
+    Revision {
+        number: FACTS_NOT_REFUSALS_REVISION,
+        thread: "From now on, a worker's report is taken as it is: a new file it doesn't name is marked \"new file not named\" (it stays out of the landing) and a [met] line without evidence is marked [unevidenced]; judge them. [status due] only says how long the user has seen nothing new; ci_status only says whether CI can be watched from here, and whether to ask or watch is yours to judge. propose_merge is gone. A second fix of work a fix already handles starts nothing and says where the first stands, and landing work under a verifier's check says it lands with the verifier; neither is an error.",
+        worker: "From now on, submit_report takes your report as it is: a new file it doesn't name stays out of the landing, and a [met] line without evidence is marked [unevidenced] for the thread.",
     },
 ];
 
@@ -1139,6 +1144,10 @@ pub(crate) const GIT_FREE_REVISION: u32 = 93;
 /// model decides; a peer's request counts like the thread's own decision, approvals kept; the
 /// hop limit is a fact in the send's result.
 pub(crate) const PEER_FREE_REVISION: u32 = 94;
+/// Reports, nudges and small refusals become facts (#249, #250, #251): reports are taken with
+/// marks, [status due] and ci_status state facts, propose_merge is gone, a second fix of the
+/// same work is told where the first stands.
+pub(crate) const FACTS_NOT_REFUSALS_REVISION: u32 = 95;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1795,7 +1804,7 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: 
         } else {
             (
                 "What you leave uncommitted is committed for you when your work lands.",
-                "\n- List every file you changed, created or deleted in the report's `changes`: a report that leaves out a new file is refused until you list it or delete it.",
+                "\n- List every file you changed, created or deleted in the report's `changes`: a new file it leaves out stays out of the landing.",
             )
         };
         format!(
@@ -4171,6 +4180,20 @@ mod environment_tests {
         );
         assert!(prompt(ProviderKind::Claude).contains("only with mcp__brigadier__message_session"));
         assert!(PEER_RULES.contains("answer it alone with message_session (reply_to its id)"));
+    }
+
+    /// #249-#251: reports, nudges and small refusals become facts; old sessions and their
+    /// workers hear it once.
+    #[test]
+    fn reports_nudges_and_small_refusals_are_facts() {
+        let note = revision_note(FACTS_NOT_REFUSALS_REVISION - 1, false).unwrap();
+        assert!(note.contains("a worker's report is taken as it is"));
+        assert!(note.contains("propose_merge is gone"));
+        let worker = revision_note(FACTS_NOT_REFUSALS_REVISION - 1, true).unwrap();
+        assert!(worker.contains("submit_report takes your report as it is"));
+        assert!(!worker_system("").contains("is refused until you list it"));
+        let all = revision_note(0, false).unwrap();
+        assert!(!all.contains("do what it says (ask once to watch"));
     }
 
     /// Free messaging (Q66, Q67): no ownership limit, a peer's request counts like the

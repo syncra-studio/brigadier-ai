@@ -353,7 +353,6 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),
         "stop_merge" => ToolCall::Orchestrator(O::StopMerge(arg(name, args))),
-        "propose_merge" => ToolCall::Orchestrator(O::ProposeMerge(arg(name, args))),
         "propose_plan" => ToolCall::Orchestrator(O::ProposePlan(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
         "record_findings" => ToolCall::Orchestrator(O::RecordFindings(arg(name, args))),

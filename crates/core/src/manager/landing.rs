@@ -94,12 +94,13 @@ impl SessionManager {
                 task.number, task.state
             )));
         }
-        // A verifier the orchestrator started on this work lands it with its own.
+        // A verifier the orchestrator started on this work lands it with its own: landing it
+        // first would replay its commits under the verifier's. A fact, not an error (#251).
         if let Some(verifier) = self.verifier_of(&task).await {
-            return Err(Error::Invalid(format!(
-                "task-{}'s work is verified by task-{}, which you started on top of its commits: land task-{} once it reports.",
+            return Ok(format!(
+                "Nothing landed: task-{}'s work is under task-{}'s verification, built on its commits, so it lands with task-{} once that reports.",
                 task.number, verifier.number, verifier.number
-            )));
+            ));
         }
         let later = self.later_request_for(id, &task).await;
         // Checked and changed in one step: a stop, a steer or a newer report that came after
@@ -1386,16 +1387,6 @@ impl SessionManager {
         Ok(run)
     }
 
-    /// `propose_merge`, retired (BUILD-PLAN A4): merge cards are gone, and a session that still
-    /// has the tool hears what to do instead.
-    pub(crate) async fn propose_merge(
-        &self,
-        _id: &ConversationId,
-        _note: Option<String>,
-    ) -> Result<String> {
-        Err(Error::Invalid(PROPOSE_MERGE_RETIRED.into()))
-    }
-
     /// When the user last wrote on the branch shown, if ever.
     pub(super) async fn latest_user_message_at(
         &self,
@@ -2659,9 +2650,6 @@ pub(super) fn reviews_since_merge(board: &crate::board::Board) -> Vec<&crate::wo
     reviews.sort_by_key(|review| (review.number, review.started_at_ms));
     reviews
 }
-
-/// What a late `propose_merge` call hears: merge cards are retired (BUILD-PLAN A4).
-pub(super) const PROPOSE_MERGE_RETIRED: &str = "propose_merge is retired: there are no merge cards any more. When the work is ready to merge you may say so once, in plain text. Merge only on the user's word: [merge] (call finish_session without consent), a card answer or their message (finish_session with its consent).";
 
 /// How long a merge waits for the fetch of its base's remote (#224).
 const FETCH_PATIENCE: std::time::Duration = std::time::Duration::from_secs(20);

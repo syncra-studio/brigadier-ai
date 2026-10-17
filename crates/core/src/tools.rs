@@ -345,15 +345,6 @@ pub struct AskOption {
     pub description: Option<String>,
 }
 
-/// `propose_merge`, retired (BUILD-PLAN A4): no longer offered, and a late call from a session
-/// that still has it is refused with what to do instead, whatever it passed.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-pub struct ProposeMerge {
-    /// One short line under the question: what the merge brings, and what the reviews found.
-    #[serde(default)]
-    pub note: Option<String>,
-}
-
 /// `read_artifact`: page through a stored artifact (transcript, diff, command output, note).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1155,7 +1146,6 @@ pub enum OrchestratorCall {
     LandPhase(LandPhase),
     FinishSession(FinishSession),
     StopMerge(StopMerge),
-    ProposeMerge(ProposeMerge),
     NoteForUser(NoteForUser),
     RecordFindings(RecordFindings),
     CiStatus(CiPush),
@@ -1265,7 +1255,6 @@ impl OrchestratorCall {
             Self::LandPhase(_) => "land_phase",
             Self::FinishSession(_) => "finish_session",
             Self::StopMerge(_) => "stop_merge",
-            Self::ProposeMerge(_) => "propose_merge",
             Self::NoteForUser(_) => "note_for_user",
             Self::RecordFindings(_) => "record_findings",
             Self::CiStatus(_) => "ci_status",

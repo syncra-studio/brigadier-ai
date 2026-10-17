@@ -1084,7 +1084,8 @@ impl super::SessionManager {
         Ok((repo, url, sha))
     }
 
-    /// `ci_status`: whether the push's CI can be watched from here, and what to tell the user.
+    /// `ci_status`: whether the push's CI can be watched from here, as a fact; asking, watching
+    /// and what to tell the user are the thread's call (#250).
     pub(crate) async fn ci_status(
         &self,
         id: &crate::model::ConversationId,
@@ -1095,16 +1096,14 @@ impl super::SessionManager {
         let parted = parted_note(&repo, push.branch.trim(), &sha).await;
         let status = match probe(&repo, &url, &sha, self.gh().as_ref()).await {
             Probe::Watchable { repo, .. } => format!(
-                "watchable: {repo} runs GitHub Actions on {short}. Ask the user once with ask_user, \"Watch CI for {short}?\" with Watch and No. On Watch, call watch_ci with the same remote, branch and sha; on No, say nothing more about it."
+                "watchable: {repo} runs GitHub Actions on {short}; watch_ci follows it with the same remote, branch and sha."
             ),
             Probe::NotWatchable { why, link } => format!(
-                "not watchable: {why} Tell the user in one line that you can't watch this repository's CI from here{}, and don't offer to.",
-                link.map(|link| format!(", with its link {link}"))
+                "not watchable: {why}{}",
+                link.map(|link| format!(" Its CI: {link}"))
                     .unwrap_or_default()
             ),
-            Probe::NoCi => {
-                "no CI: the pushed commit has no CI files. Say nothing about CI.".to_owned()
-            }
+            Probe::NoCi => "no CI: the pushed commit has no CI files.".to_owned(),
         };
         Ok(status + &parted)
     }

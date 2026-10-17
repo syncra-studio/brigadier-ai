@@ -1,7 +1,6 @@
 //! Merging is the user's act (BUILD-PLAN A3, A4): only their click on "Merge into main" or
-//! their own words merge. Merge cards are retired: a late propose_merge is refused with what to
-//! do instead, an old card's answer never authorises a merge (live, or stored across a
-//! restart), and an upgrade closes open merge cards and cancels a merge held on one. The
+//! their own words merge. Merge cards are retired: an old card's answer never authorises a
+//! merge (live, or stored across a restart), and an upgrade closes open merge cards and cancels a merge held on one. The
 //! session keeps its workspace through a merge, and an old post-merge removal is taken back.
 
 use std::path::PathBuf;
@@ -30,8 +29,8 @@ where
 type Log = Arc<Mutex<Vec<String>>>;
 
 /// A session whose thread commits NOTES.md on "Add notes.", says once that it is ready, merges
-/// on [merge] without words and on "just merge it" with them, and tries propose_merge when told
-/// to. Every thread input and every reply it got are logged.
+/// on [merge] without words and on "just merge it" with them. Every thread input and every
+/// reply it got are logged.
 async fn session(name: &str) -> (Flow, Log) {
     let log: Log = Arc::default();
     let said = log.clone();
@@ -47,8 +46,6 @@ async fn session(name: &str) -> (Flow, Log) {
                 said.lock().unwrap().push(turn.input.clone());
                 let log = |text: String| said.lock().unwrap().push(text);
                 if turn.input.contains("Ask about the merge.") {
-                    let reply = turn.call("propose_merge", json!({})).await;
-                    log(format!("propose_merge: {} {}", reply.is_error, reply.text));
                     return Reply::text("Ready to merge when you are.");
                 }
                 if turn.input.contains("[merge] The user clicked") {
@@ -464,27 +461,6 @@ async fn a_spent_click_never_falls_back_to_the_words_before_it() {
     flow.stop().await;
 }
 
-/// A session that still has propose_merge gets a refusal that says what to do instead, and no
-/// card is made.
-#[tokio::test]
-async fn a_late_propose_merge_is_refused_with_what_to_do() {
-    let (flow, log) = session("merge-late-propose").await;
-    flow.say("Add notes.").await;
-    flow.settled().await;
-    flow.say("Ask about the merge.").await;
-    let board = flow.settled().await;
-    let refused = logged(&log, "propose_merge: ");
-    assert_eq!(refused.len(), 1);
-    assert!(refused[0].starts_with("propose_merge: true"), "{refused:?}");
-    assert!(
-        refused[0].contains("Merge only on the user's word"),
-        "{refused:?}"
-    );
-    assert!(board.questions.is_empty());
-    assert!(!on_main(&flow, "NOTES.md"));
-    flow.stop().await;
-}
-
 /// A card's answer is the user's word (#240): the thread judges it and names the card in
 /// `consent`, and it merges once. With nothing named, the answer alone merges nothing.
 #[tokio::test]
@@ -604,7 +580,7 @@ async fn an_upgrade_closes_open_merge_cards_and_keeps_a_held_merge() {
 }
 
 /// Rule R: a session told the instructions before this change hears the merge note once when
-/// it resumes; its late propose_merge is refused, and a click merges.
+/// it resumes, and a click merges.
 #[tokio::test]
 async fn a_session_from_before_hears_the_note_once_and_merges_on_a_click() {
     let (mut flow, log) = session("merge-revision").await;
@@ -638,7 +614,6 @@ async fn a_session_from_before_hears_the_note_once_and_merges_on_a_click() {
     let note = revision_note(MERGE_BY_USER_REVISION - 1, false).unwrap();
     assert!(note.contains("there are no merge cards"), "{note}");
     assert_eq!(logged(&log, &note).len(), 1);
-    assert!(logged(&log, "propose_merge: true")[0].contains("Merge only on the user's word"));
     flow.manager
         .merge_session(&flow.conversation, click())
         .await

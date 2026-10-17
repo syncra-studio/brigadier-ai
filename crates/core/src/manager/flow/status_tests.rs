@@ -97,9 +97,10 @@ async fn a_silent_request_gets_one_status_line_then_one_per_change() {
     flow.until("the status line", move |_| !due(&heard).is_empty())
         .await;
     let first = due(&inputs).remove(0);
+    // Only the fact: what to write is the thread's call (#250).
     assert!(
-        first.contains("min with nothing new for the user")
-            && first.contains("Write one status line"),
+        first.contains("[status due] The user has seen nothing new for 3")
+            && !first.contains("Write one status line"),
         "{first}"
     );
     // The status line it wrote is shown: its silence starts again. 30 more minutes with no

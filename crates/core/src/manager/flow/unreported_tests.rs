@@ -1,5 +1,5 @@
-//! A worker's new file that its report doesn't name never vanishes at landing: the report is
-//! refused, naming it, until the worker lists it or deletes it.
+//! A worker's report is taken as it is (#249): a new file it doesn't name and a [met] line
+//! with no evidence are marked for the thread, which judges, and nothing is refused.
 
 use std::sync::{Arc, Mutex};
 
@@ -17,20 +17,22 @@ where
 }
 
 /// The worker adds a module and its test, committed, staged or untracked, and reports only
-/// the file it changed. Its report is refused, naming each new file but its litter; it lists
-/// the work, deletes a stray file, and everything it listed lands.
+/// the file it changed, with a [met] line that names no evidence. Its report is taken at once:
+/// the thread reads each new file but its litter marked "new file not named", and the [met]
+/// line marked unevidenced; it lands the work as reported, and the unnamed files stay out.
 #[tokio::test]
-async fn new_files_a_report_leaves_out_are_handed_back_not_dropped() {
-    let refusals = Arc::new(Mutex::new(Vec::new()));
-    let seen = refusals.clone();
+async fn new_files_a_report_leaves_out_and_unevidenced_lines_are_marked_not_refused() {
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let seen = reports.clone();
     let flow = Flow::start(
         "unreported",
         Options::default(),
         script(move |turn| {
-            let refusals = refusals.clone();
+            let reports = reports.clone();
             async move {
                 if turn.is_orchestrator() {
                     if turn.input.contains("[report task-1 ") {
+                        reports.lock().unwrap().push(turn.input.clone());
                         let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
                         assert!(!reply.is_error, "{}", reply.text);
                         assert!(reply.text.contains("Landed"), "{}", reply.text);
@@ -53,27 +55,16 @@ async fn new_files_a_report_leaves_out_are_handed_back_not_dropped() {
                 // Staged, not committed.
                 turn.write("src/discounts.test.ts", "test('discount', () => {});\n");
                 turn.git(&["add", "src/discounts.test.ts"]);
-                // Untracked: one belongs to the work, one is a stray the worker deletes.
+                // Untracked.
                 turn.write("src/rules.ts", "export const rules = [];\n");
-                turn.write("src/probe.ts", "console.log(1);\n");
-                // Litter stays litter: not handed back.
+                // Litter stays litter: not marked.
                 turn.write("debug.log", "scratch\n");
                 turn.write("NOTES.md", "thinking\n");
-                let refused = turn
-                    .call(
-                        "submit_report",
-                        json!({"summary": "Added discount codes.", "changes": ["src/cart.ts"]}),
-                    )
-                    .await;
-                assert!(refused.is_error, "{}", refused.text);
-                refusals.lock().unwrap().push(refused.text.clone());
-                std::fs::remove_file(turn.cwd.join("src/probe.ts")).unwrap();
                 let reply = turn
                     .call(
                         "submit_report",
-                        json!({"summary": "Added discount codes.",
-                               "changes": ["src/cart.ts", "src/discounts.ts",
-                                           "src/discounts.test.ts", "src/rules.ts"]}),
+                        json!({"summary": "Added discount codes.", "changes": ["src/cart.ts"],
+                               "done_when": ["[met] discounts apply: they work"]}),
                     )
                     .await;
                 assert!(!reply.is_error, "{}", reply.text);
@@ -91,31 +82,32 @@ async fn new_files_a_report_leaves_out_are_handed_back_not_dropped() {
                 .any(|task| task.state == TaskState::Landed)
         })
         .await;
-    let refused = seen.lock().unwrap().join("\n");
-    for path in [
-        "src/discounts.ts",
-        "src/discounts.test.ts",
-        "src/rules.ts",
-        "src/probe.ts",
-    ] {
-        assert!(refused.contains(&format!("`{path}`")), "{path}: {refused}");
+    let report = seen.lock().unwrap().join("\n");
+    for path in ["src/discounts.ts", "src/discounts.test.ts", "src/rules.ts"] {
+        assert!(
+            report.contains(&format!(
+                "new file not named: `{path}` (left out of the landing)"
+            )),
+            "{path}: {report}"
+        );
     }
-    for path in ["src/cart.ts", "debug.log", "NOTES.md"] {
-        assert!(!refused.contains(path), "{path}: {refused}");
+    for path in ["debug.log", "NOTES.md"] {
+        assert!(!report.contains(path), "{path}: {report}");
     }
-    assert!(refused.contains("Nothing was reported"), "{refused}");
+    assert!(
+        report.contains("[met] discounts apply: they work [unevidenced]"),
+        "{report}"
+    );
     let task = Flow::task(&board, 1);
     let target = task.workspace.as_ref().unwrap().target.clone().unwrap();
     let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &target]);
+    assert!(files.lines().any(|line| line == "src/cart.ts"), "{files}");
     for path in [
-        "src/cart.ts",
-        "src/discounts.ts",
         "src/discounts.test.ts",
         "src/rules.ts",
+        "debug.log",
+        "NOTES.md",
     ] {
-        assert!(files.lines().any(|line| line == path), "{path}: {files}");
-    }
-    for path in ["src/probe.ts", "debug.log", "NOTES.md"] {
         assert!(!files.lines().any(|line| line == path), "{path}: {files}");
     }
     flow.settled().await;

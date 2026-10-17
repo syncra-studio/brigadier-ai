@@ -119,7 +119,8 @@ async fn fixed_once(name: &str, high: bool, refuse_resume: bool) -> (Flow, Arc<M
                             )
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
-                        // One fix at a time resumes a session.
+                        // One fix at a time resumes a session: a second is no error, and
+                        // the thread is told where the first stands (#251).
                         let again = turn
                             .call(
                                 "delegate_task",
@@ -128,9 +129,10 @@ async fn fixed_once(name: &str, high: bool, refuse_resume: bool) -> (Flow, Arc<M
                                        "spec": "Fix R1.1."}),
                             )
                             .await;
-                        assert!(again.is_error, "{}", again.text);
+                        assert!(!again.is_error, "{}", again.text);
                         assert!(
-                            again.text.contains("task-2 fixes task-1's findings already"),
+                            again.text.contains("task-2 fixes task-1's findings already (")
+                                && again.text.contains("so no new task started"),
                             "{}",
                             again.text
                         );

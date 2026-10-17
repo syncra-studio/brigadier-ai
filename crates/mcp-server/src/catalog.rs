@@ -257,12 +257,10 @@ repeat them. Returns at once.";
 const CI_STATUS: &str = "After a push of yours (`git push`), say which commit and branch went \
 to which remote: it answers at once whether this repository's CI can be watched from here \
 (GitHub Actions, gh signed in), can't be (another CI, or gh missing or signed out; with a link \
-when there is one), or has no CI, and what to tell the user. On [ci … failed], fix it on that branch (`main` only \
-through the usual merge into it here), push it and call watch_ci again without asking: the \
-user's yes to watching covers that, nothing else.";
+when there is one), or has no CI. On [ci … failed], fix it on that branch (`main` only \
+through the usual merge into it here), push it and call watch_ci again without asking.";
 
-const WATCH_CI: &str = "Watch the GitHub Actions runs of a push, once the user said yes to \
-watching it: it returns at once, the user sees the runs live, and the result comes later as a \
+const WATCH_CI: &str = "Watch the GitHub Actions runs of a push: it returns at once, the user sees the runs live, and the result comes later as a \
 [ci <sha> · passed|failed|no runs …] message with each failing job and its log lines.";
 
 const CLEAN_UP: &str = "Only when the user asks to clean up: removes what this session's \
@@ -920,7 +918,6 @@ pub fn parse_call(
                 "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
                 "stop_merge" => OrchestratorCall::StopMerge(args(name, arguments)?),
-                "propose_merge" => OrchestratorCall::ProposeMerge(args(name, arguments)?),
                 "note_for_user" => OrchestratorCall::NoteForUser(args(name, arguments)?),
                 "record_findings" => OrchestratorCall::RecordFindings(args(name, arguments)?),
                 "ci_status" => OrchestratorCall::CiStatus(args(name, arguments)?),
@@ -1699,10 +1696,10 @@ mod tests {
         assert_eq!(names, listed);
     }
 
-    /// Merge cards are retired (BUILD-PLAN A4): no role lists propose_merge, and a late call
-    /// from a session started before still parses, with any arguments, to reach its refusal.
+    /// Merge cards are retired (BUILD-PLAN A4) and propose_merge is gone (#250): no role lists
+    /// it, and a late call is an unknown tool.
     #[test]
-    fn propose_merge_is_retired_but_a_late_call_still_parses() {
+    fn propose_merge_is_gone() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
             run: RunTools::WithEscalation,
@@ -1715,11 +1712,8 @@ mod tests {
                 "{role:?}"
             );
         }
-        let late = serde_json::json!({ "note": "Adds NOTES.md.", "extra": true });
-        assert!(matches!(
-            parse_call(&thread, "propose_merge", late.as_object().cloned()),
-            Ok(ToolCall::Orchestrator(OrchestratorCall::ProposeMerge(_)))
-        ));
+        let late = serde_json::json!({ "note": "Adds NOTES.md." });
+        assert!(parse_call(&thread, "propose_merge", late.as_object().cloned()).is_err());
     }
 
     #[test]

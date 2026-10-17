@@ -1,6 +1,7 @@
 //! No long silences (SESSION-FIXES-PLAN.md Q9): while a request works and the user has seen
-//! nothing new in it for 30 minutes, the thread is told `[status due]` and writes one status
-//! line. After that, one at most every 30 minutes, and only when something changed since.
+//! nothing new in it for 30 minutes, the thread is told `[status due]` with that fact and what
+//! changed, and judges what to write (#250). After that, one at most every 30 minutes, and only
+//! when something changed since.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -130,7 +131,7 @@ impl SessionManager {
                     clock.told.insert(request.id.clone(), (now, workers));
                     let minutes = (now - since) / 60_000;
                     format!(
-                        "[status due] {minutes} min with nothing new for the user.{} Write one status line now: what runs, why, and roughly what's left. Then reply as before.",
+                        "[status due] The user has seen nothing new for {minutes} min.{}",
                         if changed.is_empty() {
                             String::new()
                         } else {

@@ -230,10 +230,12 @@ impl SessionManager {
                                 && task.subject.as_ref() == Some(&held.id)
                         })
                 {
-                    return Err(Error::Invalid(format!(
-                        "task-{} fixes task-{}'s findings already: send it more with message_worker",
-                        fix.number, held.number
-                    )));
+                    // One fix at a time resumes the session: a second is told where the first
+                    // stands, not refused (#251).
+                    return Ok(format!(
+                        "task-{} fixes task-{}'s findings already ({:?}), so no new task started: send it more with message_worker.",
+                        fix.number, held.number, fix.state
+                    ));
                 }
                 let pin = match held {
                     Some(held) => Some(brigadier_router::Pin {
@@ -572,10 +574,6 @@ impl SessionManager {
             }
             OrchestratorCall::StopMerge(args) => {
                 crate::heap(|| self.stop_merge(id, &args.why)).await
-            }
-            OrchestratorCall::ProposeMerge(args) => {
-                crate::heap(|| self.check_plan_mode(id)).await?;
-                crate::heap(|| self.propose_merge(id, args.note)).await
             }
             OrchestratorCall::NoteForUser(args) => {
                 crate::heap(|| self.note_for_user(id, args)).await

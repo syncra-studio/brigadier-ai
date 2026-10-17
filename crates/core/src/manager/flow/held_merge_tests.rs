@@ -208,10 +208,6 @@ async fn held(name: &str, plan: Plan) -> Held {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
-                    // A late propose_merge is refused: merge cards are retired.
-                    let card = turn.call("propose_merge", json!({})).await;
-                    assert!(card.is_error, "{}", card.text);
-                    log(&format!("propose_merge: {}", card.text));
                     let reply = turn
                         .call(
                             "finish_session",
@@ -311,7 +307,6 @@ async fn stopped(held: &Held) {
 async fn merge_when_done_with_two_writers_merges_once_they_land_without_asking_again() {
     let held = held("held-merge", Plan::default()).await;
     writing(&held).await;
-    assert_eq!(held.logged("propose_merge: propose_merge is retired"), 1);
     assert_eq!(
         held.logged("finish_session: [merge held] Merging after 2 workers finish"),
         1
