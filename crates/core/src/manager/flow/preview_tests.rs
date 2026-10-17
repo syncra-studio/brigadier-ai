@@ -1840,3 +1840,90 @@ async fn the_thread_hears_a_workers_preview_ended_without_restarting_it() {
     assert!(!all.contains("Start it again"), "{all}");
     flow.stop().await;
 }
+
+/// Don't trust (issue #235): an idle worker's preview, started with the worker's own access,
+/// stops with its CLI instead of running on with the access the folder no longer allows.
+#[tokio::test]
+async fn an_untrusted_folder_stops_an_idle_workers_preview() {
+    let flow = Flow::start(
+        "preview-worker-untrusted",
+        Options::default(),
+        script(move |turn| async move {
+            if turn.is_orchestrator() {
+                if turn.earlier == 0 {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Show it", "kind": "implement",
+                                   "spec": "Show it.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                return Reply::text("[quiet]");
+            }
+            if turn.earlier == 0 {
+                let reply = turn
+                    .call(
+                        "start_preview",
+                        json!({"command": "echo listening on 8125; sleep 600", "name": "site"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                turn.write("shown.txt", "shown\n");
+                turn.git(&["add", "shown.txt"]);
+                turn.git(&["commit", "-qm", "Show it"]);
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Shown.", "changes": ["shown.txt"]}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+            }
+            Reply::text("Reported.")
+        }),
+    )
+    .await;
+    flow.say("Show it.").await;
+    let board = flow
+        .until("the reported worker's preview", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.state == crate::work::TaskState::Reported)
+                && running(board)
+                    .iter()
+                    .any(|preview| preview.task_id.is_some())
+        })
+        .await;
+    let preview = running(&board).pop().unwrap();
+    let pid = preview.pid.unwrap();
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id
+        .unwrap();
+    flow.manager
+        .set_folder_trust(project, None, false)
+        .await
+        .unwrap();
+    let board = flow
+        .until("the worker's preview to stop", |board| {
+            !board.previews[&preview.id].state.is_live()
+        })
+        .await;
+    assert!(
+        matches!(&board.previews[&preview.id].state, PreviewState::Stopped { reason } if reason.contains("trust")),
+        "{:?}",
+        board.previews[&preview.id].state
+    );
+    gone(&flow, pid).await;
+    // The worker is idle, not stopped: it resumes under Ask for approval.
+    assert_eq!(
+        Flow::task(&board, 1).state,
+        crate::work::TaskState::Reported
+    );
+    flow.stop().await;
+}

@@ -1732,6 +1732,20 @@ impl SessionManager {
         stop_all(&live, "its worker's task ended").await;
     }
 
+    /// Stops `task`'s worker previews for `reason`, after a start of theirs under way, while
+    /// the worker carries on.
+    pub(crate) async fn stop_worker_previews(
+        &self,
+        id: &ConversationId,
+        task: &TaskId,
+        reason: &str,
+    ) {
+        drop(self.previews.starting.lock().await);
+        if let Err(err) = self.stop_previews_of(id, None, Some(task), reason).await {
+            tracing::warn!(task = %task, error = %err, "could not stop a worker's previews");
+        }
+    }
+
     /// A task's folder is gone, and its worker with it: a start of its taken up from here finds
     /// no worker, so it no longer needs its entry among the ended tasks.
     pub(crate) async fn forget_task_previews(&self, task: &TaskId) {

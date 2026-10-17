@@ -34,6 +34,9 @@ fn owner(project: &ProjectId) -> String {
     format!("trust:{project}")
 }
 
+/// Why a worker's preview stopped when the user stopped trusting its folder.
+const UNTRUSTED: &str = "the user no longer trusts this folder";
+
 /// How often a write starts over when the entry changed between its look and its write.
 const ATTEMPTS: usize = 3;
 
@@ -328,8 +331,8 @@ impl SessionManager {
 
     /// The folder is no longer trusted: a worker whose CLI runs above Ask for approval (its
     /// access was set when it launched) is stopped mid-turn, and its thread told why; an idle
-    /// one's CLI closes, to resume under Ask. A terminal the user has open goes on: they are
-    /// at it; it hands back under Ask.
+    /// one's CLI closes, to resume under Ask, and its previews, which run with the access it
+    /// had, stop. A terminal the user has open goes on: they are at it; it hands back under Ask.
     async fn hold_to_ask(&self, project: &Project, path: &str) {
         for id in self.sessions_on(project, path) {
             let saved = match self.core.conversation(&id).map(|c| c.setup) {
@@ -342,20 +345,27 @@ impl SessionManager {
                 if task.state.is_final() {
                     continue;
                 }
-                let Some(live) = self.existing_task_live(&task.id) else {
-                    continue;
-                };
-                if !live.has_cli().await {
-                    continue;
-                }
                 if !above && task.access == access_for(task.kind, PermissionLevel::AskForApproval) {
                     continue;
                 }
-                // Idle (a reported worker): its CLI closes as on hibernation, and its next
-                // turn resumes the session under Ask.
-                if !live.busy().await {
-                    live.close_cli().await;
-                    live.allow_revival().await;
+                let live = self.existing_task_live(&task.id);
+                let cli = match &live {
+                    Some(live) => live.has_cli().await,
+                    None => false,
+                };
+                let busy = match &live {
+                    Some(live) if cli => live.busy().await,
+                    _ => false,
+                };
+                if !busy {
+                    // Idle (a reported worker): its CLI closes as on hibernation, and its next
+                    // turn resumes the session under Ask. Its previews ran with the access it
+                    // had: they stop, and one it starts again runs under Ask.
+                    if let Some(live) = live.as_ref().filter(|_| cli) {
+                        live.close_cli().await;
+                        live.allow_revival().await;
+                    }
+                    self.stop_worker_previews(&id, &task.id, UNTRUSTED).await;
                     continue;
                 }
                 match self.stop_task(task.id.clone()).await {
