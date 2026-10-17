@@ -20,7 +20,7 @@ import { openFeedback } from "@/state/feedback";
  * they make one row along the bottom, Settings first; collapsed, they stack in the strip, Settings
  * last. Settings stays in the corner either way, and the others fade in where they move to, so the
  * foot doesn't jump as the sidebar collapses or expands. In a narrow row "Restart to update"
- * shortens its words.
+ * shortens its words, and a row too narrow for every icon goes on to a second line.
  */
 export function SidebarFoot() {
   const shortcuts = useShortcuts();
@@ -40,7 +40,8 @@ export function SidebarFoot() {
     <div
       className={cn(
         "flex shrink-0 px-2 py-2",
-        open ? "flex-row items-center gap-1" : "flex-col gap-px",
+        // A row too narrow for them all goes on to a second line, rather than past the edge.
+        open ? "flex-row flex-wrap items-center gap-1" : "flex-col gap-px",
       )}
     >
       {open && settings}
@@ -70,7 +71,8 @@ function Moving({ open, shrink = false, children }: { open: boolean; shrink?: bo
     <div
       className={cn(
         "flex motion-reduce:animate-none",
-        shrink && "min-w-0",
+        // Takes what the row has left: it wraps only when its icon wouldn't fit, not its words.
+        shrink && (open ? "has-[button]:min-w-strip-button min-w-0 grow basis-0" : "min-w-0"),
         // Two names for one fade, so it starts again on each turn.
         open ? "animate-[foot-row_150ms_ease-out]" : "animate-[foot-stack_150ms_ease-out]",
       )}
