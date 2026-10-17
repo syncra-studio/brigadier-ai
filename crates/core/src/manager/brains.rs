@@ -1382,6 +1382,7 @@ impl SessionManager {
                 let decided = match &plan.state {
                     crate::work::PlanState::Approved { .. } => "approved",
                     crate::work::PlanState::Rejected { .. } => "rejected",
+                    crate::work::PlanState::PutOff => "put off for now",
                     _ => return None,
                 };
                 Some((

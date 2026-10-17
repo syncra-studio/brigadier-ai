@@ -50,6 +50,8 @@ export function planProgress(plan: Plan, states: readonly (TaskState | undefined
       return { label: "Plan proposed", status: "review", tone: "warning" };
     case "rejected":
       return { label: "Plan rejected", status: "failed", tone: "failed" };
+    case "putOff":
+      return { label: "Plan put off", status: "pending", tone: "quiet" };
     case "superseded":
       return { label: "Plan superseded", status: "pending", tone: "quiet" };
     case "approved": {

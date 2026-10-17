@@ -941,6 +941,11 @@ export async function decidePlan(
   await request({ method: "decidePlan", conversationId, cardId, approve, message });
 }
 
+/** "Not now" on a proposed plan: it stops waiting for the user, and the thread says so. */
+export async function putOffPlan(conversationId: string, cardId: string): Promise<void> {
+  await request({ method: "putOffPlan", conversationId, cardId });
+}
+
 /**
  * Overnight runs. Each command carries a fresh id, so a retried one changes nothing; Start
  * names the proposal revision the user saw.

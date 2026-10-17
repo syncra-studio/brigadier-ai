@@ -140,6 +140,81 @@ async fn a_proposed_plan_is_a_document_and_yes_builds_it_with_plan_mode_off() {
     flow.stop().await;
 }
 
+/// "Not now" puts a proposed plan off: nothing waits on it any more (the sidebar's activity
+/// drops it), the thread hears it and answers in a line, and it can't be decided after.
+#[tokio::test]
+async fn not_now_puts_a_plan_off_and_the_thread_says_so() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "plan-not-now",
+        Options {
+            plan_mode: true,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("[decision]") {
+                    return Reply::text("Okay, the plan waits until you want it.");
+                }
+                let proposed = turn
+                    .call(
+                        "propose_plan",
+                        json!({ "title": "Add a --version flag", "body": BODY }),
+                    )
+                    .await;
+                assert!(!proposed.is_error, "{}", proposed.text);
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add a --version flag to the CLI.").await;
+    let board = flow.settled().await;
+    let [plan] = plans(&board).try_into().expect("one plan");
+    let waiting = board
+        .activity(&flow.conversation)
+        .expect("the plan waits for the user");
+    assert_eq!(waiting.approvals, std::slice::from_ref(&plan.id));
+
+    flow.manager
+        .put_off_plan(flow.conversation.clone(), plan.id.clone())
+        .await
+        .unwrap();
+    flow.until("the Not now's turn", |_| inputs.lock().unwrap().len() >= 2)
+        .await;
+    let board = flow.settled().await;
+    assert_eq!(board.plans[&plan.id].state, PlanState::PutOff);
+    assert!(
+        board
+            .activity(&flow.conversation)
+            .is_none_or(|activity| activity.approvals.is_empty()),
+        "nothing waits for the user"
+    );
+    let heard = inputs.lock().unwrap()[1].clone();
+    assert!(
+        heard.contains("\u{201c}Not now\u{201d}") && heard.contains("one short line"),
+        "{heard}"
+    );
+    assert_eq!(board.requests.len(), 1, "{:#?}", board.requests);
+    // Put off, it is decided: neither Not now nor a yes takes it again.
+    assert!(
+        flow.manager
+            .put_off_plan(flow.conversation.clone(), plan.id.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        flow.manager
+            .decide_plan(flow.conversation.clone(), plan.id.clone(), true, None)
+            .await
+            .is_err()
+    );
+    flow.stop().await;
+}
+
 /// Free text on the card rejects the plan with the user's words; the thread hears them,
 /// revises, and its next `propose_plan` replaces the rejected plan, which leaves one plan
 /// waiting for the user.
@@ -460,6 +535,84 @@ async fn in_plan_mode_the_users_yes_to_the_plan_starts_the_lead_that_outlined_it
         .await;
     assert!(board.approvals.is_empty(), "{:#?}", board.approvals);
     assert!(!plan_mode(&flow));
+    flow.stop().await;
+}
+
+/// A plan put off with its lead waiting on it holds nothing up either: the request ends, and
+/// the lead keeps waiting for a yes that a later proposal can bring.
+#[tokio::test]
+async fn not_now_on_a_plan_with_a_waiting_lead_lets_its_request_end() {
+    let flow = Flow::start(
+        "plan-not-now-lead",
+        Options {
+            plan_mode: true,
+            permission: PermissionLevel::AskForApproval,
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("[outline task-1") {
+                    let proposed = turn
+                        .call(
+                            "propose_plan",
+                            json!({ "title": "Add one.txt", "body": "# Add one.txt\nOne file.\n\n## Changes\n- `one.txt`: create it." }),
+                        )
+                        .await;
+                    assert!(!proposed.is_error, "{}", proposed.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[decision]") {
+                    return Reply::text("Okay, the plan waits until you want it.");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        json!({"effort": "high", "title": "Add the file", "kind": "implement",
+                               "spec": "Create one.txt.", "provider": "claude"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("[quiet]");
+            }
+            let reply = turn
+                .call("submit_outline", json!({"outline": "1. Create one.txt"}))
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Waiting for the go-ahead.")
+        }),
+    )
+    .await;
+    flow.say("Add one.txt.").await;
+    let board = flow
+        .until("the plan card", |board| {
+            board
+                .plans
+                .values()
+                .any(|plan| plan.state == PlanState::Proposed)
+        })
+        .await;
+    let plan = board
+        .plans
+        .values()
+        .find(|plan| plan.state == PlanState::Proposed)
+        .unwrap()
+        .clone();
+    flow.manager
+        .put_off_plan(flow.conversation.clone(), plan.id.clone())
+        .await
+        .unwrap();
+    let board = flow
+        .until("the request ends", |board| {
+            board.latest_request().unwrap().state == RequestState::Done
+        })
+        .await;
+    assert_eq!(board.plans[&plan.id].state, PlanState::PutOff);
+    let lead = board.tasks.values().next().unwrap();
+    assert_eq!(
+        lead.state,
+        TaskState::Blocked,
+        "the lead still waits for a yes"
+    );
     flow.stop().await;
 }
 

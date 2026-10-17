@@ -10,7 +10,7 @@ const merge = (answer: string, input: string) => ({ method: "answerQuestion", ca
 test("every question card takes Enter only on the focused card and lights nothing until the user moves to an answer; the phase plan's rail takes no Enter", { timeout: 90000 }, async (t) => {
   const results = JSON.parse(await renderFixtureLive(t, "card-keys.html", "card-keys-result", 60000)) as Record<string, Seen>;
   for (const [name, seen] of Object.entries(results)) assert.equal(seen.error, undefined, `${name}: ${seen.error}`);
-  const { mountEnter, arrowEnter, click, enterOutside, plainEnterOutside, plainEnterFocused, digitUnfocused, digitFocused, phasePlan, implementPlan } = results as Record<string, Seen>;
+  const { mountEnter, arrowEnter, click, enterOutside, plainEnterOutside, plainEnterFocused, digitUnfocused, digitFocused, phasePlan, implementPlan, notNow } = results as Record<string, Seen>;
 
   // The dangerous one: the merge card focuses itself with its recommended answer, yet nothing
   // is lit, the pointer passing over lights nothing, and an Enter right after mount sends nothing.
@@ -63,6 +63,9 @@ test("every question card takes Enter only on the focused card and lights nothin
   assert.deepEqual(implementPlan!.markers, [square("")]);
   assert.deepEqual(implementPlan!.afterEnter, [], "Enter right after mount builds nothing");
   assert.deepEqual(implementPlan!.calls, [{ method: "decidePlan", cardId: "document", approve: true, message: null }]);
+  // "Not now" puts the plan off with the daemon, not just aside on the rail.
+  assert.equal(notNow!.label, "Not now");
+  assert.deepEqual(notNow!.calls, [{ method: "putOffPlan", cardId: "document" }]);
 });
 
 test("a question card keeps the answer the user lit and the text typed after a visit to Settings", { timeout: 90000 }, async (t) => {

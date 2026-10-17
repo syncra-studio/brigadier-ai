@@ -1314,6 +1314,9 @@ pub enum PlanState {
     Rejected {
         message: Option<String>,
     },
+    /// The user said "Not now": nothing waits on it any more, and the thread proposes it
+    /// again when they want it.
+    PutOff,
     /// A newer plan replaced it.
     Superseded,
 }
@@ -1331,6 +1334,7 @@ enum StoredPlanState {
     InReview,
     Approved { by: PlanApprover },
     Rejected { message: Option<String> },
+    PutOff,
     Superseded,
     Revising,
 }
@@ -1341,6 +1345,7 @@ impl<'de> Deserialize<'de> for PlanState {
             StoredPlanState::Proposed => Self::Proposed,
             StoredPlanState::Approved { by } => Self::Approved { by },
             StoredPlanState::Rejected { message } => Self::Rejected { message },
+            StoredPlanState::PutOff => Self::PutOff,
             StoredPlanState::InReview | StoredPlanState::Superseded | StoredPlanState::Revising => {
                 Self::Superseded
             }

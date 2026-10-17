@@ -62,7 +62,7 @@ import type {
   DiffStat,
 } from "@/ipc/generated";
 import { shownCommand } from "@/components/transcript/activity";
-import { answerCard, answerQuestion, decidePlan } from "@/state/actions";
+import { answerCard, answerQuestion, decidePlan, putOffPlan } from "@/state/actions";
 import { type ShownApproval, useBoard } from "@/state/board";
 import { type PlanDocRef, planDoc } from "@/state/planDoc";
 import { useApp } from "@/state/store";
@@ -785,6 +785,7 @@ function ChoiceCard({
   onTyped,
   onLit,
   onSkip,
+  skipLabel = "Skip",
   onDismiss,
   busy,
   error,
@@ -817,6 +818,8 @@ function ChoiceCard({
   /** The answer lit as it changes, so a visit elsewhere keeps it. */
   onLit?: (index: number | null) => void;
   onSkip: (input: AnswerInput) => void;
+  /** What the button reads while nothing is typed. */
+  skipLabel?: string;
   onDismiss: () => void;
   busy: boolean;
   error: string | null;
@@ -1007,7 +1010,7 @@ function ChoiceCard({
               disabled={busy}
               onClick={(event) => send(clickInput(event))}
             >
-              {!text ? "Skip" : last ? "Submit" : "Next"}
+              {!text ? skipLabel : last ? "Submit" : "Next"}
             </button>
           </ActionFreeText>
         </div>
@@ -1186,8 +1189,9 @@ function RoundPager({
 /**
  * "Implement this plan?" for a plan the user reads as a document: Yes builds it; typed words
  * send it back. A thread's own plan is decided as a plan (the thread revises it); a lead's
- * outline answers its approval (Yes starts the lead, words go to it as corrections). Skip and
- * × put it aside; the plan stays proposed.
+ * outline answers its approval (Yes starts the lead, words go to it as corrections). A plan's
+ * "Not now" puts it off, which the thread answers in a line; an outline's Skip, and ×, put the
+ * card aside.
  */
 function ImplementPlanAction({
   docRef,
@@ -1218,7 +1222,8 @@ function ImplementPlanAction({
       placeholder="No, and tell Brigadier what to do differently"
       onChoose={() => decide(true, null)}
       onText={(text) => decide(false, text)}
-      onSkip={onDismiss}
+      skipLabel={docRef.type === "plan" ? "Not now" : "Skip"}
+      onSkip={docRef.type === "plan" ? () => action.run(() => putOffPlan(conversationId, docRef.id)) : onDismiss}
       onDismiss={onDismiss}
       busy={action.busy}
       error={action.error}
