@@ -9,6 +9,8 @@ import { useApp } from "@/state/store";
 const query = new URLSearchParams(location.search);
 const done = query.get("view") === "done";
 const stress = query.has("panel-test");
+// The worker view's header at the panel's own width in a 1280-wide window.
+const headerTest = query.has("header-test");
 const previousWidth = localStorage.getItem("brigadier.rightSidebarWidth");
 if (stress) {
   localStorage.setItem("brigadier.rightSidebarWidth", "600");
@@ -40,7 +42,7 @@ function worker(taskId: string, number: number, title: string): Task {
     quotaWait: null, report: done ? report : null, outputs: done ? [{ id: "summary-file", title: "Project file summary", kind: "file", mime: "text/markdown", bytes: 2048, fileName: "summary.md" }] : [],
   };
 }
-const tasks = { t1: worker("t1", 1, "File summary"), t2: worker("t2", 2, "Readme draft") };
+const tasks = { t1: worker("t1", 1, headerTest ? "Add the project file summary" : "File summary"), t2: worker("t2", 2, "Readme draft") };
 if (stress) {
   tasks.t1.spec = `Brigadier desktop app (Tauri + React, apps/desktop/src). Fix the worker panel and verify it in the running app. Read ${longPath}. ${"Keep the brief readable at every width. ".repeat(8)}`;
 }
@@ -213,5 +215,22 @@ if (stress && !query.has("manual")) {
     result.textContent = JSON.stringify({ region, hiddenBy, wide, narrow, expanded, minimum, details, toggled, tooltip, noMenu, noTabs,
       closeInHeader: closeRect.top >= headerRect.top && closeRect.bottom <= headerRect.bottom && closeRect.right <= headerRect.right,
       listClose, closed, workerClosed, headerFits, plan, planFocused, workerFocused, planFocusedAgain, workerKeyFocused, shortWide, shortNarrow, shortWideBounds, shortMetrics });
+  })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
+}
+
+/** How wide a node shows against how wide its text is. */
+const size = (node: HTMLElement) => ({ shown: node.clientWidth, full: node.scrollWidth });
+if (headerTest) {
+  const result = document.body.appendChild(document.createElement("pre"));
+  result.id = "workers-header-result";
+  void (async () => {
+    for (let i = 0; i < 100 && !find('button[title^="Open Add the project"]'); i++) await wait(50);
+    find('button[title^="Open Add the project"]')!.click();
+    for (let i = 0; i < 100 && !find('[data-slot="worker-header"] h2'); i++) await wait(50);
+    await wait(500);
+    const header = find('[data-slot="worker-header"]')!;
+    const title = header.querySelector("h2")!;
+    const pill = header.querySelector<HTMLElement>('button[aria-label^="Worker details:"] span')!;
+    result.textContent = JSON.stringify({ window: innerWidth, panel: header.clientWidth, title: size(title), pill: size(pill) });
   })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
 }

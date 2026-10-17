@@ -16,7 +16,6 @@ import {
 import { WorkerThread } from "@/app/conversation/WorkerThread";
 import { effortLabel } from "@/components/assistant-ui/elements/model-selector";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { composerPill } from "@/components/assistant-ui/elements/surfaces";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import type { Task } from "@/ipc/generated";
@@ -236,23 +235,26 @@ function WorkerDetail({ task, headerActions }: { task: Task; headerActions?: Rea
           <ArrowLeft />
         </TooltipIconButton>
         <WorkerGlyph taskId={task.id} className="size-6" />
-        <h2
-          className="min-w-8 flex-1 truncate text-label font-medium"
-          title={name ?? task.title}
-        >
-          {name ?? task.title}
-        </h2>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button type="button" aria-label={`Worker details: ${model}`} aria-pressed={details}
-              data-state={details ? "open" : "closed"}
-              className={cn(composerPill, "max-w-1/2 shrink text-muted-foreground")}
-              onClick={() => setDetails((open) => !open)}>
-              <span className="truncate">{model}</span>
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>Worker details · {model}</TooltipContent>
-        </Tooltip>
+        {/* The title on its own line, the model under it: neither takes the other's width. */}
+        <div className="flex min-w-8 flex-1 flex-col items-start">
+          <h2
+            className="max-w-full truncate text-label font-medium"
+            title={name ?? task.title}
+          >
+            {name ?? task.title}
+          </h2>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button type="button" aria-label={`Worker details: ${model}`} aria-pressed={details}
+                data-state={details ? "open" : "closed"}
+                className="text-muted-foreground hover:text-foreground data-[state=open]:text-foreground flex max-w-full rounded-sm text-xs transition-colors"
+                onClick={() => setDetails((open) => !open)}>
+                <span className="truncate">{model}</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Worker details · {model}</TooltipContent>
+          </Tooltip>
+        </div>
         <StopWorker taskId={task.id} name={name ?? task.title} />
         {headerActions}
       </header>

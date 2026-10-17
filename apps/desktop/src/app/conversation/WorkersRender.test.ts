@@ -32,3 +32,11 @@ test("the worker view is a region named for its worker that nothing hides from t
   assert.deepEqual(seen.region, { role: "region", label: "Worker: File summary" });
   assert.deepEqual(seen.hiddenBy, []);
 });
+
+test("the worker view's header gives the title its room first in a 1280-wide window: the model pill shrinks instead", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "workers-ux.html?header-test=1&approvals=0", "workers-header-result"));
+  assert.equal(seen.error, undefined);
+  assert.equal(seen.window, 1280);
+  assert.ok(seen.title.shown >= seen.title.full, `the title is cut short: ${JSON.stringify(seen)}`);
+  assert.ok(seen.pill.shown > 0, `the model pill is gone: ${JSON.stringify(seen)}`);
+});
