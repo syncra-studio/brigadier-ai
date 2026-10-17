@@ -28,7 +28,7 @@ const RULE_WORDS: &str = "never edit src/money.ts by hand";
 const EXCEPTION: &str =
     "A correction to that rule: you may add new tests for src/money.ts in test/money.test.ts.";
 const EXCEPTION_WORDS: &str = "you may add new tests for src/money.ts in test/money.test.ts";
-/// Past the 400k prepare and 450k swap lines of a 1M window.
+/// Past the 300k prepare and 375k swap lines of a 1M window.
 const FULL: i64 = 460_000;
 const NOTE: &str = "Goal and open threads: the fillers.\nWhat to do next: wait.";
 

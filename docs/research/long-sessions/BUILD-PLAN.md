@@ -1210,7 +1210,8 @@ Each item must be true at the end; how it is checked is in brackets.
 
 - **Needs the user:**
   - C5's numbers, if enrichment's weekly cost calls for changing when it runs;
-  - A10's go-ahead, with its numbers;
+  - A10's go-ahead, with its numbers: given 2026-10-17, a Claude thread on a window of 500k or more is reborn at 300k
+    (swap 375k), `docs/evidence/2026-10-17-a10-earlier-rebirth.md`;
   - the report cap, after the D phases' continuity tests.
 - **Not proposed** (PLAN §7, Q41): caps, budgets, early compaction, letting the CLI compact, per-step model switching
   by guessed difficulty, more agents by default, hooks that call a model, fast mode, `tokenBudget`.

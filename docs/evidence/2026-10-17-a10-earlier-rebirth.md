@@ -2,7 +2,8 @@
 
 BUILD-PLAN Phase X, research A10. The thread's rebirth at 200k and 300k against today's 400k, on Claude Opus 5.5
 (1M window), one real long session per threshold. **Exploratory: n = 1 per threshold.** One run each can't prove a
-threshold better; it shows what one session did. Production thresholds are unchanged.
+threshold better; it shows what one session did. **The user approved 300k on 2026-10-17:** a Claude thread on a window
+of 500k or more now prepares its rebirth at 300k and swaps at 375k (`crates/core/src/knowledge.rs`).
 
 - Harness `tools/ab/v2/a10.py`, battery `tools/ab/v2/battery/a10.md`, at `9bd5b488`. Debug daemon sha256
   `67ed478e…7f4cc32`, with `BRIGADIER_REBIRTH_TOKENS` = the threshold. A release build ignores that variable, and
@@ -50,4 +51,4 @@ most of the saving (14.9M), and from memory alone it lost the one item that only
 said "unknown" and search found it. No arm showed better or worse answers late in the session, so the gain here is
 tokens, not quality. My recommendation is to move a Claude thread on a 1M window to rebirth at 300k (swap at 375k,
 as run). Because it's n = 1, a second pass of the 300k and 400k arms before the change would be cheap insurance
-(about 35M tokens), if you want one. Nothing changes until you say go.
+(about 35M tokens), if you want one. (Approved without one; see the top.)
