@@ -1432,7 +1432,7 @@ impl SessionManager {
     }
 
     /// `finish_session` with `when` "now": see [`Self::finish_session_when`].
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn finish_session(
         &self,
         id: &ConversationId,

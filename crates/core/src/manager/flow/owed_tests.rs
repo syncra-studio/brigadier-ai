@@ -63,10 +63,10 @@ async fn stays(flow: &Flow, request: &str) -> RequestState {
 }
 
 /// "Merge when done" with one writer: the thread lands it after a line mid-way ("Diff looks
-/// right.") and ends its turn on [quiet], while the landing's review runs and the merge is held.
-/// The request works on until the review ends clean and the merge lands, then is done once.
+/// right.") and ends its turn on [quiet]. The merge is due once the writer landed, while the
+/// landing's review still runs (#242); the request is done once, after the review ends clean.
 #[tokio::test]
-async fn a_held_merge_waiting_on_a_review_keeps_its_request_working_and_done_once() {
+async fn a_held_merge_is_due_while_the_review_runs_and_its_request_is_done_once() {
     let (write, review) = (
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicBool::new(false)),
@@ -151,33 +151,28 @@ async fn a_held_merge_waiting_on_a_review_keeps_its_request_working_and_done_onc
     })
     .await;
     write.store(true, Ordering::SeqCst);
+    // The landing's review doesn't hold the merge (#242): it is due once the writer landed.
     let board = flow
-        .until("the landing's review running, the thread idle", |board| {
-            board.run == RunState::Idle
+        .until("the merge, while the landing's review runs", |board| {
+            board
+                .orchestrator_steps
+                .iter()
+                .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
                 && board
                     .reviews
                     .values()
                     .any(|review| review.state == ReviewState::Running)
-                && log
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|input| input.contains("[report task-1"))
         })
         .await;
     let request = board.latest_request().unwrap().id.clone();
-    assert!(pending_merge(&board).is_some(), "still held");
-    assert_eq!(stays(&flow, &request).await, RequestState::Working);
-    assert_eq!(times_done(&flow, &request).await, 0);
-
-    review.store(true, Ordering::SeqCst);
-    flow.until("the merge", |board| {
-        board
-            .orchestrator_steps
+    assert!(
+        log.lock()
+            .unwrap()
             .iter()
-            .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
-    })
-    .await;
+            .any(|input| input.contains("[report task-1")),
+        "landed on its report"
+    );
+    review.store(true, Ordering::SeqCst);
     let board = flow.settled().await;
     assert_eq!(board.requests[&request].state, RequestState::Done);
     assert_eq!(times_done(&flow, &request).await, 1, "done once");
