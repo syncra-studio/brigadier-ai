@@ -1008,8 +1008,10 @@ mod tests {
             &AtomicBool::new(false),
         )
         .unwrap();
+        // About 0.15 s in a debug build; a line scanned again for each of its matches reads
+        // 8e10 bytes, minutes here. 5 s leaves room for a loaded machine (#10).
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(5),
             "{:?}",
             started.elapsed()
         );
