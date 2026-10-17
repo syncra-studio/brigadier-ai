@@ -733,6 +733,12 @@ impl SuccessorFiles {
     }
 }
 
+/// What every successor's first message says about its room: a successor that read how full
+/// the earlier session was cut its own reads to one token and lost every one (#114).
+pub(crate) const FULL_READS: &str = " Your own context starts nearly empty, so read what you \
+     need in full: never cap a read or a command's output (max_output_tokens, a line limit) at a \
+     few tokens to save room, as a cut read loses what it holds.";
+
 /// The fresh session's first message.
 fn handover_text(
     task: &Task,
@@ -792,6 +798,7 @@ fn handover_text(
         ". Decisions and commitments made earlier still hold. Then carry on with the task and \
          report with submit_report as your rules say.",
     );
+    text.push_str(FULL_READS);
     files.push_tail(&mut text);
     if let Some(pending) = pending {
         let _ = write!(text, "\n\nWaiting for you now:\n{pending}");
