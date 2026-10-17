@@ -664,6 +664,8 @@ impl SessionManager {
                 stray.join(", ")
             )));
         }
+        // Their severity holds whatever the check does, and its commit's scan reads it.
+        self.mark_high(id, &high).await?;
         let command = args
             .command
             .as_deref()

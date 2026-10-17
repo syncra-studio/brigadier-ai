@@ -276,6 +276,9 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
     let seen = replies.clone();
     let tree: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::default();
     let workspace_seen = tree.clone();
+    // Each check is held in its call whatever the machine's load, so the next starts after it.
+    let conversation: Arc<Mutex<Option<crate::model::ConversationId>>> = Arc::default();
+    let held = conversation.clone();
     let flow = Flow::start(
         "findings-fixes",
         Options {
@@ -283,8 +286,15 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
             ..Options::default()
         },
         script(move |turn| {
-            let (seen, workspace_seen) = (seen.clone(), workspace_seen.clone());
+            let (seen, workspace_seen, held) = (seen.clone(), workspace_seen.clone(), held.clone());
             async move {
+                let hold = || {
+                    let id = held.lock().unwrap().clone().expect("the session");
+                    super::super::background_runs::hold_foreground(
+                        &id,
+                        Arc::new(tokio::sync::Notify::new()),
+                    );
+                };
                 if !turn.is_orchestrator() {
                     return Reply::text("");
                 }
@@ -308,6 +318,7 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                     std::fs::write(workspace.join("notes.txt"), "fixed notes\n").unwrap();
                     // An id that is no finding here is refused before anything runs or commits,
                     // so the call can be made again with the right ids.
+                    hold();
                     let refused = turn
                         .call(
                             "run_check",
@@ -325,6 +336,7 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                         "M notes.txt"
                     );
                     // `high` names only some of `fixes`.
+                    hold();
                     let refused = turn
                         .call(
                             "run_check",
@@ -341,6 +353,7 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                         ("false", json!(["r1.1", "R1.2"]), json!([])),
                         ("true", json!("R1.1, R1.2"), json!("r1.1")),
                     ] {
+                        hold();
                         let reply = turn
                             .call(
                                 "run_check",
@@ -352,6 +365,7 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                     }
                     // With nothing left to commit, no commit carries the Fixes trailer, so
                     // nothing is recorded fixed either.
+                    hold();
                     let reply = turn
                         .call(
                             "run_check",
@@ -363,6 +377,7 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                     // On the session's branch a passing check with no commit records nothing
                     // fixed: the merge takes the branch's commits, not the working tree.
                     std::fs::write(workspace.join("notes.txt"), "fixed notes, trimmed\n").unwrap();
+                    hold();
                     let reply = turn
                         .call("run_check", json!({"command": "true", "fixes": ["R1.3"]}))
                         .await;
@@ -375,6 +390,7 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
         }),
     )
     .await;
+    *conversation.lock().unwrap() = Some(flow.conversation.clone());
     flow.say("Add notes.").await;
     let recorded = replies.clone();
     let board = flow

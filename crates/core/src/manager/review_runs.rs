@@ -1870,6 +1870,38 @@ impl SessionManager {
             .collect())
     }
 
+    /// Marks the findings `high` of high severity, before `run_check` commits their fix: the
+    /// scan of the thread's new commits may read the fix commit before the check's call ends,
+    /// and decides its re-check from the mark then.
+    pub(crate) async fn mark_high(
+        &self,
+        conversation_id: &ConversationId,
+        high: &[String],
+    ) -> Result<()> {
+        if high.is_empty() {
+            return Ok(());
+        }
+        let _held = self.reviews.lock().await;
+        let board = self.core.board(conversation_id).await?;
+        for review in board.reviews.values() {
+            if !review
+                .items
+                .iter()
+                .any(|item| high.contains(&item.id) && !item.high)
+            {
+                continue;
+            }
+            let mut review = review.clone();
+            for item in &mut review.items {
+                if high.contains(&item.id) {
+                    item.high = true;
+                }
+            }
+            self.store_review(&review).await?;
+        }
+        Ok(())
+    }
+
     /// `run_check`'s `fixes` (BUILD-PLAN O4): the review findings the thread's check fixes,
     /// recorded fixed and checked by that check (`command`, its output `alias`) when it passed
     /// and, on a session branch, its commit was made; `not_fixed` says why not otherwise. Those
