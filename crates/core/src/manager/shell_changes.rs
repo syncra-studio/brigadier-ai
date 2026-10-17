@@ -193,7 +193,7 @@ fn shell_words(command: &str) -> Option<(Vec<String>, bool)> {
                         '$' | '`' => return None,
                         // In double quotes a backslash escapes only these; else it stays.
                         '\\' => match chars.next() {
-                            Some(c @ ('"' | '\\' | '\n')) => word.push(c),
+                            Some(c @ ('"' | '\\' | '\n' | '$' | '`')) => word.push(c),
                             Some(c) => {
                                 word.push('\\');
                                 word.push(c);
@@ -221,7 +221,15 @@ fn shell_words(command: &str) -> Option<(Vec<String>, bool)> {
         }
     }
     words.push(word);
-    (!words.iter().any(|word| word == "xargs" || word == "popd")).then_some((words, subshell))
+    // A shell the command starts on a script of its own, which this doesn't read.
+    let nested = words
+        .windows(2)
+        .any(|pair| matches!(pair[0].as_str(), "sh" | "bash" | "zsh" | "dash") && pair[1] == "-c");
+    let unread = nested
+        || words
+            .iter()
+            .any(|word| matches!(word.as_str(), "xargs" | "popd" | "eval"));
+    (!unread).then_some((words, subshell))
 }
 
 /// The checkout's files a command names, relative to its root `root`: each word of the command
@@ -240,36 +248,45 @@ pub(super) fn named_files(command: &str, cwd: &Path, root: &Path) -> Vec<String>
     let Some((words, subshell)) = shell_words(command) else {
         return Vec::new();
     };
-    // Each folder the command goes to, which must be one: else where its names lead is unknown.
-    let mut dirs = vec![cwd.to_owned()];
-    for (at, word) in words.iter().enumerate() {
+    // Each word is read from the folder the command is in by then: a `cd` must go to one,
+    // else where its names lead is unknown, and inside a subshell it can't be followed.
+    let mut dir = cwd.to_owned();
+    let mut found = BTreeSet::new();
+    let mut words = words.into_iter();
+    while let Some(word) = words.next() {
         if matches!(word.as_str(), "cd" | "pushd") {
-            let dir = match words.get(at + 1) {
-                Some(to) if !to.is_empty() && !subshell => dirs.last().unwrap().join(to),
+            let to = match words.next() {
+                Some(to) if !to.is_empty() && !subshell => dir.join(to),
                 _ => return Vec::new(),
             };
-            if !dir.is_dir() {
+            if !to.is_dir() {
                 return Vec::new();
             }
-            dirs.push(dir);
-        }
-    }
-    let split = command
-        .split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}[]=,$".contains(c))
-        .map(str::to_owned);
-    let mut found = BTreeSet::new();
-    for word in words.into_iter().chain(split) {
-        if word.is_empty() || word.contains("://") {
+            dir = to;
             continue;
         }
-        for dir in &dirs {
-            let path = dir.join(&word);
-            let there = std::fs::symlink_metadata(&path);
-            if there.as_ref().is_ok_and(|metadata| metadata.is_dir()) {
+        // The word, and its parts split at spaces, quotes and the shell's operators, for the
+        // names a script inside it writes.
+        let parts = word
+            .split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}[]=,$".contains(c))
+            .filter(|part| *part != word)
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        for word in std::iter::once(word).chain(parts) {
+            if word.is_empty() || word.contains("://") {
                 continue;
             }
+            let path = dir.join(&word);
+            let there = std::fs::symlink_metadata(&path);
+            // A folder it names (a move of one, say) holds files it doesn't name.
+            if there.as_ref().is_ok_and(|metadata| metadata.is_dir()) {
+                if matches!(word.as_str(), "." | "..") || path == root {
+                    continue;
+                }
+                return Vec::new();
+            }
             let named = (!word.starts_with('-') && word.len() <= 1024)
-                .then(|| checkout_file(&word, dir, &root))
+                .then(|| checkout_file(&word, &dir, &root))
                 .flatten();
             match named {
                 Some(relative) => {
@@ -499,8 +516,15 @@ mod tests {
         assert!(names(&absolute, Path::new("/"), "notes.md"));
         let elsewhere = format!("cd {} && echo x >> lib.rs", root.join("src").display());
         assert!(names(&elsewhere, Path::new("/"), "src/lib.rs"));
-        let left_out = named("ls src ../outside/x https://x.dev/a --flag", &root);
+        let left_out = named("ls ../outside/x https://x.dev/a --flag .", &root);
         assert_eq!(left_out, ["ls"], "only a word that could be a new file");
+        std::fs::write(root.join("src/notes.md"), "x").unwrap();
+        let within = named("cd src && echo x >> notes.md", &root);
+        assert!(within.contains(&"src/notes.md".to_owned()), "{within:?}");
+        assert!(
+            !within.contains(&"notes.md".to_owned()),
+            "read from the folder it went to"
+        );
         std::fs::write(root.join(".git/notes"), "x").unwrap();
         std::fs::write(root.join("-dash.md"), "x").unwrap();
         std::fs::create_dir_all(root.join("src/other")).unwrap();
@@ -517,6 +541,9 @@ mod tests {
             "mv .git/notes notes.md",
             "mv -- -dash.md notes.md",
             "(cd src); cd other && mv x.md notes.md",
+            "mv src old-src",
+            "sh -c 'mv x.md notes.md'",
+            "eval mv x.md notes.md",
         ] {
             assert_eq!(named(command, &root), [] as [String; 0], "{command}");
         }
@@ -532,6 +559,8 @@ mod tests {
         assert_eq!(named(&spaced, &root), [] as [String; 0]);
         assert!(names("echo x > /dev/null; cat notes.md", &root, "notes.md"));
         assert!(names("mv \"a\\ b.md\" notes.md", &root, "a\\ b.md"));
+        std::fs::write(root.join("cash$notes.md"), "x").unwrap();
+        assert!(names("mv \"cash\\$notes.md\" n.md", &root, "cash$notes.md"));
         std::fs::write(root.join("old name.txt"), "x").unwrap();
         for command in [
             "mv 'old name.txt' new.txt",
