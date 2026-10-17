@@ -230,6 +230,18 @@ test("a finished answer's file chip holds still while a later turn works: never 
   assert.ok(seen.color, "the chip is there, in link blue");
 });
 
+test("an ending that opens with Update: is the answer, its own Details folded, in a session and a Chat", { timeout: 180000 }, async (t) => {
+  for (const kind of ["session", "chat"]) {
+    const seen = await drive<{ answers: (string | null)[]; updates: number; quotes: number; details: { summary: string | null; open: boolean }[]; opening: boolean }>(
+      t, `drive=update&kind=${kind}`);
+    // One answer in view, down to its Details; no update row and no quote block under an opening line.
+    assert.deepEqual(seen.answers, ["Update: the session's full checks still don't pass, so it isn't merged. The rounding fix itself is in. Details"], kind);
+    assert.deepEqual([seen.updates, seen.quotes, seen.opening], [0, 0, false], kind);
+    // The model's own `### Details` folds like the app's.
+    assert.deepEqual(seen.details, [{ summary: "Details", open: false }], kind);
+  }
+});
+
 test("a follow-up that joined a turn as it ended leaves the first answer in view, above its bubble", { timeout: 120000 }, async (t) => {
   const seen = await drive<{ first: boolean; second: boolean; firstAboveBubble: boolean; header: string | null }>(t, "drive=joined&kind=session");
   assert.equal(seen.first, true, JSON.stringify(seen));

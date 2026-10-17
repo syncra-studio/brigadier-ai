@@ -19,6 +19,8 @@
  *   in view.
  * - `drive=filelink` (with `kind=session`): a finished answer's file chip holds still while a later
  *   turn works.
+ * - `drive=update` (`kind=session` for a session): an ending that opens with "Update:" and has a
+ *   `### Details` section is the answer, its Details folded; the opening line folds into the work.
  *
  * The result goes to `<pre id="work-blocks-result">`. `stop=running|answering|done|steer|menu` holds the
  * page at that moment instead, for a screenshot.
@@ -748,6 +750,41 @@ async function driveJoined(): Promise<object> {
   };
 }
 
+/** Whether an element shows: drawn, and not inside a closed fold. */
+const visible = (element: Element) => element.getClientRects().length > 0 && !element.closest("[data-slot=request-fold][data-fold=closed], [hidden]");
+
+/**
+ * An ending that opens with "Update:" (the thread reports again after a late result) and writes
+ * its own `### Details`: the answer, never an update row under the opening line (#231, #198).
+ */
+async function driveUpdate(): Promise<object> {
+  await settle(600);
+  const reply = (id: string, seq: number, parentId: string, words: string): Message => ({
+    id, conversationId: ID, seq, role: "assistant", blob: null, createdAtMs: begun + seq * 1000, attachments: [], mentions: [],
+    text: words, model: null, requestId: "r1", parentId,
+  });
+  daemon.messages = [
+    ...daemon.messages,
+    reply("a1", 2, "r1", "Starting on the rounding fix."),
+    reply("a2", 3, "a1", "Update: the session's full checks still don't pass, so it isn't merged.\n\nThe rounding fix itself is in.\n\n### Details\n- Unit tests pass.\n- The full checks fail in `billing`."),
+  ];
+  daemon.run = "idle";
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change(() => ({ run: "idle", runRequest: null, head: "a2" }));
+  request("r1", { state: { type: "done" }, endedAtMs: begun + 4000, worked: [{ fromMs: begun, toMs: begun + 4000 }] });
+  await settle(300);
+  const block = turn() ?? document.body;
+  const details = all<HTMLDetailsElement>("[data-slot=report-details]", block);
+  return {
+    // What reads: a closed fold's words don't.
+    answers: all("[data-answer]", block).filter(visible).map((element) => element.innerText.replace(/\s+/g, " ").trim()),
+    updates: all("[data-slot=answer-update]", block).length,
+    quotes: all("blockquote", block).filter(visible).length,
+    details: details.map((element) => ({ summary: text(one("summary", element)), open: element.open })),
+    opening: all("[data-slot=aui_assistant-message-content]", block).some((element) => visible(element) && !!text(element)?.startsWith("Starting on")),
+  };
+}
+
 /** A plan approved: its request works again, and the new steps show under the plan card as they come. */
 async function driveImplement(): Promise<object> {
   await settle(600);
@@ -857,7 +894,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "implement" ? driveImplement() : drive === "joined" ? driveJoined() : drive === "filelink" ? driveFileLink() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "implement" ? driveImplement() : drive === "joined" ? driveJoined() : drive === "update" ? driveUpdate() : drive === "filelink" ? driveFileLink() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

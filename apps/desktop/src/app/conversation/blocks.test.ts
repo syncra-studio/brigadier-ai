@@ -359,6 +359,32 @@ test("a late event's update line shows under the answer, never as a new answer",
   assert.equal(answerIndex([{ update: true }], false), null);
 });
 
+test("an ending that opens with Update: is the answer, not an update line under the opening line", () => {
+  const request = "update-ending";
+  const user = { ...messages[0]!, id: request, seq: 700, requestId: request, text: "Fix the rounding" };
+  const reply = (id: string, seq: number, text: string) =>
+    ({ ...messages[0]!, id, seq, role: "assistant" as const, requestId: request, parentId: request, text });
+  const opening = reply("opening", 701, "Starting on the rounding fix.");
+  const ending = reply("ending", 710, "Update: the session's full checks still don't pass.\n\nThe fix itself is in.\n\n### Details\n- Unit tests pass.");
+  const digest: BoardDigest = {
+    ...board,
+    tasks: {},
+    plans: {},
+    requests: { [request]: { ...Object.values(board.requests)[0]!, id: request, startedAtMs: user.createdAtMs, state: { type: "done" } } },
+    orchestratorSteps: [],
+    decisions: [],
+  };
+  const block = buildBlocks([user, opening, ending], {}, false, digest, []).find((candidate) => candidate.key === request)!;
+  assert.deepEqual(block.texts.map((text) => text.update), [false, false]);
+  const answer = answerIndex(block.texts, true);
+  assert.equal(block.texts[answer!]!.messageId, "ending");
+  assert.deepEqual(updateIndices(block.texts, answer), []);
+  // A short update line is still one, a list under it too; paragraphs or a heading make an ending.
+  assert.equal(isUpdate("Update: CI passed on c9cb8b3.\n- build\n- tests"), true);
+  assert.equal(isUpdate("Update: done.\n\nMore words."), false);
+  assert.equal(isUpdate("Update: done.\n### Details\n- tests"), false);
+});
+
 test("a working request shows a reply written after its work in place: only a done one has an answer", () => {
   const request = "owed-request";
   const user = { ...messages[0]!, id: request, seq: 600, requestId: request, text: "Add a note, and merge it when done." };

@@ -348,8 +348,9 @@ const ReplyText: FC<{ index: number; streaming: boolean; report?: boolean; comme
 );
 
 /**
- * A session's answer or a run's morning report: what it came to in view, its `### Details`
- * (the checks run, review findings, what wasn't tested) folded under "Details".
+ * A finished answer, a run's morning report too: what it came to in view, its `### Details`
+ * (the checks run, review findings, what wasn't tested) folded under "Details", whether the
+ * app asked for the section or the model wrote one of its own (#198).
  */
 const ReportText: FC<TextMessagePartProps> = (props) => {
   const report = splitReport(props.text);
@@ -704,11 +705,6 @@ export const RequestBlock: FC = () => {
       (run) => run.state.type === "running" && run.requestId !== null && !!requestIds?.includes(run.requestId),
     ),
   );
-  // A run's morning report folds its details.
-  const report = useBoard((s) => {
-    const id = meta?.answerId;
-    return !!id && Object.values(s.board?.overnight ?? {}).some((run) => run.reportMessageId === id);
-  });
   // The sessions it waits for, by title (one deleted meanwhile is no longer waited for).
   const waitingFor = useApp(useShallow((s) => (meta?.waitingFor ?? []).flatMap((id) => s.conversations[id]?.title ?? [])));
   // Its cards load before its work can open, so they are there the moment it does.
@@ -866,7 +862,7 @@ export const RequestBlock: FC = () => {
                 data-peer-message={meta.texts[answer]?.anchors?.join(" ")}
                 className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0 || before.length > 0) && "pt-activity")}
               >
-                <ReplyText index={answer} streaming={streams(answer)} report={!streams(answer) && (report || meta.session)} />
+                <ReplyText index={answer} streaming={streams(answer)} report={!streams(answer)} />
               </div>
             )}
             {/* Answered, it may still wait for another session's reply: that line stays under the answer. */}

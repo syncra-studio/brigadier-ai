@@ -64,9 +64,14 @@ export type BlockText = {
   commentary?: boolean;
 };
 
-/** Whether a reply is an update line: it starts with "Update:", bold or not ("**Update**:" too). */
+/**
+ * Whether a reply is an update line: it starts with "Update:", bold or not ("**Update**:" too),
+ * and is one short paragraph. An ending that opens with "Update:" (paragraphs, a Details section)
+ * is the answer, never a line under an earlier one (#231).
+ */
 export function isUpdate(text: string): boolean {
-  return /^\s*(\*\*|__)?update(\*\*|__)?:/i.test(text);
+  const body = text.trim();
+  return /^(\*\*|__)?update(\*\*|__)?:/i.test(body) && !/\n[ \t]*\n/.test(body) && !/^#{1,6}[ \t]/m.test(body);
 }
 
 /**

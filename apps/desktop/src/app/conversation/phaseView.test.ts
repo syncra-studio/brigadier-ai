@@ -203,4 +203,9 @@ test("a report shows down to its Details heading and folds the rest", () => {
   assert.equal(splitReport("See ### Details below.\n"), null);
   assert.equal(splitReport("Done.\n\n### Details\n"), null);
   assert.equal(splitReport("Done.\n\n### Details"), null);
+  // A model's own heading folds too, at another level or with a colon (#198).
+  for (const heading of ["## Details", "#### Details", "### Details:"]) {
+    assert.deepEqual(splitReport(`Done.\n\n${heading}\n- tests pass\n`), { head: "Done.", details: "- tests pass" }, heading);
+  }
+  assert.equal(splitReport("Done.\n\n# Details\n- tests\n"), null);
 });

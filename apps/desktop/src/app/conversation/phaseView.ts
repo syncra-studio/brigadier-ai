@@ -7,11 +7,12 @@ import type { OvernightRun, PhaseStage, Plan, StepSettlement } from "@/ipc/gener
  */
 
 /**
- * A morning report split at its `### Details` heading: what shows, and the details the thread
- * folds (the whole-phase checks, workers and models, provider usage). Null when it has none.
+ * An answer or a morning report split at its `### Details` heading: what shows, and the details
+ * the thread folds (the checks run, workers and models, provider usage). Null when it has none.
  */
 export function splitReport(text: string): { head: string; details: string } | null {
-  const at = text.search(/^### Details[ \t]*$/m);
+  // The heading as a model writes it too: `## Details`, `#### Details`, `### Details:`.
+  const at = text.search(/^#{2,4}[ \t]+Details:?[ \t]*$/m);
   const end = at < 0 ? -1 : text.indexOf("\n", at);
   if (end < 0) return null;
   const details = text.slice(end + 1).trim();
