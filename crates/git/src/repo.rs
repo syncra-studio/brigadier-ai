@@ -2236,7 +2236,7 @@ mod tests {
             .commit_changes("Trim a\n\nBrigadier-Author: Thread", true)
             .expect("a commit");
         let stat = repo
-            .trailer_stat(&start, &tip, "Brigadier-Author", "thread")
+            .trailer_stat(&start, &tip, "Brigadier-Author", "thread", &[])
             .unwrap();
         assert_eq!(
             stat,
@@ -2247,9 +2247,28 @@ mod tests {
             }
         );
         assert_eq!(
-            repo.trailer_stat(&tip, &tip, "Brigadier-Author", "thread")
+            repo.trailer_stat(&tip, &tip, "Brigadier-Author", "thread", &[])
                 .unwrap(),
             crate::TrailerStat::default()
+        );
+        // A commit known to be the thread's without the trailer (the user's own checkout)
+        // counts too.
+        let unmarked = repo.resolve(&format!("{}~1", tip.0)).unwrap();
+        let before = repo.resolve(&format!("{}~2", tip.0)).unwrap();
+        assert_eq!(
+            repo.trailer_stat(
+                &start,
+                &tip,
+                "Brigadier-Author",
+                "thread",
+                &[(before, unmarked)]
+            )
+            .unwrap(),
+            crate::TrailerStat {
+                commits: 3,
+                added: 8,
+                removed: 2,
+            }
         );
     }
 }

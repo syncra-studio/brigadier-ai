@@ -103,6 +103,25 @@ impl PeerRecord {
     }
 }
 
+/// What the thread is known to have written, without its commits' trailer saying so.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Authored {
+    /// Its commits on `branch` after `from` up to `tip` (`ThreadCommitsSeen.authored_from`).
+    Commits {
+        branch: String,
+        from: String,
+        tip: String,
+    },
+    /// A local checkout's files over one request: snapshots of them when it started and as
+    /// last looked at, its commits included.
+    Files {
+        request_id: String,
+        branch: String,
+        start: String,
+        tip: String,
+    },
+}
+
 /// A turn a restart cut off (see [`Board::cut_off_request`]).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CutOff {
@@ -165,6 +184,10 @@ pub(crate) struct Board {
     /// Per branch: where the thread's commits were first looked for, which its self-edit
     /// metric counts from (THREAD-PLAN.md Q13).
     pub(crate) thread_starts: HashMap<String, String>,
+    /// What the thread is known to have written without its trailer: its commit ranges, and
+    /// its local checkout's files per request, oldest first (its self-edit metric, UI audit
+    /// M6).
+    pub(crate) thread_authored: Vec<Authored>,
     /// The thread's changes for its newest request that no review covered yet (BUILD-PLAN B2).
     /// Boxed: a board is cloned on deep stacks, and every byte of it counts there.
     pub(crate) unreviewed: Option<Box<crate::work::UnreviewedRange>>,
@@ -287,13 +310,48 @@ impl Board {
             DomainEvent::BackgroundRunUpdated { run } => {
                 self.background_runs.insert(run.id.clone(), run.clone());
             }
-            DomainEvent::ThreadCommitsSeen { branch, tip, .. } => {
+            DomainEvent::ThreadCommitsSeen {
+                branch,
+                tip,
+                authored_from,
+                ..
+            } => {
                 self.thread_starts
                     .entry(branch.clone())
                     .or_insert_with(|| tip.clone());
                 self.thread_tips.insert(branch.clone(), tip.clone());
+                if let Some(from) = authored_from {
+                    self.thread_authored.push(Authored::Commits {
+                        branch: branch.clone(),
+                        from: from.clone(),
+                        tip: tip.clone(),
+                    });
+                }
             }
             DomainEvent::UnreviewedChanged { range, .. } => {
+                if let Some(range) = range
+                    && range.local
+                    && let Some(start) = &range.start
+                {
+                    let same = |known: &Authored| {
+                        matches!(known, Authored::Files { request_id, start: from, .. }
+                            if *request_id == range.request_id && from == start)
+                    };
+                    match self
+                        .thread_authored
+                        .iter_mut()
+                        .rev()
+                        .find(|known| same(known))
+                    {
+                        Some(Authored::Files { tip, .. }) => tip.clone_from(&range.tip),
+                        _ => self.thread_authored.push(Authored::Files {
+                            request_id: range.request_id.clone(),
+                            branch: range.branch.clone(),
+                            start: start.clone(),
+                            tip: range.tip.clone(),
+                        }),
+                    }
+                }
                 self.unreviewed = range.clone().map(Box::new);
             }
             DomainEvent::OutputStored { output, .. } => {

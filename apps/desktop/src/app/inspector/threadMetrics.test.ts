@@ -9,7 +9,9 @@ test("the thread's own commits read as a count and the lines they changed", () =
   assert.equal(editsLine(edits), `3 commits on brigadier/s1/session: +${(1204).toLocaleString()} −7 lines`);
   assert.equal(editsLine({ ...edits, commits: 1, added: 2, removed: 0 }), "1 commit on brigadier/s1/session: +2 −0 lines");
   assert.match(editsLine({ ...edits, kept: true }), /\(branch merged; last count\)$/);
-  assert.equal(editsLine({ ...edits, commits: 0, added: 0 }), "No commits of its own on brigadier/s1/session.");
+  assert.equal(editsLine({ ...edits, commits: 0, added: 0, removed: 0 }), "No commits of its own on brigadier/s1/session.");
+  // The user's own checkout: the thread's change waits uncommitted.
+  assert.equal(editsLine({ ...edits, branch: "main", commits: 0, added: 2, removed: 1 }), "No commits of its own on main; its changes: +2 −1 lines");
   assert.equal(editsLine(null), "Its branch hasn't been looked at yet.");
 });
 

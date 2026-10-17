@@ -1,11 +1,13 @@
 import type { CacheCauses, ProviderTokens, RequestContext, RequestSummary, ThreadEdits } from "@/ipc/generated";
 import { formatDuration, formatTokens } from "@/lib/format";
 
-/** The thread's own commits in a line: how many, and the lines they changed. */
+/** The thread's own commits in a line: how many, and the lines it changed (on the user's own checkout, uncommitted ones too). */
 export function editsLine(edits: ThreadEdits | null): string {
   if (edits === null) return "Its branch hasn't been looked at yet.";
   const kept = edits.kept ? " (branch merged; last count)" : "";
-  if (edits.commits === 0) return `No commits of its own on ${edits.branch}${kept}.`;
+  if (edits.commits === 0 && edits.added === 0 && edits.removed === 0) return `No commits of its own on ${edits.branch}${kept}.`;
+  if (edits.commits === 0)
+    return `No commits of its own on ${edits.branch}; its changes: +${edits.added.toLocaleString()} −${edits.removed.toLocaleString()} lines${kept}`;
   const commits = edits.commits === 1 ? "1 commit" : `${edits.commits} commits`;
   return `${commits} on ${edits.branch}: +${edits.added.toLocaleString()} −${edits.removed.toLocaleString()} lines${kept}`;
 }

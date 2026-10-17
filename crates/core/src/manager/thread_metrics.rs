@@ -1,9 +1,11 @@
 //! The session thread's metrics, to tune its instructions by (THREAD-PLAN.md Q13). Nothing is
 //! held back by them; the Inspector shows them.
 //!
-//! - **Self-edits:** the commits on the session's branch marked with the
-//!   [`super::prompts::THREAD_TRAILER`], from where the thread first looked at the branch, with
-//!   the lines they added and removed. Counted again whenever the thread's commit scan sees the
+//! - **Self-edits:** the thread's commits on the session's branch, from where it first looked
+//!   at the branch, with the lines they added and removed: those marked with the
+//!   [`super::prompts::THREAD_TRAILER`], and those the store records as its own without it
+//!   (`ThreadCommitsSeen.authored_from`, the user's own checkout). On a local checkout its
+//!   uncommitted changes count too: what its requests changed in the files not committed yet. Counted again whenever the thread's commit scan sees the
 //!   branch move, and on request when it moved since; the last count is kept in
 //!   `routing.sqlite`, so a branch merged and removed still shows its numbers.
 //! - **Context growth:** the thread's `turn_usage` rows (step `thread`), per user request: the
@@ -15,7 +17,7 @@ use std::path::PathBuf;
 use brigadier_git::Oid;
 
 use super::{SessionManager, blocking, git_error};
-use crate::board::Board;
+use crate::board::{Authored, Board};
 use crate::model::{
     CacheCauses, CauseTokens, ConversationId, ConversationKind, Environment, ProviderTokens,
     RequestContext, RequestEnd, RequestSummary, Setup, StepTokens, ThreadEdits, ThreadMetrics,
@@ -66,21 +68,57 @@ impl SessionManager {
     /// The thread's own commits on the session's branch: counted again when the branch moved
     /// since they were last counted, else as kept.
     pub(crate) async fn count_thread_edits(&self, id: &ConversationId) -> Option<ThreadEdits> {
+        self.count_thread_edits_again(id, false).await
+    }
+
+    /// The same, counted again anyway when `again` (the store just recorded commits as the
+    /// thread's: a count at the same tip from before left them out).
+    pub(crate) async fn count_thread_edits_again(
+        &self,
+        id: &ConversationId,
+        again: bool,
+    ) -> Option<ThreadEdits> {
         let store = self.runtime.routing_store()?.clone();
         let stored = store.thread_edits(id.0.clone()).await.ok().flatten();
         let kept = |stored: Option<StoredEdits>| stored.map(|edits| shown(edits, true));
         let Some((repo, branch)) = self.session_branch(id) else {
             return kept(stored);
         };
-        let start = self
-            .core
-            .board(id)
-            .await
-            .ok()
-            .and_then(|board| board.thread_starts.get(&branch).cloned());
-        let Some(start) = start else {
+        let Ok(board) = self.core.board(id).await else {
             return kept(stored);
         };
+        let Some(start) = board.thread_starts.get(&branch).cloned() else {
+            return kept(stored);
+        };
+        // On the user's own checkout, commits it made without the trailer (elsewhere the
+        // trailer says it exactly: a range the store records may hold others' commits too),
+        // and the files over each request.
+        let local = matches!(
+            self.core.conversation(id).ok().and_then(|c| c.setup),
+            Some(Setup::Session {
+                environment: Environment::LocalCheckout { .. },
+                ..
+            })
+        );
+        let (mut authored, mut windows) = (Vec::new(), Vec::new());
+        for known in &board.thread_authored {
+            match known {
+                Authored::Commits {
+                    branch: on,
+                    from,
+                    tip,
+                } if local && *on == branch => {
+                    authored.push((Oid(from.clone()), Oid(tip.clone())));
+                }
+                Authored::Files {
+                    branch: on,
+                    start,
+                    tip,
+                    ..
+                } if *on == branch => windows.push((Oid(start.clone()), Oid(tip.clone()))),
+                _ => {}
+            }
+        }
         let (key, value) = super::prompts::THREAD_TRAILER
             .split_once(": ")
             .unwrap_or_default();
@@ -91,8 +129,14 @@ impl SessionManager {
             let Some(tip) = repo.branch_tip(&name).map_err(git_error)? else {
                 return Ok(None);
             };
-            if let Some(known) = known.filter(|known| known.branch == name && known.tip == tip.0) {
-                return Ok(Some((known, false)));
+            // Uncommitted changes don't move the tip: they are added to the kept count each time.
+            let pending = uncommitted(&repo, &tip, &windows);
+            // Commits the store records as its own are looked up each time: few, and a count
+            // kept before they were recorded left them out.
+            if let Some(known) = known.filter(|known| {
+                !again && authored.is_empty() && known.branch == name && known.tip == tip.0
+            }) {
+                return Ok(Some((known, false, pending)));
             }
             let start = Oid(start);
             // A rewritten history counts from where the two still meet.
@@ -102,7 +146,7 @@ impl SessionManager {
                 repo.merge_base(&start, &tip).map_err(git_error)?
             };
             let stat = repo
-                .trailer_stat(&base, &tip, key, value)
+                .trailer_stat(&base, &tip, key, value, &authored)
                 .map_err(git_error)?;
             Ok(Some((
                 StoredEdits {
@@ -115,16 +159,20 @@ impl SessionManager {
                     at_ms: now_ms(),
                 },
                 true,
+                pending,
             )))
         })
         .await;
         match counted {
-            Ok(Some((edits, fresh))) => {
+            Ok(Some((edits, fresh, (plus, minus)))) => {
                 if fresh && let Err(err) = store.put_thread_edits(id.0.clone(), edits.clone()).await
                 {
                     tracing::warn!(conversation = %id, error = %err, "could not keep the thread's edit count");
                 }
-                Some(shown(edits, false))
+                let mut edits = shown(edits, false);
+                edits.added = edits.added.saturating_add(plus);
+                edits.removed = edits.removed.saturating_add(minus);
+                Some(edits)
             }
             // The branch is gone: what was counted last stands.
             Ok(None) => kept(stored),
@@ -151,6 +199,87 @@ impl SessionManager {
         };
         Some((PathBuf::from(repo), branch))
     }
+}
+
+/// Requests that changed files looked at for the thread's uncommitted changes, newest first.
+const PENDING_REQUESTS: usize = 50;
+
+/// The thread's uncommitted changes on a local checkout whose branch is at `tip`, as it last
+/// left the files: in each path that still differs from `tip` in its newest snapshot, what its
+/// requests changed there, each from its own start (so the user's changes before or after a
+/// request, and paths only the user changed, stay out), back to the last request that left
+/// nothing uncommitted. A path committed since a request ended is no longer its pending change.
+/// `windows`: snapshots of the files when each request started and as last looked at, oldest
+/// first (a snapshot is `HEAD` itself when nothing differs from it, else a child of it).
+/// Nothing while another branch is checked out; a snapshot git has pruned since counts none.
+fn uncommitted(repo: &brigadier_git::Repo, tip: &Oid, windows: &[(Oid, Oid)]) -> (i64, i64) {
+    let Some((_, newest)) = windows.last() else {
+        return (0, 0);
+    };
+    if newest == tip || repo.resolve("HEAD").ok().as_ref() != Some(tip) {
+        return (0, 0);
+    }
+    let paths = |from: &Oid, to: &Oid| -> std::collections::HashSet<String> {
+        repo.diff_stat(from, to)
+            .map(|diff| diff.files.into_iter().map(|file| file.path).collect())
+            .unwrap_or_default()
+    };
+    let mut pending = paths(tip, newest);
+    // A snapshot that is a commit: nothing was uncommitted then.
+    let clean = |snapshot: &Oid| snapshot == tip || repo.ancestor(snapshot, tip).unwrap_or(false);
+    let head_of = |snapshot: &Oid| repo.resolve(&format!("{}^", snapshot.0)).ok();
+    let mut since: Option<Oid> = None;
+    let (mut plus, mut minus, mut looked) = (0, 0, 0);
+    for (start, end) in windows.iter().rev() {
+        // Left with nothing uncommitted: what came before was committed or undone.
+        if clean(end) {
+            break;
+        }
+        let started_clean = clean(start);
+        if start != end {
+            looked += 1;
+            if looked > PENDING_REQUESTS {
+                break;
+            }
+            let Some(head) = head_of(end) else {
+                break;
+            };
+            if since.as_ref() != Some(&head) {
+                for path in paths(&head, tip) {
+                    pending.remove(&path);
+                }
+                since = Some(head.clone());
+            }
+            if pending.is_empty() {
+                break;
+            }
+            let ours: std::collections::HashSet<String> =
+                paths(start, end).intersection(&pending).cloned().collect();
+            // A request that committed on the way: only what it changed after its commit.
+            let start_head = if started_clean {
+                Some(start.clone())
+            } else {
+                head_of(start)
+            };
+            let from = if start_head.as_ref() == Some(&head) {
+                start
+            } else {
+                &head
+            };
+            if !ours.is_empty()
+                && let Ok(diff) = repo.diff_stat(from, end)
+            {
+                for file in diff.files.iter().filter(|file| ours.contains(&file.path)) {
+                    plus += i64::from(file.insertions);
+                    minus += i64::from(file.deletions);
+                }
+            }
+        }
+        if started_clean {
+            break;
+        }
+    }
+    (plus, minus)
 }
 
 fn shown(edits: StoredEdits, kept: bool) -> ThreadEdits {

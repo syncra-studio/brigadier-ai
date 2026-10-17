@@ -175,19 +175,33 @@ impl Repo {
     }
 
     /// The commits from `base` (excluded) to `tip` that carry the trailer `key: value` (as
-    /// [`Self::has_trailer`] matches it), and the lines they added and removed (`--numstat`;
-    /// merges show none, binary files count none).
+    /// [`Self::has_trailer`] matches it) or lie in one of the `authored` ranges (`from`
+    /// excluded to `to`: commits known to be the same author's without the trailer), and the
+    /// lines they added and removed (`--numstat`; merges show none, binary files count none).
     pub fn trailer_stat(
         &self,
         base: &Oid,
         tip: &Oid,
         key: &str,
         value: &str,
+        authored: &[(Oid, Oid)],
     ) -> Result<TrailerStat> {
         valid_oid(base)?;
         valid_oid(tip)?;
-        // Each commit starts with a record separator, then its trailer values on one line.
-        let format = format!("--format=%x1e%(trailers:key={key},valueonly,separator=%x1f)");
+        let mut known = std::collections::HashSet::new();
+        for (from, to) in authored {
+            valid_oid(from)?;
+            valid_oid(to)?;
+            let range = format!("{}..{}", from.0, to.0);
+            // A range rewritten away and pruned since has no commit in this history.
+            let Ok(out) = self.cmd(&["rev-list", &range, "--"], true) else {
+                continue;
+            };
+            known.extend(parse::text(&out)?.lines().map(str::to_owned));
+        }
+        // Each commit starts with a record separator and its id, then its trailer values on
+        // one line.
+        let format = format!("--format=%x1e%H%x1d%(trailers:key={key},valueonly,separator=%x1f)");
         let range = format!("{}..{}", base.0, tip.0);
         let out = self.cmd(
             &["log", "--no-renames", "--numstat", &format, &range, "--"],
@@ -195,11 +209,12 @@ impl Repo {
         )?;
         let mut stat = TrailerStat::default();
         for commit in parse::text(&out)?.split('\x1e').skip(1) {
-            let (values, numstat) = commit.split_once('\n').unwrap_or((commit, ""));
-            if !values
+            let (head, numstat) = commit.split_once('\n').unwrap_or((commit, ""));
+            let (id, values) = head.split_once('\x1d').unwrap_or((head, ""));
+            let marked = values
                 .split('\x1f')
-                .any(|found| found.trim().eq_ignore_ascii_case(value))
-            {
+                .any(|found| found.trim().eq_ignore_ascii_case(value));
+            if !marked && !known.contains(id.trim()) {
                 continue;
             }
             stat.commits += 1;
