@@ -2,8 +2,9 @@
 
 The helper that lets Brigadier's agents see and drive apps on this Mac in the
 background: Accessibility-tree first, input posted to the target process (no
-focus change, no pointer movement), window-scoped screenshots, a per-session
-agent cursor, and a browser `page` tool. macOS only.
+focus change, no pointer movement), window-scoped screenshots and a browser
+`page` tool. Brigadier's agents show no cursor on screen; the per-session agent
+cursor is only drawn for a helper started by hand. macOS only.
 
 It is a separate Cargo workspace (the root workspace excludes it) and ships
 inside Brigadier.app as `Helpers/Brigadier Computer Use.app`, signed with
