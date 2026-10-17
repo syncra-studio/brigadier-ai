@@ -10,6 +10,7 @@ import { createRoot } from "react-dom/client";
 
 import { LinkConversationContext, LinkTimeContext } from "@/components/assistant-ui/file-links";
 import { FileChip } from "@/components/assistant-ui/markdown-text";
+import { Toaster } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { Request } from "@/ipc/generated";
@@ -64,6 +65,8 @@ createRoot(document.getElementById("root")!).render(
         </table>
       </main>
     </LinkConversationContext.Provider>
+    {/* The app's own toasts, so an error one would show (#49). */}
+    <Toaster className="top-2" />
   </TooltipProvider>,
 );
 
@@ -100,7 +103,9 @@ try {
   await until("the tooltips to close", () => !document.querySelector("[data-slot=tooltip-content]"));
   await fixtureClick(row("stored").querySelector("[data-slot=file-chip-save]")!);
   await until("the save", () => calls.some((call) => (call as { command?: string }).command === "save_artifact"));
-  seen.toasts = document.querySelectorAll("[data-slot=toast]").length;
+  // An error toast would show by now: the failed open or save toasts as its call returns.
+  await sleep(300);
+  seen.toasts = document.querySelectorAll("[data-slot=toast][data-tone=error]").length;
 } catch (error) {
   seen.error = String(error);
 }
