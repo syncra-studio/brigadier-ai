@@ -1655,7 +1655,7 @@ impl SessionManager {
             Prepared::Ready(commit, base_tip, tip, commits) => (commit, base_tip, tip, commits),
             Prepared::Moved => {
                 return Err(Error::Invalid(format!(
-                    "[not merged] Other work landed on `{branch}` since the user consented, and their consent doesn't cover it. Nothing was merged. Tell the user; it merges on their next \"Merge into main\" or their words."
+                    "[not merged] Other work landed on `{branch}` since the user consented, and their consent doesn't cover it. Nothing was merged. Tell the user; it merges on their next words asking for it."
                 )));
             }
             Prepared::Unchecked => {
@@ -1972,7 +1972,7 @@ impl SessionManager {
                 kind: InjectionKind::Decision,
                 label: "merge cancelled".into(),
                 task_id: None,
-                text: "[merge cancelled by the user] The user cancelled the merge they had asked for. Don't merge: their consent is spent, and only their new words or a new \"Merge into main\" click give it again. Reply in one line at most.".into(),
+                text: "[merge cancelled by the user] The user cancelled the merge they had asked for. Don't merge: their consent is spent, and only their new words give it again. Reply in one line at most.".into(),
             },
         )
         .await;
@@ -2015,10 +2015,10 @@ impl SessionManager {
         let text = match (open.is_empty(), held.is_some()) {
             (true, false) => return,
             (_, true) => {
-                "[merge cards retired] Brigadier no longer merges on a card's answer, so the merge held from one is cancelled and nothing was merged. Merge only on the side panel's \"Merge into main\" or the user's own words."
+                "[merge cards retired] Brigadier no longer merges on a card's answer, so the merge held from one is cancelled and nothing was merged. Merge only on the user's own words."
             }
             (false, false) => {
-                "[merge cards retired] Brigadier no longer asks about merges on cards, so the open merge card is closed. Merge only on the side panel's \"Merge into main\" or the user's own words."
+                "[merge cards retired] Brigadier no longer asks about merges on cards, so the open merge card is closed. Merge only on the user's own words."
             }
         };
         self.queue_envelope(
@@ -2729,11 +2729,11 @@ pub(super) fn reviews_since_merge(board: &crate::board::Board) -> Vec<&crate::wo
 }
 
 /// What a late `propose_merge` call hears: merge cards are retired (BUILD-PLAN A4).
-pub(super) const PROPOSE_MERGE_RETIRED: &str = "propose_merge is retired: there are no merge cards any more. When the work is ready to merge you may say so once, in plain text. Merge only on the side panel's \"Merge into main\" button (you hear [merge] when the user clicks it, then call finish_session without user_words) or the user's own words (finish_session with user_words).";
+pub(super) const PROPOSE_MERGE_RETIRED: &str = "propose_merge is retired: there are no merge cards any more. When the work is ready to merge you may say so once, in plain text. Merge only on [merge] (call finish_session without user_words) or the user's own words (finish_session with user_words).";
 
 fn not_consented(why: String) -> Error {
     Error::Invalid(format!(
-        "[not merged] {why}. Nothing was merged. Merge only once the user consents: their click on the side panel's \"Merge into main\" (you hear [merge]), or their latest message asking for it in words. You may say once, in plain text, that the work is ready."
+        "[not merged] {why}. Nothing was merged. Merge only once the user consents: [merge], or their latest message asking for it in words. You may say once, in plain text, that the work is ready."
     ))
 }
 

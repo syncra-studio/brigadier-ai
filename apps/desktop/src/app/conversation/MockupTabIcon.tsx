@@ -4,7 +4,7 @@ import { useEffect, useMemo } from "react";
 import { Spinner } from "@/components/glyphs/spinner";
 import { useBoard } from "@/state/board";
 import { type Mockup, mockupOf } from "@/state/mockup";
-import { showMockupTab } from "@/state/sessionTabs";
+import { closeMockupTab, showMockupTab } from "@/state/sessionTabs";
 
 function useMockup(conversationId: string): Mockup | null {
   const tasks = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.tasks : null));
@@ -15,13 +15,17 @@ const busy = (mockup: Mockup | null) => mockup?.status === "building" || mockup?
 
 /**
  * Adds the session's Mockup tab (SESSION-FIXES-PLAN.md Q10) when its mockup starts, when a
- * revision starts, and when it is compared with the live app.
+ * revision starts, and when it is compared with the live app. Approved and built for real, it
+ * closes once instead.
  */
 export function useMockupTab(conversationId: string): void {
   const mockup = useMockup(conversationId);
-  const moment = mockup ? `${mockup.task.id}/v${mockup.version}${mockup.status === "compared" ? "/compared" : ""}` : null;
+  const stage = mockup?.status === "compared" ? "/compared" : mockup?.status === "matching" ? "/matching" : "";
+  const moment = mockup ? `${mockup.task.id}/v${mockup.version}${stage}` : null;
   useEffect(() => {
-    if (moment) showMockupTab(conversationId, moment);
+    if (!moment) return;
+    if (moment.endsWith("/matching")) closeMockupTab(conversationId, moment);
+    else showMockupTab(conversationId, moment);
   }, [conversationId, moment]);
 }
 

@@ -8,14 +8,26 @@ import {
   Folder,
   Pencil,
   Pin,
+  Plus,
+  Trash,
   Unpin,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, useEffect } from "react";
+import { type FC, useEffect, useState } from "react";
 
 import { FORK_PLACES } from "@/app/conversation/ForkMenu";
 import { useLatestAnswer } from "@/app/conversation/SlashCommands";
 import { NameDialog } from "@/app/NameDialog";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Spinner } from "@/components/glyphs/spinner";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,9 +43,12 @@ import { openFolder } from "@/ipc/client";
 import type { Conversation, ForkPlace } from "@/ipc/generated";
 import {
   archive,
+  closeWorkspace,
   forkConversation,
   renameConversation,
+  select,
   setPinned,
+  setProjectExpanded,
 } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
@@ -43,6 +58,19 @@ function workingDirectory(conversation: Conversation): string | null {
   const setup = conversation.setup;
   if (setup?.type !== "session") return null;
   return (setup.environment.type === "newWorktree" && setup.environment.path) || setup.repo;
+}
+
+/** A worktree session's own workspace: what "Close workspace" removes, and where it merges. */
+interface SessionWorkspace {
+  path: string;
+  branch: string;
+  base: string;
+}
+
+function sessionWorkspace(conversation: Conversation): SessionWorkspace | null {
+  const setup = conversation.setup;
+  if (setup?.type !== "session" || setup.environment.type !== "newWorktree" || !setup.environment.path) return null;
+  return { path: setup.environment.path, branch: setup.environment.branch, base: setup.environment.base };
 }
 
 /** The thread on its shown branch as Markdown, for "Copy as Markdown". */
@@ -73,7 +101,8 @@ async function copy(text: string, done: string) {
 }
 
 /**
- * The header's ⋯ "Chat actions": Rename ⌥⌘R, Pin ⌥⌘P, Archive ⇧⌘A; Copy › (working directory,
+ * The header's ⋯ "Chat actions": Rename ⌥⌘R, Pin ⌥⌘P, Archive ⇧⌘A; a session's New session (in
+ * its project) and, with a worktree of its own, Close workspace…; Copy › (working directory,
  * Markdown); Fork ›; Open in › (a session's working directory). Share, side chats, scheduled
  * tasks and new windows need what Brigadier doesn't have, so they are not offered.
  */
@@ -88,6 +117,9 @@ export const ChatActions: FC<{
   const pinned = conversation.pinnedAtMs !== null;
   const archived = conversation.lifecycle === "archived";
   const directory = workingDirectory(conversation);
+  const workspace = sessionWorkspace(conversation);
+  const projectId = conversation.kind === "session" ? conversation.projectId : null;
+  const [closing, setClosing] = useState(false);
   const answer = useLatestAnswer();
   const markdown = useThreadMarkdown(conversation.title);
   const mac = useApp((s) => s.info?.platform === "macos");
@@ -152,6 +184,24 @@ export const ChatActions: FC<{
                 <DropdownMenuShortcut>{key("⇧⌘A")}</DropdownMenuShortcut>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
+              {projectId && (
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setProjectExpanded(projectId, true);
+                    select({ type: "draft", kind: "session", projectId });
+                  }}
+                >
+                  <Plus />
+                  New session
+                </DropdownMenuItem>
+              )}
+              {workspace && (
+                <DropdownMenuItem onSelect={() => setClosing(true)}>
+                  <Trash />
+                  Close workspace…
+                </DropdownMenuItem>
+              )}
+              {(projectId || workspace) && <DropdownMenuSeparator />}
             </>
           )}
           <DropdownMenuSub>
@@ -228,7 +278,65 @@ export const ChatActions: FC<{
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+      {workspace && (
+        <CloseWorkspaceDialog
+          conversationId={id}
+          workspace={workspace}
+          open={closing}
+          onOpenChange={setClosing}
+        />
+      )}
     </>
+  );
+};
+
+/** The confirm before "Close workspace": it names the folder that goes and the branch that stays. */
+const CloseWorkspaceDialog: FC<{
+  conversationId: string;
+  workspace: SessionWorkspace;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}> = ({ conversationId, workspace, open, onOpenChange }) => {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Close workspace?</DialogTitle>
+          <DialogDescription>
+            This removes the folder <code className="break-all">{workspace.path}</code>. Uncommitted
+            changes are kept as a commit on <code>{workspace.branch}</code>, and the branch stays
+            unless all of its work is already on <code>{workspace.base}</code>. The session&apos;s
+            next change makes a fresh workspace in the same folder.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button type="button" variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              closeWorkspace(conversationId)
+                .then((text) => {
+                  toast(text);
+                  onOpenChange(false);
+                })
+                .catch((error: unknown) =>
+                  toast(`Couldn't close the workspace: ${error instanceof Error ? error.message : String(error)}`, { tone: "error" }),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            {busy && <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" />}
+            Close workspace
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

@@ -136,13 +136,13 @@ records each `setComposerShown` and writes JSON into `#composer-suggestion-resul
 `ComposerSuggestionRender.test.ts` checks it. IPC stays mocked. This entry is absent from the
 production build.
 
-# Merge button
+# Session menu
 
-`/fixtures/merge-button.html` renders the side panel's branch row with its Git actions for a
-worktree session with work, one without, and a session with no workspace: "Merge into main"
-shows only on the first, "Close workspace…" only with a workspace, and a click sends
-`mergeSession`. It writes JSON into `#merge-button-result`; `MergeButtonRender.test.ts` checks
-it. IPC stays mocked. This entry is absent from the production build.
+`/fixtures/session-menu.html` renders the session tab's ⋯ "Chat actions" for a worktree session,
+a session in its repository and a chat: "New session" shows for both sessions, "Close
+workspace…" only with a worktree, and confirming its dialog sends `closeWorkspace`. It writes
+JSON into `#session-menu-result`; `SessionMenuRender.test.ts` checks it. IPC stays mocked. This
+entry is absent from the production build.
 
 # Closing while hidden
 

@@ -16,7 +16,7 @@ import type { ArtifactRef, Conversation, Request, Task } from "@/ipc/generated";
 import { tokenColor } from "@/lib/tokens";
 import { emptyBoard, useBoard } from "@/state/board";
 import { changeNotes, mockupNotesOf } from "@/state/mockupNotes";
-import { CHAT_TAB, closeTab, MOCKUP_TAB, selectTab, sessionTabs, useSessionTabs, useSessionTabsOf } from "@/state/sessionTabs";
+import { CHAT_TAB, MOCKUP_TAB, selectTab, sessionTabs, useSessionTabs, useSessionTabsOf } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const id = "mockup-fixture";
@@ -253,7 +253,10 @@ function Fixture() {
       at(1200, () => {
         seen.after = button("File actions for Density toggle mockup")?.textContent;
         seen.backTools = document.querySelector('[aria-label="Image editing tools"]')?.textContent;
-        closeTab(id, MOCKUP_TAB);
+        // Approved: the real work starts building it, and the tab closes (issue 215).
+        const board = useBoard.getState().board!;
+        useBoard.setState({ board: { ...board, tasks: { ...board.tasks,
+          "task-2": task(2, { title: "Compact density toggle", mockup: { type: "matches", task: "task-1" }, state: "running" }) } } });
       });
       at(1500, () => {
         seen.closed = { tab: Boolean(mockupTab()), active: sessionTabs(id).active };

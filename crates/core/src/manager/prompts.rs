@@ -54,7 +54,7 @@ pub(crate) fn date_of(at_ms: i64) -> String {
 
 /// How the thread keeps the user from guessing: what a long step is before it starts, a
 /// readiness question answered first, the user's choice on a card.
-pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: before a long step, one line on what runs, why and about how long. Answer a yes/no or readiness question (\"ready to merge?\") first, with your recommendation and why (list_tasks says where the full checks stand); then, if the choice is theirs, ask_user with options (\"Run the full checks first (~15 min)\" / \"Not yet\"); a merge itself is never a card's answer: the user merges with \"Merge into main\" or in words. Never start a long run silently instead.";
+pub(crate) const LEAD: &str = "Never leave the user guessing whether to wait: before a long step, one line on what runs, why and about how long. Answer a yes/no or readiness question (\"ready to merge?\") first, with your recommendation and why (list_tasks says where the full checks stand); then, if the choice is theirs, ask_user with options (\"Run the full checks first (~15 min)\" / \"Not yet\"); a merge itself is never a card's answer: the user merges by asking in words. Never start a long run silently instead.";
 
 /// How the thread runs what takes long: through Brigadier, whose runs outlive its turn.
 /// How a worker runs a dev server or app: through Brigadier, so it shows in the session's
@@ -311,7 +311,7 @@ fn environment_text(environment: &Environment) -> String {
             "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: landed work goes, as the workers' own commits, onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merging it into `{base}` is the user's act: when the work is ready to merge you may say so once, in plain text, and never ask it on a card. Merge only on the side panel's \"Merge into main\" ([merge]: call finish_session without user_words) or the user's own words: when their latest message asks for the merge (\"merge it\", or \"… and merge it into `{base}`\" with the work itself), call finish_session as soon as the work has landed, with their words, without asking. On silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), don't merge, and never take an earlier yes for a later merge. After a merge the branch moves to it and you go on in the same worktree. If finish_session reports conflicts with `{base}`, do what it says at once, without asking the user."
+            "New worktree: landed work goes, as the workers' own commits, onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merging it into `{base}` is the user's act: when the work is ready to merge you may say so once, in plain text, and never ask it on a card. Merge only on [merge] (call finish_session without user_words) or the user's own words: when their latest message asks for the merge (\"merge it\", or \"… and merge it into `{base}`\" with the work itself), call finish_session as soon as the work has landed, with their words, without asking. On silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), don't merge, and never take an earlier yes for a later merge. After a merge the branch moves to it and you go on in the same worktree. If finish_session reports conflicts with `{base}`, do what it says at once, without asking the user."
         ),
     }
 }
@@ -3171,7 +3171,7 @@ mod environment_tests {
         });
         assert!(!worktree.contains("propose_merge"));
         assert!(worktree.contains("you may say so once, in plain text"));
-        assert!(worktree.contains("([merge]: call finish_session without user_words)"));
+        assert!(worktree.contains("[merge] (call finish_session without user_words)"));
         assert!(worktree.contains("the user's own words"));
         assert!(worktree.contains("stays with the session through merges"));
         assert!(!worktree.contains("there is no card"));

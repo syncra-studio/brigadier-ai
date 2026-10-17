@@ -262,7 +262,7 @@ async fn a_late_propose_merge_is_refused_with_what_to_do() {
     let refused = logged(&log, "propose_merge: ");
     assert_eq!(refused.len(), 1);
     assert!(refused[0].starts_with("propose_merge: true"), "{refused:?}");
-    assert!(refused[0].contains("Merge into main"), "{refused:?}");
+    assert!(refused[0].contains("the user's own words"), "{refused:?}");
     assert!(board.questions.is_empty());
     assert!(!on_main(&flow, "NOTES.md"));
     flow.stop().await;
@@ -423,7 +423,7 @@ async fn a_session_from_before_hears_the_note_once_and_merges_on_a_click() {
     let note = revision_note(MERGE_BY_USER_REVISION - 1, false).unwrap();
     assert!(note.contains("there are no merge cards"), "{note}");
     assert_eq!(logged(&log, &note).len(), 1);
-    assert!(logged(&log, "propose_merge: true")[0].contains("Merge into main"));
+    assert!(logged(&log, "propose_merge: true")[0].contains("the user's own words"));
     flow.manager
         .merge_session(&flow.conversation, click())
         .await

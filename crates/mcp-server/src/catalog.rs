@@ -228,8 +228,8 @@ a [checks failed …] message for you to send back. Conflicts come back to you: 
 task.";
 
 const FINISH_SESSION: &str = "New-worktree sessions only: merge the session branch into its \
-base branch, once the user consented: they clicked \"Merge into main\" on the side panel (you \
-hear [merge]; leave user_words out), or their latest message asks for it in words (\"merge it\", \
+base branch, once the user consented: you heard [merge] (their Merge click; leave user_words \
+out), or their latest message asks for it in words (\"merge it\", \
 also together with the work: then merge as soon as it has landed, without asking again). Pass \
 such words in user_words, quoted exactly from that message. Brigadier checks the consent and \
 refuses on a question, a condition, a \"no\" or a \"wait\", or consent already used for a merge; \

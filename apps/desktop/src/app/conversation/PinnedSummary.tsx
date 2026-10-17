@@ -1,9 +1,6 @@
 import { useAui } from "@assistant-ui/react";
 import {
   Branch,
-  Copy,
-  DotsHorizontal,
-  FolderOpen,
   HandRaised,
   Link,
   Plus,
@@ -35,7 +32,7 @@ import {
   useOvernightCards,
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
-import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
+import { activePlanRequest, contextPlanId, contextPlanIds } from "@/app/conversation/planProgress";
 import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { ChecksRow, ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
@@ -43,7 +40,6 @@ import { keptScroll, useSummary } from "@/app/conversation/summaryState";
 import { RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { CHAT_TAB, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
-import { GitActions } from "@/app/conversation/GitActions";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
 import {
@@ -55,18 +51,12 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import { TitlebarButton } from "@/components/titlebar-button";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   Popover,
   PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { openFolder, request } from "@/ipc/client";
+import { request } from "@/ipc/client";
 import { openLink as openWebLink } from "@/state/links";
 import type {
   Conversation,
@@ -80,9 +70,7 @@ import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import {
   getSessionDiff,
-  select,
   setPinnedSummary,
-  setProjectExpanded,
 } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
@@ -343,60 +331,6 @@ function Sources({ conversationId, session = true }: { conversationId: string; s
         </PopoverContent>
       </Popover>
     </SummarySection>
-  );
-}
-
-/** The project's ⋯ "Actions": a new session, its folder, and its path. */
-function ProjectActions({
-  projectId,
-  path,
-}: {
-  projectId: string;
-  path: string;
-}) {
-  const mac = useApp((s) => s.info?.platform === "macos");
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <TooltipIconButton tooltip="Actions" size="icon-xs">
-          <DotsHorizontal />
-        </TooltipIconButton>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem
-          onSelect={() => {
-            setProjectExpanded(projectId, true);
-            select({ type: "draft", kind: "session", projectId });
-          }}
-        >
-          <Plus />
-          New session
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() =>
-            void openFolder(path).catch((error: unknown) =>
-              toast(error instanceof Error ? error.message : String(error), {
-                tone: "error",
-              }),
-            )
-          }
-        >
-          <FolderOpen />
-          {mac ? "Reveal in Finder" : "Open in File Manager"}
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() =>
-            navigator.clipboard.writeText(path).then(
-              () => toast("Copied path"),
-              () => toast("Failed to copy path", { tone: "error" }),
-            )
-          }
-        >
-          <Copy />
-          Copy path
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -766,11 +700,6 @@ export function SummaryFloat({ children }: { children: ReactNode }) {
   );
 }
 
-/** Whether the branch changes anything its base lacks: "Merge into ‹base›" shows only then. */
-export function hasWork(diff: DiffStat | null | undefined): boolean {
-  return (diff?.files.length ?? 0) > 0;
-}
-
 /** The branch the session's work is on, with its +N −N once known. */
 function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) {
   return (
@@ -840,16 +769,8 @@ function SessionSummaryContent({
       ? (s.projects[conversation.projectId]?.name ?? null)
       : null,
   );
-  // The session's own plans, oldest first. A run's own plan shows as its card instead.
   const planIds = useBoard(
-    useShallow((s) =>
-      s.board?.conversationId === conversation.id
-        ? Object.values(s.board.plans)
-            .filter((plan) => plan.state.type !== "superseded" && !isRunRequest(plan.requestId))
-            .toSorted((a, b) => a.position - b.position)
-            .map((plan) => plan.id)
-        : [],
-    ),
+    useShallow((s) => (s.board?.conversationId === conversation.id ? contextPlanIds(s.board.plans) : [])),
   );
   const plans = planIds.filter((id) => !overnight.some((card) => card.run.planId === id));
   const currentPlanId = useBoard((s) => {
@@ -889,32 +810,9 @@ function SessionSummaryContent({
           <SummarySection
             foldKey="project"
             title={<span title={checkout}>{project ?? setup.repo}</span>}
-            action={
-              conversation.projectId && (
-                <ProjectActions projectId={conversation.projectId} path={checkout} />
-              )
-            }
           >
-            {run?.workspace ? (
-              // The run's card merges its verified work: no second way to merge here.
-              <BranchRow branch={run.workspace.branch} diff={diff} />
-            ) : (
-              <GitActions
-                conversationId={conversation.id}
-                workspace={
-                  setup.environment.type === "newWorktree" && setup.environment.path
-                    ? {
-                        path: setup.environment.path,
-                        branch: setup.environment.branch,
-                        base: setup.environment.base,
-                      }
-                    : null
-                }
-                mergeable={hasWork(diff)}
-              >
-                <BranchRow branch={setup.environment.branch} diff={diff} />
-              </GitActions>
-            )}
+            {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
+            <BranchRow branch={run?.workspace?.branch ?? setup.environment.branch} diff={diff} />
             <ReviewRows conversationId={conversation.id} />
             <ChecksRow conversationId={conversation.id} />
             {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
