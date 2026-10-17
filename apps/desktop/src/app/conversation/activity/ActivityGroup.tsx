@@ -79,7 +79,7 @@ export function stoppedLabel(words: StepWords, startedAtMs: number | undefined, 
  * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test" ("in 41s" inside an opened group); the verb shimmers while it
  * runs. It opens to `detail` when there is one, also while it runs.
  */
-export function StepRow({ words: said, status, exit = null, startedAtMs, endedAtMs, stopped: stoppedCall = false, detail, suffix, slot, objectNode, trail }: Described & {
+export function StepRow({ words, status, exit = null, startedAtMs, endedAtMs, stopped: stoppedCall = false, detail, suffix, slot, objectNode, trail }: Described & {
   detail?: ReactNode;
   /** After the words: "in 41s". */
   suffix?: ReactNode;
@@ -90,9 +90,9 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
   trail?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  // An edit opened to its diff, which names the file itself: the row reads "Edited file" ("Created file").
-  const opened = open && said.kind === "edit" && status === "completed" && said.object;
-  const words = opened ? { kind: said.kind, doing: said.doing, done: `${said.done.slice(0, said.done.indexOf(" "))} file` } : said;
+  // An edit opened to its diff, whose card says its counts: the row keeps the file's name, so it
+  // still says which file once the card has scrolled away or several are open (#175).
+  const opened = open && words.kind === "edit" && status === "completed" && words.object;
   const stoppedBy = useContext(StoppedBy);
   // Still running when the user's Stop ended its thread, or failing as it did: it was stopped,
   // not running or failed.
@@ -121,12 +121,12 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, endedAt
         ) : running ? (
           stepLabel(words, status, exit)
         ) : (
-          <Words words={words} label={stepLabel(words, status, exit)} objectNode={opened ? undefined : objectNode} />
+          <Words words={words} label={stepLabel(words, status, exit)} objectNode={objectNode} />
         )}
       </span>
       {/* "in 41s" only on a row inside an opened group: a row on its own says what it did. */}
       {suffix && inGroup && <span className="shrink-0 tabular-nums">{suffix}</span>}
-      {/* Opened, an edit's diff card says its counts: the row reads "Edited file" alone. */}
+      {/* Opened, an edit's diff card says its counts: the row reads "Edited math.js" alone. */}
       {!opened && trail}
     </ThreadActivity>
   );

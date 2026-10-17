@@ -42,8 +42,8 @@ test("the thread's own work reads like the reference thread: running commands st
   assert.equal(diff.name, "math.js");
   // Numbered from the real patch's hunk (`@@ -10,6 +10,11 @@`), not from 1.
   assert.deepEqual(diff.numbers, ["10", "11", "12"]);
-  // Opened, the row reads "Edited file" alone: the diff card says its name and counts.
-  assert.equal(diff.row, "Edited file");
+  // Opened, the row keeps the file's name and leaves the counts to the diff card (#175).
+  assert.equal(diff.row, "Edited math.js");
 
   // A Codex find in a page says what and where.
   assert.equal(seen.find, "Searched the web for 'LTS' in https://nodejs.org/en");

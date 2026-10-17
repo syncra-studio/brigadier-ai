@@ -123,8 +123,8 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.equal(tools["tool-failed"]?.error, true);
   for (const each of Object.values(tools)) assert.deepEqual([each.argumentsShown, each.raw], [false, "Show raw tool call output"]);
   assert.match(seen.toolRaw ?? "", /lookup.*Input.*"id":7.*Output/);
-  // An edit row opened to its diff reads "Edited file".
-  assert.deepEqual(seen.editRow, { closed: "Edited math.js", open: "Edited file" });
+  // An edit row opened to its diff still names its file (#175).
+  assert.deepEqual(seen.editRow, { closed: "Edited math.js", open: "Edited math.js" });
   // A Codex rename is a rename row, not "Edited new.rs +0 −0".
   assert.deepEqual(seen.renameRows, ["Renamed old.rs to new.rs +0 −0", "Moved a.rs +0 −0"]);
   // The turn's diff card: "Edited 5 files +5 −5" and Undo; the first three files, a
