@@ -1224,11 +1224,16 @@ async fn a_local_checkouts_uncommitted_change_is_reviewed_and_checked_from_a_sna
 
 /// Issue #33: on the user's own checkout a review's fix is a change like any other (UI audit
 /// M6). The findings say to leave the fix uncommitted, the thread does, nothing is committed on
-/// the user's branch, and the fix, however big, gets no review of its own.
+/// the user's branch, and the fix, however big, gets no review of its own. run_check's `fixes`
+/// records it fixed on a pass, but not when a file changed while the check ran.
 #[tokio::test]
 async fn a_review_fix_on_the_local_checkout_stays_uncommitted() {
     let told: Arc<Mutex<Vec<String>>> = Arc::default();
     let seen = told.clone();
+    // Every input and run_check reply, so a check's result is there whether it came in the
+    // call or, past the foreground limit, from the background.
+    let log: Arc<Mutex<Vec<String>>> = Arc::default();
+    let heard = log.clone();
     let mut flow = Flow::start(
         "integrated-local-fix",
         Options {
@@ -1238,16 +1243,33 @@ async fn a_review_fix_on_the_local_checkout_stays_uncommitted() {
             ..options()
         },
         script(move |turn| {
-            let seen = seen.clone();
+            let (seen, heard) = (seen.clone(), heard.clone());
             async move {
+                heard.lock().unwrap().push(turn.input.clone());
                 let workspace = turn.add_dirs.first().cloned();
+                if turn.input.contains("Check it again.") {
+                    // On the user's own checkout a pass records them, with nothing committed.
+                    let check = turn
+                        .call("run_check", json!({"command": "true", "fixes": ["R1.1"]}))
+                        .await;
+                    let quiet = check.text.contains("goes on in the background");
+                    heard.lock().unwrap().push(check.text);
+                    return Reply::text(if quiet { "[quiet]" } else { "Checked." });
+                }
                 if turn.input.contains("Change three files.") {
                     let workspace = workspace.unwrap();
                     for file in ["a.txt", "b.txt", "c.txt"] {
                         std::fs::write(workspace.join(file), notes(file)).unwrap();
                     }
                     let check = turn.call("run_check", json!({"command": "true"})).await;
-                    assert!(check.text.contains("[review running]"), "{}", check.text);
+                    // Its review starts with its pass, in the call or, under load, once the
+                    // check finishes in the background.
+                    assert!(
+                        check.text.contains("[review running]")
+                            || check.text.contains("goes on in the background"),
+                        "{}",
+                        check.text
+                    );
                     return Reply::text("[quiet]");
                 }
                 if turn.input.contains("[review of your changes") || turn.input.contains("found 1")
@@ -1264,19 +1286,12 @@ async fn a_review_fix_on_the_local_checkout_stays_uncommitted() {
                             json!({"command": "echo more >> b.txt", "fixes": ["R1.1"]}),
                         )
                         .await;
-                    assert!(
-                        check.text.contains(
-                            "Not recorded fixed: R1.1, as b.txt changed while the check ran, so it didn't check them."
-                        ),
-                        "{}",
-                        check.text
-                    );
-                    // On the user's own checkout a pass records them, with nothing committed.
-                    let check = turn
-                        .call("run_check", json!({"command": "true", "fixes": ["R1.1"]}))
-                        .await;
                     assert!(!check.text.contains("[review running]"), "{}", check.text);
-                    assert!(check.text.contains("Recorded: R1.1 fixed"), "{}", check.text);
+                    let quiet = check.text.contains("goes on in the background");
+                    heard.lock().unwrap().push(check.text);
+                    if quiet {
+                        return Reply::text("[quiet]");
+                    }
                     return Reply::text("Fixed R1.1. Changed 1 file, not committed.");
                 }
                 Reply::text("[quiet]")
@@ -1343,8 +1358,34 @@ async fn a_review_fix_on_the_local_checkout_stays_uncommitted() {
             .unwrap()
             .starts_with("# Title 1\n")
     );
-    // One review: the fix got none of its own. Its finding is fixed, checked by the check.
+    // One review: the fix got none of its own.
     assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
+    let said = |log: &Arc<Mutex<Vec<String>>>, text: &str| {
+        log.lock().unwrap().iter().any(|said| said.contains(text))
+    };
+    let changed = log.clone();
+    flow.until("the fix's first check", move |_| {
+        said(
+            &changed,
+            "Not recorded fixed: R1.1, as b.txt changed while the check ran, so it didn't check them.",
+        )
+    })
+    .await;
+    // A clean pass records its finding fixed, checked by that check.
+    flow.say("Check it again.").await;
+    let recorded = log.clone();
+    let board = flow
+        .until("the fix's second check", move |board| {
+            said(&recorded, "Recorded: R1.1 fixed")
+                && board.reviews.values().any(|review| {
+                    matches!(
+                        review.items[0].status,
+                        crate::work::FindingStatus::Fixed { .. }
+                    )
+                })
+        })
+        .await;
+    flow.settled().await;
     let review = board.reviews.values().next().unwrap();
     assert!(
         matches!(

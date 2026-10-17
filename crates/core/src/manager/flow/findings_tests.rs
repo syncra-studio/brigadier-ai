@@ -330,6 +330,16 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                         assert!(!reply.is_error, "{}", reply.text);
                         seen.lock().unwrap().push(reply.text);
                     }
+                    // With nothing left to commit, no commit carries the Fixes trailer, so
+                    // nothing is recorded fixed either.
+                    let reply = turn
+                        .call(
+                            "run_check",
+                            json!({"command": "true", "commit": "Fix the notes again", "fixes": ["R1.3"]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    seen.lock().unwrap().push(reply.text);
                     // On the session's branch a passing check with no commit records nothing
                     // fixed: the merge takes the branch's commits, not the working tree.
                     std::fs::write(workspace.join("notes.txt"), "fixed notes, trimmed\n").unwrap();
@@ -355,7 +365,8 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
             [
                 "Not committed: the check didn't pass.",
                 "Recorded: R1.1 fixed",
-                "Not recorded fixed: R1.3",
+                "Nothing to commit",
+                "on this branch a fix counts once",
             ]
             .iter()
             .all(|text| said.iter().any(|said| said.contains(text)))
@@ -381,7 +392,12 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
         failed.contains("Not recorded fixed: R1.1, R1.2"),
         "{failed}"
     );
-    let uncommitted = said("Not recorded fixed: R1.3");
+    let clean = said("Nothing to commit");
+    assert!(
+        clean.contains("Not recorded fixed: R1.3, as nothing was committed."),
+        "{clean}"
+    );
+    let uncommitted = said("on this branch a fix counts once");
     assert!(
         uncommitted.contains("Not recorded fixed: R1.3, as nothing was committed: on this branch a fix counts once run_check's `commit` commits it."),
         "{uncommitted}"
@@ -395,7 +411,12 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
     assert!(body.starts_with("Fix the notes"), "{body}");
     assert!(body.contains("Brigadier-Author: thread"), "{body}");
     assert!(body.contains("Brigadier-Fixes: R1.1, R1.2"), "{body}");
-    let review = board.reviews.values().next().unwrap();
+    // The board's reviews are a map: take the first review's, R1.
+    let review = board
+        .reviews
+        .values()
+        .find(|review| review.items.iter().any(|item| item.id.starts_with("R1.")))
+        .unwrap();
     for item in &review.items {
         match (item.id.as_str(), &item.status) {
             (

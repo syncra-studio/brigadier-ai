@@ -723,7 +723,8 @@ impl SessionManager {
                 let note = manager
                     .commit_on_pass(&caller, tree, passed, checked, &message, &fixes)
                     .await;
-                if passed && !note.starts_with("Not committed") {
+                // Only a commit made now carries their Fixes trailer.
+                if passed && note.starts_with("Committed") {
                     not_fixed = None;
                 } else if passed {
                     not_fixed = Some("nothing was committed".to_owned());
@@ -733,23 +734,28 @@ impl SessionManager {
                 } else {
                     format!("{reply}\n{note}")
                 };
-            } else if let (true, None, Some(tree), Some(checked)) = (
-                !fixes.is_empty(),
-                &not_fixed,
-                tree.as_deref(),
-                under_way.tree(),
-            ) {
+            } else if let (true, None, Some(tree)) =
+                (!fixes.is_empty(), &not_fixed, tree.as_deref())
+            {
                 // The user's own checkout, uncommitted: the fix counts only if the check saw
                 // the files as they are now.
-                not_fixed = match manager.changed_since_check(tree, checked.to_owned()).await {
-                    Ok((had, _)) if had.is_empty() => None,
-                    Ok((had, _)) => Some(format!(
-                        "{} changed while the check ran, so it didn't check them",
-                        listed(&had)
-                    )),
-                    Err(err) => Some(format!(
-                        "git could not tell whether files changed while the check ran: {err}"
-                    )),
+                not_fixed = match under_way.tree() {
+                    None => Some(
+                        "Brigadier could not take the files' snapshot when the check started, so it can't tell what the check saw"
+                            .to_owned(),
+                    ),
+                    Some(checked) => {
+                        match manager.changed_since_check(tree, checked.to_owned()).await {
+                            Ok((had, _)) if had.is_empty() => None,
+                            Ok((had, _)) => Some(format!(
+                                "{} changed while the check ran, so it didn't check them",
+                                listed(&had)
+                            )),
+                            Err(err) => Some(format!(
+                                "git could not tell whether files changed while the check ran: {err}"
+                            )),
+                        }
+                    }
                 };
             }
             if !fixes.is_empty() {
