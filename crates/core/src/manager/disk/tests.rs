@@ -824,3 +824,35 @@ async fn preview_data_folders_go_with_their_session() {
     }
     flow.stop().await;
 }
+
+/// The site icon cache is listed, left unpicked, and goes when picked.
+#[tokio::test]
+async fn the_site_icon_cache_is_listed_and_cleared() {
+    let (flow, _, _) = session("disk-site-icons").await;
+    let icons = flow.manager.data_dir.join("site-icons");
+    let (items, _) = scan(&flow, context()).await;
+    assert!(
+        !labels(&items)
+            .iter()
+            .any(|label| label.contains("Site icons")),
+        "{:?}",
+        labels(&items)
+    );
+    std::fs::create_dir_all(&icons).unwrap();
+    std::fs::write(icons.join("a.icon"), vec![1u8; 8 * 1024]).unwrap();
+    std::fs::write(icons.join("b.miss"), "").unwrap();
+    let (items, _) = scan(&flow, context()).await;
+    let listed = named(&items, "Site icons of links");
+    assert_eq!(listed.item.category, CleanCategory::Temporary);
+    assert!(listed.item.selectable && !listed.item.checked);
+    assert!(listed.item.bytes >= 8 * 1024, "{}", listed.item.bytes);
+    let cleaned = flow
+        .manager
+        .clean_storage(listed.action.clone(), context())
+        .await
+        .unwrap();
+    assert!(cleaned.failures.is_empty(), "{cleaned:?}");
+    assert!(cleaned.reclaimed >= 8 * 1024, "{cleaned:?}");
+    assert_eq!(std::fs::read_dir(&icons).unwrap().count(), 0);
+    flow.stop().await;
+}

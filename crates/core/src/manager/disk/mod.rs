@@ -367,6 +367,7 @@ impl SessionManager {
             scan.thread_scratch();
             scan.brains();
             scan.logs_and_recordings();
+            scan.site_icons();
             scan.models(embeddings_busy, context.speech_busy);
             let mut usage = scan.usage(&project_blobs);
             usage.kept = scan.kept;
@@ -2137,6 +2138,39 @@ impl Scanner<'_> {
             entry.to_trash = true;
             self.push(entry, Action::Trash(recordings));
         }
+    }
+
+    /// The icons of web sites the thread's answers linked, kept by the daemon.
+    fn site_icons(&mut self) {
+        let dir = self.data("site-icons");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        let files: Vec<(Bound, u64)> = entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .filter_map(|entry| {
+                let path = entry.path();
+                let bytes = removal::allocated_size(&path);
+                Some((self.bind_data(&path)?, bytes))
+            })
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        let bytes = files.iter().map(|(_, bytes)| bytes).sum();
+        self.push(
+            item(
+                CleanCategory::Temporary,
+                "Site icons of links".into(),
+                Some(dir),
+                bytes,
+                "The icons shown next to links in answers. Each site is asked for its icon again \
+                 when a link to it shows.",
+                false,
+            ),
+            Action::Delete(files),
+        );
     }
 
     fn models(&mut self, embeddings_busy: bool, speech_busy: bool) {
