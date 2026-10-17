@@ -191,6 +191,11 @@ export async function openUrl(url: string): Promise<void> {
   }
 }
 
+/** This computer's system and processor, for feedback ("macOS 27.0 Tahoe (aarch64)"). */
+export function systemName(): Promise<string> {
+  return invoke<string>("system_name");
+}
+
 /** The conversations the menu-bar item lists under "Running". */
 export function setRunningChats(chats: RunningChat[]): Promise<void> {
   return invoke("set_running_chats", { chats });

@@ -70,6 +70,14 @@ fn app_info(state: State<'_, AppState>) -> AppInfo {
     state.info.clone()
 }
 
+/// This computer's system and its processor, for feedback ("macOS 27.0 Tahoe (aarch64)").
+#[tauri::command]
+fn system_name() -> String {
+    let system =
+        sysinfo::System::long_os_version().unwrap_or_else(|| std::env::consts::OS.to_owned());
+    format!("{system} ({})", std::env::consts::ARCH)
+}
+
 /// The running app, for Uninstall Brigadier…: its bundle identifier, the app bundle it runs
 /// from (macOS) and its pid.
 #[tauri::command]
@@ -787,6 +795,7 @@ fn main() {
             open_artifact,
             open_folder,
             open_url,
+            system_name,
             reveal_path,
             set_running_chats,
             set_key_capture,

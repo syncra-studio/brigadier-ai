@@ -80,6 +80,8 @@ pub enum BridgeEvent {
     OpenComputerUseSettings,
     /// Brigadier › Settings… (⌘,) was chosen: open Settings, or leave it when it is open.
     SettingsMenu,
+    /// Help › Send Feedback… was chosen.
+    FeedbackMenu,
 }
 
 /// A conversation the menu-bar item lists under "Running".
