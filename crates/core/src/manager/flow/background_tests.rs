@@ -434,9 +434,106 @@ async fn the_users_stop_of_one_background_run_tells_the_thread() {
     let inputs = inputs.lock().unwrap().clone();
     assert!(
         inputs.iter().any(|input| input
-            .contains("[The user stopped run-1 before it finished · run `sleep 60; echo late`")),
+            .contains("[The user stopped run-1 before it finished · run `sleep 60; echo late`: it printed nothing")),
         "{inputs:#?}"
     );
+    flow.stop().await;
+}
+
+/// A run the user stopped after it printed a long log: the thread hears that what it printed
+/// is kept, with its end, never that nothing came back; one that printed nothing says so.
+#[tokio::test]
+async fn the_users_stop_of_a_run_that_printed_says_what_it_printed() {
+    use brigadier_providers::{ItemStatus, ProviderEvent};
+    let inputs: Log = Default::default();
+    let log = inputs.clone();
+    let command = "for i in $(seq 1 108); do echo log line $i; done; sleep 60";
+    let flow = Flow::start(
+        "background-stop-printed",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("The user stopped run-1") {
+                    return Reply::text("Stopped the log run.");
+                }
+                turn.emit(ProviderEvent::ToolCall {
+                    kept: None,
+                    item_id: "own-run".into(),
+                    name: "mcp__brigadier__run".into(),
+                    input: Some(json!({ "command": command }).to_string()),
+                    status: ItemStatus::InProgress,
+                    output: None,
+                })
+                .await;
+                let id = turn.conversation().unwrap();
+                tokio::time::timeout(super::PATIENCE, async {
+                    while !turn
+                        .host
+                        .core
+                        .board(&id)
+                        .await
+                        .unwrap()
+                        .orchestrator_steps
+                        .iter()
+                        .any(|step| matches!(&step.kind, crate::work::OrchestratorStepKind::Tool { item_id, .. } if item_id == "own-run"))
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                let reply = turn.call("run", json!({ "command": command })).await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text(crate::manager::prompts::QUIET)
+            }
+        }),
+    )
+    .await;
+    flow.say("Run the log.").await;
+    flow.until("the run to go to the background", |board| {
+        run_state(board, "run-1") == Some(BackgroundRunState::Running)
+    })
+    .await;
+    tokio::time::timeout(super::PATIENCE, async {
+        loop {
+            let (text, _) = flow
+                .manager
+                .read_background_run(&flow.conversation, "run-1")
+                .await
+                .unwrap();
+            if text.contains("log line 108") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    flow.manager
+        .stop_background_run(flow.conversation.clone(), "run-1".into())
+        .await
+        .unwrap();
+    flow.until("the thread's answer", |board| {
+        run_state(board, "run-1") == Some(BackgroundRunState::Stopped)
+            && board
+                .requests
+                .values()
+                .all(|request| request.state == RequestState::Done)
+    })
+    .await;
+    let inputs = inputs.lock().unwrap().clone();
+    let told = inputs
+        .iter()
+        .find(|input| input.contains("The user stopped run-1"))
+        .unwrap_or_else(|| panic!("{inputs:#?}"));
+    assert!(
+        told.contains("what it printed until then is kept"),
+        "{told}"
+    );
+    assert!(told.contains("log line 108"), "{told}");
+    assert!(!told.contains("it printed nothing"), "{told}");
     flow.stop().await;
 }
 

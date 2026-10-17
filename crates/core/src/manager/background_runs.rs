@@ -88,6 +88,24 @@ pub(super) fn hold_foreground(id: &ConversationId, gate: std::sync::Arc<tokio::s
     FOREGROUND_GATES.lock().unwrap().insert(id.clone(), gate);
 }
 
+/// What the thread hears of a run the user stopped alone: what it printed until then, as its
+/// row keeps it (`kept`, the digest of its stored output), or that it printed nothing.
+fn stopped_text(run: &BackgroundRun, kept: &str) -> String {
+    let ask = "Don't run it again unless they ask; say in one line where that leaves the work.";
+    if kept.trim().is_empty() {
+        return format!(
+            "[The user stopped {} before it finished · {} `{}`: it printed nothing and no \
+             result came. {ask}]",
+            run.id, run.tool, run.command
+        );
+    }
+    format!(
+        "[The user stopped {} before it finished · {} `{}`: no result came, but what it \
+         printed until then is kept, and its row shows it. {ask}]\n{kept}",
+        run.id, run.tool, run.command
+    )
+}
+
 impl SessionManager {
     /// Runs `work`, the thread's `tool` call of `command` (its status and reply), in its tool
     /// call while it ends within [`FOREGROUND`], else in the background: its reply then comes
@@ -243,8 +261,10 @@ impl SessionManager {
         }
         run.ended_at_ms = Some(now_ms());
         if cancel.is_cancelled() {
-            // What it printed before the Stop stays readable from its row.
-            self.retain_background_output(&run, "stopped", String::new())
+            // What it printed before the Stop stays readable from its row, and the thread hears
+            // of it as kept.
+            let (_, kept) = self
+                .retain_background_output(&run, "stopped", String::new())
                 .await;
             run.state = BackgroundRunState::Stopped;
             let alone = self
@@ -258,12 +278,7 @@ impl SessionManager {
                     kind: InjectionKind::BackgroundRun,
                     label: format!("{} stopped", run.id),
                     task_id: None,
-                    text: format!(
-                        "[The user stopped {} before it finished · {} `{}`: no result came. \
-                         Don't run it again unless they ask; say in one line where that leaves \
-                         the work.]",
-                        run.id, run.tool, run.command
-                    ),
+                    text: stopped_text(&run, &kept),
                 };
                 self.end_with_message(run, envelope).await;
             } else {
@@ -276,7 +291,7 @@ impl SessionManager {
             Ok(done) => done,
             Err(err) => ("couldn't run".to_owned(), format!("[couldn't run: {err}]")),
         };
-        let text = self.retain_background_output(&run, &status, text).await;
+        let (text, _) = self.retain_background_output(&run, &status, text).await;
         run.state = BackgroundRunState::Finished { status };
         let envelope = Envelope {
             kind: InjectionKind::BackgroundRun,
@@ -292,14 +307,15 @@ impl SessionManager {
 
     /// Stores what a background run printed as its row's final output, `text` when its live
     /// buffer holds nothing more, and releases the buffer: the stored output then answers the
-    /// row's reads. Returns `text`, the result the thread hears as it always did: a check's
-    /// evidence and commit lines are in it, not in what the pipes printed.
+    /// row's reads. Returns `text`, the result the thread hears as it always did (a check's
+    /// evidence and commit lines are in it, not in what the pipes printed), and what was
+    /// stored (the digest of what the pipes printed, else `text`).
     async fn retain_background_output(
         &self,
         run: &BackgroundRun,
         status: &str,
         text: String,
-    ) -> String {
+    ) -> (String, String) {
         let mut stored = text.clone();
         let live_output = if crate::digest::digest_alias(&text).is_none() {
             self.conv(&run.conversation_id)
@@ -345,7 +361,7 @@ impl SessionManager {
         if let Ok(conv) = self.conv(&run.conversation_id) {
             conv.items().background_ended(&run.id);
         }
-        text
+        (text, stored)
     }
 
     /// Records a background run's end with the message the thread hears of it: the message is
