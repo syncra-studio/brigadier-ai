@@ -73,10 +73,10 @@ test("the thread's own work reads like the reference thread: running commands st
     ["Edited 4 files", "+11 −2", 3, "Show 1 more file", "Undo"],
   );
   // Undo says beforehand, and afterwards, which file it leaves as it is.
-  assert.equal(turnDiff.four.held, "You changed src/notes.md during this request too, so Undo leaves it as it is.");
+  assert.equal(turnDiff.four.held, "src/notes.md also changed during this request in a way Brigadier didn't see (by you, or by one of the thread's own tools), so Undo leaves it as it is.");
   assert.deepEqual(seen.undone, {
     asked: ["four:undo"],
-    toast: "Changes reverted. You changed src/notes.md during this request too, so Undo leaves it as it is.",
+    toast: "Changes reverted. src/notes.md also changed during this request in a way Brigadier didn't see (by you, or by one of the thread's own tools), so Undo leaves it as it is.",
   });
   assert.equal(seen.reapply, "Reapply");
   // Reapply names what Undo left without giving Undo's reason again; a refusal says which way.

@@ -430,7 +430,7 @@ async fn request_changes_mid_request_saves_are_held_or_unowned() {
         assert_eq!(outcome.restored, ["b.txt"]);
         assert_eq!(
             outcome.held[0].reason,
-            "You changed a.txt during this request too, so Undo leaves it as it is."
+            "a.txt also changed during this request in a way Brigadier didn't see (by you, or by one of the thread's own tools), so Undo leaves it as it is."
         );
         assert_eq!(
             std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
@@ -2054,7 +2054,8 @@ async fn request_changes_own_a_shell_edit_by_its_files_read_around_it() {
             .clone()
     };
     assert!(
-        reason("b.txt").starts_with("You changed b.txt"),
+        reason("b.txt")
+            .starts_with("b.txt also changed during this request in a way Brigadier didn't see"),
         "{}",
         reason("b.txt")
     );

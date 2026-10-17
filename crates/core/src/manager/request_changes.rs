@@ -207,8 +207,12 @@ fn stream(id: &ConversationId, request: &str) -> String {
 fn prefix(id: &ConversationId, request: &str) -> String {
     format!("refs/brigadier/changes/{id}/{request}")
 }
+/// A change no edit, command or landing of the request explains: the user's, or one of the
+/// thread's own tools that reports no edit, which Brigadier can't tell apart (#196).
 fn user_reason(path: &str) -> String {
-    format!("You changed {path} during this request too, so Undo leaves it as it is.")
+    format!(
+        "{path} also changed during this request in a way Brigadier didn't see (by you, or by one of the thread's own tools), so Undo leaves it as it is."
+    )
 }
 fn together_reason(path: &str, held: &str) -> String {
     format!(

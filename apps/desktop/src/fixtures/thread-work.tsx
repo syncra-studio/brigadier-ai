@@ -102,7 +102,7 @@ mockIPC((command, payload) => {
         method: req.method,
         outcome: {
           restored: ["src/a.ts", "src/b.ts", "src/c.ts"],
-          held: [{ path: "src/notes.md", reason: "You changed src/notes.md during this request too, so Undo leaves it as it is." }],
+          held: [{ path: "src/notes.md", reason: "src/notes.md also changed during this request in a way Brigadier didn't see (by you, or by one of the thread's own tools), so Undo leaves it as it is." }],
         },
       };
     case "getReviewDiff":
@@ -146,7 +146,7 @@ useBoard.setState({
       one: request("one", "done", { stat: stat([["scripts/run.mjs", 4, 1]]), settled: true }),
       four: request("four", "done", {
         stat: stat([["src/a.ts", 3, 1], ["src/b.ts", 2, 0], ["src/c.ts", 1, 1], ["src/notes.md", 5, 0]]),
-        held: [{ path: "src/notes.md", reason: "You changed src/notes.md during this request too, so Undo leaves it as it is." }],
+        held: [{ path: "src/notes.md", reason: "src/notes.md also changed during this request in a way Brigadier didn't see (by you, or by one of the thread's own tools), so Undo leaves it as it is." }],
         settled: true,
       }),
       live: request("live", "working", { stat: stat([["src/math.js", 8, 2], ["src/new.ts", 3, 0]]), settled: false }),

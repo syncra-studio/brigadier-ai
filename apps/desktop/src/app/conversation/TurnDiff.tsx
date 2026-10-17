@@ -10,7 +10,7 @@ import { useShallow } from "zustand/react/shallow";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { isFinal } from "@/app/conversation/blocks";
 import { mergeStats } from "@/app/conversation/ComposerCapsule";
-import { undoToast } from "@/app/conversation/undoWords";
+import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -398,7 +398,7 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
           variant="ghost"
           size="sm"
           data-held={held.length || undefined}
-          title={held.length === 0 ? undefined : held.length === 1 ? held[0]?.reason : `Undo leaves ${held.length} files as they are: changed by you or by a command during the request`}
+          title={held.length === 0 ? undefined : held.length === 1 ? held[0]?.reason : `Undo leaves ${held.length} files as they are: ${HELD_WHY}`}
           disabled={busy || working}
           aria-busy={busy || undefined}
           onClick={toggle}

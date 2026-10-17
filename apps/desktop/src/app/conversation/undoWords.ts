@@ -1,8 +1,14 @@
 import type { HeldPath } from "@/ipc/generated";
 
 /**
+ * Why Undo leaves several files as they are: what changed them, as far as Brigadier can tell (one
+ * file's reason says more). Never the user alone: the thread's own tools change files too (#196).
+ */
+export const HELD_WHY = "changed during the request by you, or by the thread's own commands and tools";
+
+/**
  * What an Undo or Reapply left as it was, after its toast's first words: ". Left notes.md as it
- * is: you changed it during this request too." One file says why; several are named.
+ * is: a command changed it too." One file says why; several are named.
  */
 export function leftWords(left: readonly HeldPath[], reapply = false): string {
   const [only] = left;
@@ -15,7 +21,7 @@ export function leftWords(left: readonly HeldPath[], reapply = false): string {
       : `. ${left.length} files stay as they are (${names.join(", ")}): Undo left them`;
   }
   if (left.length === 1) return `. ${only.reason}`;
-  return `. Left ${left.length} files as they are (${names.join(", ")}): changed by you or by a command during the request`;
+  return `. Left ${left.length} files as they are (${names.join(", ")}): ${HELD_WHY}`;
 }
 
 /** The toast after an Undo or Reapply: what it did, then what it left. One that put nothing back says so. */
