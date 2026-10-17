@@ -48,12 +48,18 @@ function correctedNames(answer: string, scratch: readonly string[]): string[] {
     if (scratch.some((root) => path === root || path.startsWith(`${root}/`))) continue;
     const name = path.split("/").pop();
     if (name) names.push(name);
-    // A label naming the original also identifies a corrected copy saved under a new name.
-    if (label) {
+    // A label naming the original also identifies a corrected copy saved under a new name, when
+    // the copy is the same kind of file.
+    if (label && name) {
       const original = label.replace(/^(`+|\*{1,2}|_{1,2})(.*?)\1$/, "$2").replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1")
         .replace(/(?::|#L)\d+(?:[-:]L?\d+)?$/, "").split("/").pop();
-      if (original) names.push(original);
+      if (original && extension(original) === extension(name)) names.push(original);
     }
   }
   return names;
+}
+
+/** ".md" of "rates.md", lower-cased; "" for a name without one. */
+function extension(name: string): string {
+  return /\.[^.]+$/.exec(name)?.[0].toLowerCase() ?? "";
 }

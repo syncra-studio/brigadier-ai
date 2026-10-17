@@ -69,6 +69,7 @@ test("a renamed corrected copy replaces only the worker file named by its link",
     assert.deepEqual(ids("See [rates.md](outputs/final.md)."), ["rates", "notes"]);
     assert.deepEqual(ids("See [rates.md](https://example.com/final.md)."), ["rates", "notes"]);
     assert.deepEqual(ids("See [unrelated](/repo/final.md)."), ["rates", "notes"]);
+    assert.deepEqual(ids("See [rates.md](/repo/src/rates.ts)."), ["rates", "notes"]);
   } finally {
     await server.close();
   }
