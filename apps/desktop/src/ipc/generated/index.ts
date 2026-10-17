@@ -381,6 +381,7 @@ export type { Setup } from "./Setup";
 export type { SetupRequest } from "./SetupRequest";
 export type { SharedPart } from "./SharedPart";
 export type { SharedUsage } from "./SharedUsage";
+export type { ShellCall } from "./ShellCall";
 export type { SitePermission } from "./SitePermission";
 export type { SmokeReport } from "./SmokeReport";
 export type { SourceChange } from "./SourceChange";

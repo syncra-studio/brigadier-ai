@@ -7,6 +7,7 @@ use brigadier_providers::{FileChange, FileChangeKind, ItemStatus, ProviderEvent,
 
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::board::Board;
+use crate::manager::shell_changes::ShellKey;
 use crate::model::Setup;
 use crate::work::{OrchestratorStepKind, ReviewScope};
 
@@ -1832,4 +1833,277 @@ async fn an_edit_just_before_the_delegation_is_the_threads_on_the_question() {
         }
     );
     flow.stop().await;
+}
+
+/// A shell call of the thread's: the files its command names are read before it runs, `run`
+/// changes them, and they are read again once it ended (as Claude's tool hook does, #87).
+async fn shell(turn: &Turn, item: &str, command: &str, run: impl FnOnce(&Path)) {
+    let id = turn.conversation().unwrap();
+    let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+    let key = ShellKey::Call(item.into());
+    turn.host
+        .capture_shell(&id, key.clone(), command, Some(&workspace), false)
+        .await;
+    run(&workspace);
+    turn.host.capture_shell(&id, key, command, None, true).await;
+}
+
+async fn shell_reported(turn: &Turn, item: &str, command: &str) {
+    for status in [ItemStatus::InProgress, ItemStatus::Completed] {
+        turn.emit(ProviderEvent::Command {
+            kept: None,
+            item_id: item.into(),
+            command: command.into(),
+            cwd: None,
+            status,
+            exit_code: (status == ItemStatus::Completed).then_some(0),
+            output: None,
+            duration_ms: None,
+        })
+        .await;
+    }
+}
+
+/// A file long enough that git finds it again where it moved with a line more.
+const MOVED: &str = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n";
+
+fn append(path: &Path, text: &str) {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    std::io::Write::write_all(&mut file, text.as_bytes()).unwrap();
+}
+
+/// A shell command's change is the thread's when the files its command names were read around
+/// it, the change starts from the file as the request last knew it and the file still holds
+/// what the command left: Undo and Reapply take it, and it shows as an edit row after the
+/// command's. A save of the user's just before or after the command, a file the command
+/// doesn't name, and a move one of whose ends is held stay as they are (#87).
+#[tokio::test]
+async fn request_changes_own_a_shell_edit_by_its_files_read_around_it() {
+    let flow = Flow::start(
+        "20261017-0213-issues-run-w24-shell-edits",
+        Options {
+            thread: ProviderKind::Claude,
+            files: vec![
+                ("a.txt", "base\n"),
+                ("b.txt", "base\n"),
+                ("other.txt", "base\n"),
+                ("m.txt", MOVED),
+                ("p.txt", "base\n"),
+            ],
+            ..Default::default()
+        },
+        script(|turn| async move {
+            // Its start reported only once the command wrote: the reads around it decide.
+            let append_a = "echo 'thread a' >> a.txt";
+            shell(&turn, "bash-1", append_a, |dir| {
+                append(&dir.join("a.txt"), "thread a\n");
+            })
+            .await;
+            shell_reported(&turn, "bash-1", append_a).await;
+            observed(&turn, 1).await;
+            // The user saved b.txt just before the command.
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            std::fs::write(workspace.join("b.txt"), "user b\n").unwrap();
+            let edit_b = "perl -pi -e 's/user/thread/' b.txt";
+            shell(&turn, "bash-2", edit_b, |dir| {
+                std::fs::write(dir.join("b.txt"), "thread b\n").unwrap();
+            })
+            .await;
+            shell_reported(&turn, "bash-2", edit_b).await;
+            observed(&turn, 2).await;
+            // The user saved other.txt once the command ended, before its snapshot.
+            let edit_other = "sed -i '' s/base/thread/ other.txt";
+            shell(&turn, "bash-3", edit_other, |dir| {
+                std::fs::write(dir.join("other.txt"), "thread\n").unwrap();
+            })
+            .await;
+            std::fs::write(workspace.join("other.txt"), "user other\n").unwrap();
+            shell_reported(&turn, "bash-3", edit_other).await;
+            observed(&turn, 3).await;
+            // A file the command doesn't name.
+            shell(&turn, "bash-4", "make", |dir| {
+                std::fs::write(dir.join("generated.txt"), "made\n").unwrap();
+            })
+            .await;
+            shell_reported(&turn, "bash-4", "make").await;
+            observed(&turn, 4).await;
+            // A move with an edit: both ends are the thread's.
+            let move_m = "printf 'more\\n' >> m.txt && mv m.txt n.txt";
+            shell(&turn, "bash-5", move_m, |dir| {
+                append(&dir.join("m.txt"), "more\n");
+                std::fs::rename(dir.join("m.txt"), dir.join("n.txt")).unwrap();
+            })
+            .await;
+            shell_reported(&turn, "bash-5", move_m).await;
+            // One file, renamed.
+            observed(&turn, 5).await;
+            // A move of a file the user had just changed: neither end is the thread's.
+            std::fs::write(workspace.join("p.txt"), "user p\n").unwrap();
+            let move_p = "mv p.txt q.txt";
+            shell(&turn, "bash-6", move_p, |dir| {
+                std::fs::rename(dir.join("p.txt"), dir.join("q.txt")).unwrap();
+            })
+            .await;
+            shell_reported(&turn, "bash-6", move_p).await;
+            observed(&turn, 6).await;
+            Reply::text("Changed the files through the shell.")
+        }),
+    )
+    .await;
+    flow.say("Change the files with shell commands.").await;
+    let board = flow
+        .until("settled changes", |board| {
+            board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.settled)
+        })
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    let changes = board.latest_request().unwrap().changes.as_ref().unwrap();
+    let held: Vec<_> = changes.held.iter().map(|held| held.path.as_str()).collect();
+    assert_eq!(
+        held,
+        ["b.txt", "generated.txt", "other.txt", "p.txt", "q.txt"]
+    );
+    let reason = |path: &str| {
+        changes
+            .held
+            .iter()
+            .find(|held| held.path == path)
+            .unwrap()
+            .reason
+            .clone()
+    };
+    assert!(
+        reason("b.txt").starts_with("You changed b.txt"),
+        "{}",
+        reason("b.txt")
+    );
+    assert!(reason("other.txt").starts_with("A command changed other.txt"));
+    assert!(reason("q.txt").contains("p.txt"), "{}", reason("q.txt"));
+    // The owned commands' files show as edit rows after them; the held ones' don't.
+    let files = |item: &str| {
+        board
+            .orchestrator_steps
+            .iter()
+            .find_map(|step| match &step.kind {
+                OrchestratorStepKind::Tool { item_id, files, .. } if item_id == item => {
+                    files.clone()
+                }
+                _ => None,
+            })
+    };
+    let a = files("bash-1/edits").expect("a.txt's edit row");
+    assert_eq!(a.len(), 1);
+    assert!(a[0].path.ends_with("a.txt"));
+    assert_eq!((a[0].insertions, a[0].deletions), (1, 0));
+    let moved = files("bash-5/edits").expect("the move's edit row");
+    assert_eq!(moved.len(), 2);
+    for item in [
+        "bash-2/edits",
+        "bash-3/edits",
+        "bash-4/edits",
+        "bash-6/edits",
+    ] {
+        assert!(files(item).is_none(), "{item}");
+    }
+    let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+    let read = |path: &str| std::fs::read_to_string(workspace.join(path)).ok();
+    let outcome = flow
+        .manager
+        .undo_request(flow.conversation.clone(), request.clone(), false)
+        .await
+        .unwrap();
+    assert_eq!(outcome.restored, ["a.txt", "m.txt", "n.txt"]);
+    assert_eq!(read("a.txt").as_deref(), Some("base\n"));
+    assert_eq!(read("m.txt").as_deref(), Some(MOVED));
+    assert_eq!(read("n.txt"), None);
+    assert_eq!(read("b.txt").as_deref(), Some("thread b\n"));
+    assert_eq!(read("other.txt").as_deref(), Some("user other\n"));
+    assert_eq!(read("generated.txt").as_deref(), Some("made\n"));
+    assert_eq!(read("p.txt"), None);
+    assert_eq!(read("q.txt").as_deref(), Some("user p\n"));
+    let outcome = flow
+        .manager
+        .undo_request(flow.conversation.clone(), request, true)
+        .await
+        .unwrap();
+    assert_eq!(outcome.restored, ["a.txt", "m.txt", "n.txt"]);
+    assert_eq!(read("a.txt").as_deref(), Some("base\nthread a\n"));
+    assert_eq!(read("m.txt"), None);
+    assert_eq!(read("n.txt"), Some(format!("{MOVED}more\n")));
+    flow.stop().await;
+}
+
+/// Brigadier's own `run` reads the files its command names right before it starts and once it
+/// ended, so its change is the thread's, in either provider's thread, with its edit row (#87).
+#[tokio::test]
+async fn request_changes_own_a_run_commands_edit() {
+    for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+        let flow = Flow::start(
+            "20261017-0213-issues-run-w24-run-edits",
+            options(provider),
+            script(move |turn| async move {
+                let id = turn.conversation().unwrap();
+                let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+                let command = format!(
+                    "printf 'thread a\\n' >> '{}'",
+                    workspace.join("a.txt").display()
+                );
+                let name = match provider {
+                    ProviderKind::Claude => "mcp__brigadier__run",
+                    _ => "brigadier/run",
+                };
+                let input = Some(serde_json::json!({ "command": command }).to_string());
+                let call = |status, output| ProviderEvent::ToolCall {
+                    kept: None,
+                    item_id: "own-run".into(),
+                    name: name.into(),
+                    input: input.clone(),
+                    status,
+                    output,
+                };
+                turn.emit(call(ItemStatus::InProgress, None)).await;
+                let reply = turn
+                    .call("run", serde_json::json!({ "command": command }))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                turn.emit(call(ItemStatus::Completed, Some(reply.text)))
+                    .await;
+                observed(&turn, 1).await;
+                Reply::text("Appended to a.txt.")
+            }),
+        )
+        .await;
+        flow.say("Append to a.txt.").await;
+        let board = flow
+            .until("settled changes", |board| {
+                board
+                    .latest_request()
+                    .and_then(|r| r.changes.as_ref())
+                    .is_some_and(|c| c.settled)
+            })
+            .await;
+        let request = board.latest_request().unwrap();
+        assert_eq!(request.changes.as_ref().unwrap().held, []);
+        assert!(board.orchestrator_steps.iter().any(|step| matches!(
+            &step.kind,
+            OrchestratorStepKind::Tool { item_id, files: Some(files), .. }
+                if item_id == "own-run/edits" && files.len() == 1
+        )));
+        let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+        let outcome = flow
+            .manager
+            .undo_request(flow.conversation.clone(), request.id.clone(), false)
+            .await
+            .unwrap();
+        assert_eq!(outcome.restored, ["a.txt"]);
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+            "base\n"
+        );
+        flow.stop().await;
+    }
 }

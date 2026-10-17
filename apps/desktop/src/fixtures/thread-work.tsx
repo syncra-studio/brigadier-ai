@@ -181,6 +181,12 @@ const editStep = tool(13, {
     { path: `${ROOT}/src/old.ts`, insertions: 0, deletions: 4, binary: false, change: "delete" },
   ],
 });
+// A shell command that edited a file, and the row Brigadier files after it for the change it owns (#87).
+const shellRun = tool(15, { itemId: "bash-1", name: "shell", detail: "echo 'thread' >> notes.md", item: "command", exit: 0, endedAtMs: now });
+const shellEdits = tool(16, {
+  itemId: "bash-1/edits", name: "apply_patch", detail: `${ROOT}/notes.md`, item: "files", endedAtMs: now,
+  files: [{ path: `${ROOT}/notes.md`, insertions: 1, deletions: 0, binary: false, change: "update" }],
+});
 const findStep = tool(14, { itemId: "find", name: "web_search", detail: "'LTS' in https://nodejs.org/en", item: "web" });
 const views = [tool(20, { itemId: "view-1", name: "view_image", item: "image" }), tool(21, { itemId: "view-2", name: "view_image", item: "image" })];
 const made = [tool(22, { itemId: "made", name: "imagegen", detail: "a purple square", item: "image" })];
@@ -230,6 +236,10 @@ function Page() {
             </Case>
             <Case id="edit">
               <LeadStepRow step={editStep} />
+            </Case>
+            <Case id="shell-edit">
+              <LeadStepRow step={shellRun} />
+              <LeadStepRow step={shellEdits} />
             </Case>
             <Case id="find">
               <LeadStepRow step={findStep} />
@@ -314,6 +324,7 @@ async function measure(): Promise<object> {
     counts: text(one("[data-slot=edited-file-counts]", row)),
     dot: one("[data-slot=edited-file-dot]", row)?.getAttribute("data-change") ?? null,
   }));
+  out.shellEdit = all("[data-slot=edited-file]", at("shell-edit")).map((row) => text(row));
   const openedBefore = asked.opened.length;
   one<HTMLElement>("[data-slot=edited-file-link]", fileRows()[0])?.click();
   await wait(200);

@@ -140,6 +140,23 @@ pub struct HookOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub touched: Option<String>,
+    /// Instead of an output: a `Bash` call about to run or just ended, whose named files the
+    /// daemon reads then, so Undo can tell what the call changed. No bytes follow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub shell: Option<ShellCall>,
+}
+
+/// A thread's `Bash` call as its tool hook sees it, before it runs or once it ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellCall {
+    /// Whether it ended: false before it runs (`PreToolUse`).
+    pub ended: bool,
+    pub tool_use_id: String,
+    pub command: String,
+    /// Where it runs.
+    pub cwd: Option<String>,
 }
 
 /// The daemon's answer to a worker's `Stop` hook.

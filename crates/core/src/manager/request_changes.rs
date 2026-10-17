@@ -9,6 +9,7 @@ use brigadier_providers::{FileChangeKind, ItemStatus, ProviderEvent};
 use brigadier_store::{NewEvent, StreamPage};
 use serde::{Deserialize, Serialize};
 
+use super::shell_changes::{ShellCaptures, ShellEvidence, ShellKey};
 use super::{SessionManager, blocking, git_error};
 use crate::model::{ConversationId, Environment, Setup};
 use crate::work::{HeldPath, RequestChanges, RequestState};
@@ -20,6 +21,8 @@ pub(super) struct ChangeRecords {
     /// Thread events waiting for a snapshot, in the order the thread saw them. Whoever holds
     /// the session's lock takes them first, so a later refresh never overtakes them.
     queued: std::sync::Mutex<HashMap<ConversationId, VecDeque<Queued>>>,
+    /// The files shell commands named, read around them, until their calls are reported.
+    pub(super) shells: ShellCaptures,
 }
 
 #[derive(Default)]
@@ -80,6 +83,8 @@ pub(super) struct Queued {
     key: Option<String>,
     edits: Vec<Evidence>,
     command: bool,
+    /// What a shell command changed, by the files it names read around it.
+    shell: Option<ShellEvidence>,
 }
 
 /// What one reported edit did to one file. Its `after` is read when the edit is reported, so a
@@ -90,6 +95,13 @@ struct Evidence {
     after: Option<Blob>,
 }
 
+/// One part of a snapshot's evidence, in the order the thread reported it, with whether a
+/// command reported before it may explain what its files held before it.
+enum Step {
+    Edit(Evidence, bool),
+    Shell(ShellEvidence, bool),
+}
+
 enum Before {
     Known(Option<Blob>),
     /// The edit gave nothing to check its original against: the last snapshot stands in.
@@ -97,7 +109,7 @@ enum Before {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct Blob {
+pub(super) struct Blob {
     oid: String,
     mode: String,
 }
@@ -138,6 +150,10 @@ pub(super) struct Record {
     committed: BTreeSet<String>,
     settled: bool,
     seen: BTreeSet<String>,
+    /// The files one shell command changed: Undo puts them back together or leaves them all,
+    /// so a move (`mv a b`) never loses its one copy.
+    #[serde(default)]
+    together: Vec<BTreeSet<String>>,
 }
 
 pub(super) enum Refresh<'a> {
@@ -187,6 +203,11 @@ fn prefix(id: &ConversationId, request: &str) -> String {
 fn user_reason(path: &str) -> String {
     format!("You changed {path} during this request too, so Undo leaves it as it is.")
 }
+fn together_reason(path: &str, held: &str) -> String {
+    format!(
+        "The same command changed {path} and {held}, which Undo leaves as it is, so it leaves both."
+    )
+}
 fn command_reason(path: &str) -> String {
     format!(
         "A command changed {path}, and Brigadier can't tell that change from yours, so Undo leaves it as it is."
@@ -208,7 +229,7 @@ impl Record {
         // A command's snapshot runs behind the thread, so it can read an edit or a worker's
         // landing reported just after the command and claim it. Their own evidence of that
         // same change takes the file back.
-        if (by == "edit" || by == "landing")
+        if (by == "edit" || by == "landing" || by == "shell")
             && !weak
             && let Some(owned) = self.paths.get_mut(path)
             && owned.by.len() == 1
@@ -266,6 +287,27 @@ impl Record {
             .collect();
         (before, after)
     }
+    /// One shell command's files go together: one left as it is leaves them all.
+    fn hold_together(&mut self) {
+        for group in &self.together {
+            let held = group.iter().find(|path| {
+                self.paths
+                    .get(*path)
+                    .is_some_and(|owned| owned.held.is_some())
+            });
+            let Some(held) = held.cloned() else {
+                continue;
+            };
+            for path in group {
+                if let Some(owned) = self.paths.get_mut(path)
+                    && owned.held.is_none()
+                {
+                    owned.held = Some(together_reason(path, &held));
+                }
+            }
+        }
+    }
+
     fn held(&self) -> Vec<HeldPath> {
         self.paths
             .iter()
@@ -383,7 +425,8 @@ impl SessionManager {
         };
         let pass = match refresh {
             Refresh::Start => Pass::Start,
-            Refresh::Event(event) => match self.queued_change(&checkout, request, event).await? {
+            Refresh::Event(event) => match self.queued_change(id, &checkout, request, event).await?
+            {
                 Some(queued) => Pass::Events(vec![queued]),
                 None => return Ok(()),
             },
@@ -420,6 +463,7 @@ impl SessionManager {
     /// changes nothing. An edit's files are read now; the snapshot waits.
     async fn queued_change(
         &self,
+        id: &ConversationId,
         checkout: &Path,
         request: &str,
         event: &ProviderEvent,
@@ -541,11 +585,41 @@ impl SessionManager {
             }
             _ => Vec::new(),
         };
+        // A shell call's own evidence, when its files were read around it.
+        let shell = match event {
+            ProviderEvent::Command { item_id, .. } if command => {
+                self.change_records
+                    .shells
+                    .take(id, &ShellKey::Call(item_id.clone()), item_id)
+            }
+            ProviderEvent::ToolCall {
+                item_id,
+                name,
+                input,
+                ..
+            } if command => {
+                let key = if matches!(
+                    crate::digest::bare_tool_name(name),
+                    "run" | "run_unsandboxed"
+                ) {
+                    input
+                        .as_deref()
+                        .and_then(|input| serde_json::from_str::<serde_json::Value>(input).ok())
+                        .and_then(|input| Some(input.get("command")?.as_str()?.to_owned()))
+                        .map(ShellKey::Run)
+                } else {
+                    Some(ShellKey::Call(item_id.clone()))
+                };
+                key.and_then(|key| self.change_records.shells.take(id, &key, item_id))
+            }
+            _ => None,
+        };
         Ok(Some(Queued {
             request: request.to_owned(),
             key,
             edits,
             command,
+            shell,
         }))
     }
 
@@ -570,7 +644,7 @@ impl SessionManager {
         }
         let mut keys = Vec::new();
         // Each edit, and whether a command reported before it in this snapshot may explain
-        // what its file held before it.
+        // what its file held before it; and each shell command's own evidence, in order.
         let mut edits = Vec::new();
         let mut command = false;
         let mut landing = None;
@@ -587,7 +661,15 @@ impl SessionManager {
                         keys.push(key);
                     }
                     any = true;
-                    edits.extend(queued.edits.into_iter().map(|edit| (edit, command)));
+                    edits.extend(
+                        queued
+                            .edits
+                            .into_iter()
+                            .map(|edit| Step::Edit(edit, command)),
+                    );
+                    if let Some(shell) = queued.shell {
+                        edits.push(Step::Shell(shell, command));
+                    }
                     command |= queued.command;
                 }
                 if !any {
@@ -623,7 +705,7 @@ impl SessionManager {
             id.clone(),
             request.to_owned(),
         );
-        let (record, changes, changed, cost) = blocking(move || {
+        let (record, changes, changed, cost, rows) = blocking(move || {
             let repo = git.open(&checkout).map_err(git_error)?;
             let started = std::time::Instant::now();
             let latest = repo.snapshot_files().map_err(git_error)?;
@@ -636,7 +718,46 @@ impl SessionManager {
             };
             let current = repo.file_blobs(&latest).map_err(git_error)?;
             let mut explained = BTreeSet::new();
-            for (edit, after_command) in edits {
+            // Each shell command's item and the files its evidence gave the record.
+            let mut shells = Vec::new();
+            for step in edits {
+                let (edit, after_command) = match step {
+                    Step::Edit(edit, after_command) => (edit, after_command),
+                    Step::Shell(shell, after_command) => {
+                        let mut group = BTreeMap::new();
+                        for (path, before, after) in shell.changes {
+                            let previous_blob = previous.get(&path).cloned().map(Blob::from);
+                            let current_blob = current.get(&path).cloned().map(Blob::from);
+                            // A file no snapshot keeps (an ignored one) is no part of the
+                            // request's changes.
+                            if previous_blob.is_none() && current_blob.is_none() {
+                                continue;
+                            }
+                            if current_blob == after {
+                                explained.insert(path.clone());
+                            } else {
+                                explained.remove(&path);
+                            }
+                            record.own(
+                                &path,
+                                before.clone(),
+                                after.clone(),
+                                previous_blob,
+                                "shell",
+                                false,
+                                after_command,
+                            );
+                            group.insert(path, (before, after));
+                        }
+                        if group.len() > 1 {
+                            record.together.push(group.keys().cloned().collect());
+                        }
+                        if !group.is_empty() {
+                            shells.push((shell.item, group));
+                        }
+                        continue;
+                    }
+                };
                 let path = edit.path.as_str();
                 let previous_blob = previous.get(path).cloned().map(Blob::from);
                 let (before, weak) = match edit.before {
@@ -719,6 +840,37 @@ impl SessionManager {
                     }
                 }
             }
+            record.hold_together();
+            // A command whose files all stay the thread's shows them as its edits.
+            let mut rows = Vec::new();
+            for (item, group) in shells {
+                let owned = group.keys().all(|path| {
+                    record
+                        .paths
+                        .get(path)
+                        .is_some_and(|owned| owned.held.is_none())
+                });
+                if !owned {
+                    continue;
+                }
+                let mut files = Vec::new();
+                for (path, (before, after)) in group {
+                    let diff = repo
+                        .file_diff(
+                            &path,
+                            before.clone().map(Into::into).as_ref(),
+                            after.clone().map(Into::into).as_ref(),
+                        )
+                        .map_err(git_error)?;
+                    let kind = match (&before, &after) {
+                        (None, _) => FileChangeKind::Add,
+                        (_, None) => FileChangeKind::Delete,
+                        _ => FileChangeKind::Update,
+                    };
+                    files.push((repo.root().join(&path), kind, diff));
+                }
+                rows.push((item, files));
+            }
             let changed = record.latest != latest.0
                 || record.paths != previous_paths
                 || record.settled != settled
@@ -749,7 +901,7 @@ impl SessionManager {
                 held: record.held(),
                 settled,
             };
-            Ok((record, changes, changed, cost))
+            Ok((record, changes, changed, cost, rows))
         })
         .await?;
         clock.slow |= cost > std::time::Duration::from_millis(300);
@@ -758,6 +910,9 @@ impl SessionManager {
         }
         if changed || recovering {
             self.core.set_request_changes(id, request, changes).await?;
+        }
+        for (item, files) in rows {
+            self.shell_edit_row(id, request, &item, files).await;
         }
         Ok(())
     }
@@ -1027,7 +1182,7 @@ impl SessionManager {
         let Some((checkout, _)) = self.changes_checkout(id) else {
             return;
         };
-        let queued = match self.queued_change(&checkout, &request, event).await {
+        let queued = match self.queued_change(id, &checkout, &request, event).await {
             Ok(Some(queued)) => queued,
             Ok(None) => return,
             Err(err) => {
@@ -1036,6 +1191,9 @@ impl SessionManager {
             }
         };
         self.change_records.push(id, queued);
+        if matches!(event, ProviderEvent::TurnCompleted { .. }) {
+            self.change_records.shells.clear(id);
+        }
         let Some(manager) = self.me.upgrade() else {
             return;
         };
@@ -1096,8 +1254,8 @@ impl SessionManager {
                     let base = committed.get(&path).cloned().map(Blob::from);
                     let mut expected = repo.checkout_blob(&path).ok()?.map(Blob::from);
                     for owned in chain.iter().rev() {
-                        let edits_only =
-                            owned.held.is_none() && owned.by.iter().all(|by| by == "edit");
+                        let edits_only = owned.held.is_none()
+                            && owned.by.iter().all(|by| by == "edit" || by == "shell");
                         if !edits_only || owned.last != expected {
                             return None;
                         }

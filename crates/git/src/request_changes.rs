@@ -213,6 +213,36 @@ impl Repo {
         Ok(())
     }
 
+    /// One file's unified diff between two of its versions (`None`: no file), from its `---`
+    /// line on: empty when nothing changed or git can only call the change binary.
+    pub fn file_diff(
+        &self,
+        path: &str,
+        before: Option<&FileBlob>,
+        after: Option<&FileBlob>,
+    ) -> Result<String> {
+        let tree = |blob: Option<&FileBlob>| {
+            self.blob_tree(None, &BTreeMap::from([(path.to_owned(), blob.cloned())]))
+        };
+        let (from, to) = (tree(before)?, tree(after)?);
+        let out = self.cmd(
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--no-renames",
+                &from.0,
+                &to.0,
+            ],
+            true,
+        )?;
+        let text = parse::text(&out)?;
+        Ok(text
+            .find("--- ")
+            .map_or_else(String::new, |at| text[at..].to_owned()))
+    }
+
     /// Reconstructs the old file by reverse applying an unclipped unified patch to its new blob.
     pub fn before_patch(
         &self,

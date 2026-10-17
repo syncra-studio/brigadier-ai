@@ -87,6 +87,7 @@ mod routing;
 mod run;
 pub mod search;
 mod secrets;
+mod shell_changes;
 mod side_chat;
 mod sidecars;
 mod status;

@@ -14,6 +14,11 @@
 //! - **Failure**: the event holds only the CLI's excerpt of the output (`error`), which the
 //!   daemon stores as such. Nothing is printed, so the model gets the excerpt untrimmed; a
 //!   failure's hook can't replace the output anyway.
+//! - **A `Bash` call's start and end** (`PreToolUse`, from the same settings, and both of the
+//!   above): the call goes to the daemon, which reads the files its command names before it
+//!   runs and once it ended, so Undo can tell what the call changed (#87). Nothing is printed
+//!   for it, and the call runs as it would without the hook. A call sent to the background is
+//!   left out: it ends after its hook.
 //! - **A file tool's success** (`Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, run by
 //!   a second `PostToolUse` entry): the touched file's path goes to the daemon, which answers
 //!   with the rules of its folders the thread hasn't had yet (a subfolder's `CLAUDE.md` or
@@ -31,7 +36,7 @@ use std::process::ExitCode;
 
 use brigadier_core::digest::BASH_WHOLE_MAX;
 use brigadier_core::manager::{HOOK_GRANT_ENV, OUTPUT_MAX_BYTES, STOP_GRANT_ENV};
-use brigadier_ipc::protocol::{ClientFrame, HookOutput, HookReply, StopHookReply};
+use brigadier_ipc::protocol::{ClientFrame, HookOutput, HookReply, ShellCall, StopHookReply};
 use brigadier_sandbox::PlatformOptions;
 use serde_json::{Map, Value, json};
 
@@ -96,9 +101,19 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
 /// What the hook prints for the event `stdin`, given a way to reach the daemon; `None`: nothing.
 fn handle(
     stdin: &str,
-    send: impl FnOnce(&HookOutput, &[u8]) -> Option<HookReply>,
+    mut send: impl FnMut(&HookOutput, &[u8]) -> Option<HookReply>,
 ) -> Option<String> {
     let event: Value = serde_json::from_str(stdin).ok()?;
+    if let Some(shell) = shell_call(&event) {
+        let header = HookOutput {
+            excerpt: false,
+            status: String::new(),
+            bytes: 0,
+            touched: None,
+            shell: Some(shell),
+        };
+        send(&header, &[]);
+    }
     match plan(&event)? {
         Plan::Trim {
             output,
@@ -110,6 +125,7 @@ fn handle(
                 status,
                 bytes: output.len() as u64,
                 touched: None,
+                shell: None,
             };
             let replacement = send(&header, &output)?.replacement?;
             response.insert("stdout".into(), Value::String(replacement));
@@ -133,6 +149,7 @@ fn handle(
                 status,
                 bytes: excerpt.len() as u64,
                 touched: None,
+                shell: None,
             };
             send(&header, &excerpt);
             None
@@ -143,6 +160,7 @@ fn handle(
                 status: String::new(),
                 bytes: 0,
                 touched: Some(path),
+                shell: None,
             };
             let context = send(&header, &[])?.context?;
             Some(
@@ -156,6 +174,29 @@ fn handle(
             )
         }
     }
+}
+
+/// A `Bash` call about to run (`PreToolUse`) or just ended, as the daemon reads its files for
+/// it; `None` for any other event, and for a call sent to the background.
+fn shell_call(event: &Value) -> Option<ShellCall> {
+    if event.get("tool_name").and_then(Value::as_str)? != "Bash" {
+        return None;
+    }
+    let ended = match event.get("hook_event_name").and_then(Value::as_str)? {
+        "PreToolUse" => false,
+        "PostToolUse" | "PostToolUseFailure" => true,
+        _ => return None,
+    };
+    let input = event.get("tool_input")?;
+    if input.get("run_in_background").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    Some(ShellCall {
+        ended,
+        tool_use_id: event.get("tool_use_id")?.as_str()?.to_owned(),
+        command: input.get("command")?.as_str()?.to_owned(),
+        cwd: event.get("cwd").and_then(Value::as_str).map(str::to_owned),
+    })
 }
 
 /// The file tools whose calls bring the rules of the touched file's folders (BUILD-PLAN D1.6).
@@ -394,8 +435,12 @@ mod tests {
 
     fn digest_reply(
         sent: &std::cell::RefCell<Option<(HookOutput, Vec<u8>)>>,
-    ) -> impl FnOnce(&HookOutput, &[u8]) -> Option<HookReply> + '_ {
+    ) -> impl FnMut(&HookOutput, &[u8]) -> Option<HookReply> + '_ {
         move |header, bytes| {
+            // The call's files go first, on a connection of their own.
+            if header.shell.is_some() {
+                return None;
+            }
             *sent.borrow_mut() = Some((header.clone(), bytes.to_vec()));
             Some(HookReply {
                 replacement: Some("exit 0 [full output: read_artifact out-1, …]".into()),
@@ -479,11 +524,67 @@ mod tests {
         assert_eq!(replaced["returnCodeInterpretation"], "No matches found");
     }
 
+    /// A `Bash` call goes to the daemon before it runs and once it ended (a failure too), with
+    /// its command and folder, and the hook prints nothing for it; a call sent to the
+    /// background, or another tool, sends nothing (#87).
+    #[test]
+    fn a_bash_calls_start_and_end_go_to_the_daemon_for_its_files() {
+        let event = |name: &str, input: Value| {
+            json!({
+                "hook_event_name": name,
+                "tool_name": "Bash",
+                "tool_use_id": "toolu_1",
+                "cwd": "/repo",
+                "tool_input": input,
+                "tool_response": { "stdout": "", "stderr": "" },
+                "error": "Exit code 1",
+            })
+            .to_string()
+        };
+        let command = json!({ "command": "echo x >> notes.md" });
+        for (name, ended) in [
+            ("PreToolUse", false),
+            ("PostToolUse", true),
+            ("PostToolUseFailure", true),
+        ] {
+            let sent = std::cell::RefCell::new(Vec::new());
+            let printed = handle(&event(name, command.clone()), |header, bytes| {
+                // A failure's excerpt follows on its own connection.
+                if header.shell.is_some() {
+                    assert!(bytes.is_empty());
+                    sent.borrow_mut().push(header.clone());
+                }
+                None
+            });
+            assert_eq!(printed, None, "{name}");
+            let shell = sent.borrow()[0].shell.clone().expect("the call");
+            assert_eq!(
+                shell,
+                ShellCall {
+                    ended,
+                    tool_use_id: "toolu_1".into(),
+                    command: "echo x >> notes.md".into(),
+                    cwd: Some("/repo".into()),
+                }
+            );
+        }
+        let background = json!({ "command": "sleep 9", "run_in_background": true });
+        assert_eq!(
+            handle(&event("PreToolUse", background), |_, _| panic!(
+                "a background call's changes stay unowned"
+            )),
+            None
+        );
+    }
+
     #[test]
     fn a_short_success_is_left_alone_without_reaching_the_daemon() {
         let printed = handle(
             &success(json!({ "stdout": "x".repeat(BASH_WHOLE_MAX), "stderr": "" })),
-            |_, _| panic!("nothing to store"),
+            |header, _| {
+                assert!(header.shell.is_some(), "nothing to store");
+                None
+            },
         );
         assert_eq!(printed, None);
     }
@@ -533,6 +634,7 @@ mod tests {
             status: String::new(),
             bytes: 0,
             touched: None,
+            shell: None,
         };
         assert_eq!(send(None, None, &header, b""), None);
         assert_eq!(send(Some(""), None, &header, b""), None);

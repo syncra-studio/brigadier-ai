@@ -6681,7 +6681,7 @@ impl SessionManager {
 
     /// [`Self::log_provider`], returning where the entry is in the log (`None` if it could
     /// not be stored).
-    async fn log_provider_at(
+    pub(super) async fn log_provider_at(
         &self,
         id: &ConversationId,
         provider: ProviderKind,

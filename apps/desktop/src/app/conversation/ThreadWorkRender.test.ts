@@ -34,6 +34,8 @@ test("the thread's own work reads like the reference thread: running commands st
     { row: "Created new.ts +3 −0", link: "new.ts", counts: "+3 −0", dot: "add" },
     { row: "Deleted old.ts +0 −4", link: "old.ts", counts: "+0 −4", dot: "delete" },
   ]);
+  // A shell command's edit, which its request owns, reads as an edit after the command's row (#87).
+  assert.deepEqual(seen.shellEdit, ["Edited notes.md +1 −0"]);
   // The name opens the file, not the row; the row opens to the file's numbered diff.
   assert.deepEqual(seen.editLink, { opened: ["/repo/src/math.js"], rowOpened: false });
   const diff = seen.editDiff as { row: string; name: string; numbers: string[] };

@@ -826,7 +826,9 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
 /// docs/en/hooks, "PostToolUse decision control"; checked on 2.1.292,
 /// docs/evidence/2026-10-07-thread-phase2-contracts.md §2). A successful file tool's call runs
 /// it too, and its `hookSpecificOutput.additionalContext` (the touched folder's rules) follows
-/// the call's result (BUILD-PLAN D1.6).
+/// the call's result (BUILD-PLAN D1.6). Before a `Bash` call runs (`PreToolUse`) it runs as
+/// well, and the CLI waits for it: the daemon reads the files the command names, so Undo can
+/// tell what the call changed (#87).
 fn output_hooks(spec: &SessionSpec) -> Option<Value> {
     let hook = spec
         .output_hook
@@ -843,7 +845,11 @@ fn output_hooks(spec: &SessionSpec) -> Option<Value> {
     let files = json!({ "matcher": FILE_TOOLS_MATCHER, "hooks": [run] });
     let mut success = entry.clone();
     success.as_array_mut()?.push(files);
-    Some(json!({ "PostToolUse": success, "PostToolUseFailure": entry }))
+    Some(json!({
+        "PreToolUse": entry.clone(),
+        "PostToolUse": success,
+        "PostToolUseFailure": entry,
+    }))
 }
 
 /// The file tools whose successful calls also run a thread's output hook.
@@ -2688,7 +2694,9 @@ for line in sys.stdin:
         files["matcher"] = json!("Read|Edit|Write|MultiEdit|NotebookEdit");
         success.as_array_mut().unwrap().push(files);
         assert_eq!(hooks["PostToolUse"], success);
-        assert_eq!(hooks.as_object().map(Map::len), Some(2));
+        // Before a `Bash` call runs, for the files it names (#87).
+        assert_eq!(hooks["PreToolUse"], expected);
+        assert_eq!(hooks.as_object().map(Map::len), Some(3));
         let args = Claude::session_args(
             &thread,
             cwd.path(),

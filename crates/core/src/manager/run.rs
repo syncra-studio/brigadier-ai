@@ -242,6 +242,12 @@ impl SessionManager {
         let work_cancel = cancel.clone();
         let tool = if unsandboxed { RUN_UNSANDBOXED } else { "run" };
         let output = self.own_command_output(id, tool, command);
+        // The files the command names, read right before it starts and once it ended, tell
+        // its request's record what it changed (#87).
+        let shell = super::shell_changes::ShellKey::Run(command.to_owned());
+        self.capture_shell(id, shell.clone(), command, Some(&workdir), false)
+            .await;
+        let command_owned = command.to_owned();
         let work = async move {
             let ran = run_command_streamed(
                 manager.runtime.platform().clone(),
@@ -253,7 +259,11 @@ impl SessionManager {
                 |_| {},
                 Some(output),
             )
-            .await?;
+            .await;
+            manager
+                .capture_shell(&id_owned, shell, &command_owned, None, true)
+                .await;
+            let ran = ran?;
             let reply = if ran.output.len() <= TRIM_ABOVE {
                 let output = manager.hide_secrets(&id_owned, ran.output).await;
                 format!("[{}]\n{}", ran.status, String::from_utf8_lossy(&output))
