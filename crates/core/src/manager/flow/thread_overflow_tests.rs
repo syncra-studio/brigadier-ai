@@ -15,8 +15,8 @@ use super::{Flow, Options, Reply, Script, Turn};
 use crate::knowledge::RebirthTrigger;
 use crate::manager::fault::{FaultKey, InjectedError};
 use crate::manager::prompts::{
-    ANSWER_DETAILS_REVISION, COMMIT_FIRST_REVISION, LEAN_TOOLS_REVISION, OVERFLOW_REVISION,
-    SHORT_START_REVISION, THREAD_STEPS_REVISION, revision_note,
+    ANSWER_DETAILS_REVISION, ANSWER_FILES_REVISION, COMMIT_FIRST_REVISION, LEAN_TOOLS_REVISION,
+    OVERFLOW_REVISION, SHORT_START_REVISION, THREAD_STEPS_REVISION, revision_note,
 };
 use crate::model::{DomainEvent, streams};
 use crate::work::{OrchestratorEntry, RequestState};
@@ -547,6 +547,16 @@ async fn a_session_from_before_the_lean_tools_is_told_once() {
     told_once(
         LEAN_TOOLS_REVISION,
         "your shell stops a command at two minutes, so one that may run longer still goes through run",
+    )
+    .await;
+}
+
+/// Rule R for the Save… under an answer, which offers only the worker files it links (#218).
+#[tokio::test]
+async fn a_session_from_before_the_answer_files_is_told_once() {
+    told_once(
+        ANSWER_FILES_REVISION,
+        "link one you hand over as [notes.md](outputs/notes.md)",
     )
     .await;
 }
