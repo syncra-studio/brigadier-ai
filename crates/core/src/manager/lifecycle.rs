@@ -22,7 +22,7 @@ use std::time::{Duration, SystemTime};
 
 use brigadier_providers::{Artifact, BoxFuture, ItemStatus};
 
-use super::conversation::Envelope;
+use super::conversation::{ConvLive, Envelope};
 use super::prompts;
 use super::workers::{route_label, test_data_dir, test_data_root};
 use super::{SessionManager, blocking, git_error};
@@ -698,6 +698,26 @@ impl SessionManager {
                 continue;
             }
             tracing::info!(conversation = %conversation.id, "kept a merged session's workspace");
+            // A Close workspace that couldn't remove the folder: the session still records it,
+            // and the user hears that it stays rather than finding it there unannounced.
+            if let Some(Setup::Session {
+                environment:
+                    Environment::NewWorktree {
+                        path: Some(path), ..
+                    },
+                ..
+            }) = &conversation.setup
+            {
+                self.notice(
+                    &conversation.id,
+                    brigadier_providers::NoticeLevel::Warning,
+                    &format!(
+                        "Closing this session's workspace didn't finish, so its folder {path} stays and the session keeps working there. Close the workspace again to remove it."
+                    ),
+                )
+                .await;
+                continue;
+            }
             let Some(Setup::Session {
                 repo,
                 environment:
@@ -793,6 +813,32 @@ impl SessionManager {
                 "Its uncommitted changes couldn't be kept, so the workspace stays.".into(),
             ));
         }
+        // No turn starts from here until the folder is gone: a message or a worker's report
+        // that comes meanwhile waits for the turn after, in a fresh worktree.
+        let conv = self.conv(id)?;
+        if !conv.begin_scratch_sweep().await {
+            return Err(Error::Invalid(
+                "The session is working: stop it first, then close its workspace.".into(),
+            ));
+        }
+        let closed = self
+            .close_reserved(id, &conversation, &path, &branch, &base, &conv)
+            .await;
+        conv.end_scratch_sweep().await;
+        self.kick(&conv);
+        closed
+    }
+
+    /// The end of [`Self::close_workspace`], while no turn of the session can start.
+    async fn close_reserved(
+        &self,
+        id: &ConversationId,
+        conversation: &Conversation,
+        path: &str,
+        branch: &str,
+        base: &str,
+        conv: &ConvLive,
+    ) -> Result<String> {
         // Asked again just before the folder goes: a turn or worker that started meanwhile
         // keeps it (Codex review, phase A verify).
         self.quiet_for_close(id).await?;
@@ -807,20 +853,18 @@ impl SessionManager {
                 leftovers.failures.join("; ")
             )));
         }
-        let deleted = self.forget_session_worktree(&conversation).await;
+        let deleted = self.forget_session_worktree(conversation).await;
         let branch_line = if deleted {
             format!("Branch `{branch}` went too: all of its work is on `{base}`.")
         } else {
             format!("Branch `{branch}` stays.")
         };
-        if let Ok(conv) = self.conv(id) {
-            conv.workspace_closed
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            conv.note(format!(
-                "[workspace closed] The user closed this session's workspace: its folder {path} is removed. {branch_line} The next change makes a fresh worktree in the same folder."
-            ))
-            .await;
-        }
+        conv.workspace_closed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        conv.note(format!(
+            "[workspace closed] The user closed this session's workspace: its folder {path} is removed. {branch_line} The next change makes a fresh worktree in the same folder."
+        ))
+        .await;
         Ok(format!("Closed the workspace. {branch_line}"))
     }
 

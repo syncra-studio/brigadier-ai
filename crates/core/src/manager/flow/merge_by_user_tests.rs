@@ -565,6 +565,46 @@ async fn clean_up_keeps_a_workspace_whose_close_failed() {
     flow.stop().await;
 }
 
+/// A Close workspace whose removal failed is taken back at the next start, and the session's
+/// notices say so: the workspace stays, and closing it again removes it (#48).
+#[tokio::test]
+async fn a_failed_close_workspace_says_so_at_the_next_start() {
+    let (mut flow, _) = session("merge-close-failed-restart").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let path = workspace(&flow).0.unwrap();
+    flow.manager
+        .runtime
+        .ledger()
+        .set_worktree_remover(std::sync::Arc::new(|_, _| {
+            Box::pin(async { Err("a file in it is locked".to_owned()) })
+        }));
+    assert!(
+        flow.manager
+            .close_workspace(&flow.conversation)
+            .await
+            .is_err()
+    );
+    flow.restart().await;
+    flow.settled().await;
+    let owner = format!("session:{}", flow.conversation);
+    assert!(!flow.manager.runtime.ledger().disposing().contains(&owner));
+    assert!(path.join(".git").exists());
+    let board = flow.board().await;
+    assert!(
+        board
+            .notices
+            .iter()
+            .any(|notice| notice.text.contains(&format!(
+                "Closing this session's workspace didn't finish, so its folder {} stays",
+                path.display()
+            ))),
+        "{:#?}",
+        board.notices
+    );
+    flow.stop().await;
+}
+
 /// "Close workspace" removes the session's worktree only when the user asks; its branch keeps
 /// work the base lacks, and the next change makes a fresh worktree in the same folder.
 #[tokio::test]
@@ -645,6 +685,61 @@ async fn close_workspace_after_a_merge_tells_the_thread_once() {
     let input = logged(&log, "Add more notes.").pop().unwrap();
     assert!(input.contains("[workspace closed]"), "{input}");
     assert!(!input.contains("[workspace] A fresh branch"), "{input}");
+    flow.stop().await;
+}
+
+/// A message the user sends while Close workspace removes the folder waits for the close: its
+/// turn runs after, in a fresh worktree, never in the folder going (#47).
+#[tokio::test]
+async fn a_message_during_close_workspace_waits_for_it() {
+    let (flow, log) = session("merge-close-fence").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let path = workspace(&flow).0.unwrap();
+    // The workspace's removal holds until released, so the message comes while it runs.
+    let removing = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (seen, held, workspace_path) = (removing.clone(), release.clone(), path.clone());
+    flow.manager
+        .runtime
+        .ledger()
+        .set_worktree_remover(Arc::new(move |repo, path| {
+            let (seen, held) = (seen.clone(), held.clone());
+            let ours = path == workspace_path;
+            Box::pin(async move {
+                if ours {
+                    seen.notify_one();
+                    held.notified().await;
+                }
+                git(
+                    &repo,
+                    &["worktree", "remove", "--force", &path.to_string_lossy()],
+                );
+                Ok(())
+            })
+        }));
+    let closing = tokio::spawn({
+        let manager = flow.manager.clone();
+        let id = flow.conversation.clone();
+        async move { manager.close_workspace(&id).await }
+    });
+    removing.notified().await;
+    flow.say("Add more notes.").await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(
+        logged(&log, "Add more notes.").is_empty(),
+        "a turn started in the folder being removed"
+    );
+    release.notify_one();
+    closing.await.unwrap().unwrap();
+    flow.manager.install_worktree_remover();
+    flow.settled().await;
+    assert_eq!(
+        logged(&log, "worked in: "),
+        [format!("worked in: {}", path.display())]
+    );
+    assert!(path.join(".git").exists(), "the turn made a fresh worktree");
+    assert!(path.join("MORE.md").exists());
     flow.stop().await;
 }
 
