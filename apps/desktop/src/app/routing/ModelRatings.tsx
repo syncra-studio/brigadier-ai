@@ -231,7 +231,7 @@ export function ModelRatings({
       </div>
       <RefreshLines rankings={rankings} models={models} registry={registry} />
       <div className="overflow-x-auto text-xs">
-        <div className="min-w-4xl">
+        <div style={{ minWidth: spacing(280) }}>
           <div className="text-muted-foreground border-divider grid items-center gap-1 border-y px-6 py-2" style={COLUMNS}>
             <span>Model</span>
             <span>Tier</span>

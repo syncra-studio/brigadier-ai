@@ -100,7 +100,7 @@ export function RankingNow({
         </span>
       </div>
       <div className="bg-card border-divider rounded-settings overflow-x-auto border text-xs">
-        <div className="min-w-2xl">
+        <div style={{ minWidth: spacing(192) }}>
           <div className="text-muted-foreground border-divider grid items-center gap-2 border-b px-4 py-2" style={COLUMNS}>
             <span>#</span>
             <span>Model</span>
