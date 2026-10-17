@@ -41,7 +41,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { revealPath } from "@/ipc/client";
 import type { CleanItem, CleanReport, SharedPart, StorageReport } from "@/ipc/generated";
 import { formatBytes, shortPath } from "@/lib/format";
-import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { cleanStorage, openUninstall, scanStorage } from "@/state/storage";
 import { useApp } from "@/state/store";
@@ -645,27 +644,29 @@ function ChooseDialog({
     });
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onCancel()}>
-      <DialogContent data-slot="storage-choose" className="flex max-h-full max-w-lg flex-col">
+      <DialogContent data-slot="storage-choose" className="rounded-question flex max-h-picker max-w-lg flex-col">
         <DialogHeader>
           <DialogTitle>Choose what to remove</DialogTitle>
-          <DialogDescription>Pick what Brigadier may remove. Nothing goes until you confirm.</DialogDescription>
+          <DialogDescription>Nothing goes until you review it.</DialogDescription>
         </DialogHeader>
-        <div className="-mx-1 grid min-h-0 flex-1 content-start gap-3 overflow-y-auto px-1">
+        <div data-slot="storage-choose-list" className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
           {groups.length === 0 ? (
             <p data-slot="storage-empty" className="text-foreground/65 py-6 text-center text-sm">
               Nothing can be removed right now.
             </p>
           ) : (
-            groups.map((group) => (
-              <PickGroup
-                key={group.category}
-                title={group.title}
-                bytes={group.bytes}
-                items={group.items}
-                chosen={chosen}
-                onPick={pick}
-              />
-            ))
+            <SettingsCard>
+              {groups.map((group) => (
+                <PickGroup
+                  key={group.category}
+                  title={group.title}
+                  bytes={group.bytes}
+                  items={group.items}
+                  chosen={chosen}
+                  onPick={pick}
+                />
+              ))}
+            </SettingsCard>
           )}
         </div>
         <DialogFooter className="items-center">
@@ -676,14 +677,18 @@ function ChooseDialog({
                 Updating…
               </>
             ) : (
-              selectable.length > 0 &&
-              `${plan.ids.length} of ${selectable.length} selected · ${formatBytes(plan.bytes)}`
+              selectable.length > 0 && `${formatBytes(plan.bytes)} selected`
             )}
           </span>
-          <Button type="button" variant="ghost" onClick={onCancel}>
+          <Button type="button" variant="ghost" className="rounded-full" onClick={onCancel}>
             Cancel
           </Button>
-          <Button type="button" disabled={plan.ids.length === 0 || scanning} onClick={() => onRemove(chosen)}>
+          <Button
+            type="button"
+            className="rounded-full"
+            disabled={plan.ids.length === 0 || scanning}
+            onClick={() => onRemove(chosen)}
+          >
             {plan.ids.length === 0 ? "Review" : `Review ${count(plan.ids.length, "item", "items")}`}
           </Button>
         </DialogFooter>
@@ -692,7 +697,7 @@ function ChooseDialog({
   );
 }
 
-/** A group of the items to choose from: its own box picks or leaves all of them. */
+/** A group of the items to choose from: its own box picks or leaves all of them; it opens to its items. */
 function PickGroup({
   title,
   bytes,
@@ -710,28 +715,38 @@ function PickGroup({
   const on = ids.filter((id) => chosen.has(id)).length;
   const state = on === 0 ? false : on === ids.length ? true : "indeterminate";
   return (
-    <SettingsCard>
-      <PickLine
-        checked={state}
-        label={title}
-        labelClass="font-medium"
-        bytes={bytes}
-        onCheckedChange={(next) => onPick(ids, next)}
-      />
-      {items.map((item) => (
-        <PickLine
-          key={item.id}
-          checked={chosen.has(item.id)}
-          label={item.label}
-          badges={item.badges}
-          note={plainWords(item)}
-          bytes={item.bytes}
-          path={item.path}
-          inset
-          onCheckedChange={(next) => onPick([item.id], next)}
-        />
-      ))}
-    </SettingsCard>
+    <Collapsible data-slot="storage-choose-group">
+      <div data-slot="storage-pick-group" className="flex items-center gap-3 py-1 ps-4 pe-2">
+        <PickBox checked={state} label={title} onCheckedChange={(next) => onPick(ids, next)} />
+        <CollapsibleTrigger className="group flex min-h-10 min-w-0 flex-1 items-center gap-3 text-start">
+          <span className="text-label min-w-0 flex-1 truncate font-medium">{title}</span>
+          <span className="text-foreground/65 shrink-0 text-xs tabular-nums">
+            {on === ids.length ? count(ids.length, "item", "items") : `${on} of ${ids.length}`}
+          </span>
+          <span className="text-label w-20 shrink-0 text-end tabular-nums">{formatBytes(bytes)}</span>
+          <ChevronRight
+            aria-hidden
+            className="text-muted-foreground size-icon-sm shrink-0 transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
+          />
+        </CollapsibleTrigger>
+      </div>
+      <CollapsibleContent>
+        <div className="grid pb-2">
+          {items.map((item) => (
+            <PickLine
+              key={item.id}
+              checked={chosen.has(item.id)}
+              label={item.label}
+              badges={item.badges}
+              note={plainWords(item)}
+              bytes={item.bytes}
+              path={item.path}
+              onCheckedChange={(next) => onPick([item.id], next)}
+            />
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -749,46 +764,61 @@ const BADGE_WORDS = {
   legacy: () => "Older Brigadier",
 };
 
-/** One line to pick: its box, name and warnings, what it is, its size and where it is. */
+/** A box to pick with, named for screen readers by its line. */
+function PickBox({
+  checked,
+  label,
+  id,
+  onCheckedChange,
+}: {
+  checked: boolean | "indeterminate";
+  label?: string;
+  id?: string;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <CheckboxPrimitive.Root
+      id={id}
+      checked={checked}
+      aria-label={label}
+      // A group partly picked picks all of it.
+      onCheckedChange={(state) => onCheckedChange(state !== false)}
+      className="border-input data-[state=checked]:bg-primary data-[state=checked]:border-primary data-[state=checked]:text-primary-foreground data-[state=indeterminate]:bg-primary data-[state=indeterminate]:border-primary data-[state=indeterminate]:text-primary-foreground flex size-icon-md shrink-0 items-center justify-center rounded-xs border"
+    >
+      <CheckboxPrimitive.Indicator>
+        {checked === "indeterminate" ? <Minus className="size-icon-xs" /> : <Check className="size-icon-xs" />}
+      </CheckboxPrimitive.Indicator>
+    </CheckboxPrimitive.Root>
+  );
+}
+
+/** One item to pick, under its group: its box, name and warnings, what it is, its size and where it is. */
 function PickLine({
   checked,
   label,
-  labelClass,
   badges = [],
   note,
   bytes,
   path = null,
-  inset = false,
   onCheckedChange,
 }: {
-  checked: boolean | "indeterminate";
+  checked: boolean;
   label: string;
-  labelClass?: string;
   badges?: readonly CleanItem["badges"][number][];
   note?: string;
   bytes: number;
   path?: string | null;
-  /** An item under its group's line. */
-  inset?: boolean;
   onCheckedChange: (checked: boolean) => void;
 }) {
   const id = useId();
   return (
-    <div data-slot="storage-pick" className={cn("flex items-start gap-3 py-3 pe-2", inset ? "ps-11" : "ps-4")}>
-      <CheckboxPrimitive.Root
-        id={id}
-        checked={checked}
-        // A group partly picked picks all of it.
-        onCheckedChange={(state) => onCheckedChange(state !== false)}
-        className="border-input data-[state=checked]:bg-primary data-[state=checked]:border-primary data-[state=checked]:text-primary-foreground data-[state=indeterminate]:bg-primary data-[state=indeterminate]:border-primary data-[state=indeterminate]:text-primary-foreground rounded-xs mt-0.5 flex size-icon-md shrink-0 items-center justify-center border"
-      >
-        <CheckboxPrimitive.Indicator>
-          {checked === "indeterminate" ? <Minus className="size-icon-xs" /> : <Check className="size-icon-xs" />}
-        </CheckboxPrimitive.Indicator>
-      </CheckboxPrimitive.Root>
+    <div data-slot="storage-pick" className="group/pick flex items-start gap-3 py-2 ps-11 pe-2">
+      <span className="mt-0.5 flex">
+        <PickBox id={id} checked={checked} onCheckedChange={onCheckedChange} />
+      </span>
       <label htmlFor={id} className="grid min-w-0 flex-1 gap-0.5">
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className={cn("text-label break-words", labelClass)}>{label}</span>
+          <span className="text-label break-words">{label}</span>
           {badges.map((badge) => (
             <Badge key={badge.type} variant="warning">
               {badge.type === "notMerged" ? BADGE_WORDS.notMerged(badge.ahead) : BADGE_WORDS[badge.type]()}
@@ -797,8 +827,10 @@ function PickLine({
         </span>
         {note && <span className="text-foreground/65 text-xs">{note}</span>}
       </label>
-      <span className="text-label shrink-0 pt-px text-end tabular-nums">{formatBytes(bytes)}</span>
-      <span className="flex w-icon-button-sm shrink-0 justify-center">{path && <RevealIconButton path={path} />}</span>
+      <span className="text-foreground/65 w-16 shrink-0 pt-0.5 text-end text-xs tabular-nums">{formatBytes(bytes)}</span>
+      <span className="flex w-icon-button-sm shrink-0 justify-center opacity-0 group-hover/pick:opacity-100 focus-within:opacity-100">
+        {path && <RevealIconButton path={path} />}
+      </span>
     </div>
   );
 }

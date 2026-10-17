@@ -55,6 +55,7 @@ const twMerge = extendTailwindMerge({
         "traffic-lights",
         "setup",
         "setup-card",
+        "picker",
         "agent-mark",
         "summary-inset",
         "browser-address",

@@ -109,6 +109,7 @@
  *               max-w-settings-wide           data pages (Routing, Usage, Storage, Providers,
  *                                             Inspector)
  *               max-w-setup, h-setup          the first-run setup sheet (near full window, capped)
+ *               max-h-picker                  a dialog that picks from a list (capped, then it scrolls)
  *               setup-card                    a setup card's minimum width in its auto-filled grid
  *               max-w-onboarding{,-agents,-detail}  the first-run setup's headings, its two
  *                                             agent columns, an agent's own page
@@ -433,6 +434,7 @@
   --session-tab-title-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 13rem;
+  --spacing-picker: min(34rem, calc(100dvh - 6rem));
   --spacing-agent-mark: 4.5rem;
   --spacing-user-message: 20lh;
   --spacing-peer-message: 6lh;
