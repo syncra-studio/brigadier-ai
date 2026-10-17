@@ -173,6 +173,35 @@ window, so the arms don't map there.
   settlement and per hour (without `p1` and the warm-up); the account and `claude --version`.
 - `--smoke --only r1,…` with a low threshold proves the plumbing on small ballast files; it is never a measurement.
 
+### The long-session head-to-head (`v2/a10long.md`, `v2/plain.py`, `v2/h2h.py`)
+
+Brigadier against plain Claude Code on the same script, long enough that plain, with its own auto-compaction on,
+compacts at least twice (near 967k on a 1M window): `a10long.md` is `a10.md` with four files a ballast step and 26
+ballast steps (about 2.2M tokens of growth). Both arms run on one root (the same template repo and ballast paths).
+
+    v2/a10.py run --battery a10long --root /tmp/X --threshold 400000 --expect-account <email> --expect-claude <version>
+    v2/plain.py run --root /tmp/X --expect-account <email> --expect-claude <version>
+    v2/h2h.py /tmp/X/runs/a10long-400k-T-1 /tmp/X/runs/plain-a10long-T-1     # the table, a winner per row
+
+- **Plain:** the user's own `claude`, one session, `claude -p` then `--resume` per step, with the bench's plain-arm
+  flags (`bench/arms/claude.sh`): Opus at high, permissions skipped, only the project's setting sources (so the
+  user's `autoCompactEnabled: false` doesn't apply), no MCP servers, no auto-memory, no idle compaction. It gets
+  every step but `p2` (it has no session search). The false `learned` line is Brigadier-only, so that item isn't
+  scored for plain. Its usage is the session's cumulative `modelUsage` (compactions included), cross-checked against
+  the transcript. A plain item counts as tested once a compaction came between its source and its use (two for
+  the edits).
+- **The table** (`h2h.py`, both arms rescored from their run dirs):
+  - memory (`p1`, the items both arms tested);
+  - guesses instead of "unknown";
+  - the late and early quality probes;
+  - edits whose hidden checks pass;
+  - claims the work can't back up (guesses, plus edits whose check fails and whose answer admits no problem);
+  - tokens through settlement (Brigadier's `p1` put back and `p2` left out);
+  - working time (the sum of the steps);
+  - seams and peak context.
+- `plain.py --smoke-compact-pct N` (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE) tries the plumbing on a small budget; it is
+  never a measurement.
+
 ## V1 overnight-style task (`v1-overnight/`, E2)
 
 One overnight phase, "Invoice note" (`plan.json`), on the V3 fixture, with four "done when" criteria. Two of them

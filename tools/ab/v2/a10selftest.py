@@ -119,6 +119,51 @@ CASES = [
 ]
 
 
+def make_plain(dirpath, *, compact_after=("b12", "b24"), p1=None, asks=None, checks=None):
+    """A plain arm's run dir as plain.py leaves one: start.json with each step's record."""
+    b = load_battery("a10long")
+    os.makedirs(dirpath, exist_ok=True)
+    shutil.copyfile(b["path"], os.path.join(dirpath, "battery.md"))
+    steps = [s["id"] for s in b["steps"] if s["role"] != "lookup"]
+    sent = [1_000_000 + i * STEP_MS for i in range(len(steps))]
+    ended = [t + 50_000 for t in sent]
+    answers = {"p1": "\n".join(f"{n}. {a}" for n, a in sorted((p1 or GOOD).items())), **ASKS, **(asks or {})}
+    records = {}
+    for i, s in enumerate(steps):
+        records[s] = {"answer": answers.get(s, "ok"), "subtype": "success", "rc": 0, "model_calls": 2, "context": 30_000 + 1_000 * i,
+                      "compactions": [{"trigger": "auto", "pre_tokens": 967_000}] if s in compact_after else [],
+                      "usage_cumulative": {"input": 10 * (i + 1), "cache_read": 1_000 * (i + 1), "cache_write": 100 * (i + 1),
+                                           "output": 50 * (i + 1), "raw": 1_160 * (i + 1)}}
+    json.dump({"arm": "plain", "battery": "a10long", "label": "test", "n": 1, "account": "test@example.invalid",
+               "claude_version": "0 (test)", "battery_sha256": "1" * 64, "started_ms": sent[0], "t0_ms": sent[0],
+               "steps": steps, "sent_ms": sent, "ended_ms": ended, "records": records},
+              open(os.path.join(dirpath, "start.json"), "w"))
+    json.dump(checks or {s: {"rc": 0, "result": {"constraint": True, "exception": True, "ruled_out": True}}
+                         for s in ("e1", "e2", "k3", "k4", "l3", "l4")},
+              open(os.path.join(dirpath, "checks.json"), "w"))
+    return len(steps), 2
+
+
+PLAIN_CASES = [
+    ("plain: all pass after two compactions", {},
+     lambda s, n, r: s["valid"] and s["completed"] and s["compaction_count"] == 2
+     and all(v == "pass" for k, v in s["battery"]["by_item"].items() if k != "false_learned")
+     and s["battery"]["by_item"]["false_learned"] == "not_applicable"
+     and s["quality"]["late"]["passed"] == 4 and s["usage"]["session"]["raw"] == n * 1_160),
+    ("plain: one compaction before e1 only: e1's items not tested, invalid", dict(compact_after=("b24",)),
+     lambda s, n, r: not s["valid"] and s["battery"]["by_item"]["constraint"] == "not_tested"
+     and s["battery"]["by_item"]["hash"] == "pass"),
+    ("plain: no compaction: nothing tested", dict(compact_after=()),
+     lambda s, n, r: s["battery"]["by_item"]["hash"] == "not_tested" and not s["valid"]),
+    ("plain: a guessed number and a broken edit that claims done",
+     dict(p1={**GOOD, 5: "about 3 seconds"}, checks={**{k: {"rc": 0, "result": {"constraint": True, "exception": True, "ruled_out": True}}
+                                                       for k in ("e1", "e2", "k3", "k4", "l3")}, "l4": {"rc": 1, "output": "e4: not trimmed"}},
+          asks={"l4": "Done: parseProduct now trims names, and the checks pass."}),
+     lambda s, n, r: s["battery"]["by_item"]["units"] == "fail" and s["battery"]["unknown_instead_of_guess"]["guessed"] == 1
+     and s["edit_answers"]["l4"]["unbacked"] and not s["edit_answers"]["l3"]["unbacked"]),
+]
+
+
 def main():
     failed = 0
     tmp = tempfile.mkdtemp(prefix="a10-selftest-")
@@ -136,13 +181,33 @@ def main():
             if not good:
                 s = json.loads(first)
                 print(json.dumps({k: s[k] for k in ("batteries", "quality", "usage", "rebirths", "valid")}, indent=1)[:4000])
+        plain = scorer.load("plain", os.path.join(HERE, "plain.py"))
+        for i, (name, kw, ok) in enumerate(PLAIN_CASES):
+            d = os.path.join(tmp, f"plain{i}")
+            n, r = make_plain(d, **kw)
+            first = json.dumps(plain.score_run(d), sort_keys=True)
+            again = subprocess.run([sys.executable, os.path.join(HERE, "plain.py"), "score", d], check=True, capture_output=True,
+                                   text=True).stdout
+            same = json.loads(again) == json.loads(first)
+            good = ok(json.loads(first), n, r) and same
+            failed += not good
+            print("ok  " if good else "FAIL", name, "" if same else "(rescoring differs)")
+            if not good:
+                s = json.loads(first)
+                print(json.dumps({k: s[k] for k in ("battery", "quality", "usage", "valid", "edit_answers")}, indent=1)[:4000])
         for root in sys.argv[1:]:
             for run in sorted(os.listdir(os.path.join(root, "runs"))):
                 d = os.path.join(root, "runs", run)
-                if run.startswith("a10-") and os.path.exists(os.path.join(d, "score.json")):
+                if not os.path.exists(os.path.join(d, "score.json")):
+                    continue
+                if run.startswith(("a10-", "a10long-")):
                     same = scorer.score(d) == json.load(open(os.path.join(d, "score.json")))
-                    failed += not same
-                    print("ok  " if same else "FAIL", "rescore", run)
+                elif run.startswith("plain-"):
+                    same = plain.score_run(d) == json.load(open(os.path.join(d, "score.json")))
+                else:
+                    continue
+                failed += not same
+                print("ok  " if same else "FAIL", "rescore", run)
     finally:
         shutil.rmtree(tmp)
     print("selftest:", "passed" if not failed else f"{failed} failed")

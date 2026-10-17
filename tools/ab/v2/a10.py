@@ -37,7 +37,7 @@ v3run, req, log, now_ms = v2.v3run, v2.req, v2.log, v2.now_ms
 v3lib = v2.v3lib
 WORDS = ("amber basil cedar delta ember fable garnet harbor indigo juniper kestrel lumen meadow nectar "
          "onyx pepper quartz raven saffron tundra umber velvet willow xenon yarrow zephyr").split()
-BALLAST_FILES = 44      # two per ballast step, b01-b22
+BALLAST_FILES = 104     # enough for a10.md (2 a step, b01-b22) and a10long.md (4 a step, b01-b26)
 CHARS_PER_TOKEN = 2.07  # these lines, as the Read tool returns them (the smoke measured 2.07)
 NOTE_WAIT_S = 1800
 NOTE_WRITTEN = "handoff note written"
@@ -60,9 +60,9 @@ def write_ballast(d, count, tokens):
             line = f"ballast {i:02d} line {n:04d}: " + " ".join(rnd.choice(WORDS) for _ in range(12))
             lines.append(line); size += len(line) + 1
         lines.append(check_word(i))
-        path = os.path.join(d, f"{i:02d}.txt")
+        path = os.path.join(d, f"{i:03d}.txt")
         open(path, "w").write("\n".join(lines) + "\n")
-        manifest[f"{i:02d}.txt"] = {"sha256": v3run.sha256(path), "lines": len(lines), "bytes": os.path.getsize(path)}
+        manifest[f"{i:03d}.txt"] = {"sha256": v3run.sha256(path), "lines": len(lines), "bytes": os.path.getsize(path)}
     json.dump({"tokens_target": tokens, "files": manifest}, open(os.path.join(d, "MANIFEST.json"), "w"), indent=1, sort_keys=True)
 
 
@@ -121,7 +121,8 @@ def claude_dirs(root):
         slug = re.sub(r"[^A-Za-z0-9]", "-", v)
         assert "-tmp-" in slug
         out += glob.glob(os.path.join(v3run.HOME, ".claude", "projects", glob.escape(slug + "-arm-") + "*"))
-    return sorted(set(out))
+    # Not plain.py's session (`arm-plain/`): only Brigadier's arm is copied and put back.
+    return sorted(d for d in set(out) if "-arm-plain-" not in d)
 
 
 def clone(src, dst):
@@ -197,19 +198,20 @@ def claude_version():
     return subprocess.run(["claude", "--version"], capture_output=True, text=True).stdout.strip()
 
 
-def ballast_text(text, root, d, k):
-    files = [os.path.join(root, d, f"{2 * k - 1:02d}.txt"), os.path.join(root, d, f"{2 * k:02d}.txt")]
-    return text.replace("{files}", " and ".join(files)), files
+def ballast_text(text, root, d, k, per_step=2):
+    """The `k`-th ballast step's request, naming its `per_step` files."""
+    files = [os.path.join(root, d, f"{per_step * (k - 1) + i:03d}.txt") for i in range(1, per_step + 1)]
+    return text.replace("{files}", ", ".join(files[:-1]) + " and " + files[-1]), files
 
 
 def run_arm(a):
     root = v3run.check_root(a.root)
-    b = load_battery("a10")
+    b = load_battery(a.battery)
     h = b["harness"]
     build = json.load(open(os.path.join(root, "build.json")))
     label = a.tag or build["label"]
     smoke = "-smoke" if a.smoke else ""
-    rid_ = f"a10-{a.threshold // 1000}k-{label}{smoke}-{a.n}"
+    rid_ = f"{b['name']}-{a.threshold // 1000}k-{label}{smoke}-{a.n}"
     run = os.path.join(root, "runs", rid_)
     if os.path.exists(os.path.join(run, "score.json")):
         log(rid_, "scored already"); return
@@ -279,7 +281,7 @@ def run_arm(a):
             text = step["text"]
             if step["role"] == "ballast":
                 k += 1
-                text, files = ballast_text(text, root, ballast_dir, k)
+                text, files = ballast_text(text, root, ballast_dir, k, h.get("ballast_files_per_step", 2))
                 start["ballast_files"][step["id"]] = files
             t, rid = v3run.send(arm.data, conv, text + " " + v3lib.SAFETY)
             if i == 0:
@@ -356,6 +358,7 @@ def main():
     t.add_argument("--file-tokens", type=int, default=20_000); t.add_argument("--smoke-file-tokens", type=int, default=6_000)
     r = sub.add_parser("run"); r.add_argument("--root", required=True); r.add_argument("--threshold", type=int, required=True)
     r.add_argument("--n", type=int, default=1); r.add_argument("--tag"); r.add_argument("--smoke", action="store_true")
+    r.add_argument("--battery", default="a10", help="a10 (Phase X) or a10long (the head-to-head with plain.py)")
     r.add_argument("--only"); r.add_argument("--expect-account"); r.add_argument("--expect-claude")
     s = sub.add_parser("score"); s.add_argument("run")
     a = ap.parse_args()

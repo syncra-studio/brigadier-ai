@@ -16,7 +16,7 @@
 - **Usage (V1's accounting):** the conversation's `turn_usage` from t0 to settlement (raw, cache reads
   and writes apart), per hour of session, without `p1` (kept apart in `p1/`) and the warm-up.
 usage: a10score.py <run-dir>   prints the score as JSON"""
-import importlib.util, json, os, sqlite3, sys
+import importlib.util, json, os, re, sqlite3, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 V3 = os.path.join(os.path.dirname(HERE), "v3")
@@ -55,6 +55,55 @@ def open_db(path):
         return None
     db = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
     return db
+
+
+def quality_of(asks):
+    """The early and late probes' totals from their asks."""
+    quality = {}
+    for probe in ("early", "late"):
+        mine = {k: v for k, v in asks.items() if v["probe"] == probe}
+        if mine:
+            ctx = [v["context_at_send"] for v in mine.values() if v["context_at_send"]]
+            quality[probe] = {"passed": sum(v["passed"] for v in mine.values()), "of": len(mine),
+                              "context_range": [min(ctx), max(ctx)] if ctx else None,
+                              "seconds": round(sum(v["seconds"] for v in mine.values()), 1),
+                              "model_calls": sum(v["model_calls"]["total"] for v in mine.values())}
+    return quality
+
+
+def transcripts_once(run, t0, end):
+    """Every assistant message of the run's Claude transcripts once, in [t0, end]: (raw tokens,
+    messages). A rebirth's note fork copies the session's earlier messages, which tokens.py counts
+    again; this is the cross-check of `turn_usage`."""
+    seen = {}
+    for dirpath, _, names in os.walk(os.path.join(run, "transcripts", "claude")):
+        for name in sorted(names):
+            for line in open(os.path.join(dirpath, name), errors="replace"):
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                m = r.get("message") or {}
+                if r.get("type") == "assistant" and m.get("id") and m.get("usage") and r.get("timestamp") \
+                        and t0 <= v3lib.tsms(r["timestamp"]) <= end:
+                    u = m["usage"]
+                    seen[m["id"]] = sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
+                                                               "cache_creation_input_tokens", "output_tokens"))
+    return sum(seen.values()), len(seen)
+
+
+ADMITS = re.compile(r"\b(fail(s|ed|ing)?|not pass(ing)?|couldn't|could not|unable|didn't (pass|work)|still broken|error remains)\b", re.I)
+
+
+def edit_answers(checks, answers):
+    """Each edit with a hidden check: whether the check passed, and whether the answer admits a
+    problem. An edit whose check fails and whose answer admits none is a claim the work can't back."""
+    out = {}
+    for step, c in sorted(checks.items()):
+        text = answers.get(step) or ""
+        out[step] = {"check_passed": c.get("rc") == 0, "admits_problem": bool(ADMITS.search(text)), "answer": text[:600],
+                     "unbacked": c.get("rc") != 0 and not ADMITS.search(text)}
+    return out
 
 
 def after_seams(s, b, start, briefs, need):
@@ -123,15 +172,7 @@ def score(run):
             c = checks.get(step) or {}
             d.update(passed=c.get("rc") == 0, why="hidden check passed" if c.get("rc") == 0 else (c.get("output") or "")[-300:])
         asks[step] = d
-    quality = {}
-    for probe in ("early", "late"):
-        mine = {k: v for k, v in asks.items() if v["probe"] == probe}
-        if mine:
-            ctx = [v["context_at_send"] for v in mine.values() if v["context_at_send"]]
-            quality[probe] = {"passed": sum(v["passed"] for v in mine.values()), "of": len(mine),
-                              "context_range": [min(ctx), max(ctx)] if ctx else None,
-                              "seconds": round(sum(v["seconds"] for v in mine.values()), 1),
-                              "model_calls": sum(v["model_calls"]["total"] for v in mine.values())}
+    quality = quality_of(asks)
 
     db = open_db(os.path.join(run, "data", "routing.sqlite"))
     conv = start["conversation"]
@@ -144,22 +185,10 @@ def score(run):
         p1db = open_db(os.path.join(run, "p1", "routing.sqlite"))
         p1 = usage(p1db, "conversation_id = ? AND at_ms BETWEEN ? AND ?", (conv, sent["p1"], start.get("restored_ms") or settled))
 
-    # The cross-check: every assistant message of the run's Claude transcripts once (a rebirth's
-    # note fork copies the session's earlier messages, which tokens.py counts again).
-    seen = {}
-    for dirpath, _, names in os.walk(os.path.join(run, "transcripts", "claude")):
-        for name in sorted(names):
-            for line in open(os.path.join(dirpath, name), errors="replace"):
-                try:
-                    r = json.loads(line)
-                except ValueError:
-                    continue
-                m = r.get("message") or {}
-                if r.get("type") == "assistant" and m.get("id") and m.get("usage") and r.get("timestamp") \
-                        and t0 <= v3lib.tsms(r["timestamp"]) <= settled:
-                    u = m["usage"]
-                    seen[m["id"]] = sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
-                                                               "cache_creation_input_tokens", "output_tokens"))
+    once = transcripts_once(run, t0, settled)
+    p2 = usage(db, "conversation_id = ? AND at_ms BETWEEN ? AND ?", (conv, sent["p2"], settled)) if "p2" in sent else None
+    # Working time: each step from its send to its end (the harness's settling between steps left out).
+    working_s = sum(((ended.get(s) or sent[s]) - sent[s]) for s in order) / 1000
     reborn = []
     for x in briefs:
         r = next(e["entry"]["record"] for e in log if e["entry"].get("type") == "rebirth"
@@ -195,7 +224,9 @@ def score(run):
         "contexts": [[c["step"], c["used"]] for c in start.get("contexts", [])],
         "usage": {"session": total, "hours": round(hours, 3), "raw_per_hour": round(total["raw"] / hours) if total and hours else None,
                   "rebirths_raw": sum(x["raw"] for x in reborn), "p1_apart": p1,
-                  "transcripts_raw_once": sum(seen.values()), "transcripts_messages": len(seen)},
+                  "transcripts_raw_once": once[0], "transcripts_messages": once[1],
+                  "p2_apart": p2, "working_s": round(working_s, 1)},
+        "edit_answers": edit_answers({k: v for k, v in checks.items() if k in rid}, {s: rec.answer(rid[s]) for s in checks if s in rid}),
         "edits": {k: {"rc": v.get("rc"), "result": v.get("result")} for k, v in checks.items()},
         "item_details": {k: v["items"] for k, v in batteries.items() if "items" in v},
     }
