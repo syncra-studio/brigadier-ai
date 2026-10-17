@@ -167,7 +167,7 @@ impl RegistryHolder {
         if !running(&state, id) {
             return;
         }
-        let (patches, errors) = match reply {
+        let (mut patches, mut errors) = match reply {
             Ok(reply) if reply.len() <= super::MAX_BYTES => validate_patches(&reply, models),
             Ok(_) => (
                 Vec::new(),
@@ -175,6 +175,23 @@ impl RegistryHolder {
             ),
             Err(error) => (Vec::new(), vec![error]),
         };
+        // No vendor rates its own models up: those raises are dropped here and never applied.
+        let producer = state.refresh.provider;
+        patches.retain_mut(|patch| {
+            patch.researched_by = producer;
+            let Some(model) = models.iter().find(|model| patch.applies(model)) else {
+                return true;
+            };
+            let dropped = patch.drop_self_raises(model);
+            if !dropped.is_empty() {
+                errors.push(format!(
+                    "{}: a model's own maker can't raise its ratings, so {} stayed as before",
+                    patch.model,
+                    dropped.join(", ")
+                ));
+            }
+            !patch.is_empty()
+        });
         state.refresh.errors = errors;
         state.refresh.finished_at_ms = Some(now_ms());
         state.refresh.changes = patches
@@ -204,10 +221,21 @@ impl RegistryHolder {
                 .map(|o| o.patches.clone())
                 .unwrap_or_default();
             for patch in patches {
-                if let Some(prior) = kept
-                    .iter_mut()
-                    .find(|prior| prior.provider == patch.provider && prior.model == patch.model)
-                {
+                // The newer finding wins over another researcher's older values for the same
+                // fields, so replaying the patches in any order gives this one.
+                for prior in kept.iter_mut().filter(|prior| {
+                    prior.provider == patch.provider
+                        && prior.model == patch.model
+                        && prior.researched_by != patch.researched_by
+                }) {
+                    prior.give_way(&patch);
+                }
+                kept.retain(|prior| !prior.is_empty());
+                if let Some(prior) = kept.iter_mut().find(|prior| {
+                    prior.provider == patch.provider
+                        && prior.model == patch.model
+                        && prior.researched_by == patch.researched_by
+                }) {
                     prior.tier = patch.tier.or(prior.tier);
                     prior.strengths.extend(patch.strengths);
                     prior.area_strengths.extend(patch.area_strengths);
@@ -306,18 +334,20 @@ mod tests {
         }
     }
     fn capture(holder: &RegistryHolder, id: &str) -> (u64, Vec<MergedModel>) {
+        capture_by(holder, id, (ProviderKind::Claude, "claude-opus-5-5"))
+    }
+    fn capture_by(
+        holder: &RegistryHolder,
+        id: &str,
+        producer: (ProviderKind, &str),
+    ) -> (u64, Vec<MergedModel>) {
         let info = serde_json::from_value(serde_json::json!({
             "id":"gpt-6.1-sol", "displayName":"Sol", "description":"",
             "efforts":["low","medium","high"], "isDefault":true, "inputModalities":["text"], "legacy":false
         }))
         .unwrap();
         holder
-            .capture_refresh(
-                id,
-                &[(ProviderKind::Codex, &[info])],
-                (ProviderKind::Codex, "gpt-6.1-sol"),
-                &[],
-            )
+            .capture_refresh(id, &[(ProviderKind::Codex, &[info])], producer, &[])
             .unwrap()
     }
     fn reply() -> Result<String, String> {
@@ -521,5 +551,119 @@ mod tests {
             9.0
         );
         assert_eq!(patches[0].sources.len(), 2);
+    }
+
+    #[test]
+    fn a_vendor_never_raises_its_own_models_ratings() {
+        let cache = Cache::new();
+        let holder = cache.holder();
+        let (id, _) = holder.admit_refresh();
+        let (base, models) = capture_by(&holder, &id, (ProviderKind::Codex, "gpt-6.1-sol"));
+        let research = models[0].strengths[&brigadier_router::TaskCategory::Research];
+        let verify = models[0].strengths[&brigadier_router::TaskCategory::Verify];
+        holder.finish_refresh(
+            &id,
+            base,
+            &models,
+            Ok(
+                serde_json::json!({"patches":[{"provider":"codex","model":"gpt-6.1-sol",
+                "sources":["https://example.com/model"], "tier":"frontier",
+                "strengths":{"research":research + 2.0, "verify":verify - 1.0,
+                    "scout":models[0].strengths[&brigadier_router::TaskCategory::Scout]}}]})
+                .to_string(),
+            ),
+        );
+        let refresh = holder.rankings_refresh();
+        assert_eq!(refresh.state, RankingsRefreshState::Done);
+        assert!(
+            refresh
+                .errors
+                .iter()
+                .any(|error| error.contains("strengths.research"))
+        );
+        let patches = holder.rating_snapshot().1;
+        assert_eq!(patches[0].researched_by, Some(ProviderKind::Codex));
+        assert!(
+            !patches[0]
+                .strengths
+                .contains_key(&brigadier_router::TaskCategory::Research)
+        );
+        // An unchanged score isn't a raise: it is kept and not reported.
+        assert!(
+            patches[0]
+                .strengths
+                .contains_key(&brigadier_router::TaskCategory::Scout)
+        );
+        assert!(!refresh.errors.iter().any(|error| error.contains("scout")));
+        let mut model = models[0].clone();
+        patches[0].apply(&mut model);
+        assert_eq!(
+            model.strengths[&brigadier_router::TaskCategory::Research],
+            research
+        );
+        assert_eq!(
+            model.strengths[&brigadier_router::TaskCategory::Verify],
+            verify - 1.0
+        );
+
+        // An overlay saved before patches named their researcher: whoever ran the last job,
+        // its raises of a model don't apply.
+        let mut overlay = holder.state().overlay.clone().unwrap();
+        overlay.job.provider = Some(ProviderKind::Claude);
+        overlay.patches[0].researched_by = None;
+        overlay.patches[0]
+            .strengths
+            .insert(brigadier_router::TaskCategory::Research, research + 2.0);
+        holder
+            .write_atomic("overlay.json", &serde_json::to_vec(&overlay).unwrap())
+            .unwrap();
+        let patches = cache.holder().rating_snapshot().1;
+        assert_eq!(patches[0].researched_by, Some(ProviderKind::Codex));
+        let mut model = models[0].clone();
+        patches[0].apply(&mut model);
+        assert_eq!(
+            model.strengths[&brigadier_router::TaskCategory::Research],
+            research
+        );
+    }
+
+    #[test]
+    fn the_newest_finding_wins_when_researchers_take_turns() {
+        let cache = Cache::new();
+        let holder = cache.holder();
+        let verify = brigadier_router::TaskCategory::Verify;
+        let (id, _) = holder.admit_refresh();
+        let base = capture(&holder, &id).1.remove(0);
+        holder.cancel_refresh();
+        let bundled = base.strengths[&verify];
+        let run = |producer: (ProviderKind, &str), value: f64| {
+            let (id, _) = holder.admit_refresh();
+            let (revision, models) = capture_by(&holder, &id, producer);
+            holder.finish_refresh(
+                &id,
+                revision,
+                &models,
+                Ok(
+                    serde_json::json!({"patches":[{"provider":"codex","model":"gpt-6.1-sol",
+                    "sources":["https://example.com/model"], "strengths":{"verify":value}}]})
+                    .to_string(),
+                ),
+            );
+            assert_eq!(holder.rankings_refresh().state, RankingsRefreshState::Done);
+            let mut model = base.clone();
+            for patch in holder.rating_snapshot().1 {
+                patch.apply(&mut model);
+            }
+            model.strengths[&verify]
+        };
+        let codex = (ProviderKind::Codex, "gpt-6.1-sol");
+        assert_eq!(run(codex, bundled - 1.0), bundled - 1.0);
+        assert_eq!(
+            run((ProviderKind::Claude, "claude-opus-5-5"), bundled + 1.0),
+            bundled + 1.0
+        );
+        // Its own vendor lowers the other's raise, still above the registry's value.
+        assert_eq!(run(codex, bundled + 0.5), bundled + 0.5);
+        assert_eq!(run(codex, bundled - 2.0), bundled - 2.0);
     }
 }

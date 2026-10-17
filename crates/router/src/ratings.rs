@@ -21,6 +21,10 @@ pub struct RatingPatch {
     pub area_strengths: BTreeMap<Area, f64>,
     #[serde(default)]
     pub default_effort: BTreeMap<TaskCategory, String>,
+    /// The vendor whose model did the research. A vendor may lower its own models' ratings but
+    /// never raise them; the host sets this, whatever the research answer says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub researched_by: Option<ProviderKind>,
 }
 
 impl RatingPatch {
@@ -32,11 +36,27 @@ impl RatingPatch {
         if !self.applies(model) {
             return;
         }
-        if let Some(tier) = self.tier {
-            model.tier = tier;
+        if self.researched_by == Some(model.provider) {
+            // Its own vendor's research can only lower a model's ratings.
+            if let Some(tier) = self.tier {
+                model.tier = model.tier.min(tier);
+            }
+            for (category, value) in &self.strengths {
+                if let Some(prior) = model.strengths.get_mut(category) {
+                    *prior = prior.min(*value);
+                }
+            }
+            for (area, value) in &self.area_strengths {
+                let prior = model.area_strengths.entry(*area).or_insert(0.0);
+                *prior = prior.min(*value);
+            }
+        } else {
+            if let Some(tier) = self.tier {
+                model.tier = tier;
+            }
+            model.strengths.extend(self.strengths.clone());
+            model.area_strengths.extend(self.area_strengths.clone());
         }
-        model.strengths.extend(self.strengths.clone());
-        model.area_strengths.extend(self.area_strengths.clone());
         model.default_effort.extend(
             self.default_effort
                 .iter()
@@ -44,6 +64,37 @@ impl RatingPatch {
                 .map(|(category, effort)| (*category, effort.clone())),
         );
         model.rating_provenance = RatingProvenance::ResearchedOverlay;
+    }
+
+    /// Drops the ratings this patch would raise on its own vendor's model: they never apply.
+    /// Returns the dropped field paths.
+    pub fn drop_self_raises(&mut self, model: &MergedModel) -> Vec<String> {
+        if self.researched_by != Some(model.provider) {
+            return Vec::new();
+        }
+        let mut dropped = Vec::new();
+        if self.tier.is_some_and(|tier| tier > model.tier) {
+            self.tier = None;
+            dropped.push("tier".into());
+        }
+        self.strengths.retain(|category, value| {
+            let keep = model
+                .strengths
+                .get(category)
+                .is_some_and(|prior| *value <= *prior);
+            if !keep {
+                dropped.push(format!("strengths.{}", name(category)));
+            }
+            keep
+        });
+        self.area_strengths.retain(|area, value| {
+            let keep = *value <= model.area_strengths.get(area).copied().unwrap_or(0.0);
+            if !keep {
+                dropped.push(format!("areaStrengths.{}", name(area)));
+            }
+            keep
+        });
+        dropped
     }
 
     /// Field paths, including categories, for the refresh summary.
@@ -78,6 +129,48 @@ impl RatingPatch {
         }
         fields
     }
+
+    /// Gives way to `newer`, another researcher's later finding for the same model: drops the
+    /// fields it sets. When `newer` is the model's own vendor lowering a rating (it can only
+    /// lower), this patch's value comes down to it instead, so the lower value still applies
+    /// on top of this patch's raise.
+    pub fn give_way(&mut self, newer: &RatingPatch) {
+        let lowers = newer.researched_by == Some(newer.provider);
+        if let Some(tier) = newer.tier {
+            self.tier = self.tier.filter(|_| lowers).map(|_| tier);
+        }
+        for (category, value) in &newer.strengths {
+            if lowers && let Some(prior) = self.strengths.get_mut(category) {
+                *prior = *value;
+            } else {
+                self.strengths.remove(category);
+            }
+        }
+        for (area, value) in &newer.area_strengths {
+            if lowers && let Some(prior) = self.area_strengths.get_mut(area) {
+                *prior = *value;
+            } else {
+                self.area_strengths.remove(area);
+            }
+        }
+        self.default_effort
+            .retain(|category, _| !newer.default_effort.contains_key(category));
+    }
+
+    /// Whether anything is left to apply.
+    pub fn is_empty(&self) -> bool {
+        self.tier.is_none()
+            && self.strengths.is_empty()
+            && self.area_strengths.is_empty()
+            && self.default_effort.is_empty()
+    }
+}
+
+fn name(key: &impl Serialize) -> String {
+    serde_json::to_value(key)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 /// Drop individual malformed, unsupported, unsourced or out-of-bounds patches.

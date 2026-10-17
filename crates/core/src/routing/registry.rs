@@ -89,9 +89,16 @@ impl RegistryHolder {
         let meta = meta.filter(|meta| {
             source == RegistrySource::Downloaded && meta.revision == registry.revision
         });
-        let overlay: Option<refresh::Overlay> = std::fs::read(dir.join("overlay.json"))
+        let mut overlay: Option<refresh::Overlay> = std::fs::read(dir.join("overlay.json"))
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        // An overlay saved before patches named their researcher: who rated what is unknown,
+        // so each patch counts as its own vendor's and can only lower ratings.
+        if let Some(overlay) = &mut overlay {
+            for patch in &mut overlay.patches {
+                patch.researched_by = patch.researched_by.or(Some(patch.provider));
+            }
+        }
         let mut refresh = overlay
             .as_ref()
             .map(|overlay| overlay.job.clone())
