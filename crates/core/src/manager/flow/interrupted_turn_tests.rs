@@ -39,17 +39,20 @@ async fn held_turn(flow: &Flow, seen: &Arc<Mutex<Vec<String>>>) -> String {
     board.latest_request().expect("a request").id.clone()
 }
 
-/// After the start: the request is interrupted, nothing runs, and Continue answers it.
+/// After the start: the request is interrupted, the run reads failed in its name, and
+/// Continue answers it.
 async fn interrupted_then_continued(flow: &Flow, request: &str, seen: &Arc<Mutex<Vec<String>>>) {
+    flow.until("the request interrupted", |board| {
+        board
+            .requests
+            .get(request)
+            .is_some_and(|r| super::super::conversation::interrupted_by_quit(&r.state))
+    })
+    .await;
     let board = flow
-        .until("the request interrupted", |board| {
-            board
-                .requests
-                .get(request)
-                .is_some_and(|r| super::super::conversation::interrupted_by_quit(&r.state))
-        })
+        .until("the run failed", |board| board.run == RunState::Failed)
         .await;
-    assert_ne!(board.run, RunState::Running);
+    assert_eq!(board.run_request.as_deref(), Some(request));
     // It stays that way: nothing settles it as answered meanwhile.
     tokio::time::sleep(Duration::from_millis(200)).await;
     let board = flow.board().await;

@@ -2062,11 +2062,26 @@ impl Core {
         if board.run == crate::work::RunState::Running {
             board.cut_off_request = board.run_request.clone();
         }
+        // A quit may stop the store after the cut-off request was written failed and before
+        // its run was: the run failed too.
+        let request_failed = board
+            .run_request
+            .as_ref()
+            .and_then(|request| board.requests.get(request))
+            .is_some_and(|request| {
+                matches!(request.state, crate::work::RequestState::Failed { .. })
+            });
         board.run = match board.run {
             crate::work::RunState::Hibernated => crate::work::RunState::Hibernated,
+            // A failed run stays failed, with the request it names: one a quit cut off reads
+            // so after the start as one a crash cut off does.
+            crate::work::RunState::Failed => crate::work::RunState::Failed,
+            crate::work::RunState::Running if request_failed => crate::work::RunState::Failed,
             _ => crate::work::RunState::Idle,
         };
-        board.run_request = None;
+        if board.run != crate::work::RunState::Failed {
+            board.run_request = None;
+        }
         board.streaming = None;
         Ok(board)
     }
