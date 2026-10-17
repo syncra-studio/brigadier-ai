@@ -431,6 +431,11 @@
   outline-offset: 2px;
 }
 
+/* A changed-file row reaches its card's clipped edges: keep Find's ring inside it. */
+[data-slot="turn-diff-file"] > [data-thread-find-active] {
+  outline-offset: -2px;
+}
+
 /* A wait on the user's approval: the same sweep over fainter words. */
 @utility shimmer-quiet {
   --shimmer-base: var(--live-text-quiet);

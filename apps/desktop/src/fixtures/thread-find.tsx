@@ -16,9 +16,11 @@ import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
 import { ACTIVE_BUTTON, ACTIVE_MATCH, FINDING, MATCHES } from "@/app/conversation/ThreadFind";
+import { TurnDiff } from "@/app/conversation/TurnDiff";
+import { ViewContext } from "@/app/conversation/viewContext";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { Conversation, ConversationView as View, EventEnvelope, Message, Request } from "@/ipc/generated";
+import type { Conversation, ConversationView as View, EventEnvelope, Message, Request, UserRequest } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
 import { applyEvents, useApp } from "@/state/store";
@@ -527,7 +529,47 @@ const steps = {
 async function drive(): Promise<void> {
   const result: Record<string, unknown> = {};
   try {
-    if (SHORT || new URLSearchParams(location.search).get("drive") === "top") {
+    if (new URLSearchParams(location.search).get("drive") === "glitches") {
+      await steps.opened();
+      const host = document.createElement("div");
+      viewport().querySelector('[data-slot="aui_thread-column"]')!.append(host);
+      const changed: UserRequest = {
+        id: "find-files", conversationId: "long", preview: "Files", state: { type: "done" },
+        startedAtMs: start, endedAtMs: start + 1, steeredInto: null, steeredAfter: null,
+        undo: null, worked: [], quotaWait: false,
+        changes: { settled: true, stat: { insertions: 2, deletions: 0, files: ["otter.ts", "badger.ts"].map((path) => ({ path, insertions: 1, deletions: 0, binary: false })) } },
+      };
+      useBoard.setState(({ board }) => ({ board: board && { ...board, requests: { ...board.requests, [changed.id]: changed } } }));
+      const root = createRoot(host);
+      root.render(<ViewContext.Provider value={{ selection: { type: "conversation", id: "long" }, conversation, embedded: false }}><TurnDiff requestIds={[changed.id]} /></ViewContext.Provider>);
+      await settle(300);
+      await find("otter.ts");
+      const row = host.querySelector('[data-slot="turn-diff-file"] > button')!;
+      const style = getComputedStyle(row);
+      result["ring"] = { onRow: row.hasAttribute(ACTIVE_BUTTON), inset: parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset) <= 0 };
+      // WebKit can paint button ranges on neighbouring selectable text. They must never enter the registry.
+      result["buttonMarks"] = matches()?.size ?? 0;
+      const prose = document.createElement("p");
+      prose.innerHTML = 'before <code class="aui-md-inline-code bg-muted text-code-inline rounded-md px-1.5 py-0.5 font-mono">formatted</code> after';
+      host.append(prose);
+      await find("before formatted after");
+      const code = prose.querySelector("code")!.firstChild!;
+      const textRange = document.createRange();
+      textRange.selectNodeContents(code);
+      const codeMark = [...(matches() ?? [])].find((range) => range.startContainer === code && range.endContainer === code);
+      result["inline"] = { split: !!codeMark, aligned: codeMark instanceof Range && codeMark.getBoundingClientRect().x === textRange.getBoundingClientRect().x && codeMark.getBoundingClientRect().width === textRange.getBoundingClientRect().width };
+      await find("solitary");
+      result["previousGone"] = [...(matches() ?? [])].every((range) => range.toString() === "solitary");
+      await find("marmalade");
+      const bubble = textHolding("marmalade")!.node.parentElement!.closest(".aui-user-message-content")!;
+      result["expanded"] = bubble.querySelector(":scope > button")?.getAttribute("aria-expanded");
+      press(field()!, "Escape");
+      await until(() => bar() === null);
+      await settle(100);
+      result["collapsed"] = bubble.querySelector(":scope > button")?.getAttribute("aria-expanded");
+      root.unmount();
+      host.remove();
+    } else if (SHORT || new URLSearchParams(location.search).get("drive") === "top") {
       select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
       $('[data-slot="earlier-turns"]')?.click();
