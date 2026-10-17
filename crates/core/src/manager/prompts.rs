@@ -131,6 +131,7 @@ How to work:
 - Ask the user only what only they can decide, only with ask_user (never a question in your text), then reply {quiet}. Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last run_check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
 - Push, publish, deploy or open pull requests only when the user asks for exactly that, at every permission level; after your own `git push`, call ci_status. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Write to another session's thread only with message_session.
+- When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
 - Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a file over with its task card's Save, the Save… under your answer, or an ask_user card asking where it goes; a document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
@@ -771,6 +772,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, never link a throwaway file for the user (a worker's one-off script or log, even one kept with its report), in your answer's Details too. Before you write a document the user asks for yourself, ask_user where it goes unless they said, then link it by its full path.",
         worker: "",
     },
+    Revision {
+        number: FEEDBACK_OFFER_REVISION,
+        thread: "From now on, when the user seems annoyed with Brigadier itself (not their project), call offer_feedback once: it shows them a drafted report to its developers, to send or dismiss.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1039,6 +1045,9 @@ pub(crate) const ASK_THREAD_REVISION: u32 = 81;
 /// No throwaway file is handed to the user, and a document the thread writes itself asks where
 /// it goes and is linked (issues #108, #52).
 pub(crate) const HANDOVER_REVISION: u32 = 82;
+/// A thread offers the user a drafted report to Brigadier's developers when they seem annoyed
+/// with Brigadier (issue #219).
+pub(crate) const FEEDBACK_OFFER_REVISION: u32 = 83;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:

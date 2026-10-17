@@ -643,6 +643,8 @@ pub(crate) struct ConvLive {
     pub(super) user_wrote: tokio::sync::Mutex<u64>,
     /// Serializes the full-access notice check and write, including persisted notices.
     pub(super) full_access_notice: tokio::sync::Mutex<()>,
+    /// Serializes the feedback offer's checks and writes (`offer_feedback` and its answer).
+    pub(super) feedback_offer: tokio::sync::Mutex<()>,
     /// The landing lock of the session's merge: `finish_session` holds it from its look at
     /// the user's consent to the move of the base, and a Cancel of the held merge takes it, so
     /// one of them wins (SESSION-FIXES-PLAN.md Q3).
@@ -718,6 +720,7 @@ impl ConvLive {
             retry: tokio::sync::Mutex::new(()),
             user_wrote: tokio::sync::Mutex::new(0),
             full_access_notice: tokio::sync::Mutex::new(()),
+            feedback_offer: tokio::sync::Mutex::new(()),
             merge_lock: tokio::sync::Mutex::new(()),
             merge_told: std::sync::Mutex::new(None),
             reviews_due: std::sync::atomic::AtomicUsize::new(0),

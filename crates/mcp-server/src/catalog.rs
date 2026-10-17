@@ -6,12 +6,13 @@ use std::sync::{Arc, OnceLock};
 use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CiPush, CodeRefs, CodeSearch,
     DelegateTask, EndRun, FinishSession, JobCall, LandPhase, ListSessions, MessageSession,
-    MessageWorker, NoteForUser, OrchestratorCall, PlanPhases, PreviewLog, ProposeOvernight,
-    ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, RecordFindings, RecordNodes,
-    Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand,
-    RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, SettleWait, StartPreview,
-    StopPreview, StopWorker, SubmitOutline, SubmitReport, SuggestFullAccess, TabChatCall, TabTools,
-    TaskRef, ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
+    MessageWorker, NoteForUser, OfferFeedback, OrchestratorCall, PlanPhases, PreviewLog,
+    ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, RecordFindings,
+    RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck,
+    RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, SettleWait,
+    StartPreview, StopPreview, StopWorker, SubmitOutline, SubmitReport, SuggestFullAccess,
+    TabChatCall, TabTools, TaskRef, ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall,
+    WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -309,6 +310,14 @@ would let you do. Not for what Full access wouldn't fix (a missing key, a failin
 outward step only the user takes). Refused when the session already has Full access. Returns at \
 once; the user's switch, if they make it, arrives as a change of this session's setting.";
 
+const OFFER_FEEDBACK: &str = "When the user seems annoyed with Brigadier itself (a bug in \
+the app or in how you or its workers behave; never their own project's code), offer them a \
+report to Brigadier's developers, drafted from this conversation: a card under your answer that \
+they send to GitHub, edit first or dismiss. Nothing is sent without their click. title: one line \
+naming the problem. body: what happened and what they expected, steps if known, a few plain \
+lines; no secrets, paths or project code. One offer per incident: refused while an earlier one \
+is unanswered or after they dismissed one.";
+
 const RUN: &str = "Run a shell command and get its result: builds, tests, logs, long \
 listings. It runs with this session's access and sandbox, in `workdir` (the workspace, a folder \
 in it, or your scratch folder). Up to 8 KB of output comes back as it is, more as a digest (the \
@@ -586,6 +595,11 @@ fn orchestrator_tools() -> Vec<Tool> {
             SUGGEST_FULL_ACCESS,
             input_schema::<SuggestFullAccess>(),
         ),
+        tool(
+            "offer_feedback",
+            OFFER_FEEDBACK,
+            input_schema::<OfferFeedback>(),
+        ),
         tool("list_tasks", LIST_TASKS, no_arguments()),
         tool("settle_step", SETTLE_STEP, input_schema::<SettleStep>()),
         tool("end_run", END_RUN, input_schema::<EndRun>()),
@@ -706,6 +720,10 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
     ("answer_worker", "worker question"),
     ("read_report", "worker report"),
     ("run", "shell command, long output, background"),
+    (
+        "offer_feedback",
+        "user annoyed, frustrated, complaint, bug report, feedback",
+    ),
 ];
 
 /// The thread's tools marked for Claude Code's tool search: [`THREAD_ALWAYS_LOADED`] load up
@@ -888,6 +906,7 @@ pub fn parse_call(
                 "suggest_full_access" => {
                     OrchestratorCall::SuggestFullAccess(args(name, arguments)?)
                 }
+                "offer_feedback" => OrchestratorCall::OfferFeedback(args(name, arguments)?),
                 "list_tasks" => OrchestratorCall::ListTasks,
                 "settle_step" => OrchestratorCall::SettleStep(args(name, arguments)?),
                 "end_run" => OrchestratorCall::EndRun(args(name, arguments)?),
@@ -1361,6 +1380,41 @@ mod tests {
                 Ok(ToolCall::Orchestrator(OrchestratorCall::SuggestFullAccess(args)))
                     if args.reason == "Installing Homebrew writes outside the project"
             ));
+        }
+    }
+
+    /// Every thread can offer a feedback report, found behind the tool search by what it is for.
+    #[test]
+    fn every_thread_can_offer_feedback() {
+        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+            let thread = Role::Orchestrator {
+                conversation_id: brigadier_core::model::ConversationId("c1".into()),
+                run,
+            };
+            let tool = tools_for(&thread)
+                .iter()
+                .find(|tool| tool.name == "offer_feedback")
+                .expect("offer_feedback");
+            let hint = tool
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.0.get("anthropic/searchHint"));
+            assert!(
+                hint.is_some_and(|hint| hint.as_str().unwrap().contains("annoyed")),
+                "{run:?}"
+            );
+            let arguments = serde_json::json!({
+                "kind": "bug",
+                "title": "Stop leaves the tab spinning",
+                "body": "After Stop the tab keeps its spinner.",
+            });
+            assert!(matches!(
+                parse_call(&thread, "offer_feedback", arguments.as_object().cloned()),
+                Ok(ToolCall::Orchestrator(OrchestratorCall::OfferFeedback(args)))
+                    if args.kind == brigadier_core::FeedbackKind::Bug && args.title == "Stop leaves the tab spinning"
+            ));
+            let wrong = serde_json::json!({ "kind": "rant", "title": "x", "body": "y" });
+            assert!(parse_call(&thread, "offer_feedback", wrong.as_object().cloned()).is_err());
         }
     }
 

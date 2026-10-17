@@ -1902,6 +1902,14 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.put_off_plan(conversation_id, card_id)).await?;
             Response::PutOffPlan
         }
+        Request::AnswerFeedbackOffer {
+            conversation_id,
+            offer_id,
+            sent,
+        } => {
+            heap(|| sessions.answer_feedback_offer(&conversation_id, &offer_id, sent)).await?;
+            Response::AnswerFeedbackOffer
+        }
         Request::CancelMerge { conversation_id } => Response::CancelMerge {
             text: heap(|| sessions.cancel_merge(&conversation_id)).await?,
         },

@@ -486,6 +486,22 @@ test("the lead's suggestion of Full access shows as its notice, and its tool cal
   assert.deepEqual(kept.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((step) => step.kind) : []), shown);
 });
 
+test("the lead's feedback offer stays in view as its card; its tool call and the user's answer show no row", () => {
+  const user = { ...messages[0]!, id: "team", requestId: "team", seq: 1 };
+  const offer = { type: "feedbackOffered", id: "f1", kind: "bug", title: "Stop leaves the tab spinning", body: "After Stop the tab spins." } as const;
+  const replay: BoardDigest = { ...board, plans: {}, decisions: [], tasks: {}, requests: {}, workerSteps: [],
+    orchestratorSteps: [
+      teamStep(2, { type: "tool", itemId: "t1", name: "mcp__brigadier__offer_feedback", detail: null, status: "completed", throughPosition: 0 }),
+      teamStep(3, offer),
+      teamStep(4, { type: "feedbackAnswered", id: "f1", sent: false }),
+    ] };
+  const entries = sequence(buildBlocks([user], {}, false, replay, [])[0]!);
+  const shown = entries.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((s) => s.kind) : []);
+  assert.deepEqual(shown, [offer]);
+  const kept = entries.filter((entry) => entry.kind !== "text" && !foldsAway(entry, 0));
+  assert.deepEqual(kept.flatMap((entry) => entry.kind === "orchestrator" ? entry.steps.map((step) => step.kind) : []), [offer]);
+});
+
 const node = (id: string, parentId: string | null, kind: ThreadNode["kind"], state: Block["state"] = "done"): ThreadNode =>
   ({ id, parentId, kind, block: { user: kind === "user" ? {} : null, state } as unknown as Block, head: null });
 

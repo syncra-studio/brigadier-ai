@@ -938,6 +938,11 @@ export async function decidePlan(
   await request({ method: "decidePlan", conversationId, cardId, approve, message });
 }
 
+/** The user's answer to the thread's feedback offer: opened on GitHub (`sent`) or dismissed. */
+export async function answerFeedbackOffer(conversationId: string, offerId: string, sent: boolean): Promise<void> {
+  await request({ method: "answerFeedbackOffer", conversationId, offerId, sent });
+}
+
 /** "Not now" on a proposed plan: it stops waiting for the user, and the thread says so. */
 export async function putOffPlan(conversationId: string, cardId: string): Promise<void> {
   await request({ method: "putOffPlan", conversationId, cardId });

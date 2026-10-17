@@ -21,7 +21,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
 
 use crate::model::{ConversationId, ProjectId, TaskId};
-use crate::work::{ChecksResult, ReviewVerdict, TaskKind, WorkerRole};
+use crate::work::{ChecksResult, FeedbackKind, ReviewVerdict, TaskKind, WorkerRole};
 
 /// What a grant allows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1004,6 +1004,19 @@ pub struct SuggestFullAccess {
     pub reason: String,
 }
 
+/// `offer_feedback`: the user seems annoyed with Brigadier itself; the thread offers them a
+/// report to its developers, drafted from the conversation, as a card they send or dismiss.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OfferFeedback {
+    /// "bug" for something wrong, "idea" for something missing.
+    pub kind: FeedbackKind,
+    /// One line naming the problem ("Stop leaves the session tab spinning").
+    pub title: String,
+    /// What happened and what they expected, steps if known; in the user's view, a few lines.
+    pub body: String,
+}
+
 /// `settle_step`: during an overnight run, the thread settles a step of the run's plan once it
 /// has judged the step's whole scope and every "done when" (its own edits too).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1108,6 +1121,7 @@ pub enum OrchestratorCall {
     CiStatus(CiPush),
     WatchCi(CiPush),
     SuggestFullAccess(SuggestFullAccess),
+    OfferFeedback(OfferFeedback),
     ListTasks,
     SettleStep(SettleStep),
     EndRun(EndRun),
@@ -1159,6 +1173,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "ci_status",
     "watch_ci",
     "suggest_full_access",
+    "offer_feedback",
     "list_tasks",
     "settle_step",
     "end_run",
@@ -1212,6 +1227,7 @@ impl OrchestratorCall {
             Self::CiStatus(_) => "ci_status",
             Self::WatchCi(_) => "watch_ci",
             Self::SuggestFullAccess(_) => "suggest_full_access",
+            Self::OfferFeedback(_) => "offer_feedback",
             Self::ListTasks => "list_tasks",
             Self::SettleStep(_) => "settle_step",
             Self::EndRun(_) => "end_run",

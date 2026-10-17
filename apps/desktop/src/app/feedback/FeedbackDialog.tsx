@@ -48,7 +48,10 @@ function Feedback({ draft }: { draft: FeedbackDraft | null }) {
   const send = () => {
     setError(null);
     sendFeedback(kind, text).then(
-      () => setSent(true),
+      () => {
+        setSent(true);
+        draft?.onSent?.();
+      },
       (cause: unknown) => setError(errorText(cause)),
     );
   };

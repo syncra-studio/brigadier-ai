@@ -3,6 +3,7 @@ import type { FC } from "react";
 
 import { isTeamStep, TeamStep, WorkerName } from "@/app/conversation/activity/TeamSentence";
 import type { BlockOrchestratorStep, DecidedStep, MachineWords } from "@/app/conversation/blocks";
+import { FeedbackOffer } from "@/app/conversation/FeedbackOffer";
 import { machineWords } from "@/app/conversation/rowWords";
 import { SandboxLimitNotice } from "@/app/conversation/SandboxLimitNotice";
 import { WorkerLine } from "@/app/conversation/WorkerChip";
@@ -76,6 +77,7 @@ export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   if (kind.type === "decided") return <DecidedRow kind={kind} />;
   if (isTeamStep(kind)) return <TeamStep kind={kind} atMs={step.atMs} />;
   if (kind.type === "fullAccessSuggested") return <SandboxLimitNotice reason={kind.reason} />;
+  if (kind.type === "feedbackOffered") return <FeedbackOffer id={kind.id} kind={kind.kind} title={kind.title} body={kind.body} />;
   if (kind.type === "merged") {
     return (
       <div data-slot="orchestrator-step" data-kind="merged" className={ROW}>
