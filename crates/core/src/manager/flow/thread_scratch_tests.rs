@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -34,6 +35,21 @@ fn spawn_in(dir: &Path, program: &str, args: &[&str]) -> Child {
         .process_group(0)
         .spawn()
         .unwrap()
+}
+
+/// Waits until the sweep after the first turn is over and left `tmp` empty. A folder that
+/// reads empty isn't enough: a sweep still at it removes what the test puts there next (#187).
+async fn first_sweep_over(flow: &Flow, tmp: &Path) {
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    super::eventually_async("the first sweep", || {
+        let conv = conv.clone();
+        async move {
+            !conv.scratch_used.load(Ordering::SeqCst)
+                && conv.scratch_idle().await
+                && std::fs::read_dir(tmp).is_ok_and(|mut entries| entries.next().is_none())
+        }
+    })
+    .await;
 }
 
 /// What the thread's turn leaves in its temporary folder: a second checkout's build output, a
@@ -276,10 +292,7 @@ async fn the_launch_sweeps_what_a_quit_left() {
     flow.say("First.").await;
     flow.settled().await;
     let tmp = session_temp_dir(&flow.conversation, SessionTemp::Thread);
-    super::eventually("the first sweep", || {
-        std::fs::read_dir(&tmp).is_ok_and(|mut entries| entries.next().is_none())
-    })
-    .await;
+    first_sweep_over(&flow, &tmp).await;
     // Left while the app was down.
     std::fs::create_dir_all(tmp.join("bt-verify/target")).unwrap();
     std::fs::write(tmp.join("bt-verify/target/out.bin"), b"built").unwrap();
@@ -381,10 +394,7 @@ async fn a_temp_folder_replaced_by_a_link_is_left_alone() {
     flow.say("First.").await;
     flow.settled().await;
     let tmp = session_temp_dir(&flow.conversation, SessionTemp::Thread);
-    super::eventually("the first sweep", || {
-        std::fs::read_dir(&tmp).is_ok_and(|mut entries| entries.next().is_none())
-    })
-    .await;
+    first_sweep_over(&flow, &tmp).await;
     let elsewhere =
         std::env::temp_dir().join(format!("brigadier-scratch-link-{}", flow.conversation));
     std::fs::create_dir_all(&elsewhere).unwrap();
