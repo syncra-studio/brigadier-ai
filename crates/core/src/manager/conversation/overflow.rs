@@ -20,7 +20,7 @@ use brigadier_providers::{ProviderKind, TurnInput};
 use super::{Cli, ConvLive};
 use crate::knowledge::{self, RebirthTrigger};
 use crate::manager::SessionManager;
-use crate::manager::rebirth::BriefingPlan;
+use crate::manager::rebirth::{BriefingPlan, HANDOFF_AFTER_CLOSE, HandoffPurpose};
 use crate::model::{ConversationId, DomainEvent, Message, streams};
 use crate::routing::WriteCause;
 use crate::work::{InjectionKind, OrchestratorEntry, RequestState, RunState};
@@ -196,19 +196,40 @@ impl SessionManager {
         let stopped = self
             .stopped_text(&conv.id, cli.provider, tokens, None)
             .await;
-        let user_stopped = {
+        // A note written earlier at the prepare threshold still helps (one still being written
+        // is of an older context); else the closed session writes one now in a fork, as a
+        // swap's does, so what it checked and found outlives the verbatim tail. No turn starts
+        // meanwhile: the hand-over holds them.
+        let (earlier, window) = {
             let mut state = conv.state.lock().await;
             let window = state.context.and_then(|(_, window)| window);
-            // A note written earlier at the prepare threshold still helps; one being written
-            // can't be waited for.
-            let prep = state.rebirth.take().filter(|prep| prep.ready());
+            (state.rebirth.take().filter(|prep| prep.ready()), window)
+        };
+        let prep = match earlier {
+            Some(prep) => prep,
+            None => {
+                let prep = self.prepare_rebirth(
+                    &conv.id,
+                    cli.provider,
+                    cli.model.clone(),
+                    Some(cli.session.native_id()),
+                    (tokens, window),
+                    HandoffPurpose::Threshold,
+                );
+                prep.closed();
+                prep.note(HANDOFF_AFTER_CLOSE).await;
+                prep
+            }
+        };
+        let user_stopped = {
+            let mut state = conv.state.lock().await;
             state.checkpoint = None;
             state.context = None;
             state.fresh = true;
             state.reseed = false;
             state.briefing = Some(BriefingPlan {
                 trigger: RebirthTrigger::MidTurn,
-                prep,
+                prep: Some(prep),
                 at_tokens: tokens,
                 window,
                 swap_started_at_ms: now_ms(),

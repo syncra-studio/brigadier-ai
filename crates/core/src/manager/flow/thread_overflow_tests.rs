@@ -32,6 +32,8 @@ where
 const WINDOW: i64 = 200_000;
 const REQUEST: &str = "Build the parser.";
 const STOPPED: &str = "[Where your earlier session stopped]";
+/// The stopped session's handoff note, written in a fork once its CLI closed.
+const NOTE: &str = "Failed checks: cargo test lexer::spans failed at src/lexer.rs:42 (not fixed).";
 
 async fn context(turn: &Turn, tokens: i64) {
     turn.emit(ProviderEvent::ContextSize {
@@ -80,6 +82,9 @@ fn thread(
     script(move |turn| {
         let (seen, started, go) = (seen.clone(), started.clone(), go.clone());
         async move {
+            if turn.input.contains("Write the handoff note") {
+                return Reply::text(NOTE);
+            }
             if turn.is_review() {
                 return Reply::text("No findings.");
             }
@@ -183,6 +188,14 @@ async fn entries(flow: &Flow) -> Vec<OrchestratorEntry> {
         .collect()
 }
 
+/// What the stopped session checked and found so far came in its handoff note (#113).
+fn noted(fresh: &str) {
+    assert!(
+        fresh.contains("[Handoff note from your earlier context]") && fresh.contains(NOTE),
+        "{fresh}"
+    );
+}
+
 /// The request went on in a fresh session reborn mid-turn, with no compaction recorded.
 async fn continued(run: &Run) -> String {
     assert_eq!(ended(&run.flow).await, RequestState::Done);
@@ -250,6 +263,7 @@ async fn past_the_hard_line(provider: ProviderKind) {
         fresh.contains(REQUEST),
         "the request is carried on: {fresh}"
     );
+    noted(&fresh);
     run.flow.stop().await;
 }
 
@@ -272,7 +286,7 @@ async fn a_refused_compaction_rebirths_the_thread_mid_turn() {
     )
     .await;
     run.flow.say(REQUEST).await;
-    continued(&run).await;
+    noted(&continued(&run).await);
     assert!(run.seen.lock().unwrap().stopped);
     run.flow.stop().await;
 }
@@ -300,7 +314,7 @@ async fn prompt_too_long_on_the_thread_rebirths_it_and_the_request_goes_on() {
         .await
         .unwrap();
     run.go.notify_one();
-    continued(&run).await;
+    noted(&continued(&run).await);
     run.flow.stop().await;
 }
 
