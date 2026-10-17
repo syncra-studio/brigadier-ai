@@ -11,7 +11,7 @@ test("Find clears and aligns its marks and restores folded messages", { timeout:
     assert.equal(seen.previousGone, true);
   });
   await t.test("inline code has its own text-aligned mark", () => {
-    assert.deepEqual(seen.inline, { split: true, aligned: true });
+    assert.deepEqual(seen.inline, { singleTextNodes: true, pieces: 3 });
   });
   await t.test("the changed-file ring stays inside its row", () => {
     assert.deepEqual(seen.ring, { onRow: true, inset: true });
@@ -19,5 +19,9 @@ test("Find clears and aligns its marks and restores folded messages", { timeout:
   await t.test("Esc collapses the message Find expanded", () => {
     assert.equal(seen.expanded, "true");
     assert.equal(seen.collapsed, "false");
+    assert.equal(seen.collapseMoved, 0, "Esc keeps the visible text in place");
+  });
+  await t.test("Esc respects the user’s expansion choice", () => {
+    assert.equal(seen.manualExpanded, "true");
   });
 });

@@ -331,7 +331,7 @@ const ThreadRoot: FC<{
               data-slot="aui_thread-column"
               className={cn(
                 "max-w-thread mx-auto flex min-h-full w-full shrink-0 flex-col px-4",
-                Find && !isEmpty ? "pt-[calc(var(--spacing-browser-find-row)+1.5rem)]" : "pt-8",
+                Find && !isEmpty ? "pt-thread-find-top" : "pt-8",
               )}
             >
               {/* The new chat: the hero ends a little above the middle, the composer sits at
