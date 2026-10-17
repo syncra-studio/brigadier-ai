@@ -1575,14 +1575,17 @@ fn penalty(query: &Query, model: &MergedModel) -> Option<(f64, String)> {
         .filter(|(penalty, _, _)| *penalty > 0.0)
         .max_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(penalty, w, projected)| {
-            (
-                penalty,
-                format!(
-                    "{} is projected at {:.0}% by its reset",
-                    window_name(name(model.provider), Some(&w.window.label)),
-                    projected.min(999.0)
-                ),
-            )
+            let window = window_name(name(model.provider), Some(&w.window.label));
+            // Past 100% the number says nothing more: the penalty is at its most already.
+            let mut text = if projected >= 100.0 {
+                format!("{window} runs out before its reset at this pace")
+            } else {
+                format!("{window} is projected at {projected:.0}% by its reset")
+            };
+            if w.forecast.is_some_and(|f| f.gap) {
+                text.push_str(" (a rough estimate: its readings have a gap)");
+            }
+            (penalty, text)
         })
 }
 
@@ -2486,6 +2489,62 @@ mod tests {
             route.reason.contains("ties go to Codex"),
             "{}",
             route.reason
+        );
+    }
+
+    /// Codex's weekly window on 17 October: 16% at 19:36, Brigadier closed, then 77% when it
+    /// started again at 02:10, 82% by 03:00. The reason doesn't print a projection past 100%
+    /// and says the estimate spans a gap.
+    #[test]
+    fn a_projection_across_a_gap_in_the_readings_is_labelled_and_capped() {
+        let registry = Registry::bundled();
+        let models = catalog(&registry);
+        let hour = 3_600_000;
+        let now = 100 * hour;
+        let window = brigadier_providers::QuotaWindow {
+            id: "primary".into(),
+            label: "Weekly".into(),
+            used_percent: 82.0,
+            resets_at_ms: Some(now + 126 * hour),
+            window_minutes: Some(10_080),
+            bucket: None,
+            model: None,
+        };
+        let history: Vec<crate::QuotaSample> = [
+            (now - 10 * hour, 15.0),
+            (now - 7 * hour, 16.0),
+            (now - hour, 77.0),
+            (now - hour / 2, 80.0),
+            (now, 82.0),
+        ]
+        .map(|(at_ms, used_percent)| crate::QuotaSample {
+            at_ms,
+            used_percent,
+        })
+        .to_vec();
+        let state = crate::forecast::window_state(&window, &history, now, false, now);
+        assert!(state.forecast.unwrap().gap);
+        let mut codex = quota(ProviderKind::Codex, 82.0);
+        codex.quota.as_mut().unwrap().windows = vec![state];
+        let providers = [quota(ProviderKind::Claude, 20.0), codex];
+        let mut q = query(&registry, &models, &providers);
+        q.now_ms = now;
+        let luna = preview(&q)
+            .candidates
+            .into_iter()
+            .find(|c| c.model == "gpt-6-luna")
+            .unwrap();
+        let label = luna
+            .factors
+            .iter()
+            .map(|f| f.label.as_str())
+            .find(|label| label.contains("window"))
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            label,
+            "Codex's weekly window runs out before its reset at this pace (a rough estimate: its \
+             readings have a gap)"
         );
     }
 

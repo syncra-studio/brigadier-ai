@@ -35,6 +35,10 @@ pub struct Forecast {
     pub runs_out_at_ms: Option<i64>,
     /// Samples the rate is based on.
     pub samples: u32,
+    /// The samples skip an hour or more (Brigadier wasn't running): what was used in that
+    /// stretch counts as spread evenly over it, so the rate is a rougher estimate.
+    #[serde(default)]
+    pub gap: bool,
 }
 
 /// One usage window with its estimate.

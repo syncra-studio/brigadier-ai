@@ -14,7 +14,8 @@
 //!   samples start inside the look-back with no reset among them, the time before the first
 //!   counts at the window's own pace so far (its use over the time since it began).
 //! - **Forecast:** `projected_at_reset = used + rate × time left`, and "runs out at" when that
-//!   passes 100. Absent until the samples span 10 minutes (short windows) or an hour.
+//!   passes 100. Absent until the samples span 10 minutes (short windows) or an hour. Samples
+//!   more than an hour apart (Brigadier wasn't running) mark it as estimated across a gap.
 //! - **Heat:** Limited when a limit names the window or it is 97% used; Hot when projected at 90%
 //!   or 85% used; Warm when projected at 70%; else Cool. A provider's heat is its hottest
 //!   provider-wide window (Limited while a limit is set); a window scoped to one model counts only
@@ -36,6 +37,9 @@ const SHORT_MIN_SPAN_MS: i64 = 10 * 60 * 1000;
 const LONG_MIN_SPAN_MS: i64 = 60 * 60 * 1000;
 /// A fall of more than this many points between samples is a reset, not use.
 const RESET_DROP: f64 = 1.0;
+/// Samples further apart than this mean nobody was watching: the monitor stores one at least
+/// every half hour while Brigadier runs.
+const GAP_MS: i64 = 60 * 60 * 1000;
 const HOUR_MS: f64 = 3_600_000.0;
 
 /// Used share at which a window counts as used up.
@@ -203,7 +207,8 @@ fn forecast(
     sorted.sort_by_key(|sample| sample.at_ms);
 
     let mut points: Vec<QuotaSample> = Vec::new();
-    if let Some(anchor) = sorted.iter().rev().find(|sample| sample.at_ms <= cutoff) {
+    let anchor = sorted.iter().rev().find(|sample| sample.at_ms <= cutoff);
+    if let Some(anchor) = anchor {
         points.push(QuotaSample {
             at_ms: cutoff,
             used_percent: anchor.used_percent,
@@ -288,6 +293,19 @@ fn forecast(
         projected_at_reset: projected,
         runs_out_at_ms,
         samples: u32::try_from(points.len()).unwrap_or(u32::MAX),
+        // From the readings' own times: the anchor's, not the look-back's start.
+        gap: anchor
+            .map(|anchor| anchor.at_ms)
+            .into_iter()
+            .chain(
+                points
+                    .iter()
+                    .skip(usize::from(anchor.is_some()))
+                    .map(|p| p.at_ms),
+            )
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| pair[1] - pair[0] > GAP_MS),
     })
 }
 
@@ -414,6 +432,28 @@ mod tests {
             "rate {}",
             forecast.rate_per_hour
         );
+        // Readings every half hour leave no gap.
+        assert!(!forecast.gap);
+    }
+
+    /// A short window read three hours apart (Brigadier closed in between) is marked as an
+    /// estimate across a gap, though its look-back is only the last hour.
+    #[test]
+    fn a_short_window_across_a_restart_has_a_gap() {
+        let hour = 3_600_000;
+        let now = 10 * hour;
+        let window = QuotaWindow {
+            id: "five_hour".into(),
+            label: "5-hour".into(),
+            used_percent: 70.0,
+            resets_at_ms: Some(now + 2 * hour),
+            window_minutes: Some(300),
+            bucket: None,
+            model: None,
+        };
+        let history = samples(&[(now - 3 * hour, 10.0), (now - 20 * 60_000, 70.0)]);
+        let state = window_state(&window, &history, now, false, now);
+        assert!(state.forecast.expect("a forecast").gap);
         assert_eq!(state.heat, Heat::Hot);
     }
 }

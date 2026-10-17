@@ -20,4 +20,9 @@ runsOutAtMs: number | null,
 /**
  * Samples the rate is based on.
  */
-samples: number, };
+samples: number, 
+/**
+ * The samples skip an hour or more (Brigadier wasn't running): what was used in that
+ * stretch counts as spread evenly over it, so the rate is a rougher estimate.
+ */
+gap: boolean, };
