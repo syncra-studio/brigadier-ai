@@ -70,6 +70,30 @@ async fn edit(turn: &Turn, path: &Path, item: &str, before: &str, after: &str) {
     .await;
 }
 
+/// Waits until the event loop took the turn's edits so far: queued for their snapshot, or in
+/// one that counts `files`. A CLI reports an edit well before its next call reaches Brigadier;
+/// a scripted turn sends both at once, so the call could overtake the report (#185).
+async fn taken(turn: &Turn, files: usize) {
+    let id = turn.conversation().unwrap();
+    tokio::time::timeout(*super::PATIENCE, async {
+        while !turn.host.change_records.pending(&id)
+            && !turn
+                .host
+                .core
+                .board(&id)
+                .await
+                .unwrap()
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.stat.files.len() == files)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
 async fn local(flow: &mut Flow) {
     let conversation = flow.core.conversation(&flow.conversation).unwrap();
     let Setup::Session {
@@ -1874,6 +1898,7 @@ async fn an_edit_just_before_the_delegation_is_the_threads_on_the_question() {
                     "base\nthread b\n",
                 )
                 .await;
+                taken(&turn, 1).await;
                 let reply = turn
                     .call(
                         "delegate_task",
