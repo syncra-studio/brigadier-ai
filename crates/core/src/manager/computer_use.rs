@@ -502,6 +502,14 @@ mod tests {
         assert!(skill.starts_with("---\nname: computer-use\n"));
     }
 
+    /// #228: a run opens its first page once and navigates that same window and tab.
+    #[test]
+    fn the_skill_keeps_a_browser_run_in_one_window_and_tab() {
+        assert!(SKILL.contains("**Use one window and one tab for the whole run.** Each `launch_app` with `urls` opens another window, so call it once."));
+        assert!(SKILL.contains("**Close what you opened**"));
+        assert!(!SKILL.contains("Prefer windows over tabs"));
+    }
+
     #[test]
     fn a_missing_helper_is_no_helper() {
         let dir = Scratch::new();

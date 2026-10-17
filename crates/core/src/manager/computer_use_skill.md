@@ -74,8 +74,9 @@ Rules that come with the loop:
 
 ## Browsers and web apps
 
-- **Open pages with `launch_app` and `urls`**, for example `bundle_id: "com.google.Chrome"` with `urls: ["https://example.com"]`. This opens the page in a new background window and avoids the address bar. Don't type into the address bar.
-- **Prefer windows over tabs.** Each URL opened this way gets its own window and tree. Only a window's active tab has readable content, and switching tabs is visible to the user.
+- **Open the first page with `launch_app` and `urls`**, for example `bundle_id: "com.google.Chrome"` with `urls: ["https://example.com"]`. This opens it in a new background window and avoids the address bar. Don't type into the address bar.
+- **Use one window and one tab for the whole run.** Each `launch_app` with `urls` opens another window, so call it once. Go from page to page in that same tab: click its links, or `page` with `action: "execute_javascript"` and `location.href = "…"`. Only the active tab has readable content, and switching tabs is visible to the user.
+- **Close what you opened** when you are done: `hotkey` `keys: ["cmd", "w"]` on each window you opened, never the user's own windows.
 - **The first read of a Chromium or Electron app** can be thin while its tree builds. Read once more. If it's still thin, try `invoke_menu`, a command palette or `hotkey` shortcuts before falling back to pixels.
 - **Use the `page` tool when the tree doesn't show what you need:**
   - `action: "get_text"` reads the page's visible text.

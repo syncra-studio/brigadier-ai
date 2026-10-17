@@ -114,7 +114,7 @@ Your workspace: {workspace}
 You are this session's one long-lived thread: you read, search, run commands and edit in your workspace as a plain coding session does, and run workers when work needs them (delegate_task says how to brief them).
 
 How to work:
-- Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. {workers}{computer}
+- Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. A long job across back end and UI goes to one worker per layer, split along a data contract (the field names) written into both briefs. {workers}{computer}
 - Answer code questions yourself from the Brain, code_search, code_refs and a few precise reads, quoting the file:line each point rests on (src/cart.ts:42); explain an error from the code that raises it. Never start a worker for what reading answers.
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) with run_check, not your shell, before your final answer. {CHECK_PREFIXES} Never background a command yourself (`&`, nohup): one still going after a minute goes to the background by itself. Run dev servers and apps with start_preview.
@@ -125,7 +125,7 @@ How to work:
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
 - Ask query_brain before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. ask_user answers and outline go-aheads are kept for you. Never reopen a settled decision.
 - Ask the user only what only they can decide, only with ask_user (never a question in your text), then reply {quiet}. Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last run_check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
-- Push, publish, deploy or open pull requests only when the user asks for exactly that, at every permission level; after your own `git push`, call ci_status. Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
+- Push, publish, deploy or open pull requests only when the user asks for exactly that, at every permission level; after your own `git push`, call ci_status. When a request's own rules clash with this session's setup ("push to main" from a session branch), say so in one line at the start, and which one you follow; ask when it's unclear. When the user wants bugs filed as issues, file each before fixing it, and let its fix close it ("Fixes #N"). Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Write to another session's thread only with message_session.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
 - Never give the user a scratch path, nor point them at a file you haven't just seen exist. Hand a file over with its task card's Save, the Save… under your answer, or an ask_user card asking where it goes; never copy it to the Desktop, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
@@ -301,7 +301,7 @@ fn environment_text(environment: &Environment) -> String {
             "Local checkout: landed work goes, as the workers' own commits, directly onto `{branch}` in the user's own checkout."
         ),
         Environment::NewWorktree { base, branch, .. } => format!(
-            "New worktree: landed work goes onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merging it into `{base}` is the user's act: merge only on [merge] (call finish_session without user_words) or the user's own words: when their latest message asks for it (\"merge it\"), call finish_session with their words once the work has landed, without asking. Never on silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), nor on an earlier yes. You may say once, in plain text, that the work is ready to merge; never ask it on a card."
+            "New worktree: landed work goes onto the session branch `{branch}` (from `{base}`), in a worktree that stays with the session through merges. Merging it into `{base}` is the user's act: merge only on [merge] (call finish_session without user_words) or the user's own words: when their latest message asks for it (\"merge it\"), call finish_session with their words once the work has landed, without asking. Never on silence, \"no\", \"wait\" or a condition (\"once the tests pass\"), nor on an earlier yes. You may say once, in plain text, that the work is ready to merge; never ask it on a card. \"merge it\" is for this merge only: offer anything else, such as updating the user's local `{base}`, in plain words."
         ),
     }
 }
@@ -752,6 +752,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, on a Claude thread, run builds, tests, logs and listings in your own shell (`cd <your workspace> && …`; output up to 30 KB comes back whole); your shell stops a command at two minutes, so one that may run longer still goes through run (run_check for a check). run leaves your tool list from the start, at your next resume: load it through ToolSearch by its name when you need it. Send a note_for_user in the same message as your last run_check, never in a call of its own. A try by hand or a one-off script is a shell call of its own, never run_check or part of its command.",
         worker: "",
     },
+    Revision {
+        number: PLANNING_GAPS_REVISION,
+        thread: "From now on: when a request's own rules clash with this session's setup (\"push to main\" from a session branch), say so in one line at the start, and which one you follow; ask when it's unclear. A long job across back end and UI goes to one worker per layer, split along a data contract (the field names) written into both briefs. When the user wants bugs filed as issues, file each before fixing it, and let its fix close it (\"Fixes #N\"). \"merge it\" is for the session's merge only: offer anything else, such as updating the user's local main, in plain words.",
+        worker: "From now on, a look or demo shows pages in the app it is about when it can; else in one browser window and one tab, navigated from page to page, never a new window per page. Close what you opened at the end.",
+    },
 ];
 
 /// The instructions' current revision.
@@ -834,7 +839,7 @@ pub(crate) fn reviews_note(on: bool) -> String {
 pub(crate) const BROWSER_OFF: &str = "Brigadier's built-in browser is off (the user's setting): for you it doesn't exist. Never offer to open a page in it or say a page will open there; links and preview URLs you give the user open in their default browser.";
 
 /// What an agent with the `computer` tools is told about them.
-pub(crate) const COMPUTER_USE: &str = "You can see and drive apps on this Mac with the `computer` tools. They work in the background: the user's windows stay where they are and their pointer doesn't move. Before your first one, load the `computer-use` skill and follow it. Use them when the job needs an app's interface (operating an app, checking a change in the running app); never bring a window to the front unless asked.";
+pub(crate) const COMPUTER_USE: &str = "You can see and drive apps on this Mac with the `computer` tools. They work in the background: the user's windows stay where they are and their pointer doesn't move. Before your first one, load the `computer-use` skill and follow it. Use them when the job needs an app's interface (operating an app, checking a change in the running app); never bring a window to the front unless asked. A look or demo shows pages in the app it is about when it can; else in one browser window and one tab, navigated from page to page, never a new window per page. Close what you opened at the end.";
 
 /// The instructions' paragraph while the browser is off; nothing while it is on.
 pub(crate) fn browser_section(on: bool) -> String {
@@ -1010,6 +1015,11 @@ pub(crate) const SHORT_START_REVISION: u32 = 70;
 /// A Claude thread's `run` waits behind its tool search, it runs its commands in its own shell,
 /// and its note_for_user goes with its last check (BUILD-PLAN O5).
 pub(crate) const LEAN_TOOLS_REVISION: u32 = 71;
+
+/// The thread flags a request that clashes with its setup, splits a two-layer job along a
+/// data contract, files issues before fixes when asked, and keeps "merge it" for the merge;
+/// a look or demo uses one browser window and tab (#228, #229).
+pub(crate) const PLANNING_GAPS_REVISION: u32 = 72;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -3233,6 +3243,43 @@ mod environment_tests {
         // B1-B3). The rules for workers, follow-ups and other sessions come when they first
         // apply, and how to brief, preview and fix CI is in their tools (BUILD-PLAN C1).
         assert!(codex.len() < 11_500, "{}", codex.len());
+    }
+
+    /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
+    /// along a data contract, files issues before fixes when asked, and keeps "merge it" for
+    /// the merge.
+    #[test]
+    fn the_thread_flags_clashes_splits_layers_files_issues_and_keeps_merge_it_for_the_merge() {
+        let prompt = thread(
+            &session("fullAccess"),
+            None,
+            &[],
+            Some(&workspace()),
+            Some("/work/session @ brigadier/flow"),
+            ProviderKind::Claude,
+            true,
+        );
+        assert!(prompt.contains("When a request's own rules clash with this session's setup (\"push to main\" from a session branch), say so in one line at the start, and which one you follow; ask when it's unclear."));
+        assert!(prompt.contains("A long job across back end and UI goes to one worker per layer, split along a data contract (the field names) written into both briefs."));
+        assert!(prompt.contains("When the user wants bugs filed as issues, file each before fixing it, and let its fix close it (\"Fixes #N\")."));
+        let worktree = environment_text(&Environment::NewWorktree {
+            base: "main".into(),
+            branch: "brigadier/flow".into(),
+            path: None,
+            start: None,
+        });
+        assert!(worktree.contains("\"merge it\" is for this merge only: offer anything else, such as updating the user's local `main`, in plain words."));
+        let note = revision_note(PLANNING_GAPS_REVISION - 1, false).unwrap();
+        assert!(note.contains("say so in one line at the start"));
+    }
+
+    /// #228: a look or demo navigates one browser window and tab, never a window per page,
+    /// and closes what it opened.
+    #[test]
+    fn a_look_or_demo_uses_one_browser_window_and_tab() {
+        assert!(COMPUTER_USE.contains("in one browser window and one tab, navigated from page to page, never a new window per page. Close what you opened at the end."));
+        let note = revision_note(PLANNING_GAPS_REVISION - 1, true).unwrap();
+        assert!(note.contains("one browser window and one tab"));
     }
 
     #[test]
