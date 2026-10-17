@@ -1,144 +1,108 @@
 import { Reload } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useMemo } from "react";
+import { useEffect, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
+import { agentState } from "@/app/onboarding/SetupTerminal";
 import { useRevealedEmails } from "@/app/providers/AccountRows";
-import { ProviderCard } from "@/app/providers/ProviderCard";
-import { learnedKey, ModelRow, ProjectPicker } from "@/app/routing/models";
-import { RANKINGS_ROWS, RatingsSection } from "@/app/routing/RankingsSection";
-import { AdvancedRouting, ROUTING_ROWS, RoutingKinds } from "@/app/routing/routing";
-import {
-  SettingsAdvanced,
-  SettingsButton,
-  SettingsCard,
-  SettingsPage,
-  SettingsRow,
-  SettingsSection,
-  SwitchSetting,
-} from "@/app/settings/parts";
+import { ProviderPanel } from "@/app/providers/ProviderPanel";
+import { SettingsButton, SettingsPage, SettingsSwitch } from "@/app/settings/parts";
+import { useReveal } from "@/app/settings/reveal";
+import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useNow } from "@/hooks/use-now";
-import type { Learned } from "@/ipc/generated";
+import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";
-import { PROVIDERS, ruleSentence } from "@/lib/routing";
+import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";
 import { useModelGroups } from "@/lib/setup";
+import { cn } from "@/lib/utils";
 import { refreshProviders } from "@/state/actions";
 import { accountsOf, loadAccounts, refreshAccounts } from "@/state/accounts";
-import { reopenOnboarding } from "@/state/onboarding";
-import { modelAvailable } from "@/state/providers";
-import { useRankingsRefresh } from "@/state/rankings";
+import { providerOn } from "@/state/providers";
+import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 import { useUsage, useUsageRefresh } from "@/state/usage";
 
-/**
- * The Providers page's rows, for Settings search; the page renders this copy. It holds what the
- * Providers, Accounts and Routing pages did: a row whose place moved says where (`target`).
- */
+/** The Providers page's rows, for Settings search; the page renders this copy. */
 export const PROVIDERS_ROWS = {
   switch: {
     label: "Switch to another account when one runs out",
     description:
-      "A chat that hits its account's limit carries on with your next account, then with the other provider",
+      "A chat that hits its account's limit carries on with your next account, then with the other provider.",
   },
   agents: {
     label: "Agents",
     description:
       "The coding agents that do Brigadier's work with your own subscriptions, each with a switch",
-    target: PROVIDER_LABELS.claude,
+    target: "Accounts",
   },
   accounts: {
     label: "Accounts",
-    description: "Each agent's accounts: who is signed in, the plan, how much is used, and Use",
-    target: PROVIDER_LABELS.claude,
+    description: "Each agent's accounts: who is signed in, the plan, how much of each limit is used, and Use",
+  },
+  usage: {
+    label: "Usage",
+    description: "How much of each account's 5-hour, weekly and model limits is used, and when each resets",
+    target: "Accounts",
   },
   add: {
     label: "Add account",
     description: "Sign in to another Claude Code or Codex account",
-    target: PROVIDER_LABELS.claude,
+    target: "Accounts",
   },
   own: {
     label: "This computer's login",
     description: "Also used by your terminal",
-    target: PROVIDER_LABELS.claude,
-  },
-  models: {
-    label: "Use this model",
-    description:
-      "Each model's switch, formerly Available models: on, it shows in the model pickers and Brigadier can give it work",
-    target: "Models",
-  },
-  workers: {
-    label: "Models Brigadier can give work to",
-    description: "Now a rule under Advanced › Rules: “Don't give work” keeps a model from tasks",
-    target: ROUTING_ROWS.rules.label,
-  },
-  whoDoesWhat: ROUTING_ROWS.simple,
-  advanced: {
-    label: "Advanced",
-    description:
-      "Where each agent is installed, the first-run setup, the full routing order and backup models, settings per project or area, rules, each model's scores, and where the ratings come from.",
-    target: "Installed agents",
+    target: "Accounts",
   },
   installed: {
     label: "Installed agents",
     description: "Where each agent is installed, and its version",
+    target: "Accounts",
   },
-  setup: {
-    label: "Run the first-run setup again",
-    description: "Walks through connecting the agents and adding projects",
-  },
-  kinds: ROUTING_ROWS.kinds,
-  modes: { ...ROUTING_ROWS.modes, target: ROUTING_ROWS.kinds.label },
-  areas: { ...ROUTING_ROWS.areas, target: ROUTING_ROWS.kinds.label },
-  reset: { ...ROUTING_ROWS.reset, target: ROUTING_ROWS.kinds.label },
-  rules: ROUTING_ROWS.rules,
-  details: {
-    label: "Model details",
+  models: {
+    label: "Models",
     description:
-      "Brigadier scores each model 0–10 per kind of work from the model registry, then adjusts the scores from how its tasks went.",
-  },
-  ratings: RANKINGS_ROWS.ratings,
-  refresh: { ...RANKINGS_ROWS.refresh, target: RANKINGS_ROWS.ratings.label },
-  registry: {
-    label: "Model registry",
-    description: "The published list the models' ratings start from",
-    target: RANKINGS_ROWS.ratings.label,
+      "Each model's switch: on, it shows in the model pickers and Brigadier can give it work",
   },
 } as const;
 
-/** What Advanced holds, by the labels Settings may bring into view there. */
-const ADVANCED_LABELS: readonly string[] = [
-  PROVIDERS_ROWS.installed.label,
-  PROVIDERS_ROWS.setup.label,
-  PROVIDERS_ROWS.kinds.label,
-  PROVIDERS_ROWS.rules.label,
-  PROVIDERS_ROWS.details.label,
-  PROVIDERS_ROWS.ratings.label,
-];
+/** A dot for how an agent stands: ready, needing a step, or off. */
+function stateDot(on: boolean, overview: ProviderOverview | undefined): string {
+  if (!on) return "bg-muted-foreground/50";
+  const state = agentState(overview);
+  if (state === "ready") return "bg-success";
+  if (state === "checking") return "bg-muted-foreground/50";
+  return "bg-warning";
+}
 
 /**
- * Settings › Providers: the switch for moving chats between accounts, then each agent (how it
- * stands and its switch, its accounts, its models), then who does each kind of work. Where the
- * agents are installed, the first-run setup and routing in full wait under Advanced.
+ * Settings › Providers: the switch for moving chats between accounts, then a tab per agent with
+ * how it stands and its switch, its accounts with how much of each limit is used, and its
+ * models. Who does which work is on Routing.
  */
 export function ProvidersPage() {
-  // The models' plain descriptions and scores come with the usage view.
+  // The models' plain descriptions come with the usage view.
   useUsageRefresh();
   const view = useUsage((s) => s.view);
-  const picked = useUsage((s) => s.projectId);
   const overviews = useApp((s) => s.providers.view?.providers);
   const accounts = useApp((s) => s.accounts?.accounts);
   const settings = useApp((s) => s.settings);
-  const projects = useApp((s) => s.projects);
-  // Names of every model (a rule may name one that isn't available).
   const groups = useModelGroups();
-  const rankings = useRankingsRefresh();
   const revealed = useRevealedEmails();
   const now = useNow(30_000);
   const refresh = useAction();
+  const switching = useAction();
+  const [tab, setTab] = useState<ProviderKind>("claude");
+  // Search's rows are on every tab; the one shown keeps them.
+  const revealing = useReveal((s) => s.label);
   useEffect(() => {
     loadAccounts().catch((error: unknown) => console.error("reading the accounts failed", error));
   }, []);
+  const revealedTab = revealing
+    ? overviews?.find((entry) => entry.models?.models.some((model) => model.displayName === revealing))?.provider
+    : undefined;
+  if (revealedTab && revealedTab !== tab) setTab(revealedTab);
 
   const checkedAtMs = Math.max(
     0,
@@ -146,25 +110,6 @@ export function ProvidersPage() {
     ...(accounts ?? []).map((account) => account.checkedAtMs ?? 0),
   );
   const merged = view?.models ?? null;
-  // Adjustments read for another project than the one picked are not shown while it is read.
-  const forPicked = view?.projectId === picked;
-  const learned = useMemo(
-    () =>
-      new Map<string, Learned>(
-        forPicked && view
-          ? view.learned.map((entry) => [learnedKey(entry.provider, entry.model, entry.category), entry])
-          : [],
-      ),
-    [view, forPicked],
-  );
-  const detailed = (merged ?? []).filter((model) =>
-    modelAvailable(settings, { provider: model.provider, id: model.id }),
-  );
-  // A model's "Allow in Rules" brings its rule into view, opening Advanced for it.
-  const advancedLabels = [
-    ...ADVANCED_LABELS,
-    ...settings.routingOverrides.map((rule) => ruleSentence(rule, groups, projects)),
-  ];
 
   return (
     <SettingsPage
@@ -174,7 +119,10 @@ export function ProvidersPage() {
       actions={
         <>
           {checkedAtMs > 0 && (
-            <span className="text-muted-foreground text-xs">Checked {formatAgo(checkedAtMs, now)}</span>
+            <span className="text-muted-foreground flex items-center gap-1.5 text-label">
+              <span aria-hidden className="bg-success size-1.5 rounded-full" />
+              Checked {formatAgo(checkedAtMs, now)}
+            </span>
           )}
           <SettingsButton
             aria-label="Check the agents and accounts again"
@@ -187,84 +135,72 @@ export function ProvidersPage() {
         </>
       }
     >
-      <SettingsCard>
-        <SwitchSetting setting="switchAccounts" row={PROVIDERS_ROWS.switch} />
-      </SettingsCard>
+      <div className="-mt-3 flex flex-col">
+        <div
+          data-setting={PROVIDERS_ROWS.switch.label}
+          className="border-divider flex items-center justify-between gap-6 border-b px-1 pb-4"
+        >
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="text-sm">{PROVIDERS_ROWS.switch.label}</span>
+            <span className="text-foreground/65 text-xs">{PROVIDERS_ROWS.switch.description}</span>
+            {switching.error && (
+              <p role="alert" className="text-destructive text-xs">
+                {switching.error}
+              </p>
+            )}
+          </div>
+          <SettingsSwitch
+            label={PROVIDERS_ROWS.switch.label}
+            checked={settings.switchAccounts}
+            disabled={switching.busy}
+            onCheckedChange={(next) => switching.run(() => setSetting("switchAccounts", next))}
+          />
+        </div>
 
-      {PROVIDERS.map((provider) => (
-        <ProviderCard
-          key={provider}
-          provider={provider}
-          overview={overviews?.find((entry) => entry.provider === provider)}
-          accounts={accounts === undefined ? null : accountsOf(accounts, provider)}
-          merged={merged}
-          groups={groups}
-          now={now}
-          revealed={revealed}
-        />
-      ))}
-
-      <RoutingKinds groups={groups} />
-
-      <SettingsAdvanced description={PROVIDERS_ROWS.advanced.description} labels={advancedLabels}>
-        <SettingsSection title={PROVIDERS_ROWS.installed.label} description={PROVIDERS_ROWS.installed.description}>
-          <SettingsCard>
+        <Tabs value={tab} onValueChange={(next) => setTab(next as ProviderKind)} className="gap-0 pt-5">
+          <TabsList variant="line" className="border-divider h-auto w-full justify-start gap-6 rounded-none border-b p-0">
             {PROVIDERS.map((provider) => {
-              const status = overviews?.find((entry) => entry.provider === provider)?.status;
+              const overview = overviews?.find((entry) => entry.provider === provider);
+              const plan = overview?.status?.plan;
               return (
-                <SettingsRow
+                <TabsTrigger
                   key={provider}
-                  label={PROVIDER_LABELS[provider]}
-                  description={
-                    status?.path ? (
-                      <span className="font-mono" title={status.path}>
-                        {status.path}
-                      </span>
-                    ) : (
-                      // How to install it by hand, where the agent says.
-                      (status?.guidance ?? "Not installed")
-                    )
-                  }
+                  value={provider}
+                  className="h-auto flex-none gap-2 rounded-none px-1 pb-3 text-base font-normal after:-bottom-px data-[state=active]:font-medium"
                 >
-                  {status?.version && (
-                    <span className="text-muted-foreground font-mono text-xs">v{status.version}</span>
+                  <span className="bg-foreground/8 rounded-nav flex size-6 items-center justify-center">
+                    <ProviderGlyph provider={provider} className="size-icon-sm" />
+                  </span>
+                  {VENDOR_LABELS[provider]}
+                  {plan && (
+                    <Badge variant="secondary" className="text-2xs font-normal">
+                      {plan.charAt(0).toUpperCase()}
+                      {plan.slice(1)}
+                    </Badge>
                   )}
-                </SettingsRow>
+                  <span
+                    aria-hidden
+                    className={cn("size-1.5 rounded-full", stateDot(providerOn(settings, provider), overview))}
+                  />
+                </TabsTrigger>
               );
             })}
-            <SettingsRow label={PROVIDERS_ROWS.setup.label} description={PROVIDERS_ROWS.setup.description}>
-              <SettingsButton onClick={() => reopenOnboarding()}>Run setup</SettingsButton>
-            </SettingsRow>
-          </SettingsCard>
-        </SettingsSection>
-        <AdvancedRouting groups={groups} />
-        <SettingsSection title={PROVIDERS_ROWS.details.label} description={PROVIDERS_ROWS.details.description}>
-          <SettingsCard>
-            <SettingsRow
-              label="Learned in"
-              description="The project the details show the adjustments for, or all of them"
-            >
-              <ProjectPicker projectId={picked} />
-            </SettingsRow>
-          </SettingsCard>
-          {merged === null ? (
-            <p className="text-muted-foreground text-xs">Reading the models…</p>
-          ) : (
-            <SettingsCard>
-              {detailed.map((model) => (
-                <ModelRow
-                  key={`${model.provider}/${model.id}`}
-                  model={model}
-                  learned={learned}
-                  projectId={picked}
-                  groups={groups}
-                />
-              ))}
-            </SettingsCard>
-          )}
-        </SettingsSection>
-        <RatingsSection rankings={rankings} merged={merged} registry={view?.registry ?? null} now={now} />
-      </SettingsAdvanced>
+          </TabsList>
+          {PROVIDERS.map((provider) => (
+            <TabsContent key={provider} value={provider}>
+              <ProviderPanel
+                provider={provider}
+                overview={overviews?.find((entry) => entry.provider === provider)}
+                accounts={accounts === undefined ? null : accountsOf(accounts, provider)}
+                merged={merged}
+                groups={groups}
+                now={now}
+                revealed={revealed}
+              />
+            </TabsContent>
+          ))}
+        </Tabs>
+      </div>
     </SettingsPage>
   );
 }

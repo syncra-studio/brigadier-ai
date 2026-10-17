@@ -1,4 +1,4 @@
-/** Settings → Providers over a faked daemon: accounts with masked emails, models, rules. */
+/** Settings → Providers over a faked daemon: a tab per agent, accounts with masked emails, models. */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -7,21 +7,15 @@ import { revealSetting } from "@/app/settings/reveal";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type {
-  AccountView,
-  ModelInfo,
-  OverrideRule,
-  ProviderKind,
-  ProviderOverview,
-  ProviderStatus,
-  Request,
-} from "@/ipc/generated";
+import { accounts, overviews, previewRoutes, projects, rankings, rules, usageView } from "@/fixtures/routingData";
+import type { Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
 
 /*
- * ?drive=1 reveals one account's email, leaves the page and comes back, opens a search result
- * whose row moved, and follows a new model's link to its rule, writing what it saw to
+ * ?drive=1 reveals one account's email, leaves the page and comes back, follows the old Usage
+ * page's link, a model's rule tag and a new model's link to Routing, and searches for a row that
+ * moved there, writing what it saw to
  * #providers-result (ProvidersPageRender.test.ts reads it). Without it, the page stays as it
  * opens, for screenshots (see ?reveal and ?show below).
  */
@@ -34,110 +28,13 @@ if (params.has("drive")) {
   document.head.append(still);
 }
 
-function model(id: string, displayName: string, fields: Partial<ModelInfo> = {}): ModelInfo {
-  return {
-    id,
-    displayName,
-    description: "",
-    resolved: null,
-    efforts: [],
-    defaultEffort: null,
-    isDefault: false,
-    inputModalities: [],
-    fast: null,
-    legacy: false,
-    ...fields,
-  };
-}
-
-function status(provider: ProviderKind, fields: Partial<ProviderStatus> = {}): ProviderStatus {
-  return {
-    provider,
-    path: `/usr/local/bin/${provider}`,
-    version: "2.1.0",
-    loggedIn: true,
-    authMethod: "subscription",
-    plan: "max",
-    guidance: null,
-    compacts: true,
-    ...fields,
-  };
-}
-
-function overview(provider: ProviderKind, models: ModelInfo[]): ProviderOverview {
-  return {
-    provider,
-    status: status(provider),
-    models: { provider, models, cliVersion: "2.1.0", fetchedAtMs: 0 },
-    quota: null,
-    usage: null,
-    error: null,
-    checkedAtMs: Date.now(),
-  };
-}
-
-const quota = (provider: ProviderKind, fiveHour: number, week: number) => ({
-  provider,
-  windows: [
-    { id: "five_hour", label: "5-hour", usedPercent: fiveHour, resetsAtMs: null, windowMinutes: 300, bucket: null, model: null },
-    { id: "seven_day", label: "Weekly", usedPercent: week, resetsAtMs: null, windowMinutes: 10_080, bucket: null, model: null },
-  ],
-  limit: null,
-  observedAtMs: Date.now(),
-  source: "read" as const,
-});
-
-function account(provider: ProviderKind, id: string | undefined, fields: Partial<AccountView>, email: string): AccountView {
-  return {
-    account: id === undefined ? { provider } : { provider, account: id },
-    name: "",
-    default: false,
-    status: status(provider, { email }),
-    quota: quota(provider, 32, 69),
-    quotaAtMs: Date.now(),
-    checkedAtMs: Date.now(),
-    checking: false,
-    checkedGeneration: 0,
-    error: null,
-    ...fields,
-  };
-}
-
-const accounts: AccountView[] = [
-  account("claude", undefined, { default: true }, "stephen.golban@example.com"),
-  account("claude", "acct-work", { name: "work.person@corp.example.io", quota: quota("claude", 84, 93) }, "work.person@corp.example.io"),
-  account("claude", "acct-side", { name: "Side project" }, "side@example.org"),
-  account("codex", undefined, { default: true }, "stephen@example.com"),
-];
-
-const workerKinds: OverrideRule["categories"] = ["scout", "research", "implement", "review", "merge", "verify", "operate"];
-const rules: OverrideRule[] = [
-  // What Routing's old switch wrote for a model kept from tasks.
-  { id: "old-switch", effect: "never", target: { type: "model", provider: "claude", id: "sonnet" }, categories: workerKinds, areas: [], projectId: null, createdAtMs: 1 },
-  // A model seen after its agent's first list.
-  { id: "new-model-0192", effect: "never", target: { type: "model", provider: "codex", id: "gpt-6-luna" }, categories: workerKinds, areas: [], projectId: null, createdAtMs: 2 },
-];
-
 useApp.setState((state) => ({
   info: { ...state.info, platform: "macos" } as typeof state.info,
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
-  settings: { ...state.settings, routingOverrides: rules, switchAccounts: true },
+  settings: { ...state.settings, routingOverrides: rules, routingRankings: rankings, switchAccounts: true },
+  projects,
   accounts: { accounts },
-  providers: {
-    ...state.providers,
-    view: {
-      providers: [
-        overview("claude", [
-          model("opus", "Opus 5.5", { isDefault: true }),
-          model("sonnet", "Sonnet 5.5"),
-          model("claude-fable-5-1", "Fable 5.1"),
-        ]),
-        overview("codex", [model("gpt-6", "GPT-6", { isDefault: true }), model("gpt-6-luna", "GPT-6 Luna")]),
-      ],
-      sessions: [],
-      fixtures: [],
-    },
-  },
+  providers: { ...state.providers, view: { providers: overviews, sessions: [], fixtures: [] } },
 }));
 
 mockIPC((command, payload) => {
@@ -150,8 +47,10 @@ mockIPC((command, payload) => {
       return { method: req.method, settings: req.settings };
     case "getRankingsRefresh":
       return { method: req.method, refresh: null };
+    case "getUsage":
+      return { method: req.method, usage: usageView(req.projectId) };
     case "previewRoutes":
-      return { method: req.method, routes: [] };
+      return { method: req.method, routes: previewRoutes(req.areas, req.author) };
     default:
       return { method: req.method };
   }
@@ -166,18 +65,16 @@ const button = (name: string, root: ParentNode = document) =>
     (element) => text(element) === name || element.getAttribute("aria-label") === name,
   );
 const titles = () => all('[data-slot="account-title"]').map(text);
-const advancedOpen = () => document.querySelector('[data-slot="settings-advanced"]')?.getAttribute("data-state") === "open";
+/** Presses a tab the way a pointer does (Radix switches tabs on mouse down). */
+const press = (element: Element | undefined | null) => {
+  element?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+};
 /** Whether the element is in the page's scrolled view. */
 const inView = (element: Element | undefined | null) => {
   if (!element) return false;
   const box = element.getBoundingClientRect();
   return box.bottom > 0 && box.top < window.innerHeight;
 };
-const section = (name: string) =>
-  all("section").find((element) => {
-    const id = element.getAttribute("aria-labelledby");
-    return id !== null && text(document.getElementById(id)) === name;
-  });
 const typeSearch = (value: string) => {
   const input = document.querySelector<HTMLInputElement>('input[aria-label="Search settings"]');
   if (!input) return;
@@ -192,7 +89,7 @@ function Fixture() {
   useEffect(() => {
     openSettings("providers");
     // For screenshots: ?reveal=1 shows the second account's email, ?show=<row> brings a row
-    // into view (opening Advanced for one of its rows).
+    // into view.
     if (params.has("reveal") || params.has("show")) {
       const timer = setTimeout(() => {
         if (params.has("reveal")) {
@@ -207,19 +104,16 @@ function Fixture() {
     const seen: Record<string, unknown> = {};
     const steps: (() => void)[] = [
       () => {
-        seen.sections = all("main section > div h2").map(text);
+        seen.tabs = all('[data-slot="tabs-trigger"]').map(text);
+        seen.status = text(document.querySelector('[data-slot="provider-panel"] > div'));
         seen.switchRow = Boolean(document.querySelector('[data-setting="Switch to another account when one runs out"]'));
         seen.masked = titles();
         seen.eyes = all("button").filter((element) => element.getAttribute("aria-label") === "Show email").length;
-        seen.usage = all('[data-slot="account-usage"]').slice(0, 4).map((element) => ({
-          text: text(element),
-          tone: element.lastElementChild?.className,
-        }));
-        seen.models = all('[data-slot="settings-card"]')
-          .flatMap((card) => all('[data-slot="settings-row"]', card))
-          .filter((row) => row.querySelector('button[role="switch"][aria-label^="Use "]') && !row.dataset.setting)
-          .map(text);
-        seen.advancedAtFirst = advancedOpen();
+        seen.usage = all('[data-slot="account-usage"]').slice(0, 4).map((element) => {
+          const share = all("span", element).find((span) => span.textContent?.endsWith("% used") && span.children.length === 0);
+          return { text: text(share), tone: share?.className };
+        });
+        seen.models = all('[data-slot="provider-model"]').map(text);
         // Reveal the second account's email only.
         all<HTMLButtonElement>("button").filter((element) => element.getAttribute("aria-label") === "Show email")[1]?.click();
       },
@@ -232,29 +126,39 @@ function Fixture() {
       },
       () => {
         seen.afterLeaving = titles();
-        typeSearch("Models Brigadier can give work to");
+        // The Usage page is gone: its links land on the accounts.
+        openSettings("usage");
       },
       () => {
-        seen.searched = {
+        seen.usageLink = {
           page: useApp.getState().selection,
-          advanced: advancedOpen(),
-          rulesInView: inView(section("Rules")),
-          rules: all('[data-setting^="Don\'t give"]').map((row) => text(row)),
+          accountsInView: inView(document.querySelector('[data-setting="Accounts"]')),
         };
-        openSettings("git");
+        all<HTMLButtonElement>("button").find((element) => text(element).startsWith("Never gets Review changes"))?.click();
       },
       () => {
+        const rule = document.querySelector('[data-setting="Never use Claude Sonnet 5.5 for review"]');
+        seen.ruleLink = {
+          page: useApp.getState().selection,
+          kind: text(document.querySelector('[data-slot="routing-kind"][aria-selected="true"]')),
+          inView: inView(rule),
+        };
         openSettings("providers");
       },
       () => {
-        seen.advancedAgain = advancedOpen();
-        const allow = button("Allow in Rules");
-        seen.newModelRow = text(allow?.closest('[data-slot="settings-row"]'));
-        allow?.click();
+        press(all('[data-slot="tabs-trigger"]').find((element) => text(element).startsWith("Codex")));
+      },
+      () => {
+        seen.codexModels = all('[data-slot="provider-model"]').map(text);
+        button("Allow in Routing")?.click();
       },
       () => {
         const rule = all('[data-setting^="Don\'t give"]').find((row) => row.dataset.setting?.includes("Luna"));
-        seen.allowed = { advanced: advancedOpen(), rule: rule?.dataset.setting, inView: inView(rule) };
+        seen.allowed = { page: useApp.getState().selection, rule: rule?.dataset.setting, inView: inView(rule) };
+        typeSearch("Who does what");
+      },
+      () => {
+        seen.searched = useApp.getState().selection;
         setResult(JSON.stringify(seen));
       },
     ];

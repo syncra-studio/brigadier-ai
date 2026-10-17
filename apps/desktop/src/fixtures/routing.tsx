@@ -1,0 +1,193 @@
+/** Settings → Routing over a faked daemon: kinds of work, orders, rules and the models' ratings. */
+import { mockIPC } from "@tauri-apps/api/mocks";
+import { useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+
+import { ROUTING_PAGE_ROWS } from "@/app/routing/RoutingPage";
+import { revealSetting } from "@/app/settings/reveal";
+import { SettingsNav } from "@/app/settings/SettingsNav";
+import { SettingsView } from "@/app/settings/SettingsView";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { accounts, overviews, previewRoutes, projects, rankings, rules, usageView } from "@/fixtures/routingData";
+import type { Request } from "@/ipc/generated";
+import { openSettings } from "@/state/actions";
+import { useApp } from "@/state/store";
+
+/*
+ * ?drive=1 picks Review changes, reads its order, ranking, rules and overrides, asks the ranking
+ * about a change Codex wrote, removes a model from the order, makes the order wait, resets it,
+ * opens a model's profile and adds a rule, writing what it saw to #routing-result
+ * (RoutingPageRender.test.ts reads it). Without it the page stays as it opens, for screenshots:
+ * ?kind=<name> picks a kind, ?open=<model> opens a model's profile, ?show=<row> reveals one.
+ */
+const params = new URLSearchParams(location.search);
+if (params.has("drive")) {
+  const still = document.createElement("style");
+  still.textContent =
+    "*, *::before, *::after { animation: none !important; transition: none !important; backdrop-filter: none !important; }";
+  document.head.append(still);
+}
+
+useApp.setState((state) => ({
+  info: { ...state.info, platform: "macos" } as typeof state.info,
+  connection: { ...state.connection, status: "connected" } as typeof state.connection,
+  settings: { ...state.settings, routingOverrides: rules, routingRankings: rankings },
+  projects,
+  accounts: { accounts },
+  providers: { ...state.providers, view: { providers: overviews, sessions: [], fixtures: [] } },
+}));
+
+/** Every preview asked for, in order. */
+const asked: { projectId: string | null; areas: string[]; author: string | null }[] = [];
+
+mockIPC((command, payload) => {
+  if (command !== "ipc_request") return null;
+  const req = (payload as { request: Request }).request;
+  switch (req.method) {
+    case "getAccounts":
+      return { method: req.method, accounts: { accounts } };
+    case "updateSettings":
+      return { method: req.method, settings: req.settings };
+    case "getUsage":
+      return { method: req.method, usage: usageView(req.projectId) };
+    case "getRankingsRefresh":
+      return { method: req.method, refresh: null };
+    case "previewRoutes":
+      asked.push({ projectId: req.projectId, areas: req.areas, author: req.author });
+      return { method: req.method, routes: previewRoutes(req.areas, req.author) };
+    default:
+      return { method: req.method };
+  }
+});
+
+const all = <T extends Element = HTMLElement>(selector: string, root: ParentNode = document) => [
+  ...root.querySelectorAll<T>(selector),
+];
+const text = (element: Element | null | undefined) => element?.textContent?.trim().replaceAll(/\s+/g, " ") ?? "";
+const button = (name: string, root: ParentNode = document) =>
+  all<HTMLButtonElement>("button", root).find(
+    (element) => text(element) === name || element.getAttribute("aria-label") === name,
+  );
+/** Opens a menu's trigger the way a pointer does (Radix opens menus on pointer down). */
+const press = (element: Element | undefined | null) => {
+  element?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
+};
+const menuItem = (name: string) =>
+  all('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]').find((item) => text(item) === name);
+const review = () => useApp.getState().settings.routingRankings.find((ranking) => ranking.id === "rank-review");
+
+function Fixture() {
+  const page = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
+  const [result, setResult] = useState("");
+  useEffect(() => {
+    openSettings("routing");
+    if (!params.has("drive")) {
+      const timer = setTimeout(() => {
+        const kind = params.get("kind");
+        if (kind) all<HTMLButtonElement>('[data-slot="routing-kind"]').find((element) => text(element).startsWith(kind))?.click();
+        const open = params.get("open");
+        if (open) all<HTMLButtonElement>('[data-slot="rating-row"] > button').find((row) => text(row).startsWith(open))?.click();
+        const show = params.get("show");
+        if (show) revealSetting(show);
+      }, 800);
+      return () => clearTimeout(timer);
+    }
+    const seen: Record<string, unknown> = {};
+    const steps: (() => void)[] = [
+      () => {
+        seen.kinds = all('[data-slot="routing-kind"]').map(text);
+        seen.selected = text(document.querySelector('[data-slot="routing-kind"][aria-selected="true"]'));
+        all<HTMLButtonElement>('[data-slot="routing-kind"]').find((element) => text(element).startsWith("Review changes"))?.click();
+      },
+      () => {
+        seen.heading = text(document.querySelector("main h2.text-xl"));
+        seen.order = text(document.querySelector('[data-slot="try-order"]'));
+        seen.ranked = all('[data-slot="route-candidate"]').map(text);
+        seen.blocked = all('[data-slot="blocked-candidate"]').length;
+        seen.more = text(all('[data-slot="ranking-now"] button').find((element) => text(element).includes("more")));
+        seen.rules = all('[data-slot="routing-rule"]').map((row) => row.dataset.setting);
+        seen.overrides = all('[data-slot="area-override"]').length;
+        // Every searchable row without a replacement has a place search can bring into view.
+        seen.unrevealable = Object.values(ROUTING_PAGE_ROWS)
+          .filter((row) => !("target" in row))
+          .map((row) => row.label)
+          .filter((label) => !all("[data-setting]").some((element) => element.dataset.setting === label));
+        seen.authors = asked.filter((question) => question.author !== null).map((question) => question.author);
+        press(button("Who wrote the change under review"));
+      },
+      () => {
+        (menuItem("Codex") as HTMLElement | undefined)?.click();
+      },
+      () => {
+        seen.askedCodex = asked.some((question) => question.author === "codex");
+        seen.reasonAfter = text(document.querySelector('[data-slot="route-candidate"][data-chosen] p'));
+        button("Remove GPT-6")?.click();
+      },
+      () => {
+        seen.afterRemove = review()?.entries.map((entry) => (entry.target.type === "model" ? entry.target.id : ""));
+        seen.orderAfterRemove = text(document.querySelector('[data-slot="try-order"] ol'));
+        press(button("When none of Review changes's models can run"));
+      },
+      () => {
+        (menuItem("wait") as HTMLElement | undefined)?.click();
+      },
+      () => {
+        seen.waits = review()?.only;
+        button("Reset to default")?.click();
+      },
+      () => {
+        seen.afterReset = { manual: review()?.manual, kept: review()?.entries.length };
+        seen.automatic = text(document.querySelector('[data-slot="try-order"]'));
+        seen.ratingGroups = all('[data-slot="model-ratings"] .font-medium')
+          .map(text)
+          .filter((name) => ["Claude", "Codex", "Not in the registry"].includes(name));
+        seen.ratingRows = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
+        seen.best = all('[data-slot="rating-row"] .text-success').map(text);
+        all<HTMLButtonElement>('[data-slot="rating-row"] > button').find((row) => text(row).startsWith("GPT-6"))?.click();
+      },
+      () => {
+        const profile = document.querySelector('[data-slot="rating-row"] .grid-cols-4');
+        seen.profile = all("h4", profile ?? document.body).map(text);
+        seen.learned = text(profile?.querySelector(".text-2xl"));
+        button("Add rule")?.click();
+      },
+      () => {
+        seen.form = Boolean(document.querySelector('[data-slot="routing-rule-form"]'));
+        button("Cancel")?.click();
+      },
+      () => {
+        seen.formAfterCancel = Boolean(document.querySelector('[data-slot="routing-rule-form"]'));
+        setResult(JSON.stringify(seen));
+      },
+    ];
+    let stopped = false;
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    void (async () => {
+      await wait(600);
+      for (const step of steps) {
+        if (stopped) return;
+        step();
+        await wait(300);
+      }
+    })();
+    return () => {
+      stopped = true;
+    };
+  }, []);
+  return (
+    <TooltipProvider>
+      <div className="bg-background text-foreground flex h-screen">
+        <aside className="w-64 shrink-0">
+          <SettingsNav />
+        </aside>
+        <main className="flex h-full min-w-0 flex-1">
+          <div className="min-w-0 flex-1">{page && <SettingsView page={page} />}</div>
+        </main>
+      </div>
+      {result && <pre id="routing-result">{result}</pre>}
+    </TooltipProvider>
+  );
+}
+
+const root = document.getElementById("root");
+if (root) createRoot(root).render(<Fixture />);

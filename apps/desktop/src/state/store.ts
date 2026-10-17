@@ -28,8 +28,8 @@ import { confirmPending } from "@/state/shownIds";
 export type SettingsPageId =
   | "general"
   | "configuration"
-  | "usage"
   | "providers"
+  | "routing"
   | "git"
   | "computerUse"
   | "storage"

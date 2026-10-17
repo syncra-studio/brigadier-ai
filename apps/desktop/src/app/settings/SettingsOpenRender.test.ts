@@ -23,8 +23,8 @@ test("settings and its pages show on the first frame, data filling in where it g
   assert.equal(seen.error, undefined);
   // Its code loaded at idle: the navigation and General, with no empty frame first.
   assert.deepEqual(seen.settings, { nav: true, backToApp: false, title: "General" });
-  // The usage read made at idle: Usage opens filled in.
-  assert.deepEqual(seen.usage, { title: "Usage", data: true, reading: false });
+  // The usage read made at idle: Providers opens with the models' details filled in.
+  assert.deepEqual(seen.usage, { title: "Providers", data: true, reading: false });
   // The permissions read still on its way: the page and its rows show, its setup line saying
   // it is checking; then the answer fills in.
   assert.equal(seen.computerUse.title, "Computer use");

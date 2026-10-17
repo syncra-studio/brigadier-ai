@@ -239,11 +239,13 @@ impl SessionManager {
 
     /// What routing would choose for each task category now, for the next task in `project`
     /// touching `areas`: the same question a submitted task asks, the next trial slot
-    /// included. Starts nothing and takes no trial slot.
+    /// included; a review as if `author`'s vendor wrote the change. Starts nothing and takes
+    /// no trial slot.
     pub async fn preview_routes(
         &self,
         project: Option<ProjectId>,
         areas: Vec<Area>,
+        author: Option<ProviderKind>,
     ) -> Vec<RoutePreview> {
         let rankings = self.core.settings().routing_rankings;
         let mut previews = Vec::new();
@@ -260,7 +262,13 @@ impl SessionManager {
                     },
                     pin: None,
                     hold_pin: false,
-                    avoid: None,
+                    // A review of a change goes to another vendor than its author's.
+                    avoid: author
+                        .filter(|_| category == TaskCategory::Review)
+                        .map(|provider| brigadier_router::Author {
+                            provider,
+                            model: None,
+                        }),
                     distinct_from: Vec::new(),
                     exclude: &[],
                     project_id: project.as_ref(),

@@ -1061,6 +1061,10 @@ pub enum Request {
         project_id: Option<ProjectId>,
         #[serde(default)]
         areas: Vec<Area>,
+        /// Who wrote the change a review is about: the review goes to another vendor when one
+        /// can take it, as it does for a real review.
+        #[serde(default)]
+        author: Option<ProviderKind>,
     },
     /// Asks the repository for a newer model registry now; answers the registry in use after.
     CheckRegistry,

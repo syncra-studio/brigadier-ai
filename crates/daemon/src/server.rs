@@ -2201,8 +2201,12 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::GetUsageActivity { days } => Response::GetUsageActivity {
             activity: daemon.sessions.usage_activity(days).await,
         },
-        Request::PreviewRoutes { project_id, areas } => Response::PreviewRoutes {
-            routes: heap(|| daemon.sessions.preview_routes(project_id, areas)).await,
+        Request::PreviewRoutes {
+            project_id,
+            areas,
+            author,
+        } => Response::PreviewRoutes {
+            routes: heap(|| daemon.sessions.preview_routes(project_id, areas, author)).await,
         },
         Request::GetRankingsRefresh => Response::GetRankingsRefresh {
             refresh: daemon.runtime.registry().rankings_refresh(),

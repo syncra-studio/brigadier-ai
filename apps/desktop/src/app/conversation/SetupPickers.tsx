@@ -397,8 +397,8 @@ function StandInPill({
         <button
           type="button"
           data-slot="stand-in-model"
-          aria-label={`${text}. ${fallback.reason} Open the Usage page.`}
-          onClick={() => openSettings("usage")}
+          aria-label={`${text}. ${fallback.reason} Open Providers.`}
+          onClick={() => openSettings("providers")}
           className="h-pill px-pill rounded-capsule bg-warning/15 text-warning hover:bg-warning/25 inline-flex max-w-sm min-w-0 shrink items-center gap-1 text-xs transition-colors"
         >
           <Shuffle aria-hidden className="size-icon-xs shrink-0" />

@@ -249,8 +249,8 @@ export function inspectedConversation(state: AppState): Conversation | null {
 const MERGED_SETTINGS_PAGES = {
   conversations: { page: "configuration", row: "Model for sessions" },
   personalization: { page: "configuration", row: "Memories" },
-  accounts: { page: "providers", row: "Switch to another account when one runs out" },
-  routing: { page: "providers", row: "Who does what" },
+  accounts: { page: "providers", row: "Accounts" },
+  usage: { page: "providers", row: "Accounts" },
 } as const satisfies Record<string, { page: SettingsPageId; row: string }>;
 
 /** A Settings page's id, or one of a page since merged into another. */

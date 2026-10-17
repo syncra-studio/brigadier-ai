@@ -130,13 +130,13 @@ function barStatus(shown: (ProviderOverview & { quota: QuotaSnapshot })[]): {
 
 /**
  * Usage at the sidebar's foot: its icon (tinted, with a dot, from 80% used), and on
- * click each agent's windows, with the way to the Usage page.
+ * click each agent's windows, with the way to the Providers page.
  */
 export function UsageMenu() {
   useUsageRefresh();
   const providers = useApp((s) => s.providers.view?.providers);
   const onPage = useApp(
-    (s) => s.selection.type === "settings" && s.selection.page === "usage",
+    (s) => s.selection.type === "settings" && s.selection.page === "providers",
   );
   const now = useNow();
   const shown = (providers ?? []).filter(withQuota);
@@ -165,9 +165,9 @@ export function UsageMenu() {
           ))
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => openSettings("usage")}>
+        <DropdownMenuItem onSelect={() => openSettings("providers")}>
           <Usage />
-          Open the Usage page
+          Open Providers
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

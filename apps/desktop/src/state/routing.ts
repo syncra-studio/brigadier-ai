@@ -5,6 +5,7 @@ import type {
   Area,
   ModelRef,
   OverrideRule,
+  ProviderKind,
   Ranking,
   RoutePreview,
   TaskCategory,
@@ -146,11 +147,13 @@ const PREVIEW_EVERY_MS = 30_000;
  * What routing would choose for the next task of each kind, in `projectId`, touching `areas`:
  * read on opening, again whenever the rules, rankings or a provider's state change, and every
  * half minute while the window can be seen (quota, running workers and the trial slot move).
- * Only the latest question's answer is kept.
+ * A review is previewed as if `author`'s vendor wrote the change. Only the latest question's
+ * answer is kept.
  */
 export function useRoutePreview(
   projectId: string | null,
   areas: readonly Area[],
+  author: ProviderKind | null = null,
 ): { routes: RoutePreview[] | null; error: string | null } {
   const connected = useApp((s) => s.connection.status === "connected");
   const providers = useApp((s) => s.providers.view?.providers);
@@ -167,7 +170,12 @@ export function useRoutePreview(
     if (!connected) return;
     const read = () => {
       const seq = ++asked.current;
-      request({ method: "previewRoutes", projectId, areas: areasKey ? (areasKey.split(",") as Area[]) : [] })
+      request({
+        method: "previewRoutes",
+        projectId,
+        areas: areasKey ? (areasKey.split(",") as Area[]) : [],
+        author,
+      })
         .then(({ routes: next }) => {
           if (seq !== asked.current) return;
           setRoutes(next);
@@ -185,6 +193,6 @@ export function useRoutePreview(
     // Read again whenever a provider's state, a rule, a ranking, what's available or the models'
     // ratings change.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [connected, projectId, areasKey, providers, rules, rankings, disabledProviders, hiddenModels, rankingsRevision]);
+  }, [connected, projectId, areasKey, author, providers, rules, rankings, disabledProviders, hiddenModels, rankingsRevision]);
   return { routes, error };
 }

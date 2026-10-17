@@ -5,7 +5,7 @@
  * `scripts/measure-settings-open.mjs`.
  *
  * The sidebar's foot has the real Settings button; `[data-open-page]` buttons open Settings at a
- * page, as the app's links into a page do (Usage from the usage menu, Import Browser Data from
+ * page, as the app's links into a page do (Providers from the usage menu, Import Browser Data from
  * the browser's menu). `window.ipcCalls` lists what was asked, with when. ?drive=1 opens Settings
  * and some of its pages and writes what each showed on its first frame to #settings-open-result
  * (SettingsOpenRender.test.ts reads it).
@@ -227,7 +227,7 @@ const waiting = (method: string) => calls.some((call) => call.method === method 
 // ----- the layout ------------------------------------------------------------------------------
 
 const PAGES: SettingsPageId[] = [
-  "general", "voice", "configuration", "shortcuts", "providers", "usage", "git", "computerUse",
+  "general", "voice", "configuration", "shortcuts", "providers", "routing", "git", "computerUse",
   "browser", "browserImport", "storage", "inspector", "archived",
 ];
 
@@ -271,7 +271,7 @@ async function drive(): Promise<string> {
   };
   // Settings open and idle: the Inspector's code loads.
   await sleep(1500);
-  const usage = await open("Usage", () => ({ data: mainText().includes("% left"), reading: mainText().includes("Reading usage") }));
+  const usage = await open("Providers", () => ({ data: mainText().includes("Frontier"), reading: mainText().includes("Reading the models") }));
   const computerUse = await open("Computer use", () => ({
     status: document.querySelector('[data-slot="setup-line"]')?.textContent ?? null,
     readWaiting: waiting("getComputerUse"),

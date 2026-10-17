@@ -72,7 +72,7 @@ function PreviewSection() {
     setRoutes(null);
     preview.run(async () => {
       try {
-        const { routes: next } = await request({ method: "previewRoutes", projectId, areas });
+        const { routes: next } = await request({ method: "previewRoutes", projectId, areas, author: null });
         if (seq === asked.current) setRoutes(next);
       } catch (error) {
         if (seq === asked.current) throw error;

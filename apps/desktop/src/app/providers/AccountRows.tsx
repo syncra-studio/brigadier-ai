@@ -1,4 +1,4 @@
-import { DotsHorizontal, Eye, EyeOff, Plus } from "@openai/apps-sdk-ui/components/Icon";
+import { CheckMd, DotsHorizontal, Eye, EyeOff, Plus } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -17,8 +17,10 @@ import {
 import { Input } from "@/components/ui/input";
 import type { AccountView, ProviderKind, QuotaWindow } from "@/ipc/generated";
 import { hasEmail, maskEmailsIn } from "@/lib/email";
+import { VENDOR_LABELS } from "@/lib/routing";
 import { formatCountdown } from "@/lib/format";
-import { glance, usageTone, used } from "@/lib/quota";
+import { glance, ordered, usageTone, used } from "@/lib/quota";
+import { cn } from "@/lib/utils";
 import {
   accountLabel,
   addAccount,
@@ -66,20 +68,23 @@ type SigningIn = { id: string | null; fresh: boolean; exitedAtMs: number | null 
 
 /**
  * One agent's accounts as a card (the computer's own login first), ending in a row that adds
- * another and shows its sign-in.
+ * another and shows its sign-in. `wide` lays them out as Settings › Providers does: rows split by
+ * hairlines, each window's usage on the row itself, and a link that adds another.
  */
 export function ProviderAccounts({
   provider,
   views,
   now,
   revealed,
+  wide = false,
 }: {
   provider: ProviderKind;
   views: AccountView[] | null;
   now: number;
   revealed: Revealed;
+  wide?: boolean;
 }) {
-  const label = PROVIDER_LABELS[provider];
+  const label = wide ? VENDOR_LABELS[provider] : PROVIDER_LABELS[provider];
   const [signing, setSigning] = useState<SigningIn | null>(null);
   const signingId = useRef<string | null>(null);
   // Off the page: a new account added only after that goes again with its sign-in.
@@ -146,34 +151,64 @@ export function ProviderAccounts({
   });
   useEffect(() => () => cancel.current?.(), []);
 
+  const rows =
+    views === null ? (
+      wide ? (
+        <p className="text-muted-foreground px-1 py-3.5 text-sm">Reading the accounts…</p>
+      ) : (
+        <SettingsRow label="Reading the accounts…" />
+      )
+    ) : (
+      shown.map((view) => (
+        <AccountRow
+          key={revealKey(view)}
+          view={view}
+          now={now}
+          busy={active !== null}
+          wide={wide}
+          revealed={revealed.has(revealKey(view))}
+          onReveal={() => revealed.toggle(revealKey(view))}
+          onSignIn={start}
+        />
+      ))
+    );
+  const terminal = active && (
+    <SetupTerminal
+      bare
+      provider={provider}
+      install={false}
+      openTerminal={openTerminal}
+      check={null}
+      onExited={onExited}
+      onClose={close}
+    />
+  );
+  const addLabel = anySignedIn ? `Add another ${label} account` : `Add a ${label} account`;
+
+  if (wide) {
+    return (
+      <div data-slot="provider-accounts" className="divide-divider flex flex-col divide-y border-divider border-b">
+        {rows}
+        {terminal || (
+          <button
+            type="button"
+            aria-label={addLabel}
+            disabled={views === null}
+            onClick={() => start(null)}
+            className="text-link flex w-fit items-center gap-2 px-1 py-3.5 text-sm hover:underline disabled:opacity-50"
+          >
+            <Plus className="size-icon-sm" />
+            {addLabel}
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <SettingsCard>
-      {views === null ? (
-        <SettingsRow label="Reading the accounts…" />
-      ) : (
-        shown.map((view) => (
-          <AccountRow
-            key={revealKey(view)}
-            view={view}
-            now={now}
-            busy={active !== null}
-            revealed={revealed.has(revealKey(view))}
-            onReveal={() => revealed.toggle(revealKey(view))}
-            onSignIn={start}
-          />
-        ))
-      )}
-      {active ? (
-        <SetupTerminal
-          bare
-          provider={provider}
-          install={false}
-          openTerminal={openTerminal}
-          check={null}
-          onExited={onExited}
-          onClose={close}
-        />
-      ) : (
+      {rows}
+      {terminal || (
         <button
           type="button"
           aria-label={`Add a ${label} account`}
@@ -184,7 +219,7 @@ export function ProviderAccounts({
           <span className="border-divider flex size-8 shrink-0 items-center justify-center rounded-full border border-dashed">
             <Plus className="size-icon-sm" />
           </span>
-          {anySignedIn ? `Add another ${label} account` : `Add a ${label} account`}
+          {addLabel}
         </button>
       )}
     </SettingsCard>
@@ -222,6 +257,7 @@ function AccountRow({
   view,
   now,
   busy,
+  wide,
   revealed,
   onReveal,
   onSignIn,
@@ -229,6 +265,8 @@ function AccountRow({
   view: AccountView;
   now: number;
   busy: boolean;
+  /** Settings › Providers' row: who on the start, every window's usage across, Use on the end. */
+  wide: boolean;
   revealed: boolean;
   onReveal: () => void;
   /** Signs in to the account `id` again. */
@@ -256,6 +294,123 @@ function AccountRow({
   }
   if (own) details.push("your terminal's login");
 
+  const eye = hidden && (
+    <Button
+      type="button"
+      size="icon-xs"
+      variant="ghost"
+      aria-label={revealed ? "Hide email" : "Show email"}
+      aria-pressed={revealed}
+      className="text-muted-foreground shrink-0"
+      onClick={onReveal}
+    >
+      {revealed ? <EyeOff /> : <Eye />}
+    </Button>
+  );
+  const nameField = renaming && id && (
+    <RenameField
+      name={editable}
+      onDone={(name) => {
+        setRenaming(false);
+        if (name !== null && name !== view.name) action.run(() => renameAccount(id, name));
+      }}
+    />
+  );
+  const use =
+    !signedIn && !own && status?.path ? (
+      <SettingsButton disabled={busy} onClick={() => id && onSignIn(id)}>
+        Sign in
+      </SettingsButton>
+    ) : view.default ? (
+      wide ? (
+        <span className="flex shrink-0 items-center gap-1 text-sm" title="New chats start on this account">
+          <CheckMd aria-hidden className="text-success size-icon-sm" />
+          In use
+        </span>
+      ) : (
+        <Badge variant="secondary" title="New chats start on this account">
+          In use
+        </Badge>
+      )
+    ) : (
+      <SettingsButton
+        disabled={action.busy || !signedIn}
+        title="Start new chats on this account"
+        onClick={() => action.run(() => makeDefaultAccount(provider, id))}
+      >
+        Use
+      </SettingsButton>
+    );
+  const menu = own ? (
+    <span aria-hidden className="size-6 shrink-0" />
+  ) : (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          aria-label={`${title}: more`}
+          className="text-muted-foreground shrink-0"
+          disabled={action.busy}
+        >
+          <DotsHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem>
+        <DropdownMenuItem disabled={busy} onSelect={() => onSignIn(id)}>
+          Sign in again
+        </DropdownMenuItem>
+        <DropdownMenuItem variant="destructive" onSelect={() => action.run(() => removeAccount(id))}>
+          Remove
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
+  if (wide) {
+    // Who it is: the email (masked) over its plan and what it is to the user.
+    const wideTitle = status?.email ? (revealed ? status.email : maskEmailsIn(status.email)) : title;
+    const wideDetails: string[] = [];
+    if (!status) wideDetails.push("Checking…");
+    else if (!status.path) wideDetails.push(`${PROVIDER_LABELS[provider]} isn't installed`);
+    else if (!signedIn) wideDetails.push("Not signed in");
+    else {
+      if (status.plan) wideDetails.push(`${capitalize(status.plan)} plan`);
+      if (view.quotaAtMs === null) wideDetails.push("usage not read yet");
+    }
+    if (own) wideDetails.push("This computer's login");
+    else if (wideTitle !== title) wideDetails.push(title);
+    const all = signedIn && view.quota ? ordered(view.quota) : [];
+    return (
+      <div data-slot="account-row" className="flex items-center gap-6 px-1 py-3.5">
+        <div className="flex w-60 min-w-0 shrink-0 flex-col gap-0.5">
+          {nameField || (
+            <span className="flex min-w-0 items-center gap-1">
+              <span data-slot="account-title" className="text-label truncate font-mono">
+                {wideTitle}
+              </span>
+              {eye}
+            </span>
+          )}
+          <span className="text-foreground/65 truncate text-xs">{wideDetails.join(" · ")}</span>
+          {view.error && <span className="text-destructive text-xs">{view.error}</span>}
+          <ErrorLine error={action.error} />
+        </div>
+        <div className="flex min-w-0 flex-1 flex-wrap gap-x-5 gap-y-2">
+          {all.map((window) => (
+            <UsageMeter key={window.id} window={window} now={now} />
+          ))}
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-3">
+          {use}
+          {menu}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div data-slot="account-row" className="flex items-center gap-3 px-4 py-3">
       <span
@@ -265,32 +420,12 @@ function AccountRow({
         {initial(title)}
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        {renaming && id ? (
-          <RenameField
-            name={editable}
-            onDone={(name) => {
-              setRenaming(false);
-              if (name !== null && name !== view.name) action.run(() => renameAccount(id, name));
-            }}
-          />
-        ) : (
+        {nameField || (
           <span className="flex min-w-0 items-center gap-1">
             <span data-slot="account-title" className="text-label truncate font-medium">
               {title}
             </span>
-            {hidden && (
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
-                aria-label={revealed ? "Hide email" : "Show email"}
-                aria-pressed={revealed}
-                className="text-muted-foreground shrink-0"
-                onClick={onReveal}
-              >
-                {revealed ? <EyeOff /> : <Eye />}
-              </Button>
-            )}
+            {eye}
           </span>
         )}
         <span className="text-foreground/65 flex flex-wrap gap-x-1.5 text-xs tabular-nums">
@@ -311,50 +446,8 @@ function AccountRow({
         {view.error && <span className="text-destructive text-xs">{view.error}</span>}
         <ErrorLine error={action.error} />
       </div>
-      {!signedIn && !own && status?.path ? (
-        <SettingsButton disabled={busy} onClick={() => id && onSignIn(id)}>
-          Sign in
-        </SettingsButton>
-      ) : view.default ? (
-        <Badge variant="secondary" title="New chats start on this account">
-          In use
-        </Badge>
-      ) : (
-        <SettingsButton
-          disabled={action.busy || !signedIn}
-          title="Start new chats on this account"
-          onClick={() => action.run(() => makeDefaultAccount(provider, id))}
-        >
-          Use
-        </SettingsButton>
-      )}
-      {own ? (
-        <span aria-hidden className="size-6 shrink-0" />
-      ) : (
-        <DropdownMenu modal={false}>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              size="icon-xs"
-              variant="ghost"
-              aria-label={`${title}: more`}
-              className="text-muted-foreground shrink-0"
-              disabled={action.busy}
-            >
-              <DotsHorizontal />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem>
-            <DropdownMenuItem disabled={busy} onSelect={() => onSignIn(id)}>
-              Sign in again
-            </DropdownMenuItem>
-            <DropdownMenuItem variant="destructive" onSelect={() => action.run(() => removeAccount(id))}>
-              Remove
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+      {use}
+      {menu}
     </div>
   );
 }
@@ -376,6 +469,62 @@ function UsageBar({ window, now }: { window: QuotaWindow; now: number }) {
       </span>
       <span className={usage.text}>{percent}%</span>
     </span>
+  );
+}
+
+/** Segments in a usage meter's bar. */
+const METER_SEGMENTS = 32;
+
+/**
+ * A window's short name on a meter: what it is limited to ("Fable"), else its length ("5h",
+ * "7d"), else its label.
+ */
+export function meterName(window: QuotaWindow): string {
+  const named = /\((.+)\)$/.exec(window.label);
+  if (named?.[1]) return named[1];
+  const scope = window.model ?? window.bucket;
+  if (scope) return scope;
+  const minutes = window.windowMinutes;
+  if (minutes !== null && minutes > 0) {
+    if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+    if (minutes % 60 === 0) return `${minutes / 60}h`;
+  }
+  return SHORT_WINDOW[window.label] ?? window.label;
+}
+
+/**
+ * A usage window on Settings › Providers: its name and the share used over a bar of segments,
+ * and when it resets; coloured only near its limit.
+ */
+function UsageMeter({ window, now }: { window: QuotaWindow; now: number }) {
+  const percent = used(window);
+  const usage = usageTone(percent, { normal: { text: "text-foreground", fill: "bg-foreground/80" } });
+  const name = meterName(window);
+  const resets = window.resetsAtMs !== null ? formatCountdown(window.resetsAtMs, now) : null;
+  const filled = Math.round((percent / 100) * METER_SEGMENTS);
+  return (
+    <div
+      data-slot="account-usage"
+      className="flex w-56 min-w-0 flex-col gap-1.5 font-mono text-xs"
+      title={`${window.label}: ${percent}% used${resets ? `, resets in ${resets}` : ""}`}
+    >
+      <span className="flex items-baseline justify-between gap-2 whitespace-nowrap">
+        <span>
+          <span className="text-muted-foreground">{name} · </span>
+          <span className={usage.text}>{percent}% used</span>
+        </span>
+        {resets && <span className="text-muted-foreground truncate">resets {resets}</span>}
+      </span>
+      <span aria-hidden className="flex h-2 gap-px">
+        {Array.from({ length: METER_SEGMENTS }, (_, index) => (
+          <span
+            // oxlint-disable-next-line react/no-array-index-key -- the segments are positions.
+            key={index}
+            className={cn("flex-1 rounded-xs", index < filled ? usage.fill : "bg-foreground/12")}
+          />
+        ))}
+      </span>
+    </div>
   );
 }
 

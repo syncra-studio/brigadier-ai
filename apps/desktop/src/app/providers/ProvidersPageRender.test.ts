@@ -5,47 +5,52 @@ import { createServer } from "vite";
 import type { AccountView } from "@/ipc/generated";
 import { renderFixtureLive } from "@/fixtures/headless";
 
-// The real page in Chromium over a faked daemon: emails masked, one row's revealed until the
-// page is left, usage coloured only near the limit, the Don't give work rules (the old switch's
-// and a new model's), and rows whose place moved brought into view, Advanced opening for them.
-test("Providers masks emails, reveals one row until the page is left, and brings moved rows into view", { timeout: 60000 }, async (t) => {
+// The real page in Chromium over a faked daemon: a tab per agent, emails masked, one row's
+// revealed until the page is left, usage coloured only near the limit, the models with their
+// rule tags, and the links that moved to Routing (the old Usage page's, a rule's, a new model's).
+test("Providers shows a tab per agent, masks emails, and links to Routing for rules", { timeout: 60000 }, async (t) => {
   const dump = await renderFixtureLive(t, "providers.html?drive=1", "providers-result", 30000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
-  assert.deepEqual(seen.sections, ["Claude Code", "Codex", "Who does what"]);
+  assert.deepEqual(seen.tabs, ["ClaudeMax", "CodexPlus"]);
+  assert.equal(seen.status, "Readyv2.1.0 · Max plan · /usr/local/bin/claudeOn");
   assert.equal(seen.switchRow, true);
-  const masked = ["ste•••••@•••••.com", "wor•••••@•••••.io", "Side project", "ste•••••@•••••.com"];
+  const masked = ["ste•••••@•••••.com", "wor•••••@•••••.io", "sid•••••@•••••.org"];
   assert.deepEqual(seen.masked, masked);
-  assert.equal(seen.eyes, 4);
+  assert.equal(seen.eyes, 3);
   assert.deepEqual(seen.usage, [
-    { text: "5h32%", tone: "text-foreground/65" },
-    { text: "Week69%", tone: "text-foreground/65" },
-    { text: "5h84%", tone: "text-warning" },
-    { text: "Week93%", tone: "text-destructive" },
+    { text: "32% used", tone: "text-foreground" },
+    { text: "69% used", tone: "text-foreground" },
+    { text: "84% used", tone: "text-warning" },
+    { text: "93% used", tone: "text-destructive" },
   ]);
   assert.deepEqual(seen.models, [
-    "Opus 5.5",
-    "Sonnet 5.5Gets no tasks: a rule under Advanced keeps it to chats and sessions you pick it for",
-    "Fable 5.1Brigadier never gives work to Fable models; you can still pick one for a chat or session",
-    "GPT-6",
-    "GPT-6 LunaNewBrigadier gives it no tasks until you allow itAllow in Rules",
+    "Opus 5.5opus · defaultFrontier · Best for writing code, reviewing changes and resolving conflicts",
+    "Sonnet 5.5sonnetNever gets Review changes · rule in RoutingGets no tasks: a rule in Routing keeps it to chats and sessions you pick it for",
+    "Fable 5.1claude-fable-5-1Brigadier never gives work to Fable models; you can still pick one for a chat or session",
   ]);
-  assert.equal(seen.advancedAtFirst, false);
   // Only the row whose eye was pressed, and only until the page is left.
-  assert.deepEqual(seen.revealed, [masked[0], "work.person@corp.example.io", masked[2], masked[3]]);
+  assert.deepEqual(seen.revealed, [masked[0], "work.person@corp.example.io", masked[2]]);
   assert.deepEqual(seen.afterLeaving, masked);
-  // Search's "Models Brigadier can give work to" lands on Rules, Advanced opened for it; the old
-  // switch's rule and the new model's read as Don't give work rules.
-  assert.deepEqual(seen.searched, {
-    page: { type: "settings", page: "providers" },
-    advanced: true,
-    rulesInView: true,
-    rules: [
-      "Don't give Claude Sonnet 5.5 workYou can still pick it for a chat or session",
-      "Don't give Codex GPT-6 Luna workNew model: Brigadier gives it no tasks until you remove this rule",
-    ],
+  // The old Usage page's links land on the accounts.
+  assert.deepEqual(seen.usageLink, { page: { type: "settings", page: "providers" }, accountsInView: true });
+  // A model's rule tag opens Routing at its kind of work, the rule in view.
+  assert.deepEqual(seen.ruleLink, {
+    page: { type: "settings", page: "routing" },
+    kind: "Review changes→ Opus 5.5, then GPT-6",
+    inView: true,
   });
-  assert.equal(seen.advancedAgain, false);
-  assert.deepEqual(seen.allowed, { advanced: true, rule: "Don't give Codex GPT-6 Luna work", inView: true });
+  assert.deepEqual(seen.codexModels, [
+    "GPT-6gpt-6 · defaultFrontier · Best for writing code, reviewing changes and research",
+    "GPT-6 Lunagpt-6-lunaNewBrigadier gives it no tasks until you allow itAllow in Routing",
+    "GPT-5.5gpt-5.5Strong · Best for research, writing code and reviewing changes",
+  ]);
+  assert.deepEqual(seen.allowed, {
+    page: { type: "settings", page: "routing" },
+    rule: "Don't give Codex GPT-6 Luna work",
+    inView: true,
+  });
+  // Routing's old name finds its page.
+  assert.deepEqual(seen.searched, { type: "settings", page: "routing" });
 });
 
 /** An extra Claude account named `name`, signed in as `email`. */

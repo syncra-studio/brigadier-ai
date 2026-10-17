@@ -98,7 +98,7 @@ export const PLAIN_KIND_NAMES: Record<TaskCategory, string> = {
   verify: "Run checks",
   operate: "Use apps",
   chat: "Take over a chat",
-  orchestrate: "Plan and delegate",
+  orchestrate: "Coordinate work",
   gitText: "Write commit messages",
 };
 
@@ -112,7 +112,7 @@ export const PLAIN_KIND_WORDS: Record<TaskCategory, string> = {
   verify: "running checks",
   operate: "using apps",
   chat: "chat",
-  orchestrate: "planning",
+  orchestrate: "coordinating work",
   gitText: "writing commit messages",
 };
 
@@ -125,13 +125,13 @@ export const PLAIN_TIERS: Record<QualityTier, string> = {
   unrated: "Not rated yet",
 };
 
-/** The least capable tier each kind of work runs on unless the orchestrator asks for more. */
+/** The least capable tier each kind of work runs on unless the orchestrator asks for more (the router's `default_floor`). */
 export const DEFAULT_FLOORS: Record<TaskCategory, QualityTier> = {
   scout: "light",
   research: "standard",
-  implement: "strong",
-  review: "strong",
-  merge: "strong",
+  implement: "frontier",
+  review: "frontier",
+  merge: "frontier",
   verify: "light",
   operate: "strong",
   chat: "light",

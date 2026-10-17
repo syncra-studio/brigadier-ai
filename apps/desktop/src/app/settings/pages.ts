@@ -10,8 +10,8 @@ import {
   Robot,
   SettingsCog,
   SettingsSlider,
+  Shuffle,
   Storage,
-  Usage,
 } from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentType, SVGProps } from "react";
 
@@ -26,7 +26,7 @@ import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
 import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
-import { UsagePage } from "@/app/usage/UsagePage";
+import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/routing/RoutingPage";
 import { preloadable } from "@/lib/preloadable";
 import { prefetchImportSources } from "@/state/browserImport";
 import { type SettingsPageId, useApp } from "@/state/store";
@@ -83,10 +83,6 @@ const INSPECTOR_ROWS: readonly SettingsRowCopy[] = [
   { label: "Routing preview", description: "What routing would pick" },
 ];
 
-const USAGE_ROWS: readonly SettingsRowCopy[] = [
-  { label: "Usage windows", description: "How much of each agent's usage is left" },
-];
-
 export const SETTINGS_GROUPS: readonly SettingsGroup[] = ["Personal", "Agents", "Browser & Data", "System", "end"];
 
 /** A group's title in the navigation; the last group has none. */
@@ -131,7 +127,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   {
     id: "providers",
     label: "Providers",
-    formerly: ["Accounts", "Routing"],
+    formerly: ["Accounts", "Usage"],
     icon: Robot,
     group: "Agents",
     component: ProvidersPage,
@@ -139,12 +135,13 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     prefetch: prefetchUsage,
   },
   {
-    id: "usage",
-    label: "Usage",
-    icon: Usage,
+    id: "routing",
+    label: "Routing",
+    formerly: ["Who does what"],
+    icon: Shuffle,
     group: "Agents",
-    component: UsagePage,
-    rows: USAGE_ROWS,
+    component: RoutingPage,
+    rows: Object.values(ROUTING_PAGE_ROWS),
     prefetch: prefetchUsage,
   },
   {
