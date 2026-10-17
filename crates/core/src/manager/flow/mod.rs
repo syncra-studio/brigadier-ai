@@ -1273,9 +1273,20 @@ pub(crate) struct Scratch {
 impl Scratch {
     /// A fresh folder named for `name`.
     pub fn new(name: &str) -> Self {
+        Self::within(&std::env::temp_dir(), name)
+    }
+
+    /// A fresh folder named for `name` under `/tmp`, whatever the temp directory is, for paths
+    /// that must be there (a preview's `BRIGADIER_DATA_DIR`).
+    #[cfg(target_os = "macos")]
+    pub fn in_tmp(name: &str) -> Self {
+        Self::within(Path::new("/tmp"), name)
+    }
+
+    fn within(root: &Path, name: &str) -> Self {
         sweep_killed_tests();
         let scratch = Self {
-            dir: std::env::temp_dir().join(format!(
+            dir: root.join(format!(
                 "{SCRATCH}{name}-{}-{}",
                 std::process::id(),
                 uuid::Uuid::new_v4().simple()
@@ -1351,10 +1362,15 @@ thread_local! {
 /// Removes the folders of test processes that are gone, once per test process.
 fn sweep_killed_tests() {
     static SWEPT: std::sync::Once = std::sync::Once::new();
-    SWEPT.call_once(|| remove_killed_tests(&std::env::temp_dir()));
+    SWEPT.call_once(|| {
+        remove_killed_tests(&std::env::temp_dir());
+        #[cfg(target_os = "macos")]
+        remove_killed_tests(Path::new("/tmp"));
+    });
 }
 
-/// Removes the folders in `temp` that test processes now gone made with [`Scratch::new`],
+/// Removes the folders in `temp` that test processes now gone made with [`Scratch::new`] (or
+/// [`Scratch::in_tmp`]),
 /// after ending what still runs in them.
 fn remove_killed_tests(temp: &Path) {
     let Ok(platform) = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
