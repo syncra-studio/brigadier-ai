@@ -24,7 +24,8 @@ import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
 import { applyEvents, useApp } from "@/state/store";
 
 const LOAD_MS = 200;
-const TURNS = 60;
+const SHORT = new URLSearchParams(location.search).get("drive") === "short";
+const TURNS = SHORT ? 1 : 60;
 /** Turns the first load brings. */
 const FIRST_TURNS = 40;
 const NEEDLE_TURNS = new Set([31, 35, 40, 44, 50, 55, 58]);
@@ -141,7 +142,7 @@ useApp.setState((state) => ({
 function Page() {
   const selection = useApp((s) => s.selection);
   useEffect(() => {
-    if (new URLSearchParams(location.search).get("drive") === "1") void drive();
+    if (new URLSearchParams(location.search).has("drive")) void drive();
   }, []);
   return (
     <TooltipProvider>
@@ -526,7 +527,37 @@ const steps = {
 async function drive(): Promise<void> {
   const result: Record<string, unknown> = {};
   try {
-    for (const [name, step] of Object.entries(steps)) {
+    if (SHORT || new URLSearchParams(location.search).get("drive") === "top") {
+      select({ type: "conversation", id: "long" });
+      await settle(LOAD_MS + 400);
+      $('[data-slot="earlier-turns"]')?.click();
+      await settle(100);
+      viewport().dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+      viewport().scrollTop = 0;
+      await settle(100);
+      const anchorWord = SHORT ? "Question 1" : "Question 21";
+      const anchorTop = () => {
+        const anchor = document.createRange();
+        anchor.selectNodeContents(textHolding(anchorWord)!.node);
+        return anchor.getBoundingClientRect().top;
+      };
+      const beforeOpen = anchorTop();
+      press(document.body, "KeyF", { meta: true });
+      await until(() => bar() !== null);
+      await settle(100);
+      result["openingMoved"] = round(anchorTop() - beforeOpen);
+      viewport().scrollTop = 0;
+      await frame();
+      const first = document.createTreeWalker(viewport().querySelector('[data-slot="aui_thread-column"]')!, NodeFilter.SHOW_TEXT).nextNode()!;
+      const range = document.createRange();
+      range.selectNodeContents(first);
+      const beforeClose = range.getBoundingClientRect().top;
+      result["clear"] = beforeClose >= bar()!.getBoundingClientRect().bottom;
+      press(field()!, "Escape");
+      await until(() => bar() === null);
+      await settle(100);
+      result["closingMoved"] = round(range.getBoundingClientRect().top - beforeClose);
+    } else for (const [name, step] of Object.entries(steps)) {
       document.body.dataset["findStep"] = name;
       result[name] = await step();
     }
