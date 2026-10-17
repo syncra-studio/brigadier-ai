@@ -454,6 +454,16 @@ export function showMockupTab(conversationId: string, moment: string): void {
   });
 }
 
+/**
+ * Closes the Mockup tab once when the session's mockup reaches `moment` and the user approved it:
+ * it is being built for real (issue 215). ⌘⇧T brings it back; the comparison shows it again.
+ */
+export function closeMockupTab(conversationId: string, moment: string): void {
+  if (sessionTabs(conversationId).mockup === moment) return;
+  update(conversationId, (current) => ({ ...current, mockup: moment }));
+  closeTab(conversationId, MOCKUP_TAB);
+}
+
 export function selectTab(conversationId: string, id: string): void {
   update(conversationId, (current) =>
     id === CHAT_TAB || current.tabs.some((tab) => tab.id === id)

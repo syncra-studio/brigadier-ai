@@ -15,7 +15,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, closeOtherTabs, reopenTab, moveTab,
   selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs,
-  replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, MOCKUP_TAB, openBrowserTab, dropBrowserTabs,
+  replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, closeMockupTab, MOCKUP_TAB, openBrowserTab, dropBrowserTabs,
   sideChatName, sideChatTitle } = await import("./sessionTabs");
 const { documentText, documentIsSaved } = await import("./documentDrafts");
 const { ensurePage, migrateDrafts } = await import("./pageTabs");
@@ -49,6 +49,18 @@ test("the Mockup tab appears at each mockup moment without taking the front, sta
   selectTab(session, MOCKUP_TAB);
   const restored = restoreSessionTabs({ [session]: sessionTabs(session) })[session]!;
   assert.deepEqual(restored, { tabs: [{ kind: "mockup", id: MOCKUP_TAB, opener: CHAT_TAB }], active: MOCKUP_TAB, mockup: "task-1/v2" });
+});
+
+test("an approved mockup's tab closes once as it is built for real, and comes back for the comparison (issue 215)", () => {
+  const session = "mockup-approved";
+  showMockupTab(session, "task-1/v2");
+  closeMockupTab(session, "task-1/v2/matching");
+  assert.deepEqual(sessionTabs(session).tabs, []);
+  assert.equal(reopenTab(session), true, "⌘⇧T brings it back");
+  closeMockupTab(session, "task-1/v2/matching");
+  assert.deepEqual(sessionTabs(session).tabs.map((tab) => tab.id), [MOCKUP_TAB], "only once");
+  showMockupTab(session, "task-1/v2/compared");
+  assert.deepEqual(sessionTabs(session).tabs.map((tab) => tab.id), [MOCKUP_TAB]);
 });
 
 test("multiple tools insert after the front tab; closing returns to the opener and undo restores the position", () => {
