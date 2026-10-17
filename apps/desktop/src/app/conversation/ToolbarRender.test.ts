@@ -60,7 +60,7 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.match(String(seen.draftTree), /src.*package\.json/);
   assert.equal(seen.draftComposer, "@package.json ");
   assert.deepEqual(seen.draftMention, [{ type: "file", path: "package.json" }]);
-  assert.ok((seen.draftSource as string[]).includes("Stage all"), "a local draft stages in the project folder");
+  assert.ok((seen.draftSource as string[]).includes("Stage All Changes"), "a local draft stages in the project folder");
   assert.equal(seen.draftCommitBox, true);
   assert.equal(seen.draftNote, false);
   assert.equal(seen.closedSource, null);

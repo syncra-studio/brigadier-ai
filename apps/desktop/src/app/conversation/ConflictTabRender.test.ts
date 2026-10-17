@@ -3,10 +3,13 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
+/** The fixture's JSON as the page's DOM escaped it. */
+const unescape = (dump: string) => dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&");
+
 const ACCEPTS = "Accept Current Change|Accept Incoming Change|Accept Both Changes|Compare Changes";
 
 test("a conflicted file's tab accepts sides in place, compares them, and completes the merge in the merge editor", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "conflict-tab.html", "conflict-tab-result", 8000)) as Record<string, unknown>;
+  const seen = JSON.parse(unescape(await renderFixturePage(t, "conflict-tab.html", "conflict-tab-result", 8000))) as Record<string, unknown>;
   assert.equal(seen.error, undefined, JSON.stringify(seen));
   assert.deepEqual(seen.lenses, [ACCEPTS, ACCEPTS]);
   // The current side is blue, the incoming one green; their marker lines stronger.
