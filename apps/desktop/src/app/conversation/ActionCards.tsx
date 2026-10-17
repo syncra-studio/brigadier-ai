@@ -152,6 +152,18 @@ function forgetQuestion(id: string): void {
   });
 }
 
+// A question answered elsewhere, withdrawn or dismissed takes its kept state with it.
+useBoard.subscribe(({ board }, { board: before }) => {
+  if (!board || board.conversationId !== before?.conversationId) return;
+  const { byCard } = useKept.getState();
+  for (const id of Object.keys(byCard)) {
+    const question = board.questions[id];
+    if (before.questions[id] && (!question || question.answer !== null || question.answeredAtMs !== null)) {
+      forgetQuestion(id);
+    }
+  }
+});
+
 /** What an answer to a skipped question says, so the asker carries on. */
 const SKIPPED = "Skipped: use your best judgment.";
 

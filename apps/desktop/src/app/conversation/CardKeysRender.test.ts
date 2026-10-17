@@ -72,5 +72,7 @@ test("a question card keeps the answer the user lit and the text typed after a v
   assert.deepEqual(kept!.litAfter, kept!.litBefore);
   assert.equal(kept!.typedBefore, "tiers");
   assert.equal(kept!.typedAfter, "tiers");
+  assert.deepEqual(kept!.litReopened, kept!.litFresh, "a question answered elsewhere keeps nothing");
+  assert.equal(kept!.typedReopened, "");
   assert.deepEqual(kept!.calls, []);
 });
