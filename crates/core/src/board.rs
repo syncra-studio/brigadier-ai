@@ -302,29 +302,35 @@ impl Board {
             .values()
             .filter(|run| run.tool == "run_check" && run.state == BackgroundRunState::Running)
             .map(|run| (format!("run:{}", run.id), SessionPhase::Checking));
-        let steps = self.orchestrator_steps.iter().filter_map(|step| match &step.kind {
-            OrchestratorStepKind::CiWatch {
-                repo,
-                branch,
-                sha,
-                result: None,
-                ..
-            } => Some((format!("ci:{repo} {branch} {sha}"), SessionPhase::WatchingCi)),
-            OrchestratorStepKind::Tool {
-                item_id,
-                name,
-                status: brigadier_providers::ItemStatus::InProgress,
-                ..
-            } if running && step.request_id == self.run_request => {
-                let phase = match name.rsplit("__").next().unwrap_or(name) {
-                    "run_check" => SessionPhase::Checking,
-                    "finish_session" => SessionPhase::Merging,
-                    _ => return None,
-                };
-                Some((format!("tool:{item_id}"), phase))
-            }
-            _ => None,
-        });
+        let steps = self
+            .orchestrator_steps
+            .iter()
+            .filter_map(|step| match &step.kind {
+                OrchestratorStepKind::CiWatch {
+                    repo,
+                    branch,
+                    sha,
+                    result: None,
+                    ..
+                } => Some((
+                    format!("ci:{repo} {branch} {sha}"),
+                    SessionPhase::WatchingCi,
+                )),
+                OrchestratorStepKind::Tool {
+                    item_id,
+                    name,
+                    status: brigadier_providers::ItemStatus::InProgress,
+                    ..
+                } if running && step.request_id == self.run_request => {
+                    let phase = match name.rsplit("__").next().unwrap_or(name) {
+                        "run_check" => SessionPhase::Checking,
+                        "finish_session" => SessionPhase::Merging,
+                        _ => return None,
+                    };
+                    Some((format!("tool:{item_id}"), phase))
+                }
+                _ => None,
+            });
         let merge = crate::manager::held_merge(self)
             .map(|asked_in| (format!("merge:{asked_in}"), SessionPhase::Merging));
         let mut phases: Vec<_> = tasks
@@ -996,10 +1002,15 @@ mod ci_tests {
         let id = ConversationId("c1".into());
         let mut board = Board::default();
         board.apply(&watch("o/n", None), 1);
-        let activity = board.activity(&id).expect("a watch keeps the session active");
+        let activity = board
+            .activity(&id)
+            .expect("a watch keeps the session active");
         assert_eq!(
             activity.phases,
-            [("ci:o/n main 97c298d5".to_owned(), crate::work::SessionPhase::WatchingCi)]
+            [(
+                "ci:o/n main 97c298d5".to_owned(),
+                crate::work::SessionPhase::WatchingCi
+            )]
         );
         board.apply(&watch("o/n", Some("passed")), 2);
         assert_eq!(board.activity(&id), None);
