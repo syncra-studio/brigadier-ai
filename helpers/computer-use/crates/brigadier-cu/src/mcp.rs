@@ -17,9 +17,27 @@ pub fn initialize_result() -> Value {
         "protocolVersion": "2025-06-18",
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "brigadier-cu", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": agent_instructions(host_manages_session())
+        "instructions": instructions_for(brigadier_audience(), host_manages_session())
     })
 }
+
+/// Whether the host is Brigadier, starting the server for one of its agents.
+fn brigadier_audience() -> bool {
+    std::env::var(crate::env::AUDIENCE_ENV).is_ok_and(|value| value.trim() == "brigadier")
+}
+
+/// The `instructions` for the audience. Brigadier's agents already have the skill and a brief
+/// that says when to use these tools; a longer pitch here ("drive apps in the background") pulled
+/// them toward running their own background jobs, so they get one line pointing at the skill.
+fn instructions_for(brigadier: bool, host_manages_session: bool) -> String {
+    if brigadier {
+        BRIGADIER_INSTRUCTIONS.to_owned()
+    } else {
+        agent_instructions(host_manages_session)
+    }
+}
+
+const BRIGADIER_INSTRUCTIONS: &str = "Tools for seeing and operating the interfaces of apps on this Mac. Load the `computer-use` skill before your first call and follow it.";
 
 /// Whether the host that started this process already gives each connection its own session
 /// (and with it the agent cursor): every call then carries that session, and the connection
@@ -319,6 +337,15 @@ mod tests {
             standalone.contains("start_session(session) once per run"),
             "{standalone}"
         );
+    }
+
+    #[test]
+    fn brigadier_agents_get_one_line_pointing_at_the_skill() {
+        let brigadier = instructions_for(true, true);
+        assert_eq!(brigadier, BRIGADIER_INSTRUCTIONS);
+        assert!(brigadier.contains("`computer-use` skill"), "{brigadier}");
+        assert!(!brigadier.contains("background"), "{brigadier}");
+        assert_eq!(instructions_for(false, true), agent_instructions(true));
     }
 
     #[test]

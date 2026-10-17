@@ -111,6 +111,9 @@ impl SessionManager {
                         "BRIGADIER_CU_SOCKET_AUTH_TOKEN".into(),
                         placed.token.clone(),
                     ),
+                    // Its agents have the skill and a brief: the server's own instructions stay
+                    // one line, not a pitch that pulls them toward working on their own.
+                    ("BRIGADIER_CU_AUDIENCE".into(), "brigadier".into()),
                     // Setup runs in Brigadier's own window, not a panel of the helper's.
                     (EXTERNAL_SETUP_ENV.into(), "1".into()),
                     // The session the helper keeps for this agent: it overrides the session

@@ -321,12 +321,19 @@ async fn the_thread_has_no_computer_tools_while_workers_do() {
     let flow = flow("thread-no-computer").await;
     bundle_helper(&flow);
     assert!(flow.manager.core.settings().computer_use);
+    let kit = flow
+        .manager
+        .computer_use_kit("a-worker", false)
+        .await
+        .expect("computer use is available to agents");
+    // A worker's server gives one line of instructions, not the standalone pitch (#23).
     assert!(
-        flow.manager
-            .computer_use_kit("a-worker", false)
-            .await
-            .is_some(),
-        "computer use is available to agents"
+        kit.server
+            .env
+            .iter()
+            .any(|(name, value)| name == "BRIGADIER_CU_AUDIENCE" && value == "brigadier"),
+        "{:?}",
+        kit.server.env
     );
     flow.say("Is the build green?").await;
     flow.settled().await;

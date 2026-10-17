@@ -17,6 +17,11 @@ pub const EMBEDDED_ENV: &str = "BRIGADIER_CU_EMBEDDED";
 /// identity appears in cursor ownership and diagnostics.
 pub const DEFAULT_SESSION_ENV: &str = "BRIGADIER_CU_DEFAULT_SESSION";
 
+/// Who the MCP `instructions` are for. `brigadier` (set by Brigadier for its agents): they get
+/// the `computer-use` skill and their own brief, so the server says only where to look. Anything
+/// else: the full standalone workflow.
+pub const AUDIENCE_ENV: &str = "BRIGADIER_CU_AUDIENCE";
+
 /// Reserved per-call argument carrying a host-managed session identity that is
 /// stable across short-lived MCP proxy generations. The daemon's lifecycle
 /// session remains generation-scoped for recording/config cleanup, while the
