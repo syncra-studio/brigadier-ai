@@ -231,16 +231,17 @@ impl SessionManager {
                 .collect::<Vec<_>>())
         })
         .await?;
-        // What listens on a port: the candidates that run, and what runs below them.
+        // What listens on a port: the candidates that run, and what runs below them. One that
+        // can't be checked counts as listening, so a missing `lsof` spares a server.
         let mut asked = HashSet::new();
         let mut listeners = Vec::new();
         for (candidate, below) in &looked {
             let running = (!candidate.stopped).then_some(candidate.pid);
             for pid in running.into_iter().chain(below.iter().copied()) {
                 if asked.insert(pid)
-                    && !super::preview_ready::process_listening_ports(pid)
+                    && super::preview_ready::process_listening_ports(pid)
                         .await
-                        .is_empty()
+                        .is_none_or(|ports| !ports.is_empty())
                 {
                     listeners.push(pid);
                 }
