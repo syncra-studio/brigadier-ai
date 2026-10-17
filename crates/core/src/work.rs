@@ -3051,7 +3051,7 @@ pub struct ReplaceOutcome {
 }
 
 /// Why something entered the orchestrator's context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum InjectionKind {
     /// Brigadier's role instructions, once per CLI session.

@@ -49,6 +49,7 @@ mod files;
 mod flow;
 mod fork;
 mod git_actions;
+mod inbox_store;
 mod instructions;
 mod integrated_checks;
 mod kept;

@@ -2208,7 +2208,16 @@ impl SessionManager {
                 && newest.answer_waits
                 && newest.state == ReviewState::Clean)
                 .then(|| newest.clone())
-        }) {
+        }) && !self
+            .inbox_holds(
+                conversation_id,
+                InjectionKind::Report,
+                super::conversation::CLEAN_REVIEW,
+                None,
+                clean.request_id.as_deref(),
+            )
+            .await
+        {
             self.tell_review(&clean, None).await;
         }
         self.recover_unheard_reviews(conversation_id, &board).await;
@@ -2307,6 +2316,26 @@ impl SessionManager {
         });
         owed.sort_by_key(|review| (review.ended_at_ms, review.number));
         for review in owed {
+            let of = review
+                .task_id
+                .as_ref()
+                .and_then(|id| board.tasks.get(id))
+                .map_or_else(
+                    || "the session".to_owned(),
+                    |task| format!("task-{}", task.number),
+                );
+            if self
+                .inbox_holds(
+                    conversation_id,
+                    InjectionKind::Report,
+                    &report_label(review, &of),
+                    review.task_id.as_ref(),
+                    request_of(review).as_deref(),
+                )
+                .await
+            {
+                continue;
+            }
             let text = self.review_text(review).await;
             if matches!(review.state, ReviewState::Findings { .. }) && text.is_none() {
                 continue;

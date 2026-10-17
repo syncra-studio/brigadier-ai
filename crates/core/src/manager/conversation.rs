@@ -155,7 +155,7 @@ pub enum SendOutcome {
 pub(crate) const CLEAN_REVIEW: &str = "review of your commits · clean";
 
 /// Something for the orchestrator's next turn.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Envelope {
     pub kind: InjectionKind,
     /// Short label for the Inspector ("report task-3").
@@ -366,6 +366,9 @@ struct ConvState {
     notes: Vec<String>,
     /// No new turn starts while the user's edit or redo takes the thread apart.
     held: bool,
+    /// Nor while startup puts back what the stop left (#210), so no turn takes a message
+    /// before its recovery has seen it there.
+    recovering: bool,
     /// The thread's scratch is being swept (its requests are over): no turn starts until
     /// the sweep is done, which then looks for one ([`super::thread_scratch`]).
     sweeping: bool,
@@ -1066,6 +1069,14 @@ impl ConvLive {
         self.state.lock().await.announcing.remove(task);
     }
 
+    /// Holds new turns while startup recovers what the stop left (`true`); released, whether
+    /// something waits for a turn.
+    pub(super) async fn recovering(&self, on: bool) -> bool {
+        let mut state = self.state.lock().await;
+        state.recovering = on;
+        !state.inbox.is_empty() || !state.pending.is_empty()
+    }
+
     /// Holds new turns until [`Self::carry`].
     pub(super) async fn hold(&self) {
         self.state.lock().await.held = true;
@@ -1182,6 +1193,38 @@ impl ConvLive {
         if !state.peer_notes.iter().any(|(id, _)| id == message_id) {
             state.peer_notes.push((message_id.to_owned(), note));
         }
+    }
+
+    /// Whether the inbox holds an envelope of `kind`, `label` and `task` for `request`.
+    pub(super) async fn inbox_holds(
+        &self,
+        kind: InjectionKind,
+        label: &str,
+        task: Option<&TaskId>,
+        request: Option<&str>,
+    ) -> bool {
+        self.state.lock().await.inbox.iter().any(|(queued, of)| {
+            queued.kind == kind
+                && queued.label == label
+                && queued.task_id.as_ref() == task
+                && of.as_deref() == request
+        })
+    }
+
+    /// How many envelopes like `envelope` (its text too) the inbox holds for `request`.
+    pub(super) async fn inbox_count(&self, envelope: &Envelope, request: Option<&str>) -> usize {
+        let state = self.state.lock().await;
+        state
+            .inbox
+            .iter()
+            .filter(|(queued, of)| {
+                queued.kind == envelope.kind
+                    && queued.label == envelope.label
+                    && queued.task_id == envelope.task_id
+                    && queued.text == envelope.text
+                    && of.as_deref() == request
+            })
+            .count()
     }
 
     /// A turn runs, or a message of `request` waits for one.
@@ -2560,6 +2603,17 @@ impl SessionManager {
         envelope: Envelope,
         request: Option<String>,
     ) -> Option<Arc<ConvLive>> {
+        self.queue_envelope_kept(id, envelope, request, true).await
+    }
+
+    /// [`Self::queue_envelope`], kept in the store for a restart with `keep` (#210).
+    pub(super) async fn queue_envelope_kept(
+        &self,
+        id: &ConversationId,
+        envelope: Envelope,
+        request: Option<String>,
+        keep: bool,
+    ) -> Option<Arc<ConvLive>> {
         // A closing conversation takes nothing more (and gets no live state back).
         if self.is_closing(id) {
             return None;
@@ -2611,6 +2665,11 @@ impl SessionManager {
         {
             return None;
         }
+        // Kept under the inbox's lock, so no take of it is kept before it.
+        if keep {
+            self.keep_queued(id, &envelope, request.as_deref(), None)
+                .await;
+        }
         state.inbox.push((envelope, request));
         drop(state);
         Some(conv)
@@ -2625,15 +2684,24 @@ impl SessionManager {
         };
         let label = format!("report task-{}", task.number);
         let mut state = conv.state.lock().await;
-        let Some((queued, _)) = state.inbox.iter_mut().find(|(queued, _)| {
+        let Some((queued, request)) = state.inbox.iter_mut().find(|(queued, _)| {
             queued.kind == InjectionKind::Report
                 && queued.task_id.as_ref() == Some(&task.id)
                 && queued.label == label
         }) else {
             return false;
         };
+        let was = queued.text.clone();
         queued.text.push('\n');
         queued.text.push_str(text);
+        let (envelope, request) = (queued.clone(), request.clone());
+        self.keep_queued(
+            &task.conversation_id,
+            &envelope,
+            request.as_deref(),
+            Some(was),
+        )
+        .await;
         true
     }
 
@@ -2744,6 +2812,7 @@ impl SessionManager {
             if state.busy
                 || state.closing
                 || state.held
+                || state.recovering
                 || state.sweeping
                 || state.hand_over.is_some()
                 || self.admit().is_err()
@@ -2837,6 +2906,8 @@ impl SessionManager {
                 .filter(|(envelope, _)| envelope.peer_message().is_some())
                 .cloned()
                 .collect();
+            // Kept under the inbox's lock, like what queues them.
+            self.keep_taken(&conv.id, &envelopes).await;
             break (users, envelopes, request, notes);
         };
         let chain = self
@@ -3059,6 +3130,8 @@ impl SessionManager {
             let mut pending = users;
             pending.append(&mut state.pending);
             state.pending = pending;
+            // Back in front, kept so under the inbox's lock.
+            self.keep_carried(&conv.id, &envelopes).await;
             let mut inbox = envelopes;
             inbox.append(&mut state.inbox);
             state.inbox = inbox;

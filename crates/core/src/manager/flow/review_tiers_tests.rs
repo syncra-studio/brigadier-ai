@@ -709,6 +709,86 @@ async fn findings_the_thread_had_not_taken_before_a_restart_still_reach_it() {
     flow.stop().await;
 }
 
+/// Any other message for the thread (a worker's report, a decision) that Brigadier stopped
+/// before a turn took it from the inbox goes again after the restart, once (#210).
+#[tokio::test]
+async fn a_message_the_thread_had_not_taken_before_a_restart_still_reaches_it() {
+    let heard: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = heard.clone();
+    let mut flow = Flow::start(
+        "inbox-restart",
+        Options {
+            reviews: Some(script(|_| std::future::pending())),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let seen = seen.clone();
+            async move {
+                if turn.input.starts_with("Build the feature") {
+                    commit(&turn, "a.txt", &lines("a", 160), "Build the feature");
+                    let check = turn.call("run_check", json!({"command": "true"})).await;
+                    assert!(check.text.contains("[review running]"), "{}", check.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("The build server is back.")
+                    || turn.input.contains("The cache is warm.")
+                {
+                    seen.lock().unwrap().push(turn.input.clone());
+                    return Reply::text("Built the feature.");
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    flow.say("Build the feature.").await;
+    let board = flow
+        .until("the review to run, with the thread idle", |board| {
+            board.run == crate::work::RunState::Idle
+                && board
+                    .reviews
+                    .values()
+                    .any(|review| review.state == ReviewState::Running)
+        })
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    // Queued for the thread's next turn, two of the same label; the daemon dies before a turn
+    // takes them.
+    for text in ["The build server is back.", "The cache is warm."] {
+        let note = Envelope {
+            kind: InjectionKind::Decision,
+            label: "build server".into(),
+            task_id: None,
+            text: format!("[build server] {text}"),
+        };
+        flow.manager
+            .queue_envelope(&flow.conversation, note, Some(request.clone()))
+            .await
+            .unwrap();
+    }
+    flow.crash().await;
+    flow.until("the answer", |board| {
+        board.requests[&request].state == RequestState::Done
+    })
+    .await;
+    let both = || {
+        let heard = heard.lock().unwrap().join("\n");
+        heard.contains("The build server is back.") && heard.contains("The cache is warm.")
+    };
+    tokio::time::timeout(super::PATIENCE, async {
+        while !both() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("both messages heard: {:#?}", heard.lock().unwrap()));
+    let heard = heard.lock().unwrap().join("\n");
+    for text in ["The build server is back.", "The cache is warm."] {
+        assert_eq!(heard.matches(text).count(), 1, "{heard}");
+    }
+    flow.stop().await;
+}
+
 /// The user stops a request whose answer waits for its review: when the review then ends
 /// clean, nothing wakes the thread to answer, and the request stays stopped.
 #[tokio::test]

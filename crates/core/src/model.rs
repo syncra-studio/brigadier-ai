@@ -2540,6 +2540,11 @@ pub mod streams {
         format!("orch:{id}")
     }
 
+    /// What was queued for a thread's next turn: its inbox lives in memory (#210).
+    pub fn inbox(id: &ConversationId) -> String {
+        format!("inbox:{id}")
+    }
+
     /// A project's Brain jobs.
     pub fn brain(id: &super::ProjectId) -> String {
         format!("brain:{id}")

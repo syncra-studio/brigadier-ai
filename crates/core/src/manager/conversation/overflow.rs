@@ -374,7 +374,7 @@ impl SessionManager {
     }
 
     /// The newest stop for a rebirth with no rebirth after it: its request and context.
-    async fn unfinished_stop(&self, id: &ConversationId) -> Option<(String, i64)> {
+    pub(crate) async fn unfinished_stop(&self, id: &ConversationId) -> Option<(String, i64)> {
         let page = self
             .core
             .store()

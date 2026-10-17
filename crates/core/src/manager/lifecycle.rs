@@ -109,14 +109,29 @@ impl SessionManager {
             if conversation.deleting {
                 continue;
             }
+            // No turn starts until what the stop left is back and the reviews' recovery has
+            // seen it (#210): a turn now could take or settle what it has yet to see.
+            let live = self.conv(&conversation.id).ok();
+            if let Some(live) = &live {
+                live.recovering(true).await;
+            }
             // A request that left its answer to its checks or a review still waits for it.
             self.recover_deferred(&conversation.id).await;
             // The thread's turn the restart cut off ran its calls no further, and its request
             // reads interrupted, not answered.
             self.end_cut_off_calls(&conversation.id).await;
             // A turn stopped for a rebirth the restart cut off is reborn now and its request
-            // goes on (BUILD-PLAN D2.3b); any other cut-off turn reads interrupted.
-            if !self.recover_stopped_rebirth(&conversation.id).await {
+            // goes on (BUILD-PLAN D2.3b); any other cut-off turn reads interrupted. What the
+            // stop left in the thread's inbox goes back once a cut-off request reads so, but
+            // before anything can settle a request it still works for (the rebirth's
+            // delivery settles them), and before reviews are told again (so a review in it
+            // already isn't told twice).
+            let rebirth = self.unfinished_stop(&conversation.id).await.is_some();
+            if !rebirth {
+                self.mark_cut_off_turn(&conversation.id).await;
+            }
+            self.recover_unheard_envelopes(&conversation.id).await;
+            if rebirth && !self.recover_stopped_rebirth(&conversation.id).await {
                 self.mark_cut_off_turn(&conversation.id).await;
             }
             // Merge cards are retired: open ones close, and no card answer merges.
@@ -135,6 +150,11 @@ impl SessionManager {
             self.recover_background_runs(&conversation.id).await;
             self.recover_change_records(&conversation.id).await;
             let Ok(tasks) = self.core.tasks(&conversation.id).await else {
+                if let Some(live) = &live
+                    && live.recovering(false).await
+                {
+                    self.kick(live);
+                }
                 continue;
             };
             for task in tasks.into_iter().filter(|task| !task.state.is_final()) {
@@ -237,6 +257,11 @@ impl SessionManager {
             self.expire_stale_cards(&conversation.id).await;
             // A one-shot review the restart cut off is over; the orchestrator hears it.
             self.recover_reviews(&conversation.id).await;
+            if let Some(live) = &live
+                && live.recovering(false).await
+            {
+                self.kick(live);
+            }
             // So are its previews (the sweep above ended any a crash left running).
             self.recover_previews(&conversation.id).await;
             // And its CI watches (SESSION-FIXES-PLAN.md Q1): the user can ask to watch again.
@@ -1351,6 +1376,7 @@ impl SessionManager {
         let mut purge = vec![
             streams::conversation(&id),
             streams::orchestrator(&id),
+            streams::inbox(&id),
             streams::draft(&id.to_string()),
         ];
         purge.extend(tasks.iter().map(|task| streams::task(&task.id)));
