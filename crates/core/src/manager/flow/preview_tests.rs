@@ -1578,6 +1578,12 @@ async fn a_workers_preview_carries_its_task_and_ends_with_its_folder() {
     assert_eq!(site.name, "site");
     assert!(site.workspace.contains("task-1"), "{}", site.workspace);
     assert_eq!(app.kind, crate::work::PreviewKind::App);
+    // A worker has no read_artifact: its preview replies never point it there.
+    for (tool, text) in replies.lock().unwrap().iter() {
+        if tool.contains("preview") {
+            assert!(!text.contains("read_artifact"), "{tool}: {text}");
+        }
+    }
     // The worker's own Stop removed its extra preview; it reached none of the other's.
     assert_eq!(board.previews.len(), 2, "{:?}", board.previews.keys());
     let err = flow
@@ -1741,7 +1747,7 @@ async fn a_stopped_tasks_preview_stops_before_its_work_is_kept() {
         })
         .await;
     let task = Flow::task(&board, 1).id.clone();
-    flow.manager.stop_task(task).await.unwrap();
+    flow.manager.stop_task(task.clone()).await.unwrap();
     let board = flow
         .until("task-1 stopped", |board| {
             Flow::task(board, 1).state == crate::work::TaskState::Stopped
@@ -1755,5 +1761,81 @@ async fn a_stopped_tasks_preview_stops_before_its_work_is_kept() {
         "stopped"
     );
     assert!(running(&board).is_empty());
+    // Its folder is gone with its worker: the start guard forgets it (review R21.4).
+    super::eventually("the ended task to be forgotten", || {
+        !flow.manager.previews.task_ended(&task)
+    })
+    .await;
+    flow.stop().await;
+}
+
+/// A worker's preview that ends on its own after its worker reported: the thread hears of it as
+/// the worker's, in the worker's folder, and is not invited to start it again in its own
+/// (review R21.3).
+#[tokio::test]
+async fn the_thread_hears_a_workers_preview_ended_without_restarting_it() {
+    let heard: Arc<Mutex<Vec<String>>> = Arc::default();
+    let inputs = heard.clone();
+    let flow = Flow::start(
+        "preview-worker-ended",
+        Options::default(),
+        script(move |turn| {
+            let inputs = inputs.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    inputs.lock().unwrap().push(turn.input.clone());
+                    if turn.earlier == 0 {
+                        let reply = turn
+                            .call(
+                                "delegate_task",
+                                json!({"effort": "high", "title": "Show it", "kind": "implement",
+                                       "spec": "Show it.", "provider": "claude"}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                    }
+                    return Reply::text("[quiet]");
+                }
+                if turn.earlier == 0 {
+                    let reply = turn
+                        .call(
+                            "start_preview",
+                            json!({"command": "echo listening on 8126; sleep 4; exit 3",
+                                   "name": "short"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    turn.write("shown.txt", "shown\n");
+                    turn.git(&["add", "shown.txt"]);
+                    turn.git(&["commit", "-qm", "Show it"]);
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": "Shown.", "changes": ["shown.txt"]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                Reply::text("Reported.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Show it.").await;
+    flow.until("the worker's preview to end", |board| {
+        board.sorted_previews().iter().any(|preview| {
+            preview.task_id.is_some() && matches!(preview.state, PreviewState::Exited { .. })
+        })
+    })
+    .await;
+    flow.settled().await;
+    flow.say("Hello.").await;
+    flow.settled().await;
+    let all = heard.lock().unwrap().join("\n---\n");
+    assert!(
+        all.contains("\"short\", task-1's preview in its own folder, ended on its own (exit 3)"),
+        "{all}"
+    );
+    assert!(!all.contains("Start it again"), "{all}");
     flow.stop().await;
 }

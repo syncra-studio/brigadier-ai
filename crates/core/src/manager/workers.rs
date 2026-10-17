@@ -5172,6 +5172,7 @@ impl SessionManager {
             self.settle_fixed(task).await;
         }
         self.tasks_lock().remove(&task.id);
+        self.forget_task_previews(&task.id).await;
     }
 
     /// B15: a worker's unfinished changes survive the removal of its worktree, as a WIP commit

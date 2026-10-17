@@ -38,8 +38,6 @@ pub(crate) fn background_run_number(id: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// The cleanup-ledger owner of a session's background runs: they outlive the thread's CLI and
-/// end with the session.
 /// The thread's name for a run, trimmed to at most 40 characters; none when blank.
 fn run_name(name: Option<&str>) -> Option<String> {
     let name = name?.trim();
@@ -53,6 +51,8 @@ fn run_name(name: Option<&str>) -> Option<String> {
     Some(format!("{}…", cut.trim_end()))
 }
 
+/// The cleanup-ledger owner of a session's background runs: they outlive the thread's CLI and
+/// end with the session.
 pub(crate) fn background_owner(id: &ConversationId) -> String {
     format!("background:{id}")
 }

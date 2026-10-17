@@ -369,11 +369,11 @@ identity, never ai.brigadier.app. preview_log gives its output.";
 
 const WORKER_STOP_PREVIEW: &str = "Stop one of your previews (`id`, e.g. \"preview-1\") or, \
 without an id, every one of yours that runs: SIGTERM, then a kill after a few seconds. It is \
-removed from the user's list; its log stays readable. Returns how each ended.";
+removed from the user's list. Returns how each ended.";
 
 const WORKER_PREVIEW_LOG: &str = "The last lines of one of your previews' output (stdout and \
 stderr together; your latest one by default), with its state (starting, running, paused or \
-ended) and an out-… id for its whole log.";
+ended) and how long its whole log is.";
 
 const STOP_PREVIEW: &str = "Stop a preview (`id`, e.g. \"preview-1\") or, without an id, \
 every running one: SIGTERM, then a kill after a few seconds. It is removed from the user's \
@@ -1124,6 +1124,17 @@ mod tests {
             "use a new BRIGADIER_DATA_DIR under /tmp and a dev identity, never ai.brigadier.app"
         ));
         assert!(START_PREVIEW.contains("Mach rendezvous IDs: ai.brigadier.dev"));
+        // A worker has no read_artifact: its preview tools never point it there.
+        for text in [
+            WORKER_START_PREVIEW,
+            WORKER_STOP_PREVIEW,
+            WORKER_PREVIEW_LOG,
+        ] {
+            assert!(
+                !text.contains("read_artifact") && !text.contains("out-"),
+                "{text}"
+            );
+        }
         assert!(CI_STATUS.contains("(`main` only through the usual merge into it here), push it and call watch_ci again without asking"));
         assert!(
             MESSAGE_SESSION

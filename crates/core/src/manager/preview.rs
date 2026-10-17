@@ -156,8 +156,9 @@ pub(crate) struct Previews {
     /// How many times each conversation's previews were all stopped: a start under way when
     /// that happened is refused ([`SessionManager::stop_previews`]).
     stops: Mutex<HashMap<ConversationId, u64>>,
-    /// Tasks whose folder is going or gone: their worker's starts are refused
-    /// ([`SessionManager::stop_task_previews`]).
+    /// Tasks whose folder is going: their worker's starts are refused
+    /// ([`SessionManager::stop_task_previews`]) until it is gone with their worker
+    /// ([`SessionManager::forget_task_previews`]).
     ended_tasks: Mutex<std::collections::HashSet<TaskId>>,
 }
 
@@ -189,7 +190,7 @@ impl Previews {
         stops.get(id).copied().unwrap_or_default()
     }
 
-    fn task_ended(&self, task: &TaskId) -> bool {
+    pub(super) fn task_ended(&self, task: &TaskId) -> bool {
         let ended = self.ended_tasks.lock().unwrap_or_else(|p| p.into_inner());
         ended.contains(task)
     }
@@ -375,8 +376,9 @@ impl SessionManager {
                     .into(),
             ));
         }
+        // A task whose folder is gone has no worker any more ([`Self::forget_task_previews`]).
         if let Some(task) = &task
-            && self.previews.task_ended(task)
+            && (self.previews.task_ended(task) || self.existing_task_live(task).is_none())
         {
             return Err(Error::Invalid(
                 "your task has ended and its folder is going, so the preview was not started"
@@ -568,12 +570,12 @@ impl SessionManager {
         if ended_at_once {
             live.ended.cancelled().await;
             return self
-                .preview_log(id, Some(&preview_id), Some(START_TAIL))
+                .preview_log_for(id, Some(&preview_id), Some(START_TAIL), task.is_some())
                 .await
                 .map(|log| format!("{preview_id} ended at once.\n{log}"));
         }
         let output = self
-            .preview_log(id, Some(&preview_id), Some(START_TAIL))
+            .preview_log_for(id, Some(&preview_id), Some(START_TAIL), task.is_some())
             .await
             .unwrap_or_default();
         let state = if live.ready.is_cancelled() {
@@ -888,6 +890,55 @@ impl SessionManager {
         true
     }
 
+    /// A worker's preview ended on its own (`told`): its worker hears it while it works, as it
+    /// may start it again in its own folder; else the thread only hears of it, as a preview of
+    /// another folder than its own, never one to start again itself.
+    async fn tell_worker_preview_end(
+        &self,
+        id: &ConversationId,
+        task: &TaskId,
+        preview: &Preview,
+        told: &str,
+    ) {
+        let working = match self.existing_task_live(task) {
+            Some(worker) => worker.busy().await,
+            None => false,
+        };
+        let task = self.task_by_id(id, task).await.ok();
+        if working && let Some(task) = &task {
+            let note = format!(
+                "[preview] Your {} \"{}\" {told}; it is not running now.",
+                preview.id, preview.name
+            );
+            let rounds = task.rework_rounds;
+            match self.tell_worker(id, task, note, "Brigadier").await {
+                // A note is no rework round.
+                Ok(_) => {
+                    let _ = self
+                        .update_task(id, &task.id, |t| {
+                            t.rework_rounds = t.rework_rounds.min(rounds);
+                        })
+                        .await;
+                    return;
+                }
+                Err(err) => {
+                    tracing::info!(task = %task.id, error = %err, "a worker took no note that its preview ended");
+                }
+            }
+        }
+        if let Ok(conv) = self.conv(id) {
+            let whose = task.map_or_else(
+                || "a worker's".to_owned(),
+                |task| format!("task-{}'s", task.number),
+            );
+            conv.note(format!(
+                "[preview] {} \"{}\", {whose} preview in its own folder, {told}; it is not running now.",
+                preview.id, preview.name
+            ))
+            .await;
+        }
+    }
+
     /// Records how a preview ended, with its whole log stored, and removes its log file.
     async fn end_preview(&self, live: &LivePreview, state: PreviewState) {
         let id = &live.conversation;
@@ -919,15 +970,11 @@ impl SessionManager {
             };
             // An end on its own after the start answered is a failure the thread reports in
             // the same turn (SESSION-FIXES-PLAN.md Q9): it hears it at once. A worker's
-            // preview is the worker's to watch: the thread only hears of it.
+            // preview is the worker's to watch ([`Self::tell_worker_preview_end`]).
             let answered = {
                 let mut start = live.start_told.lock().unwrap_or_else(|p| p.into_inner());
                 start.ending = true;
                 start.answered
-            };
-            let told = match (&live.task, told) {
-                (Some(_), Some(told)) => Some(format!("(a worker's preview) {told}")),
-                (_, told) => told,
             };
             if let (PreviewState::Exited { status, .. }, true, None) =
                 (&state, answered, &live.task)
@@ -956,6 +1003,8 @@ impl SessionManager {
                     },
                 )
                 .await;
+            } else if let (Some(told), Some(task)) = (&told, &live.task) {
+                self.tell_worker_preview_end(id, task, &preview, told).await;
             } else if let (Some(told), Ok(conv)) = (told, self.conv(id)) {
                 conv.note(format!(
                     "[preview] {} \"{}\" {told}; it is not running now. Start it again if the user wants it.",
@@ -1076,7 +1125,8 @@ impl SessionManager {
                 None => return Ok("You have started no preview.".into()),
             },
         };
-        self.preview_log(id, Some(&found), tail_lines).await
+        self.preview_log_for(id, Some(&found), tail_lines, true)
+            .await
     }
 
     /// `preview_log`: the end of a preview's output (the latest preview's by default), with an
@@ -1086,6 +1136,18 @@ impl SessionManager {
         id: &ConversationId,
         preview: Option<&str>,
         tail_lines: Option<u32>,
+    ) -> Result<String> {
+        self.preview_log_for(id, preview, tail_lines, false).await
+    }
+
+    /// [`Self::preview_log`], for a worker when `worker`: it has no `read_artifact`, so its
+    /// reply names no `out-<id>`.
+    async fn preview_log_for(
+        &self,
+        id: &ConversationId,
+        preview: Option<&str>,
+        tail_lines: Option<u32>,
+        worker: bool,
     ) -> Result<String> {
         let board = self.core.board(id).await?;
         let found = match preview.map(str::trim).filter(|wanted| !wanted.is_empty()) {
@@ -1130,6 +1192,7 @@ impl SessionManager {
         };
         let total_lines = count_lines(&bytes);
         let reference = match &alias {
+            Some(_) if worker => format!("{total_lines} lines, {} bytes in all", bytes.len()),
             Some(alias) => format!(
                 "full log: read_artifact {alias}, {total_lines} lines, {} bytes",
                 bytes.len()
@@ -1454,9 +1517,11 @@ impl SessionManager {
         Ok(stopped
             .iter()
             .map(|preview| {
+                // A worker has no read_artifact.
                 let log = preview
                     .log
                     .as_ref()
+                    .filter(|_| task.is_none())
                     .map(|alias| format!(", its log: read_artifact {alias}"))
                     .unwrap_or_default();
                 format!(
@@ -1665,6 +1730,17 @@ impl SessionManager {
             .filter(|live| live.task.as_ref() == Some(task))
             .collect();
         stop_all(&live, "its worker's task ended").await;
+    }
+
+    /// A task's folder is gone, and its worker with it: a start of its taken up from here finds
+    /// no worker, so it no longer needs its entry among the ended tasks.
+    pub(crate) async fn forget_task_previews(&self, task: &TaskId) {
+        let _starting = self.previews.starting.lock().await;
+        self.previews
+            .ended_tasks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(task);
     }
 
     /// Brigadier quits: every preview stops.
