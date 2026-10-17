@@ -154,6 +154,9 @@ pub(super) struct Record {
     /// so a move (`mv a b`) never loses its one copy.
     #[serde(default)]
     together: Vec<BTreeSet<String>>,
+    /// What a command left in a file no snapshot saw, before a later one moved it on.
+    #[serde(default)]
+    unseen: BTreeMap<String, Option<Blob>>,
 }
 
 pub(super) enum Refresh<'a> {
@@ -735,6 +738,8 @@ impl SessionManager {
             let mut explained = BTreeSet::new();
             // Each shell command's item and the files its evidence gave the record.
             let mut shells = Vec::new();
+            // What this pass's steps left in each file they changed.
+            let mut made: BTreeMap<String, Option<Blob>> = BTreeMap::new();
             for step in edits {
                 let (edit, after_command) = match step {
                     Step::Edit(edit, after_command) => (edit, after_command),
@@ -745,10 +750,31 @@ impl SessionManager {
                             let previous_blob = previous.get(&path).cloned().map(Blob::from);
                             let current_blob = current.get(&path).cloned().map(Blob::from);
                             together.insert(path.clone());
+                            let made_before = made.insert(path.clone(), after.clone());
                             // A file no snapshot keeps (an ignored one, or one a later command
                             // moved on) is no part of the request's changes, though it still
-                            // ties this command's files to that later command's.
+                            // ties this command's files to that later command's. Unless it
+                            // held what no step here made: a file of the user's since the last
+                            // snapshot that the command moved or removed, which leaves the
+                            // command's files as they are with it.
                             if previous_blob.is_none() && current_blob.is_none() {
+                                let unseen = record.unseen.insert(path.clone(), after.clone());
+                                if before.is_some()
+                                    && made_before.as_ref() != Some(&before)
+                                    && unseen.as_ref() != Some(&before)
+                                    && !repo.is_ignored(&path).unwrap_or(true)
+                                {
+                                    record.own(
+                                        &path,
+                                        before.clone(),
+                                        None,
+                                        None,
+                                        "shell",
+                                        false,
+                                        after_command,
+                                    );
+                                    group.insert(path, (before, None));
+                                }
                                 continue;
                             }
                             if current_blob == after {
@@ -791,6 +817,7 @@ impl SessionManager {
                     Before::Known(before) => (before, false),
                     Before::Unverified => (previous_blob.clone(), true),
                 };
+                made.insert(path.to_owned(), edit.after.clone());
                 // The last edit to a file decides whether it explains what the file holds.
                 if current.get(path).cloned().map(Blob::from) == edit.after {
                     explained.insert(path.to_owned());

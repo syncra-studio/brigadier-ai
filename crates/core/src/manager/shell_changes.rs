@@ -37,8 +37,12 @@ pub(super) enum ShellKey {
 
 struct Capture {
     key: ShellKey,
+    /// Which read this is, of all: two runs of the same command apart.
+    call: u64,
     before: BTreeMap<String, Option<Blob>>,
     after: Option<BTreeMap<String, Option<Blob>>>,
+    /// When it ended, in the order calls end: the same command's reports come in that order.
+    ended: Option<u64>,
 }
 
 /// One command's change by its captures: each file it names that it changed, before → after.
@@ -49,39 +53,80 @@ pub(super) struct ShellEvidence {
 }
 
 #[derive(Default)]
-pub(super) struct ShellCaptures(std::sync::Mutex<HashMap<ConversationId, Vec<Capture>>>);
+pub(super) struct ShellCaptures {
+    calls: std::sync::Mutex<HashMap<ConversationId, Vec<Capture>>>,
+    /// Counts the reads started and the calls ended.
+    count: std::sync::atomic::AtomicU64,
+}
+
+/// The unfinished capture of `key`: call `call`'s, else the oldest.
+fn unfinished<'a>(
+    calls: &'a mut [Capture],
+    key: &ShellKey,
+    call: Option<u64>,
+) -> Option<&'a mut Capture> {
+    calls.iter_mut().find(|capture| {
+        capture.key == *key
+            && capture.after.is_none()
+            && call.is_none_or(|call| capture.call == call)
+    })
+}
 
 impl ShellCaptures {
-    fn start(&self, id: &ConversationId, key: ShellKey, before: BTreeMap<String, Option<Blob>>) {
-        let mut all = self.0.lock().unwrap();
+    fn next(&self) -> u64 {
+        self.count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn start(
+        &self,
+        id: &ConversationId,
+        key: ShellKey,
+        before: BTreeMap<String, Option<Blob>>,
+    ) -> u64 {
+        let call = self.next();
+        let mut all = self.calls.lock().unwrap();
         let calls = all.entry(id.clone()).or_default();
         if calls.len() == MOST_CALLS {
             calls.remove(0);
         }
         calls.push(Capture {
             key,
+            call,
             before,
             after: None,
+            ended: None,
         });
+        call
     }
 
     /// The files the call's start read: the same are read at its end.
-    fn started(&self, id: &ConversationId, key: &ShellKey) -> Option<Vec<String>> {
-        let all = self.0.lock().unwrap();
-        all.get(id)?
-            .iter()
-            .find(|capture| capture.key == *key && capture.after.is_none())
+    fn started(
+        &self,
+        id: &ConversationId,
+        key: &ShellKey,
+        call: Option<u64>,
+    ) -> Option<Vec<String>> {
+        let mut all = self.calls.lock().unwrap();
+        unfinished(all.get_mut(id)?, key, call)
             .map(|capture| capture.before.keys().cloned().collect())
     }
 
-    fn end(&self, id: &ConversationId, key: &ShellKey, after: BTreeMap<String, Option<Blob>>) {
-        let mut all = self.0.lock().unwrap();
-        if let Some(capture) = all.get_mut(id).and_then(|calls| {
-            calls
-                .iter_mut()
-                .find(|capture| capture.key == *key && capture.after.is_none())
-        }) {
+    fn end(
+        &self,
+        id: &ConversationId,
+        key: &ShellKey,
+        call: Option<u64>,
+        after: BTreeMap<String, Option<Blob>>,
+    ) {
+        let ended = self.next();
+        let mut all = self.calls.lock().unwrap();
+        if let Some(capture) = all
+            .get_mut(id)
+            .and_then(|calls| unfinished(calls, key, call))
+        {
             capture.after = Some(after);
+            capture.ended = Some(ended);
         }
     }
 
@@ -93,11 +138,15 @@ impl ShellCaptures {
         key: &ShellKey,
         item: &str,
     ) -> Option<ShellEvidence> {
-        let mut all = self.0.lock().unwrap();
+        let mut all = self.calls.lock().unwrap();
         let calls = all.get_mut(id)?;
         let at = calls
             .iter()
-            .position(|capture| capture.key == *key && capture.after.is_some())
+            .enumerate()
+            .filter(|(_, capture)| capture.key == *key)
+            .filter_map(|(at, capture)| Some((capture.ended?, at)))
+            .min()
+            .map(|(_, at)| at)
             .or_else(|| calls.iter().position(|capture| capture.key == *key))?;
         let capture = calls.remove(at);
         if calls.is_empty() {
@@ -120,7 +169,7 @@ impl ShellCaptures {
 
     /// A turn ended: none of its calls is reported any more.
     pub(super) fn clear(&self, id: &ConversationId) {
-        self.0.lock().unwrap().remove(id);
+        self.calls.lock().unwrap().remove(id);
     }
 }
 
@@ -155,54 +204,62 @@ fn shell_words(command: &str) -> Vec<String> {
 
 /// The checkout's files a command names, relative to its root `root`: each word of the command
 /// (as the shell reads it, and split at spaces, quotes and the shell's operators too, for the
-/// names a script inside it writes), read from `cwd`, that is a file in the checkout, or a new
-/// file's name in one of its folders (`echo x > new.md`). Folders, `.git` and places outside
-/// the checkout (a symlinked folder that leads out) are left out.
+/// names a script inside it writes), read from `cwd` or a folder the command goes to
+/// (`cd <dir> && …`), that is a file in the checkout, or a new file's name in one of its
+/// folders (`echo x > new.md`). Folders, `.git` and places outside the checkout (a symlinked
+/// folder that leads out) are left out.
 pub(super) fn named_files(command: &str, cwd: &Path, root: &Path) -> Vec<String> {
     let Ok(root) = root.canonicalize() else {
         return Vec::new();
     };
-    let mut found = BTreeSet::new();
+    let words = shell_words(command);
+    let mut dirs = vec![cwd.to_owned()];
+    for pair in words.windows(2) {
+        if matches!(pair[0].as_str(), "cd" | "pushd") {
+            let dir = dirs.last().unwrap().join(&pair[1]);
+            if dir.is_dir() {
+                dirs.push(dir);
+            }
+        }
+    }
     let split = command
         .split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}[]=,$".contains(c))
         .map(str::to_owned);
-    for word in shell_words(command).into_iter().chain(split) {
+    let mut found = BTreeSet::new();
+    for word in words.into_iter().chain(split) {
         let word = word.as_str();
         if word.is_empty() || word.starts_with('-') || word.contains("://") || word.len() > 1024 {
             continue;
         }
-        let path = if Path::new(word).is_absolute() {
-            PathBuf::from(word)
-        } else {
-            cwd.join(word)
-        };
-        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
-            continue;
-        };
-        let Ok(parent) = parent.canonicalize() else {
-            continue;
-        };
-        let path = parent.join(name);
-        let Some(relative) = path
-            .strip_prefix(&root)
-            .ok()
-            .and_then(Path::to_str)
-            .filter(|relative| !relative.is_empty())
-        else {
-            continue;
-        };
-        if relative == ".git" || relative.starts_with(".git/") {
-            continue;
-        }
-        if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_dir()) {
-            continue;
-        }
-        found.insert(relative.to_owned());
-        if found.len() == MOST_FILES {
-            break;
+        for dir in &dirs {
+            if let Some(relative) = checkout_file(word, dir, &root) {
+                found.insert(relative);
+            }
+            if found.len() == MOST_FILES {
+                return found.into_iter().collect();
+            }
         }
     }
     found.into_iter().collect()
+}
+
+/// `word` read from `dir` as a file of the checkout at `root`, relative to it.
+fn checkout_file(word: &str, dir: &Path, root: &Path) -> Option<String> {
+    let path = dir.join(word);
+    let parent = path.parent()?.canonicalize().ok()?;
+    let path = parent.join(path.file_name()?);
+    let relative = path
+        .strip_prefix(root)
+        .ok()
+        .and_then(Path::to_str)
+        .filter(|relative| !relative.is_empty())?;
+    if relative == ".git" || relative.starts_with(".git/") {
+        return None;
+    }
+    if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_dir()) {
+        return None;
+    }
+    Some(relative.to_owned())
 }
 
 impl SessionManager {
@@ -226,32 +283,27 @@ impl SessionManager {
             ShellKey::Call(call.to_owned()),
             command,
             cwd.map(Path::new),
-            ended,
+            ended.then_some(None),
         )
         .await;
     }
 
-    /// Reads the files the command of `key` names in its session's checkout: at its start, or
-    /// (`ended`) the same files once it ended.
+    /// Reads the files the command of `key` names in its session's checkout: at its start,
+    /// which says which call it is, or (`ended`) the same files once that call (else the
+    /// oldest of `key` unfinished) ended.
     pub(super) async fn capture_shell(
         &self,
         id: &ConversationId,
         key: ShellKey,
         command: &str,
         cwd: Option<&Path>,
-        ended: bool,
-    ) {
-        let Some((checkout, _)) = self.changes_checkout(id) else {
-            return;
-        };
+        ended: Option<Option<u64>>,
+    ) -> Option<u64> {
+        let (checkout, _) = self.changes_checkout(id)?;
         let shells = &self.change_records.shells;
-        let named = if ended {
-            match shells.started(id, &key) {
-                Some(named) => Some(named),
-                None => return,
-            }
-        } else {
-            None
+        let named = match ended {
+            Some(call) => Some(shells.started(id, &key, call)?),
+            None => None,
         };
         let (git, command, cwd) = (
             self.git.clone(),
@@ -280,13 +332,16 @@ impl SessionManager {
             Ok(files) => files,
             Err(err) => {
                 tracing::debug!(conversation = %id, error = %err, "could not read a command's files");
-                return;
+                return None;
             }
         };
-        if ended {
-            shells.end(id, &key, files);
-        } else if !files.is_empty() {
-            shells.start(id, key, files);
+        match ended {
+            Some(call) => {
+                shells.end(id, &key, call, files);
+                None
+            }
+            None if files.is_empty() => None,
+            None => Some(shells.start(id, key, files)),
         }
     }
 }
@@ -390,6 +445,8 @@ mod tests {
         ));
         let absolute = format!("cat {}", root.join("notes.md").display());
         assert!(names(&absolute, Path::new("/"), "notes.md"));
+        let elsewhere = format!("cd {} && echo x >> lib.rs", root.join("src").display());
+        assert!(names(&elsewhere, Path::new("/"), "src/lib.rs"));
         let left_out = named(
             "ls src .git/config ../outside/x https://x.dev/a --flag",
             &root,
@@ -409,5 +466,30 @@ mod tests {
             assert!(named.iter().any(|n| n == "new.txt"), "{command}: {named:?}");
         }
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Two runs of the same command, ended out of order: each end reads its own call's files,
+    /// and the reports, which come in the order the calls ended, take them in that order.
+    #[test]
+    fn the_same_command_run_twice_keeps_each_calls_reads() {
+        let id = ConversationId("c".into());
+        let key = ShellKey::Run("make".into());
+        let blob = |oid: &str| {
+            Some(Blob::from(brigadier_git::FileBlob {
+                oid: oid.into(),
+                mode: "100644".into(),
+            }))
+        };
+        let reads = |path: &str, blob: Option<Blob>| BTreeMap::from([(path.to_owned(), blob)]);
+        let shells = ShellCaptures::default();
+        let first = shells.start(&id, key.clone(), reads("a", blob("1")));
+        let second = shells.start(&id, key.clone(), reads("b", blob("1")));
+        assert_eq!(shells.started(&id, &key, Some(second)).unwrap(), ["b"]);
+        shells.end(&id, &key, Some(second), reads("b", blob("2")));
+        shells.end(&id, &key, Some(first), reads("a", blob("3")));
+        let taken = shells.take(&id, &key, "one").unwrap();
+        assert_eq!(taken.changes, [("b".into(), blob("1"), blob("2"))]);
+        let taken = shells.take(&id, &key, "two").unwrap();
+        assert_eq!(taken.changes, [("a".into(), blob("1"), blob("3"))]);
     }
 }

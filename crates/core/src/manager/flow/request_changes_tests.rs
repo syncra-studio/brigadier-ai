@@ -1842,10 +1842,12 @@ async fn shell(turn: &Turn, item: &str, command: &str, run: impl FnOnce(&Path)) 
     let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
     let key = ShellKey::Call(item.into());
     turn.host
-        .capture_shell(&id, key.clone(), command, Some(&workspace), false)
+        .capture_shell(&id, key.clone(), command, Some(&workspace), None)
         .await;
     run(&workspace);
-    turn.host.capture_shell(&id, key, command, None, true).await;
+    turn.host
+        .capture_shell(&id, key, command, None, Some(None))
+        .await;
 }
 
 async fn shell_reported(turn: &Turn, item: &str, command: &str) {
@@ -2156,6 +2158,16 @@ async fn request_changes_never_split_a_shell_move() {
             shell_reported(&turn, "bash-3", first).await;
             shell_reported(&turn, "bash-4", second).await;
             observed(&turn, 3).await;
+            // A file the user made since the last snapshot, moved.
+            let yours = format!("yours\n{GLOBBED}");
+            std::fs::write(workspace.join("user-new.txt"), &yours).unwrap();
+            let move_new = "mv user-new.txt moved.txt";
+            shell(&turn, "bash-5", move_new, |dir| {
+                std::fs::rename(dir.join("user-new.txt"), dir.join("moved.txt")).unwrap();
+            })
+            .await;
+            shell_reported(&turn, "bash-5", move_new).await;
+            observed(&turn, 4).await;
             Reply::text("Moved the files.")
         }),
     )
@@ -2172,7 +2184,17 @@ async fn request_changes_never_split_a_shell_move() {
     let request = board.latest_request().unwrap().id.clone();
     let changes = board.latest_request().unwrap().changes.as_ref().unwrap();
     let held: Vec<_> = changes.held.iter().map(|held| held.path.as_str()).collect();
-    assert_eq!(held, ["c.txt", "e.txt", "g1.txt", "h.txt"]);
+    assert_eq!(
+        held,
+        [
+            "c.txt",
+            "e.txt",
+            "g1.txt",
+            "h.txt",
+            "moved.txt",
+            "user-new.txt"
+        ]
+    );
     let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
     let read = |path: &str| std::fs::read_to_string(workspace.join(path)).ok();
     let outcome = flow
@@ -2185,5 +2207,6 @@ async fn request_changes_never_split_a_shell_move() {
     assert_eq!(read("new.txt"), None);
     assert_eq!(read("h.txt").as_deref(), Some(GLOBBED));
     assert_eq!(read("e.txt"), Some(format!("user\n{MOVED}")));
+    assert_eq!(read("moved.txt"), Some(format!("yours\n{GLOBBED}")));
     flow.stop().await;
 }

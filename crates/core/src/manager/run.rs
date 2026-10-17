@@ -245,7 +245,8 @@ impl SessionManager {
         // The files the command names, read right before it starts and once it ended, tell
         // its request's record what it changed (#87).
         let shell = super::shell_changes::ShellKey::Run(command.to_owned());
-        self.capture_shell(id, shell.clone(), command, Some(&workdir), false)
+        let call = self
+            .capture_shell(id, shell.clone(), command, Some(&workdir), None)
             .await;
         let command_owned = command.to_owned();
         let work = async move {
@@ -260,9 +261,12 @@ impl SessionManager {
                 Some(output),
             )
             .await;
-            manager
-                .capture_shell(&id_owned, shell, &command_owned, None, true)
-                .await;
+            // A command whose start read nothing has nothing to read at its end.
+            if let Some(call) = call {
+                manager
+                    .capture_shell(&id_owned, shell, &command_owned, None, Some(Some(call)))
+                    .await;
+            }
             let ran = ran?;
             let reply = if ran.output.len() <= TRIM_ABOVE {
                 let output = manager.hide_secrets(&id_owned, ran.output).await;
