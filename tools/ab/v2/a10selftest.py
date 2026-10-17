@@ -20,8 +20,9 @@ ASKS = {"k1": "The default is set at src/cli.ts:64: 30 days.", "k2": "src/tax.ts
 STEP_MS = 100_000
 
 
-def make(dirpath, *, p1=None, p2=None, reborn_after=("b03", "b08", "b15"), asks=None, checks=None):
-    b = load_battery("a10")
+def make(dirpath, *, p1=None, p2=None, reborn_after=("b03", "b08", "b15"), asks=None, checks=None, battery="a10",
+         context_in=None):
+    b = load_battery(battery)
     os.makedirs(os.path.join(dirpath, "rec"), exist_ok=True)
     os.makedirs(os.path.join(dirpath, "briefings"), exist_ok=True)
     os.makedirs(os.path.join(dirpath, "data"), exist_ok=True)
@@ -68,6 +69,9 @@ def make(dirpath, *, p1=None, p2=None, reborn_after=("b03", "b08", "b15"), asks=
             "generation": g, "trigger": "threshold", "atTokens": 210_000, "windowTokens": 1_000_000,
             "prepareStartedAtMs": at[step] + 1_000, "handoffReadyAtMs": at[step] + 15_000, "swapStartedAtMs": swapped - 2_000,
             "swappedAtMs": swapped, "briefingTokens": len(text) // 4, "sections": [], "decisions": 1, "recentMessages": 2}}})
+    for g, (step, used) in enumerate(sorted((context_in or {}).items()), start=100):
+        log.append({"streamSeq": g, "atMs": dict(zip(steps, sent))[step] + 5_000, "entry": {"type": "provider", "event": {
+            "type": "contextSize", "usedTokens": used, "windowTokens": 1_000_000}}})
     with open(os.path.join(dirpath, "orchestrator.jsonl"), "w") as f:
         for e in log:
             f.write(json.dumps(e) + "\n")
@@ -79,14 +83,15 @@ def make(dirpath, *, p1=None, p2=None, reborn_after=("b03", "b08", "b15"), asks=
     db.execute("CREATE TABLE turn_usage (at_ms INTEGER, provider TEXT, model TEXT, conversation_id TEXT, task_id TEXT, "
                "input INTEGER, cached_input INTEGER, cache_write INTEGER, output INTEGER, step TEXT)")
     rows = [(t + 30_000, "thread", 10, 1_000, 100, 50) for t in sent]               # one thread turn per step
-    for e in log:                                                                    # each rebirth: a note fork
+    reborn = [e for e in log if e["entry"]["type"] == "rebirth"]
+    for e in reborn:                                                                 # each rebirth: a note fork
         r = e["entry"]["record"]
         rows.append((r["prepareStartedAtMs"] + 5_000, "handoff", 5, 2_000, 300, 400))
     rows.append((sent[0] - 1, "thread", 999, 999, 999, 999))                         # the warm-up's, before t0
     db.executemany("INSERT INTO turn_usage VALUES (?, 'claude', 'opus', ?, NULL, ?, ?, ?, ?, ?)",
                    [(t, CONV, i, c, w, o, step) for t, step, i, c, w, o in rows])
     db.commit(); db.close()
-    return len(steps), len(log)
+    return len(steps), len(reborn)
 
 
 def all_pass(s):
@@ -113,6 +118,11 @@ CASES = [
     ("a late answer cites the wrong line", dict(asks={"l2": "src/invoice.ts:98: 24 characters."}),
      lambda s, n, r: s["quality"]["late"]["passed"] == 3 and s["quality"]["early"]["passed"] == 4
      and not s["asks"]["l2"]["passed"]),
+    ("an edit before its rebirths is not lost either (review 4)", dict(reborn_after=("b20",), p1={**GOOD, 1: "unknown"}),
+     lambda s, n, r: s["batteries"]["thread"]["by_item"]["constraint"] == "not_tested"
+     and s["batteries"]["thread"]["unknown_instead_of_guess"]["lost"] == 0),
+    ("an ask's context is its first call's, after a rebirth at its start (review 1)", dict(context_in={"l1": 36_000}),
+     lambda s, n, r: s["asks"]["l1"]["context_at_send"] == 36_000),
     ("a late edit's check fails", dict(checks={**{k: {"rc": 0, "result": {"constraint": True, "exception": True, "ruled_out": True}}
                                                   for k in ("e1", "e2", "k3", "k4", "l3")}, "l4": {"rc": 1, "output": "e4: not trimmed"}}),
      lambda s, n, r: s["quality"]["late"]["passed"] == 3 and not s["asks"]["l4"]["passed"]),
@@ -164,6 +174,29 @@ PLAIN_CASES = [
 ]
 
 
+def h2h_check(tmp):
+    """Review 2: the lookup probe's time isn't Brigadier's in the comparison (every step 50 s: a tie)."""
+    h2h = scorer.load("h2h", os.path.join(HERE, "h2h.py"))
+    plain = scorer.load("plain", os.path.join(HERE, "plain.py"))
+    make(os.path.join(tmp, "h2h-brig"), battery="a10long")
+    make_plain(os.path.join(tmp, "h2h-plain"))
+    rows = {r[0]: r for r in h2h.rows(scorer.score(os.path.join(tmp, "h2h-brig")), plain.score_run(os.path.join(tmp, "h2h-plain")))}
+    work = next(v for k, v in rows.items() if k.startswith("Working time"))
+    return work[1] == work[2]
+
+
+def stream_check():
+    """Review 3: plain's model calls count its sub-agents' calls; its context is its own."""
+    plain = scorer.load("plain", os.path.join(HERE, "plain.py"))
+    u = lambda n: {"input_tokens": 1, "cache_read_input_tokens": n, "cache_creation_input_tokens": 0, "output_tokens": 1}
+    rec = plain.step_record([
+        {"type": "assistant", "message": {"id": "m1", "usage": u(1_000)}},
+        {"type": "assistant", "parent_tool_use_id": "t1", "message": {"id": "s1", "usage": u(50)}},
+        {"type": "assistant", "message": {"id": "m2", "usage": u(2_000)}},
+        {"type": "result", "result": "done", "subtype": "success", "modelUsage": {}}])
+    return rec["model_calls"] == 3 and rec["first_context"] == 1_001 and rec["context"] == 2_001
+
+
 def main():
     failed = 0
     tmp = tempfile.mkdtemp(prefix="a10-selftest-")
@@ -195,6 +228,11 @@ def main():
             if not good:
                 s = json.loads(first)
                 print(json.dumps({k: s[k] for k in ("battery", "quality", "usage", "valid", "edit_answers")}, indent=1)[:4000])
+        for name, check in (("h2h: working time without the lookup probe (review 2)", lambda: h2h_check(tmp)),
+                            ("plain: sub-agent calls counted, context its own (review 3)", stream_check)):
+            good = check()
+            failed += not good
+            print("ok  " if good else "FAIL", name)
         for root in sys.argv[1:]:
             for run in sorted(os.listdir(os.path.join(root, "runs"))):
                 d = os.path.join(root, "runs", run)

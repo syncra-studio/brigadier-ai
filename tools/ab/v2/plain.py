@@ -67,13 +67,15 @@ def step_record(events):
     """From one `claude -p` stream: the answer, the usage of every model call it made, its distinct
     assistant messages, the context of its last call and its compactions."""
     result = next((e for e in reversed(events) if e.get("type") == "result"), {}) or {}
-    msgs, context = {}, None
+    msgs, context, first = {}, None, None
     for e in events:
         m = e.get("message") or {}
-        if e.get("type") == "assistant" and m.get("id") and m.get("usage") and not e.get("parent_tool_use_id"):
-            u = m["usage"]
-            msgs[m["id"]] = u
-            context = sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+        if e.get("type") == "assistant" and m.get("id") and m.get("usage"):
+            msgs[m["id"]] = m["usage"]  # sub-agents' calls too, as Brigadier's count has its workers'
+            if not e.get("parent_tool_use_id"):
+                u = m["usage"]
+                context = sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+                first = context if first is None else first
     compactions = [{"trigger": (e.get("compact_metadata") or {}).get("trigger"), "pre_tokens": (e.get("compact_metadata") or {}).get("pre_tokens")}
                    for e in events if e.get("type") == "system" and e.get("subtype") == "compact_boundary"]
     usage = {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0}
@@ -88,6 +90,7 @@ def step_record(events):
     return {"answer": result.get("result") or "", "is_error": result.get("is_error"), "subtype": result.get("subtype"),
             "num_turns": result.get("num_turns"), "duration_ms": result.get("duration_ms"), "usage_cumulative": usage,
             "models": sorted((result.get("modelUsage") or {}).keys()), "model_calls": len(msgs), "context": context,
+            "first_context": first,
             "compactions": compactions}
 
 
@@ -245,17 +248,14 @@ def score_run(run):
         else:
             status = "fail"
         by_item[item["id"]], detail[item["id"]] = status, d
-    lost = [i for i, s in by_item.items() if s in ("unknown", "fail")]
-    unknowns = sum(1 for i in lost if detail[i]["recall"] == "unknown")
-    guessed = sum(1 for i in lost if detail[i]["recall"] == "wrong")
     valid = forced >= v2score.SEAMS_WANTED
     asks = {}
     for step, ask_id in (h.get("asks") or {}).items():
         if step not in recs:
             continue
         ask = v3lib.ask_files([ask_id])[0]
-        prev = order[order.index(step) - 1] if order.index(step) else None
-        d = {"ask": ask_id, "probe": roles[step], "kind": ask["kind"], "context_at_send": (recs.get(prev) or {}).get("context"),
+        # The context of the ask's first model call (after a compaction at its start, if one came).
+        d = {"ask": ask_id, "probe": roles[step], "kind": ask["kind"], "context_at_send": recs[step].get("first_context"),
              "seconds": round((ended[step] - sent[step]) / 1000, 1), "model_calls": {"total": recs[step]["model_calls"]}}
         if ask["rule"].get("rule") == "answer":
             ok, why, info = v3score.score_answer(ask["rule"], recs[step]["answer"])
@@ -276,8 +276,7 @@ def score_run(run):
         "account": start["account"], "claude_version": start["claude_version"], "battery_sha256": start["battery_sha256"],
         "started_ms": start["started_ms"], "completed": completed, "valid": valid,
         "battery": {"probe": probe, "seams": {"kind": "compaction", "forced": forced, "wanted": v2score.SEAMS_WANTED},
-                    "by_item": by_item, "unknown_instead_of_guess": {"lost": len(lost), "unknown": unknowns, "guessed": guessed,
-                                                                     "score": round(unknowns / (unknowns + guessed), 3) if unknowns + guessed else None}},
+                    "by_item": by_item, "unknown_instead_of_guess": a10score.losses(by_item, detail)},
         "quality": quality, "asks": asks, "edits": {k: {"rc": v.get("rc"), "result": v.get("result")} for k, v in checks.items()},
         "edit_answers": a10score.edit_answers({k: v for k, v in checks.items() if k in recs}, {s: recs[s]["answer"] for s in recs}),
         "compaction_count": len(compactions), "compactions": compactions,

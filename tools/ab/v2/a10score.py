@@ -122,7 +122,17 @@ def after_seams(s, b, start, briefs, need):
         if len(between) < need or left is not True:
             s["by_item"][iid] = "not_tested"
     s["all_pass"] = s["completed"] and s["valid"] and all(v == "pass" for v in s["by_item"].values())
+    s["unknown_instead_of_guess"] = losses(s["by_item"], s["items"])
     return s
+
+
+def losses(by_item, details):
+    """The "unknown instead of a guess" score from the final verdicts: an item not tested is not lost."""
+    lost = [i for i, v in by_item.items() if v in ("unknown", "fail")]
+    unknown = sum(1 for i in lost if details[i]["recall"] == "unknown")
+    guessed = sum(1 for i in lost if details[i]["recall"] == "wrong")
+    return {"lost": len(lost), "unknown": unknown, "guessed": guessed,
+            "score": round(unknown / (unknown + guessed), 3) if unknown + guessed else None}
 
 
 def score(run):
@@ -162,8 +172,10 @@ def score(run):
             continue
         ask = v3lib.ask_files([ask_id])[0]
         lo, hi = sent[step], ended.get(step) or sent[step]
-        prev = order[order.index(step) - 1] if order.index(step) else None
-        d = {"ask": ask_id, "probe": roles[step], "kind": ask["kind"], "context_at_send": (contexts.get(prev) or {}).get("used"),
+        # The context of the ask's first model call: a rebirth swapped in at its start is already in it.
+        first = next((e["entry"]["event"].get("usedTokens") for e in log if lo <= e["atMs"] <= hi and e["entry"].get("type") == "provider"
+                      and (e["entry"].get("event") or {}).get("type") == "contextSize"), None)
+        d = {"ask": ask_id, "probe": roles[step], "kind": ask["kind"], "context_at_send": first,
              "seconds": round((hi - lo) / 1000, 1), "model_calls": v3score.model_calls(run, rec, lo, hi)}
         if ask["rule"].get("rule") == "answer":
             ok, why, info = v3score.score_answer(ask["rule"], rec.answer(rid[step]))
@@ -189,6 +201,7 @@ def score(run):
     p2 = usage(db, "conversation_id = ? AND at_ms BETWEEN ? AND ?", (conv, sent["p2"], settled)) if "p2" in sent else None
     # Working time: each step from its send to its end (the harness's settling between steps left out).
     working_s = sum(((ended.get(s) or sent[s]) - sent[s]) for s in order) / 1000
+    p2_s = (((ended.get("p2") or sent["p2"]) - sent["p2"]) / 1000) if "p2" in sent else 0
     reborn = []
     for x in briefs:
         r = next(e["entry"]["record"] for e in log if e["entry"].get("type") == "rebirth"
@@ -225,7 +238,7 @@ def score(run):
         "usage": {"session": total, "hours": round(hours, 3), "raw_per_hour": round(total["raw"] / hours) if total and hours else None,
                   "rebirths_raw": sum(x["raw"] for x in reborn), "p1_apart": p1,
                   "transcripts_raw_once": once[0], "transcripts_messages": once[1],
-                  "p2_apart": p2, "working_s": round(working_s, 1)},
+                  "p2_apart": p2, "working_s": round(working_s, 1), "p2_s": round(p2_s, 1)},
         "edit_answers": edit_answers({k: v for k, v in checks.items() if k in rid}, {s: rec.answer(rid[s]) for s in checks if s in rid}),
         "edits": {k: {"rc": v.get("rc"), "result": v.get("result")} for k, v in checks.items()},
         "item_details": {k: v["items"] for k, v in batteries.items() if "items" in v},

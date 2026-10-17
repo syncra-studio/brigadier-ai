@@ -19,6 +19,8 @@ threshold better; it shows what one session did. Production thresholds are uncha
   - fifteen more ballast steps, so the 400k arm is reborn twice;
   - V2's last fillers and its two edits, after the seams;
   - the memory-only probe (thread battery) and, from a copy of the state before it, the lookup probe.
+- Scored by `a10score.py` after the Phase X code review's fixes: an ask's context is taken at its first model
+  call. The run dirs are unchanged.
 - Tokens are the daemon's `turn_usage` for the conversation from t0 to settlement. They cross-check within 0.5%
   against the transcripts counted once per message. `tokens.py`'s `INCOMPLETE` is its double count of the note
   forks' copied history.
@@ -27,8 +29,8 @@ threshold better; it shows what one session did. Production thresholds are uncha
 |---|---|---|---|
 | V2 thread battery (memory only) | 10/10 pass | 10/10 pass | 9/10: the thread-only item said "unknown" (no guess) |
 | V2 lookup battery | 10/10 pass | 10/10 pass | 10/10 pass |
-| Early quality probe (at ~80k) | 4/4 | 4/4 | 4/4 |
-| Late quality probe | 4/4 at 325–334k | 4/4: q3 in the old session at 327k, the rest just after a rebirth (36–52k) | 4/4 at 156–172k |
+| Early quality probe (at 77–84k) | 4/4 | 4/4 | 4/4 |
+| Late quality probe (context at each ask's first call) | 4/4 at 326–330k | 4/4 at 35–48k, just after a rebirth | 4/4 at 156–167k |
 | Late probe: time / model calls | 93 s / 24 | 60 s / 30 | 64 s / 32 |
 | Edits' hidden checks (V2 e1, e2; V3 e1–e4) | 6/6 | 6/6 | 6/6 |
 | Rebirths (after step, context) | 2 (b09 414k, b18 405k) | 3 (b07 327k, b14 332k, b21 325k) | 5 (b04 207k, b08 213k, b12 205k, b16 209k, b20 211k) |

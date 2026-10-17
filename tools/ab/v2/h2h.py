@@ -32,6 +32,7 @@ def rows(brig, plain):
     bu, pu = brig["usage"], plain["usage"]
     btok = bu["session"]["raw"] + ((bu.get("p1_apart") or {}).get("raw") or 0) - ((bu.get("p2_apart") or {}).get("raw") or 0)
     ptok = pu["session"]["raw"]
+    bw = bu["working_s"] - (bu.get("p2_s") or 0)  # without the lookup probe, which plain doesn't get
     edits = lambda s: sum(1 for e in s["edit_answers"].values() if e["check_passed"])
     q = lambda s, k: (s["quality"].get(k) or {}).get("passed", 0)
     out = [
@@ -48,8 +49,7 @@ def rows(brig, plain):
         ("Claims it can't back up (guesses + broken edits reported done)", unbacked(brig, bg), unbacked(plain, pg), "less",
          str(unbacked(brig, bg)), str(unbacked(plain, pg))),
         ("Tokens through settlement (raw, all calls)", btok, ptok, "less", f"{btok:,}", f"{ptok:,}"),
-        ("Working time (sum of steps)", bu["working_s"], pu["working_s"], "less",
-         f"{bu['working_s'] / 60:.0f} min", f"{pu['working_s'] / 60:.0f} min"),
+        ("Working time (sum of the shared steps)", bw, pu["working_s"], "less", f"{bw / 60:.0f} min", f"{pu['working_s'] / 60:.0f} min"),
         ("Seams (Brigadier rebirths / plain compactions)", brig["rebirth_count"], plain["compaction_count"], None,
          str(brig["rebirth_count"]), str(plain["compaction_count"])),
         ("Peak context", brig["peak_context"], plain["peak_context"], None, f"{brig['peak_context']:,}", f"{plain['peak_context']:,}"),
