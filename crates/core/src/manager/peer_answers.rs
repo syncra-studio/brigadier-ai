@@ -217,12 +217,16 @@ impl SessionManager {
                 quiet = super::prompts::QUIET,
             ),
         };
-        // Underway until queued: a settling meanwhile neither reminds again nor gives up on it.
+        // Underway until its request works again: a settling meanwhile neither reminds again
+        // nor gives up on it (one that took it as given before then saw nothing working and
+        // told the sender it went unanswered).
         let queued = self
             .queue_envelope(id, envelope, Some(root.to_owned()))
             .await;
-        conv.peer_reminded(&record.message_id).await;
         // The request works again until the orchestrator has read it.
+        self.settle_requests(id).await;
+        conv.peer_reminded(&record.message_id).await;
+        // Given now: a turn for it that already ended has its answer sent.
         self.settle_requests(id).await;
         if let Some(queued) = queued {
             self.kick(&queued);
