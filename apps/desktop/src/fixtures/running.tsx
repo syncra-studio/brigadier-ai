@@ -2,6 +2,7 @@
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
 import { AgentStatus, type AgentState } from "@/components/assistant-ui/elements/agent-status";
@@ -67,6 +68,13 @@ const press = (label: string, within: ParentNode = document) => {
   button?.focus();
   button?.click();
 };
+/** The newest preview's Activities row, opened, and its command line, which opens the previews. */
+const showPreviews = () => {
+  const card = document.querySelector('[data-slot="summary-card"] [data-activity]');
+  const header = card?.querySelector<HTMLButtonElement>(":scope > button");
+  if (header?.getAttribute("aria-expanded") === "false") flushSync(() => header.click());
+  card?.querySelector<HTMLButtonElement>('[data-slot="task-card-transcript"] button')?.click();
+};
 const labels = (name: string) => [...(row(name)?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim());
 
 function Fixture() {
@@ -78,8 +86,8 @@ function Fixture() {
     const at = (ms: number, action: () => void) => timers.push(setTimeout(action, ms));
     at(500, () => {
       seen.section = document.querySelector('[data-activities] > header')?.textContent;
-      seen.chip = document.querySelector('[data-slot="summary-card"] [data-slot="preview-chip"]')?.textContent;
-      document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click();
+      seen.chip = document.querySelector('[data-slot="summary-card"] [data-activity] > button')?.textContent;
+      showPreviews();
     });
     at(1000, () => {
       press("Show log", row("Web app")!);
@@ -107,7 +115,7 @@ function Fixture() {
       });
       at(2800, () => {
         seen.linkClosed = !document.querySelector('[aria-label="Session previews"]');
-        document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click();
+        showPreviews();
       });
       at(3000, () => { press("Clear finished"); });
       at(3300, () => { seen.cleared = Object.keys(useBoard.getState().board!.previews); press("Stop", row("Web app")!); });
@@ -119,15 +127,15 @@ function Fixture() {
         seen.empty = document.querySelector('[aria-label="Session previews"]')?.textContent ?? "No previews";
         seen.calls = calls.filter((call) => ["pausePreview", "resumePreview", "stopPreview", "clearPreviews"].includes(call.method)).map((call) => call.method);
         // Reactivate after a long idle period without waiting a minute in the fixture.
-        const stopped = { ...rows[0]!, state: { type: "exited" as const, code: 0, status: "exit 0" }, endedAtMs: now };
+        const stopped = { ...rows[0]!, state: { type: "exited" as const, code: 0, status: "exit 0" }, endedAtMs: now - 60000 };
         useBoard.setState({ board: { ...useBoard.getState().board!, previews: { [stopped.id]: stopped } } });
       });
       const realNow = Date.now;
-      // Every text the chip ever holds from here on, even one replaced before the next paint.
+      // Every text the row ever holds from here on, even one replaced before the next paint.
       const chipTexts: string[] = [];
       const watch = new MutationObserver((records) => {
         for (const record of records) {
-          if (!(record.target instanceof Node) || !record.target.parentElement?.closest('[data-slot="preview-chip"]') && !(record.target instanceof Element && record.target.closest('[data-slot="preview-chip"]'))) continue;
+          if (!(record.target instanceof Node) || !record.target.parentElement?.closest("[data-activity]") && !(record.target instanceof Element && record.target.closest("[data-activity]"))) continue;
           if (record.oldValue !== null) chipTexts.push(record.oldValue);
           if (record.type === "characterData") chipTexts.push(record.target.textContent ?? "");
           for (const node of record.addedNodes) chipTexts.push(node.textContent ?? "");
@@ -140,11 +148,11 @@ function Fixture() {
         useBoard.setState({ board: { ...useBoard.getState().board!, previews: { [started.id]: started } } });
       });
       at(4550, () => {
-        seen.reactivated = document.querySelector('[data-slot="preview-chip"]')?.textContent;
+        seen.reactivated = document.querySelector("[data-activity] > button")?.textContent;
         watch.disconnect();
         seen.reactivatedTexts = chipTexts;
         Date.now = realNow;
-        document.querySelector<HTMLButtonElement>('[data-slot="preview-chip"]')?.click();
+        showPreviews();
       });
       at(4800, () => { press("Stop", row("Brigadier dev app")!); });
       at(5100, () => {

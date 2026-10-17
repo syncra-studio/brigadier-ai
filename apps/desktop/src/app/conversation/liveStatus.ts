@@ -53,7 +53,7 @@ export function elapsedWords(ms: number): string {
 }
 
 /** A command as a live line names it: its first line, cut short. */
-function commandWords(command: string): string {
+export function commandWords(command: string): string {
   const line = command.trim().split("\n")[0] ?? "";
   return line.length > 40 ? `${line.slice(0, 39).trimEnd()}…` : line;
 }

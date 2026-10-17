@@ -795,15 +795,18 @@ async function driveBackground(): Promise<object> {
   daemon.run = "idle";
   change(() => ({ run: "idle", runRequest: null, head: "a1", backgroundRuns: { [run.id]: run } }));
   await settle(300);
-  const card = () => one("[data-slot=background-run]");
+  const card = () => one("[data-activity=run-1]");
   const running = {
     ...seen(),
     said: all("[data-slot=request-work]", turn() ?? document).some((part) => text(part)?.includes("about 15 minutes")),
     row: text(card()),
-    elapsed: text(one("[data-slot=background-run-elapsed]")),
+    elapsed: text(one("[data-activity=run-1] > button span.tabular-nums")),
   };
   await hold("background");
-  one<HTMLButtonElement>("button", card() ?? document.createElement("div"))?.click();
+  // Opened, the row has its Stop.
+  one<HTMLButtonElement>(":scope > button", card() ?? document.createElement("div"))?.click();
+  await settle(100);
+  one<HTMLButtonElement>("[data-slot=task-card-actions] button", card() ?? document.createElement("div"))?.click();
   for (const end = Date.now() + 3000; Date.now() < end && calls.length === 0; ) await wait(25);
   // The result came and the thread answered it: the request is done, the run's row gone.
   const answer: Message = { ...said, id: "a2", seq: 3, text: "The full Rust tests pass: 812 tests, no failures.", createdAtMs: Date.now(), answerAtMs: Date.now() };

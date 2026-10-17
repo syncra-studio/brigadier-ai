@@ -2,6 +2,7 @@
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
 import { type ComposerTarget, ComposerTargetContext } from "@/app/conversation/composerTarget";
@@ -170,7 +171,13 @@ function Fixture() {
     });
     at(4000, () => { seen.contextWorkerRight = right(); click("Open plan"); });
     at(4300, () => { seen.planTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane"); click("Close right panel"); });
-    const chip = () => document.querySelector<HTMLButtonElement>('[data-slot="summary-card"] [data-slot="preview-chip"]');
+    // The preview's Activities row; opened, its command line opens the previews.
+    const chip = () => document.querySelector<HTMLButtonElement>('[data-slot="summary-card"] [data-activity] > button');
+    const showPreviews = () => {
+      const header = chip();
+      if (header?.getAttribute("aria-expanded") === "false") flushSync(() => header.click());
+      header?.parentElement?.querySelector<HTMLButtonElement>('[data-slot="task-card-transcript"] button')?.click();
+    };
     const arrival = (previewId: string, conversationId = id) => {
       const events = [{ stream: `conversation:${conversationId}`, event: { type: "previewUpdated", preview: { ...previews.preview!, id: previewId, conversationId } } }] as EventEnvelope[];
       revealNewPreviews(events);
@@ -245,7 +252,7 @@ function Fixture() {
       document.querySelector<HTMLTextAreaElement>('[aria-label="Fixture composer"]')?.focus();
       arrival("nested-preview");
     });
-    at(6500, () => { seen.autoOpened = useSummary.getState().floating && !!chip(); seen.composerKeptFocus = document.activeElement?.getAttribute("aria-label") === "Fixture composer"; chip()?.click(); });
+    at(6500, () => { seen.autoOpened = useSummary.getState().floating && !!chip(); seen.composerKeptFocus = document.activeElement?.getAttribute("aria-label") === "Fixture composer"; showPreviews(); });
     at(6600, () => {
       seen.nestedOpened = !!document.querySelector('[role="dialog"][aria-label="Previews"][data-state="open"]') && !!chip();
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

@@ -5,12 +5,16 @@
  * and its other sections are the real ones; only the Activities section below is drawn here, put
  * where the real one sits. Synthetic data; requests never reach a daemon.
  *
- * Each activity is a task card (`./task-card`, a mockup-only port of assistant-ui's Task Card).
+ * Each activity is a task card (`@/components/assistant-ui/elements/task-card`).
  *
  * Query `view=`: `today` (the card as it is), `build` (a worker builds the dev app; the thread's
  * "Running" section kept), `build-merged` (the same, merged into Activities), `starting` and
  * `running` (the dev app starting, then running), `open` (`build-merged` with the dev app's and the
  * demo pages' rows opened), `folded` (the section folded, with its count).
+ *
+ * With `real=1`, the product's own Activities section draws each view from the board data it
+ * stands for (the worker's dev app a preview of its own, the tests a named background run), for
+ * comparing the two.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { type ReactNode, useEffect, useState } from "react";
@@ -26,7 +30,7 @@ import { Button } from "@/components/ui/button";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import { TaskCard, type TaskCardState } from "@/fixtures/task-card";
+import { TaskCard, type TaskCardState } from "@/components/assistant-ui/elements/task-card";
 import type { BackgroundRun, Conversation, Message, Preview, Request, Task } from "@/ipc/generated";
 import { type Board, emptyBoard, useBoard } from "@/state/board";
 import { emptyThread, useApp } from "@/state/store";
@@ -38,6 +42,7 @@ const today = view === "today";
 const merged = view !== "today" && view !== "build";
 // The worker's build is done and the dev app it built starts (then runs).
 const later = view === "starting" || view === "running";
+const real = query.has("real");
 
 const id = "activities-mockup";
 const now = Date.now();
@@ -86,6 +91,20 @@ const runs: Record<string, BackgroundRun> = {
   "run-1": { id: "run-1", conversationId: id, requestId: "r1", tool: "run_check", command: TESTS,
     startedAtMs: now - 2 * MIN, endedAtMs: null, state: { type: "running" } },
 };
+// What the views stand for, as the board has it: the dev app is one preview the worker started,
+// building, then starting, then running; the tests a background run the thread named.
+const APP = "/work/brigadier/target/debug/bundle/macos/Brigadier Dev.app/Contents/MacOS/brigadier-desktop";
+const boardPreviews: Record<string, Preview> = {
+  "preview-1": { ...previews["preview-1"]!, name: "demo pages" },
+  "preview-2": {
+    id: "preview-2", conversationId: id, taskId: "task-2", name: "dev app", kind: "app",
+    command: `${BUILD} --config /scratch/tauri.conf.json && "${APP}" --brigadier-data-dir /scratch/data`,
+    workdir: "/work/task-2", workspace: "/work/task-2", pid: 43, log: null,
+    state: view === "running" ? { type: "running" } : { type: "starting" }, building: !later,
+    startedAtMs: later ? now - 5.5 * MIN : now - 4 * MIN, endedAtMs: null,
+  },
+};
+const boardRuns: Record<string, BackgroundRun> = { "run-1": { ...runs["run-1"]!, name: "Core tests" } };
 
 useBoard.setState({
   board: {
@@ -93,8 +112,8 @@ useBoard.setState({
     loaded: true,
     tasks,
     // The proposal's section stands in for the real one: the real chip shows only today.
-    previews: today ? previews : {},
-    backgroundRuns: merged ? {} : runs,
+    previews: real ? boardPreviews : today ? previews : {},
+    backgroundRuns: real ? boardRuns : merged ? {} : runs,
     activity: { "task-2": view === "running" ? "Trying the fixes in the dev app" : later ? "Starting the dev app" : `$ ${BUILD}` },
     head: messages.at(-1)!.id,
   } as Board,
@@ -188,6 +207,21 @@ function InCard({ children }: { children: ReactNode }) {
   return slot ? createPortal(children, slot) : null;
 }
 
+/** Opens or folds the real section's rows as the view has them. */
+function Drive() {
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const section = document.querySelector('[data-activities]');
+      if (!section) return;
+      clearInterval(timer);
+      if (view === "folded") section.querySelector<HTMLButtonElement>("header button")?.click();
+      if (view === "open") for (const row of ["preview-2", "preview-1"]) section.querySelector<HTMLButtonElement>(`[data-activity="${row}"] > button`)?.click();
+    }, 50);
+    return () => clearInterval(timer);
+  }, []);
+  return null;
+}
+
 /** The app's window layout (App.tsx) around the session, as the night fixture has it. */
 function Page() {
   return (
@@ -209,7 +243,7 @@ function Page() {
           <TitlebarNav />
         </SidebarProvider>
       </div>
-      {!today && <InCard><ActivityCards /></InCard>}
+      {real ? <Drive /> : !today && <InCard><ActivityCards /></InCard>}
     </TooltipProvider>
   );
 }

@@ -36,7 +36,7 @@ import {
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
 import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
-import { PreviewChip } from "@/app/conversation/PreviewChip";
+import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { ChecksRow, ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, useSummary } from "@/app/conversation/summaryState";
@@ -46,7 +46,6 @@ import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { GitActions } from "@/app/conversation/GitActions";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
-import { BackgroundRunsSummary } from "@/app/conversation/BackgroundRunsSummary";
 import {
   SummaryRow,
   SummaryRowButton,
@@ -886,7 +885,7 @@ function SessionSummaryContent({
     <>
       <SummaryCard scrollKey={`${conversation.id}/context`} active={active}>
         <div className="flex flex-col py-2.5">
-          <PreviewChip conversationId={conversation.id} />
+          <ActivitiesSummary conversationId={conversation.id} />
           <SummarySection
             foldKey="project"
             title={<span title={checkout}>{project ?? setup.repo}</span>}
@@ -933,7 +932,6 @@ function SessionSummaryContent({
             />
           )}
           <WorkersSummary conversationId={conversation.id} />
-          <BackgroundRunsSummary conversationId={conversation.id} />
           <Sources conversationId={conversation.id} />
         </div>
       </SummaryCard>

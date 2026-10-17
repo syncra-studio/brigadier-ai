@@ -35,20 +35,16 @@ export function latestLine(tail: string): string {
   return lines.findLast(Boolean) ?? "";
 }
 
-/** Prefer the newest active preview; finished previews stay reachable until cleared. */
-export function previewChip(previews: Readonly<Record<string, Preview>>) {
-  const all = Object.values(previews).toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
-  const newest = all.find((preview) => previewActive(preview.state)) ?? all[0];
-  if (!newest) return null;
-  const active = previewActive(newest.state);
-  return {
-    label: newest.name,
-    status: active ? previewStateLabel(newest.state) : previewIndicator(newest.state) === "failed" ? "Failed" : newest.state.type === "stopped" ? "Stopped" : "Finished",
-    active,
-    startedAtMs: newest.startedAtMs,
-    indicator: previewIndicator(newest.state),
-    title: all.map((preview) => `${preview.name}: ${preview.command} (in ${preview.workdir})`).join("\n"),
-  };
+/** A preview's state in a word. A web page that is up is showing; an app is running. */
+export function previewWord(preview: Preview): string {
+  const { state } = preview;
+  switch (state.type) {
+    case "starting": return preview.building ? "Building" : "Starting";
+    case "running": return preview.kind === "app" ? "Running" : "Showing";
+    case "paused": return "Paused";
+    case "stopped": return "Stopped";
+    case "exited": return state.code === 0 ? "Stopped" : "Failed";
+  }
 }
 
 export function previewIndicator(state: PreviewState): AgentState {

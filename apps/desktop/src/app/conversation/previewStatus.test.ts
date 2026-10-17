@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { latestLine, previewChip, previewIndicator, previewActions, previewActive, previewStateLabel, previewSummary } from "@/app/conversation/previewStatus";
+import { latestLine, previewIndicator, previewActions, previewActive, previewStateLabel, previewSummary, previewWord } from "@/app/conversation/previewStatus";
 import type { EventEnvelope, Preview, PreviewState } from "@/ipc/generated";
 import { applyToBoard, emptyBoard } from "@/state/board";
 
@@ -34,22 +34,18 @@ test("Clear finished keeps starting, running and paused previews", () => {
   assert.deepEqual(Object.keys(board.previews).toSorted(), ["preview-1", "preview-2", "preview-3"]);
 });
 
-test("the pill names the newest active preview, then the newest finished one", () => {
-  const starting = { ...preview("build", { type: "starting" }), startedAtMs: 2 };
-  const running = preview("server", { type: "running" });
-  const finished = { ...preview("old", { type: "exited", code: 0, status: "exit 0" }), startedAtMs: 3 };
-  const chip = previewChip({ starting, running, finished });
-  assert.equal(chip?.label, "build");
-  assert.equal(chip?.status, "Starting");
-  assert.equal(chip?.active, true);
-  assert.equal(previewChip({ running })?.status, "Running");
-  assert.equal(previewChip({ paused: preview("paused", { type: "paused" }) })?.status, "Paused");
-  assert.equal(previewChip({ finished })?.status, "Finished");
-  assert.equal(previewChip({ finished })?.active, false);
-  assert.equal(previewChip({ finished })?.indicator, "done");
+const web = (state: PreviewState, building = false) => ({ ...preview("page", state), building });
+const app = (state: PreviewState) => ({ ...preview("app", state), kind: "app" as const });
+test("an activity's state word: building, starting, running for an app, showing for a page, stopped or failed", () => {
+  assert.equal(previewWord(web({ type: "starting" }, true)), "Building");
+  assert.equal(previewWord(web({ type: "starting" })), "Starting");
+  assert.equal(previewWord(web({ type: "running" })), "Showing");
+  assert.equal(previewWord(app({ type: "running" })), "Running");
+  assert.equal(previewWord(web({ type: "paused" })), "Paused");
+  assert.equal(previewWord(web({ type: "exited", code: 0, status: "exit 0" })), "Stopped");
+  assert.equal(previewWord(web({ type: "stopped", reason: "by the user" } as PreviewState)), "Stopped");
+  assert.equal(previewWord(web({ type: "exited", code: 1, status: "exit 1" })), "Failed");
   assert.equal(previewIndicator({ type: "exited", code: null, status: "signal 9" }), "failed");
-  assert.equal(previewChip({ failed: preview("failed", { type: "exited", code: 1, status: "exit 1" }) })?.status, "Failed");
-  assert.equal(previewChip({}), null);
 });
 
 test("preview states map onto the standalone agent-status states", () => {

@@ -59,7 +59,7 @@ SOFTWARE.
 
 ## assistant-ui elements permission notice
 
-The `agent-status` and `background-inbox` elements are ported from the [assistant-ui registry](https://r.assistant-ui.com/) sources fetched on 2026-10-14: [agent-status](https://r.assistant-ui.com/elements-agent-status.json), [background-inbox](https://r.assistant-ui.com/elements-background-inbox.json). The port maps design tokens and icon imports and adds preview controls and a waiting inbox state. The Activities mockup's task card (`apps/desktop/src/fixtures/task-card.tsx`) is ported from [task-card](https://r.assistant-ui.com/elements-task-card.json), fetched on 2026-10-17, the same way; it puts the meta under the label.
+The `agent-status` and `background-inbox` elements are ported from the [assistant-ui registry](https://r.assistant-ui.com/) sources fetched on 2026-10-14: [agent-status](https://r.assistant-ui.com/elements-agent-status.json), [background-inbox](https://r.assistant-ui.com/elements-background-inbox.json). The port maps design tokens and icon imports and adds preview controls and a waiting inbox state. The Activities section's task card (`apps/desktop/src/components/assistant-ui/elements/task-card.tsx`) is ported from [task-card](https://r.assistant-ui.com/elements-task-card.json), fetched on 2026-10-17, the same way; it puts the meta under the label.
 
 MIT License
 

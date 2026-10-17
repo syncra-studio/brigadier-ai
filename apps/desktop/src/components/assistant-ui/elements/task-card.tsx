@@ -1,5 +1,5 @@
 // Ported from assistant-ui’s standalone registry (MIT); see THIRD_PARTY_NOTICES.md.
-// A mockup component for the Activities mockup only: icons map to the app's, raw sizes and
+// The rows of the context card's Activities section: icons map to the app's, raw sizes and
 // colours to its tokens. Shaped as a context-card row rather than a card: no surface or border, the
 // row's height and wash, the meta as a second line under the label, and opened, one line of
 // detail with its actions inline where the original stacks actions and a transcript.
