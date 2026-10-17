@@ -27,7 +27,7 @@ const merge: Question = {
   }],
   answer: null, answers: [], createdAtMs: 0, answeredAtMs: null,
 };
-// A plain question: its recommended answer is lit at once, and only the focused card takes Enter.
+// A plain question: its answers may change code, so its recommended answer is marked, never lit.
 const ask: Question = {
   ...merge,
   id: "ask",
@@ -216,21 +216,33 @@ const results = new URLSearchParams(location.search).get("case") === "kept" ? {
     await settle();
     seen.litAfter = lit();
   }),
-  // A plain question lit at once: a click in the thread, then Enter, answers nothing.
+  // A plain question lights nothing either, and a click in the thread, then Enter, answers nothing.
   plainEnterOutside: await run(async (seen) => {
-    // The pointer off the answers: passing over one lights it on a plain card.
     await fixtureInput({ type: "pointer", x: 4, y: 4 });
     await mountCard({ type: "question", id: "ask" });
     seen.lit = lit();
+    seen.recommended = document.querySelector("[data-slot=action-option]")?.textContent?.includes("Recommended");
+    const first = document.querySelector("[data-slot=action-option]")!.getBoundingClientRect();
+    await fixtureInput({ type: "pointer", x: first.x + first.width / 2, y: first.y + first.height / 2 });
+    seen.litHovered = lit();
+    await fixtureInput({ type: "pointer", x: 4, y: 4 });
     await fixtureClick(region("thread").querySelector("p")!);
     seen.focused = focused();
     await key("Enter");
     await settle();
     seen.litAfter = lit();
   }),
-  plainEnterFocused: await run(async () => {
+  // Enter on the focused card right after mount sends nothing; 1 lights the first answer, then Enter sends it.
+  plainEnterFocused: await run(async (seen, since) => {
     await fixtureInput({ type: "pointer", x: 4, y: 4 });
     await mountCard({ type: "question", id: "ask" });
+    await key("Enter");
+    await settle();
+    seen.afterEnter = since();
+    await key("1");
+    await settle();
+    seen.lit = lit();
+    seen.afterDigit = since();
     const from = calls.length;
     await key("Enter");
     await until("the answer", sent(from));

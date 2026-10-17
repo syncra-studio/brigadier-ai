@@ -697,16 +697,16 @@ function clickInput(event: MouseEvent): AnswerInput {
 }
 
 /**
- * The card shared by questions and "Implement this plan?": numbered answers (1–9 pick, ↑/↓
+ * The card shared by questions and "Implement this plan?": numbered answers (1–9 light, ↑/↓
  * move, Enter picks the lit one; a pick shows its dot, then goes), then the free-text row
  * with Skip, which turns into Submit once something is typed (Next, before a round's last
  * question; ←/→ page through the round). Esc or × puts it aside.
  *
  * Enter picks the lit answer only from the focused card, never from elsewhere in the window: a
- * click in the thread and Enter answers nothing. A `consequential` card (a choice that is hard
- * to undo: a merge, building a plan) also lights nothing until the user moves to an answer, even
- * when it took focus on its own: ↑/↓ or 1–9 light one (the pointer passing over lights nothing).
- * A click on an answer picks it.
+ * click in the thread and Enter answers nothing. Every answer may change code or be hard to undo
+ * (a merge, building a plan), so nothing is lit until the user moves to an answer, even when the
+ * card took focus on its own: ↑/↓ or 1–9 light one (the pointer passing over lights nothing),
+ * and the recommended answer is only marked. A click on an answer picks it.
  */
 /**
  * The free-text row's microphone: dictates into the row, as the composer's does into the
@@ -740,9 +740,7 @@ function ChoiceCard({
   detail,
   extra,
   choices,
-  initial,
   kept,
-  consequential = false,
   initialText = "",
   placeholder,
   pager,
@@ -765,12 +763,8 @@ function ChoiceCard({
   /** Between the question and the answers (the files asked about). */
   extra?: ReactNode;
   choices: { label: string; description?: ReactNode; recommended?: boolean }[];
-  /** The answer lit at first (none on a consequential card). */
-  initial: number;
   /** The answer lit when the card was last shown, before the user went elsewhere. */
   kept?: number | null | undefined;
-  /** Its answers are hard to undo: only a deliberate pick answers it. */
-  consequential?: boolean;
   /** What the free-text row holds at first (an answer typed before paging back). */
   initialText?: string;
   placeholder: string;
@@ -780,7 +774,7 @@ function ChoiceCard({
   last?: boolean;
   /** ←/→ to the round's previous or next question. */
   onPage?: (step: -1 | 1) => void;
-  /** An answer picked, and how: a click, Enter, or its digit. */
+  /** An answer picked, and how: a click or Enter. */
   onChoose: (index: number, input: AnswerInput) => void;
   /** Words typed in the free-text row. */
   onText: (text: string) => void;
@@ -798,7 +792,7 @@ function ChoiceCard({
 }) {
   // The lit answer; -1 is the free-text row, null none yet.
   const [highlight, setHighlight] = useState<number | null>(
-    choices.length === 0 ? -1 : kept !== undefined ? kept : consequential ? null : initial,
+    choices.length === 0 ? -1 : (kept ?? null),
   );
   const lit = useEffectEvent((index: number | null) => onLit?.(index));
   useEffect(() => lit(highlight), [highlight]);
@@ -876,8 +870,7 @@ function ChoiceCard({
       digit <= Math.min(9, choices.length)
     ) {
       event.preventDefault();
-      if (consequential) setHighlight(digit - 1);
-      else commit(digit - 1, "digit");
+      setHighlight(digit - 1);
     } else if (digit === choices.length + 1 && digit <= 9) {
       event.preventDefault();
       field.current?.focus();
@@ -933,7 +926,6 @@ function ChoiceCard({
                   highlighted={index === highlight}
                   chosen={index === chosen}
                   disabled={busy}
-                  onPointerEnter={() => idle && !consequential && setHighlight(index)}
                   onClick={(event) => commit(index, clickInput(event))}
                   {...row(index + 2)}
                 />
@@ -1099,9 +1091,7 @@ function QuestionAction({
         description: option.description && <CodeSpans text={option.description} />,
         recommended: item.recommended === index,
       }))}
-      initial={picked >= 0 ? picked : (item.recommended ?? 0)}
-      kept={lit[at]}
-      consequential={question.kind.type === "merge"}
+      kept={lit[at] ?? (picked >= 0 ? picked : null)}
       initialText={drafts[at] ?? (given !== null && picked < 0 && given !== SKIPPED ? given : "")}
       placeholder={
         item.options.length > 0
@@ -1191,8 +1181,6 @@ function ImplementPlanAction({
       name="plan"
       title="Implement this plan?"
       choices={[{ label: "Yes, implement this plan" }]}
-      initial={0}
-      consequential
       placeholder="No, and tell Brigadier what to do differently"
       onChoose={() => decide(true, null)}
       onText={(text) => decide(false, text)}
