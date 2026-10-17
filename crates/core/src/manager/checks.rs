@@ -1995,8 +1995,11 @@ fn learned_commands(body: &str) -> Vec<String> {
 
 /// Whether `command` runs something in a temporary folder (its caller's `tmp`, `$TMPDIR`,
 /// `/tmp`, `/var/folders`): a one-off try, not a project check, so it is never learned. The
-/// full checks run in another checkout, where the scratch file isn't, and would fail on it.
+/// full checks run in another checkout, where the scratch file isn't, and would fail on it. A
+/// temporary file the command only writes its output to (`> /tmp/tests.log`, or a `mktemp`
+/// one: `f=$(mktemp) && npm test > $f`) runs nowhere: such a real check is learned (#202).
 fn scratch_command(command: &str, tmp: &Path) -> bool {
+    let command = without_temp_outputs(command);
     let tmp = tmp.to_string_lossy();
     (!tmp.is_empty() && command.contains(tmp.as_ref()))
         || [
@@ -2009,6 +2012,95 @@ fn scratch_command(command: &str, tmp: &Path) -> bool {
         ]
         .iter()
         .any(|scratch| command.contains(scratch))
+}
+
+/// `command` without the temporary files its output goes to: a `>` or `>>` target right in a
+/// temporary folder (`/tmp/tests.log`, `$TMPDIR/out`, never one in a folder there that may go)
+/// or in a variable, and without a `NAME=$(mktemp)` whose variable is used only as one. A `>`
+/// in quotes is no redirection.
+fn without_temp_outputs(command: &str) -> String {
+    let mut kept = String::new();
+    let mut chars = command.chars().peekable();
+    let mut quote = None;
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) => {
+                if c == q {
+                    quote = None;
+                }
+                kept.push(c);
+            }
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                kept.push(c);
+            }
+            (None, '\\') => {
+                kept.push(c);
+                kept.extend(chars.next());
+            }
+            // `<>` opens its file to read as well.
+            (None, '>') if kept.ends_with('<') => kept.push(c),
+            (None, '>') => {
+                while chars.next_if(|c| matches!(c, '>' | '|')).is_some() {}
+                // `2>&1` names no file.
+                if chars.next_if_eq(&'&').is_some() {
+                    kept.push_str(">&");
+                    continue;
+                }
+                while chars.next_if(|c| c.is_whitespace()).is_some() {}
+                let (mut target, mut quoted) = (String::new(), None);
+                while let Some(&c) = chars.peek() {
+                    match quoted {
+                        Some(q) if c == q => quoted = None,
+                        Some(_) => target.push(c),
+                        None if c.is_whitespace() || ";&|()<>".contains(c) => break,
+                        None if c == '\'' || c == '"' => quoted = Some(c),
+                        None => target.push(c),
+                    }
+                    chars.next();
+                }
+                let variable = target
+                    .strip_prefix('$')
+                    .is_some_and(|name| !name.contains('/'));
+                let in_temp = ["/tmp/", "/private/tmp/", "$TMPDIR/", "${TMPDIR}/"]
+                    .iter()
+                    .filter_map(|root| target.strip_prefix(root))
+                    .any(|name| !name.is_empty() && !name.contains('/'));
+                kept.push(' ');
+                if !variable && !in_temp {
+                    kept.push('>');
+                    kept.push_str(&target);
+                }
+            }
+            (None, c) => kept.push(c),
+        }
+    }
+    let mut out = kept.clone();
+    for assignment in kept.split([';', '&', '|', '\n']).map(str::trim) {
+        let Some((name, value)) = assignment.split_once('=') else {
+            continue;
+        };
+        if name.is_empty()
+            || !name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
+            // A bare one: a folder or template it names may go.
+            || value != "$(mktemp)"
+        {
+            continue;
+        }
+        // `$f`, `${f}`, `${f:-x}`: not `$file`.
+        let used = [format!("${name}"), format!("${{{name}")]
+            .iter()
+            .any(|var| {
+                kept.match_indices(var.as_str()).any(|(at, _)| {
+                    !kept[at + var.len()..]
+                        .starts_with(|c: char| c == '_' || c.is_ascii_alphanumeric())
+                })
+            });
+        if !used {
+            out = out.replacen(assignment, "", 1);
+        }
+    }
+    out
 }
 
 /// Whether `command`, run in `dir`, runs a script file that isn't there: a worker's one-off
@@ -3106,18 +3198,49 @@ mod tests {
             "cd /tmp/x && npm test",
             "bash /private/tmp/try.sh",
             "node /var/folders/ab/T/big.js",
-            "f=$(mktemp) && node src/cli.ts > $f",
             "node /Users/me/Library/brigadier/tmp/t1/big.ts",
+            "(cd /tmp/x && npm test)",
+            "d=$(mktemp -d) && cd $d && npm init -y",
+            "f=$(mktemp) && bash ${f} > /tmp/out.txt",
+            "d=$TMPDIR; cd \"$d\" && npm test",
+            "env node /tmp/probe.mjs",
+            "bash -o pipefail /tmp/probe.sh",
+            "bash -c 'node /tmp/probe.mjs'",
+            "node scripts/smoke.mjs /var/folders/ab/T/fixture.json",
+            "node cli.js < /tmp/input.json > /tmp/out.json",
+            "node cli.js >/tmp/out.json</tmp/input.json",
+            "npm test > /tmp/brigadier-test-x/tests.log",
+            "log=$(mktemp /tmp/worker-1/log.XXXXXX) && npm test > \"$log\"",
+            "node cli.js <> /tmp/input.json",
+            "d=$(mktemp) && cd \"${d:?}\" && npm init -y",
+            "node -e 'const f = () => \"/tmp/probe.js\"; require(f())'",
         ] {
             assert!(scratch_command(command, tmp), "{command}");
         }
         assert!(!scratch_command("npm run check", tmp));
         assert!(!scratch_command("cargo test -p tmp-utils", tmp));
+        // A real check that only writes its output to a temporary file is one (#202).
+        for command in [
+            "f=$(mktemp) && node src/cli.ts > $f",
+            "cargo test -p core > /tmp/core-tests.txt 2>&1",
+            "npm test 2>/tmp/err.log",
+            "cargo build >> /tmp/build.log && cargo test",
+            "out=$(mktemp); pnpm lint >\"$out\"",
+        ] {
+            assert!(!scratch_command(command, tmp), "{command}");
+        }
         // A Brain that learned one before reads it back without it.
-        let learned = vec!["npm run check".to_owned(), "node $TMPDIR/big.ts".to_owned()];
+        let learned = vec![
+            "npm run check".to_owned(),
+            "node $TMPDIR/big.ts".to_owned(),
+            "cargo test -p core > /tmp/core-tests.txt 2>&1".to_owned(),
+        ];
         assert_eq!(
             learned_commands(&learned_body(&learned)),
-            vec!["npm run check"]
+            vec![
+                "npm run check",
+                "cargo test -p core > /tmp/core-tests.txt 2>&1"
+            ]
         );
     }
 
