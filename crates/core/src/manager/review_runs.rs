@@ -1872,21 +1872,19 @@ impl SessionManager {
 
     /// `run_check`'s `fixes` (BUILD-PLAN O4): the review findings the thread's check fixes,
     /// recorded fixed and checked by that check (`command`, its output `alias`) when it passed
-    /// and its commit, if it asked for one, was made (`passed`). What became of them, in one
-    /// line.
+    /// and, on a session branch, its commit was made; `not_fixed` says why not otherwise. What
+    /// became of them, in one line.
     pub(crate) async fn record_fixed_by_check(
         &self,
         conversation_id: &ConversationId,
         fixes: &[String],
-        passed: bool,
+        not_fixed: Option<&str>,
         command: &str,
         alias: &str,
     ) -> String {
         let ids = fixes.join(", ");
-        if !passed {
-            return format!(
-                "Not recorded fixed: {ids}, as the check didn't pass or nothing was committed."
-            );
+        if let Some(why) = not_fixed {
+            return format!("Not recorded fixed: {ids}, as {why}.");
         }
         let items = fixes
             .iter()

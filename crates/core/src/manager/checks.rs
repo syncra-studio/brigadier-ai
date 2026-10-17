@@ -632,6 +632,9 @@ impl SessionManager {
     ) -> Result<String> {
         let mut caller = self.check_caller(id, task).await?;
         let unknown = self.unknown_findings(id, &fixes).await?;
+        // On a session branch a fix counts once it is committed, as a merge takes the branch's
+        // commits; on the user's own checkout it stays uncommitted, so a pass is enough.
+        let fixes_need_commit = !fixes.is_empty() && self.local_checkout(id).is_none();
         if !unknown.is_empty() {
             return Err(Error::Invalid(format!(
                 "{} is no review finding of this session: nothing ran or was committed. Give `fixes` only the ids its review findings show (R1.2), or leave it out.",
@@ -698,13 +701,25 @@ impl SessionManager {
                 .check_now(&caller, &workdir, &words, timeout, args.rerun, &args.inputs)
                 .await?;
             let passed = status == "exit 0";
-            let mut committed = true;
+            let mut not_fixed = if !passed {
+                Some("the check didn't pass")
+            } else if fixes_need_commit {
+                Some(
+                    "nothing was committed: on this branch a fix counts once run_check's `commit` commits it",
+                )
+            } else {
+                None
+            };
             if let (Some(message), Some(tree)) = (commit, tree) {
                 let checked = under_way.tree().map(str::to_owned);
                 let note = manager
                     .commit_on_pass(&caller, &tree, passed, checked, &message, &fixes)
                     .await;
-                committed = !note.starts_with("Not committed");
+                if passed && !note.starts_with("Not committed") {
+                    not_fixed = None;
+                } else if passed {
+                    not_fixed = Some("nothing was committed");
+                }
                 reply = if note.starts_with("Committed") {
                     format!("{reply}\n{note} {AFTER_COMMIT}")
                 } else {
@@ -713,13 +728,7 @@ impl SessionManager {
             }
             if !fixes.is_empty() {
                 let note = manager
-                    .record_fixed_by_check(
-                        &conversation,
-                        &fixes,
-                        passed && committed,
-                        &words,
-                        &alias,
-                    )
+                    .record_fixed_by_check(&conversation, &fixes, not_fixed, &words, &alias)
                     .await;
                 reply = format!("{reply}\n{note}");
             }

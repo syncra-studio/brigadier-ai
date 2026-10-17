@@ -265,8 +265,8 @@ async fn an_open_thread_resumes_with_record_findings_and_its_note() {
 /// A fix of the thread's own goes with run_check's `fixes` (BUILD-PLAN O4): a failing check
 /// commits and records nothing; a passing one commits the fix with the Fixes trailer and records
 /// those findings fixed, checked by that check, with no git commit or record_findings call of
-/// the thread's own. The finding it didn't name stays unrecorded, and an id that is no finding
-/// is refused before anything runs.
+/// the thread's own. The finding it didn't name stays unrecorded, and so does one a passing check
+/// names without a commit; an id that is no finding is refused before anything runs.
 #[tokio::test]
 async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
     // Every run_check reply and every later thread input, so a check's result is there
@@ -330,6 +330,14 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
                         assert!(!reply.is_error, "{}", reply.text);
                         seen.lock().unwrap().push(reply.text);
                     }
+                    // On the session's branch a passing check with no commit records nothing
+                    // fixed: the merge takes the branch's commits, not the working tree.
+                    std::fs::write(workspace.join("notes.txt"), "fixed notes, trimmed\n").unwrap();
+                    let reply = turn
+                        .call("run_check", json!({"command": "true", "fixes": ["R1.3"]}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    seen.lock().unwrap().push(reply.text);
                     return Reply::text("Fixed two.");
                 }
                 Reply::text("Noted.")
@@ -347,6 +355,7 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
             [
                 "Not committed: the check didn't pass.",
                 "Recorded: R1.1 fixed",
+                "Not recorded fixed: R1.3",
             ]
             .iter()
             .all(|text| said.iter().any(|said| said.contains(text)))
@@ -371,6 +380,11 @@ async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
     assert!(
         failed.contains("Not recorded fixed: R1.1, R1.2"),
         "{failed}"
+    );
+    let uncommitted = said("Not recorded fixed: R1.3");
+    assert!(
+        uncommitted.contains("Not recorded fixed: R1.3, as nothing was committed: on this branch a fix counts once run_check's `commit` commits it."),
+        "{uncommitted}"
     );
     let passed = said("Recorded: R1.1 fixed");
     assert!(passed.contains("R1.2 fixed"), "{passed}");
