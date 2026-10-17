@@ -104,7 +104,7 @@ useApp.setState((state) => ({
 }));
 
 const landed = (id: string, requestId: string, number: number, files: string[] | null) => ({
-  id, requestId, number, landed: "abc", state: "landed",
+  id, requestId, number, title: "", landed: "abc", state: "landed",
   candidate: files && { diffStat: { files: files.map((path) => ({ path, insertions: 1, deletions: 1, binary: false })), insertions: files.length, deletions: files.length } },
 });
 useBoard.setState({

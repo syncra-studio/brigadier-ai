@@ -40,3 +40,12 @@ test("the worker view's header gives the title its room first in a 1280-wide win
   assert.ok(seen.title.shown >= seen.title.full, `the title is cut short: ${JSON.stringify(seen)}`);
   assert.ok(seen.pill.shown > 0, `the model pill is gone: ${JSON.stringify(seen)}`);
 });
+
+test("a worker's task-1.diff chip opens its diff in colour, titled for the worker, within the window and scrolling", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "workers-ux.html?diff-test=1&approvals=0", "workers-diff-result"));
+  assert.equal(seen.error, undefined);
+  const { colouredLines, ...rest } = seen;
+  assert.deepEqual(rest, { title: "Diff of “File summary”", fits: true, scrolls: true });
+  // Every added line tinted, as the diff engine draws them.
+  assert.ok(colouredLines >= 240, `coloured lines: ${colouredLines}`);
+});

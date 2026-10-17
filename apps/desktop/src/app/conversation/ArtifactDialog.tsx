@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
+import { useWorkerText } from "@/app/conversation/WorkerChip";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -41,6 +42,8 @@ function ArtifactBody({ artifact }: { artifact: ArtifactRef }) {
   const [binary, setBinary] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // "Diff of task-1" names its worker as the user knows it.
+  const title = useWorkerText(artifact.title);
 
   const apply = useCallback((from: number, page: ArtifactText) => {
     setBinary(page.binary);
@@ -80,7 +83,7 @@ function ArtifactBody({ artifact }: { artifact: ArtifactRef }) {
   return (
     <>
       <DialogHeader>
-        <DialogTitle>{artifact.title}</DialogTitle>
+        <DialogTitle>{title}</DialogTitle>
         <DialogDescription>
           {artifact.kind} · {artifact.mime} · {formatBytes(artifact.bytes)}
         </DialogDescription>

@@ -1,6 +1,6 @@
 /* oxlint-disable brigadier/no-raw-design-values -- Fixed widths exercise user-resized panels. */
 /** Production chat/panel fixture with stored worker events. No live workers or daemon. */
-import { leadTranscript } from "@/fixtures/flow";
+import { leadTranscript, workerPatch } from "@/fixtures/flow";
 import type { Message, ProviderEvent, RawEntry, Report, Task } from "@/ipc/generated";
 import { showPlanDoc } from "@/state/planDoc";
 import { useBoard } from "@/state/board";
@@ -11,6 +11,8 @@ const done = query.get("view") === "done";
 const stress = query.has("panel-test");
 // The worker view's header at the panel's own width in a 1280-wide window.
 const headerTest = query.has("header-test");
+// A done worker's diff, opened from its `task-1.diff` chip.
+const diffTest = query.has("diff-test");
 const previousWidth = localStorage.getItem("brigadier.rightSidebarWidth");
 if (stress) {
   localStorage.setItem("brigadier.rightSidebarWidth", "600");
@@ -39,7 +41,7 @@ function worker(taskId: string, number: number, title: string): Task {
     createdAtMs: now - (number === 1 ? 75000 : 64000), updatedAtMs: now - 60000,
     route: { ...base.route, choice: { provider: "codex", model: "gpt-6.1-sol", effort: "high" } },
     attempts: [], workspace: null, candidate: null, kept: null, error: null, blockedReason: null,
-    quotaWait: null, report: done ? report : null, outputs: done ? [{ id: "summary-file", title: "Project file summary", kind: "file", mime: "text/markdown", bytes: 2048, fileName: "summary.md" }] : [],
+    quotaWait: null, report: done || diffTest ? { ...report, artifacts: diffTest ? [{ id: "worker-diff", title: `Diff of task-${number}`, kind: "diff", mime: "text/x-diff", bytes: workerPatch.length, fileName: `task-${number}.diff` }] : [] } : null, outputs: done ? [{ id: "summary-file", title: "Project file summary", kind: "file", mime: "text/markdown", bytes: 2048, fileName: "summary.md" }] : [],
   };
 }
 const tasks = { t1: worker("t1", 1, headerTest ? "Add the project file summary" : "File summary"), t2: worker("t2", 2, "Readme draft") };
@@ -232,5 +234,33 @@ if (headerTest) {
     const title = header.querySelector("h2")!;
     const pill = header.querySelector<HTMLElement>('button[aria-label^="Worker details:"] span')!;
     result.textContent = JSON.stringify({ window: innerWidth, panel: header.clientWidth, title: size(title), pill: size(pill) });
+  })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
+}
+
+/** The dialog's added lines, tinted in the diff engine's own shadow root. */
+const lines = () => [...document.querySelectorAll("[role=dialog] diffs-container")].flatMap((host) => [...host.shadowRoot?.querySelectorAll("[data-line-type=change-addition]") ?? []]);
+if (diffTest) {
+  const result = document.body.appendChild(document.createElement("pre"));
+  result.id = "workers-diff-result";
+  void (async () => {
+    for (let i = 0; i < 100 && !find('button[title="Open File summary"]'); i++) await wait(50);
+    find('button[title="Open File summary"]')!.click();
+    let chip: HTMLElement | undefined;
+    for (let i = 0; i < 100 && !chip; i++) {
+      chip = [...document.querySelectorAll<HTMLElement>("[data-slot=file-list] button")].find((button) => button.textContent?.includes("task-1.diff"));
+      await wait(50);
+    }
+    chip!.click();
+    for (let i = 0; i < 100 && lines().length < 6 * 40; i++) await wait(50);
+    await wait(300);
+    const dialog = find("[role=dialog]")!;
+    const box = dialog.getBoundingClientRect();
+    const list = find("[data-slot=artifact-diff]");
+    result.textContent = JSON.stringify({
+      title: dialog.querySelector("h2")?.textContent,
+      colouredLines: lines().length,
+      fits: box.top >= 0 && box.bottom <= innerHeight,
+      scrolls: !!list && list.scrollHeight > list.clientHeight,
+    });
   })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
 }

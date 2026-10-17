@@ -331,6 +331,11 @@ function entry(event: ProviderEvent, at: number): RawEntry {
   return { streamSeq: seq, atMs: at, event };
 }
 
+/** A worker's diff of six files, forty new lines each: taller than any window. */
+export const workerPatch = Array.from({ length: 6 }, (_, file) =>
+  `diff --git a/src/f${file}.ts b/src/f${file}.ts\n--- a/src/f${file}.ts\n+++ b/src/f${file}.ts\n@@ -0,0 +1,40 @@\n` + Array.from({ length: 40 }, (_line, line) => `+export const v${line} = ${line};\n`).join(""),
+).join("");
+
 /** The lead's own transcript, for its thread in the Workers panel. */
 export const leadTranscript: RawEntry[] = [
   entry({ type: "message", itemId: "x1", role: "assistant", text: "I’ll read the settings code first, then outline the change." }, ago(110)),
@@ -483,6 +488,8 @@ mockIPC((command, payload) => {
       return { method: req.method, files: [], truncated: false };
     case "listWorkerEvents":
       return { method: req.method, page: { entries: leadTranscript, hasMore: false } };
+    case "readArtifact":
+      return { method: req.method, text: { text: workerPatch, offset: 0, totalBytes: workerPatch.length, binary: false } };
     default:
       return { method: req.method };
   }
