@@ -96,6 +96,15 @@ pub struct BrainMetrics {
     pub largest_index_run: Option<Box<IndexRun>>,
 }
 
+/// The user's Undos and Reapplies since the daemon started (a request's changes or picked
+/// pending changes), and how many of them failed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoMetrics {
+    pub tried: u64,
+    pub failed: u64,
+}
+
 /// A daemon metrics sample.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -112,6 +121,8 @@ pub struct DaemonMetrics {
     pub store: StoreMetrics,
     pub connections: u32,
     pub brain: BrainMetrics,
+    #[serde(default)]
+    pub undo: UndoMetrics,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

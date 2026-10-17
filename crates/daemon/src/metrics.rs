@@ -1,11 +1,11 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use brigadier_ipc::metrics::{
     BrainMetrics, DaemonMetrics, IndexRun, LatencySummary, ProcessInfo, ProcessRole,
-    RuntimeMetrics, StoreMetrics, TaskPollMetrics,
+    RuntimeMetrics, StoreMetrics, TaskPollMetrics, UndoMetrics,
 };
 use brigadier_ipc::protocol::ClientInfo;
 use brigadier_sandbox::Platform;
@@ -50,6 +50,30 @@ pub struct Metrics {
     system: Arc<Mutex<System>>,
     /// Where the Brain counters come from.
     sessions: Weak<SessionManager>,
+    undo: UndoCounts,
+}
+
+/// The user's Undos and Reapplies since the daemon started, and how many failed.
+#[derive(Default)]
+struct UndoCounts {
+    tried: AtomicU64,
+    failed: AtomicU64,
+}
+
+impl UndoCounts {
+    fn count(&self, ok: bool) {
+        self.tried.fetch_add(1, Ordering::Relaxed);
+        if !ok {
+            self.failed.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn get(&self) -> UndoMetrics {
+        UndoMetrics {
+            tried: self.tried.load(Ordering::Relaxed),
+            failed: self.failed.load(Ordering::Relaxed),
+        }
+    }
 }
 
 impl Metrics {
@@ -73,6 +97,7 @@ impl Metrics {
             heartbeat: Mutex::new(VecDeque::with_capacity(HEARTBEAT_WINDOW)),
             system: Arc::new(Mutex::new(System::new())),
             sessions: Arc::downgrade(sessions),
+            undo: UndoCounts::default(),
         });
 
         let sampler = metrics.clone();
@@ -161,6 +186,11 @@ impl Metrics {
             .remove(&id);
     }
 
+    /// One Undo or Reapply the user asked for ended, done or failed.
+    pub fn undo_ended(&self, ok: bool) {
+        self.undo.count(ok);
+    }
+
     /// A fresh sample, taken now.
     /// The Brains' query timings, embedder and largest index run.
     fn brain(&self) -> BrainMetrics {
@@ -238,6 +268,7 @@ impl Metrics {
             },
             connections: self.connections.load(Ordering::Relaxed),
             brain: self.brain(),
+            undo: self.undo.get(),
         }
     }
 
@@ -306,5 +337,26 @@ impl Metrics {
         })
         .await
         .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every Undo counts, and those that failed apart (#129).
+    #[test]
+    fn undo_failures_are_counted() {
+        let undo = UndoCounts::default();
+        undo.count(true);
+        undo.count(false);
+        undo.count(false);
+        assert_eq!(
+            undo.get(),
+            UndoMetrics {
+                tried: 3,
+                failed: 2
+            }
+        );
     }
 }

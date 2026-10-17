@@ -236,6 +236,7 @@ function DaemonDetails({ metrics }: { metrics: DaemonMetrics | null }) {
         <Detail label="Embedding model">
           {metrics.brain.embedderLoaded ? "loaded" : "not loaded"}
         </Detail>
+        <Detail label="Undo failures">{metrics.undo.failed} of {metrics.undo.tried}</Detail>
       </dl>
     </section>
   );

@@ -436,6 +436,7 @@ export type { TrustBefore } from "./TrustBefore";
 export type { TrustCli } from "./TrustCli";
 export type { TurnStatus } from "./TurnStatus";
 export type { UiMeasurements } from "./UiMeasurements";
+export type { UndoMetrics } from "./UndoMetrics";
 export type { UndoOutcome } from "./UndoOutcome";
 export type { UninstallApp } from "./UninstallApp";
 export type { UninstallItem } from "./UninstallItem";

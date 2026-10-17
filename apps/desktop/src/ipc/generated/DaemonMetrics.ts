@@ -4,6 +4,7 @@ import type { LatencySummary } from "./LatencySummary";
 import type { RuntimeMetrics } from "./RuntimeMetrics";
 import type { StoreMetrics } from "./StoreMetrics";
 import type { TaskPollMetrics } from "./TaskPollMetrics";
+import type { UndoMetrics } from "./UndoMetrics";
 
 /**
  * A daemon metrics sample.
@@ -13,4 +14,4 @@ export type DaemonMetrics = { atMs: number, uptimeMs: number, rssBytes: number, 
  * How late a 50 ms heartbeat timer fires: a proxy for runtime stalls. Sampled only while
  * metrics are streaming.
  */
-schedulerDelay: LatencySummary, tasks: TaskPollMetrics, runtime: RuntimeMetrics, store: StoreMetrics, connections: number, brain: BrainMetrics, };
+schedulerDelay: LatencySummary, tasks: TaskPollMetrics, runtime: RuntimeMetrics, store: StoreMetrics, connections: number, brain: BrainMetrics, undo: UndoMetrics, };
