@@ -93,19 +93,22 @@ export type LeadStep = BlockOrchestratorStep;
  * A turn's activity: its sequence (from `blockSequence`) grouped. The live thought at the end of
  * a live turn is the live line's, not the activity's.
  */
-export function turnActivity(sequence: readonly SequenceEntry[]): Activity<LeadStep, SequenceEntry>[] {
-  return groupLead(sequence).map((item) => (item.type === "group" ? { ...item, items: joinExchanges(item.items) } : item));
+export function turnActivity(sequence: readonly SequenceEntry[], joinPeers = true): Activity<LeadStep, SequenceEntry>[] {
+  const grouped = groupLead(sequence);
+  if (!joinPeers) return grouped;
+  return grouped.map((item) => (item.type === "group" ? { ...item, items: joinExchanges(item.items) } : item));
 }
 
 /**
  * Messages to other sessions and the waits for their replies, next to each other in a group,
  * read as one row: "Sent messages to Docs and API work, waited for their replies".
+ * A trailing send still in flight stays separate until its wait arrives or the turn ends.
  */
-function joinExchanges(items: GroupItem<LeadStep>[]): GroupItem<LeadStep>[] {
+export function joinExchanges(items: GroupItem<LeadStep>[], sending: LeadStep | null = null): GroupItem<LeadStep>[] {
   const out: GroupItem<LeadStep>[] = [];
   for (const item of items) {
     const last = out.at(-1);
-    if (item.type === "step" && item.step.kind.type === "peerSent" && last?.type === "step" && last.step.kind.type === "peerSent") {
+    if (item.step !== sending && item.type === "step" && item.step.kind.type === "peerSent" && last?.type === "step" && last.step.kind.type === "peerSent") {
       const kind = last.step.kind;
       const next = item.step.kind;
       out[out.length - 1] = {

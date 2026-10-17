@@ -378,6 +378,12 @@ if (!long) {
   api.requests["a7"]!.state = { type: "working" };
   if (live === "ok") {
     sent(api, "a7", "m7", DOCS, "Is the guide ready to publish?", { type: "waitingForOk" });
+  } else if (live?.startsWith("second")) {
+    sent(api, "a7", "m7", DOCS, "Is the guide ready?", { type: "seen" });
+    waits(api, "a7", "w7");
+    sent(api, "a7", "m8", NOTES, "Are the notes ready?", { type: "seen" });
+    if (live === "second-wait") waits(api, "a7", "w8", "inProgress");
+    if (live === "second-done") answer(api, "a7", "Asked both sessions.");
   } else if (live === "sending") {
     sent(api, "a7", "m7", DOCS, "Is the guide ready to publish?", { type: "pending" });
   } else if (live === "rested") {
@@ -663,6 +669,13 @@ function liveTurn() {
 async function driveLive(): Promise<object> {
   await shown(API);
   await wait(300);
+  if (live?.startsWith("second")) {
+    await unfoldAll();
+    const body = all("[data-slot=request-body]").at(-1);
+    return all("[data-slot=orchestrator-step][data-kind=message]", body ?? document).map((row) => ({
+      state: row.getAttribute("data-state"), label: text(one("[data-slot=peer-words]", row)),
+    }));
+  }
   return liveTurn();
 }
 
