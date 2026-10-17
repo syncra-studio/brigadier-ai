@@ -104,7 +104,8 @@ export function StepRow({ words: said, status, exit = null, startedAtMs, detail,
       data-step-state={stopped ? "stopped" : running ? "running" : status === "declined" ? "declined" : undefined}
       detail={detail}
       onOpenChange={setOpen}
-      detailClassName={cn(ROW_DETAIL, "ps-0")}
+      // In a group its detail doesn't scroll on its own: the group's list scrolls it, a diff's header kept in view.
+      detailClassName={cn(ROW_DETAIL, "ps-0", inGroup && "max-h-none overflow-visible")}
     >
       <StepIcon words={words} stopped={stopped} />
       <span className={cn("min-w-0 truncate", running && "shimmer")}>
@@ -230,7 +231,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
       <CollapsibleContent className={OPENS}>
         {/* Up to 224px of rows 4px apart, then it scrolls, its edges fading while there is more.
             Its rows keep their height: an opened Shell box scrolls with them, never squeezed. */}
-        <div data-slot={GROUP_LIST} className="max-h-group-list scroll-edge-fade gap-activity-row-gap flex min-w-0 flex-col overflow-y-auto *:shrink-0 pt-1 [--spacing-scroll-fade-bottom:var(--spacing-group-fade)] [--spacing-scroll-fade-top:var(--spacing-group-fade)]">
+        <div data-slot={GROUP_LIST} className="max-h-group-list scroll-edge-fade gap-activity-row-gap flex min-w-0 flex-col overflow-y-auto *:shrink-0 pt-1 [--spacing-scroll-fade-bottom:var(--spacing-group-fade)] [--spacing-scroll-fade-top:var(--spacing-group-fade)] [--diff-header-top:var(--spacing-group-fade)]">
           <InGroup.Provider value>
             {items.map((item, index) => (described[index] && exploring(described[index]) ? null : renderStep(item.step, item.key)))}
           </InGroup.Provider>

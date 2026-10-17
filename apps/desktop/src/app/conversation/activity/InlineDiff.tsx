@@ -10,13 +10,14 @@ import { cn } from "@/lib/utils";
 /** A diff longer than this many lines isn't drawn inline. */
 const TOO_LARGE_LINES = 5000;
 
-const CARD = "border-foreground/10 rounded-shell mt-1 flex min-w-0 flex-col overflow-hidden border";
+const CARD = "border-foreground/10 rounded-shell mt-1 flex min-h-0 min-w-0 flex-col overflow-clip border";
 
 /**
  * One file's change, as a thread row opens to it: a card with the file's name, "+7 −2" and Copy,
  * then its lines in the file's colours, each changed line tinted with a bar and its changed words
  * marked, numbered when the change came as a real patch. Up to 240px, then it scrolls, its bottom
- * fading while there is more. `tall`: no height limit (a dialog of its own).
+ * fading while there is more. `tall`: no height limit (a dialog of its own). In a group's list its
+ * header sticks below the list's faded top edge (`--diff-header-top`) while the card scrolls by.
  */
 export function InlineDiff({ path, diff, tall = false }: { path: string; diff: string | null | undefined; tall?: boolean }) {
   const parsed = useMemo(() => (diff === null || diff === undefined ? null : parseDiff(diff)), [diff]);
@@ -25,16 +26,18 @@ export function InlineDiff({ path, diff, tall = false }: { path: string; diff: s
   const tooLarge = !parsed || parsed.rows.length > TOO_LARGE_LINES;
   return (
     <div data-slot="diff-card" className={CARD}>
-      <div className="bg-foreground/5 text-foreground/80 flex min-h-8 items-center gap-2 ps-3 pe-1 text-sm">
-        <span data-slot="diff-name" className="min-w-0 truncate" title={path}>
-          {name}
-        </span>
-        {parsed && (
-          <span data-slot="diff-counts" className="text-muted-foreground shrink-0 text-xs tabular-nums">
-            <span className="text-success">+{added}</span> <span className="text-destructive">−{removed}</span>
+      <div className="bg-background sticky top-(--diff-header-top) z-10">
+        <div className="bg-foreground/5 text-foreground/80 flex min-h-8 items-center gap-2 ps-3 pe-1 text-sm">
+          <span data-slot="diff-name" className="min-w-0 truncate" title={path}>
+            {name}
           </span>
-        )}
-        {diff && <CopyDiff text={diff} />}
+          {parsed && (
+            <span data-slot="diff-counts" className="text-muted-foreground shrink-0 text-xs tabular-nums">
+              <span className="text-success">+{added}</span> <span className="text-destructive">−{removed}</span>
+            </span>
+          )}
+          {diff && <CopyDiff text={diff} />}
+        </div>
       </div>
       {tooLarge ? (
         <p data-slot="diff-empty" className="text-muted-foreground px-3 py-2 text-sm">
