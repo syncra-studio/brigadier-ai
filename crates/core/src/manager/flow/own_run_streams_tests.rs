@@ -379,13 +379,17 @@ async fn own_run_streams_keep_one_buffer_through_background_handoff() {
         assert_eq!(bytes, mid.len() as u64);
         assert!(bytes > first.len() as u64);
         release(scratch.join("gate-2")).await;
-        flow.until("the final stored output", |b| {
-            b.background_runs
-                .get("run-1")
-                .is_some_and(|run| matches!(run.state, BackgroundRunState::Finished { .. }))
-        })
-        .await;
-        let board = flow.board().await;
+        // The run's file joins its request's changes a moment after the run reads finished.
+        let board = flow
+            .until("the final stored output and its change", |b| {
+                b.background_runs
+                    .get("run-1")
+                    .is_some_and(|run| matches!(run.state, BackgroundRunState::Finished { .. }))
+                    && b.latest_request()
+                        .and_then(|request| request.changes.as_ref())
+                        .is_some_and(|changes| !changes.stat.files.is_empty())
+            })
+            .await;
         let changes = board.latest_request().unwrap().changes.as_ref().unwrap();
         assert_eq!(changes.stat.files.len(), 1);
         assert_eq!(changes.stat.files[0].path, "background-written.txt");
