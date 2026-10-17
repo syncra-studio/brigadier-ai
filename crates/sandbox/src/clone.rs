@@ -172,10 +172,28 @@ fn platform_clone(
     new: &OsStr,
     deadline: Instant,
 ) -> io::Result<()> {
+    use nix::fcntl::{AtFlags, OFlag, openat};
+    use nix::sys::stat::{Mode, SFlag, fstatat, mkdirat};
     use std::io::Read;
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
+    // `cp -T` copies into a folder already at `new` and over a file there: `new` is made first,
+    // empty, refused if anything is in its place, and the copy fills it.
+    let kind = fstatat(&src.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
+    let made = if SFlag::from_bits_truncate(kind.st_mode) & SFlag::S_IFMT == SFlag::S_IFDIR {
+        mkdirat(&dst.fd, new, Mode::from_bits_truncate(0o700))
+    } else {
+        let flags = OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW;
+        openat(
+            &dst.fd,
+            new,
+            flags | OFlag::O_CLOEXEC,
+            Mode::from_bits_truncate(0o600),
+        )
+        .map(drop)
+    };
+    made.map_err(io::Error::from)?;
     let into = dst.fd.as_raw_fd();
     let mut command = Command::new("cp");
     command
