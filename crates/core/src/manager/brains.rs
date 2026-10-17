@@ -1265,7 +1265,7 @@ impl SessionManager {
                     None if matches!(status, ItemStatus::Failed) => lead.push_str(" (failed)"),
                     None => {}
                 }
-                ("command", lead, command.as_str(), output, kept)
+                (command_role(command), lead, command.as_str(), output, kept)
             }
             ProviderEvent::ToolCall {
                 name,
@@ -2822,6 +2822,17 @@ pub(crate) fn one_line(text: &str, max: usize) -> String {
 
 /// `text` on one line with its whitespace collapsed, cut at [`STEP_LEAD_BYTES`]: a thread
 /// step's call in its entry's first line.
+/// A Codex command's role in the thread's transcript index: `read` for one that only reads,
+/// lists or searches files (`sed -n`, `rg`, `ls`…), as Claude's `Read` and `Grep` are, else
+/// `command`.
+fn command_role(command: &str) -> &'static str {
+    if brigadier_providers::only_looks(&brigadier_providers::policy::unwrapped_command(command)) {
+        "read"
+    } else {
+        "command"
+    }
+}
+
 fn lead_part(text: &str) -> String {
     cut(
         &text.split_whitespace().collect::<Vec<_>>().join(" "),
@@ -2964,6 +2975,18 @@ pub(crate) async fn project_map(index: CodeIndex) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Codex read (a command that only reads or searches, wrapped in its shell) is indexed
+    /// as a read; any other command as a command.
+    #[test]
+    fn a_codex_read_is_indexed_as_a_read() {
+        assert_eq!(
+            command_role("/bin/zsh -lc \"sed -n '1,80p' src/a.rs\""),
+            "read"
+        );
+        assert_eq!(command_role("rg -n thread_items crates"), "read");
+        assert_eq!(command_role("/bin/zsh -lc 'cargo test -p core'"), "command");
+    }
 
     struct TestDir(PathBuf);
 
