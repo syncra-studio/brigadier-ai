@@ -185,15 +185,16 @@ pub(crate) fn request_contexts(
             continue;
         };
         let context = context_of_row(row);
+        let calls = model_calls(row);
         spans
             .entry(request)
-            .and_modify(|(calls, _, last)| {
-                *calls += 1;
+            .and_modify(|(counted, _, last)| {
+                *counted = counted.saturating_add(calls);
                 *last = context;
             })
             .or_insert_with(|| {
                 order.push(request.to_owned());
-                (1, context, context)
+                (calls, context, context)
             });
     }
     order
@@ -352,13 +353,17 @@ pub(crate) fn cache_causes(rows: &[&TurnUsage]) -> CacheCauses {
     summary
 }
 
+/// The model calls a row covers; one stored before they were counted counts as one.
+fn model_calls(row: &TurnUsage) -> u32 {
+    row.model_calls
+        .map_or(1, |calls| u32::try_from(calls).unwrap_or(u32::MAX))
+}
+
 fn step_tokens(rows: &[&TurnUsage]) -> Vec<StepTokens> {
     let mut by: Vec<StepTokens> = Vec::new();
     for row in rows {
         let step = row.step.map_or("unknown", StepKind::as_str);
-        let calls = row
-            .model_calls
-            .map_or(1, |calls| u32::try_from(calls).unwrap_or(u32::MAX));
+        let calls = model_calls(row);
         let turns = u32::from(row.opens_turn);
         match by.iter_mut().find(|known| known.step == step) {
             Some(known) => {
@@ -426,11 +431,21 @@ mod tests {
             // r1: Codex calls (no context said apart) from 10k to 14k.
             row(Some("r1"), None, 2_000, 8_000),
             row(Some("r1"), None, 1_000, 11_000),
-            // r2 (gone since) interleaves: a Claude turn, whose context came apart.
-            row(Some("r2"), Some(20_000), 9_000, 90_000),
+            // r2 (gone since) interleaves: a Claude turn of 5 model calls, whose context came
+            // apart.
+            TurnUsage {
+                model_calls: Some(5),
+                ..row(Some("r2"), Some(20_000), 9_000, 90_000)
+            },
             row(Some("r1"), None, 500, 13_500),
         ];
         let contexts = request_contexts(&rows, &requests);
+        // Its calls are counted as the request's summary counts its steps' calls.
+        let of_requests: Vec<&TurnUsage> = rows.iter().filter(|r| r.request_id.is_some()).collect();
+        assert_eq!(
+            step_tokens(&of_requests)[0].calls,
+            contexts.iter().map(|context| context.calls).sum::<u32>()
+        );
         assert_eq!(
             contexts,
             [
@@ -447,7 +462,7 @@ mod tests {
                     request_id: "r2".into(),
                     preview: String::new(),
                     started_at_ms: 0,
-                    calls: 1,
+                    calls: 5,
                     first_tokens: 20_000,
                     last_tokens: 20_000,
                     growth_tokens: 0,

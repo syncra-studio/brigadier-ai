@@ -1727,7 +1727,7 @@ pub struct RequestContext {
     /// The start of the user's message, on one line (empty when the request is gone).
     pub preview: String,
     pub started_at_ms: i64,
-    /// The thread's model calls (Claude: turns) for it.
+    /// The thread's model calls for it, counted as the request's summary counts them.
     pub calls: u32,
     pub first_tokens: i64,
     pub last_tokens: i64,
