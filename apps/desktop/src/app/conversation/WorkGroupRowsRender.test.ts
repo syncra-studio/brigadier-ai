@@ -13,3 +13,8 @@ test("a row opened inside a work group scrolls its state line into the group's l
   const { openInGroup } = await seen<{ openInGroup: { scrolls: boolean; endingShown: boolean } }>(t);
   assert.deepEqual(openInGroup, { scrolls: true, endingShown: true });
 });
+
+test("a running worker's lone step row says the live line in its own header", { timeout: 120000 }, async (t) => {
+  const { workerLone } = await seen<{ workerLone: { rowLine: string | null; linesUnder: number } }>(t);
+  assert.deepEqual(workerLone, { rowLine: "Thinking", linesUnder: 0 });
+});

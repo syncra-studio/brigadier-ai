@@ -5,6 +5,8 @@
  *
  * - A finished group of commands, opened and scrolled to its end: its last row opens to its Shell
  *   box, and the box's last line, how it ended, shows in the group's list.
+ * - A running worker's view whose newest group is one finished command: "Thinking" is that row's
+ *   own header, not a line under it.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -12,11 +14,36 @@ import { createRoot } from "react-dom/client";
 import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { stepWords } from "@/app/conversation/activity/words";
+import { WorkerThread } from "@/app/conversation/WorkerThread";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { RawEntry, Request, Task } from "@/ipc/generated";
+import { emptyBoard, useBoard } from "@/state/board";
 
 const query = new URLSearchParams(location.search);
 
-mockIPC(() => null);
+const CHAT = "work-group-rows";
+const now = Date.now();
+
+/** The worker's transcript: one command, done; nothing after it yet. */
+const workerEntries: RawEntry[] = [
+  { streamSeq: 1, atMs: now - 2000, event: { type: "command", itemId: "ls", command: "ls .", cwd: null, status: "completed", exitCode: 0, output: "a.ts", durationMs: 200 } },
+];
+
+mockIPC((command, payload) => {
+  if (command !== "ipc_request") return null;
+  const req = (payload as { request: Request }).request;
+  if (req.method === "listWorkerEvents") return { method: req.method, page: { entries: workerEntries, next: null } };
+  return { method: req.method };
+});
+
+const worker = {
+  id: "t1", number: 1, title: "File summary", conversationId: CHAT, state: "running", spec: "List the files.",
+  createdAtMs: now - 10_000, updatedAtMs: now - 2000, attempts: [], outputs: [], report: null, messages: [], error: null,
+} as unknown as Task;
+
+useBoard.setState({
+  board: { ...emptyBoard(CHAT), loaded: true, transcripts: { t1: { entries: workerEntries, loading: false, hasMore: false } } } as unknown as ReturnType<typeof emptyBoard>,
+});
 
 /** A finished command in a group, its row opening to its Shell box. */
 type Ran = { key: string; command: string };
@@ -41,6 +68,9 @@ function Page() {
               />
             )}
           />
+        </section>
+        <section data-case="worker-lone" className="flex h-96 flex-col">
+          <WorkerThread task={worker} />
         </section>
       </main>
     </TooltipProvider>
@@ -71,6 +101,14 @@ async function measure(): Promise<object> {
   out.openInGroup = {
     scrolls: list.scrollHeight > list.clientHeight,
     endingShown: !!ending && ending.top >= shown.top && ending.bottom <= shown.bottom,
+  };
+
+  // The worker's newest group is one finished command: its own row says "Thinking", no line under it.
+  const thread = one("[data-slot=worker-thread]", at("worker-lone"));
+  const column = thread?.querySelector(":scope > div");
+  out.workerLone = {
+    rowLine: one("[data-slot=group-live-line]", thread ?? document)?.textContent ?? null,
+    linesUnder: [...(column?.children ?? [])].filter((child) => !child.matches("[data-slot=work-group]") && child.textContent === "Thinking").length,
   };
   return out;
 }
