@@ -170,9 +170,9 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
           </div>}
           <div
             id="right-sidebar-content"
-            role={workerHeader ? "region" : "tabpanel"}
+            // A worker's view is its own region, named for the worker.
+            role={workerHeader ? undefined : "tabpanel"}
             aria-labelledby={workerHeader ? undefined : `right-sidebar-${panel.active}`}
-            aria-label={workerHeader ? "Workers" : undefined}
             data-pane={panel.active}
             className={cn(
               "bg-background text-sidebar-foreground flex min-h-0 flex-1 flex-col overflow-clip transition-opacity duration-150 motion-reduce:transition-none",

@@ -115,6 +115,17 @@ if (stress && !query.has("manual")) {
     await ready('[data-slot="worker-brief"] .aui-md');
     await ready('[data-slot="worker-thread"] pre');
     await wait(500);
+    // The worker view is a named region, and nothing above it takes it out of the accessibility tree.
+    const view = find('[data-slot="worker-thread"]')!.closest('[role="region"], section');
+    // A section with a name is a region.
+    const role = view?.getAttribute("role") ?? (view?.hasAttribute("aria-label") ? "region" : view?.tagName.toLowerCase());
+    const region = { role, label: view?.getAttribute("aria-label") };
+    const hiddenBy: string[] = [];
+    for (let node = find('[data-slot="worker-thread"]'); node && node !== document.body; node = node.parentElement) {
+      const hidden = node.getAttribute("aria-hidden") === "true" || node.inert
+        || (node.hasAttribute("role") && getComputedStyle(node).display === "contents");
+      if (hidden) hiddenBy.push(node.outerHTML.slice(0, 120));
+    }
     const sidebar = find('[data-slot="right-sidebar"]')!;
     const wide = bounds();
     // This is the same live CSS variable the sidebar drag updates before persisting its width.
@@ -199,7 +210,7 @@ if (stress && !query.has("manual")) {
     const workerClosed = sidebar.dataset.state === "collapsed";
     if (previousWidth === null) localStorage.removeItem("brigadier.rightSidebarWidth");
     else localStorage.setItem("brigadier.rightSidebarWidth", previousWidth);
-    result.textContent = JSON.stringify({ wide, narrow, expanded, minimum, details, toggled, tooltip, noMenu, noTabs,
+    result.textContent = JSON.stringify({ region, hiddenBy, wide, narrow, expanded, minimum, details, toggled, tooltip, noMenu, noTabs,
       closeInHeader: closeRect.top >= headerRect.top && closeRect.bottom <= headerRect.bottom && closeRect.right <= headerRect.right,
       listClose, closed, workerClosed, headerFits, plan, planFocused, workerFocused, planFocusedAgain, workerKeyFocused, shortWide, shortNarrow, shortWideBounds, shortMetrics });
   })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });

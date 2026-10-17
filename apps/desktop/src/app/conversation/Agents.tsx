@@ -226,7 +226,7 @@ function WorkerDetail({ task, headerActions }: { task: Task; headerActions?: Rea
   const choice = task.route.choice;
   const model = `${modelName(groups, choice)}${choice.effort ? ` · ${effortLabel(choice.effort)}` : ""}`;
   return (
-    <>
+    <section aria-label={`Worker: ${name ?? task.title}`} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header data-slot="worker-header" className="border-border flex h-page-toolbar min-w-0 shrink-0 items-center gap-2 border-b px-2">
         <TooltipIconButton
           tooltip={details ? "Back to worker" : `Back to ${WORKERS_LABEL.toLowerCase()}`}
@@ -266,7 +266,7 @@ function WorkerDetail({ task, headerActions }: { task: Task; headerActions?: Rea
           </section>
         </div>
       </div> : <WorkerThread key={task.id} task={task} />}
-    </>
+    </section>
   );
 }
 

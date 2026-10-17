@@ -25,3 +25,10 @@ test("a brief gains Show brief when its panel narrows", { timeout: 90000 }, asyn
   assert.equal(seen.shortWide, false, JSON.stringify(seen.shortWideBounds));
   assert.equal(seen.shortNarrow, true, JSON.stringify(seen.shortMetrics));
 });
+
+test("the worker view is a region named for its worker that nothing hides from the accessibility tree", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "workers-ux.html?panel-test=1&approvals=0&sidebar=0", "workers-result", 15000));
+  assert.equal(seen.error, undefined);
+  assert.deepEqual(seen.region, { role: "region", label: "Worker: File summary" });
+  assert.deepEqual(seen.hiddenBy, []);
+});
