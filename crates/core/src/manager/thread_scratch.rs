@@ -389,6 +389,8 @@ fn sweep_blocking(
     let processes = platform.processes();
     let mut swept = Swept::default();
     let mut kept_dirs: Vec<PathBuf> = Vec::new();
+    // A kept process whose folder can't be told (no `lsof`) may work in any of them.
+    let mut kept_somewhere = false;
     for candidate in candidates {
         let same = processes.is_alive(candidate.pid)
             && candidate.started.is_some_and(|started| {
@@ -416,8 +418,9 @@ fn sweep_blocking(
                     candidate.pid
                 ));
             }
-            if let Some(cwd) = working_dir(server) {
-                kept_dirs.push(cwd);
+            match working_dir(server) {
+                Some(cwd) => kept_dirs.push(cwd),
+                None => kept_somewhere = true,
             }
             continue;
         }
@@ -430,8 +433,9 @@ fn sweep_blocking(
                 "process {} listens on a port: {what}",
                 candidate.pid
             ));
-            if let Some(cwd) = working_dir(candidate.pid) {
-                kept_dirs.push(cwd);
+            match working_dir(candidate.pid) {
+                Some(cwd) => kept_dirs.push(cwd),
+                None => kept_somewhere = true,
             }
             continue;
         }
@@ -439,6 +443,12 @@ fn sweep_blocking(
             Ok(()) => swept.ended += 1,
             Err(err) => swept.kept.push(format!("process {}: {err}", candidate.pid)),
         }
+    }
+    if kept_somewhere {
+        swept
+            .kept
+            .push("the folders: a kept process works in one, and which can't be told".to_owned());
+        return swept;
     }
     empty(tmp, |_| false, &kept_dirs, &mut swept);
     for dir in command_temps {
@@ -519,5 +529,49 @@ fn working_dir(pid: u32) -> Option<PathBuf> {
     {
         let _ = pid;
         None
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// A kept server whose folder can't be told (no `lsof` to ask) may work in any of the
+    /// folders, so none is emptied.
+    #[test]
+    fn a_kept_process_in_an_unknown_folder_keeps_every_folder() {
+        let dir = std::env::temp_dir().join(format!("brigadier-sweep-{}", uuid::Uuid::now_v7()));
+        let tmp = dir.join("tmp");
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("asset.txt"), "kept").unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.join("data")),
+        })
+        .unwrap();
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let candidate = Candidate {
+            pid,
+            started: platform.processes().start_time_ms(pid).ok(),
+            stopped: false,
+            listens: false,
+            // A server below it that has exited since: its folder can't be read.
+            shelters: Some(u32::MAX - 1),
+        };
+        let swept = sweep_blocking(&*platform, &[candidate], &tmp, &[]);
+        let _ = child.kill();
+        let _ = child.wait();
+        let left = tmp.join("asset.txt").exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(left, "{swept:?}");
+        assert!(
+            swept
+                .kept
+                .iter()
+                .any(|kept| kept.starts_with("the folders"))
+        );
     }
 }
