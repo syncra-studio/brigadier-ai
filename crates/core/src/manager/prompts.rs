@@ -1407,6 +1407,10 @@ pub(crate) fn fill_told(told: &mut Told, older: &Told) {
     }
 }
 
+/// What a session whose instructions named an overnight run, but not its plan, was told of
+/// the run: no run's fingerprint (those are hex), and not empty, which says "no run".
+const UNHEARD_RUN: &str = "unheard";
+
 /// What the current CLI session was last told, from its log's instruction entries (logged at
 /// `at_ms`), newest first. Entries from before told was recorded say less: role instructions
 /// their Short replies setting, contract 0 and the day they were logged; a Short replies note
@@ -1421,6 +1425,16 @@ pub(crate) fn told_from_log<'a>(
         }
         let role = entry.label.starts_with(ROLE_INSTRUCTIONS);
         match &entry.told {
+            // Instructions written during a run before they left its plan to the `[run]` note
+            // counted the whole run as told, though they name only where it works: its plan,
+            // Rules and restrictions are still to hear, and its end once it ends (#117).
+            Some(said) if role && said.run.as_deref().is_some_and(|run| !run.is_empty()) => {
+                let said = Told {
+                    run: Some(UNHEARD_RUN.to_owned()),
+                    ..said.clone()
+                };
+                fill_told(&mut told, &said);
+            }
             Some(said) => fill_told(&mut told, said),
             None => fill_told(
                 &mut told,
@@ -3554,6 +3568,32 @@ mod environment_tests {
         let sent = notes(&told, now);
         took(&mut told, &sent);
         told
+    }
+
+    /// A session whose instructions came from a build that counted the whole run as told
+    /// (their `run` the run's fingerprint) still hears the run's plan once, and its end.
+    #[test]
+    fn instructions_that_counted_a_run_as_told_still_hear_its_plan() {
+        let now = current("approveForMe", Some("Restrictions: none."), &[]);
+        let stale = Told {
+            run: Some(now.run_fingerprint()),
+            ..now.told()
+        };
+        let role = entry(ROLE_INSTRUCTIONS_SHORT, Some(stale));
+        let (mut told, reached) = told_from_log([(1, &role)]);
+        assert!(reached);
+        let sent = notes(&told, &now);
+        assert_eq!(labels(&sent), vec![RUN_LABEL]);
+        took(&mut told, &sent);
+        assert_eq!(notes(&told, &now), Vec::new());
+        // Read back with the note it took: told once, not again.
+        let note = entry("run", Some(sent[0].told.clone()));
+        let (back, _) = told_from_log([(2, &note), (1, &role)]);
+        assert_eq!(notes(&back, &now), Vec::new());
+        // A run that ended before the upgrade: its end is still said.
+        let (over, _) = told_from_log([(1, &role)]);
+        let after = current("approveForMe", None, &[]);
+        assert_eq!(labels(&notes(&over, &after)), vec![RUN_OVER_LABEL]);
     }
 
     /// The rules left out of the instructions come once per CLI session, with the first
