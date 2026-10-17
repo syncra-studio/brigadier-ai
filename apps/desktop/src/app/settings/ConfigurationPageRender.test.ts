@@ -54,7 +54,7 @@ test("a finished reply keeps the sandbox notice outside its collapsed work", { t
 });
 
 // The real page in Chromium over a faked daemon: one headless card of the defaults with a line
-// each, the explanations in the menus (Automatic first, each level's allowance and risk), and
+// each, every section shown, the explanations in the menus (Automatic first, each level's allowance and risk), and
 // an old page's link and a search landing on their rows.
 test("Configuration shows its defaults in one card and explains the choices in its menus", { timeout: 60000 }, async (t) => {
   const dump = await renderFixtureLive(t, "configuration.html?drive=1", "configuration-result", 30000);
@@ -70,7 +70,9 @@ test("Configuration shows its defaults in one card and explains the choices in i
     },
   ]);
   assert.equal(seen.firstCardHeading, false, "the first card has no heading");
-  assert.deepEqual(seen.sections, ["Memory"]);
+  // Every section shows, with no Advanced accordion holding some back.
+  assert.deepEqual(seen.sections, ["Memory", "Composer", "Brain"]);
+  assert.equal(seen.advanced, false, "no Advanced accordion");
   // Its count shows by its name; search and links still find the row by its name.
   assert.deepEqual(seen.memories, { setting: "Memories", row: "Memories · 2 saved" });
   assert.deepEqual(seen.buttons, [], "no Use automatic button");

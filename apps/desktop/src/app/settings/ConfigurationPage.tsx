@@ -4,7 +4,6 @@ import { useAction } from "@/app/conversation/useAction";
 import { errorText } from "@/app/dialogs/fields";
 import { MemoriesDialog } from "@/app/settings/MemoriesDialog";
 import {
-  SettingsAdvanced,
   SettingsButton,
   SettingsCard,
   SettingsPage,
@@ -95,15 +94,10 @@ export const CONFIGURATION_ROWS = {
   },
 } as const;
 
-const ADVANCED_LABELS = [
-  CONFIGURATION_ROWS.fullAccessNotice.label,
-  CONFIGURATION_ROWS.enrichBrain.label,
-];
-
 /**
  * How Brigadier works for the user: one card of the defaults new sessions and chats start with
- * (models, permission level, reviews, starting workers), what Brigadier remembers, then display and
- * Brain extras under Advanced. Each row says in a line what it chooses; its menu explains the
+ * (models, permission level, reviews, starting workers), what Brigadier remembers, what the composer
+ * shows, and the Brain's spare quota. Each row says in a line what it chooses; its menu explains the
  * choices.
  */
 export function ConfigurationPage() {
@@ -146,24 +140,19 @@ export function ConfigurationPage() {
         </SettingsCard>
       </SettingsSection>
 
-      <SettingsAdvanced
-        description="What the composer shows, and spare quota for the Brain."
-        labels={ADVANCED_LABELS}
-      >
-        <SettingsSection title="Composer">
-          <SettingsCard>
-            <SwitchSetting
-              setting="showFullAccessNotice"
-              row={CONFIGURATION_ROWS.fullAccessNotice}
-            />
-          </SettingsCard>
-        </SettingsSection>
-        <SettingsSection title="Brain">
-          <SettingsCard>
-            <SwitchSetting setting="enrichBrain" row={CONFIGURATION_ROWS.enrichBrain} />
-          </SettingsCard>
-        </SettingsSection>
-      </SettingsAdvanced>
+      <SettingsSection title="Composer">
+        <SettingsCard>
+          <SwitchSetting
+            setting="showFullAccessNotice"
+            row={CONFIGURATION_ROWS.fullAccessNotice}
+          />
+        </SettingsCard>
+      </SettingsSection>
+      <SettingsSection title="Brain">
+        <SettingsCard>
+          <SwitchSetting setting="enrichBrain" row={CONFIGURATION_ROWS.enrichBrain} />
+        </SettingsCard>
+      </SettingsSection>
     </SettingsPage>
   );
 }
