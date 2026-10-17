@@ -2094,6 +2094,28 @@ mod tests {
         assert_eq!(at_least(TaskCategory::Scout, "low"), "low");
     }
 
+    /// The Routing page shows each kind's floor from `DEFAULT_FLOORS`; this function is the
+    /// source of truth and the page's copy must say the same.
+    #[test]
+    fn the_routing_page_floors_are_the_routers() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../apps/desktop/src/lib/routing.ts"
+        );
+        let source = std::fs::read_to_string(path).unwrap();
+        let start = source.find("export const DEFAULT_FLOORS").unwrap();
+        let block = &source[start..start + source[start..].find("};").unwrap()];
+        for category in TaskCategory::ALL {
+            let key = serde_json::to_value(category).unwrap();
+            let tier = serde_json::to_value(default_floor(category)).unwrap();
+            let line = format!("{}: {},", key.as_str().unwrap(), tier);
+            assert!(
+                block.contains(&line),
+                "routing.ts DEFAULT_FLOORS needs `{line}`"
+            );
+        }
+    }
+
     #[test]
     fn code_runs_on_the_best_at_high_and_chores_on_light_at_low() {
         for category in [

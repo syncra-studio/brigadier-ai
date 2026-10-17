@@ -125,7 +125,7 @@ export const PLAIN_TIERS: Record<QualityTier, string> = {
   unrated: "Not rated yet",
 };
 
-/** The least capable tier each kind of work runs on unless the orchestrator asks for more (the router's `default_floor`). */
+/** The least capable tier each kind of work runs on unless the orchestrator asks for more. A copy of the router's `default_floor`, which decides; a router test fails when they differ. */
 export const DEFAULT_FLOORS: Record<TaskCategory, QualityTier> = {
   scout: "light",
   research: "standard",
