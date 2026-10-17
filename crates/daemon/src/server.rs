@@ -15,7 +15,7 @@ use brigadier_core::pages::{PageChange, PageError, Pages};
 use brigadier_core::runtime::{Runtime, StartRaw};
 use brigadier_core::{
     Conversation, ConversationId, Core, Lifecycle, MAX_ATTACHMENT_BYTES, ProjectId, SearchUpdate,
-    Setup, WorkspaceTarget,
+    Setup, WorkspaceTarget, streams,
 };
 use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
 use brigadier_ipc::protocol::{
@@ -327,7 +327,9 @@ impl Session {
                     Ok(event) => {
                         if event.seq > self.last_sent {
                             self.last_sent = event.seq;
-                            self.writer.write(&ServerFrame::Event { event: envelope(&event) }).await?;
+                            if streams::on_live_feed(&event.stream) {
+                                self.writer.write(&ServerFrame::Event { event: envelope(&event) }).await?;
+                            }
                         }
                     }
                     Err(RecvError::Lagged(_)) => {
@@ -1009,6 +1011,9 @@ impl Session {
             let page = self.daemon.store.read_since(cursor, REPLAY_PAGE).await?;
             for event in &page {
                 cursor = event.seq;
+                if !streams::on_live_feed(&event.stream) {
+                    continue;
+                }
                 let frame = ServerFrame::Event {
                     event: envelope(event),
                 };

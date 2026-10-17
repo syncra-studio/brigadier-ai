@@ -60,9 +60,9 @@ def tsms(s):
 
 
 def domain_event(env):
-    """Whether a recorded envelope carries a domain event. The store also holds a request's
-    file record (`changes:…`) and a background run's stored output (`background-output:…`),
-    which the live feed sends too, with no `type`; nothing measured reads them."""
+    """Whether a recorded envelope carries a domain event. Runs recorded before #189 also
+    hold a request's file record (`changes:…`) and a background run's stored output
+    (`background-output:…`), with no `type`; the live feed no longer sends them."""
     event = env.get("event")
     return isinstance(event, dict) and "type" in event
 

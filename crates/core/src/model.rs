@@ -2554,6 +2554,15 @@ pub mod streams {
     pub fn draft(scope: &str) -> String {
         format!("draft:{scope}")
     }
+
+    /// Whether the clients' live feed carries `stream`'s events: not the engine's own records,
+    /// which are no domain events (a background run's stored output, a request's change
+    /// records and pending changes, the thread's inbox), #189.
+    pub fn on_live_feed(stream: &str) -> bool {
+        !["background-output:", "changes:", "pending:", "inbox:"]
+            .iter()
+            .any(|internal| stream.starts_with(internal))
+    }
 }
 
 #[cfg(test)]

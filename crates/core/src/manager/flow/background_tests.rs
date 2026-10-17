@@ -1458,3 +1458,38 @@ async fn a_run_whose_end_was_missed_does_not_stay_running() {
     }
     flow.stop().await;
 }
+
+/// What the live feed sends is a domain event a client can switch on by its `type`: a
+/// background run's stored output, a request's change records and the thread's inbox are the
+/// engine's own records and stay off it (#189).
+#[tokio::test]
+async fn the_live_feed_carries_only_typed_domain_events() {
+    let (inputs, replies): (Log, Log) = Default::default();
+    let flow = Flow::start(
+        "20261017-0213-issues-run-w49-feed",
+        Options::default(),
+        checking(vec![("run", "sleep 3; echo ran")], inputs, replies),
+    )
+    .await;
+    flow.background_commands();
+    flow.say("Run it.").await;
+    flow.settled().await;
+    let events = flow.core.store().read_since(0, 100_000).await.unwrap();
+    let mut kept_off = std::collections::BTreeSet::new();
+    for event in &events {
+        if !crate::model::streams::on_live_feed(&event.stream) {
+            kept_off.insert(event.kind.clone());
+            continue;
+        }
+        let typed = serde_json::from_str::<DomainEvent>(event.payload.get());
+        assert!(
+            typed.is_ok(),
+            "{} ({}) on the feed: {:?}",
+            event.stream,
+            event.kind,
+            typed.err()
+        );
+    }
+    assert!(kept_off.contains("background.output"), "{kept_off:?}");
+    flow.stop().await;
+}
