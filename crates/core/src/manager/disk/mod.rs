@@ -486,11 +486,12 @@ impl SessionManager {
                     OwnerState::Unfinished
                 } else {
                     let alive = match owner.split_once(':') {
-                        // A session's thread temporary folder, background runs and full
-                        // checks go with the session, as its own folders do.
+                        // A session's thread temporary folder, background runs, full checks
+                        // and previews with their data folders go with the session, as its own
+                        // folders do.
                         Some((
                             "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"
-                            | "checks",
+                            | "checks" | "preview" | "preview-data",
                             id,
                         )) => records.conversation(id).is_some(),
                         Some(("task", id)) => records.task(id).is_some(),
@@ -908,7 +909,7 @@ impl SessionManager {
                 let conversation_gone = match owner.split_once(':') {
                     Some((
                         "orch" | "chat" | "session" | "workers" | "thread-temp" | "background"
-                        | "checks",
+                        | "checks" | "preview" | "preview-data",
                         id,
                     )) => !catalog.conversations.iter().any(|c| c.id.0 == id),
                     _ => false,
@@ -1713,7 +1714,8 @@ impl Scanner<'_> {
             }
             let (what, many) = match owner.split_once(':') {
                 Some((
-                    "orch" | "session" | "workers" | "thread-temp" | "background" | "checks",
+                    "orch" | "session" | "workers" | "thread-temp" | "background" | "checks"
+                    | "preview" | "preview-data",
                     _,
                 )) => ("a session", "sessions"),
                 Some(("chat", _)) => ("a Chat", "Chats"),
