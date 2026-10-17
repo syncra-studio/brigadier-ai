@@ -100,6 +100,21 @@ async fn what_the_helper_last_wrote_shows_as_not_current() {
 }
 
 #[tokio::test]
+async fn finished_setup_shows_as_set_up_while_no_helper_has_read_the_permissions() {
+    let flow = flow("cu-host-set-up").await;
+    let home = fake_helper(&flow, HEALTHY);
+    std::fs::write(
+        home.join(super::super::computer_host::CAPTURE_CONFIRMED),
+        b"",
+    )
+    .unwrap();
+    let status = flow.manager.computer_use_status().await;
+    assert!(!status.current);
+    assert_eq!(status.setup, ComputerSetup::Ready);
+    assert!(calls(&home).is_empty());
+}
+
+#[tokio::test]
 async fn a_running_helper_shows_its_permissions_and_the_agents_using_apps() {
     let flow = flow("cu-host-live").await;
     let home = fake_helper(&flow, HEALTHY);

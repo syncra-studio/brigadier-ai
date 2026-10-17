@@ -159,6 +159,8 @@ fn setup_of(
         None => {}
     }
     match permissions {
+        // Unread (no helper since): the capture check passing is what finished setup.
+        None if capture_confirmed => ComputerSetup::Ready,
         None => ComputerSetup::NotSetUp,
         Some(p) if !p.accessibility || !p.screen_recording => ComputerSetup::Missing,
         Some(_) if !capture_confirmed => ComputerSetup::ConfirmCapture,
