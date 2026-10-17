@@ -776,8 +776,16 @@ pub fn preview(query: &Query) -> Preview {
         .collect();
     let tie = if tied.is_empty() {
         Tie::None
-    } else if tied.iter().any(|i| candidates[*i].used != pick.used) {
+    } else if tied.iter().any(|i| candidates[*i].used > pick.used)
+        && tied.iter().all(|i| candidates[*i].used >= pick.used)
+    {
         Tie::Quota
+    } else if cheaper_when_near(query.category)
+        && tied
+            .iter()
+            .any(|i| candidates[*i].model.tier > pick.model.tier)
+    {
+        Tie::Cheaper
     } else {
         Tie::Order
     };
@@ -1988,6 +1996,8 @@ enum Tie {
     Quota,
     /// The table's vendor order.
     Order,
+    /// A chore's cheaper tier.
+    Cheaper,
 }
 
 fn score_why(
@@ -2016,6 +2026,7 @@ fn score_why(
         Tie::Order => {
             evidence.push_str(&format!("; ties go to {} here", name(pick.model.provider)));
         }
+        Tie::Cheaper => evidence.push_str("; a tie, and it is the cheaper model"),
     }
     let lead = if cheapest_first(query.category) {
         "the fastest, cheapest model that can take it".to_owned()
@@ -2479,6 +2490,17 @@ mod tests {
         let route = routed(&query(&registry, &models, &busy_codex));
         assert_eq!(route.model, "sonnet");
         assert!(route.reason.contains("more quota left"), "{}", route.reason);
+        // Another Claude model in the tie, at the pick's own quota, doesn't change why.
+        let mut three = models.clone();
+        three
+            .iter_mut()
+            .find(|model| model.id == "claude-opus-5")
+            .unwrap()
+            .strengths
+            .insert(TaskCategory::Research, 9.0);
+        let route = routed(&query(&registry, &three, &busy_codex));
+        assert_eq!(route.provider, ProviderKind::Claude);
+        assert!(route.reason.contains("more quota left"), "{}", route.reason);
         let same = [
             quota(ProviderKind::Claude, 40.0),
             quota(ProviderKind::Codex, 40.0),
@@ -2487,6 +2509,41 @@ mod tests {
         assert_eq!(route.model, "gpt-6-luna");
         assert!(
             route.reason.contains("ties go to Codex"),
+            "{}",
+            route.reason
+        );
+    }
+
+    /// A chore's tie broken by the cheaper tier says so, not that a vendor with less quota
+    /// left has more.
+    #[test]
+    fn a_chore_tie_broken_by_the_cheaper_tier_says_so() {
+        let registry = Registry::bundled();
+        let mut models = catalog(&registry);
+        for model in &mut models {
+            let value = if model.id == "claude-opus-5" || model.id == "gpt-6-luna" {
+                8.0
+            } else {
+                5.0
+            };
+            model.strengths.insert(TaskCategory::Scout, value);
+        }
+        let busy_codex = [
+            quota(ProviderKind::Claude, 20.0),
+            quota(ProviderKind::Codex, 40.0),
+        ];
+        let mut q = query(&registry, &models, &busy_codex);
+        q.category = TaskCategory::Scout;
+        q.floor = default_floor(TaskCategory::Scout);
+        let route = routed(&q);
+        assert_eq!(route.model, "gpt-6-luna");
+        assert!(
+            !route.reason.contains("more quota left"),
+            "{}",
+            route.reason
+        );
+        assert!(
+            route.reason.contains("a tie, and it is the cheaper model"),
             "{}",
             route.reason
         );
