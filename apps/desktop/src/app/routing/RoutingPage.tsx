@@ -120,7 +120,6 @@ export function RoutingPage() {
 
   return (
     <SettingsPage
-      wide
       title="Routing"
       description="Which model takes each kind of work, in what order, and what it's never given."
       actions={

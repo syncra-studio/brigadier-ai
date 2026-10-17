@@ -158,6 +158,11 @@ function Fixture() {
       },
       () => {
         seen.formAfterCancel = Boolean(document.querySelector('[data-slot="routing-rule-form"]'));
+        // The page's column, as wide as every other page's.
+        const column = document.querySelector('[data-slot="settings-page"] h1')?.closest(".mx-auto");
+        const probe = document.body.appendChild(Object.assign(document.createElement("div"), { className: "max-w-settings" }));
+        seen.settingsColumn = Boolean(column) && getComputedStyle(column as Element).maxWidth === getComputedStyle(probe).maxWidth;
+        probe.remove();
         // Scrolled so Add rule sits just under the page's top edge: a click there reaches it.
         const add = button("Add rule");
         const scroller = add?.closest(".overflow-y-auto");

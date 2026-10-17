@@ -107,6 +107,10 @@ function Fixture() {
         seen.tabs = all('[data-slot="tabs-trigger"]').map(text);
         seen.status = text(document.querySelector('[data-slot="provider-panel"] > div'));
         seen.switchRow = Boolean(document.querySelector('[data-setting="Switch to another account when one runs out"]'));
+        const column = document.querySelector('[data-slot="settings-page"] h1')?.closest(".mx-auto");
+        const probe = document.body.appendChild(Object.assign(document.createElement("div"), { className: "max-w-settings" }));
+        seen.settingsColumn = Boolean(column) && getComputedStyle(column as Element).maxWidth === getComputedStyle(probe).maxWidth;
+        probe.remove();
         seen.masked = titles();
         seen.eyes = all("button").filter((element) => element.getAttribute("aria-label") === "Show email").length;
         seen.usage = all('[data-slot="account-usage"]').slice(0, 4).map((element) => {

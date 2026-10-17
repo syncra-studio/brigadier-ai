@@ -105,8 +105,7 @@
  *               max-h-peer-message            a message between sessions, folded (six lines)
  *               max-w-thread, max-w-{2xs,xs,sm,md,lg} readable column / surface widths
  *               max-w-settings                the Settings page's column
- *               max-w-settings-wide           data pages (Routing, Usage, Storage, Providers,
- *                                             Inspector)
+ *               max-w-settings-wide           the Inspector's panes
  *               max-w-setup, h-setup          the first-run setup sheet (near full window, capped)
  *               max-h-picker                  a dialog that picks from a list (capped, then it scrolls)
  *               setup-card                    a setup card's minimum width in its auto-filled grid

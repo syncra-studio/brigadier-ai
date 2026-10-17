@@ -113,7 +113,6 @@ export function ProvidersPage() {
 
   return (
     <SettingsPage
-      wide
       title="Providers"
       description="The coding agents Brigadier runs, your accounts with them, and which of their models do what."
       actions={

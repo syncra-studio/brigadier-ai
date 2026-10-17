@@ -66,6 +66,8 @@ test("Routing shows each kind's order, ranking, rules and the models' ratings, a
   assert.equal(seen.learned, "+0.40");
   assert.equal(seen.form, true);
   assert.equal(seen.formAfterCancel, false);
+  // The page's column is the one every Settings page has (#259).
+  assert.equal(seen.settingsColumn, true);
   // Nothing over the page's top takes a click meant for what scrolled under it (#260).
   assert.equal(seen.addRuleNearTop, true);
   assert.equal(seen.addRuleHit, true);

@@ -14,6 +14,8 @@ test("Providers shows a tab per agent, masks emails, and links to Routing for ru
   assert.deepEqual(seen.tabs, ["ClaudeMax", "CodexPlus"]);
   assert.equal(seen.status, "Readyv2.1.0 · Max plan · /usr/local/bin/claudeOn");
   assert.equal(seen.switchRow, true);
+  // The page's column is the one every Settings page has (#259).
+  assert.equal(seen.settingsColumn, true);
   const masked = ["ste•••••@•••••.com", "wor•••••@•••••.io", "sid•••••@•••••.org"];
   assert.deepEqual(seen.masked, masked);
   assert.equal(seen.eyes, 3);
