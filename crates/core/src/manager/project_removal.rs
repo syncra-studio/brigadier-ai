@@ -451,13 +451,10 @@ fn unlanded(
         // A worker's branch targets its session's branch; once that is gone, its work would
         // land on the repository's default branch.
         let target = match repo.branch_tip(&record.target) {
-            Ok(Some(target_tip)) => Some((record.target.clone(), target_tip)),
-            _ => repo.default_branch().ok().flatten().and_then(|fallback| {
-                let tip = repo.branch_tip(&fallback).ok().flatten()?;
-                Some((fallback, tip))
-            }),
+            Ok(Some(_)) => Some(record.target.clone()),
+            _ => repo.default_branch().ok().flatten(),
         };
-        let Some((target, target_tip)) = target else {
+        let Some(target) = target else {
             listed.push(unknown(&record));
             continue;
         };
@@ -466,12 +463,11 @@ fn unlanded(
                 w.branch.as_deref() == Some(record.name.as_str()) && same_path_in(&w.path, &dirty)
             })
         });
-        let landed = match (
-            repo.is_merged(&record.name, &target),
-            repo.count_commits(&target_tip, &tip),
-        ) {
-            (Ok(merged), Ok(ahead)) => merged && ahead == 0 && !gains_wip,
-            _ => {
+        // Against the target and its upstream (a local main is often behind GitHub's), a
+        // cherry-picked commit counting as landed.
+        let landed = match repo.landed_in(&tip, &target) {
+            Ok(landed) => landed && !gains_wip,
+            Err(_) => {
                 listed.push(unknown(&record));
                 continue;
             }
@@ -567,4 +563,87 @@ pub(super) fn branch_records<'r>(
         }))
         .filter(|record| owned.owns(&record.repo, &record.name))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{ffi::OsString, path::PathBuf, process::Command};
+
+    use super::{BranchRecord, unlanded};
+
+    #[test]
+    fn a_branch_landed_on_the_upstream_main_is_not_unlanded() {
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-unlanded-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_nanos())
+        ));
+        let root = dir.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let config = dir.join("gitconfig");
+        std::fs::write(&config, "").unwrap();
+        let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
+            .filter(|(key, _)| !key.to_string_lossy().starts_with("GIT_"))
+            .collect();
+        env.push(("GIT_CONFIG_GLOBAL".into(), config.into_os_string()));
+        for (key, value) in [
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+            ("GIT_AUTHOR_NAME", "Test"),
+            ("GIT_AUTHOR_EMAIL", "test@example.com"),
+            ("GIT_COMMITTER_NAME", "Test"),
+            ("GIT_COMMITTER_EMAIL", "test@example.com"),
+        ] {
+            env.push((key.into(), value.into()));
+        }
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .env_clear()
+                .envs(env.iter().cloned())
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        let commit = |file: &str| {
+            std::fs::write(root.join(file), file).unwrap();
+            run(&["add", file]);
+            run(&["commit", "--quiet", "-m", file]);
+            run(&["rev-parse", "HEAD"])
+        };
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        commit("base");
+        // Two sessions' branches: one cherry-picked onto GitHub's main, one equal to it; the
+        // local main is behind both.
+        run(&["checkout", "--quiet", "-b", "picked"]);
+        let picked = commit("picked");
+        run(&["checkout", "--quiet", "-b", "upstream", "main"]);
+        commit("upstream");
+        run(&["cherry-pick", &picked]);
+        let upstream = run(&["rev-parse", "HEAD"]);
+        run(&["update-ref", "refs/remotes/origin/main", &upstream]);
+        run(&["branch", "--quiet", "equal", &upstream]);
+        run(&["checkout", "--quiet", "-b", "fresh", "main"]);
+        commit("fresh");
+        run(&["checkout", "--quiet", "main"]);
+
+        let git = brigadier_git::Git::new(PathBuf::from("git"), env.clone());
+        let record = |name: &str| BranchRecord {
+            repo: root.clone(),
+            name: name.to_owned(),
+            target: "main".to_owned(),
+            tip: None,
+        };
+        let listed = unlanded(
+            &git,
+            &[],
+            vec![record("picked"), record("equal"), record("fresh")],
+        );
+        let names: Vec<&str> = listed.iter().map(|branch| branch.name.as_str()).collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(names, ["fresh"]);
+    }
 }

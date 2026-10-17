@@ -47,8 +47,8 @@ function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
     const all = useApp.getState().conversations;
     return ids.map((id) => all[id]).filter((c): c is Conversation => c !== undefined);
   });
-  // Delete waits for the preview, so the line about unlanded work is never skipped; `failed`
-  // when it couldn't be told.
+  // The check for unlanded work runs meanwhile and its line shows when ready; Delete never waits
+  // for it. `failed` when it couldn't be told.
   const [branches, setBranches] = useState<UnlandedBranch[] | "failed" | null>(null);
   useEffect(() => {
     let current = true;
@@ -60,10 +60,9 @@ function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
     };
   }, [ids]);
   const deleteButton = useRef<HTMLButtonElement>(null);
-  const ready = branches !== null;
   useEffect(() => {
-    if (ready) deleteButton.current?.focus();
-  }, [ready]);
+    deleteButton.current?.focus();
+  }, []);
 
   const count = conversations.length;
   const noun = conversationNoun(conversations);
@@ -100,7 +99,6 @@ function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
           ref={deleteButton}
           type="button"
           variant="destructive"
-          disabled={!ready}
           onClick={confirm}
         >
           {count === 1 ? `Delete ${noun}` : `Delete ${count} ${noun}`}

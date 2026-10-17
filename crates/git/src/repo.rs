@@ -333,6 +333,60 @@ impl Repo {
     pub fn is_merged(&self, branch: &str, into: &str) -> Result<bool> {
         self.ancestor(&self.branch_commit(branch)?, &self.branch_commit(into)?)
     }
+    /// Whether every commit of `tip` is in local branch `into` or in its upstream (`origin/<into>`
+    /// when none is set): reachable from it, or there as the same change (a cherry-pick), as
+    /// `git cherry` tells. A stale local branch doesn't hide work that landed upstream. A merge
+    /// commit of its own has no patch to match (its resolution may be new work): never landed.
+    pub fn landed_in(&self, tip: &Oid, into: &str) -> Result<bool> {
+        valid_oid(tip)?;
+        let mut bases = vec![self.branch_commit(into)?];
+        bases.extend(self.upstream_tip(into)?);
+        for base in bases {
+            let range = format!("{}..{}", base.0, tip.0);
+            let merges = self.cmd(
+                &["rev-list", "--merges", "--max-count=1", &range, "--"],
+                true,
+            )?;
+            if !merges.trim_ascii().is_empty() {
+                continue;
+            }
+            let out = self.cmd(&["cherry", &base.0, &tip.0], true)?;
+            if !out
+                .split(|byte| *byte == b'\n')
+                .any(|line| line.starts_with(b"+"))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The commit local branch `branch`'s upstream is at, else `origin/<branch>`'s; none when
+    /// neither exists.
+    pub fn upstream_tip(&self, branch: &str) -> Result<Option<Oid>> {
+        self.validate_branch(branch)?;
+        for spec in [
+            format!("refs/heads/{branch}@{{upstream}}"),
+            format!("refs/remotes/origin/{branch}"),
+        ] {
+            let spec = format!("{spec}^{{commit}}");
+            let out = self.run(
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "--end-of-options",
+                    &spec,
+                ],
+                true,
+            )?;
+            if out.status.success() {
+                return Ok(Some(parse::oid(&out.stdout)?));
+            }
+        }
+        Ok(None)
+    }
+
     /// Whether `from` is reachable from `to` (including equality).
     pub fn ancestor(&self, from: &Oid, to: &Oid) -> Result<bool> {
         valid_oid(from)?;
@@ -2270,5 +2324,59 @@ mod tests {
                 removed: 2,
             }
         );
+    }
+
+    #[test]
+    fn work_on_the_upstream_main_or_cherry_picked_there_has_landed() {
+        let (dir, git) = test_git("landed-in");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        let run = |args: &[&str]| repo.cmd(args, false).expect("git");
+        fs::write(root.join("a.txt"), "a\n").expect("a file");
+        repo.commit_changes("Base", true).expect("a commit");
+        run(&["branch", "-M", "main"]);
+        // Work on a branch, then cherry-picked onto the upstream main: the local main is stale.
+        run(&["checkout", "--quiet", "-b", "picked"]);
+        fs::write(root.join("b.txt"), "b\n").expect("a file");
+        let picked = repo.commit_changes("Add b", true).expect("a commit");
+        run(&["checkout", "--quiet", "-b", "upstream", "main"]);
+        fs::write(root.join("c.txt"), "c\n").expect("a file");
+        repo.commit_changes("Add c upstream", true)
+            .expect("a commit");
+        run(&["cherry-pick", picked.0.as_str()]);
+        let upstream = repo.resolve("HEAD").expect("HEAD");
+        run(&["checkout", "--quiet", "main"]);
+        let landed = |tip: &Oid| repo.landed_in(tip, "main").expect("landed");
+        assert!(!landed(&picked), "no upstream: the stale main lacks it");
+        run(&[
+            "update-ref",
+            "refs/remotes/origin/main",
+            upstream.0.as_str(),
+        ]);
+        assert_eq!(
+            repo.upstream_tip("main").expect("upstream"),
+            Some(upstream.clone())
+        );
+        assert!(landed(&picked), "cherry-picked onto origin/main");
+        assert!(
+            landed(&upstream),
+            "equal to origin/main, ahead of the stale main"
+        );
+        run(&["checkout", "--quiet", "-b", "fresh", "main"]);
+        fs::write(root.join("d.txt"), "d\n").expect("a file");
+        let fresh = repo.commit_changes("Add d", true).expect("a commit");
+        assert!(!landed(&fresh), "new work landed nowhere");
+        // A merge of its own, even of commits already upstream, may hold a resolution of its own.
+        run(&["checkout", "--quiet", "-b", "merged", "main"]);
+        run(&[
+            "merge",
+            "--quiet",
+            "--no-ff",
+            "--no-edit",
+            picked.0.as_str(),
+        ]);
+        let merged = repo.resolve("HEAD").expect("HEAD");
+        assert!(!landed(&merged), "its merge commit is nowhere upstream");
     }
 }

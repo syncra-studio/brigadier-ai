@@ -71,6 +71,7 @@ useApp.setState((state) => ({
 }));
 
 const calls: string[] = [];
+let releasePreview: (() => void) | null = null;
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
@@ -84,6 +85,13 @@ mockIPC((command, payload) => {
       };
     }
     case "previewDelete":
+      // Deleting several, the check is held until the driver lets it answer: Delete mustn't wait.
+      if (req.ids.length > 1) {
+        return new Promise((resolve) => {
+          releasePreview = () =>
+            resolve({ method: req.method, branches: [{ repo: "/repo", name: "brigadier/912a9469/session", unknown: false }] });
+        });
+      }
       return { method: req.method, branches: [] };
     case "delete":
       calls.push(`delete ${req.ids.join(",")}`);
@@ -217,6 +225,12 @@ function Fixture() {
       },
       () => {
         seen.deleteAll = dialog();
+        const confirm = button("Delete 3 conversations", q('[role="dialog"]') ?? document);
+        seen.deleteAtOnce = { enabled: confirm?.disabled === false, focused: document.activeElement === confirm };
+        releasePreview?.();
+      },
+      () => {
+        seen.unlanded = dialog();
         // Closing, the box keeps its text until its exit animation ends: hold that animation.
         const hold = document.createElement("style");
         hold.textContent =

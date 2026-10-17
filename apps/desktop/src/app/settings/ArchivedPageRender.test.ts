@@ -46,6 +46,10 @@ test("archived chats search, filter, sort, pick and delete", { timeout: 60000 },
   assert.deepEqual(seen.contextMenu, ["Unarchive", "Delete…"]);
   assert.deepEqual(seen.moreMenu, ["Delete all…"]);
   assert.match(String(seen.deleteAll), /^Delete 3 conversations\?/);
+  // Delete is ready at once; the unlanded-work check answers later, adding its line.
+  assert.doesNotMatch(String(seen.deleteAll), /never landed/);
+  assert.deepEqual(seen.deleteAtOnce, { enabled: true, focused: true });
+  assert.match(String(seen.unlanded), /branch brigadier\/912a9469\/session has work that never landed/);
   // The box keeps its text while it animates out (it once emptied first).
   assert.match(String(seen.closing), /^Delete 3 conversations\?/);
   assert.deepEqual(seen.calls, ["restore s1,s2", "delete s4"]);
