@@ -54,7 +54,8 @@ test("the thread's own work reads like the reference thread: running commands st
   // Background terminals, by how they stand; a finished one opens to its output.
   assert.deepEqual(seen.background, [
     { row: "Started background terminal with npm run dev -- --port 5173", state: "running", icon: "run" },
-    { row: "Background terminal finished", state: "finished", icon: "run" },
+    // A finished one names its command too.
+    { row: "Background terminal finished with npm run dev -- --port 5173", state: "finished", icon: "run" },
     { row: "Background terminal stopped with npm run dev -- --port 5173", state: "stopped", icon: "stop" },
   ]);
   assert.deepEqual(seen.backgroundOutput, { output: "served on :5173 shut down", ending: "Success", asked: ["run-2"] });

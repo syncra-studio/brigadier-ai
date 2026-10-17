@@ -11,9 +11,9 @@ import { cn } from "@/lib/utils";
 
 /**
  * A command of the thread's that went on in the background, as its row: "Started background
- * terminal with npm run dev" while it runs, "Background terminal finished", "Background terminal
- * stopped with npm run dev" (with a stop square). It opens to its Shell box: its output once it
- * ended, "No output yet" while it runs.
+ * terminal with npm run dev" while it runs, "Background terminal finished with npm run dev",
+ * "Background terminal stopped with npm run dev" (with a stop square). It opens to its Shell
+ * box: its output once it ended, "No output yet" while it runs.
  */
 
 /** The command a row names: its first line. */
@@ -29,7 +29,7 @@ export function backgroundWords(run: BackgroundRun): string {
     case "running":
       return `Started background terminal with ${command}`;
     case "finished":
-      return "Background terminal finished";
+      return `Background terminal finished with ${command}`;
     case "stopped":
     case "interrupted":
       return `Background terminal stopped with ${command}`;

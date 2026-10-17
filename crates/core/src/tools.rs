@@ -441,14 +441,27 @@ pub struct ThreadRunCheck {
     /// checkout.
     #[serde(default)]
     pub commit: Option<String>,
+    /// The review findings this change fixes, by id (`R1.2`), when it does nothing else: when
+    /// the check passes they are recorded fixed, checked by it, and its `commit` carries their
+    /// Fixes trailer, so it gets no review of its own.
+    #[serde(default, deserialize_with = "lines")]
+    #[schemars(with = "Vec<String>")]
+    pub fixes: Vec<String>,
+    /// Those of `fixes` of high severity (it loses data, breaks a build or a security
+    /// boundary): their fix gets one targeted re-check.
+    #[serde(default, deserialize_with = "lines")]
+    #[schemars(with = "Vec<String>")]
+    pub high: Vec<String>,
 }
 
-/// The parts of the thread's `run_check`: the check, the risk it marks and the commit it asks
-/// for on a pass.
+/// The parts of the thread's `run_check`: the check, the risk it marks, the commit it asks
+/// for on a pass, the review findings that pass fixes and those of them that are high.
 pub struct ThreadCheckParts {
     pub check: RunCheck,
     pub risky: Option<String>,
     pub commit: Option<String>,
+    pub fixes: Vec<String>,
+    pub high: Vec<String>,
 }
 
 impl ThreadRunCheck {
@@ -467,8 +480,20 @@ impl ThreadRunCheck {
                 .commit
                 .map(|message| message.trim().to_owned())
                 .filter(|message| !message.is_empty()),
+            fixes: finding_ids(&self.fixes),
+            high: finding_ids(&self.high),
         }
     }
+}
+
+/// Finding ids as given, one per entry or several split by commas or spaces, uppercased.
+fn finding_ids(given: &[String]) -> Vec<String> {
+    given
+        .iter()
+        .flat_map(|ids| ids.split([',', ' ']))
+        .map(|id| id.trim().to_ascii_uppercase())
+        .filter(|id| !id.is_empty())
+        .collect()
 }
 
 /// `run_unsandboxed`: the same, outside the sandbox, once approved.
@@ -557,20 +582,19 @@ pub struct QueryBrain {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum MemoryKind {
-    /// Something the user settled (with `user_message`), or you decided (kept as your own
-    /// unverified claim), that later work must respect, including a rule the user sets for
-    /// this session only.
+    /// Something the user settled (with `user_message`), or you decided (your unverified
+    /// claim), that later work must respect.
     Decision,
-    /// How this project always does things (naming, structure, style, commit messages),
-    /// shared with its other sessions; not a rule for this session only.
+    /// How this project always does things (naming, structure, style), shared with its other
+    /// sessions.
     Convention,
-    /// What the user likes in general, across projects (needs `user_message`).
+    /// What the user likes across projects (needs `user_message`).
     Preference,
-    /// An interface between parts or services that both sides rely on.
+    /// An interface between parts that both sides rely on.
     Contract,
-    /// A standing rule the user set ("never touch X", "always Y", "except in tests"), kept in
-    /// their own words: cite their message in `user_message`, with `quote` for the exact part
-    /// of it that is the rule (the whole message without it), and give its `scope`.
+    /// A standing rule the user set ("never touch X", "always Y", "except in tests"), in their
+    /// words: `user_message`, `quote` for the exact rule (the whole message without it), and
+    /// `scope`.
     Constraint,
 }
 
@@ -578,9 +602,9 @@ pub enum MemoryKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum ConstraintScope {
-    /// Only while the request it was said in is open.
+    /// While the request it was said in is open.
     Request,
-    /// For the rest of this session.
+    /// For this session.
     Session,
     /// For every session of this project.
     Project,
@@ -592,34 +616,29 @@ pub enum ConstraintScope {
 #[serde(deny_unknown_fields)]
 pub struct Remember {
     pub kind: MemoryKind,
-    /// One line that states it, e.g. "Commit subjects are imperative and under 60 characters".
+    /// One line that states it.
     pub title: String,
     /// Why, and any detail that matters later.
     #[serde(default)]
     pub detail: Option<String>,
-    /// True for a preference of the user's that holds in every project (it goes to their
-    /// Personal Brain); false for this project only.
+    /// True for a preference of the user's in every project (their Personal Brain).
     #[serde(default)]
     pub personal: bool,
-    /// Repository-relative files or folders it is about, if any; `path:12-30` names the
-    /// lines that show it.
+    /// Repository-relative paths it is about; `path:12-30` names the lines that show it.
     #[serde(default)]
     pub files: Vec<String>,
-    /// The id of an earlier decision this one replaces. For a constraint, only when the user's
-    /// new words replace the old rule entirely: an exception or a narrowing is a constraint of
-    /// its own, and the old one stays.
+    /// The id of an earlier node this one replaces; for a constraint, only when the user's new
+    /// words replace the old rule entirely (an exception is a constraint of its own).
     #[serde(default)]
     pub replaces: Option<String>,
-    /// A constraint's scope: `request`, `session` (the default) or `project`.
+    /// A constraint's scope (default `session`).
     #[serde(default)]
     pub scope: Option<ConstraintScope>,
-    /// The user's message that settled it: `latest`, or its number as search_transcript
-    /// shows it (`#12`). Needed for a preference; without it, anything else is kept as your
-    /// own claim, unverified.
+    /// The user's message that settled it: `latest`, or `#12` as search_transcript shows it.
+    /// Without it, anything but a preference is kept as your unverified claim.
     #[serde(default)]
     pub user_message: Option<String>,
-    /// With `user_message`: the user's words in it, exactly. Else the exact words your
-    /// evidence shows (the `files` lines, the `check` output or the `finding`).
+    /// The exact words: the user's in `user_message`, else what your evidence shows.
     #[serde(default)]
     pub quote: Option<String>,
     /// The out-… id a check's result ends with, whose output shows it.

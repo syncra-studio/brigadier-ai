@@ -59,12 +59,22 @@ def tsms(s):
     return int(datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() * 1000)
 
 
+def domain_event(env):
+    """Whether a recorded envelope carries a domain event. The store also holds a request's
+    file record (`changes:…`) and a background run's stored output (`background-output:…`),
+    which the live feed sends too, with no `type`; nothing measured reads them."""
+    event = env.get("event")
+    return isinstance(event, dict) and "type" in event
+
+
 def events(run):
     out = []
     with open(os.path.join(run, "rec", "events.jsonl")) as f:
         for line in f:
             if line.endswith("\n"):
-                out.append(json.loads(line))
+                env = json.loads(line)
+                if domain_event(env):
+                    out.append(env)
     out.sort(key=lambda env: env["seq"])
     return out
 

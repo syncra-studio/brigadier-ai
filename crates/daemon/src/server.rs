@@ -1656,9 +1656,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.rate(&conversation_id, subject, rating)).await?;
             Response::RateMessage
         }
-        Request::GetSessionDiff { id } => Response::GetSessionDiff {
-            stat: heap(|| sessions.session_diff_stat(&id)).await?,
-        },
+        Request::GetSessionDiff { id } => {
+            let diff = heap(|| sessions.session_diff_stat(&id)).await?;
+            Response::GetSessionDiff {
+                commits: diff.as_ref().map_or(0, |(_, commits)| *commits),
+                stat: diff.map(|(stat, _)| stat),
+            }
+        }
         Request::GetWorkerDiffs { conversation_id } => Response::GetWorkerDiffs {
             diffs: heap(|| sessions.worker_diffs(&conversation_id)).await?,
         },
@@ -1890,6 +1894,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => {
             heap(|| sessions.decide_plan(conversation_id, card_id, approve, message)).await?;
             Response::DecidePlan
+        }
+        Request::PutOffPlan {
+            conversation_id,
+            card_id,
+        } => {
+            heap(|| sessions.put_off_plan(conversation_id, card_id)).await?;
+            Response::PutOffPlan
         }
         Request::CancelMerge { conversation_id } => Response::CancelMerge {
             text: heap(|| sessions.cancel_merge(&conversation_id)).await?,

@@ -664,11 +664,12 @@ fn review_request(board: &Board, review: &ReviewRun) -> Option<String> {
 
 /// Whether a task of the request is blocked on the thread's answer. A lead whose outline is
 /// on a proposed plan's card waits for the user's yes instead, and that card holds nothing up
-/// (THREAD-PARITY-PLAN §8.5).
+/// (THREAD-PARITY-PLAN §8.5); nor does a plan the user put off, whose lead waits until they
+/// want it.
 fn blocked_on_the_thread(board: &Board, request: &str) -> bool {
     let proposed = board.plans.values().any(|plan| {
         plan.request_id.as_deref() == Some(request)
-            && plan.state == PlanState::Proposed
+            && matches!(plan.state, PlanState::Proposed | PlanState::PutOff)
             && plan.body.is_some()
     });
     board.tasks.values().any(|task| {

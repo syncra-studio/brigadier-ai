@@ -15,8 +15,8 @@ use super::{Flow, Options, Reply, Script, Turn};
 use crate::knowledge::RebirthTrigger;
 use crate::manager::fault::{FaultKey, InjectedError};
 use crate::manager::prompts::{
-    ANSWER_DETAILS_REVISION, COMMIT_FIRST_REVISION, OVERFLOW_REVISION, THREAD_STEPS_REVISION,
-    revision_note,
+    ANSWER_DETAILS_REVISION, COMMIT_FIRST_REVISION, LEAN_TOOLS_REVISION, OVERFLOW_REVISION,
+    SHORT_START_REVISION, THREAD_STEPS_REVISION, revision_note,
 };
 use crate::model::{DomainEvent, streams};
 use crate::work::{OrchestratorEntry, RequestState};
@@ -499,6 +499,40 @@ async fn a_session_from_before_commit_on_the_first_check_is_told_once() {
     told_once(
         COMMIT_FIRST_REVISION,
         "on the first check you expect to pass",
+    )
+    .await;
+}
+
+/// Rule R for the shorter instructions, whose findings and merge rules moved into the messages
+/// that need them (BUILD-PLAN O2).
+#[tokio::test]
+async fn a_session_from_before_the_short_start_is_told_once() {
+    told_once(
+        SHORT_START_REVISION,
+        "where they say more than your instructions, follow them",
+    )
+    .await;
+}
+
+/// Rule R for a Claude thread's `run` behind its tool search (BUILD-PLAN O5).
+#[tokio::test]
+async fn a_session_from_before_the_lean_tools_is_told_once() {
+    told_once(
+        LEAN_TOOLS_REVISION,
+        "load it through ToolSearch by its name",
+    )
+    .await;
+    // A try by hand stays out of run_check, where a T4 bench run put it in the check's command
+    // and a T6 one ran a scratch script as a check (BUILD-PLAN O3).
+    told_once(
+        LEAN_TOOLS_REVISION,
+        "A try by hand or a one-off script is a shell call of its own, never run_check or part of its command.",
+    )
+    .await;
+    // The shell stops a command at two minutes, so a longer one still goes through run.
+    told_once(
+        LEAN_TOOLS_REVISION,
+        "your shell stops a command at two minutes, so one that may run longer still goes through run",
     )
     .await;
 }

@@ -235,7 +235,7 @@ impl SessionManager {
         for earlier in board.plans.values().filter(|plan| {
             plan.state == PlanState::Proposed
                 || (plan.request_id == request_id
-                    && (matches!(plan.state, PlanState::Rejected { .. })
+                    && (matches!(plan.state, PlanState::Rejected { .. } | PlanState::PutOff)
                         || (matches!(plan.state, PlanState::Approved { .. })
                             && plan.steps.iter().any(|step| {
                                 step.task_id.as_ref().is_some_and(|t| leads.contains(&t))

@@ -232,6 +232,7 @@ fn assert_whole(successor: &Successor) {
         assert!(input.contains(name), "{name} in: {input}");
     }
     assert!(input.contains("transcript.md is complete."), "{input}");
+    assert!(input.contains("read what you need in full"), "{input}");
     assert!(!input.contains("note.md ("), "no note was written: {input}");
     let transcript = successor.file("transcript.md").expect("transcript.md");
     assert!(transcript.contains(PLANTED), "{transcript}");

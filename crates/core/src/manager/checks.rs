@@ -149,20 +149,38 @@ struct Caller {
 /// What `run_check`'s `commit` says on the user's own checkout.
 const NOT_ON_LOCAL: &str = "Not committed: this is the user's own checkout, where you commit only when they ask, with git yourself.";
 
+/// What a commit's reply ends with (BUILD-PLAN O3): the gate's bench saw the thread try its
+/// change by hand after the commit, a whole call, where the try belonged in the check's message,
+/// and once put it in the check's command, which failed on purpose and took a second check.
+pub(super) const AFTER_COMMIT: &str = "If the work is done, run nothing more for it: a try by hand is a shell call of its own in the message with this check, never part of its command, and never after it.";
+
 /// Longest a `run_check` commit may take, the repository's hooks included.
 const COMMIT_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 5 } else { 300 });
 
 /// The shell lines of `run_check`'s `commit` (BUILD-PLAN C9): everything changed in the
 /// checkout staged and committed with `message` and the thread's trailer. They run as the
 /// check did, at its access and in its environment, since git runs the repository's hooks and
-/// filters. Exit 100: nothing to commit; 101: `git add` failed.
-fn commit_command(message: &str) -> String {
+/// filters. Exit 100: nothing to commit; 101: `git add` failed. A commit that fixes review
+/// findings (`fixes`, their ids) names them in its Fixes trailer too, so it gets no review of
+/// its own (BUILD-PLAN O4).
+fn commit_command(message: &str, fixes: &[String]) -> String {
     let quoted = |text: &str| format!("'{}'", text.replace('\'', r"'\''"));
-    format!(
+    let mut command = format!(
         "git add -A || exit 101\ngit diff --cached --quiet && exit 100\ngit commit -q -m {} --trailer {}",
         quoted(message),
         quoted(super::prompts::THREAD_TRAILER)
-    )
+    );
+    if !fixes.is_empty() {
+        command.push_str(&format!(
+            " --trailer {}",
+            quoted(&format!(
+                "{}: {}",
+                super::prompts::FIXES_TRAILER,
+                fixes.join(", ")
+            ))
+        ));
+    }
+    command
 }
 
 /// What the commit `commit_command` made in `tree` holds, and what it left (BUILD-PLAN C10
@@ -213,6 +231,42 @@ fn last_said(output: &[u8]) -> String {
 }
 
 impl SessionManager {
+    /// The files of `tree` changed since the check started on `checked` (its tree's id): those
+    /// the check started with, and those new since. The check didn't see either.
+    async fn changed_since_check(
+        &self,
+        tree: &Path,
+        checked: String,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let (git, root) = (self.git.clone(), tree.to_owned());
+        blocking(move || {
+            let paths = git
+                .open_worktree(&root)
+                .and_then(|worktree| {
+                    worktree.paths_changed_since(&brigadier_git::Oid(checked.clone()))
+                })
+                .map_err(git_error)?;
+            if paths.is_empty() {
+                return Ok((paths, Vec::new()));
+            }
+            // Which of them the check started with: the rest are new since.
+            let mut args = vec!["ls-tree", "-r", "-z", "--name-only", &checked, "--"];
+            args.extend(paths.iter().map(String::as_str));
+            let listed = git
+                .open(&root)
+                .and_then(|repo| repo.read_only(&args))
+                .map_err(git_error)?;
+            let had: std::collections::HashSet<&str> =
+                listed.split('\0').filter(|path| !path.is_empty()).collect();
+            let (had, new): (Vec<String>, Vec<String>) = paths
+                .iter()
+                .cloned()
+                .partition(|path| had.contains(path.as_str()) || !root.join(path).exists());
+            Ok((had, new))
+        })
+        .await
+    }
+
     /// `run_check`'s `commit` (BUILD-PLAN C9): on a pass, everything changed in `tree` is
     /// committed with `message` and the thread's trailer, run as `caller`'s check ran; on a
     /// failure nothing is. Nor is anything when a file of `checked` (a
@@ -227,39 +281,14 @@ impl SessionManager {
         passed: bool,
         checked: Option<String>,
         message: &str,
+        fixes: &[String],
     ) -> String {
         if !passed {
             return "Not committed: the check didn't pass.".into();
         }
         let mut made = Vec::new();
         if let Some(checked) = checked {
-            let (git, root) = (self.git.clone(), tree.to_owned());
-            let changed = blocking(move || {
-                let paths = git
-                    .open_worktree(&root)
-                    .and_then(|worktree| {
-                        worktree.paths_changed_since(&brigadier_git::Oid(checked.clone()))
-                    })
-                    .map_err(git_error)?;
-                if paths.is_empty() {
-                    return Ok((paths, Vec::new()));
-                }
-                // Which of them the check started with: the rest are new since.
-                let mut args = vec!["ls-tree", "-r", "-z", "--name-only", &checked, "--"];
-                args.extend(paths.iter().map(String::as_str));
-                let listed = git
-                    .open(&root)
-                    .and_then(|repo| repo.read_only(&args))
-                    .map_err(git_error)?;
-                let had: std::collections::HashSet<&str> =
-                    listed.split('\0').filter(|path| !path.is_empty()).collect();
-                let (had, new): (Vec<String>, Vec<String>) = paths
-                    .iter()
-                    .cloned()
-                    .partition(|path| had.contains(path.as_str()) || !root.join(path).exists());
-                Ok((had, new))
-            })
-            .await;
+            let changed = self.changed_since_check(tree, checked).await;
             match changed {
                 Ok((paths, new)) if paths.is_empty() => made = new,
                 Ok((paths, _)) => {
@@ -275,7 +304,7 @@ impl SessionManager {
                 }
             }
         }
-        let spec = match self.check_spec(caller, tree, &commit_command(message)) {
+        let spec = match self.check_spec(caller, tree, &commit_command(message, fixes)) {
             Ok(spec) => spec,
             Err(err) => return format!("Not committed: {err}"),
         };
@@ -564,6 +593,8 @@ impl SessionManager {
             check: args,
             risky,
             commit,
+            fixes,
+            high,
         } = args.split();
         if let Some(why) = &risky {
             self.mark_risky(id, why).await;
@@ -573,7 +604,7 @@ impl SessionManager {
             Some(_) if self.local_checkout(id).is_some() => (None, true),
             commit => (commit, false),
         };
-        self.check_and_commit(id, None, args, commit)
+        self.check_and_commit(id, None, args, commit, fixes, high)
             .await
             .map(|reply| {
                 if local {
@@ -593,21 +624,48 @@ impl SessionManager {
         task: Option<&TaskId>,
         args: RunCheck,
     ) -> Result<String> {
-        self.check_and_commit(id, task, args, None).await
+        self.check_and_commit(id, task, args, None, Vec::new(), Vec::new())
+            .await
     }
 
     /// [`Self::run_check_tool`], then the thread's commit of everything it changed when the
     /// check passes (`commit`: its message), in the same call, even once it went to the
-    /// background (BUILD-PLAN C9); then, for the thread, the review its change is due, which
-    /// only a pass starts (C10).
+    /// background (BUILD-PLAN C9), with the review findings it fixes (`fixes`) recorded fixed
+    /// on that pass (O4); then, for the thread, the review its change is due, which only a pass
+    /// starts (C10).
     async fn check_and_commit(
         &self,
         id: &ConversationId,
         task: Option<&TaskId>,
         args: RunCheck,
         commit: Option<String>,
+        fixes: Vec<String>,
+        high: Vec<String>,
     ) -> Result<String> {
         let mut caller = self.check_caller(id, task).await?;
+        let unknown = self.unknown_findings(id, &fixes).await?;
+        // On a session branch a fix counts once it is committed, as a merge takes the branch's
+        // commits; on the user's own checkout it stays uncommitted, so a pass is enough.
+        let fixes_need_commit = !fixes.is_empty() && self.local_checkout(id).is_none();
+        if !unknown.is_empty() {
+            return Err(Error::Invalid(format!(
+                "{} is no review finding of this session: nothing ran or was committed. Give `fixes` only the ids its review findings show (R1.2), or leave it out.",
+                unknown.join(", ")
+            )));
+        }
+        let stray: Vec<&str> = high
+            .iter()
+            .filter(|id| !fixes.contains(id))
+            .map(String::as_str)
+            .collect();
+        if !stray.is_empty() {
+            return Err(Error::Invalid(format!(
+                "{} is in `high` but not in `fixes`: nothing ran or was committed. `high` names those of `fixes` of high severity.",
+                stray.join(", ")
+            )));
+        }
+        // Their severity holds whatever the check does, and its commit's scan reads it.
+        self.mark_high(id, &high).await?;
         let command = args
             .command
             .as_deref()
@@ -662,15 +720,70 @@ impl SessionManager {
                 .thread_check_started(&conversation, tree.as_deref())
                 .await;
             let CheckDone {
-                status, mut reply, ..
+                status,
+                mut reply,
+                alias,
             } = manager
                 .check_now(&caller, &workdir, &words, timeout, args.rerun, &args.inputs)
                 .await?;
             let passed = status == "exit 0";
-            if let (Some(message), Some(tree)) = (commit, tree) {
+            let mut not_fixed = if !passed {
+                Some("the check didn't pass".to_owned())
+            } else if fixes_need_commit {
+                Some("nothing was committed: on this branch a fix counts once run_check's `commit` commits it".to_owned())
+            } else {
+                None
+            };
+            if let (Some(message), Some(tree)) = (commit, tree.as_deref()) {
                 let checked = under_way.tree().map(str::to_owned);
                 let note = manager
-                    .commit_on_pass(&caller, &tree, passed, checked, &message)
+                    .commit_on_pass(&caller, tree, passed, checked, &message, &fixes)
+                    .await;
+                // Only a commit made now carries their Fixes trailer.
+                if passed && note.starts_with("Committed") {
+                    not_fixed = None;
+                } else if passed {
+                    not_fixed = Some("nothing was committed".to_owned());
+                }
+                reply = if note.starts_with("Committed") {
+                    format!("{reply}\n{note} {AFTER_COMMIT}")
+                } else {
+                    format!("{reply}\n{note}")
+                };
+            } else if let (true, None, Some(tree)) =
+                (!fixes.is_empty(), &not_fixed, tree.as_deref())
+            {
+                // The user's own checkout, uncommitted: the fix counts only if the check saw
+                // the files as they are now.
+                not_fixed = match under_way.tree() {
+                    None => Some(
+                        "Brigadier could not take the files' snapshot when the check started, so it can't tell what the check saw"
+                            .to_owned(),
+                    ),
+                    Some(checked) => {
+                        match manager.changed_since_check(tree, checked.to_owned()).await {
+                            Ok((had, _)) if had.is_empty() => None,
+                            Ok((had, _)) => Some(format!(
+                                "{} changed while the check ran, so it didn't check them",
+                                listed(&had)
+                            )),
+                            Err(err) => Some(format!(
+                                "git could not tell whether files changed while the check ran: {err}"
+                            )),
+                        }
+                    }
+                };
+            }
+            if !fixes.is_empty() {
+                let note = manager
+                    .record_fixed_by_check(
+                        &conversation,
+                        &fixes,
+                        &high,
+                        not_fixed.as_deref(),
+                        &words,
+                        &alias,
+                    )
                     .await;
                 reply = format!("{reply}\n{note}");
             }
@@ -1167,7 +1280,7 @@ impl SessionManager {
         .await;
         // The full checks' commands are the project's, not a package's to learn.
         let full_checks = caller.task_id.is_none() && caller.low_priority;
-        if ran.status == "exit 0" && !full_checks {
+        if ran.status == "exit 0" && !full_checks && !scratch_command(command, &caller.tmp) {
             self.learn_check(caller, workdir, command).await;
         }
         Ok(CheckDone {
@@ -1859,13 +1972,32 @@ fn learned_key(folder: &str) -> String {
     format!("checks:{folder}")
 }
 
-/// The commands a learned-checks node lists, one per line.
+/// The commands a learned-checks node lists, one per line. A scratch command a Brain learned
+/// before scratch commands were left out is skipped too.
 fn learned_commands(body: &str) -> Vec<String> {
     body.lines()
         .filter_map(|line| line.strip_prefix("- "))
         .map(|command| command.trim_matches('`').to_owned())
-        .filter(|command| !command.is_empty())
+        .filter(|command| !command.is_empty() && !scratch_command(command, Path::new("")))
         .collect()
+}
+
+/// Whether `command` runs something in a temporary folder (its caller's `tmp`, `$TMPDIR`,
+/// `/tmp`, `/var/folders`): a one-off try, not a project check, so it is never learned. The
+/// full checks run in another checkout, where the scratch file isn't, and would fail on it.
+fn scratch_command(command: &str, tmp: &Path) -> bool {
+    let tmp = tmp.to_string_lossy();
+    (!tmp.is_empty() && command.contains(tmp.as_ref()))
+        || [
+            "$TMPDIR",
+            "${TMPDIR",
+            "/tmp/",
+            "/private/tmp/",
+            "/var/folders/",
+            "mktemp",
+        ]
+        .iter()
+        .any(|scratch| command.contains(scratch))
 }
 
 fn learned_body(commands: &[String]) -> String {
@@ -2906,6 +3038,30 @@ mod tests {
         assert_eq!(learned_commands(&learned_body(&commands)), commands);
     }
 
+    #[test]
+    fn a_scratch_command_is_not_a_check_to_learn() {
+        let tmp = Path::new("/Users/me/Library/brigadier/tmp/t1");
+        for command in [
+            "node $TMPDIR/big.ts",
+            "node ${TMPDIR}/big.ts",
+            "cd /tmp/x && npm test",
+            "bash /private/tmp/try.sh",
+            "node /var/folders/ab/T/big.js",
+            "f=$(mktemp) && node src/cli.ts > $f",
+            "node /Users/me/Library/brigadier/tmp/t1/big.ts",
+        ] {
+            assert!(scratch_command(command, tmp), "{command}");
+        }
+        assert!(!scratch_command("npm run check", tmp));
+        assert!(!scratch_command("cargo test -p tmp-utils", tmp));
+        // A Brain that learned one before reads it back without it.
+        let learned = vec!["npm run check".to_owned(), "node $TMPDIR/big.ts".to_owned()];
+        assert_eq!(
+            learned_commands(&learned_body(&learned)),
+            vec!["npm run check"]
+        );
+    }
+
     /// `crates/index` used by `crates/core`, used by `crates/daemon`; `crates/other` alone; a
     /// pnpm workspace with `apps/desktop` using `packages/ui`.
     fn workspace() -> Vec<Package> {
@@ -3216,9 +3372,14 @@ mod tests {
 
     /// Runs `run_check`'s commit lines in `tree` as a check would, then reads its record.
     fn commit_in(tree: &Path, message: &str) -> String {
+        commit_fixing(tree, message, &[])
+    }
+
+    /// [`commit_in`] for a commit that fixes the review findings `fixes`.
+    fn commit_fixing(tree: &Path, message: &str, fixes: &[String]) -> String {
         let out = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg(commit_command(message))
+            .arg(commit_command(message, fixes))
             .current_dir(tree)
             .output()
             .unwrap();
@@ -3273,6 +3434,36 @@ mod tests {
             line.contains("(c.txt). Left uncommitted: vendor."),
             "{line}"
         );
+    }
+
+    /// A commit that fixes review findings carries both trailers, so it gets no review of its
+    /// own (BUILD-PLAN O4); one that fixes none carries only the thread's.
+    #[test]
+    fn a_commit_that_fixes_findings_names_them_in_its_trailer() {
+        let temp = Temp::new("commit-fixes");
+        let tree = temp.0.as_path();
+        repo_at(tree);
+        let body = |tree: &Path| {
+            String::from_utf8(
+                std::process::Command::new("git")
+                    .args(["log", "-1", "--format=%B"])
+                    .current_dir(tree)
+                    .output()
+                    .unwrap()
+                    .stdout,
+            )
+            .unwrap()
+        };
+        std::fs::write(tree.join("a.txt"), "a\n").unwrap();
+        commit_in(tree, "Add a");
+        assert!(!body(tree).contains(super::super::prompts::FIXES_TRAILER));
+        std::fs::write(tree.join("a.txt"), "fixed\n").unwrap();
+        let fixes = ["R1.1".to_owned(), "R1.2".to_owned()];
+        commit_fixing(tree, "Fix a's 'quoting'", &fixes);
+        let body = body(tree);
+        assert!(body.contains("Brigadier-Author: thread"), "{body}");
+        assert!(body.contains("Brigadier-Fixes: R1.1, R1.2"), "{body}");
+        assert!(body.starts_with("Fix a's 'quoting'"), "{body}");
     }
 
     #[test]

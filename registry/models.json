@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "revision": 4,
-  "updated": "2026-10-13",
+  "revision": 5,
+  "updated": "2026-10-17",
   "models": [
     {
       "key": "claude-opus-5-5",
@@ -587,7 +587,7 @@
         "medium",
         "high"
       ],
-      "contextWindow": 1050000,
+      "contextWindow": 258400,
       "knowledgeCutoff": "2026-04",
       "modalities": {
         "input": [
@@ -625,6 +625,7 @@
       },
       "released": "2026-09-03",
       "sources": [
+        "https://github.com/openai/codex",
         "https://learn.chatgpt.com/docs/models",
         "https://learn.chatgpt.com/docs/image-generation",
         "https://developers.openai.com/api/docs/changelog",
@@ -649,7 +650,7 @@
         "medium",
         "high"
       ],
-      "contextWindow": 1050000,
+      "contextWindow": 475000,
       "modalities": {
         "input": [
           "text",
@@ -687,6 +688,7 @@
       },
       "released": "2026-09-29",
       "sources": [
+        "https://github.com/openai/codex",
         "https://learn.chatgpt.com/docs/models",
         "https://learn.chatgpt.com/docs/image-generation",
         "https://developers.openai.com/api/docs/changelog",
@@ -708,7 +710,7 @@
         "medium",
         "high"
       ],
-      "contextWindow": 1050000,
+      "contextWindow": 258400,
       "knowledgeCutoff": "2026-04",
       "modalities": {
         "input": [
@@ -746,6 +748,7 @@
       },
       "released": "2026-09-22",
       "sources": [
+        "https://github.com/openai/codex",
         "https://learn.chatgpt.com/docs/models",
         "https://learn.chatgpt.com/docs/image-generation",
         "https://developers.openai.com/api/docs/changelog",
@@ -769,7 +772,7 @@
         "medium",
         "high"
       ],
-      "contextWindow": 1050000,
+      "contextWindow": 258400,
       "knowledgeCutoff": "2026-05",
       "modalities": {
         "input": [
@@ -807,6 +810,7 @@
       },
       "released": "2026-09-22",
       "sources": [
+        "https://github.com/openai/codex",
         "https://learn.chatgpt.com/docs/models",
         "https://learn.chatgpt.com/docs/image-generation",
         "https://developers.openai.com/api/docs/changelog",
@@ -828,7 +832,7 @@
         "medium",
         "high"
       ],
-      "contextWindow": 1050000,
+      "contextWindow": 258400,
       "knowledgeCutoff": "2026-02",
       "modalities": {
         "input": [
@@ -866,6 +870,7 @@
       },
       "released": "2026-07-09",
       "sources": [
+        "https://github.com/openai/codex",
         "https://learn.chatgpt.com/docs/models",
         "https://learn.chatgpt.com/docs/image-generation",
         "https://developers.openai.com/api/docs/changelog",
@@ -890,7 +895,7 @@
         "medium",
         "high"
       ],
-      "contextWindow": 1050000,
+      "contextWindow": 258400,
       "knowledgeCutoff": "2026-02",
       "modalities": {
         "input": [
@@ -928,6 +933,7 @@
       },
       "released": "2026-07-09",
       "sources": [
+        "https://github.com/openai/codex",
         "https://learn.chatgpt.com/docs/models",
         "https://learn.chatgpt.com/docs/image-generation",
         "https://developers.openai.com/api/docs/changelog",
@@ -950,7 +956,7 @@
         "medium",
         "high"
       ],
-      "contextWindow": 1050000,
+      "contextWindow": 258400,
       "knowledgeCutoff": "2026-02",
       "modalities": {
         "input": [
@@ -988,6 +994,7 @@
       },
       "released": "2026-07-09",
       "sources": [
+        "https://github.com/openai/codex",
         "https://learn.chatgpt.com/docs/models",
         "https://learn.chatgpt.com/docs/image-generation",
         "https://developers.openai.com/api/docs/changelog",

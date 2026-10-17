@@ -43,7 +43,9 @@ def events(run):
     with open(os.path.join(run, "rec", "events.jsonl")) as f:
         for line in f:
             if line.endswith("\n"):
-                out.append(json.loads(line)["event"])
+                e = json.loads(line)["event"]
+                if isinstance(e, dict) and "type" in e:  # not a stored record
+                    out.append(e)
     return out
 
 

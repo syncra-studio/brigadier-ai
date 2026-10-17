@@ -169,6 +169,58 @@ async fn a_check_runs_once_per_tree_for_workers_and_the_thread() {
     flow.stop().await;
 }
 
+/// A passing check of a one-off script in the temporary folder is not learned as the project's
+/// check, so the full checks, which run in another checkout, never run it and fail on its
+/// missing file (Phase O, a T6 bench run); a project command next to it still is.
+#[tokio::test]
+async fn a_scratch_script_that_passes_is_not_learned_as_a_check() {
+    let flow = Flow::start(
+        "checks",
+        Options::default(),
+        script(move |turn| async move {
+            let command = if turn.earlier == 0 {
+                "test -d \"$TMPDIR\" && echo scratch"
+            } else {
+                "echo checked"
+            };
+            let reply = turn.call("run_check", json!({ "command": command })).await;
+            assert!(!reply.is_error, "{}", reply.text);
+            assert!(reply.text.contains("[exit 0]"), "{}", reply.text);
+            Reply::text("Checked.")
+        }),
+    )
+    .await;
+    // One message each, so a learned scratch command would be in the Brain before the second
+    // check's pass is added to it.
+    flow.say("Try the script.").await;
+    flow.settled().await;
+    flow.say("Check the greeting.").await;
+    flow.until("both requests", |board| board.requests.len() == 2)
+        .await;
+    flow.settled().await;
+
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id
+        .unwrap();
+    let brain = flow.manager.project_brain(&project).await.unwrap();
+    let mut learned = None;
+    super::eventually("the pass to be learned", || {
+        learned = brain
+            .brain
+            .node_by_key(NodeKind::Convention, "checks:.")
+            .unwrap();
+        learned.is_some()
+    })
+    .await;
+    let learned = learned.unwrap();
+    assert!(learned.body.contains("`echo checked`"), "{}", learned.body);
+    assert!(!learned.body.contains("scratch"), "{}", learned.body);
+    flow.stop().await;
+}
+
 /// Bug 8: a check runs with a raised open-files limit and the task's test folder as TMPDIR,
 /// and a prefix that changes neither is dropped, so the check answers from the cache; one
 /// that changes how it runs keeps its own entry and runs as written.

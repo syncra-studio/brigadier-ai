@@ -45,6 +45,7 @@ while time.time() - t0 < a.timeout_min * 60:
     now = None
     for l in open(a.events):
         e = json.loads(l)["event"]
+        if not isinstance(e, dict) or "type" not in e: continue  # a stored record, not an event
         if e["type"] == "overnightUpdated" and e["run"]["id"] == run["id"]:
             now = e["run"]
     if now:

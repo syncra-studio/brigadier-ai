@@ -83,6 +83,42 @@ pub(crate) fn piped_command(spec: &SpawnSpec) -> Command {
 /// The niceness of low-priority processes.
 const LOW_PRIORITY_NICE: libc::c_int = 10;
 
+/// `dir` as [`crate::Processes::in_dir`] may search it: fully resolved (`/tmp` is a link on
+/// macOS, a name may differ in case from the folder's own), but never through a link at `dir`
+/// itself. A link planted at the folder's own path would aim the search, and the cleanup that
+/// ends what it finds, at whatever it points to.
+pub(crate) fn search_root(dir: &Path) -> io::Result<std::path::PathBuf> {
+    let refused = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is a link, not a folder", dir.display()),
+        )
+    };
+    if fs::symlink_metadata(dir)?.file_type().is_symlink() {
+        return Err(refused());
+    }
+    let root = dir.canonicalize()?;
+    // The root, `.` or a path ending in `..`: no name of its own to plant a link at.
+    let (Some(parent), Some(name)) = (dir.parent(), dir.file_name()) else {
+        return Ok(root);
+    };
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    // A link put in its place meanwhile resolves elsewhere: outside the folder's parent, or
+    // to another name in it.
+    let moved = root.parent() != Some(parent.canonicalize()?.as_path())
+        || !root
+            .file_name()
+            .is_some_and(|real| real.eq_ignore_ascii_case(name));
+    if moved || fs::symlink_metadata(dir)?.file_type().is_symlink() {
+        return Err(refused());
+    }
+    Ok(root)
+}
+
 pub(crate) fn is_alive(pid: u32) -> bool {
     let Some(pid) = to_pid(pid) else {
         return false;
@@ -188,4 +224,46 @@ fn to_pid(pid: u32) -> Option<Pid> {
 
 fn invalid_pid() -> Error {
     Error::Io(io::Error::new(io::ErrorKind::InvalidInput, "invalid pid"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A folder, removed when dropped however the test ends.
+    struct Temp(std::path::PathBuf);
+
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_search_root_is_the_real_folder_and_never_a_link_at_its_name() {
+        let base =
+            std::env::temp_dir().join(format!("brigadier-search-root-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("Real")).unwrap();
+        let base = Temp(base);
+        let real = base.0.join("Real").canonicalize().unwrap();
+        assert_eq!(search_root(&base.0.join("Real")).unwrap(), real);
+        std::os::unix::fs::symlink(base.0.join("Real"), base.0.join("link")).unwrap();
+        assert!(search_root(&base.0.join("link")).is_err());
+        // A name differing only in case finds the folder where the file system ignores case.
+        if base.0.join("real").exists() {
+            assert_eq!(search_root(&base.0.join("real")).unwrap(), real);
+        }
+    }
+
+    #[test]
+    fn a_relative_one_name_search_root_resolves() {
+        let name = format!("brigadier-search-root-rel-{}", std::process::id());
+        fs::create_dir(&name).unwrap();
+        let _cleanup = Temp(Path::new(&name).canonicalize().unwrap());
+        assert_eq!(
+            search_root(Path::new(&name)).unwrap(),
+            Path::new(&name).canonicalize().unwrap()
+        );
+    }
 }

@@ -106,6 +106,7 @@ def load_events(path):
     # repeat an envelope, so use seq to deduplicate before assembling messages.
     with Path(path).open(encoding="utf-8") as source:
         envelopes = [json.loads(line) for line in source if line.endswith("\n") and line.strip()]
+    envelopes = [env for env in envelopes if v3lib.domain_event(env)]
     by_seq = {env["seq"]: env for env in envelopes}
     return [by_seq[seq] for seq in sorted(by_seq)]
 

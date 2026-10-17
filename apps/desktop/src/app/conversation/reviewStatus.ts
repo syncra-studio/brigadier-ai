@@ -77,40 +77,52 @@ function findingStatus(status: Finding["status"]): { status: FindingLabel; note:
 
 /**
  * How many findings the thread recorded as open, how many as fixed without a check in the merged
- * code, and how many it hasn't recorded yet.
+ * code, and how many it hasn't recorded yet; then how many it fixed and checked, and how many it
+ * dismissed.
  */
-function counts(reviews: readonly ReviewRun[]): { open: number; unverified: number; unrecorded: number } {
+function counts(reviews: readonly ReviewRun[]): { open: number; unverified: number; unrecorded: number; fixed: number; dismissed: number } {
   let open = 0;
   let unverified = 0;
   let unrecorded = 0;
+  let fixed = 0;
+  let dismissed = 0;
   for (const review of reviews) {
     for (const item of review.items) {
       if (item.status.type === "open") open += 1;
       if (item.status.type === "fixed" && !item.status.checked) unverified += 1;
+      if (item.status.type === "fixed" && item.status.checked) fixed += 1;
+      if (item.status.type === "dismissed") dismissed += 1;
       if (item.status.type === "new") unrecorded += 1;
     }
     // A review stored before findings were items: what it found was never recorded.
     if (review.items.length === 0 && review.state.type === "findings") unrecorded += review.state.count;
   }
-  return { open, unverified, unrecorded };
+  return { open, unverified, unrecorded, fixed, dismissed };
+}
+
+/** What the thread did with the findings it settled: "2 fixed · 1 dismissed", or nothing. */
+function settled({ fixed, dismissed }: { fixed: number; dismissed: number }): string[] {
+  return [...(fixed > 0 ? [`${fixed} fixed`] : []), ...(dismissed > 0 ? [`${dismissed} dismissed`] : [])];
 }
 
 /**
  * A batch's outcome in a word or two, from what the thread recorded of each finding (Q7):
  * "running…" while a review runs (merging doesn't wait for it), then "2 open · 1 unverified ·
- * 1 new", "clean" or "couldn’t run". A fix nobody checked in the merged code is never clean.
+ * 1 new", "2 fixed · 1 dismissed", "clean" or "couldn’t run". Clean is only a review that found
+ * nothing: findings fixed or dismissed say so, and a fix nobody checked reads unverified.
  * Null when nothing was reviewed.
  */
 function outcome(reviews: readonly ReviewRun[]): string | null {
   if (reviews.length === 0) return null;
   if (reviews.some((review) => review.state.type === "running")) return "running…";
-  const { open, unverified, unrecorded } = counts(reviews);
+  const count = counts(reviews);
   const parts = [
-    ...(open > 0 ? [`${open} open`] : []),
-    ...(unverified > 0 ? [`${unverified} unverified`] : []),
-    ...(unrecorded > 0 ? [`${unrecorded} new`] : []),
+    ...(count.open > 0 ? [`${count.open} open`] : []),
+    ...(count.unverified > 0 ? [`${count.unverified} unverified`] : []),
+    ...(count.unrecorded > 0 ? [`${count.unrecorded} new`] : []),
   ];
   if (parts.length > 0) return parts.join(" · ");
+  if (settled(count).length > 0) return settled(count).join(" · ");
   if (reviews.every((review) => review.state.type === "failed")) return "couldn’t run";
   return "clean";
 }
@@ -130,19 +142,21 @@ export function reviewStatus(reviews: readonly ReviewRun[]): string | null {
 
 /**
  * The merged work's line: "Merged · review clean", or "Merged · 2 open (not fixed)" for what the
- * thread left open and "Merged · 1 fixed, unverified" for a fix it never checked in the merged
- * code; a review that ends after the merge says so too.
+ * thread left open, "Merged · 1 fixed, unverified" for a fix it never checked in the merged
+ * code and "Merged · 2 fixed" for the fixes it checked; a review that ends after the merge says
+ * so too.
  */
 export function mergedStatus(reviews: readonly ReviewRun[]): string | null {
   if (reviews.length === 0) return null;
   if (reviews.some((review) => review.state.type === "running")) return "Merged · review running…";
-  const { open, unverified, unrecorded } = counts(reviews);
+  const count = counts(reviews);
   const parts = [
-    ...(open > 0 ? [`${open} open (not fixed)`] : []),
-    ...(unverified > 0 ? [`${unverified} fixed, unverified`] : []),
-    ...(unrecorded > 0 ? [`${unrecorded} new`] : []),
+    ...(count.open > 0 ? [`${count.open} open (not fixed)`] : []),
+    ...(count.unverified > 0 ? [`${count.unverified} fixed, unverified`] : []),
+    ...(count.unrecorded > 0 ? [`${count.unrecorded} new`] : []),
   ];
   if (parts.length > 0) return `Merged · ${parts.join(" · ")}`;
+  if (settled(count).length > 0) return `Merged · ${settled(count).join(" · ")}`;
   if (reviews.every((review) => review.state.type === "failed")) return "Merged · review couldn’t run";
   return "Merged · review clean";
 }
@@ -198,7 +212,7 @@ export type ReviewRow = { text: string; sections: ReviewSection[] };
 
 /**
  * The context card's one review row. With work since the last merge, the row speaks for both
- * batches: "Review: clean" when both are, else each batch's own outcome, labelled ("Merged:
+ * batches: "Review: clean" when both found nothing, else each batch's own outcome, labelled ("Merged:
  * 1 open · Since the merge: running…"), so a newer review never hides what the merge left open
  * and no count adds across merges (Q7). Its list keeps the batches apart the same way.
  */

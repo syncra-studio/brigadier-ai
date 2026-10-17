@@ -636,6 +636,79 @@ async fn an_awaited_review_that_ended_before_a_restart_still_brings_the_answer()
     flow.stop().await;
 }
 
+/// The review's findings were recorded, but Brigadier stopped before a turn of the thread
+/// took them from its inbox (#69): after the restart they go again, once, and the request
+/// gets its answer.
+#[tokio::test]
+async fn findings_the_thread_had_not_taken_before_a_restart_still_reach_it() {
+    let answered: Arc<Mutex<Vec<String>>> = Arc::default();
+    let heard = answered.clone();
+    let mut flow = Flow::start(
+        "review-tiers-findings-restart",
+        Options {
+            reviews: Some(script(|_| std::future::pending())),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let heard = heard.clone();
+            async move {
+                if turn.input.starts_with("Build the feature") {
+                    commit(&turn, "a.txt", &lines("a", 160), "Build the feature");
+                    let check = turn.call("run_check", json!({"command": "true"})).await;
+                    assert!(check.text.contains("[review running]"), "{}", check.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("found 1") {
+                    heard.lock().unwrap().push(turn.input.clone());
+                    return Reply::text("Built the feature; the one finding is not a bug.");
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    flow.say("Build the feature.").await;
+    let board = flow
+        .until("the review to run, with the thread idle", |board| {
+            board.run == crate::work::RunState::Idle
+                && board
+                    .reviews
+                    .values()
+                    .any(|review| review.state == ReviewState::Running)
+        })
+        .await;
+    let request = board.latest_request().unwrap().id.clone();
+    let mut review = board.reviews.values().next().unwrap().clone();
+    // Its findings are recorded; the daemon dies before the thread hears them.
+    let text = "- [P2] The loop never ends — a.txt:3\n  It counts up from 0 forever.";
+    let hash = flow
+        .core
+        .store()
+        .blobs()
+        .put(text.as_bytes().to_vec())
+        .await
+        .unwrap();
+    review.findings = Some(hash.to_string());
+    review.state = ReviewState::Findings { count: 1 };
+    review.ended_at_ms = Some(crate::now_ms());
+    flow.core
+        .record_conversation(
+            &flow.conversation,
+            vec![crate::model::DomainEvent::ReviewUpdated { review }],
+        )
+        .await
+        .unwrap();
+    flow.crash().await;
+    flow.until("the answer", |board| {
+        board.requests[&request].state == RequestState::Done
+    })
+    .await;
+    let heard = answered.lock().unwrap().clone();
+    assert_eq!(heard.len(), 1, "{heard:#?}");
+    assert!(heard[0].contains("The loop never ends"), "{}", heard[0]);
+    flow.stop().await;
+}
+
 /// The user stops a request whose answer waits for its review: when the review then ends
 /// clean, nothing wakes the thread to answer, and the request stays stopped.
 #[tokio::test]

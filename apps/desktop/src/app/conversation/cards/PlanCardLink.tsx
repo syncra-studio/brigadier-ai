@@ -7,6 +7,7 @@ const STATE_WORDS: Record<PlanState["type"], string> = {
   proposed: "waiting for approval",
   approved: "approved",
   rejected: "rejected",
+  putOff: "put off",
   superseded: "replaced",
 };
 

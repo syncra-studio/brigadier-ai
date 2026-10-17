@@ -312,6 +312,80 @@ fn search_of(
     }
 }
 
+/// Whether a shell command only reads, lists or searches files: every step of it (`cd` steps
+/// aside) and every stage of a pipeline is `cat`, `nl`, `head`, `tail`, `wc`, `ls`, `grep`, a
+/// `sed -n` that prints lines (`'<a>,<b>p'`), or an `rg`, `fd`, `find` or `tree` that runs and
+/// writes nothing, with no substitution, variable or redirection but of its errors
+/// (`2>/dev/null`, `2>&1`). The thread's transcript index files such a command as a read.
+pub fn only_looks(command: &str) -> bool {
+    let mut looked = false;
+    for step in split_top(command, true) {
+        for stage in split_top(&step, false) {
+            // Its errors' redirection said, what is left is read whole: any other `>` writes,
+            // and a lone `&` starts a command of its own.
+            let stage = stage.replace("2>/dev/null", " ").replace("2>&1", " ");
+            if has_unquoted(&stage, '>') || has_unquoted(&stage, '&') {
+                return false;
+            }
+            let Some(words) = loose_words(&stage) else {
+                return false;
+            };
+            let Some((first, args)) = words.split_first() else {
+                return false;
+            };
+            // A short flag counts given alone, with its value attached or among others
+            // (`-o`, `-otree.txt`, `-Hx`); a long one alone or with `=`.
+            let has = |flags: &[&str]| {
+                args.iter().any(|arg| {
+                    flags.iter().any(|flag| match flag.strip_prefix('-') {
+                        Some(short) if short.len() == 1 => {
+                            arg.starts_with('-') && !arg.starts_with("--") && arg.contains(short)
+                        }
+                        _ => arg == flag || arg.starts_with(&format!("{flag}=")),
+                    })
+                })
+            };
+            let looks = match first.rsplit('/').next().unwrap_or(first) {
+                "cd" => continue,
+                "cat" | "nl" | "head" | "tail" | "wc" | "ls" | "grep" => true,
+                // Its lines, then only files.
+                "sed" => {
+                    args.len() >= 2
+                        && sed_lines(&args[..2]).is_some()
+                        && args[2..].iter().all(|arg| !arg.starts_with('-'))
+                }
+                "rg" => !has(&["--pre"]),
+                "fd" => !has(&["-x", "--exec", "-X", "--exec-batch"]),
+                "find" => !has(&[
+                    "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0",
+                    "-fprintf", "-fls",
+                ]),
+                "tree" => !has(&["-o"]),
+                _ => false,
+            };
+            if !looks {
+                return false;
+            }
+            looked = true;
+        }
+    }
+    looked
+}
+
+/// Whether `command` holds `c` outside quotes.
+fn has_unquoted(command: &str, c: char) -> bool {
+    let mut quote: Option<char> = None;
+    command.chars().any(|at| {
+        match quote {
+            Some(q) if at == q => quote = None,
+            Some(_) => {}
+            None if matches!(at, '\'' | '"') => quote = Some(at),
+            None => return at == c,
+        }
+        false
+    })
+}
+
 fn is_glob(word: &str) -> bool {
     word.contains(['*', '?', '['])
 }
@@ -434,6 +508,44 @@ mod tests {
 
     fn range(start: u64, end: Option<u64>) -> Option<LineRange> {
         Some(LineRange { start, end })
+    }
+
+    /// A command that only reads, lists or searches looks; one that runs, writes or deletes
+    /// anything doesn't.
+    #[test]
+    fn a_command_that_only_reads_or_searches_looks() {
+        for command in [
+            "sed -n '1,120p' src/main.rs",
+            "cd crates/core && rg -n \"fn thread_items\" src | head -20",
+            "cat a.rs b.rs",
+            "nl -ba src/lib.rs | sed -n '40,80p'",
+            "ls -la && find . -name '*.rs' -type f 2>/dev/null",
+            "grep -rn TODO src; wc -l src/*.rs",
+        ] {
+            assert!(only_looks(command), "{command}");
+        }
+        for command in [
+            "cargo test",
+            "cat a.rs > b.rs",
+            "sed -i 's/a/b/' a.rs",
+            "find . -name '*.tmp' -delete",
+            "find . 2>/dev/null -delete",
+            "fd -x touch {}.bak",
+            "rg --pre ./preprocessor foo src",
+            "sed -n 'w backup.txt' src/main.rs",
+            "tree -o tree.txt",
+            "head a.rs >> b.rs",
+            "cat a.rs & touch marker",
+            "sed -n '1,10p' --in-place a.rs",
+            "tree -otree.txt",
+            "fd -Hx rm",
+            "rg foo && cargo build",
+            "cat $(ls)",
+            "cd src",
+            "",
+        ] {
+            assert!(!only_looks(command), "{command}");
+        }
     }
 
     #[test]

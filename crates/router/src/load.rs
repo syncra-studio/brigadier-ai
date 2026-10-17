@@ -554,4 +554,20 @@ mod tests {
                 .any(|note| note.contains("never routed to"))
         );
     }
+
+    /// A Codex model holds what the Codex CLI gives it (its catalog's window, 95% of it
+    /// usable, as its token counts report), not the API's larger figure.
+    #[test]
+    fn the_bundled_codex_windows_are_the_codex_cli_s() {
+        let registry = Registry::bundled();
+        let window = |key: &str| {
+            registry
+                .models
+                .iter()
+                .find(|model| model.key == key)
+                .and_then(|model| model.context_window)
+        };
+        assert_eq!(window("codex-luna-6"), Some(258_400));
+        assert_eq!(window("codex-sol-6-1"), Some(475_000));
+    }
 }

@@ -142,7 +142,7 @@ impl Processes for LinuxProcesses {
         Some((user + system) * 1000 / ticks_per_sec)
     }
     fn in_dir(&self, dir: &std::path::Path) -> Result<Vec<u32>> {
-        let dir = dir.canonicalize()?;
+        let dir = unix::search_root(dir)?;
         let own = std::process::id();
         let mut pids = Vec::new();
         for entry in std::fs::read_dir("/proc")?.flatten() {

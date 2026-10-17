@@ -380,6 +380,7 @@ function keepPlan(plan: Plan): boolean {
   switch (plan.state.type) {
     case "proposed":
     case "rejected":
+    case "putOff":
       return true;
     case "approved":
     case "superseded":

@@ -50,6 +50,8 @@ async fn a_reviews_findings_are_items_the_thread_records_and_the_merge_lists_the
                         "R1.2: [P2] NOTES.md has no title — NOTES.md:1",
                         "R1.3: [P3] Trailing space — NOTES.md:2",
                         "record_findings",
+                        // How to judge them comes with them (BUILD-PLAN O2).
+                        "is no bug: dismiss it with that reason",
                         // Bug 4: after the answer, one update line at most.
                         crate::manager::prompts::LATE_EVENT,
                     ] {
@@ -257,5 +259,230 @@ async fn an_open_thread_resumes_with_record_findings_and_its_note() {
     flow.settled().await;
     let third = inputs.lock().unwrap()[2].clone();
     assert!(!third.contains("[instructions]"), "{third}");
+    flow.stop().await;
+}
+
+/// A fix of the thread's own goes with run_check's `fixes` (BUILD-PLAN O4): a failing check
+/// commits and records nothing; a passing one commits the fix with the Fixes trailer and records
+/// those findings fixed, checked by that check, with no git commit or record_findings call of
+/// the thread's own. The finding it didn't name stays unrecorded, and so does one a passing check
+/// names without a commit; an id that is no finding, or one in `high` but not in `fixes`, is
+/// refused before anything runs, and one in `high` is marked high.
+#[tokio::test]
+async fn a_passing_check_with_fixes_commits_the_fix_and_records_it_checked() {
+    // Every run_check reply and every later thread input, so a check's result is there
+    // whether it came in the call or, past the foreground limit, from the background.
+    let replies: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = replies.clone();
+    let tree: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::default();
+    let workspace_seen = tree.clone();
+    // Each check is held in its call whatever the machine's load, so the next starts after it.
+    let conversation: Arc<Mutex<Option<crate::model::ConversationId>>> = Arc::default();
+    let held = conversation.clone();
+    let flow = Flow::start(
+        "findings-fixes",
+        Options {
+            reviews: Some(script(|_| async { Reply::text(THREE) })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (seen, workspace_seen, held) = (seen.clone(), workspace_seen.clone(), held.clone());
+            async move {
+                let hold = || {
+                    let id = held.lock().unwrap().clone().expect("the session");
+                    super::super::background_runs::hold_foreground(
+                        &id,
+                        Arc::new(tokio::sync::Notify::new()),
+                    );
+                };
+                if !turn.is_orchestrator() {
+                    return Reply::text("");
+                }
+                if turn.input.contains("Add notes.") {
+                    commit_in_workspace(
+                        &turn,
+                        "notes.txt",
+                        &format!("notes \n{}", super::thread_tests::reviewed_notes()),
+                        "Add notes\n\nBrigadier-Author: thread",
+                    );
+                    return Reply::text("Added NOTES.md.");
+                }
+                seen.lock().unwrap().push(turn.input.clone());
+                // The first review's findings; the re-check of the high one's fix comes after.
+                if turn.input.contains("[review of your commits · Codex found 3")
+                    && workspace_seen.lock().unwrap().is_none()
+                {
+                    assert!(turn.input.contains("run_check's `commit` and `fixes`"));
+                    let workspace = turn.add_dirs[0].clone();
+                    *workspace_seen.lock().unwrap() = Some(workspace.clone());
+                    std::fs::write(workspace.join("notes.txt"), "fixed notes\n").unwrap();
+                    // An id that is no finding here is refused before anything runs or commits,
+                    // so the call can be made again with the right ids.
+                    hold();
+                    let refused = turn
+                        .call(
+                            "run_check",
+                            json!({"command": "true", "commit": "Fix the notes", "fixes": ["R1.1", "R9.9"]}),
+                        )
+                        .await;
+                    assert!(refused.is_error, "{}", refused.text);
+                    assert!(
+                        refused.text.contains("R9.9 is no review finding of this session: nothing ran or was committed."),
+                        "{}",
+                        refused.text
+                    );
+                    assert_eq!(
+                        super::git(&workspace, &["status", "--porcelain"]).trim(),
+                        "M notes.txt"
+                    );
+                    // `high` names only some of `fixes`.
+                    hold();
+                    let refused = turn
+                        .call(
+                            "run_check",
+                            json!({"command": "true", "commit": "Fix the notes", "fixes": ["R1.2"], "high": ["R1.1"]}),
+                        )
+                        .await;
+                    assert!(refused.is_error, "{}", refused.text);
+                    assert!(
+                        refused.text.contains("R1.1 is in `high` but not in `fixes`: nothing ran or was committed."),
+                        "{}",
+                        refused.text
+                    );
+                    for (command, fixes, high) in [
+                        ("false", json!(["r1.1", "R1.2"]), json!([])),
+                        ("true", json!("R1.1, R1.2"), json!("r1.1")),
+                    ] {
+                        hold();
+                        let reply = turn
+                            .call(
+                                "run_check",
+                                json!({"command": command, "commit": "Fix the notes", "fixes": fixes, "high": high}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        seen.lock().unwrap().push(reply.text);
+                    }
+                    // With nothing left to commit, no commit carries the Fixes trailer, so
+                    // nothing is recorded fixed either.
+                    hold();
+                    let reply = turn
+                        .call(
+                            "run_check",
+                            json!({"command": "true", "commit": "Fix the notes again", "fixes": ["R1.3"]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    seen.lock().unwrap().push(reply.text);
+                    // On the session's branch a passing check with no commit records nothing
+                    // fixed: the merge takes the branch's commits, not the working tree.
+                    std::fs::write(workspace.join("notes.txt"), "fixed notes, trimmed\n").unwrap();
+                    hold();
+                    let reply = turn
+                        .call("run_check", json!({"command": "true", "fixes": ["R1.3"]}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    seen.lock().unwrap().push(reply.text);
+                    return Reply::text("Fixed two.");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    *conversation.lock().unwrap() = Some(flow.conversation.clone());
+    flow.say("Add notes.").await;
+    let recorded = replies.clone();
+    let board = flow
+        .until("the fix's check to record its findings", move |board| {
+            // Both checks' replies, each in the call or from the background, the passing
+            // one's after its record.
+            let said = recorded.lock().unwrap();
+            [
+                "Not committed: the check didn't pass.",
+                "Recorded: R1.1 fixed",
+                "Nothing to commit",
+                "on this branch a fix counts once",
+            ]
+            .iter()
+            .all(|text| said.iter().any(|said| said.contains(text)))
+                && board.reviews.values().any(|review| {
+                    review
+                        .items
+                        .iter()
+                        .filter(|item| matches!(item.status, FindingStatus::Fixed { .. }))
+                        .count()
+                        == 2
+                })
+        })
+        .await;
+    let said = |text: &str| {
+        let seen = replies.lock().unwrap().clone();
+        seen.iter()
+            .find(|said| said.contains(text))
+            .cloned()
+            .unwrap_or_else(|| panic!("nothing said {text:?}: {seen:#?}"))
+    };
+    let failed = said("Not committed: the check didn't pass.");
+    assert!(
+        failed.contains("Not recorded fixed: R1.1, R1.2"),
+        "{failed}"
+    );
+    let clean = said("Nothing to commit");
+    assert!(
+        clean.contains("Not recorded fixed: R1.3, as nothing was committed."),
+        "{clean}"
+    );
+    let uncommitted = said("on this branch a fix counts once");
+    assert!(
+        uncommitted.contains("Not recorded fixed: R1.3, as nothing was committed: on this branch a fix counts once run_check's `commit` commits it."),
+        "{uncommitted}"
+    );
+    let passed = said("Recorded: R1.1 fixed");
+    assert!(passed.contains("R1.2 fixed"), "{passed}");
+    assert!(passed.contains("Still not recorded: R1.3."), "{passed}");
+    // The findings are recorded fixed only after the fix's commit was made.
+    let workspace = tree.lock().unwrap().clone().expect("the fix turn ran");
+    let body = super::git(&workspace, &["log", "-1", "--format=%B"]);
+    assert!(body.starts_with("Fix the notes"), "{body}");
+    assert!(body.contains("Brigadier-Author: thread"), "{body}");
+    assert!(body.contains("Brigadier-Fixes: R1.1, R1.2"), "{body}");
+    // R1.1 was marked high, so its fix commit gets the one targeted re-check.
+    let fix = super::git(&workspace, &["rev-parse", "HEAD"]);
+    flow.until("the high finding's re-check", move |board| {
+        board
+            .reviews
+            .values()
+            .any(|review| review.number == 2 && review.tip == fix)
+    })
+    .await;
+    // The board's reviews are a map: take the first review's, R1.
+    let review = board
+        .reviews
+        .values()
+        .find(|review| review.items.iter().any(|item| item.id.starts_with("R1.")))
+        .unwrap();
+    for item in &review.items {
+        match (item.id.as_str(), &item.status) {
+            (
+                "R1.1" | "R1.2",
+                FindingStatus::Fixed {
+                    task: None,
+                    checked: Some(checked),
+                    ..
+                },
+            ) => {
+                assert!(
+                    checked.starts_with("`true` passed after the fix [evidence: out-"),
+                    "{checked}"
+                );
+                // The one named in `high` is marked high, so its fix gets its re-check.
+                assert_eq!(item.high, item.id == "R1.1", "{}", item.id);
+            }
+            ("R1.3", FindingStatus::New) => {}
+            (id, status) => panic!("{id}: {status:?}"),
+        }
+    }
+    flow.settled().await;
     flow.stop().await;
 }

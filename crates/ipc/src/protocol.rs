@@ -732,6 +732,11 @@ pub enum Request {
         approve: bool,
         message: Option<String>,
     },
+    /// "Not now" on a proposed plan: it stops waiting for the user, and the thread says so.
+    PutOffPlan {
+        conversation_id: ConversationId,
+        card_id: CardId,
+    },
     /// The user clicked "Merge into main" on the side panel: the session branch merges into
     /// its base on this click, once.
     MergeSession {
@@ -1343,6 +1348,10 @@ pub enum Response {
     GetSessionDiff {
         /// Absent for Chats and local-checkout sessions.
         stat: Option<DiffStat>,
+        /// The branch's commits its base lacks: what a merge would take, even when their sum
+        /// changes nothing. 0 without a stat.
+        #[serde(default)]
+        commits: u32,
     },
     GetWorkerDiffs {
         diffs: Vec<WorkerDiff>,
@@ -1473,6 +1482,7 @@ pub enum Response {
     AnswerCard,
     AnswerQuestion,
     DecidePlan,
+    PutOffPlan,
     /// What became of the Cancel, for the user.
     CancelMerge {
         text: String,

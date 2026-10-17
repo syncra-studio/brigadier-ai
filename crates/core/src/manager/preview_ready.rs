@@ -14,6 +14,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 /// How long `lsof` may take.
 #[cfg(target_os = "macos")]
 const LSOF_TIMEOUT: Duration = Duration::from_secs(3);
+#[cfg(target_os = "macos")]
+const LSOF: &str = "/usr/sbin/lsof";
 
 /// The kind of preview `command` starts: an app for the dev commands of Tauri and Electron,
 /// which open their own window (whatever frontend address they print is not the app), and for a
@@ -92,29 +94,32 @@ pub(super) fn window_owners() -> Vec<u32> {
 /// is missing or fails.
 #[cfg(target_os = "macos")]
 pub(super) async fn listening_ports(group: u32) -> Vec<u16> {
-    lsof_listening("-g", group).await
+    lsof_listening(LSOF, "-g", group).await.unwrap_or_default()
 }
 
-/// The TCP ports process `pid` listens on, per `lsof`; none when it is missing or fails.
+/// The TCP ports process `pid` listens on, per `lsof`; `None` when that can't be told (`lsof`
+/// missing, failing or too slow), which a caller sparing listening servers must read as
+/// "may listen".
 #[cfg(target_os = "macos")]
-pub(super) async fn process_listening_ports(pid: u32) -> Vec<u16> {
-    lsof_listening("-p", pid).await
+pub(super) async fn process_listening_ports(pid: u32) -> Option<Vec<u16>> {
+    lsof_listening(LSOF, "-p", pid).await
 }
 
 /// The TCP ports the processes `lsof` selects with `flag` `id` (`-g` a group, `-p` a process)
-/// listen on.
+/// listen on; `None` when `lsof` can't run or doesn't finish in time.
 #[cfg(target_os = "macos")]
-async fn lsof_listening(flag: &str, id: u32) -> Vec<u16> {
+async fn lsof_listening(lsof: &str, flag: &str, id: u32) -> Option<Vec<u16>> {
     let id = id.to_string();
-    let output = tokio::process::Command::new("/usr/sbin/lsof")
+    let output = tokio::process::Command::new(lsof)
         .args(["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-Fn", flag, &id])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();
     match tokio::time::timeout(LSOF_TIMEOUT, output).await {
-        Ok(Ok(output)) => lsof_ports(&String::from_utf8_lossy(&output.stdout)),
-        _ => Vec::new(),
+        // It exits 1 when nothing matches, so only its running at all tells.
+        Ok(Ok(output)) => Some(lsof_ports(&String::from_utf8_lossy(&output.stdout))),
+        _ => None,
     }
 }
 
@@ -145,25 +150,29 @@ pub(super) async fn listening_ports(group: u32) -> Vec<u16> {
         })
     })
     .await
+    .unwrap_or_default()
 }
 
-/// The TCP ports process `pid` listens on.
+/// The TCP ports process `pid` listens on; `None` when that can't be told (no socket table
+/// readable), which a caller sparing listening servers must read as "may listen".
 #[cfg(target_os = "linux")]
-pub(super) async fn process_listening_ports(pid: u32) -> Vec<u16> {
+pub(super) async fn process_listening_ports(pid: u32) -> Option<Vec<u16>> {
     let pid = pid.to_string();
     proc_listening(move |of| of == pid).await
 }
 
 /// The TCP ports the processes `wanted` picks (by pid) listen on: the listening sockets of
-/// `/proc/net/tcp{,6}` that one of their open files is.
+/// `/proc/net/tcp{,6}` that one of their open files is. `None` when neither table can be read.
 #[cfg(target_os = "linux")]
-async fn proc_listening(wanted: impl Fn(&str) -> bool + Send + 'static) -> Vec<u16> {
+async fn proc_listening(wanted: impl Fn(&str) -> bool + Send + 'static) -> Option<Vec<u16>> {
     tokio::task::spawn_blocking(move || {
         let mut listening = std::collections::HashMap::new();
+        let mut read_any = false;
         for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
             let Ok(text) = std::fs::read_to_string(table) else {
                 continue;
             };
+            read_any = true;
             for line in text.lines().skip(1) {
                 let fields: Vec<&str> = line.split_whitespace().collect();
                 if fields.get(3) != Some(&"0A") {
@@ -180,8 +189,11 @@ async fn proc_listening(wanted: impl Fn(&str) -> bool + Send + 'static) -> Vec<u
         }
         let mut ports = Vec::new();
         let Ok(processes) = std::fs::read_dir("/proc") else {
-            return ports;
+            return None;
         };
+        if !read_any {
+            return None;
+        }
         for process in processes.flatten() {
             let pid = process.file_name().to_string_lossy().into_owned();
             if !pid.bytes().all(|b| b.is_ascii_digit()) || !wanted(&pid) {
@@ -200,10 +212,11 @@ async fn proc_listening(wanted: impl Fn(&str) -> bool + Send + 'static) -> Vec<u
         }
         ports.sort_unstable();
         ports.dedup();
-        ports
+        Some(ports)
     })
     .await
-    .unwrap_or_default()
+    .ok()
+    .flatten()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -212,8 +225,8 @@ pub(super) async fn listening_ports(_group: u32) -> Vec<u16> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub(super) async fn process_listening_ports(_pid: u32) -> Vec<u16> {
-    Vec::new()
+pub(super) async fn process_listening_ports(_pid: u32) -> Option<Vec<u16>> {
+    None
 }
 
 /// Whether an HTTP server on `port` of this machine answers (a TCP connect alone isn't enough:
@@ -302,6 +315,17 @@ mod tests {
             vec![3000, 5173]
         );
         assert_eq!(lsof_ports(""), Vec::<u16>::new());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_missing_lsof_reads_as_unknown_not_as_not_listening() {
+        let own = std::process::id();
+        assert_eq!(lsof_listening("/nonexistent/lsof", "-p", own).await, None);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let ports = process_listening_ports(own).await.expect("lsof ran");
+        assert!(ports.contains(&port), "{ports:?} lacks {port}");
     }
 
     #[tokio::test]

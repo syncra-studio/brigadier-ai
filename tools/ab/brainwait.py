@@ -15,6 +15,7 @@ while True:
     if os.path.exists(evf):
         for line in open(evf):
             e = json.loads(line)["event"]
+            if not isinstance(e, dict) or "type" not in e: continue  # a stored record, not an event
             if e.get("type") == "brainJobUpdated":
                 j = e["job"]
                 jobs[j["id"]] = (j["kind"], j["state"]["type"])

@@ -15,6 +15,7 @@ first, model, running, title = {}, {}, {}, {}
 for line in open(os.path.join(arm, "rec", "events.jsonl")):
     env = json.loads(line)
     e, at = env["event"], env["atMs"]
+    if not isinstance(e, dict) or "type" not in e: continue  # a stored record, not an event
     if e["type"] == "orchestratorStepped" and e["step"]["kind"]["type"] == "created":
         created.setdefault(e["step"]["kind"]["taskId"], e["step"]["atMs"])
     elif e["type"] == "taskUpdated":

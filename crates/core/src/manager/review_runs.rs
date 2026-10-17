@@ -37,6 +37,31 @@ use crate::work::{
 };
 use crate::{Error, Result, now_ms};
 
+/// The label of the envelope that tells the thread how `review` ended, `of` its task
+/// (`task-3`), as its injection is logged once a turn takes it. Findings and a review that
+/// couldn't run carry the review's number, so a restart tells which the thread took.
+fn report_label(review: &ReviewRun, of: &str) -> String {
+    let label = report_base_label(review, of);
+    if review.number > 0 && review.state != ReviewState::Clean {
+        format!("{label} · R{}", review.number)
+    } else {
+        label
+    }
+}
+
+/// [`report_label`] without the review's number, as builds before it logged it.
+fn report_base_label(review: &ReviewRun, of: &str) -> String {
+    match (review.kind, review.task_id.is_some()) {
+        (ReviewKind::Code, true) => format!("review {of}"),
+        (ReviewKind::Plan, true) => format!("plan review {of}"),
+        (ReviewKind::Code, false) if review.state == ReviewState::Clean => {
+            super::conversation::CLEAN_REVIEW.to_owned()
+        }
+        (ReviewKind::Code, false) => "review of your commits".to_owned(),
+        (ReviewKind::Plan, false) => "plan review of your plan".to_owned(),
+    }
+}
+
 /// A one-shot review's time box.
 const REVIEW_TIME: Duration = Duration::from_secs(30 * 60);
 /// The most of a review's text a message carries; all of it stays in the review's blob.
@@ -311,7 +336,7 @@ pub(crate) fn unverified(status: &FindingStatus) -> bool {
 /// record them.
 fn record_line(items: &[Finding]) -> String {
     format!(
-        "Its findings:\n{}\nRecord what became of each with record_findings, all in one call: fixed (in task-N, or by you, with how you checked it in the merged code), open, or dismissed and why. If record_findings isn't in your tool list, look it up in the same message as your first fix or check, not in a call of its own. If your answer is already written: {}",
+        "Its findings:\n{}\nA finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason (mention it to the user if it matters). Record what became of each that no run_check `fixes` records with record_findings, all in one call: fixed (in task-N, or by you, with how you checked it in the merged code), open, or dismissed and why. If you record any with record_findings and it isn't in your tool list, look it up in the same message as your first fix or check, not in a call of its own. If your answer is already written: {}",
         listed(items),
         super::prompts::LATE_EVENT
     )
@@ -1576,7 +1601,18 @@ impl SessionManager {
     /// orchestrator. A clean review of a landing or an outline is no news for the orchestrator:
     /// the context card shows it, and finish_session's answer says it.
     pub(super) async fn tell_review(&self, review: &ReviewRun, text: Option<&str>) {
-        self.tell_review_now(review, text).await;
+        self.tell_review_filed(review, text, None).await;
+    }
+
+    /// [`Self::tell_review`], its word filed under `request` when given, else under the
+    /// request new work is filed under now.
+    async fn tell_review_filed(
+        &self,
+        review: &ReviewRun,
+        text: Option<&str>,
+        request: Option<String>,
+    ) {
+        self.tell_review_now(review, text, request).await;
         // An overnight phase that waited for this review to settle (BUILD-PLAN E2).
         crate::heap(|| self.settle_wait_over(review)).await;
         // A merge held for the review's end looks again (SESSION-FIXES-PLAN.md Q3), on its
@@ -1591,7 +1627,7 @@ impl SessionManager {
         });
     }
 
-    async fn tell_review_now(&self, review: &ReviewRun, text: Option<&str>) {
+    async fn tell_review_now(&self, review: &ReviewRun, text: Option<&str>, filed: Option<String>) {
         let review_text = text;
         let reviewer = review.reviewer.label();
         if let ReviewFor::Worker { task_id } = &review.notify
@@ -1662,11 +1698,11 @@ impl SessionManager {
         // audit M6, issue #33), left uncommitted unless the user asks.
         let local = self.local_checkout(&review.conversation_id).is_some();
         let fix_rule = if local {
-            "This is the user's own checkout: make the fix yourself and leave it uncommitted, with the one line saying so, unless the user asked you to commit it; it gets no review of its own."
+            "This is the user's own checkout: make the fix yourself and leave it uncommitted, with the one line saying so, unless the user asked you to commit it; it gets no review of its own. run_check's `fixes` (their ids) records them fixed when its check passes."
                 .to_owned()
         } else {
             format!(
-                "A fix commit of yours names what it fixes, `--trailer \"{FIXES_TRAILER}: <their ids>\"`: it gets no review of its own."
+                "Commit a fix of yours, with nothing else in it, with run_check's `commit` and `fixes` (their ids; `high` names those that lose data or break a build or a security boundary, whose fix then gets one re-check): on a pass it commits with `--trailer \"{FIXES_TRAILER}: <their ids>\"` and records them fixed, checked by that check; such a commit gets no review of its own."
             )
         };
         let text = match (review.kind, &review.state, text) {
@@ -1746,9 +1782,13 @@ impl SessionManager {
             // Clean, or still running: nothing to say.
             _ => return,
         };
-        let request = self
-            .request_for(&review.conversation_id, review.task_id.as_ref())
-            .await;
+        let request = match filed {
+            Some(request) => Some(request),
+            None => {
+                self.request_for(&review.conversation_id, review.task_id.as_ref())
+                    .await
+            }
+        };
         // An overnight run that has ended wakes nobody: its report was written before this
         // review ended, so the user reads the outcome in the thread instead.
         if let Some(request) = &request
@@ -1780,15 +1820,7 @@ impl SessionManager {
             &review.conversation_id,
             Envelope {
                 kind: InjectionKind::Report,
-                label: match (review.kind, review.task_id.is_some()) {
-                    (ReviewKind::Code, true) => format!("review {of}"),
-                    (ReviewKind::Plan, true) => format!("plan review {of}"),
-                    (ReviewKind::Code, false) if review.state == ReviewState::Clean => {
-                        super::conversation::CLEAN_REVIEW.to_owned()
-                    }
-                    (ReviewKind::Code, false) => "review of your commits".to_owned(),
-                    (ReviewKind::Plan, false) => "plan review of your plan".to_owned(),
-                },
+                label: report_label(review, &of),
                 task_id: review.task_id.clone(),
                 text,
             },
@@ -1846,6 +1878,99 @@ impl SessionManager {
                 tracing::warn!(review = %running.id, error = %err, "could not record that the answer waits for a review");
                 false
             }
+        }
+    }
+
+    /// The ids in `run_check`'s `fixes` that are no finding of this session, checked before the
+    /// check runs: a commit made with an unknown id in its Fixes trailer can't be corrected by
+    /// running the check again, as nothing would be left to commit.
+    pub(crate) async fn unknown_findings(
+        &self,
+        conversation_id: &ConversationId,
+        fixes: &[String],
+    ) -> Result<Vec<String>> {
+        let board = self.core.board(conversation_id).await?;
+        Ok(fixes
+            .iter()
+            .filter(|id| {
+                !board
+                    .reviews
+                    .values()
+                    .any(|review| review.items.iter().any(|item| &item.id == *id))
+            })
+            .cloned()
+            .collect())
+    }
+
+    /// Marks the findings `high` of high severity, before `run_check` commits their fix: the
+    /// scan of the thread's new commits may read the fix commit before the check's call ends,
+    /// and decides its re-check from the mark then.
+    pub(crate) async fn mark_high(
+        &self,
+        conversation_id: &ConversationId,
+        high: &[String],
+    ) -> Result<()> {
+        if high.is_empty() {
+            return Ok(());
+        }
+        let _held = self.reviews.lock().await;
+        let board = self.core.board(conversation_id).await?;
+        for review in board.reviews.values() {
+            if !review
+                .items
+                .iter()
+                .any(|item| high.contains(&item.id) && !item.high)
+            {
+                continue;
+            }
+            let mut review = review.clone();
+            for item in &mut review.items {
+                if high.contains(&item.id) {
+                    item.high = true;
+                }
+            }
+            self.store_review(&review).await?;
+        }
+        Ok(())
+    }
+
+    /// `run_check`'s `fixes` (BUILD-PLAN O4): the review findings the thread's check fixes,
+    /// recorded fixed and checked by that check (`command`, its output `alias`) when it passed
+    /// and, on a session branch, its commit was made; `not_fixed` says why not otherwise. Those
+    /// in `high` are marked high. What became of them, in one line.
+    pub(crate) async fn record_fixed_by_check(
+        &self,
+        conversation_id: &ConversationId,
+        fixes: &[String],
+        high: &[String],
+        not_fixed: Option<&str>,
+        command: &str,
+        alias: &str,
+    ) -> String {
+        let ids = fixes.join(", ");
+        if let Some(why) = not_fixed {
+            return format!("Not recorded fixed: {ids}, as {why}.");
+        }
+        let items = fixes
+            .iter()
+            .map(|id| crate::tools::FindingRecord {
+                id: id.clone(),
+                status: crate::tools::FindingVerdict::Fixed,
+                task: None,
+                checked: Some(format!(
+                    "`{command}` passed after the fix [evidence: {alias}]"
+                )),
+                why: None,
+                // Marked high, its fix gets one targeted re-check (SESSION-FIXES-PLAN.md Q6.1).
+                high: high.contains(id).then_some(true),
+            })
+            .collect();
+        match self
+            .record_findings(conversation_id, crate::tools::RecordFindings { items })
+            .await
+        {
+            Ok(reply) => reply,
+            Err(err) => format!("Findings not recorded: {err}"),
         }
     }
 
@@ -2086,6 +2211,7 @@ impl SessionManager {
         }) {
             self.tell_review(&clean, None).await;
         }
+        self.recover_unheard_reviews(conversation_id, &board).await;
         let running: Vec<ReviewRun> = board
             .reviews
             .values()
@@ -2114,6 +2240,130 @@ impl SessionManager {
                     .await;
             }
         }
+    }
+
+    /// Findings, or a review that couldn't run, whose word to the thread was still in its
+    /// inbox when Brigadier stopped (the inbox lives in memory, #69): each goes again, once,
+    /// while its request still works for it and is the one the word is filed under (a task's
+    /// own, else the newest). One a turn took is logged in the orchestrator's stream after
+    /// the review ended, by its label (which names the review) and task.
+    async fn recover_unheard_reviews(
+        &self,
+        conversation_id: &ConversationId,
+        board: &crate::board::Board,
+    ) {
+        // As `request_for` files it: no turn runs at startup.
+        let latest = board.latest_request().map(|request| request.id.clone());
+        let request_of = |review: &ReviewRun| match review.task_id.as_ref() {
+            Some(task) => board
+                .tasks
+                .get(task)
+                .and_then(|task| task.request_id.clone())
+                .or_else(|| latest.clone()),
+            None => latest.clone(),
+        };
+        let mut owed: Vec<&ReviewRun> = board
+            .reviews
+            .values()
+            .filter(|review| {
+                matches!(
+                    review.state,
+                    ReviewState::Findings { .. } | ReviewState::Failed { .. }
+                ) && review.notify == ReviewFor::Orchestrator
+                    && review.ended_at_ms.is_some()
+            })
+            .filter(|review| {
+                let filed = request_of(review);
+                let own = review.request_id.is_none() || review.request_id == filed;
+                own && filed.is_some_and(|request| {
+                    board
+                        .requests
+                        .get(&request)
+                        .is_some_and(|of| of.state == crate::work::RequestState::Working)
+                        && !super::requests::ended_run_request(board, &request)
+                })
+            })
+            .collect();
+        let Some(since) = owed.iter().filter_map(|review| review.ended_at_ms).min() else {
+            return;
+        };
+        let taken = self.reports_taken_since(conversation_id, since).await;
+        owed.retain(|review| {
+            let of = review
+                .task_id
+                .as_ref()
+                .and_then(|id| board.tasks.get(id))
+                .map_or_else(
+                    || "the session".to_owned(),
+                    |task| format!("task-{}", task.number),
+                );
+            // A report logged before labels named their review counts for any of its label.
+            let (label, older) = (report_label(review, &of), report_base_label(review, &of));
+            !taken.iter().any(|(at_ms, taken_label, task_id)| {
+                Some(*at_ms) >= review.ended_at_ms
+                    && (*taken_label == label || *taken_label == older)
+                    && *task_id == review.task_id
+            })
+        });
+        owed.sort_by_key(|review| (review.ended_at_ms, review.number));
+        for review in owed {
+            let text = self.review_text(review).await;
+            if matches!(review.state, ReviewState::Findings { .. }) && text.is_none() {
+                continue;
+            }
+            tracing::info!(review = %review.id, "a review's word the restart lost goes to the thread again");
+            // Filed under the request checked above, even if a turn started for another.
+            self.tell_review_filed(review, text.as_deref(), request_of(review))
+                .await;
+        }
+    }
+
+    /// The reports a turn of the thread took since `since_ms`: when, their label and task.
+    async fn reports_taken_since(
+        &self,
+        id: &ConversationId,
+        since_ms: i64,
+    ) -> Vec<(i64, String, Option<TaskId>)> {
+        let mut taken = Vec::new();
+        let mut before = None;
+        loop {
+            let Ok(page) = self
+                .core
+                .store()
+                .read_stream(
+                    crate::model::streams::orchestrator(id),
+                    brigadier_store::StreamPage {
+                        before,
+                        kinds: vec!["orchestrator.logged".into()],
+                        limit: 500,
+                    },
+                )
+                .await
+            else {
+                break;
+            };
+            let Some(last) = page.last() else {
+                break;
+            };
+            before = Some(last.stream_seq);
+            let mut older = false;
+            for stored in &page {
+                older |= stored.at_ms < since_ms;
+                if stored.at_ms >= since_ms
+                    && let Ok(DomainEvent::OrchestratorLogged {
+                        entry: crate::work::OrchestratorEntry::Injection { injection },
+                        ..
+                    }) = serde_json::from_str::<DomainEvent>(stored.payload.get())
+                    && injection.kind == InjectionKind::Report
+                {
+                    taken.push((stored.at_ms, injection.label, injection.task_id));
+                }
+            }
+            if older {
+                break;
+            }
+        }
+        taken
     }
 
     /// A review's full text, from its blob.

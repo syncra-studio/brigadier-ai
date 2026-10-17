@@ -1,8 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-/** Plan shows while a plan is open in it (`showPlanDoc`). */
-export type RightSidebarTab = "workers" | "plan";
+export type RightSidebarTab = "workers";
 
 /** One open choice for the app, with each session remembering its front tab. */
 type RightSidebarState = {
@@ -34,7 +33,7 @@ export function selectRightSidebarTab(id: string, tab: RightSidebarTab): void {
   useRightSidebarState.setState(({ tabs }) => ({ tabs: { ...tabs, [id]: tab } }));
 }
 
-/** A tab a session comes back to at launch: not Plan, whose open plan isn't kept. */
+/** A tab a session comes back to at launch (an old saved Plan is dropped: plans open in their own tab). */
 export function isRightSidebarTab(tab: string): tab is RightSidebarTab {
   return tab === "workers";
 }

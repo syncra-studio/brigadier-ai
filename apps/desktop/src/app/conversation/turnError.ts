@@ -18,14 +18,18 @@ const API = /api error|\b[45]\d\d\b|overloaded|server error|bad gateway|service 
 
 /** The daemon's words for a turn that was running when Brigadier quit (`INTERRUPTED_BY_QUIT`). */
 const INTERRUPTED = "Brigadier quit while this was running.";
+/** …and for one still starting, whose message the thread never had (`INTERRUPTED_BEFORE_START`). */
+const INTERRUPTED_BEFORE_START = "Brigadier quit before this started.";
 
-/** Whether a turn ended because Brigadier quit while it ran: it reads interrupted, with Continue. */
+/** Whether a turn ended because Brigadier quit while it ran or started: it reads interrupted, with Continue. */
 export function interruptedByQuit(raw: string | null | undefined): boolean {
-  return raw?.trim() === INTERRUPTED;
+  const text = raw?.trim();
+  return text === INTERRUPTED || text === INTERRUPTED_BEFORE_START;
 }
 
 /** `limit`: the provider's usage limit stopped it, which the thread shows as a divider, not an error. */
 export function describeTurnError(raw: string, provider = "Claude"): { summary: string; limit?: true } {
+  if (raw.trim() === INTERRUPTED_BEFORE_START) return { summary: "Interrupted: Brigadier quit before this started. Continue sends it again." };
   if (interruptedByQuit(raw)) return { summary: "Interrupted: Brigadier quit while this was running. Continue picks it up where it stands." };
   // A rate limit reads "limit exceeded" too, and is no usage limit: it passes in a moment.
   if (RATE.test(raw)) return { summary: `${provider} is limiting how fast it takes requests. Try again in a moment.` };

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
-test("toolbar order, right sidebar, its keys, Files search, draft project folder and worker/plan-only right panel routes", { timeout: 60000 }, async (t) => {
+test("toolbar order, right sidebar, its keys, Files search, draft project folder and worker-only right panel routes", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "toolbar.html?live=1", "toolbar-result", 30000)) as Record<string, unknown>;
   assert.deepEqual(seen.sessionControls, ["Context", "Terminal", "Right sidebar"]);
   assert.deepEqual(seen.draftControls, ["Context", "Terminal", "Right sidebar"]);
@@ -47,7 +47,6 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.equal(seen.openShown, seen.openWidth);
   assert.equal(seen.closingShown, "", "closing gives the room back at once");
   assert.equal(seen.closedShown, "");
-  assert.equal(seen.planTab, "plan");
   for (const field of ["preferenceKept", "besideOpened", "returnClosed", "loadingClosed", "composerKeptFocus", "loadedClosed", "updateClosed", "backgroundClosed", "autoOpened", "nestedOpened", "nestedDismissed"]) assert.equal(seen[field], true, field);
   for (const field of ["fileTabClosed", "browserTabClosed", "chatReturnClosed", "autoEscapeClosed", "activitiesUnfolded", "activitiesFoldKept"]) assert.equal(seen[field], true, field);
   assert.equal(seen.autoEscapeFocus, "Fixture composer", "Escape after an automatic open leaves the composer focused");

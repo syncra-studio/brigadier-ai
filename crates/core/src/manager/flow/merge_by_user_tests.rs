@@ -149,6 +149,35 @@ fn merged(board: &crate::board::Board) -> usize {
         .count()
 }
 
+/// "Merge into main" reads the branch's commits, not its diff: commits that change nothing in
+/// sum (a file added, then removed) are still work to merge, and none is none.
+#[tokio::test]
+async fn the_session_diff_counts_commits_whose_sum_changes_nothing() {
+    let (flow, _log) = session("merge-diffless").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let (path, _) = workspace(&flow);
+    let path = path.expect("the worktree");
+    let (stat, commits) = flow
+        .manager
+        .session_diff_stat(&flow.conversation)
+        .await
+        .unwrap()
+        .expect("a worktree session");
+    assert_eq!((stat.files.len(), commits), (1, 1));
+    git(&path, &["rm", "-q", "NOTES.md"]);
+    git(&path, &["commit", "-q", "-m", "Remove the notes"]);
+    let (stat, commits) = flow
+        .manager
+        .session_diff_stat(&flow.conversation)
+        .await
+        .unwrap()
+        .expect("a worktree session");
+    assert!(stat.files.is_empty(), "{stat:?}");
+    assert_eq!(commits, 2);
+    flow.stop().await;
+}
+
 /// The click merges, once: it is recorded with where it came from, the thread merges on its
 /// [merge], and a second finish_session on the same click is refused. Nothing was ever put on a
 /// card, and the workspace stays with its branch at the merge.

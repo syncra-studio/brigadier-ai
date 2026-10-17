@@ -29,7 +29,9 @@ def pushes(subject):
     text = json.dumps(subject).lower()
     return "git push" in text or "gh pr" in text or "push to" in text
 def handle(env):
-    ev = env["event"]; t = ev.get("type")
+    ev = env["event"]
+    if not isinstance(ev, dict): return  # a stored record, not an event (a run's output digest)
+    t = ev.get("type")
     if t == "cleanupRecorded":
         a = ev["artifact"]
         if a["type"] == "claudeSession": sessions.add(("claude", a["sessionId"]))

@@ -126,10 +126,18 @@ const ENDED_UNEXPECTEDLY: &str = "The CLI session ended unexpectedly.";
 /// A request whose turn was running when Brigadier quit or stopped (H1). The app shows it as
 /// interrupted, with Continue.
 pub(crate) const INTERRUPTED_BY_QUIT: &str = "Brigadier quit while this was running.";
+/// A request whose turn was still starting when Brigadier quit or stopped: the thread never had
+/// its message, which Continue sends again.
+pub(crate) const INTERRUPTED_BEFORE_START: &str = "Brigadier quit before this started.";
+/// Sent with the user's message Continue sends again after [`INTERRUPTED_BEFORE_START`].
+const RESENT_AFTER_QUIT: &str = "[Brigadier quit as this message was being sent to you, and the \
+user asked you to continue. If you had already begun on it, check git status and git log \
+first, then carry on from where it stands.]";
 
-/// Whether a request ended because Brigadier quit while its turn ran.
+/// Whether a request ended because Brigadier quit while its turn ran or started.
 pub(crate) fn interrupted_by_quit(state: &RequestState) -> bool {
-    matches!(state, RequestState::Failed { error } if error == INTERRUPTED_BY_QUIT)
+    matches!(state, RequestState::Failed { error }
+        if error == INTERRUPTED_BY_QUIT || error == INTERRUPTED_BEFORE_START)
 }
 /// Sent with every turn while the session is in plan mode.
 const PLAN_MODE_NOTE: &str = "[plan mode] The user turned plan mode on: they want a plan to decide on before anything changes. Change nothing. Look around yourself (read, search, project_map) or with scouts, ask_user only what only they can decide, then write the plan and propose it with propose_plan, in its shape: a short title, one summary sentence, then Changes, Checks and Assumptions. Reply [quiet] after it: the plan card is your answer. Their yes turns plan mode off and comes back as a message; build only then. Merging, landing and finish_session are refused until then.";
@@ -2122,8 +2130,14 @@ impl SessionManager {
     /// After a start: the request whose thread turn the daemon's last stop cut off (a quit
     /// or a crash) ends interrupted, never as answered, and the thread's Continue picks it up.
     pub(crate) async fn mark_cut_off_turn(&self, id: &ConversationId) {
-        let Some(request) = self.core.take_cut_off_request(id).await else {
+        let Some(cut_off) = self.core.take_cut_off_request(id).await else {
             return;
+        };
+        let request = cut_off.request;
+        let error = if cut_off.began {
+            INTERRUPTED_BY_QUIT
+        } else {
+            INTERRUPTED_BEFORE_START
         };
         let live = self
             .core
@@ -2136,11 +2150,21 @@ impl SessionManager {
             return;
         }
         let failed = RequestState::Failed {
-            error: INTERRUPTED_BY_QUIT.into(),
+            error: error.into(),
         };
+        // It worked until it was last recorded, not across the time Brigadier was closed.
         if let Err(err) = self
             .core
-            .update_request(id, &request, failed, false, false, Vec::new(), None)
+            .update_request_at(
+                id,
+                &request,
+                failed,
+                false,
+                false,
+                Vec::new(),
+                None,
+                cut_off.at_ms,
+            )
             .await
         {
             tracing::warn!(conversation = %id, error = %err, "could not mark a cut-off turn");
@@ -2150,17 +2174,12 @@ impl SessionManager {
             conv.state.lock().await.outcomes.insert(
                 request.clone(),
                 RequestState::Failed {
-                    error: INTERRUPTED_BY_QUIT.into(),
+                    error: error.into(),
                 },
             );
         }
-        self.set_run_for(
-            id,
-            RunState::Failed,
-            Some(INTERRUPTED_BY_QUIT.into()),
-            Some(request),
-        )
-        .await;
+        self.set_run_for(id, RunState::Failed, Some(error.into()), Some(request))
+            .await;
     }
 
     /// Continues the latest request after the user stopped it: a turn for that request, in its
@@ -2187,6 +2206,24 @@ impl SessionManager {
             }
         };
         self.core.set_queue_paused(&id, false).await?;
+        // Cut off before its turn began, the thread never had the user's message, as far as
+        // was recorded: it goes again, as the user sent it, with a word in case the stop came
+        // just after the CLI took it.
+        if matches!(&board.requests[&request].state, RequestState::Failed { error } if error == INTERRUPTED_BEFORE_START)
+            && let Some(message) = self
+                .core
+                .all_messages(&id)
+                .await?
+                .into_iter()
+                .find(|message| message.id == request && message.role == MessageRole::User)
+        {
+            let mut state = conv.state.lock().await;
+            state.notes.push(RESENT_AFTER_QUIT.into());
+            state.pending.push(message);
+            drop(state);
+            self.kick(&conv);
+            return Ok(());
+        }
         let text = if interrupted {
             "[Brigadier quit while you were working on this request, and the user asked you to \
              continue. Your last steps may have finished after your record of them: check git \
@@ -5026,6 +5063,40 @@ impl SessionManager {
         self.record_compaction(&conv.id, compaction).await;
     }
 
+    /// Ends the calls of the turn the user stopped that its CLI dropped without saying they
+    /// ended (a wait for replies, #61): they read stopped as of now, not running in a turn
+    /// that is over. Only this turn's: a Codex command an earlier turn left running goes on as
+    /// its CLI's job.
+    async fn end_stopped_calls(&self, conv: &Arc<ConvLive>) {
+        let Some(turn) = conv.items().turn() else {
+            return;
+        };
+        let Ok(board) = self.core.board(&conv.id).await else {
+            return;
+        };
+        let now = now_ms();
+        for step in &board.orchestrator_steps {
+            let mut kind = step.kind.clone();
+            if let OrchestratorStepKind::Tool {
+                status: status @ ItemStatus::InProgress,
+                stopped,
+                through_position,
+                ended_at_ms,
+                turn: Some(of),
+                ..
+            } = &mut kind
+                && *of == turn
+            {
+                *status = ItemStatus::Failed;
+                *stopped = true;
+                *through_position = 0;
+                *ended_at_ms = Some(now);
+                self.orchestrator_step_in(&conv.id, step.request_id.clone(), kind)
+                    .await;
+            }
+        }
+    }
+
     async fn turn_completed(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>, status: TurnStatus) {
         conv.state.lock().await.watchdog.acknowledge();
         // A turn that ended before its CLI said it began starts nothing more.
@@ -5041,6 +5112,9 @@ impl SessionManager {
                 .unwrap_or_else(|| "The model did not finish compacting".into()),
         };
         self.end_compaction(conv, unfinished).await;
+        if status == TurnStatus::Interrupted && conv.state.lock().await.interrupted {
+            self.end_stopped_calls(conv).await;
+        }
         if conv.kind == ConversationKind::Session {
             // What the thread committed in this turn gets its review, before a next turn can
             // take its commits for the user's.

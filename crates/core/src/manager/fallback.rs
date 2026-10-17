@@ -572,6 +572,7 @@ impl SessionManager {
             ". Decisions and commitments made earlier still hold. Report with submit_report as \
              your rules say.",
         );
+        text.push_str(super::worker_handoff::FULL_READS);
         files.push_tail(&mut text);
         Ok(self.with_constraints(&task.conversation_id, text).await)
     }

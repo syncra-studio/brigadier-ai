@@ -141,7 +141,7 @@ export type RowActivity = { running: boolean; awaiting: "approval" | "input" | n
 
 const QUIET: RowActivity = { running: false, awaiting: null };
 
-function rowActivity(activity: Activity | undefined): RowActivity {
+export function rowActivity(activity: Activity | undefined): RowActivity {
   if (!activity) return QUIET;
   const states = Object.values(activity.tasks);
   const running =

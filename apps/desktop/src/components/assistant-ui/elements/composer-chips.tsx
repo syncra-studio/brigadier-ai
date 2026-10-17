@@ -336,14 +336,6 @@ function completedTokens(text: string, caret: number | null): Token[] {
   return tokens;
 }
 
-/**
- * Turns `` `code` `` and links into chips: as they're typed, when the character completing one
- * (the closing backtick, the space after a link) goes in at the caret, and everywhere in a
- * paste. So a chip turned back into text stays text while it's edited. Never mid-composition.
- * It also keeps the system's text substitutions out of the field, lets ← and → past chips, and
- * leaves Enter and Space on a chip's own button (an image's preview or ×, reached by Tab) to
- * press it, where the editor would send the message.
- */
 /** What turns off the webview's text checking (smart quotes and dashes, auto-correct, capitals). */
 const PLAIN_TYPING = { spellcheck: "false", autocorrect: "off", autocapitalize: "off" };
 
@@ -370,6 +362,14 @@ function keepDoubleSpace(event: InputEvent) {
   root.ownerDocument.execCommand("insertText", false, " ");
 }
 
+/**
+ * Turns `` `code` `` and links into chips: as they're typed, when the character completing one
+ * (the closing backtick, the space after a link) goes in at the caret, and everywhere in a
+ * paste. So a chip turned back into text stays text while it's edited. Never mid-composition.
+ * It also keeps the system's text substitutions out of the field, lets ← and → past chips, and
+ * leaves Enter and Space on a chip's own button (an image's preview or ×, reached by Tab) to
+ * press it, where the editor would send the message.
+ */
 function ChipsPlugin({
   formatter,
   editorRef,

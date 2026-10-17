@@ -50,6 +50,8 @@ export function planProgress(plan: Plan, states: readonly (TaskState | undefined
       return { label: "Plan proposed", status: "review", tone: "warning" };
     case "rejected":
       return { label: "Plan rejected", status: "failed", tone: "failed" };
+    case "putOff":
+      return { label: "Plan put off", status: "pending", tone: "quiet" };
     case "superseded":
       return { label: "Plan superseded", status: "pending", tone: "quiet" };
     case "approved": {
@@ -116,14 +118,26 @@ export function contextPlanIds(plans: Readonly<Record<string, Plan>>): string[] 
     .map((plan) => plan.id);
 }
 
-/** The context card keeps the last session plan after its request ends. */
+/** The newest request not steered into another, at work or over: the one the context card speaks for. */
+export function latestPlanRequest(requests: Readonly<Record<string, UserRequest>>): UserRequest | null {
+  return (
+    Object.values(requests)
+      .filter((request) => request.steeredInto === null)
+      .toSorted((a, b) => b.startedAtMs - a.startedAtMs)[0] ?? null
+  );
+}
+
+/**
+ * The context card's plan follows the latest request: its plan, kept after the request ends,
+ * or none for a request without one, never an earlier request's plan.
+ */
 export function contextPlanId(
   plans: Readonly<Record<string, Plan>>,
   planIds: readonly string[],
-  activeRequest: UserRequest | null,
+  latestRequest: UserRequest | null,
 ): string | null {
-  if (!activeRequest) return planIds.at(-1) ?? null;
-  const plan = currentRequestPlan(plans, activeRequest.id);
+  if (!latestRequest) return planIds.at(-1) ?? null;
+  const plan = currentRequestPlan(plans, latestRequest.id);
   return plan && planIds.includes(plan.id) ? plan.id : null;
 }
 

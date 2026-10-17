@@ -6,6 +6,7 @@ import json, sys
 st = None
 for l in open(sys.argv[1] + "/rec/events.jsonl"):
     e = json.loads(l)["event"]
+    if not isinstance(e, dict) or "type" not in e: continue  # a stored record, not an event
     if e["type"] == "requestUpdated": st = e["request"]["state"]["type"]
 sys.exit(0 if st not in (None, "working") else 1)
 PY

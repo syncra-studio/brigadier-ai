@@ -32,7 +32,7 @@ import {
   useOvernightCards,
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
-import { activePlanRequest, contextPlanId, contextPlanIds } from "@/app/conversation/planProgress";
+import { contextPlanId, contextPlanIds, latestPlanRequest } from "@/app/conversation/planProgress";
 import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { ChecksRow, ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
@@ -89,7 +89,7 @@ const BARE = "rounded-none border-0 bg-transparent";
 function useSessionDiff(
   conversationId: string,
   worktree: boolean,
-): DiffStat | null {
+): { stat: DiffStat; commits: number } | null {
   // Landings, the thread's own requests ending (it commits too) and merges move the branch.
   const landed = useBoard(
     (s) =>
@@ -97,7 +97,7 @@ function useSessionDiff(
       Object.values(s.board?.requests ?? {}).filter((asked) => asked.state.type === "done").length +
       (s.board?.orchestratorSteps ?? []).filter((step) => step.kind.type === "merged").length,
   );
-  const [stat, setStat] = useState<DiffStat | null>(null);
+  const [stat, setStat] = useState<{ stat: DiffStat; commits: number } | null>(null);
   useEffect(() => {
     if (!worktree) return;
     let current = true;
@@ -775,7 +775,7 @@ function SessionSummaryContent({
   const plans = planIds.filter((id) => !overnight.some((card) => card.run.planId === id));
   const currentPlanId = useBoard((s) => {
     if (s.board?.conversationId !== conversation.id) return null;
-    return contextPlanId(s.board.plans, plans, activePlanRequest(s.board.requests));
+    return contextPlanId(s.board.plans, plans, latestPlanRequest(s.board.requests));
   });
   // A plan the thread asked to see (an earlier plan's "View plan"), until another plan takes over.
   const shownPlan = useSummary((s) => s.plan);
@@ -793,7 +793,7 @@ function SessionSummaryContent({
   const sessionDiff = useSessionDiff(conversation.id, worktree && !run);
   const runDiff = useRunDiff(conversation.id, run?.id ?? null);
   // During and after a run the card shows the run's branch: that is where the work is.
-  const diff = run ? runDiff : sessionDiff;
+  const diff = run ? runDiff : (sessionDiff?.stat ?? null);
   const pullRequest = usePullRequest(conversation.id);
   // Before a session has its folder and branch, its card is a chat's: never an empty space.
   if (!setup) return <ChatSummaryContent conversation={conversation} active={active} />;

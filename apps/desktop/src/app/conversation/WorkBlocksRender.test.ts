@@ -97,10 +97,17 @@ test("a turn has one live line, folds the moment its final answer starts, and ke
 });
 
 test("a turn that ends in a plan keeps its work open, and the user's choice outlives a remount", { timeout: 120000 }, async (t) => {
-  const seen = await drive<Record<"ended" | "closed" | "remounted", Seen>>(t, "drive=plan");
+  const seen = await drive<Record<"ended" | "closed" | "remounted", Seen> & { opened: Record<string, unknown> }>(t, "drive=plan");
   assert.match(seen.ended.header ?? "", /^Worked for/);
   // Closed, its fold is gone; remounted, it stays closed where the plan would open it.
   assert.deepEqual([seen.ended.fold, seen.closed.fold, seen.remounted.fold], ["open", "gone", "gone"]);
+  // A chat has no tabs: its plan doesn't offer to open.
+  assert.deepEqual(seen.opened, { canOpen: false, active: "chat", kinds: [], shown: false, tab: null, rightPanel: false });
+});
+
+test("a session's plan opens full screen in its own tab, not the right panel", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{ opened: Record<string, unknown> }>(t, "drive=plan&kind=session");
+  assert.deepEqual(seen.opened, { canOpen: true, active: "plan:plan:plan", kinds: ["plan"], shown: true, tab: "Round half-up", rightPanel: false });
 });
 
 test("a turn's denied calls are counted in its header, which opens the work to the first", { timeout: 120000 }, async (t) => {

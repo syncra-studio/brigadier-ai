@@ -58,6 +58,7 @@ useBoard.setState({
 type Call =
   | { method: "answerQuestion"; cardId: string; answers: string[]; input: string | undefined }
   | { method: "decidePlan"; cardId: string; approve: boolean; message: string | null }
+  | { method: "putOffPlan"; cardId: string }
   | { method: "dismiss" };
 const calls: Call[] = [];
 mockIPC((command, payload) => {
@@ -68,6 +69,7 @@ mockIPC((command, payload) => {
     return { method: req.method, dictation: { available: true, model: "speech.bin", modelBytes: 1, installed: true, downloading: false, languages: [] } };
   }
   if (req.method === "decidePlan") calls.push({ method: req.method, cardId: req.cardId, approve: req.approve, message: req.message });
+  if (req.method === "putOffPlan") calls.push({ method: req.method, cardId: req.cardId });
   return { method: req.method };
 });
 
@@ -296,6 +298,15 @@ const results = new URLSearchParams(location.search).get("case") === "kept" ? {
     const from = calls.length;
     await key("Enter");
     await until("the plan's decision", sent(from));
+  }),
+  // With nothing typed, the plan's button reads "Not now" and puts the plan off.
+  notNow: await run(async (seen) => {
+    await mountCard({ type: "plan", id: "document" });
+    const button = [...document.querySelectorAll<HTMLButtonElement>("[data-slot=action-card] button")].find((each) => each.textContent === "Not now");
+    seen.label = button?.textContent ?? null;
+    const from = calls.length;
+    await fixtureClick(button!);
+    await until("Not now", sent(from));
   }),
 };
 const result = document.createElement("pre");

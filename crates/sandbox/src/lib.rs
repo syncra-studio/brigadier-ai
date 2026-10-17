@@ -137,7 +137,8 @@ pub trait Processes: Send + Sync {
     /// The current user's processes whose working directory is `dir` or inside it. This finds
     /// what a worker started in its worktree even after it detached from the worker's process
     /// tree (a dev server started in the background). Only ever used on folders Brigadier
-    /// created.
+    /// created. A link at `dir` itself is refused, never followed: it would aim the search,
+    /// and the cleanup that ends what it finds, at wherever it points.
     fn in_dir(&self, dir: &Path) -> Result<Vec<u32>>;
 }
 

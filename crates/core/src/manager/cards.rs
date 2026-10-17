@@ -766,6 +766,41 @@ impl SessionManager {
         Ok(())
     }
 
+    /// The user said "Not now" to a proposed plan: nothing waits on it any more (the sidebar
+    /// stops saying so, and its card stays off the rail after a restart), and the thread says
+    /// so in a line.
+    pub async fn put_off_plan(
+        &self,
+        conversation_id: ConversationId,
+        card_id: CardId,
+    ) -> Result<()> {
+        let plan = self
+            .change_plan(&conversation_id, &card_id, |plan| {
+                if plan.state != PlanState::Proposed {
+                    return Err(Error::Invalid("this plan was already decided".into()));
+                }
+                plan.state = PlanState::PutOff;
+                plan.decided_at_ms = Some(now_ms());
+                Ok(())
+            })
+            .await?;
+        self.deliver_for(
+            &conversation_id,
+            Envelope {
+                kind: InjectionKind::Decision,
+                label: "plan decision".into(),
+                task_id: None,
+                text: format!(
+                    "[decision] The user chose \u{201c}Not now\u{201d} for the plan \u{201c}{}\u{201d}. Build nothing. Say in one short line that the plan waits until they want it, then wait for what they say next; when they want it, propose it again with propose_plan.",
+                    plan.title
+                ),
+            },
+            plan.request_id.clone(),
+        )
+        .await;
+        Ok(())
+    }
+
     /// Expires cards nobody can wait for any more (after a restart).
     pub(crate) async fn expire_stale_cards(&self, conversation_id: &ConversationId) {
         let Ok(board) = self.core.board(conversation_id).await else {
