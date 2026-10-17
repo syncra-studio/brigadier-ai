@@ -2838,11 +2838,9 @@ for line in sys.stdin:
             args
         };
         assert_eq!(without_settings(&fork), without_settings(&thread));
-        assert!(
-            settings(&thread, cwd.path(), &SubAgents::Any, false)["hooks"]
-                .get("PreToolUse")
-                .is_none()
-        );
+        // The thread's own `PreToolUse` hook only reads what a `Bash` call names (#87).
+        let hooks = &settings(&thread, cwd.path(), &SubAgents::Any, false)["hooks"];
+        assert_eq!(hooks["PreToolUse"][0]["matcher"], json!("Bash"), "{hooks}");
     }
 
     #[test]
