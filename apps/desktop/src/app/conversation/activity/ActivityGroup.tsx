@@ -7,7 +7,7 @@ import { useCalmLabel } from "@/app/conversation/activity/calmLabel";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { labelParts, stepLabel, type StepWords, summarize, summaryLead } from "@/app/conversation/activity/words";
 import { CHEVRON, LIST_ICON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
-import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
+import { GROUP_LIST, ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useNow } from "@/hooks/use-now";
 import type { ItemStatus } from "@/ipc/generated";
@@ -230,7 +230,7 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
       <CollapsibleContent className={OPENS}>
         {/* Up to 224px of rows 4px apart, then it scrolls, its edges fading while there is more.
             Its rows keep their height: an opened Shell box scrolls with them, never squeezed. */}
-        <div className="max-h-group-list scroll-edge-fade gap-activity-row-gap flex min-w-0 flex-col overflow-y-auto *:shrink-0 pt-1 [--spacing-scroll-fade-bottom:var(--spacing-group-fade)] [--spacing-scroll-fade-top:var(--spacing-group-fade)]">
+        <div data-slot={GROUP_LIST} className="max-h-group-list scroll-edge-fade gap-activity-row-gap flex min-w-0 flex-col overflow-y-auto *:shrink-0 pt-1 [--spacing-scroll-fade-bottom:var(--spacing-group-fade)] [--spacing-scroll-fade-top:var(--spacing-group-fade)]">
           <InGroup.Provider value>
             {items.map((item, index) => (described[index] && exploring(described[index]) ? null : renderStep(item.step, item.key)))}
           </InGroup.Provider>
