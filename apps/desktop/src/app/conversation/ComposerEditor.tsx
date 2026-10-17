@@ -31,7 +31,7 @@ import {
   PASTE_TAG,
   SKIP_DOM_SELECTION_TAG,
 } from "lexical";
-import { useCallback, useContext, useEffect, useMemo, useRef } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { WorkerGlyph, useWorkerName } from "@/app/conversation/WorkerChip";
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
@@ -94,6 +94,12 @@ export default function ComposerEditor({
   autoFocus,
 }: ComposerInputProps) {
   const target = useContext(ComposerTargetContext);
+  // The editor loads after the plain field stood in for it: it takes the keyboard only from that
+  // field or from nothing, not from what the user went to meanwhile (Find in the chat, a dialog).
+  const [takesFocus] = useState(() => {
+    const focused = document.activeElement;
+    return autoFocus && (!focused || focused === document.body || focused.matches('textarea[aria-label="Message input"]'));
+  });
   const memory = target?.mentions ?? null;
   const targets = target?.targets;
   useEffect(() => memory?.setWorkers(targets ?? []), [memory, targets]);
@@ -117,7 +123,7 @@ export default function ComposerEditor({
       mentionLook={mentionLook}
       onMention={onMention}
       placeholder={placeholder}
-      autoFocus={autoFocus}
+      autoFocus={takesFocus}
       // Esc stops only on a second press (useEscToStop).
       cancelOnEscape={false}
       // Enter is ComposerKeys': it sends with the key chosen in Settings.

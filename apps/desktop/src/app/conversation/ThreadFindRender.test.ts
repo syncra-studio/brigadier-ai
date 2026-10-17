@@ -142,3 +142,11 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   // A selection over two lines opens the bar with no text; × closes it.
   assert.deepEqual(seen.multiline, { value: "", label: null, size: 0, closedByButton: true });
 });
+
+test("Find keeps the keyboard when the composer's editor loads after it opened", { timeout: 180000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-find.html?drive=late-editor", "thread-find-result", 150000)) as {
+    error?: string; standIn: boolean; focusedBefore: boolean; editorLoaded: boolean; focusedAfter: boolean;
+  };
+  assert.equal(seen.error, undefined);
+  assert.deepEqual(seen, { standIn: true, focusedBefore: true, editorLoaded: true, focusedAfter: true });
+});

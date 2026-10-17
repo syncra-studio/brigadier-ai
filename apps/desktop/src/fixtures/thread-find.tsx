@@ -15,18 +15,23 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
+import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { ACTIVE_BUTTON, ACTIVE_MATCH, FINDING, MATCHES } from "@/app/conversation/ThreadFind";
 import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, ConversationView as View, EventEnvelope, Message, Request, UserRequest } from "@/ipc/generated";
+import { revealApp } from "@/lib/splash";
 import { select } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
 import { applyEvents, useApp } from "@/state/store";
 
 const LOAD_MS = 200;
 const SHORT = new URLSearchParams(location.search).get("drive") === "short";
+/** `?drive=late-editor`: startup isn't over, so the composer's editor waits to load (whenRevealed). */
+const LATE_EDITOR = new URLSearchParams(location.search).get("drive") === "late-editor";
+if (LATE_EDITOR) document.documentElement.dataset["splash"] = "";
 const TURNS = SHORT ? 1 : 60;
 /** Turns the first load brings. */
 const FIRST_TURNS = 40;
@@ -588,6 +593,25 @@ async function drive(): Promise<void> {
       result["manualExpanded"] = bubble.querySelector(":scope > button")?.getAttribute("aria-expanded");
       root.unmount();
       host.remove();
+    } else if (LATE_EDITOR) {
+      // ⌘F while the plain field stands in for the editor; the editor then loads and mounts.
+      select({ type: "conversation", id: "long" });
+      await settle(LOAD_MS + 400);
+      const editable = () => $(COMPOSER_EDITABLE);
+      result["standIn"] = editable() === null && $('textarea[aria-label="Message input"]') !== null;
+      const word = textHolding("solitary")!;
+      const range = document.createRange();
+      range.setStart(word.node, word.at);
+      range.setEnd(word.node, word.at + "solitary".length);
+      selectRange(range);
+      press(document.body, "KeyF", { meta: true });
+      await until(() => label() !== null);
+      await settle(100);
+      result["focusedBefore"] = document.activeElement === field();
+      void revealApp();
+      result["editorLoaded"] = await until(() => editable() !== null);
+      await settle(100);
+      result["focusedAfter"] = document.activeElement === field();
     } else if (SHORT || new URLSearchParams(location.search).get("drive") === "top") {
       select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
