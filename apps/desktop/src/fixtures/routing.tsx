@@ -15,11 +15,12 @@ import { setModelAvailable, setProviderOn } from "@/state/providers";
 import { useApp } from "@/state/store";
 
 /*
- * ?drive=1 picks Review changes, reads its order, ranking, rules and overrides, asks the ranking
- * about a change Codex wrote, removes a model from the order, makes the order wait, resets it,
- * opens a model's profile and adds a rule, writing what it saw to #routing-result
+ * ?drive=1 opens Advanced through search, opens Review changes, reads its order, the ranking, the
+ * rules and overrides, asks the ranking about a change Codex wrote, removes a model from the
+ * order, makes the order wait, switches to Automatic and back, opens a model's profile and adds a
+ * rule, writing what it saw to #routing-result
  * (RoutingPageRender.test.ts reads it). Without it the page stays as it opens, for screenshots:
- * ?kind=<name> picks a kind, ?open=<model> opens a model's profile, ?show=<row> reveals one.
+ * ?kind=<name> opens a kind, ?open=<model> opens a model's profile, ?show=<row> reveals one.
  */
 const params = new URLSearchParams(location.search);
 if (params.has("drive")) {
@@ -75,6 +76,10 @@ const press = (element: Element | undefined | null) => {
 };
 const menuItem = (name: string) =>
   all('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]').find((item) => text(item) === name);
+/** A kind of work's row in Who does what, by its name. */
+const kindButton = (name: string) =>
+  all<HTMLButtonElement>('[data-slot="routing-kind"] > button').find((element) => text(element).startsWith(name));
+const openKind = () => document.querySelector('[data-slot="routing-kind"][data-open]');
 const review = () => useApp.getState().settings.routingRankings.find((ranking) => ranking.id === "rank-review");
 
 function Fixture() {
@@ -85,7 +90,7 @@ function Fixture() {
     if (!params.has("drive")) {
       const timer = setTimeout(() => {
         const kind = params.get("kind");
-        if (kind) all<HTMLButtonElement>('[data-slot="routing-kind"]').find((element) => text(element).startsWith(kind))?.click();
+        if (kind) kindButton(kind)?.click();
         const open = params.get("open");
         if (open) all<HTMLButtonElement>('[data-slot="rating-row"] > button').find((row) => text(row).startsWith(open))?.click();
         const show = params.get("show");
@@ -105,17 +110,18 @@ function Fixture() {
         seen.steps = all('[data-setting]')
           .map((row) => row.dataset.setting ?? "")
           .filter((label) => /^\d\. /.test(label));
-        seen.kinds = all('[data-slot="routing-kind"]').map(text);
-        seen.selected = text(document.querySelector('[data-slot="routing-kind"][aria-selected="true"]'));
-        all<HTMLButtonElement>('[data-slot="routing-kind"]').find((element) => text(element).startsWith("Review changes"))?.click();
+        seen.kinds = all('[data-slot="routing-kind"] > button').map(text);
+        seen.openAtStart = all('[data-slot="routing-kind"][data-open]').length;
+        kindButton("Review changes")?.click();
       },
       () => {
-        seen.heading = text(document.querySelector("main h2.text-xl"));
-        seen.order = text(document.querySelector('[data-slot="try-order"]'));
+        seen.heading = text(openKind()?.querySelector("button .font-medium"));
+        seen.order = text(openKind()?.querySelector('[data-slot="try-order"]'));
         seen.ranked = all('[data-slot="route-candidate"]').map(text);
         seen.blocked = all('[data-slot="blocked-candidate"]').length;
         seen.more = text(all('[data-slot="ranking-now"] button').find((element) => text(element).includes("more")));
-        seen.rules = all('[data-slot="routing-rule"]').map((row) => row.dataset.setting);
+        seen.rules = all('[data-slot="routing-rules"] [data-slot="settings-row"]').map((row) => row.dataset.setting);
+        seen.ruleRows = all('[data-slot="routing-rules"] [data-slot="settings-row"]').map(text);
         seen.overrides = all('[data-slot="area-override"]').map(text);
         seen.rankingFor = text(button("The kind of work the ranking is for"));
         // Every searchable row without a replacement has a place search can bring into view.
@@ -140,7 +146,7 @@ function Fixture() {
       },
       () => {
         seen.afterRemove = review()?.entries.map((entry) => (entry.target.type === "model" ? entry.target.id : ""));
-        seen.orderAfterRemove = text(document.querySelector('[data-slot="try-order"] ol'));
+        seen.orderAfterRemove = text(openKind()?.querySelector('[data-slot="try-order"] ol'));
         press(button("When none of Review changes's models can run"));
       },
       () => {
@@ -148,12 +154,12 @@ function Fixture() {
       },
       () => {
         seen.waits = review()?.only;
-        button("Reset to default")?.click();
+        button("Automatic", openKind() ?? document)?.click();
       },
       () => {
         seen.afterReset = { manual: review()?.manual, kept: review()?.entries.length };
-        seen.automatic = text(document.querySelector('[data-slot="try-order"]'));
-        seen.reviewRow = all('[data-slot="routing-kind"]').map(text).find((row) => row.startsWith("Review changes"));
+        seen.automatic = text(openKind()?.querySelector('[data-slot="try-order"]'));
+        seen.reviewRow = text(kindButton("Review changes"));
         seen.ratingGroups = all('[data-slot="model-ratings"] .font-medium')
           .map(text)
           .filter((name) => ["Claude", "Codex", "Not in the registry"].includes(name));
@@ -206,6 +212,28 @@ function Fixture() {
       },
       () => {
         seen.ratingRowsBack = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
+        // My order brings back the order Automatic kept.
+        button("My order", openKind() ?? document)?.click();
+      },
+      () => {
+        seen.afterMyOrder = { manual: review()?.manual, kept: review()?.entries.length };
+        // In a project without an order of its own, the kind follows All projects' order.
+        press(button("Where these settings apply"));
+      },
+      () => {
+        (menuItem("Brigadier Desktop") as HTMLElement | undefined)?.click();
+      },
+      () => {
+        seen.projectMode = text(openKind()?.querySelector('[data-state="on"]'));
+        seen.projectOrder = text(openKind()?.querySelector('[data-slot="try-order"]'));
+        button("Automatic", openKind() ?? document)?.click();
+      },
+      () => {
+        const own = useApp
+          .getState()
+          .settings.routingRankings.find((ranking) => ranking.category === "review" && ranking.projectId !== null);
+        seen.projectAutomatic = own && { manual: own.manual, entries: own.entries.length };
+        seen.projectModeAfter = text(openKind()?.querySelector('[data-state="on"]'));
         setResult(JSON.stringify(seen));
       },
     ];

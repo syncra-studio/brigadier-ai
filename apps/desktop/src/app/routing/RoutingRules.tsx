@@ -1,10 +1,10 @@
-import { ArrowUp, Check, DotsHorizontal, MinusCircle, Plus, Sparkles } from "@openai/apps-sdk-ui/components/Icon";
-import { type ReactNode, useState } from "react";
+import { DotsHorizontal, Plus, Sparkles } from "@openai/apps-sdk-ui/components/Icon";
+import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ChipSelect, TargetSelect, useScopeOptions } from "@/app/routing/pickers";
 import { ROUTED_KINDS, shortPlaceName } from "@/app/routing/words";
-import { SettingsButton } from "@/app/settings/parts";
+import { SettingsButton, SettingsCard, SettingsRow, SettingsSection } from "@/app/settings/parts";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,9 +24,7 @@ import {
   PLAIN_KIND_WORDS,
   RANKED_CATEGORIES,
   ruleSentence,
-  WORKER_CATEGORIES,
 } from "@/lib/routing";
-import { cn } from "@/lib/utils";
 import { isNewModelRule } from "@/state/providers";
 import { addOverride, removeOverride } from "@/state/routing";
 import { useApp } from "@/state/store";
@@ -40,19 +38,6 @@ const EFFECT_OPTIONS: { value: Effect; label: string }[] = [
   { value: "prefer", label: "Prefer" },
   { value: "only", label: "Only use" },
 ];
-
-const EFFECT_ICONS: Record<Effect, typeof MinusCircle> = {
-  never: MinusCircle,
-  noWork: MinusCircle,
-  prefer: ArrowUp,
-  only: Check,
-};
-
-/** Whether a rule is about a kind of work (one naming none is about every kind). */
-export function ruleCovers(rule: OverrideRule, category: TaskCategory): boolean {
-  if (isNoWorkRule(rule)) return WORKER_CATEGORIES.includes(category);
-  return rule.categories.length === 0 || rule.categories.includes(category);
-}
 
 /**
  * Where a `prefer` rule does nothing: the kinds of work it covers whose own row has a list in
@@ -75,25 +60,17 @@ function shadowedBy(rule: OverrideRule, rankings: readonly Ranking[]): string | 
   return `Not used for ${joinWords(listed.map((category) => PLAIN_KIND_WORDS[category]))}: your order decides there`;
 }
 
-/** A word of a rule's sentence, set apart. */
-function Word({ children }: { children: ReactNode }) {
-  return (
-    <span className="border-divider bg-foreground/5 rounded-nav text-label inline-flex h-7 items-center border px-2.5">
-      {children}
-    </span>
-  );
-}
-
 /**
- * The rules about a kind of work, each as a sentence ("Never use [Sonnet 5.5] for [reviewing
- * changes], [everywhere]."), removed from its menu; Add rule opens a sentence to fill in.
+ * The rules, each as a plain sentence ("Never use Sonnet 5.5 for reviewing changes") with where
+ * it applies and what it leaves, removed from its menu; Add rule opens a sentence to fill in,
+ * about the kind of work opened above when one is.
  */
 export function RoutingRules({
   category,
   scope,
   groups,
 }: {
-  category: TaskCategory;
+  category: TaskCategory | null;
   scope: string | null;
   groups: readonly ModelGroup[];
 }) {
@@ -102,103 +79,87 @@ export function RoutingRules({
   const projects = useApp((s) => s.projects);
   const [adding, setAdding] = useState(false);
   const remove = useAction();
-  const shown = rules.filter((rule) => ruleCovers(rule, category));
   return (
-    <section data-setting="Rules" data-slot="routing-rules" className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">Rules</h3>
-        {!adding && (
+    <SettingsSection
+      title="Rules"
+      description="Models to keep from some work, to prefer, or to use only"
+      actions={
+        !adding && (
           <SettingsButton onClick={() => setAdding(true)}>
             <Plus />
             Add rule
           </SettingsButton>
+        )
+      }
+    >
+      <div data-setting="Rules" data-slot="routing-rules" className="flex flex-col gap-2">
+        {(rules.length > 0 || adding) && (
+          <SettingsCard>
+            {rules.map((rule) => {
+              const sentence = ruleSentence(rule, groups, projects);
+              const noWork = isNoWorkRule(rule);
+              const what = noWork
+                ? `Don't give ${shortPlaceName(rule.target, groups)} work`
+                : [
+                    EFFECT_OPTIONS.find((option) => option.value === rule.effect)?.label,
+                    shortPlaceName(rule.target, groups),
+                    rule.categories.length > 0 || rule.areas.length > 0 ? "for" : null,
+                    joinWords(rule.areas.map((area) => AREA_LABELS[area]), "or"),
+                    joinWords(rule.categories.map((kind) => PLAIN_KIND_WORDS[kind]), "or"),
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+              const where = rule.projectId ? `In ${projects[rule.projectId]?.name ?? "a removed project"}` : "Everywhere";
+              const note = noWork
+                ? isNewModelRule(rule)
+                  ? "A new model: it gets no tasks until you remove this rule"
+                  : "You can still pick it for a chat or session"
+                : where;
+              const shadowed = shadowedBy(rule, rankings);
+              return (
+                <SettingsRow
+                  key={rule.id}
+                  setting={sentence}
+                  label={what}
+                  description={shadowed ? `${note}. ${shadowed}` : note}
+                >
+                  <DropdownMenu modal={false}>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon-xs"
+                        variant="ghost"
+                        aria-label={`${sentence}: actions`}
+                        className="text-muted-foreground shrink-0"
+                      >
+                        <DotsHorizontal />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        disabled={remove.busy}
+                        onSelect={() => remove.run(() => removeOverride(rule.id))}
+                      >
+                        Remove
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </SettingsRow>
+              );
+            })}
+            {adding && <NewRule category={category} scope={scope} groups={groups} onDone={() => setAdding(false)} />}
+          </SettingsCard>
+        )}
+        {rules.length === 0 && !adding && (
+          <p className="text-muted-foreground text-xs">No rules: only Brigadier's own limits apply.</p>
+        )}
+        {remove.error && (
+          <p role="alert" className="text-destructive text-xs">
+            {remove.error}
+          </p>
         )}
       </div>
-      {shown.length === 0 && !adding && (
-        <p className="text-muted-foreground text-xs">
-          No rules about {PLAIN_KIND_WORDS[category]}: only Brigadier's own limits apply.
-        </p>
-      )}
-      {shown.map((rule) => {
-        const sentence = ruleSentence(rule, groups, projects);
-        const noWork = isNoWorkRule(rule);
-        const Icon = EFFECT_ICONS[noWork ? "noWork" : rule.effect];
-        const where = rule.projectId ? `in ${projects[rule.projectId]?.name ?? "a removed project"}` : "everywhere";
-        const note = noWork
-          ? isNewModelRule(rule)
-            ? " — a new model: it gets no tasks until you remove this rule."
-            : " — you can still pick it for a chat or session."
-          : ".";
-        const shadowed = shadowedBy(rule, rankings);
-        return (
-          <div
-            key={rule.id}
-            data-setting={sentence}
-            data-slot="routing-rule"
-            className="bg-card border-divider rounded-settings flex items-center gap-2 border px-4 py-2.5 text-sm"
-          >
-            <Icon
-              aria-hidden
-              className={cn(
-                "size-icon-sm shrink-0",
-                rule.effect === "never" ? "text-destructive" : "text-muted-foreground",
-              )}
-            />
-            <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1">
-              <span className="sr-only">{sentence}</span>
-              <span aria-hidden className="contents">
-                {noWork ? "Don't give work to" : EFFECT_OPTIONS.find((option) => option.value === rule.effect)?.label}
-                <Word>{shortPlaceName(rule.target, groups)}</Word>
-                {!noWork && (rule.categories.length > 0 || rule.areas.length > 0) && (
-                  <>
-                    for
-                    <Word>
-                      {[
-                        joinWords(rule.areas.map((area) => AREA_LABELS[area]), "or"),
-                        joinWords(rule.categories.map((kind) => PLAIN_KIND_WORDS[kind]), "or"),
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
-                    </Word>
-                    ,
-                  </>
-                )}
-                <Word>{where}</Word>
-                <span className="text-muted-foreground text-xs">{note}</span>
-              </span>
-              {shadowed && <span className="text-muted-foreground basis-full text-xs">{shadowed}</span>}
-            </span>
-            <DropdownMenu modal={false}>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label={`${sentence}: actions`}
-                  className="text-muted-foreground shrink-0"
-                >
-                  <DotsHorizontal />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  disabled={remove.busy}
-                  onSelect={() => remove.run(() => removeOverride(rule.id))}
-                >
-                  Remove
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        );
-      })}
-      {remove.error && (
-        <p role="alert" className="text-destructive text-xs">
-          {remove.error}
-        </p>
-      )}
-      {adding && <NewRule category={category} scope={scope} groups={groups} onDone={() => setAdding(false)} />}
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -209,7 +170,7 @@ function NewRule({
   groups,
   onDone,
 }: {
-  category: TaskCategory;
+  category: TaskCategory | null;
   scope: string | null;
   groups: readonly ModelGroup[];
   onDone: () => void;
@@ -217,7 +178,7 @@ function NewRule({
   const scopes = useScopeOptions();
   const [effect, setEffect] = useState<Effect>("never");
   const [target, setTarget] = useState<OverrideTarget | null>(null);
-  const [kind, setKind] = useState<TaskCategory | "">(category);
+  const [kind, setKind] = useState<TaskCategory | "">(category ?? "");
   const [projectId, setProjectId] = useState<string>(scope ?? "");
   const add = useAction();
   const noWork = effect === "noWork";
@@ -242,7 +203,7 @@ function NewRule({
   return (
     <div
       data-slot="routing-rule-form"
-      className="border-divider rounded-settings flex flex-col gap-2.5 border border-dashed px-4 py-3"
+      className="flex flex-col gap-2.5 px-4 py-3"
     >
       <span className="text-muted-foreground flex items-center gap-1.5 text-2xs font-medium">
         <Sparkles aria-hidden className="size-icon-xs" />

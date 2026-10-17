@@ -1,12 +1,11 @@
-import { Clock, InfoCircle, Undo } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useState } from "react";
+import { ChevronDown, ChevronRight, Clock } from "@openai/apps-sdk-ui/components/Icon";
+import { type ReactNode, useEffect, useState } from "react";
 
-import { useAction } from "@/app/conversation/useAction";
 import { AREA_OVERRIDES_ROW, AreaOverrides } from "@/app/routing/AreaOverrides";
 import { ModelRatings, RATINGS_ROWS } from "@/app/routing/ModelRatings";
 import { useScopeOptions } from "@/app/routing/pickers";
 import { RankingNow, type RankingQuestion } from "@/app/routing/RankingNow";
-import { ruleCovers, RoutingRules } from "@/app/routing/RoutingRules";
+import { RoutingRules } from "@/app/routing/RoutingRules";
 import { TryOrder } from "@/app/routing/TryOrder";
 import {
   areaOverrides,
@@ -20,33 +19,31 @@ import {
 } from "@/app/routing/words";
 import {
   SettingsAdvanced,
-  SettingsButton,
   SettingsCard,
   SettingsPage,
   SettingsRow,
   SettingsSection,
   SettingsSelect,
 } from "@/app/settings/parts";
-import { useReveal } from "@/app/settings/reveal";
+import { revealSetting } from "@/app/settings/reveal";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
-import { Badge } from "@/components/ui/badge";
 import { useNow } from "@/hooks/use-now";
 import type { Area, Ranking, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
-import { isNoWorkRule, KIND_HINTS, PLAIN_KIND_NAMES, ruleSentence, WORKER_CATEGORIES } from "@/lib/routing";
+import { KIND_HINTS, PLAIN_KIND_NAMES } from "@/lib/routing";
 import { useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { useRankingsRefresh } from "@/state/rankings";
-import { changeRanking, useRoutePreview } from "@/state/routing";
+import { useRoutePreview } from "@/state/routing";
 import { useApp } from "@/state/store";
 import { setUsageProject, useUsage, useUsageRefresh } from "@/state/usage";
 
 /** The Routing page's rows, for Settings search; the page renders this copy. */
 export const ROUTING_PAGE_ROWS = {
   kinds: {
-    label: "Kinds of work",
-    description: "Which model takes each kind of work Brigadier hands out, and in what order",
+    label: "Who does what",
+    description: "Which model takes each kind of work Brigadier hands out: Automatic, or your order",
   },
   steps: {
     label: "How a model is picked",
@@ -59,7 +56,7 @@ export const ROUTING_PAGE_ROWS = {
   order: {
     label: "Order",
     description: "The models a kind of work tries, in order, their effort, and what happens when none can run",
-    target: "Kinds of work",
+    target: "Who does what",
   },
   ranking: {
     label: "Ranking right now",
@@ -99,20 +96,21 @@ const ADVANCED_LABELS = [
 ];
 
 /**
- * Settings › Routing: the kinds of work, each with the models it tries in order (or Automatic),
- * and how routing picks; the chosen kind's order, its ranking right now, its rules and its area
- * overrides; then every model's ratings.
+ * Settings › Routing: who does what, a row per kind of work saying what it runs on, which opens
+ * in place to Automatic or your order; the rules; then, under Advanced, how a model is picked,
+ * settings for a project, the ranking right now, area overrides and every model's ratings.
  */
 export function RoutingPage() {
   useUsageRefresh();
   const groups = useModelGroups();
   const projects = useApp((s) => s.projects);
-  const rules = useApp((s) => s.settings.routingOverrides);
   const rankings = useApp((s) => s.settings.routingRankings);
   const view = useUsage((s) => s.view);
   const ratings = useRankingsRefresh();
   const now = useNow(30_000);
   const scopes = useScopeOptions();
+  // The kind opened in Who does what; `kind` is the one the ranking and ratings are about.
+  const [open, setOpen] = useState<TaskCategory | null>(null);
   const [kind, setKind] = useState<TaskCategory>("scout");
   const [scope, setScope] = useState<string | null>(null);
   const [question, setQuestion] = useState<RankingQuestion>({ projectId: null, area: null, author: "claude" });
@@ -124,83 +122,68 @@ export function RoutingPage() {
     if (useUsage.getState().projectId !== question.projectId) setUsageProject(question.projectId);
   }, [question.projectId]);
 
-  // A rule Settings brings into view shows under the kind of work it is about.
-  const revealing = useReveal((s) => s.label);
-  const revealed = revealing ? rules.find((found) => ruleSentence(found, groups, projects) === revealing) : undefined;
-  if (revealed && !ruleCovers(revealed, kind)) {
-    const about = isNoWorkRule(revealed) ? WORKER_CATEGORIES[0] : revealed.categories[0];
-    if (about) setKind(about);
-  }
-
   const changeScope = (next: string | null) => {
     setScope(next);
     setQuestion((current) => ({ ...current, projectId: next }));
   };
-  const own = rowRanking(rankings, kind, scope);
-  const everywhere = scope === null ? null : rowRanking(rankings, kind, null);
+  const toggle = (category: TaskCategory) => {
+    setOpen(open === category ? null : category);
+    setKind(category);
+  };
+  // The ranking behind a row's pick: its kind, in the scope the rows show, touching no area.
+  const why = (category: TaskCategory) => {
+    setKind(category);
+    setQuestion((current) => ({ ...current, projectId: scope, area: null }));
+    revealSetting(ROUTING_PAGE_ROWS.ranking.label);
+  };
   const scopeName = scope ? (projects[scope]?.name ?? "this project") : null;
 
   return (
     <SettingsPage
       title="Routing"
-      description="Which model takes each kind of work, in what order, and what it's never given."
-      actions={
-        <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
-          <InfoCircle aria-hidden className="size-icon-sm" />
-          Changes apply to new work, not work already running
-        </span>
-      }
+      description="Which model takes each kind of work. Brigadier picks automatically; change only what you want to."
     >
-      <div className="-mt-3 flex flex-col gap-6">
-        {error && (
-          <p role="alert" className="text-destructive text-xs">
-            {error}
-          </p>
-        )}
-        <div
-          data-slot="routing-kinds"
-          className="bg-card/40 border-divider rounded-settings flex min-h-0 overflow-hidden border"
-        >
-          <aside className="border-divider flex w-72 shrink-0 flex-col gap-6 border-e p-5">
-            <section data-setting={ROUTING_PAGE_ROWS.kinds.label} className="flex flex-col gap-0.5">
-              <h2 className="text-muted-foreground px-2 pb-1 text-xs font-medium">{ROUTING_PAGE_ROWS.kinds.label}</h2>
-              <div role="listbox" aria-label={ROUTING_PAGE_ROWS.kinds.label} className="flex flex-col gap-0.5">
-                {ROUTED_KINDS.map((category) => (
-                  <KindItem
-                    key={category}
-                    category={category}
-                    selected={category === kind}
-                    route={routeOf(category, routes)}
-                    scope={scope}
-                    rankings={rankings}
-                    groups={groups}
-                    now={now}
-                    onSelect={() => setKind(category)}
-                  />
-                ))}
-              </div>
-            </section>
-          </aside>
-          <div className="flex min-w-0 flex-1 flex-col gap-7 p-6">
-            <KindHead category={kind} scope={scope} rankings={rankings} />
-            {scopeName && (
-              <p className="text-foreground/65 -mt-3 text-xs">
-                In {scopeName}: other projects follow All projects. Change which under Advanced.
-              </p>
-            )}
-            {kind === "gitText" && <GitWriterNote groups={groups} />}
-            <TryOrder
-              category={kind}
+      {error && (
+        <p role="alert" className="text-destructive text-xs">
+          {error}
+        </p>
+      )}
+      <SettingsSection
+        title={ROUTING_PAGE_ROWS.kinds.label}
+        description={
+          scopeName
+            ? `In ${scopeName}; other projects follow All projects. Changes apply to new work.`
+            : "Automatic picks the strongest model that can run now. Changes apply to new work."
+        }
+      >
+        <SettingsCard>
+          {ROUTED_KINDS.map((category) => (
+            <KindRow
+              key={category}
+              category={category}
+              open={category === open}
+              route={routeOf(category, routes)}
               scope={scope}
-              own={own}
-              everywhere={everywhere}
-              route={routeOf(kind, routes)}
+              rankings={rankings}
               groups={groups}
-            />
-            <RoutingRules category={kind} scope={scope} groups={groups} />
-          </div>
-        </div>
-      </div>
+              now={now}
+              onToggle={() => toggle(category)}
+            >
+              {category === "gitText" && <GitWriterNote groups={groups} />}
+              <TryOrder
+                category={category}
+                scope={scope}
+                own={rowRanking(rankings, category, scope)}
+                everywhere={scope === null ? null : rowRanking(rankings, category, null)}
+                route={routeOf(category, routes)}
+                groups={groups}
+                onWhy={() => why(category)}
+              />
+            </KindRow>
+          ))}
+        </SettingsCard>
+      </SettingsSection>
+      <RoutingRules category={open} scope={scope} groups={groups} />
       <SettingsAdvanced
         description="How a model is picked, settings for a project, the ranking right now, area overrides and every model's ratings"
         labels={ADVANCED_LABELS}
@@ -260,127 +243,80 @@ function routeOf(category: TaskCategory, list: RoutePreview[] | null): RoutePrev
   return list?.find((found) => found.category === category) ?? null;
 }
 
-/** One kind of work in the list: its name and what it runs on now. */
-function KindItem({
+/** One kind of work: its name and what it runs on now; opened, its order in place. */
+function KindRow({
   category,
-  selected,
+  open,
   route,
   scope,
   rankings,
   groups,
   now,
-  onSelect,
+  onToggle,
+  children,
 }: {
   category: TaskCategory;
-  selected: boolean;
+  open: boolean;
   route: RoutePreview | null;
   scope: string | null;
   rankings: readonly Ranking[];
   groups: readonly ModelGroup[];
   now: number;
-  onSelect: () => void;
+  onToggle: () => void;
+  children: ReactNode;
 }) {
   const gitWriter = useApp((s) => s.settings.gitWriter);
   const Icon = KIND_ICONS[category];
+  const Chevron = open ? ChevronDown : ChevronRight;
   const own = rowRanking(rankings, category, scope);
   // A project without a row of its own follows All projects'; one set to Automatic doesn't.
   const followsAll = scope !== null && own === null;
   const list = decides(own) ? own : followsAll ? rowRanking(rankings, category, null) : null;
   const overrides = areaOverrides(rankings, category, scope).length;
-  let line: React.ReactNode;
+  let line: ReactNode;
   if (category === "gitText" && gitWriter) {
-    line = `→ ${shortModelName(groups, gitWriter.provider, gitWriter.model ?? "")}, set in Git`;
+    line = `Set in Git · ${shortModelName(groups, gitWriter.provider, gitWriter.model ?? "")}`;
   } else if (route?.outcome.type === "wait") {
     line = (
-      <span className="text-warning flex items-center gap-1">
+      <span className="text-warning inline-flex items-center gap-1">
         <Clock aria-hidden className="size-icon-xs" />
         Waits{route.outcome.resetsAtMs !== null && ` · ${formatCountdown(route.outcome.resetsAtMs, now)}`}
       </span>
     );
   } else if (decides(list)) {
-    line = `→ ${orderSummary(list, groups)}`;
+    line = `${list === own ? "Your order" : "All projects' order"} · ${orderSummary(list, groups)}`;
   } else if (category === "chat") {
-    line = "→ the chat's model, then Automatic";
+    line = "The chat's own model, then Automatic";
   } else if (authorPicks(route, groups, { effort: false })) {
-    line = `→ Automatic · adversarial: ${authorPicks(route, groups, { effort: false })}`;
+    line = `Automatic · adversarial: ${authorPicks(route, groups, { effort: false })}`;
   } else if (route?.outcome.type === "chosen") {
-    line = `→ Automatic · ${shortModelName(groups, route.outcome.choice.provider, route.outcome.choice.model ?? "")} now`;
+    line = `Automatic · ${shortModelName(groups, route.outcome.choice.provider, route.outcome.choice.model ?? "")} now`;
   } else {
-    line = "→ Automatic";
+    line = "Automatic";
   }
   return (
-    <button
-      type="button"
-      role="option"
-      aria-selected={selected}
-      data-slot="routing-kind"
-      onClick={onSelect}
-      className={cn(
-        "rounded-nav flex gap-2.5 px-2 py-2 text-start",
-        selected ? "bg-foreground/8" : "hover:bg-foreground/4",
-      )}
-    >
-      <Icon aria-hidden className="text-foreground/65 size-icon-md mt-0.5 shrink-0" />
-      <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="flex items-center gap-2 text-sm">
-          {PLAIN_KIND_NAMES[category]}
-          {overrides > 0 && (
-            <Badge variant="secondary" className="font-normal">
-              {overrides} {overrides === 1 ? "override" : "overrides"}
-            </Badge>
-          )}
-        </span>
-        <span className="text-muted-foreground truncate text-xs">{line}</span>
-      </span>
-    </button>
-  );
-}
-
-/** The chosen kind's icon, name and what it is, with Reset to default. */
-function KindHead({
-  category,
-  scope,
-  rankings,
-}: {
-  category: TaskCategory;
-  scope: string | null;
-  rankings: readonly Ranking[];
-}) {
-  const action = useAction();
-  const Icon = KIND_ICONS[category];
-  // What Reset turns back to Automatic: the kind's order and its area overrides here.
-  const mine = rankings.filter(
-    (ranking) => ranking.category === category && ranking.projectId === scope && ranking.manual,
-  );
-  const reset = () =>
-    action.run(async () => {
-      for (const ranking of mine) await changeRanking(ranking.id, (current) => ({ ...current, manual: false }));
-    });
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex min-w-0 gap-3">
-          <span className="bg-foreground/8 rounded-nav flex size-9 shrink-0 items-center justify-center">
-            <Icon aria-hidden className="size-icon-md" />
+    <div data-slot="routing-kind" data-open={open || undefined} className={cn(open && "bg-foreground/3")}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="hover:bg-foreground/3 flex w-full items-center gap-3 px-4 py-3 text-start"
+      >
+        <Icon aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-label font-medium">{PLAIN_KIND_NAMES[category]}</span>
+          <span className="text-foreground/65 truncate text-xs">
+            {line}
+            {overrides > 0 && ` · ${overrides} area ${overrides === 1 ? "override" : "overrides"}`}
           </span>
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <h2 className="text-xl font-medium">{PLAIN_KIND_NAMES[category]}</h2>
-            <p className="text-foreground/65 text-xs">{KIND_HINTS[category]}</p>
-          </div>
+        </span>
+        <Chevron aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
+      </button>
+      {open && (
+        <div className="flex flex-col gap-3 px-4 pt-1 pb-4 ps-11">
+          <p className="text-muted-foreground text-xs">{KIND_HINTS[category]}</p>
+          {children}
         </div>
-        <SettingsButton
-          disabled={mine.length === 0 || action.busy}
-          title="Back to Automatic here; your orders are kept"
-          onClick={reset}
-        >
-          <Undo />
-          Reset to default
-        </SettingsButton>
-      </div>
-      {action.error && (
-        <p role="alert" className="text-destructive text-xs">
-          {action.error}
-        </p>
       )}
     </div>
   );
@@ -391,7 +327,7 @@ function GitWriterNote({ groups }: { groups: readonly ModelGroup[] }) {
   const gitWriter = useApp((s) => s.settings.gitWriter);
   if (!gitWriter) return null;
   return (
-    <p className="text-foreground/65 -mt-3 text-xs">
+    <p className="text-foreground/65 text-xs">
       Git settings write commit messages with{" "}
       {shortModelName(groups, gitWriter.provider, gitWriter.model ?? "")}; the order below applies when they're
       set to Automatic.{" "}

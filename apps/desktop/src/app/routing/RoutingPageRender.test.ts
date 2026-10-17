@@ -3,9 +3,10 @@ import { test } from "node:test";
 
 import { renderFixtureLive } from "@/fixtures/headless";
 
-// The real Routing page in Chromium over a faked daemon: the kinds of work with what each runs
-// on, a kind's order as a sentence, its ranking right now (asked about the change's author), its
-// rules and overrides, editing and resetting the order, and the models' ratings with a profile.
+// The real Routing page in Chromium over a faked daemon: who does what, a kind opened in place
+// with its order, the rules, and under Advanced the ranking right now (asked about the change's
+// author), the area overrides and the models' ratings with a profile; editing the order and
+// switching it to Automatic and back.
 test("Routing shows each kind's order, ranking, rules and the models' ratings, and edits the order", { timeout: 60000 }, async (t) => {
   const dump = await renderFixtureLive(t, "routing.html?drive=1", "routing-result", 30000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
@@ -20,23 +21,25 @@ test("Routing shows each kind's order, ranking, rules and the models' ratings, a
     "4. Use your order",
     "5. Otherwise, the best score",
   ]);
+  // Who does what: a row per kind of work saying what it runs on, none open; one opens in place
+  // to Automatic or My order, its models as rows, and what it runs on right now.
   assert.deepEqual(seen.kinds, [
-    "Explore the code→ Automatic · GPT-6 now",
-    "Research→ Automatic · Opus 5.5 now",
-    "Write code→ Opus 5.5, then GPT-6",
-    "Review changes→ Opus 5.5, then GPT-6",
-    "Resolve conflicts→ Automatic · Opus 5.5 now",
-    "Run checks→ Automatic · Opus 5.5 now",
-    "Use apps1 override→ GPT-6, then Opus 5.5",
-    "Take over a chat→ the chat's model, then Automatic",
-    "Coordinate work→ Automatic · Opus 5.5 now",
-    "Write commit messages→ Automatic · Opus 5.5 now",
+    "Explore the codeAutomatic · GPT-6 now",
+    "ResearchAutomatic · Opus 5.5 now",
+    "Write codeYour order · Opus 5.5, then GPT-6",
+    "Review changesYour order · Opus 5.5, then GPT-6",
+    "Resolve conflictsAutomatic · Opus 5.5 now",
+    "Run checksAutomatic · Opus 5.5 now",
+    "Use appsYour order · GPT-6, then Opus 5.5 · 1 area override",
+    "Take over a chatThe chat's own model, then Automatic",
+    "Coordinate workAutomatic · Opus 5.5 now",
+    "Write commit messagesAutomatic · Opus 5.5 now",
   ]);
-  assert.equal(seen.selected, "Explore the code→ Automatic · GPT-6 now");
+  assert.equal(seen.openAtStart, 0);
   assert.equal(seen.heading, "Review changes");
   assert.equal(
     seen.order,
-    "Review changes tries⠿1Opus 5.5· highthen⠿2GPT-6· highAdd modelIf neither can run,pick automatically.⠿ Drag to reorder× Remove a model⌄ Change model or effort",
+    "AutomaticMy order⠿1Opus 5.5high effort⠿2GPT-6high effortAdd modelIf neither can runpick automaticallyRight now: Claude's changes → GPT-6 · high, Codex's → Opus 5.5 · high. Why",
   );
   // Each part of the score in its column; the pick's reason under it; the four first of those
   // that can't take it, then how many more.
@@ -46,10 +49,16 @@ test("Routing shows each kind's order, ranking, rules and the models' ratings, a
   ]);
   assert.equal(seen.blocked, 4);
   assert.equal(seen.more, "1 more that can't take it");
+  // Every rule, page-wide, as a plain sentence with where it applies or what it leaves.
   assert.deepEqual(seen.rules, [
     "Don't give Claude Sonnet 5.5 work",
     "Don't give Codex GPT-6 Luna work",
     "Never use Claude Sonnet 5.5 for review",
+  ]);
+  assert.deepEqual(seen.ruleRows, [
+    "Don't give Sonnet 5.5 workYou can still pick it for a chat or session",
+    "Don't give GPT-6 Luna workA new model: it gets no tasks until you remove this rule",
+    "Never use Sonnet 5.5 for reviewing changesEverywhere",
   ]);
   // Every kind's area overrides are listed together under Advanced.
   assert.deepEqual(seen.overrides, [
@@ -61,17 +70,24 @@ test("Routing shows each kind's order, ranking, rules and the models' ratings, a
   assert.deepEqual(seen.authors, ["claude"]);
   assert.equal(seen.askedCodex, true);
   assert.equal(seen.reasonAfter, "Top eligible score.");
-  // × removes a model; the order may wait; Reset goes back to Automatic and keeps the order.
+  // × removes a model; the order may wait; Automatic keeps the order, My order brings it back.
   assert.deepEqual(seen.afterRemove, ["opus"]);
-  assert.equal(seen.orderAfterRemove, "Review changes tries⠿1Opus 5.5· highAdd model");
+  assert.equal(seen.orderAfterRemove, "⠿1Opus 5.5high effort");
   assert.equal(seen.waits, true);
   assert.deepEqual(seen.afterReset, { manual: false, kept: 1 });
   // Automatic reviews are adversarial: each vendor's change goes to the other, both picks shown.
   assert.equal(
     seen.automatic,
-    "Review changes picks automatically, adversarial: the other vendor from the author reviews — Claude's changes → GPT-6 · high, Codex's → Opus 5.5 · highAdd modelBring back your order: Opus 5.5",
+    "AutomaticMy orderPicks the strongest model that can run now.Add modelRight now: the other vendor from the author reviews — Claude's changes → GPT-6 · high, Codex's → Opus 5.5 · high. Why",
   );
-  assert.equal(seen.reviewRow, "Review changes→ Automatic · adversarial: Claude's changes → GPT-6, Codex's → Opus 5.5");
+  assert.equal(seen.reviewRow, "Review changesAutomatic · adversarial: Claude's changes → GPT-6, Codex's → Opus 5.5");
+  assert.deepEqual(seen.afterMyOrder, { manual: true, kept: 1 });
+  // A project without an order of its own follows All projects' (My order); Automatic gives it
+  // an Automatic of its own.
+  assert.equal(seen.projectMode, "My order");
+  assert.match(seen.projectOrder as string, /Follows All projects: Opus 5\.5\./);
+  assert.deepEqual(seen.projectAutomatic, { manual: false, entries: 0 });
+  assert.equal(seen.projectModeAfter, "Automatic");
   // Ratings: per provider, then those not in the registry; Fable left out; the best unfaded score
   // of each kind marked; a row opens its profile with what it learned.
   assert.deepEqual(seen.ratingGroups, ["Claude", "Codex", "Not in the registry"]);

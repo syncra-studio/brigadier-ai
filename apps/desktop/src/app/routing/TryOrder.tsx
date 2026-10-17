@@ -1,11 +1,11 @@
 import { Check, ChevronDown, Plus, X } from "@openai/apps-sdk-ui/components/Icon";
 
 import { useAction } from "@/app/conversation/useAction";
-import { ChipSelect, TargetItems } from "@/app/routing/pickers";
+import { TargetItems } from "@/app/routing/pickers";
 import { authorPicks, decides, orderSummary, shortModelName, shortPlaceName } from "@/app/routing/words";
+import { Segmented, SettingsSelect } from "@/app/settings/parts";
 import { effortLabel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
-import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -56,11 +56,10 @@ function effortLevels(target: OverrideTarget, groups: readonly ModelGroup[]): re
 }
 
 /**
- * A kind of work's order in a scope, as a sentence: "Review changes tries [1 Opus 5.5 · high],
- * then [2 GPT-6 · high] [+ Add model]. If neither can run, [pick automatically]." Each model is a
- * chip: dragged by its grip to reorder, × removes it, and its menu changes its effort or model.
- * Without an order of its own, the kind picks automatically (or follows All projects), and
- * adding a model starts one.
+ * A kind of work opened in place: Automatic or My order. Its order is a list of models: each
+ * dragged by its grip to reorder, × removes it, and its menu changes its effort or model; then
+ * Add model and what happens when none can run. A project without an order of its own follows
+ * All projects'. Under it, what it runs on right now, with Why for the whole ranking.
  */
 export function TryOrder({
   category,
@@ -69,6 +68,7 @@ export function TryOrder({
   everywhere,
   route,
   groups,
+  onWhy,
 }: {
   category: TaskCategory;
   scope: string | null;
@@ -78,6 +78,8 @@ export function TryOrder({
   everywhere: Ranking | null;
   route: RoutePreview | null;
   groups: readonly ModelGroup[];
+  /** Shows the ranking right now behind the pick. */
+  onWhy: () => void;
 }) {
   const action = useAction();
   const name = PLAIN_KIND_NAMES[category];
@@ -85,6 +87,16 @@ export function TryOrder({
   const follows = own === null && scope !== null && decides(everywhere) ? everywhere : null;
   const deciding = decides(own) ? own : null;
   const entries = deciding?.entries ?? [];
+  const created = (manual: boolean, start: RankedEntry[]): Ranking => ({
+    id: newRankingId(),
+    category,
+    areas: [],
+    projectId: scope,
+    manual,
+    entries: start,
+    only: follows?.only ?? false,
+    updatedAtMs: Date.now(),
+  });
 
   const save = (next: RankedEntry[], only?: boolean) =>
     action.run(() =>
@@ -92,22 +104,28 @@ export function TryOrder({
         own?.id ?? "",
         // Removing the last model leaves the kind on Automatic; the empty list is kept.
         (current) => ({ ...current, entries: next, manual: next.length > 0, only: only ?? current.only }),
-        () => ({
-          id: newRankingId(),
-          category,
-          areas: [],
-          projectId: scope,
-          manual: true,
-          entries: [],
-          only: follows?.only ?? false,
-          updatedAtMs: Date.now(),
-        }),
+        () => created(true, []),
       ),
     );
   const add = (target: OverrideTarget) =>
     save([...(deciding ? entries : (follows?.entries ?? [])), { target, effort: null }]);
-  const bringBack = () =>
-    own && action.run(() => changeRanking(own.id, (current) => ({ ...current, manual: true })));
+  // Automatic keeps the order to come back to; My order brings it back, else starts one with
+  // All projects' order or the model picked now.
+  const choose = (mode: "automatic" | "order") => {
+    if (mode === "automatic") {
+      return action.run(() =>
+        changeRanking(own?.id ?? "", (current) => ({ ...current, manual: false }), () => created(false, [])),
+      );
+    }
+    if (own && own.entries.length > 0) {
+      return action.run(() => changeRanking(own.id, (current) => ({ ...current, manual: true })));
+    }
+    const picked = route?.outcome.type === "chosen" ? route.outcome.choice : null;
+    const start: RankedEntry[] =
+      follows?.entries ??
+      (picked ? [{ target: { type: "model", provider: picked.provider, id: picked.model ?? "" }, effort: null }] : []);
+    return save(start);
+  };
 
   const { listRef, shown, dragging, grip } = useDragReorder<RankedEntry, HTMLOListElement>({
     items: entries,
@@ -125,10 +143,10 @@ export function TryOrder({
   const addButton = (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <Button type="button" size="sm" variant="outline" className="text-link rounded-nav h-8 font-normal">
-          <Plus />
+        <button type="button" className="text-link flex items-center gap-1.5 text-label hover:underline">
+          <Plus aria-hidden className="size-icon-sm" />
           Add model
-        </Button>
+        </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-96 w-xs overflow-y-auto">
         <TargetItems
@@ -141,86 +159,75 @@ export function TryOrder({
   );
 
   return (
-    <div
-      data-slot="try-order"
-      className="bg-card border-divider rounded-settings flex flex-col gap-3 border px-5 py-4 text-base"
-    >
+    <div data-slot="try-order" className="flex flex-col gap-3">
+      <Segmented
+        label={`How ${name} picks a model`}
+        // A project following All projects' order is on an order; Automatic gives it its own.
+        value={deciding || follows ? "order" : "automatic"}
+        options={[
+          { value: "automatic", label: "Automatic" },
+          { value: "order", label: "My order" },
+        ]}
+        disabled={action.busy}
+        onChange={choose}
+      />
       {deciding ? (
         <>
-          <ol ref={listRef} aria-label={`The order ${name} tries`} className="flex flex-col gap-2.5">
+          <ol ref={listRef} aria-label={`The order ${name} tries`} className="flex flex-col gap-1.5">
             {shown.map((entry, index) => {
               const key = placeKey(entry);
               return (
-                <li key={key} data-slot="ranked-place" className="flex flex-wrap items-center gap-2">
-                  <span>{index === 0 ? `${name} tries` : "then"}</span>
-                  <OrderChip
-                    entry={entry}
-                    position={index + 1}
-                    count={entries.length}
-                    taken={entries.map((other) => other.target)}
-                    route={route}
-                    groups={groups}
-                    dragging={dragging === key}
-                    grip={grip(key, index)}
-                    onEffort={(effort) =>
-                      save(entries.map((other) => (placeKey(other) === key ? { ...other, effort } : other)))
-                    }
-                    onModel={(target) =>
-                      save(entries.map((other) => (placeKey(other) === key ? { target, effort: null } : other)))
-                    }
-                    onRemove={() => save(entries.filter((other) => placeKey(other) !== key))}
-                  />
-                  {index === shown.length - 1 && addButton}
-                </li>
+                <OrderPlace
+                  key={key}
+                  entry={entry}
+                  position={index + 1}
+                  count={entries.length}
+                  taken={entries.map((other) => other.target)}
+                  route={route}
+                  groups={groups}
+                  dragging={dragging === key}
+                  grip={grip(key, index)}
+                  onEffort={(effort) =>
+                    save(entries.map((other) => (placeKey(other) === key ? { ...other, effort } : other)))
+                  }
+                  onModel={(target) =>
+                    save(entries.map((other) => (placeKey(other) === key ? { target, effort: null } : other)))
+                  }
+                  onRemove={() => save(entries.filter((other) => placeKey(other) !== key))}
+                />
               );
             })}
           </ol>
-          <p className="flex flex-wrap items-center gap-2">
-            If {noneCan(entries.length)} run,
-            <span className="inline-flex items-center gap-0.5">
-              <ChipSelect
-                large
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {addButton}
+            <span className="text-foreground/65 flex items-center gap-2 text-xs">
+              If {noneCan(entries.length)} run
+              <SettingsSelect
                 label={`When none of ${name}'s models can run`}
                 value={deciding.only ? "wait" : "automatic"}
                 options={WHEN_NONE}
                 onChange={(value) => save(entries, value === "wait")}
               />
-              .
             </span>
-          </p>
-          <p className="text-muted-foreground flex flex-wrap gap-x-5 gap-y-1 text-2xs">
-            <span>⠿ Drag to reorder</span>
-            <span>× Remove a model</span>
-            <span>⌄ Change model or effort</span>
-          </p>
+          </div>
         </>
       ) : (
-        <>
-          <p className="flex flex-wrap items-center gap-2">
-            {follows ? (
-              <>
-                {name} follows All projects: {orderSummary(follows, groups)}.
-              </>
-            ) : (
-              <>
-                {name} picks automatically
-                {/* A stand-in takes over when the chat's model hits its limit. */}
-                {category === "chat" && ", never the chat's own model"}
-                <NowPicked route={route} groups={groups} />
-              </>
-            )}
-            {addButton}
-          </p>
-          {own && own.entries.length > 0 && !own.manual && (
-            <p className="text-muted-foreground text-xs">
-              <button type="button" className="text-link hover:underline" onClick={bringBack}>
-                Bring back your order
-              </button>
-              : {orderSummary(own, groups)}
-            </p>
+        <div className="text-foreground/65 flex flex-wrap items-center justify-between gap-3 text-xs">
+          {follows ? (
+            <span>
+              Follows All projects: {orderSummary(follows, groups)}.
+            </span>
+          ) : (
+            <span>
+              Picks the strongest model that can run now
+              {/* A stand-in takes over when the chat's model hits its limit. */}
+              {category === "chat" && ", never the chat's own model"}.
+            </span>
           )}
-        </>
+          {addButton}
+        </div>
       )}
+      <NowPicked route={route} groups={groups} deciding={deciding !== null} onWhy={onWhy} />
       {action.error && (
         <p role="alert" className="text-destructive text-xs">
           {action.error}
@@ -231,32 +238,61 @@ export function TryOrder({
 }
 
 /**
- * " — now Opus 5.5 · high", or that the next task waits; for a review, each vendor's change
- * with the other vendor's pick.
+ * "Right now: Opus 5.5 · high, the first in your order that can run. Why", or that the next task
+ * waits; for a review, each vendor's change with the other vendor's pick.
  */
-function NowPicked({ route, groups }: { route: RoutePreview | null; groups: readonly ModelGroup[] }) {
+function NowPicked({
+  route,
+  groups,
+  deciding,
+  onWhy,
+}: {
+  route: RoutePreview | null;
+  groups: readonly ModelGroup[];
+  deciding: boolean;
+  onWhy: () => void;
+}) {
   if (!route) return null;
   const picks = authorPicks(route, groups);
+  const outcome = route.outcome;
+  let now: React.ReactNode;
   if (picks) {
-    return (
-      <span className="text-muted-foreground">
-        , adversarial: the other vendor from the author reviews — {picks}
-      </span>
+    // Automatic reviews go to the other vendor from the author; an order may not.
+    now = (
+      <>
+        <span className="text-foreground">Right now:</span>{" "}
+        {deciding ? picks : `the other vendor from the author reviews — ${picks}`}.
+      </>
+    );
+  } else if (outcome.type === "wait") {
+    now = <span className="text-warning">Right now: the next task waits.</span>;
+  } else {
+    now = (
+      <>
+        <span className="text-foreground">
+          Right now: {shortModelName(groups, outcome.choice.provider, outcome.choice.model ?? "")}
+          {outcome.choice.effort && ` · ${outcome.choice.effort}`}
+        </span>
+        {!deciding
+          ? "."
+          : route.places.some((place) => place.chosen)
+            ? ", the first in your order that can run."
+            : ", picked automatically: none in your order can run."}
+      </>
     );
   }
-  const outcome = route.outcome;
-  if (outcome.type === "wait") return <span className="text-warning"> — the next task waits</span>;
   return (
-    <span className="text-muted-foreground">
-      {" "}
-      — now {shortModelName(groups, outcome.choice.provider, outcome.choice.model ?? "")}
-      {outcome.choice.effort && ` · ${outcome.choice.effort}`}
-    </span>
+    <p data-slot="now-picked" className="text-foreground/65 border-divider border-t pt-3 text-xs">
+      {now}{" "}
+      <button type="button" className="text-link hover:underline" onClick={onWhy}>
+        Why
+      </button>
+    </p>
   );
 }
 
-/** One model of the order: grip and place, the model and its effort, its menu and ×. */
-function OrderChip({
+/** One model of the order as a row: grip and place, the model, its effort and menu, and ×. */
+function OrderPlace({
   entry,
   position,
   count,
@@ -292,9 +328,10 @@ function OrderChip({
   );
   const effort = entry.effort ?? candidate?.effort ?? null;
   return (
-    <span
+    <li
+      data-slot="ranked-place"
       className={cn(
-        "border-divider bg-foreground/5 rounded-nav inline-flex h-8 items-center border text-sm",
+        "border-divider bg-card rounded-nav flex h-9 items-center gap-2 border text-sm",
         dragging && "bg-foreground/10",
       )}
     >
@@ -303,26 +340,26 @@ function OrderChip({
         aria-label={`Move ${name} (${position} of ${count}); drag, or press up and down`}
         title="Drag to reorder, or focus and press ↑ ↓"
         disabled={count < 2}
-        className="text-muted-foreground hover:text-foreground flex h-full cursor-grab touch-none items-center gap-1.5 ps-2 pe-1 font-mono text-2xs active:cursor-grabbing disabled:cursor-default"
+        className="text-muted-foreground hover:text-foreground flex h-full cursor-grab touch-none items-center gap-2 ps-3 pe-1 font-mono text-xs active:cursor-grabbing disabled:cursor-default"
         {...grip}
       >
         <span aria-hidden>⠿</span>
         {position}
       </button>
+      <ProviderGlyph provider={target.provider} className="size-icon-sm shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{name}</span>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
             aria-label={`${name}: change its model or effort`}
-            className="hover:bg-foreground/5 flex h-full items-center gap-1.5 px-1.5"
+            className="text-muted-foreground hover:text-foreground flex h-full items-center gap-1 px-1.5 text-xs"
           >
-            <ProviderGlyph provider={target.provider} className="size-icon-sm" />
-            {name}
-            <span className="text-muted-foreground text-xs">· {effort ?? "auto"}</span>
-            <ChevronDown aria-hidden className="text-muted-foreground size-icon-xs" />
+            {effort ? `${effort} effort` : "auto effort"}
+            <ChevronDown aria-hidden className="size-icon-xs" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-2xs">
+        <DropdownMenuContent align="end" className="w-2xs">
           <DropdownMenuLabel>Effort</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={entry.effort ?? "auto"}
@@ -351,11 +388,11 @@ function OrderChip({
       <button
         type="button"
         aria-label={`Remove ${name}`}
-        className="text-muted-foreground hover:text-foreground flex h-full items-center pe-2 ps-0.5"
+        className="text-muted-foreground hover:text-foreground flex h-full items-center pe-3 ps-1"
         onClick={onRemove}
       >
         <X aria-hidden className="size-icon-xs" />
       </button>
-    </span>
+    </li>
   );
 }
