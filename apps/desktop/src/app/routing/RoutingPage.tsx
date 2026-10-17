@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useState } from "react";
 
 import { AREA_OVERRIDES_ROW, AreaOverrides } from "@/app/routing/AreaOverrides";
 import { ModelRatings, RATINGS_ROWS } from "@/app/routing/ModelRatings";
+import { ModelStrength } from "@/app/routing/ModelStrength";
 import { useScopeOptions } from "@/app/routing/pickers";
 import { RankingNow, type RankingQuestion } from "@/app/routing/RankingNow";
 import { RoutingRules } from "@/app/routing/RoutingRules";
@@ -68,6 +69,7 @@ export const ROUTING_PAGE_ROWS = {
   },
   overrides: AREA_OVERRIDES_ROW,
   ratings: RATINGS_ROWS.ratings,
+  scores: RATINGS_ROWS.scores,
   refresh: { ...RATINGS_ROWS.refresh, target: RATINGS_ROWS.ratings.label },
 } as const;
 
@@ -92,13 +94,14 @@ const ADVANCED_LABELS = [
   ROUTING_PAGE_ROWS.scope.label,
   ROUTING_PAGE_ROWS.ranking.label,
   ROUTING_PAGE_ROWS.overrides.label,
-  ROUTING_PAGE_ROWS.ratings.label,
+  ROUTING_PAGE_ROWS.scores.label,
 ];
 
 /**
  * Settings › Routing: who does what, a row per kind of work saying what it runs on, which opens
- * in place to Automatic or your order; the rules; then, under Advanced, how a model is picked,
- * settings for a project, the ranking right now, area overrides and every model's ratings.
+ * in place to Automatic or your order; the rules; the models ranked by strength for a kind of
+ * work; then, under Advanced, how a model is picked, settings for a project, the ranking right
+ * now, area overrides and every score.
  */
 export function RoutingPage() {
   useUsageRefresh();
@@ -184,8 +187,20 @@ export function RoutingPage() {
         </SettingsCard>
       </SettingsSection>
       <RoutingRules category={open} scope={scope} groups={groups} />
+      <ModelStrength
+        models={view?.models ?? null}
+        learned={view && view.projectId === question.projectId ? view.learned : []}
+        registry={view?.registry ?? null}
+        rankings={ratings}
+        category={kind}
+        onCategory={setKind}
+        route={routeOf(kind, routes)}
+        projectName={question.projectId ? (projects[question.projectId]?.name ?? null) : null}
+        candidates={routeOf(kind, ranked.routes)?.candidates ?? []}
+        now={now}
+      />
       <SettingsAdvanced
-        description="How a model is picked, settings for a project, the ranking right now, area overrides and every model's ratings"
+        description="How a model is picked, settings for a project, the ranking right now, area overrides and every score"
         labels={ADVANCED_LABELS}
       >
         <SettingsSection title={ROUTING_PAGE_ROWS.steps.label} description="Each step narrows what the next one sees">
@@ -225,11 +240,9 @@ export function RoutingPage() {
           models={view?.models ?? null}
           learned={view && view.projectId === question.projectId ? view.learned : []}
           registry={view?.registry ?? null}
-          rankings={ratings}
           category={kind}
           projectName={question.projectId ? (projects[question.projectId]?.name ?? null) : null}
           candidates={routeOf(kind, ranked.routes)?.candidates ?? []}
-          now={now}
         />
       </SettingsAdvanced>
     </SettingsPage>

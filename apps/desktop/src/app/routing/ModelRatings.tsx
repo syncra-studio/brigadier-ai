@@ -11,7 +11,7 @@ import {
   type RefreshStatus,
 } from "@/app/routing/rankings";
 import { effortRange, formatPart, KIND_HEADS, KIND_ICONS, loadFactor, quotaFactor, ROUTED_KINDS, spacing } from "@/app/routing/words";
-import { SettingsButton } from "@/app/settings/parts";
+import { SettingsButton, SettingsSection } from "@/app/settings/parts";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,7 @@ import type {
   RouteCandidate,
   TaskCategory,
 } from "@/ipc/generated";
-import { formatAgo, formatTokens } from "@/lib/format";
+import { formatTokens } from "@/lib/format";
 import {
   AREA_LABELS,
   AREAS,
@@ -51,12 +51,16 @@ import { modelAvailable } from "@/state/providers";
 import type { RankingsRefreshView } from "@/state/rankings";
 import { useApp } from "@/state/store";
 
-/** The ratings card's copy, for the page and Settings search. */
+/** The ratings' copy, for the page and Settings search. */
 export const RATINGS_ROWS = {
   ratings: {
-    label: "Model ratings",
+    label: "Model strength",
     description:
-      "Strength from 0 to 10 for each kind of work, weighing quality against cost. Faded scores sit below that kind's tier floor, so Automatic won't pick them.",
+      "How good each model you use is at a kind of work, out of 10, weighing quality against cost. Faded ones aren't strong enough for it, so Automatic won't pick them.",
+  },
+  scores: {
+    label: "Every score",
+    description: "Each model's strength for every kind of work, its tier, context and efforts, and where its rating comes from",
   },
   refresh: {
     label: "Refresh rankings",
@@ -94,18 +98,18 @@ const COLUMNS = {
 };
 
 /** The tier a model counts as for a kind of work (a model of some kinds only has its own per kind). */
-function tierFor(model: MergedModel, category: TaskCategory): QualityTier {
+export function tierFor(model: MergedModel, category: TaskCategory): QualityTier {
   return model.only?.[category] ?? model.tier;
 }
 
 /** A model's score for a kind of work, when it takes that kind. */
-function strengthFor(model: MergedModel, category: TaskCategory): number | null {
+export function strengthFor(model: MergedModel, category: TaskCategory): number | null {
   if (model.only && !(category in model.only)) return null;
   return model.strengths[category] ?? null;
 }
 
 /** Whether a score is shown faded: below the kind's floor, or a legacy model's. */
-function faded(model: MergedModel, category: TaskCategory): boolean {
+export function faded(model: MergedModel, category: TaskCategory): boolean {
   return model.legacy || tierBelow(tierFor(model, category), DEFAULT_FLOORS[category]);
 }
 
@@ -145,32 +149,27 @@ function bestScores(models: readonly MergedModel[]): Map<TaskCategory, number> {
 }
 
 /**
- * Model ratings: every model routing may give work to, with its strength for each kind of work,
+ * Every score: every model routing may give work to, with its strength for each kind of work,
  * its tier against each kind's floor, its context and efforts, and where its rating comes from;
- * a row opens its profile and what it learned in the project scored for. Refresh rankings
- * researches the models again.
+ * a row opens its profile and what it learned in the project scored for.
  */
 export function ModelRatings({
   models,
   learned,
   registry,
-  rankings,
   category,
   projectName,
   candidates,
-  now,
 }: {
   models: readonly MergedModel[] | null;
   learned: readonly Learned[];
   registry: RegistryInfo | null;
-  rankings: RankingsRefreshView;
   /** The kind of work the page shows: a profile's learned number is for it. */
   category: TaskCategory;
   /** The project the learned numbers are for; `null`: every project. */
   projectName: string | null;
   /** The ranking's candidates, for each model's quota and load now. */
   candidates: readonly RouteCandidate[];
-  now: number;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const availability = useApp((s) => s.settings);
@@ -201,122 +200,100 @@ export function ModelRatings({
     });
 
   return (
-    <section
-      data-setting={RATINGS_ROWS.ratings.label}
-      data-slot="model-ratings"
-      className="bg-card border-divider rounded-settings flex flex-col overflow-hidden border"
-    >
-      <div className="flex items-start justify-between gap-6 px-6 pt-5 pb-4">
-        <div className="flex max-w-lg min-w-0 flex-1 flex-col gap-1">
-          <h2 className="text-lg font-medium">{RATINGS_ROWS.ratings.label}</h2>
-          <p className="text-foreground/65 text-xs">{RATINGS_ROWS.ratings.description}</p>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-3 text-xs">
-          {registry && (
-            <span
-              className="border-divider text-muted-foreground rounded-xs border px-1.5 py-0.5 font-mono"
-              title={registry.source === "bundled" ? "Bundled with this version of Brigadier" : "Downloaded from GitHub"}
-            >
-              registry r{registry.revision} · {registry.updated}
-            </span>
-          )}
-          {registry?.checkedAtMs != null && (
-            <span className="text-muted-foreground flex items-center gap-1.5">
-              <span aria-hidden className={cn("size-1.5 rounded-full", registry.error ? "bg-warning" : "bg-success")} />
-              Checked GitHub {formatAgo(registry.checkedAtMs, now)}
-            </span>
-          )}
-          <RefreshButton rankings={rankings} />
-        </div>
-      </div>
-      <RefreshLines rankings={rankings} models={models} registry={registry} />
-      <div className="overflow-x-auto text-xs">
-        <div style={{ minWidth: spacing(280) }}>
-          <div className="text-muted-foreground border-divider grid items-center gap-1 border-y px-6 py-2" style={COLUMNS}>
-            <span>Model</span>
-            <span>Tier</span>
-            {ROUTED_KINDS.map((kind) => {
-              const Icon = KIND_ICONS[kind];
-              return (
-                <span key={kind} className="flex min-w-0 flex-col items-center gap-0.5 text-2xs">
-                  <Icon aria-hidden className="size-icon-xs" />
-                  {KIND_HEADS[kind]}
+    <SettingsSection title={RATINGS_ROWS.scores.label} description={RATINGS_ROWS.scores.description}>
+      <div
+        data-setting={RATINGS_ROWS.scores.label}
+        data-slot="model-ratings"
+        className="bg-card border-divider rounded-settings flex flex-col overflow-hidden border"
+      >
+        <div className="overflow-x-auto text-xs">
+          <div style={{ minWidth: spacing(280) }}>
+            <div className="text-muted-foreground border-divider grid items-center gap-1 border-b px-6 py-2" style={COLUMNS}>
+              <span>Model</span>
+              <span>Tier</span>
+              {ROUTED_KINDS.map((kind) => {
+                const Icon = KIND_ICONS[kind];
+                return (
+                  <span key={kind} className="flex min-w-0 flex-col items-center gap-0.5 text-2xs">
+                    <Icon aria-hidden className="size-icon-xs" />
+                    {KIND_HEADS[kind]}
+                  </span>
+                );
+              })}
+              <span className="text-end">Context</span>
+              <span className="text-end">Effort</span>
+              <span className="text-end">Rating</span>
+            </div>
+            <div className="text-muted-foreground border-divider grid items-center gap-1 border-b px-6 py-1.5 text-2xs" style={COLUMNS}>
+              <span>Tier floor</span>
+              <span />
+              {ROUTED_KINDS.map((kind) => (
+                <span
+                  key={kind}
+                  className={cn("text-center", DEFAULT_FLOORS[kind] === "frontier" && "text-foreground font-medium")}
+                >
+                  {FLOOR_WORDS[DEFAULT_FLOORS[kind]]}
                 </span>
+              ))}
+              <span />
+              <span />
+              <span />
+            </div>
+            {!models && <p className="text-muted-foreground px-6 py-3">Reading the models…</p>}
+            {PROVIDERS.map((provider) => {
+              const list = curated.filter((model) => model.provider === provider);
+              if (list.length === 0) return null;
+              return (
+                <Fragment key={provider}>
+                  <GroupHead>
+                    <ProviderGlyph provider={provider} className="size-icon-sm" />
+                    <span className="text-foreground/80 font-medium">{VENDOR_LABELS[provider]}</span>
+                    <span className="text-muted-foreground">
+                      {list.length} {list.length === 1 ? "model" : "models"}
+                    </span>
+                  </GroupHead>
+                  {rows(list)}
+                </Fragment>
               );
             })}
-            <span className="text-end">Context</span>
-            <span className="text-end">Effort</span>
-            <span className="text-end">Rating</span>
-          </div>
-          <div className="text-muted-foreground border-divider grid items-center gap-1 border-b px-6 py-1.5 text-2xs" style={COLUMNS}>
-            <span>Tier floor</span>
-            <span />
-            {ROUTED_KINDS.map((kind) => (
-              <span
-                key={kind}
-                className={cn("text-center", DEFAULT_FLOORS[kind] === "frontier" && "text-foreground font-medium")}
-              >
-                {FLOOR_WORDS[DEFAULT_FLOORS[kind]]}
-              </span>
-            ))}
-            <span />
-            <span />
-            <span />
-          </div>
-          {!models && <p className="text-muted-foreground px-6 py-3">Reading the models…</p>}
-          {PROVIDERS.map((provider) => {
-            const list = curated.filter((model) => model.provider === provider);
-            if (list.length === 0) return null;
-            return (
-              <Fragment key={provider}>
+            {others.length > 0 && (
+              <>
                 <GroupHead>
-                  <ProviderGlyph provider={provider} className="size-icon-sm" />
-                  <span className="text-foreground/80 font-medium">{VENDOR_LABELS[provider]}</span>
+                  <Flask aria-hidden className="text-muted-foreground size-icon-sm" />
+                  <span className="text-foreground/80 font-medium">Not in the registry</span>
                   <span className="text-muted-foreground">
-                    {list.length} {list.length === 1 ? "model" : "models"}
+                    {others.length} {others.length === 1 ? "model" : "models"} · listed by the agents' CLIs; an
+                    inherited one is rated from its family less {INHERITED_PENALTY} until it has outcomes
                   </span>
                 </GroupHead>
-                {rows(list)}
-              </Fragment>
-            );
-          })}
-          {others.length > 0 && (
-            <>
-              <GroupHead>
-                <Flask aria-hidden className="text-muted-foreground size-icon-sm" />
-                <span className="text-foreground/80 font-medium">Not in the registry</span>
-                <span className="text-muted-foreground">
-                  {others.length} {others.length === 1 ? "model" : "models"} · listed by the agents' CLIs; an
-                  inherited one is rated from its family less {INHERITED_PENALTY} until it has outcomes
+                {rows(others)}
+              </>
+            )}
+            <div className="text-muted-foreground border-divider flex flex-wrap items-center justify-between gap-3 border-t px-6 py-3 text-2xs">
+              <span className="flex flex-wrap items-center gap-5">
+                <span className="flex items-center gap-1.5">
+                  <span className="bg-success/15 text-success rounded-xs px-1 font-mono">9.0</span>
+                  Best for that kind
                 </span>
-              </GroupHead>
-              {rows(others)}
-            </>
-          )}
-          <div className="text-muted-foreground border-divider flex flex-wrap items-center justify-between gap-3 border-t px-6 py-3 text-2xs">
-            <span className="flex flex-wrap items-center gap-5">
-              <span className="flex items-center gap-1.5">
-                <span className="bg-success/15 text-success rounded-xs px-1 font-mono">9.0</span>
-                Best for that kind
+                <span className="flex items-center gap-1.5">
+                  <span className="text-foreground font-mono">8.2</span>
+                  Eligible
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-foreground/30 font-mono">7.4</span>
+                  Below the tier floor
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-warning">Legacy · −1</span>
+                  hidden from the picker
+                </span>
               </span>
-              <span className="flex items-center gap-1.5">
-                <span className="text-foreground font-mono">8.2</span>
-                Eligible
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="text-foreground/30 font-mono">7.4</span>
-                Below the tier floor
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="text-warning">Legacy · −1</span>
-                hidden from the picker
-              </span>
-            </span>
-            <span>Unknown models start at 5 and run only as trials</span>
+              <span>Unknown models start at 5 and run only as trials</span>
+            </div>
           </div>
         </div>
       </div>
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -448,7 +425,7 @@ function modalityWords(list: readonly string[]): string {
 }
 
 /** A model's profile: its facts, its strength per kind, its area adjustments and what it learned. */
-function Profile({
+export function Profile({
   model,
   learned,
   registry,
@@ -474,8 +451,12 @@ function Profile({
   const ratingFrom =
     model.status === "curated" && registry ? `Registry r${registry.revision} · ${registry.updated}` : ratingWords(model).text;
   return (
-    <div className="px-6 pb-4">
-      <div className="bg-background border-divider rounded-settings grid grid-cols-4 gap-8 border p-5">
+    // Four columns where there's room for them, else two.
+    <div className="@container px-6 pb-4">
+      <div
+        data-slot="model-profile"
+        className="bg-background border-divider rounded-settings grid grid-cols-2 gap-8 border p-5 @thread:grid-cols-4"
+      >
         <div className="flex min-w-0 flex-col gap-2">
           <Caps>Profile</Caps>
           <span className="flex items-center gap-2 text-base font-medium">
@@ -612,7 +593,7 @@ function Profile({
 }
 
 /** "Refresh rankings": starts a refresh, or shows that one is running. */
-function RefreshButton({ rankings }: { rankings: RankingsRefreshView }) {
+export function RefreshButton({ rankings }: { rankings: RankingsRefreshView }) {
   const { refresh, starting, start } = rankings;
   const running = refresh !== null && refreshRunning(refresh.state);
   return (
@@ -636,7 +617,7 @@ function researcherName(refresh: RankingsRefresh, models: readonly MergedModel[]
  * Under the header: what a refresh is doing or how the last one ended, the ratings in use with
  * the way back to the published ones, what the last refresh changed, and what went wrong.
  */
-function RefreshLines({
+export function RefreshLines({
   rankings,
   models,
   registry,
@@ -652,7 +633,7 @@ function RefreshLines({
   const failure = starting.error ?? error;
   const changed = refresh?.state === "done" ? changedModels(refresh.changes) : [];
   return (
-    <div className="flex flex-col gap-1 px-6 pb-3 text-xs empty:hidden">
+    <div className="flex flex-col gap-1 px-4 pb-3 text-xs empty:hidden">
       {failure && (
         <p role="alert" className="text-destructive">
           {failure}

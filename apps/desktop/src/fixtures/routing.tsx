@@ -79,6 +79,9 @@ const menuItem = (name: string) =>
 /** A kind of work's row in Who does what, by its name. */
 const kindButton = (name: string) =>
   all<HTMLButtonElement>('[data-slot="routing-kind"] > button').find((element) => text(element).startsWith(name));
+/** A Model strength row's model name, and every row's in order. */
+const strengthName = (row: Element) => text(row.querySelector(".font-medium"));
+const strengthNames = () => all('[data-slot="strength-row"] > button').map(strengthName);
 const openKind = () => document.querySelector('[data-slot="routing-kind"][data-open]');
 const review = () => useApp.getState().settings.routingRankings.find((ranking) => ranking.id === "rank-review");
 
@@ -103,7 +106,7 @@ function Fixture() {
       () => {
         // Advanced starts closed; search bringing one of its rows into view opens it.
         seen.advancedClosed = !document.querySelector('[data-slot="ranking-now"]');
-        revealSetting(ROUTING_PAGE_ROWS.ratings.label);
+        revealSetting(ROUTING_PAGE_ROWS.scores.label);
       },
       () => {
         seen.advancedRevealed = Boolean(document.querySelector('[data-slot="ranking-now"]'));
@@ -118,6 +121,8 @@ function Fixture() {
         seen.heading = text(openKind()?.querySelector("button .font-medium"));
         seen.order = text(openKind()?.querySelector('[data-slot="try-order"]'));
         seen.ranked = all('[data-slot="route-candidate"]').map(text);
+        seen.strengthFor = text(button("The kind of work the models are ranked for"));
+        seen.strength = all('[data-slot="strength-row"] > button').map(text);
         seen.blocked = all('[data-slot="blocked-candidate"]').length;
         seen.more = text(all('[data-slot="ranking-now"] button').find((element) => text(element).includes("more")));
         seen.rules = all('[data-slot="routing-rules"] [data-slot="settings-row"]').map((row) => row.dataset.setting);
@@ -168,7 +173,7 @@ function Fixture() {
         all<HTMLButtonElement>('[data-slot="rating-row"] > button').find((row) => text(row).startsWith("GPT-6"))?.click();
       },
       () => {
-        const profile = document.querySelector('[data-slot="rating-row"] .grid-cols-4');
+        const profile = document.querySelector('[data-slot="rating-row"] [data-slot="model-profile"]');
         seen.profile = all("h4", profile ?? document.body).map(text);
         seen.learned = text(profile?.querySelector(".text-2xl"));
         button("Add rule")?.click();
@@ -202,16 +207,23 @@ function Fixture() {
       },
       () => {
         seen.ratingRowsModelOff = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
+        seen.strengthModelOff = strengthNames();
         void setProviderOn("codex", false);
       },
       () => {
         seen.ratingRowsAgentOff = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
+        seen.strengthAgentOff = strengthNames();
         seen.bestAgentOff = all('[data-slot="rating-row"] .text-success').length;
         void setProviderOn("codex", true);
         void setModelAvailable({ provider: "claude", id: "claude-opus-4-6" }, true);
       },
       () => {
         seen.ratingRowsBack = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
+        seen.strengthBack = strengthNames();
+        all<HTMLButtonElement>('[data-slot="strength-row"] > button').find((row) => strengthName(row) === "GPT-6")?.click();
+      },
+      () => {
+        seen.strengthProfile = all("h4", document.querySelector('[data-slot="strength-row"] [data-slot="model-profile"]') ?? document.body).map(text);
         // My order brings back the order Automatic kept.
         button("My order", openKind() ?? document)?.click();
       },

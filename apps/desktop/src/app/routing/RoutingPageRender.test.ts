@@ -49,6 +49,19 @@ test("Routing shows each kind's order, ranking, rules and the models' ratings, a
   ]);
   assert.equal(seen.blocked, 4);
   assert.equal(seen.more, "1 more that can't take it");
+  // Model strength: the models ranked for the kind opened, faded below its floor, the picks marked
+  // (a review's for each vendor's change);
+  // a row opens the model's profile.
+  assert.equal(seen.strengthFor, "Review changes");
+  assert.deepEqual(seen.strength, [
+    "1Opus 5.5Frontier9.1Reviews Codex's changes",
+    "2GPT-6Frontier9.0Reviews Claude's changes",
+    "3Sonnet 5.5Strong8.0",
+    "4GPT-6 LunaStrong8.0",
+    "5GPT-5.5Strong7.9",
+    "6Opus 4.6Standard7.2",
+  ]);
+  assert.deepEqual(seen.strengthProfile, ["Profile", "Strength by kind", "Area adjustments", "In all projects"]);
   // Every rule, page-wide, as a plain sentence with where it applies or what it leaves.
   assert.deepEqual(seen.rules, [
     "Don't give Claude Sonnet 5.5 work",
@@ -106,5 +119,8 @@ test("Routing shows each kind's order, ranking, rules and the models' ratings, a
   assert.deepEqual(seen.ratingRowsModelOff, ["Opus 5.5", "Sonnet 5.5", "GPT-6", "GPT-5.5", "GPT-6 Luna"]);
   assert.deepEqual(seen.ratingRowsAgentOff, ["Opus 5.5", "Sonnet 5.5"]);
   assert.ok((seen.bestAgentOff as number) > 0);
+  assert.deepEqual(seen.strengthModelOff, ["Opus 5.5", "GPT-6", "Sonnet 5.5", "GPT-6 Luna", "GPT-5.5"]);
+  assert.deepEqual(seen.strengthAgentOff, ["Opus 5.5", "Sonnet 5.5"]);
+  assert.deepEqual(seen.strengthBack, ["Opus 5.5", "GPT-6", "Sonnet 5.5", "GPT-6 Luna", "GPT-5.5", "Opus 4.6"]);
   assert.deepEqual(seen.ratingRowsBack, ["Opus 5.5", "Sonnet 5.5", "Opus 4.6", "GPT-6", "GPT-5.5", "GPT-6 Luna"]);
 });
