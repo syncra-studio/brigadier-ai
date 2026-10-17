@@ -10,26 +10,32 @@ tripwire, not a gate) and Q68 (the proof needed before an auto-merge).
 
 ## Worth doing
 
-1. **Fix the cheap model for chores.** Brain jobs, model research and commit-message writing ask for the provider's
-   cheapest model. When that lookup fails, they fall back to the first model in the CLI's list, which is Opus.
+1. **Fix the small-model fallback for Brain jobs and model research** ([#258](https://github.com/syncra-studio/brigadier-ai/issues/258)).
+   Both ask `cheapest()` for the provider's small model. When no listed model matches, it falls back to the first
+   model in the CLI's list, which is Opus.
    - Overnight on 2026-10-16/17, five Brain enrichment jobs ran on Opus: 165 calls, 11.7M cache reads, 0.48M cache
      writes and 99k output.
-   - Effect: chores go back to a small model, with no quality risk (Brain nodes are unverified by design).
+   - Commit messages take another path (`writer_route()`) and aren't metered at all; metering them is part of
+     this item.
+   - Effect: these jobs go back to a small model, with no quality risk (Brain nodes are unverified by design).
    - Size: XS–S.
-2. **Run Q68's fresh verifier as review-grade work, not as a chore.** Today a `verify` task gets the light floor,
-   medium effort and the cheaper of two near-equal models.
-   - Effect: keeps the auto-merge proof strong. It costs a little more, and the tripwire line can say "verification".
-   - Size: XS.
-3. **Put cache and waste numbers in the tripwire report.** Brigadier already records each cache write's cause and
-   the prefix each call missed. The report should also show:
+2. **Keep Q68's fresh verifier free of the build's memory.** Its model and effort are already right: Frontier floor,
+   high effort. But it gets the builder's outline, its full report and the normal context pack.
+   - Change: give it only the original request, the standing constraints, the acceptance criteria and the
+     candidate commit.
+   - Effect: an independent attempt to break the change, which is what Q68 asks for. Tokens should be about the
+     same or lower, since the inherited context goes.
+   - Size: S.
+3. **Put cache and waste numbers in the tripwire report**, limited to what `turn_usage` can attribute:
    - the share of prompt tokens read from cache;
-   - writes by cause;
+   - each session's opening write and miss, by cause, with all other writes and misses shown as unattributed;
    - invalid tool calls;
-   - the model tier behind each chore.
+   - the model tier behind each Brain and model-research row.
    - Effect: a tripwire line explains itself, and a mistake like item 1 shows up in the next phase report.
    - Size: S.
-4. **Escalate a cheap chore once when its check fails.** A scout or research report whose evidence doesn't hold
-   up is rerun once, one tier up, with the reason logged. It never starts expensive by default.
+4. **Escalate a cheap scout or research task once when its acceptance check fails.** A failed acceptance check,
+   or an explicit verdict that the requested answer lacks support, reruns the task once, one tier up, with the
+   reason logged. It never starts expensive by default.
    - Effect: cheap routing stays safe. The saving is small, because the thread now does most work itself.
    - Size: M. Do it after 1–3.
 
@@ -108,7 +114,7 @@ Verdicts: **have** = already in Brigadier; **partly**; **missing**; **rejected**
 | 1 | Meter every call: per task, agent and owner, with cached tokens on their own line | T Art. I, W, R5 | `turn_usage` per task, step, account and request (`crates/core/src/routing/store.rs:36`, columns at `:79`–`:136`, `StepKind` `:152`) | have | 61 live rows with `write_1h`, `write_5m`, `missed`, `cause` |
 | 2 | Judge by cost per successful outcome, not token totals | W, T, R4, R5 | Q58: tokens per merged change, first-look merge rate | partly | Decided 10-17; no code yet (no "first look" measure in `crates/`) |
 | 3 | Budgets, fiscal ceilings, session or loop caps, `--max-turns`, degrade at 90% | T Art. IV, W | none | n/a (rule) | The user rejected caps and budgets of every kind (PLAN §7 Rules) |
-| 4 | Route each kind of work to the cheapest model that is good enough | T, W, R1, R2, R4, R5 | Per-category floors (`crates/router/src/decide.rs:164`); the cheaper of near-equal models for scout and verify (`:188`); cheapest first for git text (`:181`); chores on `cheapest()` (`crates/core/src/manager/git_actions.rs:587`) | have, with a bug | `cheapest()` falls back to the CLI's first model (`git_actions.rs:619`): Brain jobs on `opus` (table above). Proposal 1 |
+| 4 | Route each kind of work to the cheapest model that is good enough | T, W, R1, R2, R4, R5 | Per-category floors (`crates/router/src/decide.rs:164`); the cheaper of near-equal models for scout and verify (`:188`); cheapest first for git text (`:181`); Brain jobs and model research on `cheapest()` (`crates/core/src/manager/git_actions.rs:587`); the commit writer on `writer_route()` (`:411`) | have, with a bug | `cheapest()` falls back to the CLI's first model (`git_actions.rs:619`): Brain jobs on `opus` (table above). Issue #258, proposal 1 |
 | 5 | Cheap first, escalate when a quality check fails, log each escalation | T (cascade), R3 | Fallback only on limits and errors (`crates/core/src/manager/fallback.rs:74`); a failed model is excluded from the retry (`decide.rs:239`); outcome learning (`crates/core/src/manager/outcomes.rs:1`) | partly | No escalation on a failed check. Proposal 4 |
 | 6 | A frontier call needs a logged reason | T Art. II | Routing explains each pick (`decide.rs:1993` `score_why`) | have | |
 | 7 | Move most calls to open-weight models | R5 | Only through CLIs Brigadier supports; local models are Phase 7 (`docs/PLAN.md:322`) | n/a now | Subscription CLIs only, no proxy |
@@ -131,7 +137,7 @@ Verdicts: **have** = already in Brigadier; **partly**; **missing**; **rejected**
 | 24 | Subagents return conclusions, not raw dumps | R1, T | Report "about 800 tokens at most", longer parts as artifacts (`prompts.rs:1678`); envelope cap with `read_report` for the rest (`workers.rs:97`) | have | Subagent results: median 5.4k characters, about 179k tokens in 14 days |
 | 25 | Structured memory instead of re-explaining | T, R2 | Brain, `remember`, evidence re-read on each use (`crates/core/src/manager/evidence.rs:1`) | have | |
 | 26 | Clear task boundaries; brief has paths, the check and done-when | R2, T Claude Code page | `delegate_task` spec with `include_request` (`crates/core/src/tools.rs:148`, `:190`) | have | |
-| 27 | Small specialised roles | R2 | Thread, workers, Brain jobs on a read-only tool set (`crates/providers/src/claude/mod.rs:84`), commit-message writer | have | |
+| 27 | Small specialised roles | R2 | Thread, workers, Brain jobs on a read-only tool set (`crates/providers/src/claude/mod.rs:84`), commit-message writer (`git_actions.rs:411`) | have | The writer isn't metered (proposal 1) |
 | 28 | Improve the process from real failures | R2 | Q58 measures, GitHub issues, outcome learning | have | |
 | 29 | Skip unneeded calls: batching, no detours | R4, W | Quiet envelopes batched for 15 s (`crates/core/src/manager/conversation.rs:184`); review only after a passing check (`crates/core/src/manager/unreviewed.rs:95`); the thread does small work itself (`prompts.rs:121`–`122`) | have | Phase O: calls at or under plain |
 | 30 | Usage grows to fill what's saved | R4 | Q58 reports tokens per merged change | n/a (observation) | |
@@ -183,7 +189,9 @@ to let `delegate_task` accept `out-<id>` and report ids next to `attachments`. R
 
 ## The proposals in detail
 
-### 1. Fix the cheap model for chores
+### 1. Fix the small-model fallback for Brain jobs and model research
+
+Issue: [#258](https://github.com/syncra-studio/brigadier-ai/issues/258).
 
 - **What's wrong:** `cheapest()` (`crates/core/src/manager/git_actions.rs:587`) looks for the family word (`haiku`
   or `luna`) among the listed models that the registry doesn't reserve for one kind of work.
@@ -193,66 +201,96 @@ to let `delegate_task` accept `out-<id>` and report ids next to `attachments`. R
   - The recorded model of every Brain job from 23:46 on 10-16 is exactly `opus`.
   - Likely trigger: the `haiku` alias now merges to the Haiku 5.5 entry (`crates/router/src/merge.rs:236`–`250`, an
     alias that resolves to a newer model inherits the newer entry). The registry keeps that entry for operating apps
-    only (`only: operate`), so the family match is filtered out.
-  - The same function serves model research (`crates/core/src/manager/research.rs:212`) and Brain jobs
-    (`crates/core/src/manager/brain_jobs.rs:391`). Codex model research ran on a frontier-tier model the same night;
+    only (`only: operate`), so the family match is filtered out. This is not confirmed.
+  - Its callers are Brain jobs (`crates/core/src/manager/brain_jobs.rs:391`) and model research
+    (`crates/core/src/manager/research.rs:212`). Codex model research ran on a frontier-tier model the same night;
     that cause isn't pinned down.
+- **Commit messages are separate.** The commit writer uses `writer_route()` (`git_actions.rs:411`), not
+  `cheapest()`, so this fix doesn't touch it.
+  - `run_writer()` (`:488`) drops the session's usage events, and `StepKind` (`crates/core/src/routing/store.rs:152`)
+    has no kind for it. So commit writing is not in `turn_usage` at all.
+  - Change: meter it as its own step. If the user has chosen the writer model in settings, that is their choice
+    and is never flagged as a routing mistake.
 - **Change:**
   - Pick by the registry tier from the merged catalog: lowest tier first (light, then standard), never strong or
     frontier.
-  - When nothing light or standard is available, skip the chore and log why. Spare-quota chores can wait.
+  - When nothing light or standard is available, skip the job and log why. Spare-quota jobs can wait.
   - Tests: an alias that resolves into a reserved entry; a list whose first model is frontier.
 - **Measured under Q58:** quality is unchanged, because Brain nodes stay unverified and are re-checked on use
-  (`evidence.rs:1`). The tripwire report (proposal 3) shows the tier of every `brain`, `upkeep` and git-text row.
-- **Size:** XS–S, one function and two tests.
+  (`evidence.rs:1`). The tripwire report (proposal 3) shows the tier of every `brain` and `upkeep` row.
+- **Size:** XS–S: one function and two tests, plus the writer's metering.
 - **Risk:** if the CLI lists no light model at all, Brain enrichment pauses. That is acceptable; it runs on spare
   quota.
-- **Follow-up issue:** this is a real bug and should become a GitHub issue (see "Needs the user").
 
-### 2. Q68's fresh verifier at review grade
+### 2. Keep Q68's fresh verifier free of the build's memory
 
-- **What's wrong:** Q68 asks, for big or risky changes, for "a fresh verifier without the build's memory" that tries
-  to break the change. If it is started as a `verify` task, the router gives it:
-  - the light floor (`decide.rs:164`);
-  - medium effort (`decide.rs:203`);
-  - the cheaper of two near-equal models (`decide.rs:188`).
+- **Today:** `start_verifier` (`crates/core/src/manager/phases.rs:867`) starts the verifier as an `Implement` task
+  (`:898`), so it gets high effort.
+  - Its role keeps it at a vendor's best whatever floor was asked (`crates/core/src/manager/workers.rs:1145`).
+    Routing is already right.
+  - Its spec (`phases.rs:893`) holds the brief, the lead's outline and the lead's whole report.
+  - Like any worker, it also gets the context pack: what the thread already read and searched
+    (`crates/core/src/manager/context_pack.rs:1`).
+- **The gap:** Q68 asks for "a fresh verifier without the build's memory" that tries to break the change against the
+  original request. A verifier that reads the builder's outline and report checks the builder's own story.
+- **Change:** for the auto-merge proof, an adversarial verifier gets only:
+  - the original request, verbatim;
+  - the standing constraints;
+  - the acceptance criteria ("done when");
+  - the candidate commit.
 
-  That is a blind downgrade on the one step that decides an auto-merge.
-- **Change:** the auto-merge verifier runs with `quality: "high"` (Frontier floor, `crates/core/src/manager/tools.rs:250`)
-  at high effort. Prefer the other vendor where it can take the work, the same way the review does. Plain "run these
-  checks" verify tasks stay cheap.
-- **Measured under Q58:** first-look merge rate and escaped bugs. The tripwire line names "verification" when a
-  task's tokens rise because of it.
-- **Size:** XS, in the auto-merge build.
-- **Risk:** more tokens on big or risky changes only. That is accepted under Q58 ("verification ships").
+  It gets no builder outline or report and no context pack. The routing grade stays as it is. The present
+  verifier, which finishes the lead's work and triages the review, can stay for phases.
+- **Measured under Q58:** first-look merge rate and escaped bugs. Tokens should be about flat or lower, because the
+  inherited context is gone. If they rise, the tripwire line names "verification".
+- **Size:** S, in the auto-merge build: a spec variant and the pack turned off for that role, with a flow test
+  that the spec holds no report or outline.
+- **Risk:** without the builder's notes, the verifier may spend calls re-finding the change's shape. That is the
+  point of a fresh look, and the commit's diff gives it the shape.
 
 ### 3. Cache and waste lines in the tripwire report
 
-- **Today:** `turn_usage` has `write_1h`, `write_5m`, `missed`, `cause` and `cause_missed` (`store.rs:127`–`136`,
-  causes at `:278`). Nothing puts them in the phase report next to the tripwire.
+- **Today:** `turn_usage` has `write_1h`, `write_5m`, `missed`, `missed_calls`, `unestimated_calls`, `cause`,
+  `cause_write` and `cause_missed` (`store.rs:127`–`136`, the row's fields at `:258`–`269`, causes at `:278`). Two
+  limits:
+  - `cause` names how a session opened. `cause_write` and `cause_missed` cover only that session's first call
+    (`meter.rs:187`).
+  - Every later call adds to the row's `missed` with no cause of its own.
+
+  Nothing puts these numbers in the phase report next to the tripwire.
 - **Change:** the bench and phase report prints, per task:
   - the share of prompt tokens read from cache;
-  - writes by cause;
-  - the missed prefix by cause;
+  - the opening calls' writes and misses by `cause` (from `cause_write` and `cause_missed`);
+  - all other writes and misses as one **unattributed** line, plus `unestimated_calls`;
   - the number of `Invalid arguments for …` tool errors (`catalog.rs:870`; today nothing counts them);
-  - the model tier per step for `brain`, `upkeep` and git-text rows.
+  - the model tier per step for `brain` and `upkeep` rows, and for the commit writer once it is metered
+    (proposal 1).
 
-  A row that breaks a simple rule is flagged, for example a chore above standard tier, or a "no idle gap, cause
-  unknown" miss over 50k.
+  A Brain or research row above standard tier is flagged. A commit-writer row on a model the user chose is not.
+- **Optional follow-up:** classify later misses by idle gap, as this doc's probe did from transcripts. That needs
+  per-call timing and cause in `turn_usage`. Build it only if the unattributed line turns out large on real tasks.
 - **Measured under Q58:** this is the evidence for the tripwire's "what bought it" line. It never blocks.
 - **Size:** S. A report script over `turn_usage`, plus a counter for bad tool arguments.
 - **Risk:** none to quality.
 
-### 4. Escalate a cheap chore once on a failed check
+### 4. Escalate a cheap scout or research task once when its acceptance check fails
 
 - **Today:**
   - scouts and research already start on cheaper models (`decide.rs:164`, `:188`);
   - a failed model is only excluded after an error or a limit (`fallback.rs:74`);
   - outcome learning lowers its score later (`outcomes.rs:1`).
-- **Change:** when a `scout` or `research` report's `learned` lines carry evidence that no longer re-reads
-  (`evidence.rs` gives the verdict), or the report has no evidence at all for a factual claim, Brigadier reruns the
-  task once, one tier up. It records the escalation (cheap model, reason, new model) in the routing explanation and
-  in `outcomes`. It escalates once, never downward, and implement, review and merge are untouched.
+- **What triggers it:** the task's own acceptance checks fail, or the thread (or a checker) explicitly judges that
+  the report doesn't support the answer it was asked for.
+  - It is not the evidence reader's verdict. `evidence.rs` only checks that quoted words are still there, and
+    leaves to the model whether they support the claim (`evidence.rs:8`–`12`).
+  - Q38 allows a claim with no evidence to stay unverified, so optional `learned` lines must not trigger a rerun.
+- **Change:**
+  - A citation that is merely broken is fixed in the same worker's turn, by asking it to repair the citation; there
+    is no rerun.
+  - On a real failure, Brigadier reruns the task once, one tier up. It records the escalation (cheap model, reason,
+    new model) in the routing explanation and in `outcomes`.
+  - It escalates once, never downward. Implement, review and merge are untouched. Q38's unverified-memory handling
+    stays as it is.
 - **Measured under Q58:** the scout bench with known answers (the 2026-10-01 A/B scored 13 facts per answer) and
   V3. It must show no fewer facts than today. Escalations per 100 chores go in the report.
 - **Size:** M.
@@ -265,7 +303,7 @@ to let `delegate_task` accept `out-<id>` and report ids next to `attachments`. R
   rewrites after more than an hour idle are 9.4% of all cache writes, about 1.8% of weighted usage. That is in the
   user's own sessions; Brigadier threads already rebirth when cold. No proposal here, because the measured share
   is too small to bring the question back.
-- **May chores use Haiku 5.5?** The registry keeps it for operating apps only. Proposal 1 doesn't need it.
+- **May Brain jobs use Haiku 5.5?** The registry keeps it for operating apps only. Proposal 1 doesn't need it.
   Recommendation: leave the registry as it is.
 
 Nothing in proposals 1–4 changes a settled decision. Proposal 2 applies Q68 as written.
@@ -273,18 +311,27 @@ Nothing in proposals 1–4 changes a settled decision. Proposal 2 applies Q68 as
 ## Paste-ready for the Workspaces/auto-merge Delegator prompt
 
 > Fold in these items from `docs/research/token-sources-2026-10-17.md`:
-> 1. Fix `cheapest()` (`crates/core/src/manager/git_actions.rs:587`). Chores pick the lowest registry tier
->    available (light, then standard), never strong or frontier, and skip with a log line otherwise. Brain jobs ran
->    on Opus overnight on 10-16/17 because the fallback took the CLI's first model. Add tests for an alias that
->    resolves into a reserved entry and for a list that starts with a frontier model.
-> 2. Q68's fresh verifier runs with `quality: "high"` at high effort, on the other vendor where it can, never on
->    the `verify` category's light floor or the cheaper of two near-equal models. Plain check-running verify tasks
->    stay cheap.
-> 3. The phase and bench report prints, per task: cache-read share, writes and missed prefix by cause (from
->    `turn_usage`), a count of bad tool arguments, and the tier behind each brain, upkeep and git-text row. It flags
->    a chore above standard tier. The tripwire line cites these numbers; nothing blocks.
-> 4. After 1–3, if time allows: escalate a scout or research task once, one tier up, when its evidence fails to
->    re-read, and log why. Prove it with the known-answer scout bench and V3.
+> 1. Fix issue #258: `cheapest()` (`crates/core/src/manager/git_actions.rs:587`), used by Brain jobs and model
+>    research, picks the lowest registry tier available (light, then standard), never strong or frontier, and
+>    skips with a log line otherwise. Add tests for an alias that resolves into a reserved entry and for a list that
+>    starts with a frontier model.
+>    - Also meter the commit writer (`writer_route()`/`run_writer()`) as its own `turn_usage` step. Never flag a
+>      writer model the user chose.
+> 2. Q68's adversarial fresh verifier gets only the original request, the standing constraints, the acceptance
+>    criteria and the candidate commit. It gets no builder outline or report and no context pack. Keep its routing
+>    as it is (Frontier floor, high effort). Add a flow test that its spec holds none of the builder's text.
+> 3. The phase and bench report prints, per task:
+>    - the cache-read share;
+>    - the opening calls' writes and misses by `cause` (`cause_write`/`cause_missed`), with the rest as one
+>      unattributed line;
+>    - a count of bad tool arguments;
+>    - the tier behind each brain and upkeep row (and the commit writer once metered).
+>
+>    It flags a Brain or research row above standard tier. The tripwire line cites these numbers; nothing blocks.
+> 4. After 1–3, if time allows: escalate a scout or research task once, one tier up, when its acceptance checks
+>    fail or the thread judges that the answer lacks support. Never escalate on the evidence reader's provenance
+>    verdict. Fix broken citations in the same worker turn, keep Q38's unverified-memory handling, and log why.
+>    Prove it with the known-answer scout bench and V3.
 >
 > Don't build: `$var` arguments, schema flattening, per-call model switches, caps, compression or summarising.
 > The research has the numbers.
