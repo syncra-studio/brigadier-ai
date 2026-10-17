@@ -30,6 +30,17 @@ export function outcomeWords(tasks: readonly Task[]): string {
     .join(" · ");
 }
 
+/**
+ * A message the worker was sent ("Message from the orchestrator:\n…"), as the sender wrote it:
+ * the notes Brigadier put before it are left out. `null` for any other input to its CLI.
+ */
+export function receivedMessage(text: string, sent: readonly string[]): string | null {
+  const header = /^Message from [^\n]*:\n/.exec(text);
+  if (!header) return null;
+  const body = text.slice(header[0].length);
+  return sent.findLast((message) => message.trim() !== "" && body.endsWith(message)) ?? body.trim();
+}
+
 export function workerWorking(task: Task): boolean {
   return ["starting", "running", "landing"].includes(task.state);
 }
