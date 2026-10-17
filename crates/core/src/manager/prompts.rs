@@ -118,7 +118,7 @@ Your workspace: {workspace}
 You are this session's one long-lived thread: you read, search, run commands and edit in your workspace as a plain coding session does, and run workers when work needs them (delegate_task says how to brief them).
 
 How to work:
-- Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. A long job across back end and UI goes to one worker per layer, split along a data contract (the field names) written into both briefs. {workers}{computer}
+- Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. {workers}{computer}
 - Answer code questions yourself from the Brain, code_search, code_refs and a few precise reads, quoting the file:line each point rests on (src/cart.ts:42); explain an error from the code that raises it. Never start a worker for what reading answers.
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) with run_check, not your shell, before your final answer. {CHECK_PREFIXES} Never background a command yourself (`&`, nohup): one still going after a minute goes to the background by itself. Run dev servers and apps with start_preview.
@@ -129,7 +129,7 @@ How to work:
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
 - Ask query_brain before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. ask_user answers and outline go-aheads are kept for you. Never reopen a settled decision.
 - Ask the user only what only they can decide, only with ask_user (never a question in your text), then reply {quiet}. Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last run_check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
-- Push, publish, deploy or open pull requests only when the user asks for exactly that, at every permission level; after your own `git push`, call ci_status. When a request's own rules clash with this session's setup ("push to main" from a session branch), say so in one line at the start, and which one you follow; ask when it's unclear. When the user wants bugs filed as issues, file each before fixing it, and let its fix close it ("Fixes #N"). Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
+- Push, publish, deploy or open pull requests only when the user asks for exactly that, at every permission level; after your own `git push`, call ci_status. When a request's rules clash with this session's setup ("push to main" from a session branch), say so in one line first, and which you follow; ask when unclear. Bugs the user wants filed as issues: file each before its fix, which closes it ("Fixes #N"). Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
 - Write to another session's thread only with message_session.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
 - Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a file over with its task card's Save, the Save… under your answer, or an ask_user card asking where it goes; a document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
@@ -3331,9 +3331,8 @@ mod environment_tests {
             ProviderKind::Claude,
             true,
         );
-        assert!(prompt.contains("When a request's own rules clash with this session's setup (\"push to main\" from a session branch), say so in one line at the start, and which one you follow; ask when it's unclear."));
-        assert!(prompt.contains("A long job across back end and UI goes to one worker per layer, split along a data contract (the field names) written into both briefs."));
-        assert!(prompt.contains("When the user wants bugs filed as issues, file each before fixing it, and let its fix close it (\"Fixes #N\")."));
+        assert!(prompt.contains("When a request's rules clash with this session's setup (\"push to main\" from a session branch), say so in one line first, and which you follow; ask when unclear."));
+        assert!(prompt.contains("Bugs the user wants filed as issues: file each before its fix, which closes it (\"Fixes #N\")."));
         let worktree = environment_text(&Environment::NewWorktree {
             base: "main".into(),
             branch: "brigadier/flow".into(),
@@ -3343,6 +3342,7 @@ mod environment_tests {
         assert!(worktree.contains("\"merge it\" is for this merge only: offer anything else, such as updating the user's local `main`, in plain words."));
         let note = revision_note(PLANNING_GAPS_REVISION - 1, false).unwrap();
         assert!(note.contains("say so in one line at the start"));
+        assert!(note.contains("split along a data contract"));
     }
 
     /// #228: a look or demo navigates one browser window and tab, never a window per page,
@@ -3446,7 +3446,10 @@ mod environment_tests {
         let note = revision_note(HANDOVER_REVISION - 1, false).unwrap();
         assert!(note.contains("never link a throwaway file for the user"));
         assert!(note.contains("ask_user where it goes unless they said"));
-        assert!(revision_note(HANDOVER_REVISION - 1, true).is_none());
+        let handover = REVISIONS
+            .iter()
+            .find(|revision| revision.number == HANDOVER_REVISION);
+        assert!(handover.unwrap().worker.is_empty());
     }
 
     /// The voice is fixed (BUILD-PLAN §1.4): a thread whose instructions had Short replies off

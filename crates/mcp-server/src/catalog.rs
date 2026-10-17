@@ -30,7 +30,9 @@ report or the user's next message arrives.
 When: parts that can run at once, very long jobs, work needing tools you lack (a look at a \
 running app), or the user's ask. Independent parts (separate questions, writers on separate \
 files) start in one batch, several calls in one message, each one job with its own \"done \
-when\"; dependent parts run one after another (plan_phases). Meanwhile do your own part.
+when\"; dependent parts run one after another (plan_phases). A long job across back end and \
+UI goes to one worker per layer, split along a data contract (the field names) in both briefs. \
+Meanwhile do your own part.
 
 The brief (`spec`) is self-contained: the worker sees nothing of this conversation. Give the \
 constraints and settled decisions, what \"done\" means and how to check each part by its own \
@@ -1036,6 +1038,8 @@ mod tests {
                 "operate"
             ])
         );
+        // #229: a job across back end and UI splits along a written data contract.
+        assert!(DELEGATE_TASK.contains("A long job across back end and UI goes to one worker per layer, split along a data contract (the field names) in both briefs."));
         let bytes =
             serde_json::to_string(&Value::Object(schema)).unwrap().len() + DELEGATE_TASK.len();
         assert!(bytes < 6_000, "delegate_task is {bytes} bytes");
