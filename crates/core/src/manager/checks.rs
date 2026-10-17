@@ -2013,7 +2013,7 @@ fn script_gone(command: &str, dir: &Path) -> bool {
     const INTERPRETERS: &[&str] = &[
         "bash", "sh", "zsh", "node", "python", "python3", "ruby", "perl", "tsx", "ts-node", "bun",
     ];
-    if command.contains(['\'', '"', '`', '(', ')', '$', '~', '*', '\\']) {
+    if command.contains(['\'', '"', '`', '(', ')', '$', '~', '*', '?', '[', '{', '\\']) {
         return false;
     }
     let mut at = dir.to_path_buf();
@@ -2032,14 +2032,8 @@ fn script_gone(command: &str, dir: &Path) -> bool {
         let script = if first.starts_with("./") || first.starts_with('/') {
             Some(*first)
         } else if INTERPRETERS.contains(first) {
-            // The first word that isn't an option, unless an option runs code or a module.
-            match rest
-                .iter()
-                .find(|word| !word.starts_with('-') || matches!(**word, "-m" | "-c" | "-e"))
-            {
-                Some(word) if word.starts_with('-') => None,
-                found => found.copied(),
-            }
+            // An option may take the next word (`--require x`): only a bare `bash x.sh` is read.
+            rest.first().filter(|word| !word.starts_with('-')).copied()
         } else {
             None
         };
@@ -3144,6 +3138,9 @@ mod tests {
             "pnpm vitest run src/a.test.ts",
             "bash -o pipefail scripts/check.sh",
             "bun test",
+            "node --require assert/strict --test tests/a.test.cjs",
+            "node --test tests/[ab].test.cjs",
+            "node --test tests/?.test.cjs",
         ] {
             assert!(!script_gone(kept, &dir), "{kept}");
         }
@@ -3153,7 +3150,6 @@ mod tests {
             "./check-once",
             "python3 /Users/me/Library/brigadier/scratch/t1/probe.py",
             "cd web && node gone.mjs",
-            "node --test gone.test.mjs",
         ] {
             assert!(script_gone(gone, &dir), "{gone}");
         }
