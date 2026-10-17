@@ -174,12 +174,14 @@ impl ShellCaptures {
 }
 
 /// A command's words as the shell reads them: a quoted span or an escaped space stays in its
-/// word (`mv 'old name.txt' new.txt`), and the shell's operators end one. None when the shell
-/// makes names of its own from it (a glob, a variable, a brace list, a command's output, or
-/// `xargs`): which files the command touched can't be told then.
-fn shell_words(command: &str) -> Option<Vec<String>> {
+/// word (`mv 'old name.txt' new.txt`), and the shell's operators end one; and whether it has a
+/// subshell (`(cd sub)`), whose folder changes end with it. None when the shell makes names of
+/// its own from it (a glob, a variable, a brace list, a command's output, or `xargs`): which
+/// files the command touched can't be told then.
+fn shell_words(command: &str) -> Option<(Vec<String>, bool)> {
     let mut words = Vec::new();
     let mut word = String::new();
+    let mut subshell = false;
     let mut chars = command.chars();
     while let Some(c) = chars.next() {
         match c {
@@ -189,7 +191,15 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
                     match c {
                         '"' => break,
                         '$' | '`' => return None,
-                        '\\' => word.extend(chars.next()),
+                        // In double quotes a backslash escapes only these; else it stays.
+                        '\\' => match chars.next() {
+                            Some(c @ ('"' | '\\' | '\n')) => word.push(c),
+                            Some(c) => {
+                                word.push('\\');
+                                word.push(c);
+                            }
+                            None => word.push('\\'),
+                        },
                         c => word.push(c),
                     }
                 }
@@ -203,27 +213,31 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
                 }
             }
             // An operator ends a word, and shows as an empty one (`cd;` goes nowhere named).
-            c if ";|&<>()".contains(c) => words.push(std::mem::take(&mut word)),
+            c if ";|&<>()".contains(c) => {
+                subshell |= c == '(' || c == ')';
+                words.push(std::mem::take(&mut word));
+            }
             c => word.push(c),
         }
     }
     words.push(word);
-    (!words.iter().any(|word| word == "xargs" || word == "popd")).then_some(words)
+    (!words.iter().any(|word| word == "xargs" || word == "popd")).then_some((words, subshell))
 }
 
 /// The checkout's files a command names, relative to its root `root`: each word of the command
 /// (as the shell reads it, and split at spaces, quotes and the shell's operators too, for the
 /// names a script inside it writes), read from `cwd` or a folder the command goes to
 /// (`cd <dir> && …`), that is a file in the checkout, or a new file's name in one of its
-/// folders (`echo x > new.md`). Folders, `.git` and places outside the checkout (a symlinked
-/// folder that leads out) are left out. None of a command the shell makes names for
-/// (`mv u*.txt all.txt`), or that names a file outside the checkout (`mv /tmp/x.txt x.txt`),
-/// which Undo couldn't put back: what it changed stays the user's to keep.
+/// folders (`echo x > new.md`). Folders are left out. None when a word names a file there
+/// that can't be read for the command, which Undo then couldn't put back (one outside the
+/// checkout or under `.git`, one named like an option), when the shell makes names for it
+/// (`mv u*.txt all.txt`), when where it goes can't be told, or when it names too many: what
+/// it changed then stays the user's to keep.
 pub(super) fn named_files(command: &str, cwd: &Path, root: &Path) -> Vec<String> {
     let Ok(root) = root.canonicalize() else {
         return Vec::new();
     };
-    let Some(words) = shell_words(command) else {
+    let Some((words, subshell)) = shell_words(command) else {
         return Vec::new();
     };
     // Each folder the command goes to, which must be one: else where its names lead is unknown.
@@ -231,7 +245,7 @@ pub(super) fn named_files(command: &str, cwd: &Path, root: &Path) -> Vec<String>
     for (at, word) in words.iter().enumerate() {
         if matches!(word.as_str(), "cd" | "pushd") {
             let dir = match words.get(at + 1) {
-                Some(to) if !to.is_empty() => dirs.last().unwrap().join(to),
+                Some(to) if !to.is_empty() && !subshell => dirs.last().unwrap().join(to),
                 _ => return Vec::new(),
             };
             if !dir.is_dir() {
@@ -243,29 +257,32 @@ pub(super) fn named_files(command: &str, cwd: &Path, root: &Path) -> Vec<String>
     let split = command
         .split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}[]=,$".contains(c))
         .map(str::to_owned);
-    let words: Vec<String> = words.into_iter().chain(split).collect();
-    let outside = |word: &String| {
-        dirs.iter().any(|dir| {
-            dir.join(word)
-                .canonicalize()
-                .is_ok_and(|path| path.is_file() && !path.starts_with(&root))
-        })
-    };
-    if words.iter().any(|word| !word.is_empty() && outside(word)) {
-        return Vec::new();
-    }
     let mut found = BTreeSet::new();
-    for word in words {
-        let word = word.as_str();
-        if word.is_empty() || word.starts_with('-') || word.contains("://") || word.len() > 1024 {
+    for word in words.into_iter().chain(split) {
+        if word.is_empty() || word.contains("://") {
             continue;
         }
         for dir in &dirs {
-            if let Some(relative) = checkout_file(word, dir, &root) {
-                found.insert(relative);
+            let path = dir.join(&word);
+            let there = std::fs::symlink_metadata(&path);
+            if there.as_ref().is_ok_and(|metadata| metadata.is_dir()) {
+                continue;
             }
-            if found.len() == MOST_FILES {
-                return found.into_iter().collect();
+            let named = (!word.starts_with('-') && word.len() <= 1024)
+                .then(|| checkout_file(&word, dir, &root))
+                .flatten();
+            match named {
+                Some(relative) => {
+                    found.insert(relative);
+                }
+                // A device (`/dev/null`) is no file Undo would put back.
+                None if there.is_ok_and(|metadata| metadata.is_file() || metadata.is_symlink()) => {
+                    return Vec::new();
+                }
+                None => {}
+            }
+            if found.len() > MOST_FILES {
+                return Vec::new();
             }
         }
     }
@@ -482,11 +499,12 @@ mod tests {
         assert!(names(&absolute, Path::new("/"), "notes.md"));
         let elsewhere = format!("cd {} && echo x >> lib.rs", root.join("src").display());
         assert!(names(&elsewhere, Path::new("/"), "src/lib.rs"));
-        let left_out = named(
-            "ls src .git/config ../outside/x https://x.dev/a --flag",
-            &root,
-        );
+        let left_out = named("ls src ../outside/x https://x.dev/a --flag", &root);
         assert_eq!(left_out, ["ls"], "only a word that could be a new file");
+        std::fs::write(root.join(".git/notes"), "x").unwrap();
+        std::fs::write(root.join("-dash.md"), "x").unwrap();
+        std::fs::create_dir_all(root.join("src/other")).unwrap();
+        std::fs::write(root.join("a\\ b.md"), "x").unwrap();
         for command in [
             "mv n*.md all.md",
             "mv \"$SRC\" notes.md",
@@ -496,6 +514,9 @@ mod tests {
             "mv ~/x.md notes.md",
             "cd; mv x.md notes.md",
             "cd nowhere && mv x.md notes.md",
+            "mv .git/notes notes.md",
+            "mv -- -dash.md notes.md",
+            "(cd src); cd other && mv x.md notes.md",
         ] {
             assert_eq!(named(command, &root), [] as [String; 0], "{command}");
         }
@@ -510,6 +531,7 @@ mod tests {
         let spaced = format!("cd  {} && mv x.md notes.md", outside.display());
         assert_eq!(named(&spaced, &root), [] as [String; 0]);
         assert!(names("echo x > /dev/null; cat notes.md", &root, "notes.md"));
+        assert!(names("mv \"a\\ b.md\" notes.md", &root, "a\\ b.md"));
         std::fs::write(root.join("old name.txt"), "x").unwrap();
         for command in [
             "mv 'old name.txt' new.txt",
