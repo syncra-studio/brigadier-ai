@@ -5,8 +5,9 @@ import { fileNameOf } from "@/app/conversation/FileList";
 /**
  * The files a finished request's workers left in their outputs folders, offered with Save under
  * its answer (BUILD-PLAN A2): one per file name, the latest task's copy, in the order the tasks
- * started. A file the answer links by the same name somewhere else (the thread's corrected copy
- * in its workspace, BUILD-PLAN A6) replaces it: the answer's link is the deliverable, so the
+ * started. A file the answer links by its destination name or link label somewhere else
+ * (the thread's corrected copy in its workspace, BUILD-PLAN A6) replaces it: the link is the
+ * deliverable, so the
  * worker's original isn't offered as if it were.
  */
 export function answerFiles(tasks: readonly Task[], requestIds: readonly string[], answer = ""): ArtifactRef[] {
@@ -28,12 +29,13 @@ export function answerFiles(tasks: readonly Task[], requestIds: readonly string[
 }
 
 /**
- * The file names `answer` links outside the workers' scratch folders: a link to `outputs/…` or
+ * The destination names and original-file labels `answer` links outside the workers' scratch folders: a link to `outputs/…` or
  * into a scratch folder names the stored output itself, any other file link a copy of its own.
  */
 function correctedNames(answer: string, scratch: readonly string[]): string[] {
   const names: string[] = [];
-  for (const [, href] of answer.matchAll(/\]\(<?([^)\s>]+)>?\)/g)) {
+  for (const [, label, angled, plain] of answer.matchAll(/(?:\[([^\]\n]+))?\]\((?:<([^>\n]+)>|([^\s)]+))\)/g)) {
+    const href = angled ?? plain;
     if (!href || /^[a-z][a-z0-9+.-]+:/i.test(href.replace(/^file:\/\//, "/"))) continue;
     let path = href.replace(/^file:\/\//, "");
     try {
@@ -46,6 +48,12 @@ function correctedNames(answer: string, scratch: readonly string[]): string[] {
     if (scratch.some((root) => path === root || path.startsWith(`${root}/`))) continue;
     const name = path.split("/").pop();
     if (name) names.push(name);
+    // A label naming the original also identifies a corrected copy saved under a new name.
+    if (label) {
+      const original = label.replace(/^(`+|\*{1,2}|_{1,2})(.*?)\1$/, "$2").replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, "$1")
+        .replace(/(?::|#L)\d+(?:[-:]L?\d+)?$/, "").split("/").pop();
+      if (original) names.push(original);
+    }
   }
   return names;
 }

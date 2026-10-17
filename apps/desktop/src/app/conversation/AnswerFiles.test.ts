@@ -51,3 +51,25 @@ test("a finished answer offers Save… for each file its request's workers left,
     await server.close();
   }
 });
+
+test("a renamed corrected copy replaces only the worker file named by its link", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { answerFiles } = await server.ssrLoadModule("/src/app/conversation/answerFileList.ts");
+    const worker = { ...task("worker", 1, "r1", [file("rates", "rates.md"), file("notes", "notes.md")]),
+      workspace: { scratch: "/data/scratch/worker" } } as unknown as Task;
+    const ids = (answer: string) => (answerFiles([worker], ["r1"], answer) as ArtifactRef[]).map((output) => output.id);
+    assert.deepEqual(ids("Corrected [rates.md](/repo/final.md)."), ["notes"]);
+    assert.deepEqual(ids("Corrected [**rates.md**](/repo/final.md)."), ["notes"]);
+    assert.deepEqual(ids("Corrected [outputs/rates.md:12](/repo/final.md)."), ["notes"]);
+    assert.deepEqual(ids("See [rates [v2].md](/repo/rates.md)."), ["notes"]);
+    assert.deepEqual(ids("See [rates\nversion](/repo/rates.md)."), ["notes"]);
+    assert.deepEqual(ids("Corrected [`rates.md`](</repo/final copy.md>)."), ["notes"]);
+    assert.deepEqual(ids("See [rates.md](/data/scratch/worker/outputs/final.md)."), ["rates", "notes"]);
+    assert.deepEqual(ids("See [rates.md](outputs/final.md)."), ["rates", "notes"]);
+    assert.deepEqual(ids("See [rates.md](https://example.com/final.md)."), ["rates", "notes"]);
+    assert.deepEqual(ids("See [unrelated](/repo/final.md)."), ["rates", "notes"]);
+  } finally {
+    await server.close();
+  }
+});
