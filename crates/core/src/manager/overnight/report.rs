@@ -698,7 +698,7 @@ fn render(
     }
     // The details, folded by the app: everything after this heading.
     text.push_str(&format!("\n{DETAILS}\n"));
-    text.push_str(&details(run, board, &steps, usage));
+    text.push_str(&details(run, board, &steps, commits, usage));
     // Workers by the names the app shows, also in text written before they were; the run's
     // words about the user said to the user.
     named(&to_you(&text), board)
@@ -1059,7 +1059,10 @@ fn problems(run: &OvernightRun, board: &Board, steps: &[Step], now: i64) -> Vec<
             task_list(&held)
         ));
     }
-    lines.extend(unrun_checks(run, board));
+    lines.extend(unrun_checks(
+        &run_tasks(run, board).collect::<Vec<_>>(),
+        board,
+    ));
     let stopped: Vec<u32> = run_tasks(run, board)
         .filter(|task| {
             task.kind.writes() && task.state == TaskState::Stopped && task.candidate.is_none()
@@ -1129,9 +1132,9 @@ fn task_list(numbers: &[u32]) -> String {
         .join(", ")
 }
 
-/// Checks the run's verifiers couldn't run, one line per kind: the most often named checks
-/// and how many tasks' checks named any.
-fn unrun_checks(run: &OvernightRun, board: &Board) -> Vec<String> {
+/// Checks the verifiers `among` these tasks couldn't run, one line per kind: the most often named
+/// checks and how many tasks' checks named any.
+fn unrun_checks(among: &[&Task], board: &Board) -> Vec<String> {
     const KINDS: [(&str, &str); 3] = [
         ("[not run]", "Not run"),
         ("[excluded]", "Excluded by a rule or the environment"),
@@ -1142,7 +1145,7 @@ fn unrun_checks(run: &OvernightRun, board: &Board) -> Vec<String> {
         // Each check by its name as first written, with how often it was named.
         let mut names: Vec<(String, String, usize)> = Vec::new();
         let mut tasks: Vec<u32> = Vec::new();
-        for verifier in run_tasks(run, board).filter(|task| task.kind == TaskKind::Verify) {
+        for verifier in among.iter().filter(|task| task.kind == TaskKind::Verify) {
             let Some(report) = &verifier.report else {
                 continue;
             };
@@ -1216,9 +1219,17 @@ fn times_in(count: u32, tasks: &[u32]) -> String {
 
 /// The folded part: how each phase was checked, where the work is, who did it on which model,
 /// the usage and what Brigadier ignored in the user's words.
-fn details(run: &OvernightRun, board: &Board, steps: &[Step], usage: &Usage) -> String {
-    let mut text = String::new();
+fn details(
+    run: &OvernightRun,
+    board: &Board,
+    steps: &[Step],
+    commits: &[RunCommit],
+    usage: &Usage,
+) -> String {
     let segments = chain(run, board);
+    // The three labelled lines every audited answer's details hold (Q39, E3).
+    let mut text = audit_lines(board, steps, commits, &segments);
+    text.push('\n');
     let mut checked = String::new();
     for step in steps {
         let lines = phase_evidence(step, board, &segments);
@@ -1255,6 +1266,149 @@ fn details(run: &OvernightRun, board: &Board, steps: &[Step], usage: &Usage) -> 
         ));
     }
     text
+}
+
+/// `Checks:`, `Review:` and `Not checked:`, from the records of the run and the segments it
+/// continues: how each phase reached was checked (the thread's settlement and its evidence, a
+/// verifier, or the lead's own checks), the reviews of their tasks, requests and commits, and
+/// the phases nothing checked with the checks the verifiers couldn't run.
+fn audit_lines(
+    board: &Board,
+    steps: &[Step],
+    commits: &[RunCommit],
+    segments: &[&OvernightRunId],
+) -> String {
+    let mut checks = Vec::new();
+    let mut unchecked = Vec::new();
+    for step in steps {
+        if matches!(step.mark, Mark::NotReached | Mark::Skipped) {
+            continue;
+        }
+        let tasks = phase_tasks(step.number, board, segments);
+        let reported = |task: &&&Task| task.report.is_some();
+        let verifier = tasks
+            .iter()
+            .rev()
+            .filter(reported)
+            .find(|task| task.role == Some(WorkerRole::Verifier));
+        let lead = tasks.iter().rev().filter(reported).find(|task| {
+            task.kind == TaskKind::Implement
+                && matches!(
+                    task.role,
+                    None | Some(WorkerRole::Lead | WorkerRole::Parallel | WorkerRole::Fix)
+                )
+        });
+        let mut how = Vec::new();
+        if let Some(settled) = step.settled {
+            how.push(match settled.evidence.len() {
+                0 => "settled by the thread".to_owned(),
+                n => format!(
+                    "settled with evidence for {}",
+                    plural(n, "criterion", "criteria")
+                ),
+            });
+        }
+        match (verifier, lead) {
+            (Some(task), _) => how.push(format!("verified by task-{}", task.number)),
+            (None, Some(task)) => how.push(format!("task-{} checked its own work", task.number)),
+            (None, None) => {}
+        }
+        if how.is_empty() {
+            unchecked.push(format!("phase {} (nothing checked it)", step.number));
+        } else {
+            checks.push(format!("phase {}: {}", step.number, how.join(", ")));
+        }
+    }
+    // The run's and the segments' it continues: their tasks, and their requests (a plan review
+    // the thread asked for has no task).
+    let mut tasks: Vec<&Task> = board
+        .tasks
+        .values()
+        .filter(|task| {
+            task.run
+                .as_ref()
+                .is_some_and(|context| segments.contains(&&context.run_id))
+        })
+        .collect();
+    tasks.sort_by_key(|task| task.number);
+    let requests: Vec<String> = segments
+        .iter()
+        .map(|id| format!("run-{}-", id.short()))
+        .collect();
+    let mut reviews: Vec<&ReviewRun> = board
+        .reviews
+        .values()
+        .filter(|review| {
+            review
+                .task_id
+                .as_ref()
+                .is_some_and(|id| tasks.iter().any(|task| &task.id == id))
+                || review.request_id.as_deref().is_some_and(|request| {
+                    requests.iter().any(|prefix| request.starts_with(prefix))
+                })
+                || (review.kind == ReviewKind::Code
+                    && commits.iter().any(|commit| commit.commit == review.tip))
+        })
+        .collect();
+    reviews.sort_by_key(|review| review.started_at_ms);
+    let count = |pick: fn(&ReviewState) -> bool| {
+        reviews.iter().filter(|review| pick(&review.state)).count()
+    };
+    let findings: u32 = reviews
+        .iter()
+        .map(|review| match review.state {
+            ReviewState::Findings { count } => count,
+            _ => 0,
+        })
+        .sum();
+    let review = if reviews.is_empty() {
+        "none ran".to_owned()
+    } else {
+        let parts: Vec<String> = [
+            (
+                count(|state| matches!(state, ReviewState::Clean)),
+                "with no findings".to_owned(),
+            ),
+            (
+                count(|state| matches!(state, ReviewState::Findings { .. })),
+                format!(
+                    "with {} (what was done about them is under each phase)",
+                    plural(findings as usize, "finding", "findings")
+                ),
+            ),
+            (
+                count(|state| matches!(state, ReviewState::Running)),
+                "still running".to_owned(),
+            ),
+            (
+                count(|state| matches!(state, ReviewState::Failed { .. })),
+                "couldn't run".to_owned(),
+            ),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
+        format!(
+            "{}: {}",
+            plural(reviews.len(), "review", "reviews"),
+            parts.join(", ")
+        )
+    };
+    unchecked.extend(unrun_checks(&tasks, board));
+    format!(
+        "Checks: {}.\nReview: {review}.\nNot checked: {}.\n",
+        if checks.is_empty() {
+            "none run".to_owned()
+        } else {
+            checks.join("; ")
+        },
+        if unchecked.is_empty() {
+            "nothing".to_owned()
+        } else {
+            unchecked.join("; ")
+        }
+    )
 }
 
 /// The decisions taken for the run: its own, its tasks', and those of its requests.
@@ -1819,8 +1973,16 @@ mod tests {
         ] {
             assert!(shown.contains(line), "{line}\n{text}");
         }
-        // The evidence is kept, folded.
+        // The evidence is kept, folded, under the three labelled lines (#115).
         assert!(!shown.contains("Settled:"), "{text}");
+        assert!(
+            details.starts_with(
+                "\nChecks: phase 1: settled by the thread; phase 2: settled by the thread.\n\
+                 Review: 2 reviews: 1 with no findings, 1 still running.\n\
+                 Not checked: nothing.\n\n"
+            ),
+            "{text}"
+        );
         for line in [
             "How each phase was checked:\n- Phase 1:\n  - Settled: Measured it: `just bench` printed 3.1 s.\n",
             "- Phase 2:\n  - Settled: Half of it.\n  - Left: The cold run isn't measured.\n",
@@ -1830,6 +1992,26 @@ mod tests {
         }
         assert!(!details.contains("Phase 3:"), "{text}");
         assert_eq!(notification_body(&run, &board), "1 of 3 phases done");
+    }
+
+    #[test]
+    fn the_review_line_counts_a_plan_review_the_thread_asked_for() {
+        let (run, mut board) = settled_run();
+        let mut plan_review = board.reviews["r1"].clone();
+        plan_review.id = "r3".into();
+        plan_review.kind = ReviewKind::Plan;
+        plan_review.tip = String::new();
+        plan_review.request_id = Some(super::super::run::run_request(&run));
+        plan_review.state = ReviewState::Findings { count: 2 };
+        board.reviews.insert("r3".into(), plan_review);
+        let text = render(&run, &board, &[], &usage(), 0);
+        let (_, details) = text.split_once(DETAILS).expect("details");
+        assert!(
+            details.contains(
+                "\nReview: 1 review: 1 with 2 findings (what was done about them is under each phase).\n"
+            ),
+            "{text}"
+        );
     }
 
     #[test]
@@ -1860,6 +2042,10 @@ mod tests {
             "{text}"
         );
         assert!(details.contains("Usage: "), "{text}");
+        assert!(
+            details.starts_with("\nChecks: none run.\nReview: none ran.\nNot checked: nothing.\n"),
+            "{text}"
+        );
         assert!(
             shown.starts_with("**Speed**: stopped at the deadline at "),
             "{text}"

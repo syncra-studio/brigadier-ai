@@ -77,6 +77,25 @@ def run_dir(tmp, name, tip, outcome, evidence, review, report=None, left=None):
     return run
 
 
+def keeps_routing(tmp):
+    """run.py keeps the arm's routing.sqlite in the run dir, where brig_tokens.py reads it (#115)."""
+    import importlib.util, sqlite3
+    spec = importlib.util.spec_from_file_location("v1orun", os.path.join(HERE, "run.py"))
+    v1orun = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(v1orun)
+    data, run = os.path.join(tmp, "arm-data"), os.path.join(tmp, "routing-run")
+    os.makedirs(data); os.makedirs(run)
+    db = sqlite3.connect(os.path.join(data, "routing.sqlite"))
+    db.execute("CREATE TABLE turn_usage (conversation_id TEXT, raw INTEGER)")
+    db.execute("INSERT INTO turn_usage VALUES ('conv-1', 42)"); db.commit(); db.close()
+    v1orun.keep_routing(data, run)
+    kept = sqlite3.connect(os.path.join(run, "data", "routing.sqlite"))
+    rows = kept.execute("SELECT raw FROM turn_usage").fetchall(); kept.close()
+    ok = rows == [(42,)]
+    print(("ok  " if ok else "FAIL"), "keeps-routing: the run dir has the arm's routing.sqlite")
+    return ok
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--node-modules"); a = ap.parse_args()
     tmp = tempfile.mkdtemp(prefix="v1-overnight-selftest-")
@@ -109,6 +128,8 @@ def main():
         case("reviews-on-under-the-line", True, True, ref, "done", EVIDENCE, scorer.UNDER_LINE, reviews="on")
         case("reviews-off-under-the-line", False, True, ref, "done", EVIDENCE, scorer.UNDER_LINE, reviews="off")
         case("report-without-evidence", False, True, ref, "done", EVIDENCE, SETTLED_REVIEW, report="Phase 1 done.")
+        if not keeps_routing(tmp):
+            failures.append("keeps-routing")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     if failures:

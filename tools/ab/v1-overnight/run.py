@@ -11,7 +11,7 @@ recorder (which answers cards like the user and never merges or pushes), sends a
 to finish and the conversation to go quiet, then stops the arm and scores.
 
   runs/v1o-<reviews>-<label>-<n>/  rec/, plan.json, overnight-start.json, start.json, times.json,
-                                   tokens.log, score.json
+                                   data/routing.sqlite, tokens.json, tokens.log, score.json
   v1o-results.jsonl               one line per attempt (every attempt, failed or not)
 
 usage: run.py attempt --root R --reviews on|off [--n 1] [--tag LABEL] [--timeout-min 120]
@@ -46,6 +46,12 @@ def data_size(data):
         return total, files
     (data_bytes, _), (blob_bytes, blob_files) = size(data), size(os.path.join(data, "blobs"))
     return {"data_bytes": data_bytes, "blob_bytes": blob_bytes, "blob_files": blob_files}
+
+
+def keep_routing(data, run):
+    """The arm's routing.sqlite into the run dir, as the V3 harness keeps it: brig_tokens.py reads
+    `<run>/data/routing.sqlite`, so without it no attempt had token data (#115)."""
+    v3.backup(os.path.join(data, "routing.sqlite"), v3.ensure(os.path.join(run, "data")) + "/routing.sqlite")
 
 
 def attempt(root, reviews, n, tag, timeout_min):
@@ -88,6 +94,7 @@ def attempt(root, reviews, n, tag, timeout_min):
     finally:
         arm.close()
     disk["after"] = data_size(os.path.join(root, "arm", "data"))
+    keep_routing(arm.data, run)
     start["disk"] = disk
     json.dump(start, open(os.path.join(run, "start.json"), "w"), indent=1)
     try:

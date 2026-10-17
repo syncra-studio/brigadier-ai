@@ -641,6 +641,10 @@ async fn a_run_told_to_stop_after_phase_2_settles_two_phases_and_stops() {
         "How each phase was checked:",
         "Settled: Made p1.txt",
         "Usage: ",
+        // The audited answer's three labelled lines (#115).
+        "### Details\nChecks: phase 1: settled with evidence for 1 criterion",
+        "\nReview: ",
+        "\nNot checked: ",
     ] {
         assert!(report.contains(section), "{section}\n{report}");
     }
