@@ -35,7 +35,7 @@ import {
   useOvernightCards,
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
-import { activePlanRequest, contextPlanId } from "@/app/conversation/planProgress";
+import { activePlanRequest, contextPlanId, contextPlanIds } from "@/app/conversation/planProgress";
 import { PreviewChip } from "@/app/conversation/PreviewChip";
 import { ChecksRow, ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
@@ -841,16 +841,8 @@ function SessionSummaryContent({
       ? (s.projects[conversation.projectId]?.name ?? null)
       : null,
   );
-  // The session's own plans, oldest first. A run's own plan shows as its card instead.
   const planIds = useBoard(
-    useShallow((s) =>
-      s.board?.conversationId === conversation.id
-        ? Object.values(s.board.plans)
-            .filter((plan) => plan.state.type !== "superseded" && !isRunRequest(plan.requestId))
-            .toSorted((a, b) => a.position - b.position)
-            .map((plan) => plan.id)
-        : [],
-    ),
+    useShallow((s) => (s.board?.conversationId === conversation.id ? contextPlanIds(s.board.plans) : [])),
   );
   const plans = planIds.filter((id) => !overnight.some((card) => card.run.planId === id));
   const currentPlanId = useBoard((s) => {

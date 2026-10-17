@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { activePlanRequest, capsuleMode, contextPlanId, currentRequestPlan, planProgress, planStepStatus, stepStates } from "@/app/conversation/planProgress";
+import { activePlanRequest, capsuleMode, contextPlanId, contextPlanIds, currentRequestPlan, planProgress, planStepStatus, stepStates } from "@/app/conversation/planProgress";
 import type { Plan, PlanState, TaskState, UserRequest } from "@/ipc/generated";
 
 function plan(state: PlanState, id = "plan", createdAtMs = 1): Plan {
@@ -135,6 +135,15 @@ test("the context card keeps the latest session plan after requests end, without
   }
   assert.equal(contextPlanId(plans, [], null), null);
   assert.equal(contextPlanId(plans, [older.id], request({ type: "working" })), null);
+});
+
+test("the context card shows only plans the user was shown, never phases recorded alone (issue 212)", () => {
+  const phases = plan({ type: "approved", by: "orchestrator" }, "phases", 1);
+  const shown = { ...plan({ type: "approved", by: "user" }, "shown", 2), body: "# Plan\n\nOne line." };
+  const earlier = { ...plan({ type: "superseded" }, "earlier", 0), body: "# Earlier" };
+  const run = { ...shown, id: "run", requestId: "run-phase", position: 3 };
+  assert.deepEqual(contextPlanIds({ phases, shown, earlier, run }), ["shown"]);
+  assert.deepEqual(contextPlanIds({ phases }), []);
 });
 
 test("a plan document the thread builds itself follows its request; one with workers follows them", () => {

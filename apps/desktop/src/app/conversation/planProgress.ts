@@ -104,6 +104,18 @@ export function currentRequestPlan(
   );
 }
 
+/**
+ * The session's plans the context card shows, oldest first: plans the user was shown (a
+ * document, `propose_plan`), never phases the thread recorded alone (`plan_phases`), which the
+ * Workers section and the workers rail already show. A run's own plan shows as its card instead.
+ */
+export function contextPlanIds(plans: Readonly<Record<string, Plan>>): string[] {
+  return Object.values(plans)
+    .filter((plan) => plan.body !== null && plan.state.type !== "superseded" && !isRunRequest(plan.requestId))
+    .toSorted((a, b) => a.position - b.position)
+    .map((plan) => plan.id);
+}
+
 /** The context card keeps the last session plan after its request ends. */
 export function contextPlanId(
   plans: Readonly<Record<string, Plan>>,
