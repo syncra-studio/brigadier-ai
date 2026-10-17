@@ -1982,6 +1982,8 @@ mod preview_tests;
 mod quiet_wake_tests;
 #[cfg(test)]
 mod reads_tests;
+#[cfg(test)]
+mod rebirth_words_tests;
 mod request_changes_tests;
 #[cfg(test)]
 mod restart_waits_tests;

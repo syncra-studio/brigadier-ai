@@ -53,6 +53,8 @@ struct Exchange {
     messages: u32,
     /// Its first message's number (`#N`, as search_transcript shows it).
     first: i64,
+    /// The user's message it starts with, as carried when the rest of it isn't (issue #216).
+    words: Option<String>,
 }
 /// Section budgets.
 const HANDOFF_BUDGET: usize = 3_000 * BYTES_PER_TOKEN;
@@ -66,6 +68,13 @@ const MIN_EXCHANGES_OVERFLOW: usize = 3;
 const MESSAGE_BYTES: usize = 6_000;
 /// … and a user message up to this one (a long paste is cut, with a marker).
 const USER_MESSAGE_BYTES: usize = 16_000;
+/// Past the verbatim exchanges, the user's own messages of older ones are carried without the
+/// replies, up to this much of the target: what the user said can't be looked up as easily as
+/// what the thread read, ran or wrote, which the replies hold and search_transcript finds
+/// (issue #216). They come before more verbatim exchanges beyond [`MIN_EXCHANGES`] …
+const WORDS_BUDGET: usize = 3_000 * BYTES_PER_TOKEN;
+/// … each up to this size.
+const WORDS_MESSAGE_BYTES: usize = 1_500;
 /// Messages of the branch looked at for the verbatim tail.
 const RECENT_SCAN: usize = 200;
 /// How long the fork may take to write its note.
@@ -90,8 +99,12 @@ conversation that is not in the Brain yet, one line each with the reason and, fo
 settled, their words in double quotes, or None); Ruled out (each approach tried or rejected, and \
 why); Failed checks (each with its command and exact error line, and whether it was fixed); Exact \
 identifiers in use (commit hashes, paths with line numbers, ids, numbers with their units, copied \
-exactly); Promises made to the user; What to do next (and what you are waiting for). At most about \
-1,500 words. Don't call any tool. Reply with the note only.";
+exactly); Promises made to the user; What to do next (and what you are waiting for). Keep word for \
+word what can't be looked up again: the user's decisions, corrections, rules and the exact numbers, \
+names and paths they gave. For what can be read or run again, give where it is instead of a copy: \
+path:line, commit hash, output id, message #N, decision id. Give every claim where it came from, and \
+never call something done without the check that shows it. At most about 1,500 words. Don't call \
+any tool. Reply with the note only.";
 /// A checkpoint's prompt: the same note, written while the conversation idles and its prompt
 /// cache is still warm, for a rebirth once the cache has expired.
 const CHECKPOINT_PROMPT: &str = "[Brigadier] This conversation has been idle for a while. If it \
@@ -105,8 +118,12 @@ conversation that is not in the Brain yet, one line each with the reason and, fo
 settled, their words in double quotes, or None); Ruled out (each approach tried or rejected, and \
 why); Failed checks (each with its command and exact error line, and whether it was fixed); Exact \
 identifiers in use (commit hashes, paths with line numbers, ids, numbers with their units, copied \
-exactly); Promises made to the user; What to do next (and what you are waiting for). At most about \
-1,500 words. Don't call any tool. Reply with the note only.";
+exactly); Promises made to the user; What to do next (and what you are waiting for). Keep word for \
+word what can't be looked up again: the user's decisions, corrections, rules and the exact numbers, \
+names and paths they gave. For what can be read or run again, give where it is instead of a copy: \
+path:line, commit hash, output id, message #N, decision id. Give every claim where it came from, and \
+never call something done without the check that shows it. At most about 1,500 words. Don't call \
+any tool. Reply with the note only.";
 
 /// The note's headings, lowercase, as [`note_decisions`] finds them.
 const NOTE_HEADINGS: &[&str] = &[
@@ -640,9 +657,14 @@ impl SessionManager {
             + state.text.len()
             + search.text.len();
         let total_exchanges = exchanges.len();
-        let sizes: Vec<usize> = exchanges
+        let sizes: Vec<(usize, usize)> = exchanges
             .iter()
-            .map(|exchange| exchange.text.len())
+            .map(|exchange| {
+                (
+                    exchange.text.len(),
+                    exchange.words.as_ref().map_or(0, |words| words.len() + 1),
+                )
+            })
             .collect();
         let fit = fit(fixed, brain.text.len(), &sizes, (target, max));
         let taken = fit.taken;
@@ -668,6 +690,25 @@ impl SessionManager {
             (!overflow.is_empty()).then(|| format!("overflow: {}", overflow.join("; ")));
         let mut chosen: Vec<&Exchange> = exchanges[..taken].iter().collect();
         chosen.reverse();
+        // Older exchanges past the verbatim ones: the user's own words, oldest first.
+        let said: Vec<&str> = exchanges[taken..taken + fit.words]
+            .iter()
+            .rev()
+            .filter_map(|exchange| exchange.words.as_deref())
+            .collect();
+        let mut words = Part::new(
+            "words",
+            if said.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "[The user's earlier messages, verbatim; the replies between them aren't carried, search_transcript finds them by number]\n{}",
+                    said.join("\n")
+                )
+            },
+            said.len() as u32,
+        );
+        words.truncated = !said.is_empty() && taken + fit.words < total_exchanges;
         let mut recent = Part::new(
             "recent",
             if chosen.is_empty() {
@@ -685,8 +726,13 @@ impl SessionManager {
                         .first()
                         .filter(|oldest| oldest.first > 1)
                         .map(|oldest| format!(
-                            "\n[Messages #1–#{} aren't carried here; search_transcript finds them]",
-                            oldest.first - 1
+                            "\n[Messages #1–#{} aren't carried here; search_transcript finds them{}]",
+                            oldest.first - 1,
+                            if said.is_empty() {
+                                ""
+                            } else {
+                                ". The user's own words among them are above"
+                            }
                         ))
                         .unwrap_or_default()
                 )
@@ -710,6 +756,7 @@ impl SessionManager {
             decisions,
             state,
             brain,
+            words,
             recent,
             search,
         ];
@@ -1229,11 +1276,16 @@ impl SessionManager {
         let mut exchanges: Vec<Exchange> = Vec::new();
         let mut current: Vec<String> = Vec::new();
         let mut first = 0;
-        let close = |current: &mut Vec<String>, exchanges: &mut Vec<Exchange>, first: i64| {
+        let mut words = None;
+        let close = |current: &mut Vec<String>,
+                     exchanges: &mut Vec<Exchange>,
+                     first: i64,
+                     words: &mut Option<String>| {
             exchanges.push(Exchange {
                 text: current.join("\n\n"),
                 messages: current.len() as u32,
                 first,
+                words: words.take(),
             });
             current.clear();
         };
@@ -1250,12 +1302,19 @@ impl SessionManager {
             // A peer's message starts an exchange as the user's does, but stays a peer's.
             let input = matches!(message.role, MessageRole::User | MessageRole::Peer);
             if input && !current.is_empty() {
-                close(&mut current, &mut exchanges, first);
-            }
-            if current.is_empty() {
-                first = message.seq;
+                close(&mut current, &mut exchanges, first, &mut words);
             }
             let full = self.full_words(message).await;
+            if current.is_empty() {
+                first = message.seq;
+                if message.role == MessageRole::User {
+                    words = Some(format!(
+                        "User (#{}): {}",
+                        message.seq,
+                        carried_text(&full, WORDS_MESSAGE_BYTES, message.seq)
+                    ));
+                }
+            }
             let max = if input {
                 USER_MESSAGE_BYTES
             } else {
@@ -1264,7 +1323,7 @@ impl SessionManager {
             current.push(format!("{who}: {}", carried_text(&full, max, message.seq)));
         }
         if !current.is_empty() {
-            close(&mut current, &mut exchanges, first);
+            close(&mut current, &mut exchanges, first, &mut words);
         }
         exchanges.reverse();
         exchanges
@@ -1496,6 +1555,8 @@ fn decision_index(nodes: &[Node]) -> String {
 struct Fit {
     /// The newest exchanges carried verbatim.
     taken: usize,
+    /// The exchanges past those whose user's words alone are carried.
+    words: usize,
     /// Bytes of the Brain digest kept.
     brain: usize,
     /// Bytes the briefing passes the cap by: what it must carry needs them.
@@ -1503,16 +1564,32 @@ struct Fit {
 }
 
 /// Fits a briefing of `fixed` bytes that are never cut (the framing, handoff note, decisions,
-/// state), a Brain digest of `brain` bytes and the verbatim `exchanges` (their sizes, newest
-/// first) into `(target, max)`. As many exchanges as the target leaves room for, at least six.
-/// Over the cap the exchanges shrink first, down to three, and then the Brain digest
+/// state), a Brain digest of `brain` bytes and the `exchanges` (newest first: each one's size
+/// verbatim and the size of its user's words alone) into `(target, max)`. As many exchanges
+/// verbatim as the target leaves room for, at least six, after keeping room for the user's
+/// words of the older ones ([`WORDS_BUDGET`]), which then fill what the target leaves. Over the
+/// cap the exchanges shrink first, down to three, and then the Brain digest
 /// (SESSION-FIXES-PLAN Q5). What it must carry, the fixed parts and those three exchanges
 /// (an exchange holds several messages and may be long), can still pass the cap: by `over`.
-fn fit(fixed: usize, brain: usize, exchanges: &[usize], (target, max): (usize, usize)) -> Fit {
+fn fit(
+    fixed: usize,
+    brain: usize,
+    exchanges: &[(usize, usize)],
+    (target, max): (usize, usize),
+) -> Fit {
+    // The room the user's words of the exchanges from `from` on would take.
+    let words_from = |from: usize| -> usize {
+        exchanges
+            .iter()
+            .skip(from)
+            .map(|(_, words)| words)
+            .sum::<usize>()
+            .min(WORDS_BUDGET)
+    };
     let mut taken = 0;
     let mut recent = 0;
-    for size in exchanges {
-        let room = target.saturating_sub(fixed + brain);
+    for (size, _) in exchanges {
+        let room = target.saturating_sub(fixed + brain + words_from(taken + 1));
         if taken >= MIN_EXCHANGES && recent + size > room {
             break;
         }
@@ -1521,11 +1598,27 @@ fn fit(fixed: usize, brain: usize, exchanges: &[usize], (target, max): (usize, u
     }
     while taken > MIN_EXCHANGES_OVERFLOW.min(exchanges.len()) && fixed + brain + recent > max {
         taken -= 1;
-        recent -= exchanges[taken];
+        recent -= exchanges[taken].0;
     }
     let brain = brain.min(max.saturating_sub(fixed + recent));
+    let mut room = target
+        .saturating_sub(fixed + brain + recent)
+        .min(WORDS_BUDGET);
+    let mut words = 0;
+    for (_, size) in &exchanges[taken..] {
+        if *size > room {
+            break;
+        }
+        room -= size;
+        words += 1;
+    }
+    // Not past the oldest one with words of the user's.
+    while words > 0 && exchanges[taken + words - 1].1 == 0 {
+        words -= 1;
+    }
     Fit {
         taken,
+        words,
         brain,
         over: (fixed + brain + recent).saturating_sub(max),
     }
@@ -1680,36 +1773,40 @@ mod tests {
         let budget = (800, 1_000);
         // Fits the target: all six, the digest whole.
         assert_eq!(
-            fit(300, 100, &[50; 6], budget),
+            fit(300, 100, &[(50, 0); 6], budget),
             Fit {
                 taken: 6,
+                words: 0,
                 brain: 100,
                 over: 0
             }
         );
         // Over the cap: exchanges go first, down to three, and the digest stays whole.
         assert_eq!(
-            fit(500, 200, &[100; 8], budget),
+            fit(500, 200, &[(100, 0); 8], budget),
             Fit {
                 taken: 3,
+                words: 0,
                 brain: 200,
                 over: 0
             }
         );
         // Still over with three: only then is the digest cut.
         assert_eq!(
-            fit(500, 400, &[100; 8], budget),
+            fit(500, 400, &[(100, 0); 8], budget),
             Fit {
                 taken: 3,
+                words: 0,
                 brain: 200,
                 over: 0
             }
         );
         // Decisions alone past the cap: never cut, and the newest three exchanges still go.
         assert_eq!(
-            fit(1_200, 400, &[100; 8], budget),
+            fit(1_200, 400, &[(100, 0); 8], budget),
             Fit {
                 taken: 3,
+                words: 0,
                 brain: 0,
                 over: 500
             }
@@ -1717,20 +1814,64 @@ mod tests {
         // The decisions fit, but the newest three exchanges are long: they all go, the digest
         // doesn't, and the briefing passes the cap by what they need.
         assert_eq!(
-            fit(400, 100, &[300, 300, 300, 50], budget),
+            fit(400, 100, &[(300, 0), (300, 0), (300, 0), (50, 0)], budget),
             Fit {
                 taken: 3,
+                words: 0,
                 brain: 0,
                 over: 300
             }
         );
         // Fewer exchanges than three: all of them.
         assert_eq!(
-            fit(900, 100, &[200], budget),
+            fit(900, 100, &[(200, 0)], budget),
             Fit {
                 taken: 1,
+                words: 0,
                 brain: 0,
                 over: 100
+            }
+        );
+    }
+
+    #[test]
+    fn older_user_words_come_before_more_verbatim_exchanges() {
+        // Twenty exchanges of 4,000 bytes, each with 500 bytes of the user's words: past the six
+        // verbatim ones, room is kept for the older ones' words, so all twenty are carried in
+        // part (eleven whole, nine as the user's words) instead of twelve whole and eight lost.
+        let exchanges = [(4_000, 500); 20];
+        assert_eq!(
+            fit(20_000, 10_000, &exchanges, (80_000, 100_000)),
+            Fit {
+                taken: 11,
+                words: 9,
+                brain: 10_000,
+                over: 0
+            }
+        );
+        // The words have a budget of their own: past it, older exchanges are left out.
+        let long = [(4_000, 2_000); 20];
+        let fitted = fit(20_000, 10_000, &long, (80_000, 100_000));
+        assert_eq!(fitted.words, WORDS_BUDGET / 2_000);
+        assert!(fitted.taken + fitted.words < 20);
+        // Nothing older: no room is kept, the verbatim exchanges fill the target as before.
+        assert_eq!(
+            fit(300, 100, &[(50, 10); 6], (800, 1_000)),
+            Fit {
+                taken: 6,
+                words: 0,
+                brain: 100,
+                over: 0
+            }
+        );
+        // Over the cap: the exchanges shrink as before, and no words.
+        assert_eq!(
+            fit(500, 200, &[(100, 10); 8], (800, 1_000)),
+            Fit {
+                taken: 3,
+                words: 0,
+                brain: 200,
+                over: 0
             }
         );
     }

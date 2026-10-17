@@ -30,8 +30,8 @@ def battery():
     return load_battery("thread")
 
 
-def make(dirpath, *, answers, seam="size", briefs=2, tail_holds=None, false_as_fact=False, checks=None, timed_out=False,
-         trigger="threshold"):
+def make(dirpath, *, answers, seam="size", briefs=2, tail_holds=None, words_hold=None, false_as_fact=False, checks=None,
+         timed_out=False, trigger="threshold"):
     b = battery()
     os.makedirs(os.path.join(dirpath, "rec"), exist_ok=True)
     os.makedirs(os.path.join(dirpath, "briefings"), exist_ok=True)
@@ -64,7 +64,10 @@ def make(dirpath, *, answers, seam="size", briefs=2, tail_holds=None, false_as_f
         recent = "User: " + texts[tail_holds] if tail_holds else "User: " + texts["f4"]
         learned = ("- " + b["harness"]["plant_learned"]["text"]) if false_as_fact else \
             ("- (worker claim, unverified) " + b["harness"]["plant_learned"]["text"])
-        text = ("[Brigadier briefing: only you see this]\n\n[Decisions]\n" + learned +
+        # A carried message with a blank line in it comes first: the section runs past it.
+        words = ("\n\n[The user's earlier messages, verbatim; the replies between them aren't carried, search_transcript "
+                 "finds them by number]\nUser (#2): Some notes.\n\nMore notes.\nUser (#3): " + texts[words_hold]) if words_hold else ""
+        text = ("[Brigadier briefing: only you see this]\n\n[Decisions]\n" + learned + words +
                 "\n\n[The conversation's latest messages, verbatim]\n" + recent + "\n\n[Older context] search\n\n[End of briefing]")
         open(os.path.join(dirpath, "briefings", f"{g:02d}-briefing.txt"), "w").write(text)
         log.append({"streamSeq": g, "atMs": t, "entry": {"type": "rebirth", "record": {
@@ -103,6 +106,13 @@ CASES = [
      dict(answers=GOOD, tail_holds="r1"),
      lambda s: s["by_item"]["hash"] == "not_tested" and s["by_item"]["constraint"] == "not_tested"
      and s["by_item"]["decision"] == "pass"),
+    ("a source carried among the user's earlier words is not tested",
+     dict(answers=GOOD, words_hold="r1"),
+     lambda s: s["by_item"]["hash"] == "not_tested" and s["by_item"]["constraint"] == "not_tested"
+     and s["by_item"]["decision"] == "pass"),
+    ("the user's words alone don't carry what a tool's output gave",
+     dict(answers=GOOD, words_hold="r4"),
+     lambda s: s["by_item"]["failed_check"] == "pass" and s["all_pass"]),
     ("one size seam only: invalid",
      dict(answers=GOOD, briefs=1),
      lambda s: not s["valid"] and not s["all_pass"]),
