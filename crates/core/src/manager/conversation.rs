@@ -5063,6 +5063,40 @@ impl SessionManager {
         self.record_compaction(&conv.id, compaction).await;
     }
 
+    /// Ends the calls of the turn the user stopped that its CLI dropped without saying they
+    /// ended (a wait for replies, #61): they read stopped as of now, not running in a turn
+    /// that is over. Only this turn's: a Codex command an earlier turn left running goes on as
+    /// its CLI's job.
+    async fn end_stopped_calls(&self, conv: &Arc<ConvLive>) {
+        let Some(turn) = conv.items().turn() else {
+            return;
+        };
+        let Ok(board) = self.core.board(&conv.id).await else {
+            return;
+        };
+        let now = now_ms();
+        for step in &board.orchestrator_steps {
+            let mut kind = step.kind.clone();
+            if let OrchestratorStepKind::Tool {
+                status: status @ ItemStatus::InProgress,
+                stopped,
+                through_position,
+                ended_at_ms,
+                turn: Some(of),
+                ..
+            } = &mut kind
+                && *of == turn
+            {
+                *status = ItemStatus::Failed;
+                *stopped = true;
+                *through_position = 0;
+                *ended_at_ms = Some(now);
+                self.orchestrator_step_in(&conv.id, step.request_id.clone(), kind)
+                    .await;
+            }
+        }
+    }
+
     async fn turn_completed(&self, conv: &Arc<ConvLive>, cli: &Arc<Cli>, status: TurnStatus) {
         conv.state.lock().await.watchdog.acknowledge();
         // A turn that ended before its CLI said it began starts nothing more.
@@ -5078,6 +5112,9 @@ impl SessionManager {
                 .unwrap_or_else(|| "The model did not finish compacting".into()),
         };
         self.end_compaction(conv, unfinished).await;
+        if status == TurnStatus::Interrupted && conv.state.lock().await.interrupted {
+            self.end_stopped_calls(conv).await;
+        }
         if conv.kind == ConversationKind::Session {
             // What the thread committed in this turn gets its review, before a next turn can
             // take its commits for the user's.

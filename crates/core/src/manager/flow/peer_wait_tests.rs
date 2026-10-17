@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use brigadier_providers::ProviderKind;
+use brigadier_providers::{ItemStatus, ProviderKind};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
@@ -15,7 +15,7 @@ use super::{Flow, Options, Reply};
 use crate::board::{Board, PeerRecord};
 use crate::manager::prompts::QUIET;
 use crate::model::{ConversationId, MessageRole, PeerState, PermissionLevel, ReplyHold};
-use crate::work::RequestState;
+use crate::work::{OrchestratorStepKind, RequestState};
 
 fn stands(board: &Board, id: &str, state: &PeerState) -> bool {
     board
@@ -363,6 +363,33 @@ async fn a_stop_ends_the_wait_and_the_late_reply_starts_no_turn() {
         })
         .await;
     let request = board.requests.keys().next().unwrap().clone();
+    // The wait's step ends with the turn, though the CLI never said the call ended (#61).
+    // It reads stopped, as of the Stop, not failed at its start.
+    let waits: Vec<(ItemStatus, bool, bool)> = flow
+        .settled()
+        .await
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::Tool {
+                name,
+                status,
+                stopped,
+                ended_at_ms,
+                ..
+            } if name == "wait_for_replies" => Some((
+                *status,
+                *stopped,
+                ended_at_ms.is_some_and(|ended| ended > step.at_ms),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        waits.last(),
+        Some(&(ItemStatus::Failed, true, true)),
+        "{waits:?}"
+    );
     let question = message_id(&only(&asked).0);
     gate.notify_one();
     let board = flow
