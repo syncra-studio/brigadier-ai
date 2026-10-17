@@ -1609,3 +1609,81 @@ async fn a_restart_keeps_a_request_waiting_on_its_checks() {
     );
     flow.stop().await;
 }
+
+/// What a frontend change's run tells its agents with computer use `on` or off in Settings: the
+/// thread's instructions, the UI worker's brief, and the full checks' pass as the thread hears it.
+async fn ui_change_with_computer_use(name: &str, on: bool) -> (String, String, String) {
+    let checked: Arc<Mutex<Vec<String>>> = Arc::default();
+    // The thread's instructions, the worker's brief, the pass.
+    let told: Arc<Mutex<[String; 3]>> = Arc::default();
+    let (seen, log) = (checked.clone(), told.clone());
+    let flow = Flow::start(
+        name,
+        options(),
+        script(move |turn| {
+            let (seen, log) = (seen.clone(), log.clone());
+            async move {
+                if !turn.is_orchestrator() {
+                    log.lock().unwrap()[1] = turn.prompt.clone();
+                    return worker(&turn, "sidebar.css", &seen).await;
+                }
+                log.lock().unwrap()[0] = turn.prompt.clone();
+                if land_reports(&turn).await {
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[checks passed at ") {
+                    log.lock().unwrap()[2] = turn.input.clone();
+                    return Reply::text("The sidebar is restyled.");
+                }
+                if turn.input.starts_with("Restyle the sidebar") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Restyle the sidebar",
+                                   "kind": "implement", "areas": ["frontend"],
+                                   "spec": "Restyle the sidebar in sidebar.css."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    let mut settings = flow.core.settings();
+    settings.computer_use = on;
+    flow.core.update_settings(settings).await.unwrap();
+    flow.say("Restyle the sidebar.").await;
+    flow.until("the pass to reach the thread", |_| {
+        !told.lock().unwrap()[2].is_empty()
+    })
+    .await;
+    flow.settled().await;
+    flow.stop().await;
+    let [thread, brief, passed] = told.lock().unwrap().clone();
+    (thread, brief, passed)
+}
+
+/// Computer use off routes nothing to a live look (#24): the thread isn't told workers can use
+/// apps, a pass asks for no live look, and the UI worker's scripted checks are the whole check.
+/// With it on, the same run gets all three. The live look is this Mac's alone.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn computer_use_off_routes_nothing_to_a_live_look() {
+    use crate::manager::prompts::{COMPUTER_ROUTING, scripted_ui_note};
+    let (thread, brief, passed) = ui_change_with_computer_use("cu-off-no-look", false).await;
+    assert!(!thread.contains(COMPUTER_ROUTING), "{thread}");
+    assert!(!passed.contains("live_look"), "{passed}");
+    assert!(brief.contains(&scripted_ui_note(false)), "{brief}");
+    assert!(!brief.contains("one live look"), "{brief}");
+    let (thread, brief, passed) = ui_change_with_computer_use("cu-on-look", true).await;
+    assert!(thread.contains(COMPUTER_ROUTING), "{thread}");
+    assert!(passed.contains("look at them live once"), "{passed}");
+    assert!(passed.contains("task-1"), "{passed}");
+    assert!(
+        brief.contains("Don't build or launch the app itself"),
+        "{brief}"
+    );
+}
