@@ -3431,6 +3431,55 @@ async fn a_start_that_fails_while_its_task_is_stopped_leaves_the_stop_its_work()
     flow.stop().await;
 }
 
+/// Brigadier quits as a worker starts: its CLI closes before the brief is sent, and the start's
+/// failure doesn't end the task. It carries on at the next launch.
+#[tokio::test]
+async fn a_start_cut_short_by_a_quit_carries_on_at_the_next_launch() {
+    let mut flow = Flow::start(
+        "quit-fails-start",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("Add the notes.") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Add notes", "kind": "implement", "spec": "Create notes.txt."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                return Reply::text("[quiet]");
+            }
+            std::future::pending::<()>().await;
+            Reply::text("Never.")
+        }),
+    )
+    .await;
+    flow.say("Add the notes.").await;
+    let board = flow
+        .until("task-1 at work", |board| {
+            board.tasks.values().any(|task| {
+                task.number == 1
+                    && task.state == TaskState::Running
+                    && task.native_session.is_some()
+            })
+        })
+        .await;
+    let task = Flow::task(&board, 1).clone();
+    // The quit is under way when the start's send finds the CLI closed.
+    flow.manager
+        .admitting
+        .store(false, std::sync::atomic::Ordering::Release);
+    flow.manager.worker_failed(&task, "the CLI exited").await;
+    assert_eq!(Flow::task(&flow.board().await, 1).state, TaskState::Running);
+    flow.restart().await;
+    let task = Flow::task(&flow.board().await, 1).clone();
+    assert_eq!(task.state, TaskState::Running, "{:?}", task.error);
+    assert_eq!(task.error, None);
+    flow.stop().await;
+}
+
 /// A landing replays the task branch without its litter: the engine's own rewrite, recorded
 /// under the ref lock as it is made. A check made for the thread right after it, with the
 /// worker's CLI gone, keeps the rewritten branch (PLAN bug 6 step 5).

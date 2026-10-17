@@ -5018,6 +5018,11 @@ impl SessionManager {
 
     /// A worker failed: the task ends and the orchestrator hears why.
     pub(crate) async fn worker_failed(&self, task: &Task, reason: &str) {
+        // Brigadier quitting closed its CLI (a start cut short fails to send its brief): the
+        // task carries on at the next launch, as any the quit cut off.
+        if !self.admitting.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
         // Stopped while it waited to start (for the machine, or a run's worker slot): it stays
         // stopped.
         if self
