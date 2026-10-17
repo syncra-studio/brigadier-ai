@@ -88,21 +88,36 @@ pub(super) fn hold_foreground(id: &ConversationId, gate: std::sync::Arc<tokio::s
     FOREGROUND_GATES.lock().unwrap().insert(id.clone(), gate);
 }
 
-/// What the thread hears of a run the user stopped alone: what it printed until then, as its
-/// row keeps it (`kept`, the digest of its stored output), or that it printed nothing.
+/// What the thread hears of a run the user stopped alone: how long it ran, and what it printed
+/// until then, as its row keeps it (`kept`, the digest of its stored output), or that it printed
+/// nothing; the thread has no time of its own to guess (#89).
 fn stopped_text(run: &BackgroundRun, kept: &str) -> String {
     let ask = "Don't run it again unless they ask; say in one line where that leaves the work.";
+    let ran = super::watchdog::spoken(run.ended_at_ms.unwrap_or_else(now_ms) - run.started_at_ms);
     if kept.trim().is_empty() {
         return format!(
-            "[The user stopped {} before it finished · {} `{}`: it printed nothing and no \
-             result came. {ask}]",
+            "[The user stopped {} after {ran}, before it finished · {} `{}`: it printed nothing \
+             and no result came. {ask}]",
             run.id, run.tool, run.command
         );
     }
     format!(
-        "[The user stopped {} before it finished · {} `{}`: no result came, but what it \
-         printed until then is kept, and its row shows it. {ask}]\n{kept}",
+        "[The user stopped {} after {ran}, before it finished · {} `{}`: no result came, but \
+         what it printed until then is kept, and its row shows it. {ask}]\n{kept}",
         run.id, run.tool, run.command
+    )
+}
+
+/// What the thread hears when its call goes on in the background: no guess at how long it has
+/// left, which would stay under its row once it stopped or finished (#89).
+fn backgrounded_text(id: &str) -> String {
+    format!(
+        "[{id} still runs after {secs} s, so it goes on in the background: its result comes to \
+         you as a message in this request, which works until then. Don't wait for it or run it \
+         again. Tell the user in one line what runs, with no guess at how long it has left, then \
+         carry on or reply {quiet}.]",
+        secs = FOREGROUND.as_secs(),
+        quiet = super::prompts::QUIET,
     )
 }
 
@@ -205,15 +220,7 @@ impl SessionManager {
             self.hold_guesses(id).await;
             run
         };
-        let reply = format!(
-            "[{id} still runs after {secs} s, so it goes on in the background: its result comes \
-             to you as a message in this request, which works until then. Don't wait for it or \
-             run it again. Tell the user in one line what runs and roughly how long, then carry \
-             on or reply {quiet}.]",
-            id = run.id,
-            secs = FOREGROUND.as_secs(),
-            quiet = super::prompts::QUIET,
-        );
+        let reply = backgrounded_text(&run.id);
         handoff.run = None;
         let handle = handoff.handle.take().expect("held until handed off");
         self.watch_background_run(handle, run, cancel);
@@ -580,5 +587,29 @@ mod tests {
     fn a_runs_number_is_read_from_its_id() {
         assert_eq!(background_run_number("run-12"), 12);
         assert_eq!(background_run_number("check-1"), 0);
+    }
+
+    /// #89: the thread's lines about a background run rest on what Brigadier tells it: how long
+    /// a stopped run really ran, and no time guess when a call goes on in the background.
+    #[test]
+    fn a_background_runs_words_carry_no_time_guess() {
+        let backgrounded = backgrounded_text("run-3");
+        assert!(!backgrounded.contains("how long, then"));
+        assert!(backgrounded.contains("with no guess at how long it has left"));
+        let run = BackgroundRun {
+            id: "run-3".into(),
+            conversation_id: ConversationId("c".into()),
+            request_id: None,
+            tool: "run".into(),
+            command: "cargo test".into(),
+            started_at_ms: 1_000,
+            ended_at_ms: Some(111_000),
+            state: BackgroundRunState::Stopped,
+            item_id: None,
+        };
+        assert!(
+            stopped_text(&run, "108 lines").starts_with("[The user stopped run-3 after 2 minutes,")
+        );
+        assert!(stopped_text(&run, "").contains("after 2 minutes, before it finished"));
     }
 }

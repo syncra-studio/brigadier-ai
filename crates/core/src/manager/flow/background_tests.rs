@@ -433,8 +433,12 @@ async fn the_users_stop_of_one_background_run_tells_the_thread() {
     );
     let inputs = inputs.lock().unwrap().clone();
     assert!(
-        inputs.iter().any(|input| input
-            .contains("[The user stopped run-1 before it finished · run `sleep 60; echo late`: it printed nothing")),
+        inputs
+            .iter()
+            .any(|input| input.contains("[The user stopped run-1 after ")
+                && input.contains(
+                    ", before it finished · run `sleep 60; echo late`: it printed nothing"
+                )),
         "{inputs:#?}"
     );
     flow.stop().await;
