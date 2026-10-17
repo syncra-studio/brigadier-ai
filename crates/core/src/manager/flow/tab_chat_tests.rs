@@ -661,6 +661,17 @@ async fn a_browser_tab_chat_reads_what_its_tab_sent_and_has_no_tools() {
             .set_tab_page(&file_chat, crate::manager::BrowserPage::default())
             .is_err()
     );
+    // Closing the tab (or New chat) deletes its chat: what the page held goes from memory too.
+    assert!(flow.manager.tab_chats.has_page(&chat));
+    flow.manager.delete(chat.clone()).await.unwrap();
+    super::eventually("the closed tab's chat to go", || {
+        flow.core.conversation(&chat).is_err()
+    })
+    .await;
+    assert!(
+        !flow.manager.tab_chats.has_page(&chat),
+        "the closed tab's page text stays in memory"
+    );
     flow.stop().await;
 }
 

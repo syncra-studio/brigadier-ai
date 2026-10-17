@@ -1273,6 +1273,8 @@ impl SessionManager {
     ) -> Result<bool> {
         let id = conversation.id.clone();
         let private_logs = conversation.tab_chat.is_some();
+        // What its browser tab sent goes now, however it is deleted (its tab closed, New chat).
+        self.tab_chats.forget_page(&id);
         let drained = self.drain(&id).await;
         // What other sessions sent it and it hasn't taken never goes; once it is gone, what
         // they wait for from it is over (SESSION-MESSAGING-PLAN.md §4).

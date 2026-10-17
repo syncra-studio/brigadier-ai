@@ -263,7 +263,7 @@ impl SessionManager {
 
     /// Stops a tab chat if it works and removes all of it: its messages, files and records.
     async fn wipe_tab_chat(&self, id: ConversationId) {
-        self.tab_chats.pages_lock().remove(&id);
+        self.tab_chats.forget_page(&id);
         if let Err(err) = Box::pin(self.delete_conversation(id.clone(), false, false)).await {
             crate::logging::private_trace!(true, warn, "could not delete a tab chat"; tab_chat = %id, error = %err);
         }
@@ -315,6 +315,16 @@ impl SessionManager {
 impl TabChats {
     fn pages_lock(&self) -> std::sync::MutexGuard<'_, HashMap<ConversationId, BrowserPage>> {
         self.pages.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Lets go of what a browser tab sent its chat: the chat goes.
+    pub(super) fn forget_page(&self, chat: &ConversationId) {
+        self.pages_lock().remove(chat);
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_page(&self, chat: &ConversationId) -> bool {
+        self.pages_lock().contains_key(chat)
     }
 }
 
