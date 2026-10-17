@@ -1076,7 +1076,11 @@ final answer, D1's Brain and constraint rules, the Q48 review line and the [quie
 instructions under 11.5 kB.
 
 **O3. Fewer calls.** A Claude thread sends its last edit, any try of it by hand and the `run_check` that checks it in
-one message, and tries nothing after the commit. `remember`'s field docs are shorter.
+one message, and tries nothing after the commit. A try by hand or a one-off script is a shell call of its own, never
+`run_check` or part of its command, and a passing check of a command in a temporary folder is never learned as the
+project's check (the acceptance bench saw one fail the session's full checks and wake the thread twice).
+`remember`'s field docs are shorter; its cue to correct a wrong claim with `replaces` stays (V2 saw a correction
+without it leave the false claim live).
 
 **O4. A cheaper findings turn.** The thread's `run_check` takes `fixes`, the ids of the review findings its change fixes.
 When the check passes, its commit carries their Fixes trailer and they are recorded fixed, checked by that check (its
@@ -1095,6 +1099,12 @@ against plain's 17.6k.
   [quiet] call stays;
 - the passing check's reply is already cut to 768 bytes of tail;
 - the thread's shell resetting to its scratch folder after each command: it keeps `--resume` working; a follow-up.
+
+**Acceptance** (`docs/evidence/benchmark-2026-10-16-phase-o.md`), gate ratios against plain re-run in the same window:
+T1 0.56×, T2 0.65×, T3 0.78×, T4 0.95× (worst case: plain's fourth run stopped on a weekly limit), T5 0.61×, T6 0.63×,
+T7L 0.58×. Full ratios: T3 1.04× and T5 1.03× (the Q48 review and its findings turn), every other task as its gate.
+Hidden tests pass in every completed run, E3 passes, high findings are at or under plain's, V3 keeps 12/12 with no
+invalid tool call, and V2's lookup battery passes every item on Claude (3/3) once `remember`'s `replaces` cue is back.
 
 **Done when:**
 - every bench task T1–T6 and T7L has its gate ratio ≤ 1.0× plain (T1–T6 n = 2, T4 n = 4 middle-two mean, T7L n = 2),

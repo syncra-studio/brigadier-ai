@@ -76,4 +76,61 @@ fewer:
 
 ## Acceptance bench
 
-(to come: chore O-4)
+Plain re-run on the current CLI (Claude Code 2.1.301/2.1.302) in the same window as Brigadier, arms alternating, judges
+on, no quiet hold (Q54). Statistic: mean of two runs; T4 the mean of the middle two of four. Gate ratios are judged
+against this plain; the stored medians are informational.
+
+### O-4 at `19ca6bdf` (T1–T6, T7L)
+
+| Task | Plain | Brigadier gate | Gate ratio | Full ratio | vs stored median |
+|---|---|---|---|---|---|
+| T1 | 132,665.5 | 108,400.5 | 0.82× | 0.82× | 0.82× |
+| T2 | 777,100 | 508,472.5 | 0.65× | 0.65× | 0.47× |
+| T3 | 1,437,856.5 | 1,122,667 | 0.78× | 1.04× | 0.59× |
+| T4 | 202,749 | 244,882.5 | **1.21×** | 1.21× | 1.21× |
+| T5 | 888,767 | 543,428 | 0.61× | 1.03× | 0.50× |
+| T6 | 243,504 | 243,959.5 | **1.0019×** | 1.0019× | 0.95× |
+| T7L | 6,038,015.5 | 3,486,866.5 | 0.58× | 0.73× | 0.66× |
+
+- Hidden tests 28/28; E3 16/16; T7L 24/24 features in both arms, no compaction.
+- T5's one high finding (a test "fails type checking") is false: the run's own eval type-checks and passes 109/109.
+- T7L's strict constraint audit flags medium/low judge findings in both arms' trees; plain's carry two highs,
+  Brigadier's none.
+- T4 and T6 failed on two causes, both fixed in `791fe1cd` (`c184e54b` before the rebase):
+  - T6: a scratch script run through `run_check` was learned as a project check. The session's full checks ran it in
+    their own checkout, failed, and woke the thread twice (+2 calls). A command naming a temporary folder is no longer
+    learned, and one learned before is skipped.
+  - T4: the thread put its tries by hand in the check's command (one fails on purpose), so the check failed and a
+    second `run_check` committed (+1 call, about 42k). The commit reply and revision 71 now say a try is a shell call
+    of its own, never part of the check's command.
+
+### O-6b at `d6b23ff0`, rebased onto T2 (T1, T4, T6)
+
+| Task | Plain (runs) | Brigadier gate (runs) | Gate ratio | vs O-4 plain | vs stored median |
+|---|---|---|---|---|---|
+| T1 | 166,423 (155.7k, 177.1k) | 93,173.5 (106.5k, 79.9k) | 0.56× | 0.70× | 0.70× |
+| T4 | 228,697 (206.7k, 250.7k, 276.8k, —) | 216,604 (185.4k, 197.9k, 235.3k, 259.3k) | 0.95× | 1.07× | 1.07× |
+| T6 | 288,247 (288.0k, 288.5k) | 182,364.5 (195.3k, 169.4k) | 0.63× | 0.75× | 0.71× |
+
+- Plain's fourth T4 run stopped on the account's weekly limit. With its other three, the middle-two mean of four is at
+  least 228.7k whatever the fourth costs, so 0.95× is the worst case.
+- Calls per run, Brigadier against plain: T1 4–5 against 7–8, T4 7–8 against 7–9, T6 7–8 against 10. The costlier T4
+  runs spend nothing beyond the task: a 17.4k first call, one check, nothing after the commit.
+- Hidden tests pass in every completed run; high findings 0 against 0; E3 8/8; no full check ran a temporary-folder
+  command.
+- T3 and T5's full ratios (1.04×, 1.03×) are the Q48 review and its findings turn, which the gate leaves out; O4 already
+  cut the findings turn from 6 calls to 3.
+- The T2 rebase added two internal store records (a request's file record, a background run's output digest) that the
+  live feed sends with no type. The A/B and bench readers now skip them (`ed466170`, `5151f4c0`). A first O-6 run and
+  a first V2 re-run were void because of them.
+
+### V2 and V3
+
+- V3 at `19ca6bdf`: 12/12 asks, E3 12/12, no invalid tool call.
+- V2 at `19ca6bdf`: every verdict kept but one: in a Claude lookup-size run, the thread corrected a worker's false claim
+  with `remember` but without `replaces`, so the claim stayed live in its briefings. Phase O's shorter `remember` text
+  had dropped "pass it as `replaces` to correct it, or a claim you find wrong"; `d6b23ff0` restores it.
+- V2 lookup battery, size seam, at `5151f4c0` (with `d6b23ff0`): Claude 3/3 runs valid (3 seams each) and every item
+  passes, `false_learned` and `thread_only` included; each correction of the worker's false claim passes `replaces`
+  and the briefings show it replaced. Codex 2/2 valid (2 seams), every item passes but `thread_only` unknown, as in
+  the reference. No probe ran a command or read a file.
