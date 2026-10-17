@@ -748,6 +748,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, on a Claude thread, run builds, tests, logs and listings in your own shell (`cd <your workspace> && …`; output up to 30 KB comes back whole); your shell stops a command at two minutes, so one that may run longer still goes through run (run_check for a check). run leaves your tool list from the start, at your next resume: load it through ToolSearch by its name when you need it. Send a note_for_user in the same message as your last run_check, never in a call of its own. A try by hand or a one-off script is a shell call of its own, never run_check or part of its command.",
         worker: "",
     },
+    Revision {
+        number: THREAD_NAME_REVISION,
+        thread: "",
+        worker: "From now on, in your messages and your report, call the orchestrator \"the thread\": the user reads them and knows it by that name.",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1006,6 +1011,10 @@ pub(crate) const SHORT_START_REVISION: u32 = 70;
 /// A Claude thread's `run` waits behind its tool search, it runs its commands in its own shell,
 /// and its note_for_user goes with its last check (BUILD-PLAN O5).
 pub(crate) const LEAN_TOOLS_REVISION: u32 = 71;
+
+/// A worker calls the orchestrator "the thread" in its messages and report: the user reads
+/// them in the worker's view and knows it by that name (issue #62).
+pub(crate) const THREAD_NAME_REVISION: u32 = 80;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1457,6 +1466,7 @@ pub(crate) fn told_from_log<'a>(
 /// What the voice covers for a worker, and its report's shape.
 const WORKER_VOICE: &str = "
 - Your report is for the orchestrator. Summary: the outcome first (done, partly done or blocked), then the findings that answer the task. Changes: one line per file. Verification: what you ran or read and what you saw. Done when: each criterion of \"done\" in the task, with [met], [not met] or [not checked] and its evidence; [met] names it: the out-… id its check's result ends with, or path:12-14 with the exact words in backticks; a check you didn't run is [not checked], never [met]. Open questions: decisions you need. Risks: assumptions, risks, and what you skipped and why. Needs user: what only the user can do. Report failures and unknowns plainly, and never leave out a failed check.
+- In your messages and your report, call the orchestrator \"the thread\": the user reads them and knows it by that name.
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
 /// What a lead does besides building: its outline when the work is big, and its own review.
@@ -2928,6 +2938,21 @@ mod environment_tests {
                 .iter()
                 .find(|revision| revision.number == LOCAL_COMMIT_REVISION)
                 .is_some_and(|revision| revision.worker.is_empty())
+        );
+    }
+
+    /// A worker's words name the orchestrator as the user knows it (issue #62): its instructions
+    /// say so, an open worker hears it once, and the thread hears nothing.
+    #[test]
+    fn a_worker_calls_the_orchestrator_the_thread() {
+        let said = "call the orchestrator \"the thread\"";
+        assert!(worker_system("").contains(said));
+        let note = revision_note(THREAD_NAME_REVISION - 1, true).unwrap();
+        assert_eq!(note.matches(said).count(), 1);
+        assert!(
+            !revision_note(THREAD_NAME_REVISION - 1, false)
+                .unwrap_or_default()
+                .contains(said)
         );
     }
 

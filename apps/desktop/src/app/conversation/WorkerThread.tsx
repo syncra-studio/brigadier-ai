@@ -17,7 +17,7 @@ import {
 
 import { FileList } from "@/app/conversation/FileList";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
-import { receivedMessage, workerDone, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
+import { receivedMessage, workerDone, workerOutcome, workerWorking, workerPreview } from "@/app/conversation/workerPresentation";
 import { ActivityGroup, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { changeStats, FileChangeRows } from "@/app/conversation/activity/EditedFiles";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
@@ -215,7 +215,10 @@ function Brief({ text }: { text: string }) {
   );
 }
 
-/** "Working for 1m 2s" while it works, "Worked for 3m 10s" once done, over a hairline. */
+/**
+ * "Working for 1m 2s" while it works, "Worked for 3m 10s" once done, "Stopped after 3m 10s" when
+ * it was stopped before its work was used, over a hairline.
+ */
 function WorkHeader({ task }: { task: Task }) {
   const done = workerDone(task);
   const now = useNow(done ? null : 1000);
@@ -223,7 +226,7 @@ function WorkHeader({ task }: { task: Task }) {
   const took = formatDuration(Math.max(0, (done ? task.updatedAtMs : now) - start));
   return (
     <div data-slot="worker-work-header" className="text-foreground/50 border-border border-b pb-2 text-sm tabular-nums">
-      {done ? `Worked for ${took}` : `Working for ${took}`}
+      {workerOutcome(task) === "stopped" ? `Stopped after ${took}` : done ? `Worked for ${took}` : `Working for ${took}`}
     </div>
   );
 }

@@ -42,7 +42,7 @@ createRoot(document.getElementById("root")!).render(
       {rows.map((row) => (
         <div key={row.id} data-fixture={row.id}>
           <GitActions conversationId={row.id} workspace={row.workspace} mergeable={hasWork(row.diff)}>
-            <span className="min-w-0 flex-1 truncate">brigadier/session</span>
+            <span data-slot="branch-name" className="min-w-0 flex-1 truncate">brigadier/add-four-export-formats</span>
           </GitActions>
         </div>
       ))}
@@ -78,6 +78,9 @@ const seen: Record<string, unknown> = {};
 try {
   await until("the rows", () => rows.every(({ id }) => dots(id) !== undefined));
   seen.buttons = Object.fromEntries(rows.map(({ id }) => [id, merges(id)]));
+  // The branch keeps its whole name beside the merge button in the side panel's width.
+  const name = row("with-work").querySelector<HTMLElement>("[data-slot=branch-name]")!;
+  seen.nameCut = name.scrollWidth > name.clientWidth;
   seen.menus = { "with-work": await menu("with-work"), "no-workspace": await menu("no-workspace") };
   await fixtureClick(row("with-work").querySelector("[data-slot=merge-session]")!);
   await until("the merge", () => calls.length > 0);

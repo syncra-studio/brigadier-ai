@@ -96,50 +96,54 @@ export const GitActions: FC<{
   return (
     <Popover open={committing} onOpenChange={setCommitting}>
       <PopoverAnchor asChild>
-        <div className="group/git flex min-w-0 items-center gap-2">
-          {children}
-          {workspace && mergeable && <MergeButton conversationId={conversationId} base={workspace.base} />}
-          <DropdownMenu open={menu} onOpenChange={setMenu}>
-            <DropdownMenuTrigger asChild>
-              <TooltipIconButton
-                tooltip="Git actions"
-                size="icon-xs"
-                className={cn(
-                  "opacity-0 transition-opacity group-hover/git:opacity-100 focus-visible:opacity-100",
-                  menu && "opacity-100",
+        <div className="group/git flex min-w-0 flex-col items-start gap-1">
+          <div className="flex w-full min-w-0 items-center gap-2">
+            {children}
+            <DropdownMenu open={menu} onOpenChange={setMenu}>
+              <DropdownMenuTrigger asChild>
+                <TooltipIconButton
+                  tooltip="Git actions"
+                  size="icon-xs"
+                  className={cn(
+                    "opacity-0 transition-opacity group-hover/git:opacity-100 focus-visible:opacity-100",
+                    menu && "opacity-100",
+                  )}
+                >
+                  <DotsHorizontal />
+                </TooltipIconButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className="min-w-36"
+                onCloseAutoFocus={(event) => {
+                  if (!commitNext.current) return;
+                  commitNext.current = false;
+                  event.preventDefault();
+                  setCommitting(true);
+                }}
+              >
+                <DropdownMenuItem onSelect={() => (commitNext.current = true)}>Commit</DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={!state?.remote || state.ahead === 0}
+                  onSelect={() => push(conversationId)}
+                >
+                  Push
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled title={BRANCH_FIXED}>
+                  Create branch
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled title={BRANCH_FIXED}>
+                  Switch branch
+                </DropdownMenuItem>
+                {workspace && (
+                  <DropdownMenuItem onSelect={() => setClosing(true)}>Close workspace…</DropdownMenuItem>
                 )}
-              >
-                <DotsHorizontal />
-              </TooltipIconButton>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="min-w-36"
-              onCloseAutoFocus={(event) => {
-                if (!commitNext.current) return;
-                commitNext.current = false;
-                event.preventDefault();
-                setCommitting(true);
-              }}
-            >
-              <DropdownMenuItem onSelect={() => (commitNext.current = true)}>Commit</DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={!state?.remote || state.ahead === 0}
-                onSelect={() => push(conversationId)}
-              >
-                Push
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled title={BRANCH_FIXED}>
-                Create branch
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled title={BRANCH_FIXED}>
-                Switch branch
-              </DropdownMenuItem>
-              {workspace && (
-                <DropdownMenuItem onSelect={() => setClosing(true)}>Close workspace…</DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+          {/* The merge button on a line of its own: beside the branch in the side panel's width,
+              it cut the branch's name to its first letters. */}
+          {workspace && mergeable && <MergeButton conversationId={conversationId} base={workspace.base} />}
           {workspace && (
             <CloseWorkspaceDialog
               conversationId={conversationId}
