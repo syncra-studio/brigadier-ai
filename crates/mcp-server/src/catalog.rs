@@ -236,10 +236,12 @@ card answer that agrees, or a message that asks for it (\"merge it\", also toget
 work: then merge as soon as it has landed, without asking again). A question about the merge, \
 or a \"not\" about something else, is no \"no\"; a \"wait\", a \"no\" or a condition aimed at \
 the merge is. Pass in consent the card's id, or their words quoted exactly from the message; \
-Brigadier checks only that it is the user's and no earlier merge used it. \"merge it when \
-done\" is consent. While workers write it holds the merge ([merge held]) and tells you [merge \
-due] once they land: call it again then, without asking. The session keeps its worktree and \
-branch after the merge. Returns when merged, saying where its full checks and reviews stand.";
+Brigadier checks only that it is the user's and no earlier merge used it. It merges what has \
+landed and names what still runs; when the user asked to merge once the work is done (\"merge it \
+when done\"), pass when \"workers_finish\": it holds the merge ([merge held]) and tells you \
+[merge due] once the workers land: call it again then, without asking. Its result also states \
+what the user wrote since and work that landed after their consent. The session keeps its \
+worktree and branch after the merge. Returns when merged, saying where its full checks and reviews stand.";
 
 const STOP_MERGE: &str = "Stop the held merge when the user's words since their consent take it \
 back or put it off (\"wait\", \"don't merge yet\", a new condition on it). A question about the \

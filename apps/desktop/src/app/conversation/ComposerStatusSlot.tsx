@@ -172,7 +172,7 @@ export const ComposerStatusSlot: FC<{ conversationId: string }> = ({ conversatio
     useShallow((s) => {
       const board = s.board;
       if (board?.conversationId !== conversationId) return [null, "", "", 0, false];
-      const merge = heldMerge(board.orchestratorSteps, board.tasks, Object.values(board.reviews), Object.values(board.questions));
+      const merge = heldMerge(board.orchestratorSteps, board.tasks, Object.values(board.questions));
       return merge ? [mergeWords(merge), merge.branch, merge.base, merge.sinceMs, merge.asking] : [null, "", "", 0, false];
     }),
   );

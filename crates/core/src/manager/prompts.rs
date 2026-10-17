@@ -812,6 +812,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, review findings and a review still running inform a merge, never stop or hold it: finish_session merges, and its result lists open, unrecorded and unverified findings and a review still running, for you to tell the user. A held merge is due once its workers land.",
         worker: "",
     },
+    Revision {
+        number: MERGE_WHEN_REVISION,
+        thread: "From now on, finish_session merges what has landed and names the workers still running; it holds the merge only when you pass when \"workers_finish\" (the user asked to merge once the work is done). What the user wrote since their consent, and work that landed after it, no longer refuse a merge: its result states them for you to judge and tell the user.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1105,6 +1110,9 @@ pub(crate) const CHECKS_INFORM_REVISION: u32 = 89;
 /// Review findings, and a review still running, inform a merge instead of stopping or holding
 /// it (#242).
 pub(crate) const FINDINGS_INFORM_REVISION: u32 = 90;
+/// finish_session holds a merge only on `when: "workers_finish"`, and what the user wrote since
+/// or work that landed after the consent are facts in its result, not refusals (#243).
+pub(crate) const MERGE_WHEN_REVISION: u32 = 91;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:

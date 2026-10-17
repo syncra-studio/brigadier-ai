@@ -1431,14 +1431,29 @@ impl SessionManager {
         Ok(sent.max(queued))
     }
 
-    /// `finish_session`: merges the session branch into its base once the user consented: their
-    /// click on "Merge into main", their card answer, or their message (`consent`, its id or their words;
-    /// [`merge_consent`]).
+    /// `finish_session` with `when` "now": see [`Self::finish_session_when`].
+    #[cfg(test)]
     pub(crate) async fn finish_session(
         &self,
         id: &ConversationId,
         named: &str,
         message: Option<String>,
+    ) -> Result<String> {
+        self.finish_session_when(id, named, message, crate::tools::MergeWhen::Now)
+            .await
+    }
+
+    /// `finish_session`: merges the session branch into its base once the user consented: their
+    /// click on "Merge into main", their card answer, or their message (`consent`, its id or their words;
+    /// [`merge_consent`]). `when`: now, what has landed, or held until the workers writing now
+    /// land (#243). What the user wrote since, work that landed since their consent and work
+    /// still running are facts its result states, for the thread to judge.
+    pub(crate) async fn finish_session_when(
+        &self,
+        id: &ConversationId,
+        named: &str,
+        message: Option<String>,
+        when: crate::tools::MergeWhen,
     ) -> Result<String> {
         if self.overnight.active.get(id).is_some() {
             return Err(Error::Invalid(
@@ -1460,11 +1475,7 @@ impl SessionManager {
         // The landing lock, held to the move of the base: a Cancel either comes first and
         // spends the consent, or finds it merged.
         let landing_lock = conv.merge_lock.lock().await;
-        let (consent, wrote) = {
-            let wrote = conv.user_wrote.lock().await;
-            let consent = self.merge_consent(id, named, &branch, &base).await?;
-            (consent, *wrote)
-        };
+        let consent = self.merge_consent(id, named, &branch, &base).await?;
         // What the thread committed itself gets its review before the branch is merged.
         self.scan_thread_commits(id, self.thread_turn_running(id).await)
             .await;
@@ -1475,9 +1486,9 @@ impl SessionManager {
             .collect();
         let board = self.core.board(id).await?;
         let pending = pending_merge(&board).filter(|held| held.asked_in == consent.asked_in);
-        // Consent given while workers write holds until they finish (SESSION-FIXES-PLAN.md
-        // Q3): stored, so it survives a restart.
-        if !writing.is_empty() {
+        // The thread asked to merge once the workers writing now finish (SESSION-FIXES-PLAN.md
+        // Q3): held, stored, so it survives a restart. Otherwise it merges what has landed.
+        if when == crate::tools::MergeWhen::WorkersFinish && !writing.is_empty() {
             if pending.is_none() {
                 let (git, repo_path, branch_name) =
                     (self.git.clone(), PathBuf::from(&repo), branch.clone());
@@ -1496,7 +1507,7 @@ impl SessionManager {
                         base: base.clone(),
                         asked_in: consent.asked_in.clone(),
                         consented_at_ms: consent.at_ms,
-                        condition: consent.condition,
+                        condition: crate::work::MergeCondition::WorkersFinish,
                         waiting: writing.iter().map(|t| t.id.clone()).collect(),
                         tip: tip.0,
                     },
@@ -1529,11 +1540,24 @@ impl SessionManager {
                 .filter(|m| !m.trim().is_empty())
                 .unwrap_or_else(|| format!("Merge {branch} into {base}")),
         );
+        // Workers that still write: their work isn't in this merge.
+        let running = if writing.is_empty() {
+            String::new()
+        } else {
+            let names: Vec<String> = writing
+                .iter()
+                .map(|t| format!("task-{} \"{}\"", t.number, t.title))
+                .collect();
+            format!(
+                " Still running, so not in this merge: {}.",
+                names.join(", ")
+            )
+        };
         enum Prepared {
-            Ready(Oid, Oid, Oid, u32),
+            /// The merge commit, the base's tip, the branch's, its commit count, and whether
+            /// work landed on the branch since the held consent.
+            Ready(Oid, Oid, Oid, u32, bool),
             Conflicts(Vec<String>, Oid),
-            /// Other work landed on the branch since the held consent.
-            Moved,
         }
         let (git, repo_path, base_name, branch_name, covered) = (
             self.git.clone(),
@@ -1543,16 +1567,14 @@ impl SessionManager {
             pending.as_ref().map(|held| held.tip.clone()),
         );
         // A held consent covers the branch as it was then, moved on by the session's own
-        // landings since: only the user's words take it back (Q3); other work isn't covered.
+        // landings since; other work since is a fact the result states (#243).
         let prepared = blocking(move || {
             let repo = git.open(&repo_path).map_err(git_error)?;
             let tip = repo
                 .branch_tip(&branch_name)
                 .map_err(git_error)?
                 .ok_or_else(|| Error::Invalid("the session branch is gone".into()))?;
-            if covered.is_some_and(|covered| covered != tip.0) {
-                return Ok(Prepared::Moved);
-            }
+            let moved = covered.is_some_and(|covered| covered != tip.0);
             let outcome = repo
                 .prepare_merge_commit(&base_name, &tip, &message)
                 .map_err(git_error)?;
@@ -1561,7 +1583,7 @@ impl SessionManager {
                     commit, base_tip, ..
                 } => {
                     let commits = repo.count_commits(&base_tip, &tip).map_err(git_error)?;
-                    Ok(Prepared::Ready(commit, base_tip, tip, commits))
+                    Ok(Prepared::Ready(commit, base_tip, tip, commits, moved))
                 }
                 MergeOutcome::Conflicts { paths } => Ok(Prepared::Conflicts(paths, tip)),
             }
@@ -1575,22 +1597,13 @@ impl SessionManager {
                 release.notified().await;
             }
         }
-        let (commit, base_tip, session_tip, commits) = match prepared {
-            Prepared::Ready(commit, base_tip, tip, commits) => (commit, base_tip, tip, commits),
-            Prepared::Moved => {
-                return Err(Error::Invalid(format!(
-                    "[not merged] Other work landed on `{branch}` since the user consented, and their consent doesn't cover it. Nothing was merged. Tell the user; it merges on their next words asking for it."
-                )));
+        let (commit, base_tip, session_tip, commits, moved) = match prepared {
+            Prepared::Ready(commit, base_tip, tip, commits, moved) => {
+                (commit, base_tip, tip, commits, moved)
             }
             Prepared::Conflicts(paths, tip) => {
                 // The merge used no consent: it is held, stored, until the merge task that
-                // merges the base into the branch lands, if what the user wrote since the
-                // first look still allows it.
-                let now = conv.user_wrote.lock().await;
-                if *now != wrote {
-                    return Err(wrote_meanwhile());
-                }
-                let consent = self.merge_consent(id, named, &branch, &base).await?;
+                // merges the base into the branch lands.
                 if pending.is_none() {
                     self.orchestrator_step(
                         id,
@@ -1599,7 +1612,7 @@ impl SessionManager {
                             base: base.clone(),
                             asked_in: consent.asked_in,
                             consented_at_ms: consent.at_ms,
-                            condition: consent.condition,
+                            condition: crate::work::MergeCondition::Now,
                             waiting: Vec::new(),
                             tip: tip.0,
                         },
@@ -1617,15 +1630,10 @@ impl SessionManager {
                 "`{branch}` has no commits that `{base}` lacks"
             )));
         }
-        // The last look at consent and the landing are one step for what the user writes: a
-        // message sent while the merge was prepared stops it for the thread to read; one sent
-        // now comes after it.
+        // What the user wrote while the merge was prepared is a fact its result states (#243):
+        // a write under way finishes first, and one sent from now on comes after the merge.
+        let writes = conv.user_wrote.lock().await;
         let landing = {
-            let now = conv.user_wrote.lock().await;
-            if *now != wrote {
-                return Err(wrote_meanwhile());
-            }
-            self.merge_consent(id, named, &branch, &base).await?;
             let (git, repo_path, session_branch) =
                 (self.git.clone(), PathBuf::from(&repo), branch.clone());
             let request = LandRequest {
@@ -1646,7 +1654,11 @@ impl SessionManager {
             .await
         };
         let new_tip = match landing {
-            Ok(Some(LandOutcome::Landed { new_tip })) => new_tip,
+            Ok(Some(LandOutcome::Landed { new_tip })) => {
+                let since = self.wrote_since_consent(id, &consent).await;
+                drop(writes);
+                (new_tip, since)
+            }
             Ok(None) => {
                 return Err(Error::Invalid(format!(
                     "[not merged] `{branch}` changed while the merge was being prepared. Nothing was merged; call finish_session again."
@@ -1688,8 +1700,15 @@ impl SessionManager {
             }
             Err(_) => String::new(),
         };
-        let since = self.wrote_since_consent(id, &consent).await;
+        let (new_tip, since) = new_tip;
         let checks = self.checks_line(id, &branch, &session_tip).await;
+        let moved = if moved {
+            format!(
+                " Work landed on `{branch}` after the user's consent, and it is in this merge too."
+            )
+        } else {
+            String::new()
+        };
         self.orchestrator_step(
             id,
             OrchestratorStepKind::Merged {
@@ -1712,7 +1731,7 @@ impl SessionManager {
             .follow_merge(&repo, &branch, &base, session_tip, new_tip.clone())
             .await;
         Ok(format!(
-            "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{checks}{reviews}{released}{since}",
+            "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{running}{moved}{checks}{reviews}{released}{since}",
             if commits == 1 { "" } else { "s" },
             short(&new_tip)
         ))
@@ -2056,8 +2075,8 @@ impl SessionManager {
     }
 
     /// Consent `held` (a pending merge), unless it was used, cancelled or stopped (the thread
-    /// stops it with stop_merge when the user's words since take it back), or something the
-    /// user wrote waits in the queue. `refused` is why fresh consent was refused.
+    /// stops it with stop_merge when the user's words since take it back). `refused` is why
+    /// fresh consent was refused.
     async fn held_consent(
         &self,
         id: &ConversationId,
@@ -2068,15 +2087,9 @@ impl SessionManager {
         if pending_merge(&board).is_none_or(|now| now.asked_in != held.asked_in) {
             return Err(refused);
         }
-        if wrote_since(&board, held.consented_at_ms) {
-            return Err(not_consented(
-                "the user wrote again since (it waits in the queue): read it first".into(),
-            ));
-        }
         Ok(Consent {
             asked_in: held.asked_in,
             at_ms: held.consented_at_ms,
-            condition: held.condition,
         })
     }
 
@@ -2086,6 +2099,34 @@ impl SessionManager {
         let Ok(messages) = self.core.all_messages(id).await else {
             return String::new();
         };
+        let quoted = |text: &str| {
+            let text = text.trim();
+            match text.char_indices().nth(300) {
+                Some((at, _)) => format!("\"{}…\"", &text[..at]),
+                None => format!("\"{text}\""),
+            }
+        };
+        // A message still in the queue, unread (#243).
+        let queued: Vec<String> = match self.core.board(id).await {
+            Ok(board) => board
+                .queue
+                .items
+                .iter()
+                .filter(|item| {
+                    item.queued_at_ms.max(item.edited_at_ms.unwrap_or(0)) >= consent.at_ms
+                })
+                .map(|item| quoted(&item.text))
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        let queued = if queued.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " Still waiting for you to read, sent after the consent: {}. If it meant the merge should wait, tell them at once.",
+                queued.join(", ")
+            )
+        };
         let said: Vec<String> = messages
             .iter()
             .filter(|message| {
@@ -2093,19 +2134,13 @@ impl SessionManager {
                     && message.id != consent.asked_in
                     && message.created_at_ms > consent.at_ms
             })
-            .map(|message| {
-                let text = message.text.trim();
-                match text.char_indices().nth(300) {
-                    Some((at, _)) => format!("\"{}…\"", &text[..at]),
-                    None => format!("\"{text}\""),
-                }
-            })
+            .map(|message| quoted(&message.text))
             .collect();
         if said.is_empty() {
-            return String::new();
+            return queued;
         }
         format!(
-            " The user wrote after the consent it went on: {}. If that meant it should wait, tell them at once.",
+            " The user wrote after the consent it went on: {}. If that meant it should wait, tell them at once.{queued}",
             said.join(", ")
         )
     }
@@ -2113,8 +2148,8 @@ impl SessionManager {
     /// What gives consent to the session's merge, as the thread names it (`consent`, #240):
     /// the id of the user's message, card answer or "Merge into main" click it acts on, or the
     /// user's words quoted from their message. Empty: their click since their latest message.
-    /// The thread judges whether the user consents; this only checks that it is the user's,
-    /// that nothing they wrote waits unread in the queue, and that no earlier merge used it.
+    /// The thread judges whether the user consents; this only checks that it is the user's and
+    /// that no earlier merge used it.
     async fn fresh_consent(
         &self,
         id: &ConversationId,
@@ -2132,13 +2167,6 @@ impl SessionManager {
         let latest = messages
             .iter()
             .rfind(|message| message.role == MessageRole::User);
-        let wrote_since = |since: i64| {
-            board
-                .queue
-                .items
-                .iter()
-                .any(|item| item.queued_at_ms.max(item.edited_at_ms.unwrap_or(0)) >= since)
-        };
         let clicks = board
             .orchestrator_steps
             .iter()
@@ -2164,9 +2192,9 @@ impl SessionManager {
                     "name the user's message, card answer or click you act on in `consent`, or quote their words".into(),
                 ));
             };
-            (asked, at, crate::work::MergeCondition::Now)
+            (asked, at)
         } else if let Some((asked, at)) = clicks.clone().find(|(click, _)| click == consent) {
-            (asked, at, crate::work::MergeCondition::Now)
+            (asked, at)
         } else if let Some(card) = board
             .questions
             .values()
@@ -2175,7 +2203,6 @@ impl SessionManager {
             (
                 card.id.to_string(),
                 card.answered_at_ms.unwrap_or(card.created_at_ms),
-                crate::work::MergeCondition::Now,
             )
         } else {
             let merged = board
@@ -2201,27 +2228,17 @@ impl SessionManager {
                     "\"{consent}\" is no message, card answer or click of the user's since the last merge; name the one you act on, or quote their words from it"
                 )));
             };
-            (
-                message.id.clone(),
-                message.created_at_ms,
-                merge_consent::condition(&message.text),
-            )
+            (message.id.clone(), message.created_at_ms)
         };
-        let (asked, at_ms, condition) = named;
+        let (asked, at_ms) = named;
         if used(&asked) {
             return Err(refuse(
                 "that consent was used for a merge already, or the user cancelled it; another merge needs their fresh word".into(),
             ));
         }
-        if wrote_since(at_ms) {
-            return Err(refuse(
-                "the user wrote again since (it waits in the queue): read it first".into(),
-            ));
-        }
         Ok(Consent {
             asked_in: asked,
             at_ms,
-            condition,
         })
     }
 
@@ -2391,8 +2408,6 @@ pub(super) struct Consent {
     asked_in: String,
     /// When they gave it.
     at_ms: i64,
-    /// What it waits for ("merge when done").
-    condition: crate::work::MergeCondition,
 }
 
 /// The session's merge the user consented to while workers wrote, or that stopped at
@@ -2583,12 +2598,6 @@ fn not_consented(why: String) -> Error {
     Error::Invalid(format!(
         "[not merged] {why}. Nothing was merged. Merge only once the user consents: [merge], or their own words asking for it. You may say once, in plain text, that the work is ready."
     ))
-}
-
-fn wrote_meanwhile() -> Error {
-    Error::Invalid(
-        "[not merged] The user wrote again while the merge was being prepared: read what they said. Nothing was merged; call finish_session again only if their consent still stands.".into(),
-    )
 }
 
 /// What the code reviews of the work merged now say, for the thread to tell the user: those it

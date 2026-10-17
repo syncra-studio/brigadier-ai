@@ -868,6 +868,22 @@ pub struct FinishSession {
     /// The merge commit message, when a merge commit is needed.
     #[serde(default)]
     pub message: Option<String>,
+    /// When it merges: "now" (the default) merges what has landed, even while workers still
+    /// write; "workers_finish", when the user asked to merge once the running work is done,
+    /// holds it until they land.
+    #[serde(default)]
+    pub when: MergeWhen,
+}
+
+/// When `finish_session` merges (#243).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeWhen {
+    /// Now: what has landed.
+    #[default]
+    Now,
+    /// Once the workers writing now have landed.
+    WorkersFinish,
 }
 
 /// `stop_merge`: stop the held merge, because the user's words since their consent take it

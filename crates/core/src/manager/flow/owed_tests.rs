@@ -118,7 +118,7 @@ async fn a_held_merge_waiting_on_a_review_keeps_its_request_working_and_done_onc
                     let reply = turn
                         .call(
                             "finish_session",
-                            json!({"user_words": "merge it when done"}),
+                            json!({"user_words": "merge it when done", "when": "workers_finish"}),
                         )
                         .await;
                     assert!(reply.text.contains("[merge held]"), "{}", reply.text);

@@ -388,9 +388,13 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_the_merge_states_it
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
-                    // The merge waits for the fix's writer, not for the checks.
+                    // The merge waits for the fix's writer, as the thread asks, not for the
+                    // checks.
                     let merge = turn
-                        .call("finish_session", json!({"user_words": "merge it"}))
+                        .call(
+                            "finish_session",
+                            json!({"user_words": "merge it", "when": "workers_finish"}),
+                        )
                         .await;
                     assert!(!merge.is_error, "{}", merge.text);
                     log.lock().unwrap().merges.push(merge.text);

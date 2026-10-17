@@ -1,5 +1,5 @@
 import { questionOpen } from "@/app/conversation/cards/questionRound";
-import type { CiRun, OrchestratorStep, OrchestratorStepKind, Question, ReviewRun, Task, TaskState } from "@/ipc/generated";
+import type { CiRun, OrchestratorStep, OrchestratorStepKind, Question, Task, TaskState } from "@/ipc/generated";
 
 type CiWatchKind = Extract<OrchestratorStepKind, { type: "ciWatch" }>;
 
@@ -121,23 +121,25 @@ export type HeldMergeView = {
   base: string;
   /** The write tasks it still waits for. */
   waiting: number;
-  /** A review of the session's work still runs: the merge waits for it too. */
-  reviewing: boolean;
+  /** One of them is a merge task bringing the base in (the merge met conflicts). */
+  mergingIn: boolean;
   /** A merge card asked since the user's yes waits for their answer: the merge waits on it. */
   asking: boolean;
   sinceMs: number;
 };
 
+const WRITES: readonly Task["kind"][] = ["implement", "merge"];
+
 /**
  * The held merge (SESSION-FIXES-PLAN.md Q3), while it is held: its latest `mergeHeld` row with
- * no merge, Cancel or stop since. It waits for the write tasks that ran when it was held, until
- * each is final (the daemon's `is_final`), and then for the reviews of their landings. When the
- * thread asks again on a merge card (the user wrote since their yes), it waits for that answer.
+ * no merge, Cancel or stop since. It waits for the write tasks that ran when it was held, or
+ * started since (a merge task after conflicts, #223), until each is final (the daemon's
+ * `is_final`); reviews and the full checks don't hold it (#241, #242). When the thread asks
+ * again on a merge card (the user wrote since their yes), it waits for that answer.
  */
 export function heldMerge(
   steps: readonly OrchestratorStep[],
   tasks: Readonly<Record<string, Task>>,
-  reviews: readonly ReviewRun[],
   questions: readonly Question[] = [],
 ): HeldMergeView | null {
   type Held = { kind: Extract<OrchestratorStepKind, { type: "mergeHeld" }>; sinceMs: number };
@@ -152,28 +154,31 @@ export function heldMerge(
     }
   }
   if (!held) return null;
-  const waiting = held.kind.waiting.filter((id) => {
-    const task = tasks[id];
-    return task !== undefined && !FINAL.includes(task.state);
-  }).length;
-  const reviewing = reviews.some(
-    (review) => review.kind === "code" && review.notify.type === "orchestrator" && review.state.type === "running",
+  const sinceMs = held.sinceMs;
+  const writers = Object.values(tasks).filter(
+    (task) =>
+      !FINAL.includes(task.state) &&
+      (held.kind.waiting.includes(task.id) || (WRITES.includes(task.kind) && task.createdAtMs >= sinceMs)),
   );
+  const waiting = writers.length;
+  // A merge task with no subject brings the base in; one with a subject merges into a worker's.
+  const mergingIn = writers.some((task) => task.kind === "merge" && task.subject === null);
   const consentedAtMs = held.kind.consentedAtMs;
   const asking = questions.some(
     (question) => question.kind.type === "merge" && questionOpen(question) && question.createdAtMs >= consentedAtMs,
   );
-  return { branch: held.kind.branch, base: held.kind.base, waiting, reviewing, asking, sinceMs: held.sinceMs };
+  return { branch: held.kind.branch, base: held.kind.base, waiting, mergingIn, asking, sinceMs };
 }
 
 /**
- * "Merging after 2 workers finish", then "Merging after the review", then "Merging…"; while a
- * merge card waits, "Waiting for your yes to merge".
+ * "Merging after main is merged in" while a merge task resolves conflicts, "Merging after 2
+ * workers finish", then "Merging…"; while a merge card waits, "Waiting for your yes to merge".
  */
-export function mergeWords(merge: Pick<HeldMergeView, "waiting" | "reviewing" | "asking">): string {
+export function mergeWords(merge: Pick<HeldMergeView, "base" | "waiting" | "mergingIn" | "asking">): string {
   if (merge.asking) return "Waiting for your yes to merge";
+  if (merge.mergingIn) return `Merging after ${merge.base} is merged in`;
   if (merge.waiting > 0) return `Merging after ${merge.waiting} ${merge.waiting === 1 ? "worker finishes" : "workers finish"}`;
-  return merge.reviewing ? "Merging after the review" : "Merging…";
+  return "Merging…";
 }
 
 export type SlotRow = "workers" | "ci" | "merge";

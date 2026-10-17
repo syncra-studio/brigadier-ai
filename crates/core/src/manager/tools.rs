@@ -568,7 +568,7 @@ impl SessionManager {
             OrchestratorCall::FinishSession(args) => {
                 crate::heap(|| self.check_plan_mode(id)).await?;
                 let consent = args.consent.as_deref().unwrap_or(&args.user_words);
-                crate::heap(|| self.finish_session(id, consent, args.message)).await
+                crate::heap(|| self.finish_session_when(id, consent, args.message, args.when)).await
             }
             OrchestratorCall::StopMerge(args) => {
                 crate::heap(|| self.stop_merge(id, &args.why)).await

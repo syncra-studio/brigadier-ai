@@ -1663,10 +1663,11 @@ async fn the_merge_is_asked_in_words_and_happens_only_on_the_users_yes() {
     flow.stop().await;
 }
 
-/// A "wait" the user sends while the merge is being prepared stops it: the last look at their
-/// consent, right before it lands, sees they wrote again.
+/// A "wait" the user sends while the merge is being prepared doesn't refuse it: the thread
+/// judged the consent it names, and the result quotes what they wrote since, for the thread to
+/// tell them at once (#243).
 #[tokio::test]
-async fn a_wait_sent_while_the_merge_is_prepared_stops_it() {
+async fn a_wait_sent_while_the_merge_is_prepared_is_named_in_its_result() {
     let replies: MergeReplies = Arc::default();
     let log = replies.clone();
     let flow = Flow::start(
@@ -1677,8 +1678,8 @@ async fn a_wait_sent_while_the_merge_is_prepared_stops_it() {
             async move {
                 if turn.input.contains("Add notes and merge it.") {
                     commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    assert!(!finish(&turn, "merge it", &log).await);
-                    return Reply::text("You wrote again, so I didn't merge.");
+                    assert!(finish(&turn, "merge it", &log).await);
+                    return Reply::text("Merged; you wrote \"wait!\" meanwhile.");
                 }
                 Reply::text("Done.")
             }
@@ -1700,12 +1701,13 @@ async fn a_wait_sent_while_the_merge_is_prepared_stops_it() {
     reached.notified().await;
     flow.say("wait!").await;
     release.notify_one();
-    flow.until("the refused merge", |_| !replies.lock().unwrap().is_empty())
+    flow.until("the merge", |_| !replies.lock().unwrap().is_empty())
         .await;
     flow.settled().await;
     let replies = replies.lock().unwrap().clone();
-    assert!(replies[0].0.contains("wrote again"), "{replies:#?}");
-    assert!(!on_main(&flow, "NOTES.md"), "nothing merged");
+    assert!(replies[0].0.contains("[finished]"), "{replies:#?}");
+    assert!(replies[0].0.contains("\"wait!\""), "{replies:#?}");
+    assert!(on_main(&flow, "NOTES.md"));
     flow.stop().await;
 }
 
@@ -1769,10 +1771,10 @@ async fn a_wait_still_being_stored_when_the_merge_looks_is_named_in_its_result()
     flow.stop().await;
 }
 
-/// The user editing a queued message while the merge is being prepared stops it, as a new
-/// message would: an older queued item doesn't hold the merge, its edit does.
+/// The user editing a queued message while the merge is being prepared is named in its result,
+/// as a new message would be: an older queued item isn't, its edit is (#243).
 #[tokio::test]
-async fn a_queued_message_edited_while_the_merge_is_prepared_stops_it() {
+async fn a_queued_message_edited_while_the_merge_is_prepared_is_named_in_its_result() {
     let replies: MergeReplies = Arc::default();
     let log = replies.clone();
     let flow = Flow::start(
@@ -1783,8 +1785,8 @@ async fn a_queued_message_edited_while_the_merge_is_prepared_stops_it() {
             async move {
                 if turn.input.contains("Add notes and merge it.") {
                     commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
-                    assert!(!finish(&turn, "merge it", &log).await);
-                    return Reply::text("You wrote again, so I didn't merge.");
+                    assert!(finish(&turn, "merge it", &log).await);
+                    return Reply::text("Merged; you edited a queued message meanwhile.");
                 }
                 Reply::text("Done.")
             }
@@ -1839,11 +1841,15 @@ async fn a_queued_message_edited_while_the_merge_is_prepared_stops_it() {
         .await
         .unwrap();
     release.notify_one();
-    flow.until("the refused merge", |_| !replies.lock().unwrap().is_empty())
+    flow.until("the merge", |_| !replies.lock().unwrap().is_empty())
         .await;
     let replies = replies.lock().unwrap().clone();
-    assert!(replies[0].0.contains("wrote again"), "{replies:#?}");
-    assert!(!on_main(&flow, "NOTES.md"), "nothing merged");
+    assert!(replies[0].0.contains("[finished]"), "{replies:#?}");
+    assert!(
+        replies[0].0.contains("\"wait, don't merge\""),
+        "{replies:#?}"
+    );
+    assert!(on_main(&flow, "NOTES.md"));
     flow.stop().await;
 }
 

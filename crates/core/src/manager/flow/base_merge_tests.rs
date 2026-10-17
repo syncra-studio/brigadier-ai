@@ -414,7 +414,7 @@ async fn a_wait_between_conflict_and_retry_stops_the_held_merge() {
 }
 
 #[tokio::test]
-async fn a_wait_during_conflict_preparation_does_not_save_consent() {
+async fn a_wait_during_conflict_preparation_is_left_to_the_thread() {
     let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
     let conv = flow.manager.conv(&flow.conversation).unwrap();
     let reached = Arc::new(tokio::sync::Notify::new());
@@ -426,9 +426,14 @@ async fn a_wait_during_conflict_preparation_does_not_save_consent() {
     reached.notified().await;
     flow.say("wait!").await;
     release.notify_one();
+    // The thread judges the "wait!" (#243): it comes to it with [merge held], and stop_merge
+    // ends the hold; the engine refuses nothing for it.
     let error = pending.await.unwrap().unwrap_err().to_string();
-    assert!(error.contains("wrote again"), "{error}");
-    assert!(crate::manager::landing::pending_merge(&flow.board().await).is_none());
+    assert!(
+        error.contains("conflicts with the current `main`"),
+        "{error}"
+    );
+    assert!(crate::manager::landing::pending_merge(&flow.board().await).is_some());
     *conv.merge_pause.lock().unwrap() = None;
     flow.stop().await;
 }
@@ -566,7 +571,7 @@ async fn a_file_main_deleted_that_the_session_never_touched_goes_with_no_reason(
 }
 
 #[tokio::test]
-async fn held_consent_does_not_cover_an_unrelated_merge_parent() {
+async fn an_unrelated_merge_parent_after_the_consent_is_no_refusal() {
     let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
     conflict(&flow, "merge it").await;
     let branch = branch(&flow);
@@ -601,24 +606,19 @@ async fn held_consent_does_not_cover_an_unrelated_merge_parent() {
             &session,
         ],
     );
-    let mut error = flow
+    let error = flow
         .manager
         .finish_session(&flow.conversation, "merge it", None)
         .await
         .unwrap_err()
         .to_string();
-    // The unrelated work gets its own review as the merge is asked for; on a slow machine it
-    // still runs then, and the held merge waits for it before anything else is checked.
-    if error.contains("review of the session's work still runs") {
-        review_ended(&flow, &merge).await;
-        error = flow
-            .manager
-            .finish_session(&flow.conversation, "merge it", None)
-            .await
-            .unwrap_err()
-            .to_string();
-    }
-    assert!(error.contains("consent doesn't cover it"), "{error}");
+    // Work after the consent is a fact, not a refusal (#243): the merge is prepared, and the
+    // unrelated history conflicts with main, so nothing merges.
+    assert!(!error.contains("consent doesn't cover it"), "{error}");
+    assert!(
+        error.contains("conflicts with the current `main`"),
+        "{error}"
+    );
     assert_eq!(git(&flow.repo, &["show", "main:README.md"]), "# Base");
     flow.stop().await;
 }
@@ -658,17 +658,17 @@ async fn a_merge_whose_target_moved_goes_back_to_the_same_worker_and_lands_both(
         "# Session and Base, again"
     );
     review_ended(&flow, &landed).await;
-    // The consent held over didn't cover the other work: the user's fresh yes does.
-    let error = flow
+    // The consent held over didn't cover the other work: the merge says it went in too, for
+    // the thread to tell the user (#243).
+    let merged = flow
         .manager
         .finish_session(&flow.conversation, "merge it", None)
         .await
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("consent doesn't cover it"), "{error}");
-    flow.say("merge it").await;
-    flow.settled().await;
-    finish(&flow, "merge it").await;
+        .unwrap();
+    assert!(
+        merged.contains("after the user's consent, and it is in this merge too"),
+        "{merged}"
+    );
     assert_eq!(
         git(&flow.repo, &["show", "main:README.md"]),
         "# Session and Base, again"

@@ -215,7 +215,7 @@ async fn held(name: &str, plan: Plan) -> Held {
                     let reply = turn
                         .call(
                             "finish_session",
-                            json!({"user_words": "merge it when done"}),
+                            json!({"user_words": "merge it when done", "when": "workers_finish"}),
                         )
                         .await;
                     log(&format!("finish_session: {}", reply.text));
@@ -591,6 +591,92 @@ async fn an_unrecorded_finding_doesnt_hold_the_merge() {
     held.flow.stop().await;
 }
 
+/// #243: "merge it" said while a worker still writes isn't held: finish_session (when "now")
+/// merges what has landed and names the worker still running, whose work isn't in it.
+#[tokio::test]
+async fn a_merge_now_while_a_worker_writes_merges_what_landed_and_names_it() {
+    let release = Arc::new(AtomicBool::new(false));
+    let log: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (gate, said) = (release.clone(), log.clone());
+    let flow = Flow::start(
+        "merge-now-while-writing",
+        Options::default(),
+        script(move |turn| {
+            let (gate, said) = (gate.clone(), said.clone());
+            async move {
+                if turn.is_review() {
+                    return Reply::text("No findings.");
+                }
+                if !turn.is_orchestrator() {
+                    // Task-1 writes at once; task-2 holds until released.
+                    let file = if turn.task_number() == Some(1) {
+                        "A.md"
+                    } else {
+                        until_set(&gate).await;
+                        "B.md"
+                    };
+                    turn.write(file, "note\n");
+                    turn.git(&["add", file]);
+                    turn.git(&["commit", "-qm", &format!("Write {file}")]);
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": format!("Wrote {file}."), "changes": [file]}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reported.");
+                }
+                if turn.input.starts_with("Add two notes") {
+                    for title in ["Write note A", "Write note B"] {
+                        let reply = turn
+                            .call(
+                                "delegate_task",
+                                json!({"effort": "medium", "title": title, "kind": "implement",
+                                       "spec": "Write the note.", "provider": "claude"}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                    }
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[report task-1") {
+                    let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    let reply = turn
+                        .call("finish_session", json!({"consent": "merge what you have"}))
+                        .await;
+                    said.lock().unwrap().push(reply.text);
+                    return Reply::text("Merged note A; note B is still being written.");
+                }
+                if turn.input.contains("[report task-2") {
+                    let reply = turn.call("land_phase", json!({"task": "task-2"})).await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add two notes, and merge what you have.").await;
+    let merged = log.clone();
+    flow.until("the merge", move |_| !merged.lock().unwrap().is_empty())
+        .await;
+    let result = log.lock().unwrap()[0].clone();
+    assert!(result.starts_with("[finished]"), "{result}");
+    assert!(
+        result.contains("Still running, so not in this merge: task-2 \"Write note B\""),
+        "{result}"
+    );
+    let files = git(&flow.repo, &["ls-tree", "--name-only", "main"]);
+    assert!(files.contains("A.md") && !files.contains("B.md"), "{files}");
+    let board = flow.board().await;
+    assert!(pending_merge(&board).is_none(), "nothing is held");
+    release.store(true, Ordering::SeqCst);
+    flow.settled().await;
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn a_cancel_spends_the_consent_across_a_restart() {
     let mut held = held("held-merge-cancel", Plan::default()).await;
@@ -896,7 +982,7 @@ async fn fixed_by_the_thread(
                     let reply = turn
                         .call(
                             "finish_session",
-                            json!({"user_words": "merge it when done"}),
+                            json!({"user_words": "merge it when done", "when": "workers_finish"}),
                         )
                         .await;
                     log(&format!("finish_session: {}", reply.text));
@@ -1026,25 +1112,29 @@ async fn a_held_merge_covers_the_threads_own_fix_of_a_finding_and_asks_nothing_a
 }
 
 /// The rule's other side: a commit of the thread's that doesn't name the findings it fixes is
-/// other work, with a full review of its own (it crosses the review line), and the held
-/// consent doesn't cover it.
+/// other work, with a full review of its own (it crosses the review line). The held consent
+/// doesn't cover it, and the merge's result says it went in too, for the thread to tell the
+/// user (#243).
 #[tokio::test]
-async fn a_threads_commit_that_names_no_finding_gets_a_full_review_and_needs_a_fresh_yes() {
+async fn a_threads_commit_that_names_no_finding_gets_a_full_review_and_is_named_in_the_merge() {
     let (flow, log, reviews) = fixed_by_the_thread("held-merge-own-commit", OwnFix::Unnamed).await;
     let said = log.clone();
-    flow.until("the held consent to be refused", move |_| {
-        count(&said, "Other work landed") > 0
+    flow.until("the merge", move |_| {
+        count(&said, "finish_session: [finished]") > 0
     })
     .await;
     flow.settled().await;
     let reviews = reviews.lock().unwrap().clone();
-    assert_eq!(reviews.len(), 2, "{reviews:#?}");
+    assert!(reviews.len() >= 2, "{reviews:#?}");
     assert!(!reviews[1].contains("Re-check a fix"), "{}", reviews[1]);
-    assert_eq!(count(&log, "finish_session: [finished]"), 0);
-    assert!(
-        !git(&flow.repo, &["ls-tree", "--name-only", "main"]).contains("B.md"),
-        "nothing merged"
+    assert_eq!(
+        count(
+            &log,
+            "after the user's consent, and it is in this merge too"
+        ),
+        1
     );
+    assert!(git(&flow.repo, &["ls-tree", "--name-only", "main"]).contains("notes-b.txt"));
     flow.stop().await;
 }
 
