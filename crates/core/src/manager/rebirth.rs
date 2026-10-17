@@ -80,7 +80,7 @@ const TURN_ROOM: i64 = 40_000;
 /// Orchestrator log events read per page while counting generations.
 const LOG_PAGE: u32 = 500;
 
-const HANDOFF_PROMPT: &str = "[Brigadier] Your context is nearly full, so a fresh orchestrator \
+const HANDOFF_PROMPT: &str = "[Brigadier] Your context is nearly full, so a fresh session \
 will continue this conversation from a briefing. Brigadier already gives it every decision \
 recorded in the Project Brain (everything you kept with remember, plan approvals and the user's \
 answers to cards), the live board (tasks, plan, open cards, queued messages) and the last messages \
@@ -95,7 +95,7 @@ exactly); Promises made to the user; What to do next (and what you are waiting f
 /// A checkpoint's prompt: the same note, written while the conversation idles and its prompt
 /// cache is still warm, for a rebirth once the cache has expired.
 const CHECKPOINT_PROMPT: &str = "[Brigadier] This conversation has been idle for a while. If it \
-is still idle when your prompt cache expires, a fresh orchestrator will continue it from a \
+is still idle when your prompt cache expires, a fresh session will continue it from a \
 briefing. Brigadier already gives it every decision \
 recorded in the Project Brain (everything you kept with remember, plan approvals and the user's \
 answers to cards), the live board (tasks, plan, open cards, queued messages) and the last messages \
@@ -121,7 +121,7 @@ const NOTE_HEADINGS: &[&str] = &[
 /// How long a briefing waits for the conversation's Brain writes in flight.
 const LEARN_WAIT: Duration = Duration::from_secs(10);
 
-const FRAMING: &str = "[Brigadier briefing: only you see this] You are the orchestrator of this \
+const FRAMING: &str = "[Brigadier briefing: only you see this] You lead this \
 Brigadier session, continuing the conversation summarized below. Brigadier replaced your earlier \
 context with this briefing so you have room to work; the user sees one unbroken conversation. \
 Never mention a briefing, handoff, restart or new session, and don't greet the user or introduce \

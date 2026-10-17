@@ -4436,7 +4436,7 @@ impl SessionManager {
                 self.notice(
                     &conv.id,
                     brigadier_providers::NoticeLevel::Warning,
-                    "The orchestrator ended this request without an answer. Ask it again for one.",
+                    "The thread ended this request without an answer. Ask it again for one.",
                 )
                 .await;
             }
@@ -5099,7 +5099,7 @@ impl SessionManager {
                     &conv.id,
                     OrchestratorEntry::ContractBreach {
                         message: format!(
-                            "The orchestrator's {} CLI compacted its context{}.",
+                            "The thread's {} CLI compacted its context{}.",
                             cli.provider,
                             if *automatic { " on its own" } else { "" }
                         ),

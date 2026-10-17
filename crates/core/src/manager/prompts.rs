@@ -635,7 +635,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: LEAN_WORK_REVISION,
         thread: "From now on, make a small change yourself instead of delegating it: one bounded change in one area (a bug, a small feature, about 100 changed lines or fewer in a few files), with no part worth running in parallel and no worker writing those files; read the code it touches, run the checks of what you changed, then commit with the trailer. Everything bigger still goes to workers. Never rerun a worker's checks after you land its work: the session's full checks run on their own after each landing. When one worker takes the whole request, set delegate_task's include_request and Brigadier adds the request verbatim (with what was added to it since and who sent it): don't copy it into the spec. A worker no longer waits for its own review: land a report whose review still runs, and its findings come to you. A finding that asks for something the request didn't, or contradicts it, is no bug: dismiss it with that reason.",
-        worker: "From now on, unless you verify a phase: never wait for your own review (review_code). Once your checks pass and your evidence is in, call submit_report; findings that arrive before your report are yours, later ones go to the orchestrator. Do exactly what your task asks: no extra feature, sample data, docs or refactor it didn't ask for, and a finding that asks for something your task didn't, or contradicts it, is no bug: note it in your report, don't build it.",
+        worker: "From now on, unless you verify a phase: never wait for your own review (review_code). Once your checks pass and your evidence is in, call submit_report; findings that arrive before your report are yours, later ones go to the thread. Do exactly what your task asks: no extra feature, sample data, docs or refactor it didn't ask for, and a finding that asks for something your task didn't, or contradicts it, is no bug: note it in your report, don't build it.",
     },
     Revision {
         number: MERGE_BY_USER_REVISION,
@@ -715,7 +715,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: MET_EVIDENCE_REVISION,
         thread: "From now on, an overnight phase settles done only with evidence for every \"done when\" at the run's tip: a check that passed on the tip's tree (its out-… id), the session's full checks at the tip, or lines the tip still shows. Its report gives it (its verifier's, when one ran), or you do in settle_step's done_when (\"[met] p2-c1: out-…\", from a run_check in your workspace, which is at the tip). With reviews on, its review must have ended and its findings be recorded first; with reviews off, the morning report says no review ran. A verifier or reviewer now gets the lead's whole report. A worker's question nobody answers within the hour goes on only with an operational safe default; a consent or product question waits until you answer it with answer_worker.",
-        worker: "From now on, a \"done when\" is [met] only with its evidence: the out-… id its check's result ends with, or the lines that show it as path:12-14 followed by the exact words in backticks; submit_report refuses a [met] without one, and a verifier of an overnight phase lists every criterion by its id (p2-c1). In ask_orchestrator, say what the question is `about` (operational, consent or product) and, for an operational one, your `safe_default`: when no answer comes within the hour, only an operational question goes on with it; any other waits, and you end your turn until the answer comes.",
+        worker: "From now on, a \"done when\" is [met] only with its evidence: the out-… id its check's result ends with, or the lines that show it as path:12-14 followed by the exact words in backticks; submit_report refuses a [met] without one, and a verifier of an overnight phase lists every criterion by its id (p2-c1). In ask_thread, say what the question is `about` (operational, consent or product) and, for an operational one, your `safe_default`: when no answer comes within the hour, only an operational question goes on with it; any other waits, and you end your turn until the answer comes.",
     },
     Revision {
         number: CHECKED_ANSWER_REVISION,
@@ -756,6 +756,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         number: THREAD_NAME_REVISION,
         thread: "",
         worker: "From now on, in your messages and your report, call the orchestrator \"the thread\": the user reads them and knows it by that name.",
+    },
+    Revision {
+        number: ASK_THREAD_REVISION,
+        thread: "",
+        worker: "From now on, ask the thread a question that blocks you with ask_thread (it was ask_orchestrator).",
     },
 ];
 
@@ -1019,6 +1024,9 @@ pub(crate) const LEAN_TOOLS_REVISION: u32 = 71;
 /// A worker calls the orchestrator "the thread" in its messages and report: the user reads
 /// them in the worker's view and knows it by that name (issue #62).
 pub(crate) const THREAD_NAME_REVISION: u32 = 80;
+/// A worker's instructions and tools name the thread, never "the orchestrator": its question
+/// tool is ask_thread (issue #66).
+pub(crate) const ASK_THREAD_REVISION: u32 = 81;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1469,12 +1477,11 @@ pub(crate) fn told_from_log<'a>(
 
 /// What the voice covers for a worker, and its report's shape.
 const WORKER_VOICE: &str = "
-- Your report is for the orchestrator. Summary: the outcome first (done, partly done or blocked), then the findings that answer the task. Changes: one line per file. Verification: what you ran or read and what you saw. Done when: each criterion of \"done\" in the task, with [met], [not met] or [not checked] and its evidence; [met] names it: the out-… id its check's result ends with, or path:12-14 with the exact words in backticks; a check you didn't run is [not checked], never [met]. Open questions: decisions you need. Risks: assumptions, risks, and what you skipped and why. Needs user: what only the user can do. Report failures and unknowns plainly, and never leave out a failed check.
-- In your messages and your report, call the orchestrator \"the thread\": the user reads them and knows it by that name.
+- Your report is for the thread. Summary: the outcome first (done, partly done or blocked), then the findings that answer the task. Changes: one line per file. Verification: what you ran or read and what you saw. Done when: each criterion of \"done\" in the task, with [met], [not met] or [not checked] and its evidence; [met] names it: the out-… id its check's result ends with, or path:12-14 with the exact words in backticks; a check you didn't run is [not checked], never [met]. Open questions: decisions you need. Risks: assumptions, risks, and what you skipped and why. Needs user: what only the user can do. Report failures and unknowns plainly, and never leave out a failed check.
 - Code, comments, docs and files in your outputs folder follow the project's style, not these rules.";
 
 /// What a lead does besides building: its outline when the work is big, and its own review.
-const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it: once your checks pass and your evidence is in, call submit_report at once: no more verifying, re-reading or screenshots after that. Findings that arrive before your report are yours: fix each bug you agree with and say why for those you don't; one that asks for something your task didn't, or contradicts it, is no bug, so note it in your report and don't build it. Findings that arrive after your report go to the orchestrator.\n- After your work lands, the findings of its review that the orchestrator keeps open may come back to you in this same session, as a new task.";
+const LEAD_STEPS: &str = "\n- You lead this work. If it is multi-step or risky, first read the code, then send your outline with submit_outline (the steps in order with the files each touches, how you will verify, and your open questions with your recommendations) and wait for the go-ahead; corrections that come with it win over your outline. Otherwise just build it.\n- Check every \"done when\" yourself. As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it: once your checks pass and your evidence is in, call submit_report at once: no more verifying, re-reading or screenshots after that. Findings that arrive before your report are yours: fix each bug you agree with and say why for those you don't; one that asks for something your task didn't, or contradicts it, is no bug, so note it in your report and don't build it. Findings that arrive after your report go to the thread.\n- After your work lands, the findings of its review that the thread keeps open may come back to you in this same session, as a new task.";
 
 /// What a worker that builds a mockup does instead of the change (SESSION-FIXES-PLAN.md Q10):
 /// a static preview from the real components with fake data, shown as screenshots.
@@ -1621,8 +1628,8 @@ Your first message is your task: what it is, where you work, what you may change
 Rules:
 - Never push, publish, deploy or open pull requests, unless the task says the user asked for exactly that: list such steps under needs user instead. The same goes for spending money, using credentials or the keychain, and deleting anything outside your own work.
 - If you start subagents, never use a Fable model, and never raise reasoning effort above high.
-- Files meant for the orchestrator or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Your scratch folder goes when the task ends: never link its path; name the output file (outputs/notes.md). Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
-- The orchestrator reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, learned (what the next worker in this area should know that the code doesn't say plainly; each is kept in the project's Brain, with its evidence where you have it: [evidence: path:12-14 `the exact words there`] or [evidence: out-… `the words of that check's output`]), verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{VOICE}{WORKER_VOICE}{instructions}"#
+- Files meant for the thread or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Your scratch folder goes when the task ends: never link its path; name the output file (outputs/notes.md). Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
+- The thread reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, learned (what the next worker in this area should know that the code doesn't say plainly; each is kept in the project's Brain, with its evidence where you have it: [evidence: path:12-14 `the exact words there`] or [evidence: out-… `the words of that check's output`]), verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{VOICE}{WORKER_VOICE}{instructions}"#
     )
 }
 
@@ -1704,7 +1711,7 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: 
     let alone = if task.gate_link.is_some() {
         "You work alone on this check and cannot ask anyone: decide from what you were given and your own evidence alone. Where the task is unclear, take its most reasonable reading and name it under risks."
     } else {
-        "You report to the orchestrator, who speaks for the user: treat its answers as the user's. Keep going on your own for anything the task, the project's docs and the Project Brain (query_brain) settle. When a question truly blocks you, call ask_orchestrator: one question at a time, with the options you see and the one you recommend. It waits for the answer."
+        "You report to the thread, which speaks for the user: treat its answers as the user's. Keep going on your own for anything the task, the project's docs and the Project Brain (query_brain) settle. When a question truly blocks you, call ask_thread: one question at a time, with the options you see and the one you recommend. It waits for the answer."
     };
     let code_rules = match (task.kind, &task.mockup) {
         (TaskKind::Implement, Some(MockupPart::Builds)) => {
@@ -2545,8 +2552,11 @@ mod tests {
         ));
         // Its review runs while it gathers its evidence and runs its checks: no idle wait.
         assert!(brief.contains("As soon as your work is committed, call review_code once: a reviewer from the other vendor reads your change while you gather your evidence (screenshots, manual runs) and run your checks. Never wait for it"));
-        assert!(brief.contains("Findings that arrive after your report go to the orchestrator."));
+        assert!(brief.contains("Findings that arrive after your report go to the thread."));
         assert!(brief.contains("Do exactly what the task asks"));
+        // #66: the user reads a worker's words, which name the thread as they know it.
+        assert!(brief.contains("call ask_thread"));
+        assert!(!brief.to_lowercase().contains("orchestrator"), "{brief}");
     }
 
     /// SESSION-FIXES-PLAN.md "Computer use" and §11: the one live look at the landed work, and
@@ -2962,7 +2972,6 @@ mod environment_tests {
     #[test]
     fn a_worker_calls_the_orchestrator_the_thread() {
         let said = "call the orchestrator \"the thread\"";
-        assert!(worker_system("").contains(said));
         let note = revision_note(THREAD_NAME_REVISION - 1, true).unwrap();
         assert_eq!(note.matches(said).count(), 1);
         assert!(
@@ -2970,6 +2979,17 @@ mod environment_tests {
                 .unwrap_or_default()
                 .contains(said)
         );
+    }
+
+    /// #66: a worker's instructions never say "orchestrator", its question tool is ask_thread,
+    /// and an open worker hears the rename once.
+    #[test]
+    fn a_workers_instructions_name_the_thread() {
+        let system = worker_system("");
+        assert!(!system.to_lowercase().contains("orchestrator"), "{system}");
+        let note = revision_note(ASK_THREAD_REVISION - 1, true).unwrap();
+        assert!(note.contains("with ask_thread (it was ask_orchestrator)"));
+        assert!(revision_note(ASK_THREAD_REVISION - 1, false).is_none());
     }
 
     /// Rule R for B1-B3: an open thread hears the new way of working once, in plain words,

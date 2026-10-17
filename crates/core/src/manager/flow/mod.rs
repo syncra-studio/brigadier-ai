@@ -359,7 +359,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "list_tasks" => ToolCall::Orchestrator(O::ListTasks),
         "settle_step" => ToolCall::Orchestrator(O::SettleStep(arg(name, args))),
         "end_run" => ToolCall::Orchestrator(O::EndRun(arg(name, args))),
-        "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
+        "ask_thread" | "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
         "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
         "review_code" => ToolCall::Worker(W::ReviewCode),

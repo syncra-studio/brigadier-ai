@@ -52,7 +52,7 @@ and end your turn with a handoff note for the fresh session instead of a report,
 someone with no memory of this session can carry on. Write it in plain text under these \
 headings: Goal and where it stands; Done (with commit hashes); In progress (exact files and \
 state, and anything uncommitted); Next steps (ordered and concrete); Decisions and approvals \
-already given (including the orchestrator's answers and go-aheads, so they aren't asked again); \
+already given (including the thread's answers and go-aheads, so they aren't asked again); \
 Gotchas learned (versions, commands that work, traps); Checks that passed (each command \
 and the commit it passed at); How to verify (the exact commands and what passing looks like). Include anything you found or ruled out that isn't in the code. At \
 most about 800 words. Don't call submit_report for this.",
@@ -681,7 +681,7 @@ impl SuccessorFiles {
             );
         }
         text.push_str(
-            "spec.md (the task and every later instruction from the orchestrator), progress.md (a \
+            "spec.md (the task and every later instruction from the thread), progress.md (a \
              short log of what it did), transcript.md (the whole transcript, word for word: search \
              it with rg for any detail instead of redoing work; each tool output cut there at 8 \
              KiB names its whole copy in outputs/)",

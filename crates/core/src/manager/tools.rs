@@ -377,10 +377,9 @@ impl SessionManager {
                     .await?;
                     crate::heap(|| self.settle_requests(id)).await;
                 }
-                let (reply, answered) = crate::heap(|| {
-                    self.message_worker(id, &task, args.text.clone(), "the orchestrator")
-                })
-                .await?;
+                let (reply, answered) =
+                    crate::heap(|| self.message_worker(id, &task, args.text.clone(), "the thread"))
+                        .await?;
                 let text = super::brains::cut(args.text.trim(), crate::work::STEP_TEXT_MAX);
                 crate::heap(|| {
                     self.update_task(id, &task.id, |task| messaged(task, args.text, answered))

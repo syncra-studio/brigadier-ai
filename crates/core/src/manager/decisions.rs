@@ -721,7 +721,7 @@ pub(crate) fn short_words(what: &str, why: &str) -> DecisionWords {
             };
             return words(
                 format!("Didn't land task-{number}: {reason}"),
-                "The orchestrator decides what happens next; the findings are on its checks.",
+                "The thread decides what happens next; the findings are on its checks.",
             );
         }
         if let Some(number) = rest.strip_suffix(": its checks could not finish") {
@@ -784,9 +784,7 @@ pub(crate) fn short_words(what: &str, why: &str) -> DecisionWords {
         {
             return words(
                 what,
-                &format!(
-                    "Problems left after {rounds}. The orchestrator asks you or makes it smaller."
-                ),
+                &format!("Problems left after {rounds}. The thread asks you or makes it smaller."),
             );
         }
         if why.starts_with("Its independent review could not run") {
@@ -1108,7 +1106,7 @@ mod tests {
                 "Did not land task-1: the orchestrator decides what happens next",
                 "The problems were still there after 1 fix round. From the review (task-2): P2 …",
                 "Didn't land task-1: problems left after 1 fix round",
-                "The orchestrator decides what happens next; the findings are on its checks.",
+                "The thread decides what happens next; the findings are on its checks.",
             ),
             (
                 "Did not land task-4: its checks could not finish",
@@ -1144,7 +1142,7 @@ mod tests {
                 "Did not approve the plan “Y”",
                 "It still had problems after 3 review rounds; the orchestrator asks you or makes it smaller. F1: …",
                 "Didn't approve the plan “Y”",
-                "Problems left after 3 review rounds. The orchestrator asks you or makes it smaller.",
+                "Problems left after 3 review rounds. The thread asks you or makes it smaller.",
             ),
             (
                 "Sent phase 2 back to its lead to fix what its checks found",

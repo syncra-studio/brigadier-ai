@@ -2141,7 +2141,7 @@ async fn a_reviews_news_leaves_a_workers_question_open() {
             board.tasks.values().any(|task| {
                 task.blocked_reason
                     .as_deref()
-                    .is_some_and(|why| why.starts_with("Asked the orchestrator"))
+                    .is_some_and(|why| why.starts_with("Asked the thread"))
             })
         })
         .await;

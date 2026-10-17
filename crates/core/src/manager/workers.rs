@@ -78,7 +78,9 @@ const NUDGE_TIMEOUT: Duration = Duration::from_secs(30);
 const TURN_END_WAIT: Duration = Duration::from_secs(30);
 /// How long `ask_orchestrator` waits for the orchestrator's answer.
 pub(crate) const QUESTION_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-/// How a task waiting on its question to the orchestrator says so; the question follows.
+/// How a task waiting on its question to the thread says so; the question follows.
+pub(crate) const ASKED_THE_THREAD: &str = "Asked the thread: ";
+/// How it said so before #66, as a task recorded then still says.
 pub(crate) const ASKED_THE_ORCHESTRATOR: &str = "Asked the orchestrator: ";
 /// How long a worker waiting for its own background jobs may stay silent before its wait
 /// counts as a turn without a report. A background sub-agent shows its steps; a background
@@ -1524,7 +1526,7 @@ impl SessionManager {
         }
         // Instructions the orchestrator sent while the task waited to start go with it.
         if !task.messages.is_empty() {
-            text.push_str("\n\nLater instructions from the orchestrator, oldest first:\n");
+            text.push_str("\n\nLater instructions from the thread, oldest first:\n");
             for message in &task.messages {
                 text.push_str("\n- ");
                 text.push_str(&message.replace('\n', "\n  "));
@@ -1689,7 +1691,7 @@ impl SessionManager {
         };
         let outputs = outputs_dir(&workspace.scratch);
         let mut repo_note = format!(
-            "{repo_note}\nYour outputs folder (files for the orchestrator and the user): {}",
+            "{repo_note}\nYour outputs folder (files for the thread and the user): {}",
             outputs.display()
         );
         if provider == ProviderKind::Codex {
@@ -3266,10 +3268,10 @@ impl SessionManager {
         if nudge {
             let text = match self.keep_last_message(live, task.number).await {
                 Some(_) => {
-                    "You ended your turn without calling submit_report. The orchestrator reads only your report, never your messages, so your last message has not reached it. Brigadier kept it and attaches it to your report as an artifact. If the task is done or you cannot continue, call submit_report now with a short summary; otherwise continue working."
+                    "You ended your turn without calling submit_report. The thread reads only your report, never your messages, so your last message has not reached it. Brigadier kept it and attaches it to your report as an artifact. If the task is done or you cannot continue, call submit_report now with a short summary; otherwise continue working."
                 }
                 None => {
-                    "You ended your turn without calling submit_report. The orchestrator reads only your report, never your messages. If the task is done or you cannot continue, call submit_report now; otherwise continue working."
+                    "You ended your turn without calling submit_report. The thread reads only your report, never your messages. If the task is done or you cannot continue, call submit_report now; otherwise continue working."
                 }
             };
             live.state.lock().await.begin_turn();
@@ -3561,7 +3563,7 @@ impl SessionManager {
         let question = self.redact_for(&live, &question).await;
         let (tx, rx) = oneshot::channel();
         live.state.lock().await.question = Some((question.clone(), tx));
-        self.set_task_blocked(task_id, Some(format!("{ASKED_THE_ORCHESTRATOR}{question}")))
+        self.set_task_blocked(task_id, Some(format!("{ASKED_THE_THREAD}{question}")))
             .await;
         self.deliver(
             conversation_id,
@@ -3663,7 +3665,7 @@ impl SessionManager {
                 )
             });
         }
-        Some("You are ending your turn without calling submit_report, and the orchestrator reads only your report. If the task is done or you cannot continue, call submit_report now; otherwise keep working.".into())
+        Some("You are ending your turn without calling submit_report, and the thread reads only your report. If the task is done or you cannot continue, call submit_report now; otherwise keep working.".into())
     }
 
     /// The Stop hook of `grant`'s worker: `None` for a grant that isn't one.
@@ -3753,7 +3755,7 @@ impl SessionManager {
         answer: &str,
     ) -> Result<()> {
         let text = format!(
-            "[Brigadier] Brigadier restarted while you waited. The orchestrator's answer to your question \"{question}\":\n{answer}\nContinue the task."
+            "[Brigadier] Brigadier restarted while you waited. The thread's answer to your question \"{question}\":\n{answer}\nContinue the task."
         );
         // Boxed: a session's start is a big future, and answers come in from tool calls.
         if let Err(err) = crate::heap(|| self.revive_worker(live, task, text)).await {
@@ -3819,7 +3821,7 @@ impl SessionManager {
             TaskState::Starting | TaskState::Running | TaskState::Blocked
         ) {
             return Err(Error::Invalid(format!(
-                "Your report for task-{} was already received and stands; nothing was changed. A new report is taken only after the orchestrator sends you back to work. End your turn now.",
+                "Your report for task-{} was already received and stands; nothing was changed. A new report is taken only after the thread sends you back to work. End your turn now.",
                 task.number
             )));
         }

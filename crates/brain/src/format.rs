@@ -164,7 +164,7 @@ pub(crate) fn origin_label(origin: Origin) -> &'static str {
         Origin::Skeleton => "the skeleton pass",
         Origin::Enrichment => "enrichment",
         Origin::Report => "report",
-        Origin::Orchestrator => "the orchestrator",
+        Origin::Orchestrator => "the thread",
         Origin::User => "the user",
     }
 }

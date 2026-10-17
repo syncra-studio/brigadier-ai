@@ -164,6 +164,10 @@ test("a command reads as the call it was however it ended; another tool that fai
   // A declined call shows as the call it was: the header counts the declined ones.
   assert.equal(stepLabel(ran, "declined", 130), "Ran pnpm test");
   assert.equal(stepLabel(toolStepWords(call("review_code", "failed")), "failed"), "Asked for a review — failed");
+  // A worker's question to the thread, by its name since #66 and its older one.
+  for (const name of ["mcp__brigadier__ask_thread", "mcp__brigadier__ask_orchestrator"]) {
+    assert.equal(stepLabel(toolStepWords(call(name, "completed")), "completed"), "Asked a question");
+  }
 });
 
 test("a listing has the folder, `date` and a public page's GET read as what they are", () => {

@@ -11,7 +11,7 @@ use super::SessionManager;
 use super::conversation::Envelope;
 use super::overnight::{Interrupted, interrupted, interrupted_hand_off};
 use super::worker_handoff::Handover;
-use super::workers::{ASKED_THE_ORCHESTRATOR, TaskLive};
+use super::workers::{ASKED_THE_ORCHESTRATOR, ASKED_THE_THREAD, TaskLive};
 use crate::now_ms;
 use crate::overnight::OvernightRun;
 use crate::work::{InjectionKind, Task, TaskState};
@@ -254,10 +254,10 @@ impl SessionManager {
             // The go-ahead resumes its session (`go_ahead` sends it as a message).
             TaskState::Blocked if Self::waits_for_go_ahead(task) => {}
             TaskState::Blocked => {
-                let asked = task
-                    .blocked_reason
-                    .as_deref()
-                    .and_then(|why| why.strip_prefix(ASKED_THE_ORCHESTRATOR));
+                let asked = task.blocked_reason.as_deref().and_then(|why| {
+                    why.strip_prefix(ASKED_THE_THREAD)
+                        .or_else(|| why.strip_prefix(ASKED_THE_ORCHESTRATOR))
+                });
                 match asked {
                     // Its call ended with its CLI: the thread hears the question again, and
                     // its answer resumes the session.

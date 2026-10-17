@@ -772,7 +772,7 @@ impl SessionManager {
         }
         self.set_task_blocked(&lead.id, None).await;
         let now = self.task_by_id(&lead.conversation_id, &lead.id).await?;
-        self.message_worker(&lead.conversation_id, &now, text, "the orchestrator")
+        self.message_worker(&lead.conversation_id, &now, text, "the thread")
             .await?;
         self.set_phase_stage(&now, PhaseStage::Building).await;
         self.decided_for_task(

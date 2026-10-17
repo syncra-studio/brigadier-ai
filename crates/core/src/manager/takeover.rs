@@ -379,7 +379,7 @@ impl SessionManager {
         } else if !held.is_empty() {
             // A paused or reported worker gets them the way any message reaches it.
             push_held(&mut text, &held);
-            self.message_worker(&task.conversation_id, task, text, "the orchestrator")
+            self.message_worker(&task.conversation_id, task, text, "the thread")
                 .await
                 .map(drop)
         } else {
@@ -662,7 +662,7 @@ fn push_held(text: &mut String, held: &[String]) {
     if held.is_empty() {
         return;
     }
-    text.push_str("\n\nThe orchestrator's messages while the terminal was open, oldest first:\n");
+    text.push_str("\n\nThe thread's messages while the terminal was open, oldest first:\n");
     for message in held {
         text.push_str("\n- ");
         text.push_str(&message.replace('\n', "\n  "));
