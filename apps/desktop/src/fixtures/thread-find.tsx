@@ -150,7 +150,7 @@ function Page() {
     <TooltipProvider>
       <SidebarProvider className="bg-background flex h-screen flex-col" defaultOpen={false}>
         <main className="relative flex min-h-0 w-full flex-1 flex-col">
-          <ConversationView key={selection.type === "conversation" ? selection.id : selection.type} selection={selection} />
+          <ConversationView key={selection.type === "conversation" ? selection.id : selection.type} selection={selection} embedded={new URLSearchParams(location.search).get("drive") === "embedded"} />
         </main>
       </SidebarProvider>
     </TooltipProvider>
@@ -529,7 +529,12 @@ const steps = {
 async function drive(): Promise<void> {
   const result: Record<string, unknown> = {};
   try {
-    if (new URLSearchParams(location.search).get("drive") === "glitches") {
+    const mode = new URLSearchParams(location.search).get("drive");
+    if (mode === "welcome" || mode === "embedded") {
+      select(mode === "welcome" ? { type: "draft", kind: "chat" } : { type: "conversation", id: "long" });
+      await settle(LOAD_MS + 400);
+      result["padding"] = getComputedStyle(viewport().querySelector('[data-slot="aui_thread-column"]')!).paddingTop;
+    } else if (mode === "glitches") {
       await steps.opened();
       const host = document.createElement("div");
       viewport().querySelector('[data-slot="aui_thread-column"]')!.append(host);

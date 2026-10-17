@@ -415,11 +415,6 @@
 /* The thread's `::highlight()` colours (text added to the chat, Find's marks) go on the page only
    while their marks are there: lib/highlightRules.ts. */
 
-/* Reserve Find's top band even while closed, so opening it never moves the reader's text. */
-.aui-thread-root [data-slot="aui_thread-column"] {
-  padding-top: calc(var(--spacing-browser-find-row) + 1.5rem);
-}
-
 /* WebKit marks only selectable text, and moves a mark on other text onto the next selectable
    text: the thread's text is selectable while Find marks it. Text in a button never is, so the
    button holding the match gone to gets a ring. */
