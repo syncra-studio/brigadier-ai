@@ -132,7 +132,8 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   // room without moving the view and is followed past it. Scrolled away, it goes on under the
   // composer; back at the bottom, it is followed again.
   const { send } = seen;
-  near(send.topPadding, 32, "the list's top padding");
+  // The conversation view has Find: its bar's band (2.75rem + 1.5rem) stays above the first row.
+  near(send.topPadding, 68, "the list's top padding");
   assert.ok(send.spring.moved > 100, `the spring moved ${send.spring.moved}px`);
   assert.equal(send.spring.overshoot, false);
   // Between 0.35 and 0.75 of the way left at 100ms, 0.04 and 0.25 at 200ms: no frame before the
@@ -173,7 +174,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
 
   // The first message of a new chat sits at the top padding; an unseen working chat opens at
   // its bottom.
-  near(seen.newChat.userTop, 32, "first message of a new chat");
+  near(seen.newChat.userTop, 68, "first message of a new chat");
   assert.equal(seen.newChat.top, 0);
   // A sent turn that messages another session and waits for its reply: its row goes from sending
   // straight to waiting, with no line in between, and the user's message never moves.
