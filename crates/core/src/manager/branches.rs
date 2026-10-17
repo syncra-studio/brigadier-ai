@@ -334,6 +334,7 @@ mod tests {
                     base: "main".into(),
                     commits: 1,
                     asked_in: asked_in.map(str::to_owned),
+                    upstream: None,
                 },
                 at_ms: 1,
                 position: 1,

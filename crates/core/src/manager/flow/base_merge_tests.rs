@@ -244,7 +244,14 @@ async fn conflict(flow: &Flow, words: &str) {
         .unwrap_err()
         .to_string();
     assert!(
-        error.contains("delegate a merge task without `subject` now"),
+        error.contains("conflicts with the current `main` in: ") && error.contains("README.md"),
+        "{error}"
+    );
+    // The thread judges how to resolve them (#244): no order to delegate, no "don't ask".
+    assert!(
+        error.contains("merge `main` into")
+            && error.contains("yourself, or delegate a merge task without `subject`")
+            && !error.contains("Don't ask the user"),
         "{error}"
     );
     assert!(

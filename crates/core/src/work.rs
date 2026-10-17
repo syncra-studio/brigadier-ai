@@ -1674,6 +1674,16 @@ pub struct UnreviewedRange {
     pub snapshot: bool,
 }
 
+/// The base's upstream at a session's merge (#224): the merge isn't pushed to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MergedUpstream {
+    /// Its name (`origin/main`).
+    pub name: String,
+    /// Commits it had that the merged base lacks: the base had diverged from it.
+    pub behind: u32,
+}
+
 /// What the user's consent to the session's merge waits for (SESSION-FIXES-PLAN.md Q3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2013,6 +2023,11 @@ pub enum OrchestratorStepKind {
         /// The user message whose words asked for it: it asks for no other merge.
         #[serde(default)]
         asked_in: Option<String>,
+        /// The base's upstream when it merged (#224): the merge is on this Mac only, not pushed
+        /// to it. None: the base has no upstream.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        upstream: Option<MergedUpstream>,
     },
     /// A notice that something the user asked for needs more than the session's sandbox
     /// allows (`suggest_full_access`), with a button that switches the session to Full access.

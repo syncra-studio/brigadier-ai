@@ -817,6 +817,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, finish_session merges what has landed and names the workers still running; it holds the merge only when you pass when \"workers_finish\" (the user asked to merge once the work is done). What the user wrote since their consent, and work that landed after it, no longer refuse a merge: its result states them for you to judge and tell the user.",
         worker: "",
     },
+    Revision {
+        number: MERGE_UPSTREAM_REVISION,
+        thread: "From now on, finish_session fetches the base's upstream first and fast-forwards a local base that is only behind it. Its result says the merge is on this Mac only, not pushed, and when the local base has diverged from its upstream: tell the user. On conflicts, resolve them yourself or delegate a merge task, as you judge.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1113,6 +1118,9 @@ pub(crate) const FINDINGS_INFORM_REVISION: u32 = 90;
 /// finish_session holds a merge only on `when: "workers_finish"`, and what the user wrote since
 /// or work that landed after the consent are facts in its result, not refusals (#243).
 pub(crate) const MERGE_WHEN_REVISION: u32 = 91;
+/// finish_session merges onto the base brought up to date with its upstream, says it isn't pushed
+/// and when the base diverged; on conflicts the thread resolves or delegates (#244, #224).
+pub(crate) const MERGE_UPSTREAM_REVISION: u32 = 92;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:

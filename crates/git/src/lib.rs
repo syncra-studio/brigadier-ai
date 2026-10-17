@@ -482,6 +482,19 @@ pub struct RemoteState {
     pub ahead: u32,
 }
 
+/// A local branch against its upstream ([`Repo::upstream_gap`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpstreamGap {
+    /// The upstream's name (`origin/main`).
+    pub name: String,
+    /// Where the upstream is.
+    pub tip: Oid,
+    /// Commits only the local branch has.
+    pub ahead: u32,
+    /// Commits only the upstream has.
+    pub behind: u32,
+}
+
 /// One commit of a branch's history.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommitInfo {

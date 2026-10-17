@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 
-import type { Finding, IntegratedCheck, OrchestratorStep, ReviewRun } from "@/ipc/generated";
+import type { Finding, IntegratedCheck, MergedUpstream, OrchestratorStep, ReviewRun } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 
 /**
@@ -141,24 +141,36 @@ export function reviewStatus(reviews: readonly ReviewRun[]): string | null {
 }
 
 /**
+ * Where a merge landed (#224): "Merged" with no upstream to the base, "Merged on this Mac" when
+ * it wasn't pushed to one, and "Merged on this Mac · origin/main moved on" when the upstream had
+ * commits the merged base lacked.
+ */
+export function mergedWhere(upstream: MergedUpstream | undefined): string {
+  if (upstream === undefined) return "Merged";
+  if (upstream.behind > 0) return `Merged on this Mac · ${upstream.name} moved on`;
+  return "Merged on this Mac";
+}
+
+/**
  * The merged work's line: "Merged · review clean", or "Merged · 2 open (not fixed)" for what the
  * thread left open, "Merged · 1 fixed, unverified" for a fix it never checked in the merged
  * code and "Merged · 2 fixed" for the fixes it checked; a review that ends after the merge says
- * so too.
+ * so too. "Merged" says where the merge landed (`mergedWhere`).
  */
-export function mergedStatus(reviews: readonly ReviewRun[]): string | null {
+export function mergedStatus(reviews: readonly ReviewRun[], upstream?: MergedUpstream): string | null {
   if (reviews.length === 0) return null;
-  if (reviews.some((review) => review.state.type === "running")) return "Merged · review running…";
+  const merged = mergedWhere(upstream);
+  if (reviews.some((review) => review.state.type === "running")) return `${merged} · review running…`;
   const count = counts(reviews);
   const parts = [
     ...(count.open > 0 ? [`${count.open} open (not fixed)`] : []),
     ...(count.unverified > 0 ? [`${count.unverified} fixed, unverified`] : []),
     ...(count.unrecorded > 0 ? [`${count.unrecorded} new`] : []),
   ];
-  if (parts.length > 0) return `Merged · ${parts.join(" · ")}`;
-  if (settled(count).length > 0) return `Merged · ${settled(count).join(" · ")}`;
-  if (reviews.every((review) => review.state.type === "failed")) return "Merged · review couldn’t run";
-  return "Merged · review clean";
+  if (parts.length > 0) return `${merged} · ${parts.join(" · ")}`;
+  if (settled(count).length > 0) return `${merged} · ${settled(count).join(" · ")}`;
+  if (reviews.every((review) => review.state.type === "failed")) return `${merged} · review couldn’t run`;
+  return `${merged} · review clean`;
 }
 
 /** One review line of the context card, with the findings a click lists. */
@@ -193,15 +205,14 @@ export function reviewLines(
   reviews: readonly ReviewRun[],
 ): ReviewLines {
   const merges = steps
-    .filter((step) => step.kind.type === "merged")
-    .map((step) => step.atMs)
-    .toSorted((a, b) => a - b);
+    .flatMap((step) => (step.kind.type === "merged" ? [{ atMs: step.atMs, upstream: step.kind.upstream }] : []))
+    .toSorted((a, b) => a.atMs - b.atMs);
   const last = merges.at(-1);
-  const now = batchReviews(reviews, last ?? 0, Number.POSITIVE_INFINITY);
+  const now = batchReviews(reviews, last?.atMs ?? 0, Number.POSITIVE_INFINITY);
   const current = line(now, reviewStatus(now));
   if (last === undefined) return { merged: null, current };
-  const before = batchReviews(reviews, merges.at(-2) ?? 0, last);
-  return { merged: line(before, mergedStatus(before)), current };
+  const before = batchReviews(reviews, merges.at(-2)?.atMs ?? 0, last.atMs);
+  return { merged: line(before, mergedStatus(before, last.upstream)), current };
 }
 
 /** One batch's findings in the review row's list: unlabelled when the row speaks for one batch. */

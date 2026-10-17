@@ -2505,6 +2505,7 @@ mod tests {
                 base: "main".into(),
                 commits: 1,
                 asked_in: None,
+                upstream: None,
             },
             at_ms: 20,
             position: 0,

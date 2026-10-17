@@ -248,6 +248,121 @@ async fn the_session_diff_counts_from_the_upstream_it_merged() {
     flow.stop().await;
 }
 
+/// The merge's upstream as its Merged row records it.
+fn merged_upstream(board: &crate::board::Board) -> Vec<Option<crate::work::MergedUpstream>> {
+    board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::Merged { upstream, .. } => Some(upstream.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Another clone of `origin` pushes a commit adding `file` to its `main`.
+fn push_upstream(flow: &Flow, origin: &std::path::Path, file: &str) -> String {
+    let other = flow.repo.with_file_name(format!("merge-upstream-{file}"));
+    git(
+        &flow.repo,
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(other.join(file), "upstream\n").unwrap();
+    git(&other, &["add", "-A"]);
+    git(&other, &["commit", "-q", "-m", "Upstream work"]);
+    git(&other, &["push", "-q", "origin", "HEAD:main"]);
+    git(&other, &["rev-parse", "HEAD"])
+}
+
+/// The merge fetches the base's upstream first and fast-forwards a local `main` that is only
+/// behind, so it merges onto what others pushed; its result and its Merged row say it is on
+/// this Mac only, not pushed, and say so when local `main` has diverged from it (#224).
+#[tokio::test]
+async fn a_merge_brings_main_up_to_date_and_says_it_isnt_pushed() {
+    let (flow, log) = session("merge-upstream").await;
+    let origin = flow.repo.with_file_name("merge-upstream-origin.git");
+    git(
+        &flow.repo,
+        &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
+    );
+    git(
+        &flow.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&flow.repo, &["fetch", "-q", "origin"]);
+    git(
+        &flow.repo,
+        &["branch", "--set-upstream-to=origin/main", "main"],
+    );
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    // Someone pushes to origin's main: the local main is behind, and doesn't know it yet.
+    let pushed = push_upstream(&flow, &origin, "UPSTREAM.md");
+    flow.say("Yes, just merge it.").await;
+    flow.until("the merge", |board| merged(board) == 1).await;
+    let board = flow.settled().await;
+    assert!(on_main(&flow, "NOTES.md") && on_main(&flow, "UPSTREAM.md"));
+    assert!(
+        std::process::Command::new("git")
+            .args(["merge-base", "--is-ancestor", &pushed, "main"])
+            .current_dir(&flow.repo)
+            .status()
+            .unwrap()
+            .success(),
+        "merged onto origin's main"
+    );
+    let replies = logged(&log, "finish_session: false");
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert!(
+        replies[0].contains("It is merged on this Mac only, not pushed to `origin/main`."),
+        "{}",
+        replies[0]
+    );
+    assert!(!replies[0].contains("diverged"), "{}", replies[0]);
+    let only_here = crate::work::MergedUpstream {
+        name: "origin/main".into(),
+        behind: 0,
+    };
+    assert_eq!(merged_upstream(&board), [Some(only_here.clone())]);
+    // Another push while local main holds the unpushed merge: they have diverged.
+    flow.say("Add more notes.").await;
+    flow.settled().await;
+    push_upstream(&flow, &origin, "UPSTREAM-2.md");
+    flow.say("Now just merge it again.").await;
+    flow.until("the second merge", |board| merged(board) == 2)
+        .await;
+    let board = flow.settled().await;
+    let replies = logged(&log, "finish_session: false");
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert!(
+        replies[1].contains(
+            "Local `main` has diverged from `origin/main`: 1 commit there is not in it, so pushing needs them merged in first."
+        ),
+        "{}",
+        replies[1]
+    );
+    assert!(
+        !on_main(&flow, "UPSTREAM-2.md"),
+        "diverged: no fast-forward"
+    );
+    assert_eq!(
+        merged_upstream(&board),
+        [
+            Some(only_here),
+            Some(crate::work::MergedUpstream {
+                name: "origin/main".into(),
+                behind: 1,
+            })
+        ]
+    );
+    flow.stop().await;
+}
+
 /// The click merges, once: it is recorded with where it came from, the thread merges on its
 /// [merge], and a second finish_session on the same click is refused. Nothing was ever put on a
 /// card, and the workspace stays with its branch at the merge.

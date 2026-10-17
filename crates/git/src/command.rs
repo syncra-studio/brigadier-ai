@@ -191,44 +191,9 @@ impl Git {
         extra: &[(OsString, OsString)],
         input: Option<&[u8]>,
     ) -> Result<Output> {
-        let mut command = Command::new(&self.program);
-        command.env_clear().envs(self.env.iter().cloned());
-        // A shell launched inside another git operation must not redirect this repository.
-        for key in [
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_COMMON_DIR",
-            "GIT_INDEX_FILE",
-            "GIT_PREFIX",
-            "GIT_OBJECT_DIRECTORY",
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        ] {
-            command.env_remove(key);
-        }
-        command
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("LC_ALL", "C")
-            .env("GIT_LITERAL_PATHSPECS", "1")
-            .envs(extra.iter().cloned())
-            .arg("--no-pager")
-            .stdin(if input.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if extra.iter().any(|(key, _)| key == "GIT_INDEX_FILE") {
-            command.args(["-c", "core.splitIndex=false"]);
-        }
-        command.args(args);
-        if read_only {
-            command.env("GIT_OPTIONAL_LOCKS", "0");
-        }
-        if let Some(path) = path {
-            command.current_dir(path);
-        }
-        let mut child = command.spawn()?;
+        let mut child = self
+            .command(path, args, read_only, extra, input.is_some())
+            .spawn()?;
         // Write concurrently so filters/hooks emitting output cannot deadlock a large input.
         if let Some(input) = input {
             let mut stdin = child
@@ -250,6 +215,118 @@ impl Git {
         } else {
             Ok(child.wait_with_output()?)
         }
+    }
+
+    /// [`Self::checked`] that gives up after `limit`: git is killed then, and reaped.
+    pub(crate) fn checked_within<S: AsRef<OsStr>>(
+        &self,
+        path: Option<&Path>,
+        args: &[S],
+        extra: &[(OsString, OsString)],
+        limit: std::time::Duration,
+    ) -> Result<Vec<u8>> {
+        let mut command = self.command(path, args, false, extra, false);
+        // Its own process group, so what git started (ssh, a credential helper) stops with it.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        let mut child = command.spawn()?;
+        // The pipes are read on threads of their own and waited for only to the deadline: a
+        // helper git started can hold them open after git is gone.
+        let read = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+            let (send, got) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = send.send(drain(pipe));
+            });
+            got
+        };
+        let out = read(child.stdout.take().map(|p| Box::new(p) as _));
+        let err = read(child.stderr.take().map(|p| Box::new(p) as _));
+        let deadline = std::time::Instant::now() + limit;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break Some(status);
+            }
+            if std::time::Instant::now() >= deadline {
+                // Asked first, so git removes the locks it holds; killed if it doesn't go.
+                signal_group(&child, false);
+                let grace = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while child.try_wait()?.is_none() && std::time::Instant::now() < grace {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                signal_group(&child, true);
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        // What git started and left behind goes too.
+        signal_group(&child, true);
+        let left = |got: std::sync::mpsc::Receiver<Vec<u8>>| {
+            let wait = deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .max(std::time::Duration::from_secs(1));
+            got.recv_timeout(wait).unwrap_or_default()
+        };
+        let (stdout, stderr) = (left(out), left(err));
+        let Some(status) = status else {
+            return Err(Error::Invalid(format!(
+                "git took over {} seconds and was stopped",
+                limit.as_secs()
+            )));
+        };
+        check(
+            args,
+            Output {
+                status,
+                stdout,
+                stderr,
+            },
+        )
+    }
+
+    fn command<S: AsRef<OsStr>>(
+        &self,
+        path: Option<&Path>,
+        args: &[S],
+        read_only: bool,
+        extra: &[(OsString, OsString)],
+        stdin: bool,
+    ) -> Command {
+        let mut command = Command::new(&self.program);
+        command.env_clear().envs(self.env.iter().cloned());
+        // A shell launched inside another git operation must not redirect this repository.
+        for key in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_PREFIX",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        ] {
+            command.env_remove(key);
+        }
+        command
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("LC_ALL", "C")
+            .env("GIT_LITERAL_PATHSPECS", "1")
+            .envs(extra.iter().cloned())
+            .arg("--no-pager")
+            .stdin(if stdin { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if extra.iter().any(|(key, _)| key == "GIT_INDEX_FILE") {
+            command.args(["-c", "core.splitIndex=false"]);
+        }
+        command.args(args);
+        if read_only {
+            command.env("GIT_OPTIONAL_LOCKS", "0");
+        }
+        if let Some(path) = path {
+            command.current_dir(path);
+        }
+        command
     }
 
     pub(crate) fn checked<S: AsRef<OsStr>>(
@@ -359,4 +436,33 @@ impl Drop for TempIndex {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.dir);
     }
+}
+
+/// Signals what is left of `child`'s process group (it leads one: `process_group(0)`): asks it
+/// to stop, or kills it. Elsewhere, nothing: `Child::kill` stops git alone.
+#[cfg(unix)]
+fn signal_group(child: &std::process::Child, kill: bool) {
+    use nix::sys::signal::Signal;
+    if let Ok(pid) = i32::try_from(child.id()) {
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(pid),
+            if kill {
+                Signal::SIGKILL
+            } else {
+                Signal::SIGTERM
+            },
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn signal_group(_child: &std::process::Child, _kill: bool) {}
+
+/// All a child's pipe gives until it closes.
+fn drain(pipe: Option<impl std::io::Read>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if let Some(mut pipe) = pipe {
+        let _ = pipe.read_to_end(&mut bytes);
+    }
+    bytes
 }

@@ -36,7 +36,7 @@ use super::{SessionManager, blocking, git_error, merge_consent};
 use crate::model::{ConversationId, Environment, MessageRole, Setup};
 use crate::work::{
     AnswerOrigin, DecisionKind, DecisionSource, DiffStat, ExcludedFile, FileStat, InjectionKind,
-    MergeInputs, OrchestratorStepKind, PhaseStage, QuestionKind, Task, TaskState,
+    MergeInputs, MergedUpstream, OrchestratorStepKind, PhaseStage, QuestionKind, Task, TaskState,
 };
 use crate::{Error, Result};
 
@@ -1553,6 +1553,9 @@ impl SessionManager {
                 names.join(", ")
             )
         };
+        // The base as its upstream has it (#224): the merge, and any conflicts, are against
+        // the main others pushed to, not a stale copy of it.
+        let fetch_failed = self.sync_base(&repo, &base).await;
         enum Prepared {
             /// The merge commit, the base's tip, the branch's, its commit count, and whether
             /// work landed on the branch since the held consent.
@@ -1602,6 +1605,7 @@ impl SessionManager {
                 (commit, base_tip, tip, commits, moved)
             }
             Prepared::Conflicts(paths, tip) => {
+                let upstream = self.base_upstream(&repo, &base).await;
                 // The merge used no consent: it is held, stored, until the merge task that
                 // merges the base into the branch lands.
                 if pending.is_none() {
@@ -1620,8 +1624,9 @@ impl SessionManager {
                     .await;
                 }
                 return Err(Error::Invalid(format!(
-                    "`{branch}` conflicts with the current `{base}` in: {}. Nothing was merged, and the user's consent to this merge still holds. Don't ask the user: delegate a merge task without `subject` now. Its worker merges `{base}` into `{branch}` with git and resolves the conflicts. Once it lands, Brigadier tells you [merge due]: then call finish_session again. It merges on that consent unless the user takes it back meanwhile: then call stop_merge.",
-                    paths.join(", ")
+                    "`{branch}` conflicts with the current `{base}` in: {}.{} Nothing was merged, and the user's consent to this merge still holds. Resolve it as you judge: merge `{base}` into `{branch}` with git yourself, or delegate a merge task without `subject` for its worker to (Brigadier tells you [merge due] once it lands). Then call finish_session again on that consent; if the user takes it back meanwhile, call stop_merge.",
+                    paths.join(", "),
+                    diverged_line(&base, upstream.as_ref(), fetch_failed.as_deref()),
                 )));
             }
         };
@@ -1701,6 +1706,8 @@ impl SessionManager {
             Err(_) => String::new(),
         };
         let (new_tip, since) = new_tip;
+        let upstream = self.base_upstream(&repo, &base).await;
+        let pushed = pushed_line(&base, upstream.as_ref(), fetch_failed.as_deref());
         let checks = self.checks_line(id, &branch, &session_tip).await;
         let moved = if moved {
             format!(
@@ -1716,6 +1723,7 @@ impl SessionManager {
                 base: base.clone(),
                 commits,
                 asked_in: Some(consent.asked_in),
+                upstream,
             },
         )
         .await;
@@ -1731,10 +1739,71 @@ impl SessionManager {
             .follow_merge(&repo, &branch, &base, session_tip, new_tip.clone())
             .await;
         Ok(format!(
-            "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{running}{moved}{checks}{reviews}{released}{since}",
+            "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{pushed}{running}{moved}{checks}{reviews}{released}{since}",
             if commits == 1 { "" } else { "s" },
             short(&new_tip)
         ))
+    }
+
+    /// Brings the base up to date with its upstream before a merge (#224): fetches its remote
+    /// (git is stopped after [`FETCH_PATIENCE`]) and fast-forwards local `base` when it is only
+    /// behind. A checkout of it that is busy, or has changes the fast-forward would touch,
+    /// keeps it as it is: the merge result says how far it is behind. Returns why the fetch
+    /// failed.
+    async fn sync_base(&self, repo: &str, base: &str) -> Option<String> {
+        let (git, path, branch) = (self.git.clone(), PathBuf::from(repo), base.to_owned());
+        let failed = blocking(move || {
+            git.open(&path)
+                .map_err(git_error)?
+                .fetch_remote_of(&branch, FETCH_PATIENCE)
+                .map_err(git_error)
+        })
+        .await
+        .err()
+        .map(|err| err.to_string());
+        let (git, path, branch) = (self.git.clone(), PathBuf::from(repo), base.to_owned());
+        let forwarded = blocking(move || {
+            let repo = git.open(&path).map_err(git_error)?;
+            let Some(gap) = repo.upstream_gap(&branch).map_err(git_error)? else {
+                return Ok(());
+            };
+            if gap.ahead > 0 || gap.behind == 0 {
+                return Ok(());
+            }
+            let Some(tip) = repo.branch_tip(&branch).map_err(git_error)? else {
+                return Ok(());
+            };
+            repo.land(&LandRequest {
+                branch,
+                expected_tip: tip,
+                commit: gap.tip,
+            })
+            .map(drop)
+            .map_err(git_error)
+        })
+        .await;
+        if let Err(err) = forwarded {
+            tracing::warn!(%err, "the base couldn't be brought up to date with its upstream");
+        }
+        failed
+    }
+
+    /// The base against its upstream as last fetched; none without one.
+    async fn base_upstream(&self, repo: &str, base: &str) -> Option<MergedUpstream> {
+        let (git, path, branch) = (self.git.clone(), PathBuf::from(repo), base.to_owned());
+        let gap = blocking(move || {
+            git.open(&path)
+                .map_err(git_error)?
+                .upstream_gap(&branch)
+                .map_err(git_error)
+        })
+        .await
+        .ok()
+        .flatten()?;
+        Some(MergedUpstream {
+            name: gap.name,
+            behind: gap.behind,
+        })
     }
 
     /// Once no write task is left, the held merge is stopped, waits for findings to be
@@ -2594,6 +2663,55 @@ pub(super) fn reviews_since_merge(board: &crate::board::Board) -> Vec<&crate::wo
 /// What a late `propose_merge` call hears: merge cards are retired (BUILD-PLAN A4).
 pub(super) const PROPOSE_MERGE_RETIRED: &str = "propose_merge is retired: there are no merge cards any more. When the work is ready to merge you may say so once, in plain text. Merge only on the user's word: [merge] (call finish_session without consent), a card answer or their message (finish_session with its consent).";
 
+/// How long a merge waits for the fetch of its base's remote (#224).
+const FETCH_PATIENCE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Where the merge landed against the base's upstream (#224), for the `[finished]` text.
+fn pushed_line(
+    base: &str,
+    upstream: Option<&MergedUpstream>,
+    fetch_failed: Option<&str>,
+) -> String {
+    let mut line = upstream.map_or_else(String::new, |upstream| {
+        format!(
+            " It is merged on this Mac only, not pushed to `{}`.",
+            upstream.name
+        )
+    });
+    line.push_str(&diverged_line(base, upstream, fetch_failed));
+    line
+}
+
+/// The base diverged from its upstream, or couldn't be fetched (#224): what that means.
+fn diverged_line(
+    base: &str,
+    upstream: Option<&MergedUpstream>,
+    fetch_failed: Option<&str>,
+) -> String {
+    let mut line = String::new();
+    if let Some(upstream) = upstream.filter(|upstream| upstream.behind > 0) {
+        line.push_str(&format!(
+            " Local `{base}` has diverged from `{}`: {} commit{} there {} not in it, so pushing needs them merged in first.",
+            upstream.name,
+            upstream.behind,
+            if upstream.behind == 1 { "" } else { "s" },
+            if upstream.behind == 1 { "is" } else { "are" },
+        ));
+    }
+    if let Some(why) = fetch_failed {
+        line.push_str(&match upstream {
+            Some(upstream) => format!(
+                " Fetching `{}` failed ({why}), so this is as last fetched.",
+                upstream.name
+            ),
+            None => format!(
+                " Fetching `{base}`'s remote failed ({why}), so whether `{base}` is behind it isn't known."
+            ),
+        });
+    }
+    line
+}
+
 fn not_consented(why: String) -> Error {
     Error::Invalid(format!(
         "[not merged] {why}. Nothing was merged. Merge only once the user consents: [merge], or their own words asking for it. You may say once, in plain text, that the work is ready."
@@ -2926,6 +3044,23 @@ mod tests {
             reported_paths("- `docs/Design (draft).md` (new)"),
             ["docs/Design (draft).md"]
         );
+    }
+
+    #[test]
+    fn a_failed_fetch_is_said_with_or_without_an_upstream() {
+        let upstream = MergedUpstream {
+            name: "origin/main".into(),
+            behind: 2,
+        };
+        assert_eq!(
+            pushed_line("main", Some(&upstream), Some("no network")),
+            " It is merged on this Mac only, not pushed to `origin/main`. Local `main` has diverged from `origin/main`: 2 commits there are not in it, so pushing needs them merged in first. Fetching `origin/main` failed (no network), so this is as last fetched."
+        );
+        assert_eq!(
+            pushed_line("main", None, Some("no network")),
+            " Fetching `main`'s remote failed (no network), so whether `main` is behind it isn't known."
+        );
+        assert_eq!(pushed_line("main", None, None), "");
     }
 
     #[test]

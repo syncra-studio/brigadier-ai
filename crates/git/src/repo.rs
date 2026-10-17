@@ -1,7 +1,7 @@
 use crate::{
     Branch, Change, ChangeKind, CheckoutTrees, CollidingPath, CommitInfo, DiffStat, Environment,
     Error, Git, LandBlock, LandOutcome, LandRequest, MergeAudit, MergeOutcome, Oid, PatchOutcome,
-    RemoteState, RepoState, Result, RevertOutcome, Side, Snapshot, Vanished, Worktree,
+    RemoteState, RepoState, Result, RevertOutcome, Side, Snapshot, UpstreamGap, Vanished, Worktree,
     WorktreeInfo, WorktreeSpec,
     command::{TempIndex, check, failure, valid_oid, valid_path},
     parse,
@@ -1487,6 +1487,72 @@ impl Repo {
         })
     }
 
+    /// Fetches the remote `branch` pushes to (its upstream's, else `origin`), asking nothing
+    /// on a terminal; git is stopped after `limit`. Touches no checkout or local branch. No
+    /// remote: nothing to fetch.
+    pub fn fetch_remote_of(&self, branch: &str, limit: std::time::Duration) -> Result<()> {
+        let Some(remote) = self.remote_state(branch)?.remote else {
+            return Ok(());
+        };
+        let args = ["fetch", "--quiet", "--no-tags", "--end-of-options", &remote];
+        let env: Environment = vec![("GIT_TERMINAL_PROMPT".into(), "0".into())];
+        self.git
+            .checked_within(Some(&self.root), &args, &env, limit)?;
+        Ok(())
+    }
+
+    /// Local `branch` against its upstream as last fetched: the one it tracks, else
+    /// `origin/<branch>` when it tracks none. None without one, or when the one it tracks
+    /// isn't fetched (`origin`'s isn't taken for it then).
+    pub fn upstream_gap(&self, branch: &str) -> Result<Option<UpstreamGap>> {
+        self.validate_branch(branch)?;
+        let tracks = self
+            .run(
+                &["config", "--get", &format!("branch.{branch}.merge")],
+                true,
+            )?
+            .status
+            .success();
+        let (name, spec) = match self.remote_state(branch)?.upstream {
+            Some(name) => (name, format!("{branch}@{{upstream}}")),
+            None if tracks => return Ok(None),
+            None => (
+                format!("origin/{branch}"),
+                format!("refs/remotes/origin/{branch}"),
+            ),
+        };
+        let out = self.run(
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &format!("{spec}^{{commit}}"),
+            ],
+            true,
+        )?;
+        if !out.status.success() {
+            return Ok(None);
+        }
+        let upstream = parse::oid(&out.stdout)?;
+        let tip = self
+            .branch_tip(branch)?
+            .ok_or_else(|| Error::Invalid(format!("no branch `{branch}`")))?;
+        let range = format!("{}...{}", tip.0, upstream.0);
+        let counts =
+            parse::line(&self.cmd(&["rev-list", "--left-right", "--count", &range, "--"], true)?)?;
+        let mut counts = counts.split_whitespace().map(str::parse::<u32>);
+        let (Some(Ok(ahead)), Some(Ok(behind))) = (counts.next(), counts.next()) else {
+            return Err(Error::Parse("invalid commit counts".into()));
+        };
+        Ok(Some(UpstreamGap {
+            name,
+            tip: upstream,
+            ahead,
+            behind,
+        }))
+    }
+
     /// Pushes `branch` to its upstream, or to `origin` as its new upstream. Never forces, and
     /// git asks nothing on a terminal.
     pub fn push(&self, branch: &str) -> Result<()> {
@@ -2458,5 +2524,126 @@ pub(crate) mod tests {
         ]);
         let merged = repo.resolve("HEAD").expect("HEAD");
         assert!(!landed(&merged), "its merge commit is nowhere upstream");
+    }
+
+    #[test]
+    fn a_fetch_shows_how_far_main_is_from_its_upstream() {
+        let (dir, git) = test_git("upstream-gap");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        let run = |args: &[&str]| repo.cmd(args, false).expect("git");
+        fs::write(root.join("a.txt"), "a\n").expect("a file");
+        repo.commit_changes("Base", true).expect("a commit");
+        run(&["branch", "-M", "main"]);
+        assert_eq!(repo.upstream_gap("main").expect("gap"), None);
+        let limit = std::time::Duration::from_secs(20);
+        repo.fetch_remote_of("main", limit)
+            .expect("no remote: nothing to fetch");
+        let origin = dir.join("origin.git");
+        run(&[
+            "clone",
+            "--quiet",
+            "--bare",
+            ".",
+            origin.to_str().expect("path"),
+        ]);
+        run(&["remote", "add", "origin", origin.to_str().expect("path")]);
+        run(&["fetch", "--quiet", "origin"]);
+        run(&[
+            "branch",
+            "--quiet",
+            "--set-upstream-to",
+            "origin/main",
+            "main",
+        ]);
+        // Someone else pushes to origin's main; this main commits on its own.
+        let other = dir.join("other");
+        run(&[
+            "clone",
+            "--quiet",
+            origin.to_str().expect("path"),
+            other.to_str().expect("path"),
+        ]);
+        let other = git.open(&other).expect("the clone");
+        fs::write(other.root().join("b.txt"), "b\n").expect("a file");
+        other.commit_changes("Add b", true).expect("a commit");
+        other
+            .cmd(&["push", "--quiet", "origin", "HEAD:main"], false)
+            .expect("a push");
+        let gap = repo
+            .upstream_gap("main")
+            .expect("gap")
+            .expect("an upstream");
+        assert_eq!((gap.ahead, gap.behind), (0, 0), "not fetched yet");
+        repo.fetch_remote_of("main", limit).expect("a fetch");
+        let gap = repo
+            .upstream_gap("main")
+            .expect("gap")
+            .expect("an upstream");
+        assert_eq!(gap.name, "origin/main");
+        assert_eq!((gap.ahead, gap.behind), (0, 1));
+        fs::write(root.join("c.txt"), "c\n").expect("a file");
+        repo.commit_changes("Add c", true).expect("a commit");
+        let gap = repo
+            .upstream_gap("main")
+            .expect("gap")
+            .expect("an upstream");
+        assert_eq!((gap.ahead, gap.behind), (1, 1), "diverged");
+        // Tracking a remote that isn't fetched: no gap, and origin's main isn't taken for it.
+        run(&["remote", "add", "fork", origin.to_str().expect("path")]);
+        run(&["config", "branch.main.remote", "fork"]);
+        assert_eq!(repo.upstream_gap("main").expect("gap"), None);
+    }
+
+    #[test]
+    fn a_helper_left_holding_gits_output_doesnt_hold_the_fetch() {
+        let (dir, git) = test_git("fetch-helper");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        let run = |args: &[&str]| repo.cmd(args, false).expect("git");
+        run(&["branch", "-M", "main"]);
+        run(&["remote", "add", "origin", "ssh://example.invalid/r.git"]);
+        // The ssh stand-in fails at once and leaves a child writing to git's stderr.
+        run(&["config", "core.sshCommand", "sleep 8 >&2 & exit 1;"]);
+        let started = std::time::Instant::now();
+        let err = repo
+            .fetch_remote_of("main", std::time::Duration::from_secs(20))
+            .expect_err("the fetch fails");
+        assert!(!err.to_string().contains("was stopped"), "{err}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_fetch_that_hangs_is_stopped_at_its_limit() {
+        let (dir, git) = test_git("fetch-limit");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        let run = |args: &[&str]| repo.cmd(args, false).expect("git");
+        run(&["branch", "-M", "main"]);
+        run(&["remote", "add", "origin", "ssh://example.invalid/r.git"]);
+        // A marker in its command line finds what it started, if anything was left running.
+        let marker = format!("sleep 30 # {}", dir.display());
+        run(&["config", "core.sshCommand", &format!("{marker}\n")]);
+        let started = std::time::Instant::now();
+        let err = repo
+            .fetch_remote_of("main", std::time::Duration::from_secs(1))
+            .expect_err("stopped");
+        assert!(err.to_string().contains("was stopped"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        #[cfg(unix)]
+        {
+            let left = std::process::Command::new("pgrep")
+                .args(["-f", &marker])
+                .output()
+                .expect("pgrep");
+            assert!(left.stdout.is_empty(), "left running: {left:?}");
+        }
     }
 }

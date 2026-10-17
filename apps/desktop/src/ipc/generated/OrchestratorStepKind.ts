@@ -7,6 +7,7 @@ import type { FeedbackKind } from "./FeedbackKind";
 import type { FileStat } from "./FileStat";
 import type { ItemStatus } from "./ItemStatus";
 import type { MergeCondition } from "./MergeCondition";
+import type { MergedUpstream } from "./MergedUpstream";
 import type { TaskId } from "./TaskId";
 import type { ThreadItemKind } from "./ThreadItemKind";
 
@@ -66,7 +67,12 @@ text?: string, } | { "type": "stopped", taskId: TaskId, reason: string, } | { "t
 /**
  * The user message whose words asked for it: it asks for no other merge.
  */
-askedIn: string | null, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "mergeHeld", branch: string, base: string, 
+askedIn: string | null, 
+/**
+ * The base's upstream when it merged (#224): the merge is on this Mac only, not pushed
+ * to it. None: the base has no upstream.
+ */
+upstream?: MergedUpstream, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "mergeHeld", branch: string, base: string, 
 /**
  * The user message, or "Merge into main" click (a merge card's, before BUILD-PLAN
  * A4), whose consent it holds.

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { batchReviews, checksLine, findingRows, reviewLines, reviewRow, reviewStatus } from "@/app/conversation/reviewStatus";
-import type { Finding, FindingStatus, IntegratedCheck, IntegratedCheckState, OrchestratorStep, ReviewRun, ReviewState } from "@/ipc/generated";
+import type { Finding, FindingStatus, IntegratedCheck, IntegratedCheckState, MergedUpstream, OrchestratorStep, ReviewRun, ReviewState } from "@/ipc/generated";
 
 const review = (id: string, startedAtMs: number, state: ReviewState, kind: ReviewRun["kind"] = "code"): ReviewRun => ({
   id,
@@ -142,6 +142,23 @@ test("a review still running at the merge stays the merged work's, and so does i
     merged: "Merged · review clean",
     current: null,
   });
+});
+
+test("the merged line says the merge is on this Mac only when the base has an upstream, and when that had moved on", () => {
+  const at = (atMs: number, upstream: MergedUpstream): OrchestratorStep => {
+    const step = merged(atMs);
+    return { ...step, kind: { ...step.kind, upstream } } as OrchestratorStep;
+  };
+  const clean = review("1", 10, { type: "clean" });
+  assert.equal(reviewLines([merged(20)], [clean]).merged?.text, "Merged · review clean");
+  assert.equal(
+    reviewLines([at(20, { name: "origin/main", behind: 0 })], [clean]).merged?.text,
+    "Merged on this Mac · review clean",
+  );
+  assert.equal(
+    reviewLines([at(20, { name: "origin/main", behind: 31 })], [clean]).merged?.text,
+    "Merged on this Mac · origin/main moved on · review clean",
+  );
 });
 
 test("the lines count the reviews of what landed and of the thread's own commits, not a worker's own review", () => {
