@@ -436,9 +436,9 @@ impl SessionManager {
             );
             return;
         };
-        let catalogs: Vec<_> = ProviderKind::ALL
-            .into_iter()
-            .map(|provider| {
+        let catalogs = research_catalogs(
+            &settings,
+            ProviderKind::ALL.into_iter().map(|provider| {
                 let models = self
                     .runtime
                     .overview(provider)
@@ -446,8 +446,8 @@ impl SessionManager {
                     .map(|c| c.models)
                     .unwrap_or_default();
                 (provider, models)
-            })
-            .collect();
+            }),
+        );
         let refs: Vec<_> = catalogs
             .iter()
             .map(|(provider, models)| (*provider, models.as_slice()))
@@ -512,6 +512,23 @@ it. Do not change any other facts."#,
             .registry()
             .finish_refresh(id, revision, &models, reply);
     }
+}
+
+/// The models a rankings refresh rates: what each agent lists, less the models and agents the
+/// user switched off.
+fn research_catalogs(
+    settings: &crate::model::Settings,
+    catalogs: impl IntoIterator<Item = (ProviderKind, Vec<brigadier_providers::ModelInfo>)>,
+) -> Vec<(ProviderKind, Vec<brigadier_providers::ModelInfo>)> {
+    catalogs
+        .into_iter()
+        .map(|(provider, mut models)| {
+            models.retain(|model| {
+                crate::routing::availability::model_available(settings, provider, &model.id)
+            });
+            (provider, models)
+        })
+        .collect()
 }
 
 /// The strongest model that may research now: not excluded (Fable never is picked), allowed by
@@ -791,10 +808,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn researcher_skips_a_model_whose_own_window_is_used_up() {
-        let registry = brigadier_router::Registry::bundled();
-        let info = |id: &str| brigadier_providers::ModelInfo {
+    fn info(id: &str) -> brigadier_providers::ModelInfo {
+        brigadier_providers::ModelInfo {
             id: id.to_owned(),
             display_name: id.to_owned(),
             description: String::new(),
@@ -805,7 +820,37 @@ mod tests {
             input_modalities: vec!["text".into()],
             fast: None,
             legacy: false,
+        }
+    }
+
+    #[test]
+    fn a_rankings_refresh_leaves_out_the_models_you_switched_off() {
+        let mut settings = crate::model::Settings::default();
+        settings.hidden_models.push(crate::model::ModelRef {
+            provider: ProviderKind::Claude,
+            id: "sonnet".into(),
+        });
+        let catalogs = research_catalogs(
+            &settings,
+            [
+                (ProviderKind::Claude, vec![info("opus"), info("sonnet")]),
+                (ProviderKind::Codex, vec![info("gpt-6.1-sol")]),
+            ],
+        );
+        let ids = |provider| {
+            catalogs
+                .iter()
+                .find(|(kind, _)| *kind == provider)
+                .map(|(_, models)| models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>())
+                .unwrap()
         };
+        assert_eq!(ids(ProviderKind::Claude), ["opus"]);
+        assert_eq!(ids(ProviderKind::Codex), ["gpt-6.1-sol"]);
+    }
+
+    #[test]
+    fn researcher_skips_a_model_whose_own_window_is_used_up() {
+        let registry = brigadier_router::Registry::bundled();
         let catalog = [info("opus"), info("sonnet")];
         let models =
             brigadier_router::merge(&registry, &[(ProviderKind::Claude, &catalog)], &[], &[]);
