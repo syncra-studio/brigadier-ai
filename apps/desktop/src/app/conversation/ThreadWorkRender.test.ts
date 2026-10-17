@@ -83,7 +83,7 @@ test("the thread's own work reads like the reference thread: running commands st
   assert.equal(seen.reapplied, "Changes reapplied. notes.md stays as it is: Undo left it");
   assert.equal(seen.refused, "Couldn't undo the changes: Later changes touch the same files (run.mjs)");
 
-  // The working request's pill, from its record; a click opens its changes.
+  // The working request's pill, from its record; a click opens its first file's tab.
   assert.match(String(seen.pill), /^2 files changed ?\+11 −2$/);
-  assert.deepEqual(seen.pillScope, { type: "lastTurn", requestId: "live" });
+  assert.equal(seen.pillTab, "src/math.js");
 });

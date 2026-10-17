@@ -75,11 +75,6 @@ try {
   await activePane().getByRole('button',{name:'New page'}).click(); await settle();
   now=await state(); assert.equal(now.active,before.active);assert.equal(now.tabs.find(t=>t.id===now.active).kind,'page');
   check('Native Cmd+T creates New tab; New page replaces it in place');
-  await menu('new');await field().waitFor(); before=await state();
-  await activePane().getByRole('button',{name:'Review changes'}).click();await settle();now=await state();
-  assert.equal(now.active,'review');assert.equal(now.tabs.some(t=>t.id===before.active),false);
-  assert.equal(now.tabs.filter(t=>t.kind==='review').length,1);
-  check('Review dedup consumes placeholder and selects existing tab');
   await menu('new');await field().waitFor();before=await state();
   await activePane().getByRole('button',{name:'Find file'}).click();
   const finder=page.locator('[data-pane=files]').getByRole('textbox');await finder.waitFor();

@@ -21,8 +21,7 @@ import { filePatch } from "@/lib/patch";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { keepChanges, undoChanges } from "@/state/pendingChanges";
-import { setReviewScope } from "@/state/review";
-import { openFileTab, openReviewTab } from "@/state/sessionTabs";
+import { openFileTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 
 /** The files listed before "Show {n} more files". */
@@ -217,9 +216,9 @@ const ReviewRow: FC<{
 
 /**
  * The card under a finished turn's answer: "Edited 3 files" (or the one file's name) over
- * "+a −d", which says "View changes ↗" while hovered, then Undo (where one request's changes can
- * be taken back whole), which turns into Reapply, and View changes. With more than one file it
- * lists them, the first three, each opening to its diff. It sums what each of the turn's requests
+ * "+a −d", which says "View changes ↗" while hovered and opens the first file (a lone file's diff
+ * in place), then Undo (where one request's changes can be taken back whole), which turns into
+ * Reapply. With more than one file it lists them, the first three, each opening to its diff. It sums what each of the turn's requests
  * recorded of its own changes (the thread's own edits and commands and its workers' landings,
  * never what the user changed meanwhile), and for a request from before that was kept, what its
  * workers landed; a message steered in takes over the worker it speaks to. A turn that changed
@@ -286,12 +285,6 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
   const [first] = requests;
   if (!diff || !conversationId || first === undefined) return null;
 
-  // The Changes tab shows one request: the turn's first that landed.
-  const openChanges = () => {
-    setReviewScope(conversationId, { type: "lastTurn", requestId: first });
-    openReviewTab(conversationId, { type: "all" });
-  };
-
   const [only] = diff.files;
   const one =
     diff.files.length === 1 && only
@@ -351,7 +344,7 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
         <button
           type="button"
           aria-label="View changed files"
-          onClick={reviewing ? () => openFileTab(conversationId, waiting[0] ?? diff.files[0]!.path) : openChanges}
+          onClick={() => (!reviewing && one ? flip(only!.path) : openFileTab(conversationId, waiting[0] ?? diff.files[0]!.path))}
           className="flex min-w-0 flex-1 items-center gap-3 text-start"
         >
           <span className="bg-foreground/5 text-foreground rounded-control flex size-control-lg shrink-0 items-center justify-center">
@@ -420,18 +413,9 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
             <ArrowRotateCcw className="size-icon-sm" />
           )}
         </Button>}
-        {!reviewing && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={openChanges}
-            className="border-border border font-normal"
-          >
-            View changes
-          </Button>
-        )}
       </div>
-      {!one && (
+      {/* One file of an old card: its title opens the turn's own diff here, as a row would. */}
+      {(!one || (!reviewing && opened.size > 0)) && (
         <ul className="border-border border-t">
           {shown.map((file) =>
             reviewing ? (

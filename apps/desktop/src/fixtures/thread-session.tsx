@@ -164,7 +164,7 @@ if (tabFixture) Object.assign(window, { sessionTabFixture: { id, fixtureCalls, f
 if (tabFixture && !sessionTabs(id).tabs.length && conversation.kind === "session") {
   const count = Number(query.get("tabs"));
   for (let index = 0; index < count; index++) {
-    if (index === 0) openReviewTab(id, { type: "all" });
+    if (index === 0) openReviewTab(id, { type: "changes", staged: false });
     else newSessionTab(id, index === count - 1 ? "newTab" : index % 2 ? "browser" : "page");
   }
 }

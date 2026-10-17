@@ -51,7 +51,7 @@ test("page, file and browser tabs can chat; terminal, New tab and Review can't, 
   assert.deepEqual(target(browser), { type: "browser" });
   assert.equal(target(terminal), "none");
   assert.equal(target(blank), "none");
-  assert.equal(canChat({ kind: "review", id: "review", opener: null, target: { type: "all" } } as never), false);
+  assert.equal(canChat({ kind: "review", id: "review", opener: null, target: { type: "changes", staged: false } } as never), false);
   assert.equal(chatTarget({ kind: "page", id: "draft", opener: null, pageId: null, title: "" }), null);
 });
 

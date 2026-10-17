@@ -65,7 +65,8 @@ function baseName(path: string): string {
 
 export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "review") {
-    return tab.target.type === "all" ? "Review" : `${baseName(tab.target.path)} (diff)`;
+    if (tab.target.type === "changes") return tab.target.staged ? "Staged Changes" : "Changes";
+    return `${baseName(tab.target.path)} (diff)`;
   }
   if (tab.kind === "newTab") return "New tab";
   if (tab.kind === "browser") return tab.title || tab.url || "New browser";

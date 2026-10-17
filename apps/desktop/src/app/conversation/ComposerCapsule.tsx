@@ -18,8 +18,7 @@ import { Spinner } from "@/components/glyphs/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { DiffStat, FileStat } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { setReviewScope } from "@/state/review";
-import { openReviewTab } from "@/state/sessionTabs";
+import { openFileTab } from "@/state/sessionTabs";
 import { type Board, useBoard } from "@/state/board";
 
 /**
@@ -305,10 +304,7 @@ const RequestCapsule: FC<{ conversationId: string }> = ({ conversationId }) => {
       {diff && (
         <DiffPill
           diff={diff}
-          onOpen={() => {
-            setReviewScope(conversationId, { type: "lastTurn", requestId });
-            openReviewTab(conversationId, { type: "all" });
-          }}
+          {...(diff.files[0] && { onOpen: () => openFileTab(conversationId, diff.files[0]!.path) })}
         />
       )}
     </Capsule>

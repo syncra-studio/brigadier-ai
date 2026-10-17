@@ -7,11 +7,11 @@ const range = (from: number, to: number) => Array.from({ length: to - from + 1 }
 
 type Look = { lines: number; numbers: string[]; folds: string[]; marks: string[]; split: number; overflow: string | null; coloured: boolean };
 
-test("the Review tab's diff: numbered and coloured, folds that open, word diffs, wrap, split, and comments", { timeout: 120000 }, async (t) => {
+test("the Review tab's diff: numbered and coloured, folds that open, word diffs, wrap, split, and Add to chat", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "review-diff.html", "review-diff-result", 90000)) as Record<
-    "unified" | "expanded" | "words" | "wrapped" | "split",
+    "unified" | "expanded" | "wrapped" | "split",
     Look
-  > & { error?: string; plus: boolean; box: boolean; composer: string };
+  > & { error?: string; plus: boolean; composer: string };
   assert.equal(seen.error, undefined);
   // Unified: each change with three lines around it, both numbers of a replaced line, the
   // stretch between them folded with its count, all in the file's colours.
@@ -20,15 +20,13 @@ test("the Review tab's diff: numbered and coloured, folds that open, word diffs,
   assert.equal(seen.unified.coloured, true);
   // The fold opens in place: every line shown, nothing folded.
   assert.deepEqual([seen.expanded.lines, seen.expanded.folds], [32, []]);
-  // Word diffs: none until asked for, then only the words a replaced line changed.
-  assert.deepEqual(seen.unified.marks, []);
-  assert.deepEqual(seen.words.marks.slice(0, 2), ["Math.round(", " * 100) / 100"]);
+  // Word diffs: only the words a replaced line changed.
+  assert.deepEqual(seen.unified.marks.slice(0, 2), ["Math.round(", " * 100) / 100"]);
   // A long line scrolls, then wraps.
-  assert.deepEqual([seen.words.overflow, seen.wrapped.overflow], ["scroll", "wrap"]);
+  assert.deepEqual([seen.unified.overflow, seen.wrapped.overflow], ["scroll", "wrap"]);
   // Split: the old file and the new one side by side, each numbered from 1.
   assert.deepEqual([seen.split.split, seen.split.numbers], [2, [...range(1, 30), ...range(1, 30)]]);
-  // A comment: the "+" by the hovered line's number opens a box; its words go into the composer
-  // with the line quoted.
-  assert.deepEqual([seen.plus, seen.box], [true, true]);
-  assert.equal(seen.composer, "`src/values.ts` line 3:\n> export const value3 = Math.round(3 * 100) / 100;\nWhy round here?");
+  // Add to chat: the "+" by the hovered line's number puts the line, quoted, into the composer.
+  assert.equal(seen.plus, true);
+  assert.equal(seen.composer, "`src/values.ts` line 3:\n> export const value3 = Math.round(3 * 100) / 100;\n\n");
 });

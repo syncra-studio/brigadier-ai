@@ -51,7 +51,7 @@ useApp.setState((state) => ({
 useSessionTabs.setState({ sessions: {} });
 const PAGE_TAB = openPageTab(ID, PAGE, "Launch plan");
 openFileTab(ID, "src/app.ts");
-openReviewTab(ID, { type: "all" });
+openReviewTab(ID, { type: "changes", staged: false });
 const NEW_TAB = newSessionTab(ID, "newTab");
 const BROWSER_TAB = openBrowserTab(ID, "https://example.com");
 selectTab(ID, PAGE_TAB);

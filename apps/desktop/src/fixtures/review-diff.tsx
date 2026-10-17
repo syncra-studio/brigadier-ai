@@ -1,15 +1,14 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: the Review tab's
- * diff of one file loaded whole, measured through each of its options. IPC is mocked, no daemon.
+ * diff of one file loaded whole, measured through each of its toggles. IPC is mocked, no daemon.
  * The result goes to `<pre id="review-diff-result">`; `stop=1` holds the page for a screenshot.
  *
  * - Unified: the file's numbered lines, its unmodified stretches folded with a count, a fold
  *   opened in place.
- * - Word diffs: off, then on (the words a replaced line changed, marked).
+ * - Word diffs: the words a replaced line changed, marked.
  * - Wrap: a long line scrolls, then wraps.
  * - Split: old and new side by side.
- * - Comments: the "+" by a hovered line's number opens a box under that line; its words go into
- *   the composer with the line quoted.
+ * - Add to chat: the "+" by a hovered line's number puts the line, quoted, into the composer.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useAui, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -79,7 +78,7 @@ function Fixture() {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ComposerProbe />
-      <ReviewTab conversationId={CHAT} />
+      <ReviewTab conversationId={CHAT} target={{ type: "changes", staged: false }} />
     </AssistantRuntimeProvider>
   );
 }
@@ -114,9 +113,6 @@ async function measure() {
   inside("[data-expand-button]")[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
   await until(() => look().lines > (out.unified as { lines: number }).lines, 3000);
   out.expanded = look();
-  setReviewOption("wordDiffs", true);
-  await until(() => look().marks.length > 0, 3000);
-  out.words = look();
   setReviewOption("wrap", true);
   await until(() => look().overflow === "wrap", 3000);
   out.wrapped = look();
@@ -126,24 +122,14 @@ async function measure() {
   out.split = look();
   setReviewOption("split", false);
   await until(() => look().split === 1, 3000);
-  // Comment on the changed line 3: hover it, press the "+" by its number.
+  // Add the changed line 3 to the chat: hover it, press the "+" by its number.
   const line = inside("[data-content] > [data-line='3'][data-line-type=change-addition]")[0];
   for (const type of ["pointerover", "pointerenter", "pointermove"]) line?.dispatchEvent(new PointerEvent(type, { bubbles: true, composed: true, pointerType: "mouse" }));
   await until(() => inside("[data-utility-button]").length > 0, 2000);
   const plus = inside("[data-utility-button]")[0];
   out.plus = !!plus;
   for (const type of ["pointerdown", "pointerup", "click"]) plus?.dispatchEvent(new PointerEvent(type, { bubbles: true, composed: true, pointerType: "mouse", button: 0 }));
-  await until(() => !!document.querySelector("textarea"), 2000);
-  const box = document.querySelector<HTMLTextAreaElement>("textarea");
-  out.box = !!box;
-  if (box) {
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-    setter?.call(box, "Why round here?");
-    box.dispatchEvent(new Event("input", { bubbles: true }));
-    await wait(50);
-    [...document.querySelectorAll("button")].find((button) => button.textContent === "Comment")?.click();
-    await wait(100);
-  }
+  await until(() => composer.text() !== "", 2000);
   out.composer = composer.text();
   return out;
 }

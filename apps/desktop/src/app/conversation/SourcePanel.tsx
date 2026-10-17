@@ -44,7 +44,7 @@ import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, readSource, useCa
 import type { CommitOutcome, SourceAction, SourceBranch, SourceChange, SourceFile, SourceScope, SourceState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
-import { noteSourceState, setReviewScope } from "@/state/review";
+import { noteSourceState } from "@/state/review";
 import { openConflictTab, openFileTab, openReviewTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
@@ -313,9 +313,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
   const unstagedPaths = new Set(all.map((file) => file.path));
   const merging = state?.merging ?? null;
   const openGroup = (scope: "staged" | "unstaged") => {
-    if (!conversationId) return;
-    setReviewScope(conversationId, { type: scope });
-    openReviewTab(conversationId, { type: "all" });
+    if (conversationId) openReviewTab(conversationId, { type: "changes", staged: scope === "staged" });
   };
   const openFile = conversationId ? (path: string) => openFileTab(conversationId, path) : null;
   const commitRef = useRef<((how: CommitHow) => void) | null>(null);

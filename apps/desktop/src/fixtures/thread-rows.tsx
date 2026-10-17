@@ -472,8 +472,12 @@ async function measure(): Promise<object> {
     many, all: { files: all5.files.length, more: all5.more }, one: card("turn-diff-one"),
     opened: { name: text(one("[data-slot=turn-diff-file-body] [data-slot=diff-name]", at("turn-diff-many"))), counts: text(one("[data-slot=turn-diff-file-body] [data-slot=diff-counts]", at("turn-diff-many"))) },
     direct: card("turn-diff-direct"), steered: card("turn-diff-steered"),
-    asks: reviewAsks,
+    asks: [...reviewAsks],
   };
+  // One file's title opens the turn's own diff of it in place.
+  one<HTMLButtonElement>("[aria-label='View changed files']", at("turn-diff-one"))?.click();
+  for (const end = performance.now() + 8000; performance.now() < end && !one("[data-slot=turn-diff-file-body] [data-slot=diff-name]", at("turn-diff-one")); ) await frame();
+  out.turnDiffOneOpened = text(one("[data-slot=turn-diff-file-body] [data-slot=diff-name]", at("turn-diff-one")));
   // The diff engine draws in its own shadow root.
   const inside = (id: string, selector: string) =>
     all("diffs-container", at(id)).flatMap((host) => (host.shadowRoot ? [...host.shadowRoot.querySelectorAll<HTMLElement>(selector)] : []));

@@ -17,7 +17,7 @@
  * - A Codex find in a page: "Searched the web for 'LTS' in https://nodejs.org/en".
  * - The turn's changed files from the request's own record: one file named in the title; four
  *   files with one Undo leaves as it is; Undo, its toast naming that file, then Reapply.
- * - The files-changed pill of a working request, from its record, opening the changes.
+ * - The files-changed pill of a working request, from its record, opening its first file.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { type ReactNode, useEffect, useState } from "react";
@@ -34,7 +34,7 @@ import { ViewContext } from "@/app/conversation/viewContext";
 import { OpenFileContext } from "@/components/assistant-ui/file-links";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BackgroundRun, Conversation, OrchestratorStepKind, ProviderEvent, RawEntry, Request, UserRequest } from "@/ipc/generated";
-import { useReview } from "@/state/review";
+import { sessionTabs } from "@/state/sessionTabs";
 import { emptyBoard, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";
@@ -400,12 +400,14 @@ async function measure(): Promise<object> {
   // A refused Undo says which way it failed.
   out.refused = await toastAfter(() => oneCard.undo?.click());
 
-  // The pill of the working request, from its record; a click opens its changes.
+  // The pill of the working request, from its record; a click opens its first file.
   await until(() => one("[data-slot=composer-capsule]", at("pill")));
   out.pill = text(one("[data-slot=composer-capsule]", at("pill")));
   one<HTMLElement>("[data-slot=composer-capsule] button", at("pill"))?.click();
   await wait(200);
-  out.pillScope = useReview.getState().scopes[CHAT] ?? null;
+  const tabs = sessionTabs(CHAT);
+  const opened = tabs.tabs.find((tab) => tab.id === tabs.active);
+  out.pillTab = opened?.kind === "file" ? opened.path : (opened?.kind ?? null);
   return out;
 }
 

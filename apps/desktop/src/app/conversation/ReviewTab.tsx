@@ -7,15 +7,10 @@ import {
   ChevronUpDown,
   Compare,
   Copy,
-  DotsHorizontal,
   ExternalLink,
   FolderOpen,
   Folders,
-  JumpToCaption,
-  Plus,
   Reload,
-  Search,
-  SidebarRight,
   Text,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
@@ -26,81 +21,36 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
-import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { useNow } from "@/hooks/use-now";
 import { openFolder, request, revealPath } from "@/ipc/client";
 import type { ReviewDiff, ReviewFile, ReviewScope } from "@/ipc/generated";
-import { formatSentAt } from "@/lib/format";
-import { languageOf } from "@/lib/languages";
 import { type DiffLine, fileSides, filePatch, type PatchFile, parsePatch } from "@/lib/patch";
-import { type DiffNote, type DiffSource, DiffView } from "@/app/conversation/diffView";
+import { type DiffSource, DiffView } from "@/app/conversation/diffView";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
-import {
-  LATEST_TURN,
-  type ReviewOptions,
-  setReviewOption,
-  setReviewScope,
-  useReview,
-} from "@/state/review";
-import { CHAT_TAB, openFileTab, openReviewTab, type ReviewTarget, selectTab } from "@/state/sessionTabs";
+import { type ReviewOptions, setReviewOption, useReview } from "@/state/review";
+import { CHAT_TAB, openFileTab, type ReviewTarget, selectTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 
 /**
- * A session's Review tab: a scope ("Last Turn", "Uncommitted", …) and its total, every changed
- * file's diff stacked under a sticky header, and the file list beside them; or, opened from
- * the Source panel, one file's staged or unstaged diff. It only reads; a line's "+" quotes it
- * into the composer to comment on.
+ * A session's Review tab, opened from the Source panel: a group's diffs ("Open Changes"), each
+ * file's under a sticky header, or one file's staged or unstaged diff. It only reads; a line's
+ * "+" adds it to the chat.
  */
-
-function scopeLabel(scope: ReviewScope, review: ReviewDiff | null): string {
-  switch (scope.type) {
-    case "lastTurn":
-      return "Last Turn";
-    case "uncommitted":
-      return "Uncommitted";
-    case "unstaged":
-      return "Unstaged";
-    case "staged":
-      return "Staged";
-    case "branch":
-      return "Branch";
-    case "commit":
-      return (
-        review?.commits.find((commit) => commit.commit === scope.commit)?.subject ??
-        scope.commit.slice(0, 7)
-      );
-  }
-}
-
-function sameScope(a: ReviewScope, b: ReviewScope): boolean {
-  if (a.type !== b.type) return false;
-  if (a.type === "commit" && b.type === "commit") return a.commit === b.commit;
-  return true;
-}
 
 const Counts: FC<{ insertions: number; deletions: number; className?: string }> = ({
   insertions,
@@ -129,14 +79,14 @@ function useChangeKey(conversationId: string): string {
 }
 
 /**
- * The review of `scope`, refetched when the options, the board, the Source panel's reading of
- * the checkout or `tick` change it. While a refetch loads, the last review stays only if it
- * shows the same scope and options: another scope's patch must not sit under this one's label.
+ * The review of `scope` with whole files, refetched when the board, the Source panel's reading
+ * of the checkout or `tick` change it. While a refetch loads, the last review stays only if it
+ * shows the same scope: another scope's patch must not sit under this one's label.
  */
-function useReviewDiff(conversationId: string, scope: ReviewScope, options: ReviewOptions, tick: number) {
+function useReviewDiff(conversationId: string, scope: ReviewScope, tick: number) {
   const changeKey = useChangeKey(conversationId);
   const checkout = useReview((s) => s.checkouts[conversationId] ?? "");
-  const view = JSON.stringify([conversationId, scope, options.wholeFiles, options.ignoreWhitespace]);
+  const view = JSON.stringify([conversationId, scope]);
   const key = JSON.stringify([view, tick, changeKey, checkout]);
   const [state, setState] = useState<{
     key: string | null;
@@ -146,18 +96,13 @@ function useReviewDiff(conversationId: string, scope: ReviewScope, options: Revi
   }>({ key: null, view: null, review: null, error: null });
   useEffect(() => {
     let live = true;
-    const [id, wanted, wholeFiles, ignoreWhitespace] = JSON.parse(view) as [
-      string,
-      ReviewScope,
-      boolean,
-      boolean,
-    ];
+    const [id, wanted] = JSON.parse(view) as [string, ReviewScope];
     request({
       method: "getReviewDiff",
       conversationId: id,
       scope: wanted,
-      wholeFiles,
-      ignoreWhitespace,
+      wholeFiles: true,
+      ignoreWhitespace: false,
     })
       .then(({ review }) => {
         if (live) setState({ key, view, review, error: null });
@@ -186,20 +131,17 @@ function useReviewDiff(conversationId: string, scope: ReviewScope, options: Revi
 
 export function ReviewTab({
   conversationId,
-  target = { type: "all" },
+  target,
   active = true,
 }: {
   conversationId: string;
-  target?: ReviewTarget;
+  target: ReviewTarget;
   /** In front: it shows changes made meanwhile when it comes to the front again. */
   active?: boolean;
 }) {
-  const picked = useReview((s) => s.scopes[conversationId] ?? LATEST_TURN);
   const single = target.type === "file" ? target : null;
-  const scope = useMemo<ReviewScope>(
-    () => (single ? { type: single.staged ? "staged" : "unstaged" } : picked),
-    [single, picked],
-  );
+  const staged = target.staged;
+  const scope = useMemo<ReviewScope>(() => ({ type: staged ? "staged" : "unstaged" }), [staged]);
   const options = useReview((s) => s.options);
   const [tick, setTick] = useState(0);
   const [wasActive, setWasActive] = useState(active);
@@ -207,7 +149,7 @@ export function ReviewTab({
     setWasActive(active);
     if (active) setTick(tick + 1);
   }
-  const { review: fullReview, error, loading } = useReviewDiff(conversationId, scope, options, tick);
+  const { review: fullReview, error, loading } = useReviewDiff(conversationId, scope, tick);
   // One file's diff: only its part of the scope's.
   const review = useMemo(
     () =>
@@ -241,52 +183,18 @@ export function ReviewTab({
   }, [fullReview]);
   const files = useMemo(() => review?.files ?? [], [review]);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
-  const sections = useRef(new Map<string, HTMLElement>());
-  const jump = (path: string) => {
-    setCollapsed((current) => {
-      const next = new Set(current);
-      next.delete(path);
-      return next;
-    });
-    requestAnimationFrame(() => sections.current.get(path)?.scrollIntoView({ block: "start" }));
-  };
   const allCollapsed = files.length > 0 && files.every((file) => collapsed.has(file.path));
-  const whole = review?.fullFiles ?? false;
-  // Only these compare against the working tree, whose files the checkout holds as shown.
-  const checkout = scope.type === "uncommitted" || scope.type === "unstaged";
-  const reviewContext = useMemo(
-    () => ({ conversationId, whole, checkout }),
-    [conversationId, whole, checkout],
-  );
 
   return (
     <div data-slot="review-tab" className="flex min-h-0 flex-1 flex-col">
       <div className="border-border flex h-control-lg shrink-0 items-center gap-1 border-b px-2">
-        {single ? (
-          <>
-            <span className="text-muted-foreground px-1.5 text-sm">
-              {single.staged ? "Staged changes" : "Changes"}
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setReviewScope(conversationId, { type: "uncommitted" });
-                openReviewTab(conversationId, { type: "all" });
-              }}
-            >
-              Review all
-            </Button>
-          </>
-        ) : (
-          <ScopeMenu conversationId={conversationId} scope={scope} review={review} />
-        )}
+        <span className="text-muted-foreground px-1.5 text-sm">
+          {staged ? "Staged Changes" : "Changes"}
+        </span>
         {review && review.files.length > 0 && (
           <Counts insertions={review.insertions} deletions={review.deletions} className="text-sm" />
         )}
         <div className="flex-1" />
-        <OptionsMenu options={options} review={review} />
-        <JumpToFile files={review?.files ?? []} onJump={jump} />
         <TooltipIconButton tooltip="Refresh" size="icon-sm" onClick={() => setTick(tick + 1)}>
           <Reload className={cn(loading && "animate-spin motion-reduce:animate-none")} />
         </TooltipIconButton>
@@ -297,16 +205,18 @@ export function ReviewTab({
         >
           <Text />
         </ToggleButton>
-        <TooltipIconButton
-          tooltip={allCollapsed ? "Expand all diffs" : "Collapse all diffs"}
-          size="icon-sm"
-          disabled={files.length === 0}
-          onClick={() =>
-            setCollapsed(allCollapsed ? new Set() : new Set(files.map((file) => file.path)))
-          }
-        >
-          {allCollapsed ? <ChevronUpDown /> : <ChevronDownUp />}
-        </TooltipIconButton>
+        {!single && (
+          <TooltipIconButton
+            tooltip={allCollapsed ? "Expand all diffs" : "Collapse all diffs"}
+            size="icon-sm"
+            disabled={files.length === 0}
+            onClick={() =>
+              setCollapsed(allCollapsed ? new Set() : new Set(files.map((file) => file.path)))
+            }
+          >
+            {allCollapsed ? <ChevronUpDown /> : <ChevronDownUp />}
+          </TooltipIconButton>
+        )}
         <ToggleButton
           tooltip={options.split ? "Switch to unified diff" : "Switch to split diff"}
           on={options.split}
@@ -314,22 +224,15 @@ export function ReviewTab({
         >
           <Compare />
         </ToggleButton>
-        <ToggleButton
-          tooltip={options.hideFiles ? "Show files" : "Hide files"}
-          on={!options.hideFiles}
-          onClick={() => setReviewOption("hideFiles", !options.hideFiles)}
-        >
-          <SidebarRight />
-        </ToggleButton>
       </div>
       <div className="flex min-h-0 flex-1">
-        <ReviewContext.Provider value={reviewContext}>
+        <ReviewContext.Provider value={conversationId}>
           <div data-slot="review-diffs" className="min-w-0 flex-1 overflow-auto">
             {error ? (
               <p className="text-destructive p-4 text-sm">{error}</p>
             ) : review && review.files.length === 0 ? (
               <p className="text-muted-foreground p-4 text-sm">
-                {single ? `No ${single.staged ? "staged " : ""}changes in ${single.path}` : "No changes"}
+                {single ? `No ${staged ? "staged " : ""}changes in ${single.path}` : "No changes"}
               </p>
             ) : (
               review?.files.map((file) => (
@@ -347,18 +250,11 @@ export function ReviewTab({
                       return next;
                     })
                   }
-                  sectionRef={(element) => {
-                    if (element) sections.current.set(file.path, element);
-                    else sections.current.delete(file.path);
-                  }}
                 />
               ))
             )}
           </div>
         </ReviewContext.Provider>
-        {!options.hideFiles && review && review.files.length > 0 && (
-          <FileList files={review.files} onJump={jump} />
-        )}
       </div>
     </div>
   );
@@ -381,295 +277,20 @@ const ToggleButton: FC<{
   </TooltipIconButton>
 );
 
-/** The check beside the scope shown. */
-function mark(on: boolean): ReactNode {
-  return on ? <Check className="ms-auto size-icon-sm" /> : null;
-}
-
-const SCOPES: { scope: ReviewScope; label: string }[] = [
-  { scope: LATEST_TURN, label: "Last Turn" },
-  { scope: { type: "uncommitted" }, label: "Uncommitted" },
-  { scope: { type: "unstaged" }, label: "Unstaged" },
-  { scope: { type: "staged" }, label: "Staged" },
-];
-
-/** "Last Turn ⌄": the scope picker, with the branch's recent commits under "Committed". */
-const ScopeMenu: FC<{
-  conversationId: string;
-  scope: ReviewScope;
-  review: ReviewDiff | null;
-}> = ({ conversationId, scope, review }) => {
-  const now = useNow(60_000);
-  const pick = (next: ReviewScope) => setReviewScope(conversationId, next);
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="max-w-1/2 font-normal">
-          <span className="truncate">{scopeLabel(scope, review)}</span>
-          <ChevronDown className="text-muted-foreground size-icon-xs" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-48">
-        {SCOPES.slice(0, 1).map((entry) => (
-          <DropdownMenuItem key={entry.label} onSelect={() => pick(entry.scope)}>
-            {entry.label}
-            {mark(sameScope(scope, entry.scope))}
-          </DropdownMenuItem>
-        ))}
-        <DropdownMenuSeparator />
-        {SCOPES.slice(1).map((entry) => (
-          <DropdownMenuItem key={entry.label} onSelect={() => pick(entry.scope)}>
-            {entry.label}
-            {mark(sameScope(scope, entry.scope))}
-          </DropdownMenuItem>
-        ))}
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger disabled={!review || review.commits.length === 0}>
-            Committed
-            {mark(scope.type === "commit")}
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="max-h-80 max-w-md overflow-y-auto">
-            {review?.commits.map((commit) => (
-              <DropdownMenuItem
-                key={commit.commit}
-                onSelect={() => pick({ type: "commit", commit: commit.commit })}
-              >
-                <span className="min-w-0 flex-1 truncate">{commit.subject}</span>
-                <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-                  {formatSentAt(commit.atMs, now)}
-                </span>
-                {mark(scope.type === "commit" && scope.commit === commit.commit)}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => pick({ type: "branch" })}>
-          Branch
-          {mark(scope.type === "branch")}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-};
-
-/** "Review options" ⋯: how diffs load and draw, and the patch as a `git apply` command. */
-const OptionsMenu: FC<{ options: ReviewOptions; review: ReviewDiff | null }> = ({
-  options,
-  review,
-}) => (
-  <DropdownMenu>
-    <DropdownMenuTrigger asChild>
-      <TooltipIconButton tooltip="Review options" size="icon-sm">
-        <DotsHorizontal />
-      </TooltipIconButton>
-    </DropdownMenuTrigger>
-    <DropdownMenuContent align="end" className="min-w-56">
-      <DropdownMenuCheckboxItem
-        checked={!options.wholeFiles}
-        onCheckedChange={(checked) => setReviewOption("wholeFiles", !checked)}
-      >
-        Don't load full files
-      </DropdownMenuCheckboxItem>
-      <DropdownMenuCheckboxItem
-        checked={options.wordDiffs}
-        onCheckedChange={(checked) => setReviewOption("wordDiffs", checked)}
-      >
-        Enable word diffs
-      </DropdownMenuCheckboxItem>
-      <DropdownMenuCheckboxItem
-        checked={options.ignoreWhitespace}
-        onCheckedChange={(checked) => setReviewOption("ignoreWhitespace", checked)}
-      >
-        Hide white space
-      </DropdownMenuCheckboxItem>
-      <DropdownMenuCheckboxItem
-        checked={options.richPreview}
-        onCheckedChange={(checked) => setReviewOption("richPreview", checked)}
-      >
-        Enable rich preview
-      </DropdownMenuCheckboxItem>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem
-        disabled={!review || review.patch === ""}
-        onSelect={() => {
-          if (!review) return;
-          const patch = review.patch.endsWith("\n") ? review.patch : `${review.patch}\n`;
-          navigator.clipboard
-            .writeText(`git apply <<'BRIGADIER_PATCH'\n${patch}BRIGADIER_PATCH\n`)
-            .then(
-              () => toast("Copied git apply command"),
-              () => toast("Failed to copy git apply command", { tone: "error" }),
-            );
-        }}
-      >
-        Copy git apply command
-      </DropdownMenuItem>
-    </DropdownMenuContent>
-  </DropdownMenu>
-);
-
-/** "Jump to file": the changed files, filtered as you type. */
-const JumpToFile: FC<{ files: ReviewFile[]; onJump: (path: string) => void }> = ({
-  files,
-  onJump,
-}) => {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const shown = files.filter((file) => file.path.toLowerCase().includes(query.toLowerCase()));
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) setQuery("");
-      }}
-    >
-      <PopoverTrigger asChild>
-        <TooltipIconButton tooltip="Jump to file" size="icon-sm" disabled={files.length === 0}>
-          <JumpToCaption />
-        </TooltipIconButton>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-72 p-1">
-        <input
-          autoFocus
-          value={query}
-          placeholder="Jump to file…"
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            const [first] = shown;
-            if (event.key === "Enter" && first) {
-              onJump(first.path);
-              setOpen(false);
-            }
-          }}
-          className="placeholder:text-muted-foreground h-control-md w-full bg-transparent px-2 text-sm outline-none"
-        />
-        <ul className="max-h-72 overflow-y-auto">
-          {shown.map((file) => (
-            <li key={file.path}>
-              <button
-                type="button"
-                onClick={() => {
-                  onJump(file.path);
-                  setOpen(false);
-                }}
-                className="hover:bg-muted rounded-control flex h-control-md w-full items-center gap-2 px-2 text-start text-sm"
-              >
-                <FileTypeIcon name={file.path} className="size-icon-sm shrink-0" />
-                <span className="min-w-0 flex-1 truncate">{file.path}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </PopoverContent>
-    </Popover>
-  );
-};
-
-/** The badge for how a file changed: a square for modified, a letter for the rest. */
-const StatusBadge: FC<{ file: ReviewFile }> = ({ file }) => {
-  switch (file.status) {
-    case "modified":
-    case "typeChanged":
-      return (
-        <span
-          aria-label="Modified"
-          className="border-warning rounded-xs flex size-icon-xs shrink-0 items-center justify-center border"
-        >
-          <span className="bg-warning size-1 rounded-full" />
-        </span>
-      );
-    case "added":
-      return (
-        <span
-          aria-label="Added"
-          className="border-success text-success rounded-xs flex size-icon-xs shrink-0 items-center justify-center border"
-        >
-          <Plus className="size-2.5" />
-        </span>
-      );
-    case "untracked":
-      return (
-        <span aria-label="Untracked" className="text-success w-icon-xs shrink-0 text-center text-xs font-medium">
-          U
-        </span>
-      );
-    case "deleted":
-      return (
-        <span aria-label="Deleted" className="text-destructive w-icon-xs shrink-0 text-center text-xs font-medium">
-          D
-        </span>
-      );
-    case "renamed":
-      return (
-        <span aria-label="Renamed" className="text-warning w-icon-xs shrink-0 text-center text-xs font-medium">
-          R
-        </span>
-      );
-  }
-};
-
-function baseName(path: string): string {
-  return path.split("/").pop() ?? path;
-}
-
-/** The file list beside the diffs: "Filter files…" and each file with its badge. */
-const FileList: FC<{ files: ReviewFile[]; onJump: (path: string) => void }> = ({
-  files,
-  onJump,
-}) => {
-  const [filter, setFilter] = useState("");
-  const shown = files.filter((file) => file.path.toLowerCase().includes(filter.toLowerCase()));
-  return (
-    <aside
-      aria-label="Changed files"
-      className="border-border flex w-1/3 max-w-64 min-w-40 shrink-0 flex-col gap-1 overflow-y-auto border-s p-2"
-    >
-      <label className="border-border rounded-control flex h-control-md shrink-0 items-center gap-1.5 border px-2">
-        <Search className="text-muted-foreground size-icon-sm shrink-0" />
-        <input
-          value={filter}
-          placeholder="Filter files…"
-          onChange={(event) => setFilter(event.target.value)}
-          className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
-        />
-      </label>
-      <ul>
-        {shown.map((file) => (
-          <li key={file.path}>
-            <button
-              type="button"
-              title={file.path}
-              onClick={() => onJump(file.path)}
-              className="hover:bg-muted rounded-control text-muted-foreground hover:text-foreground flex h-control-md w-full items-center gap-2 px-2 text-start text-sm"
-            >
-              <FileTypeIcon name={file.path} className="size-icon-sm shrink-0" />
-              <span className="min-w-0 flex-1 truncate">{baseName(file.path)}</span>
-              <StatusBadge file={file} />
-            </button>
-          </li>
-        ))}
-      </ul>
-    </aside>
-  );
-};
-
-/** One file's diff under its sticky header: icon, path, counts, and on hover copy and fold. */
 /** A file's lines as the Review tab reads them, with its own part of the patch text. */
 type ReviewPatch = PatchFile & { text: string };
 
+/** One file's diff under its sticky header: icon, path, counts, and on hover copy and fold. */
 const FileSection: FC<{
   file: ReviewFile;
   patch: ReviewPatch | undefined;
   options: ReviewOptions;
   collapsed: boolean;
   onToggle: () => void;
-  sectionRef: (element: HTMLElement | null) => void;
-}> = ({ file, patch, options, collapsed, onToggle, sectionRef }) => {
+}> = ({ file, patch, options, collapsed, onToggle }) => {
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   return (
-    <section ref={sectionRef} data-slot="review-file" data-path={file.path} className="scroll-mt-0">
+    <section data-slot="review-file" data-path={file.path} className="scroll-mt-0">
       <header className="group/file bg-background border-border sticky top-0 z-10 flex h-control-lg items-center gap-2 border-b px-3 text-sm">
         <FileTypeIcon name={file.path} className="size-icon-sm shrink-0" />
         <span className="text-foreground min-w-0 truncate" title={file.path}>
@@ -699,82 +320,13 @@ const FileSection: FC<{
           </TooltipIconButton>
         </span>
       </header>
-      {!collapsed &&
-        (options.richPreview && MARKDOWN.has(languageOf(file.path)) && file.status !== "deleted" ? (
-          <RichPreview file={file} patch={patch} />
-        ) : (
-          <FileBody file={file} patch={patch} options={options} />
-        ))}
+      {!collapsed && <FileBody file={file} patch={patch} options={options} />}
     </section>
   );
 };
 
-/** File types "Enable rich preview" shows rendered instead of as a diff. */
-const MARKDOWN = new Set(["md", "markdown", "mdx"]);
-
-/** The file's new text, when the patch holds all of it (whole files loaded). */
-function newText(patch: PatchFile | undefined, whole: boolean): string | null {
-  if (!patch || !whole) return null;
-  const lines: string[] = [];
-  for (const row of patch.rows) {
-    if (row.kind === "gap") {
-      if (!row.lines) return null;
-      lines.push(...row.lines.map((line) => line.text));
-    } else if (row.kind !== "del") lines.push(row.text);
-  }
-  return lines.join("\n");
-}
-
-/**
- * "Enable rich preview": a Markdown file rendered as it reads after the change. The text
- * comes from the diff when it holds the whole file, else from the checkout when the scope's
- * new side is the working tree; a staged or committed version needs the full files loaded.
- */
-const RichPreview: FC<{ file: ReviewFile; patch: PatchFile | undefined }> = ({ file, patch }) => {
-  const { conversationId, whole, checkout } = useContext(ReviewContext);
-  const fromPatch = newText(patch, whole);
-  const [read, setRead] = useState<{ text: string | null; error: string | null }>({
-    text: null,
-    error: null,
-  });
-  useEffect(() => {
-    if (fromPatch !== null || !checkout) return;
-    let live = true;
-    request({ method: "readFile", conversationId, path: file.path })
-      .then(({ file: found }) => live && setRead({ text: found.text ?? "", error: null }))
-      .catch((cause: unknown) => {
-        if (live) setRead({ text: null, error: cause instanceof Error ? cause.message : String(cause) });
-      });
-    return () => {
-      live = false;
-    };
-  }, [conversationId, file.path, fromPatch, checkout]);
-  if (fromPatch === null && !checkout) {
-    return (
-      <p className="text-muted-foreground px-3 py-2 text-sm">
-        The full file isn't loaded for this version, so it can't be previewed.
-      </p>
-    );
-  }
-  const text = fromPatch ?? read.text;
-  if (read.error) return <p className="text-destructive px-3 py-2 text-sm">{read.error}</p>;
-  if (text === null) return null;
-  return (
-    <div data-slot="review-preview" className="px-4 py-3 text-sm">
-      <MarkdownBlock text={text} />
-    </div>
-  );
-};
-
-/**
- * What a file's diff needs from its tab: whose checkout, whether whole files loaded, and
- * whether the scope's new side is the checkout's working tree.
- */
-const ReviewContext = createContext<{ conversationId: string; whole: boolean; checkout: boolean }>({
-  conversationId: "",
-  whole: false,
-  checkout: false,
-});
+/** Whose checkout a file's diff is of. */
+const ReviewContext = createContext("");
 
 function failed(cause: unknown) {
   toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
@@ -782,7 +334,7 @@ function failed(cause: unknown) {
 
 /** A changed file's "Open in" menu: a file tab, its default app, or the file manager. */
 const OpenInMenu: FC<{ file: ReviewFile }> = ({ file }) => {
-  const { conversationId } = useContext(ReviewContext);
+  const conversationId = useContext(ReviewContext);
   const root = useCheckoutRoot();
   const mac = useApp((s) => s.info?.platform === "macos");
   const gone = file.status === "deleted";
@@ -818,22 +370,25 @@ const OpenInMenu: FC<{ file: ReviewFile }> = ({ file }) => {
   );
 };
 
-/** Where a comment is being written: a line of the new file ("additions") or the old one. */
-type Commenting = { side: "additions" | "deletions"; lineNumber: number };
-
 const FileBody: FC<{ file: ReviewFile; patch: ReviewPatch | undefined; options: ReviewOptions }> = ({
   file,
   patch,
   options,
 }) => {
-  const [commenting, setCommenting] = useState<Commenting | null>(null);
+  const addToChat = useAddToChat(file.path);
   // With whole files the engine has both sides, so every unmodified stretch opens in place.
   const source = useMemo<DiffSource | null>(() => {
     if (!patch || patch.binary || patch.rows.length === 0) return null;
     const sides = fileSides(patch.rows);
     return sides ? { kind: "sides", path: file.path, ...sides } : { kind: "patch", patch: patch.text };
   }, [patch, file.path]);
-  const onGutterClick = useCallback((line: Commenting) => setCommenting(line), []);
+  const onGutterClick = useCallback(
+    (at: LineAt) => {
+      const line = patch && findLine(patch, at);
+      if (line) addToChat(line);
+    },
+    [patch, addToChat],
+  );
   if (!patch || file.binary || patch.binary) {
     return (
       <p className="text-muted-foreground px-3 py-2 text-sm">
@@ -844,21 +399,20 @@ const FileBody: FC<{ file: ReviewFile; patch: ReviewPatch | undefined; options: 
   if (!source) {
     return <p className="text-muted-foreground px-3 py-2 text-sm">No content changes</p>;
   }
-  const line = commenting && findLine(patch, commenting);
-  const notes: DiffNote<null>[] = commenting && line ? [{ ...commenting, metadata: null }] : [];
   return (
     <DiffView<null>
       source={source}
-      look={{ numbered: true, split: options.split, wrap: options.wrap, words: options.wordDiffs }}
-      annotations={notes}
-      renderAnnotation={() => line && <CommentBox path={file.path} line={line} onClose={() => setCommenting(null)} />}
+      look={{ numbered: true, split: options.split, wrap: options.wrap, words: true }}
       onGutterClick={onGutterClick}
     />
   );
 };
 
-/** The line a comment is about: by its number in the new file, or in the old one for a deleted line. */
-function findLine(patch: PatchFile, at: Commenting): DiffLine | null {
+/** A line by its number in the new file ("additions") or in the old one. */
+type LineAt = { side: "additions" | "deletions"; lineNumber: number };
+
+/** The line at `at`: by its number in the new file, or in the old one for a deleted line. */
+function findLine(patch: PatchFile, at: LineAt): DiffLine | null {
   for (const row of patch.rows) {
     for (const line of row.kind === "gap" ? (row.lines ?? []) : [row]) {
       if (at.side === "deletions" ? line.kind !== "add" && line.old === at.lineNumber : line.kind !== "del" && line.new === at.lineNumber) return line;
@@ -868,49 +422,22 @@ function findLine(patch: PatchFile, at: Commenting): DiffLine | null {
 }
 
 /**
- * The box a line's "+" opens: the comment goes into the composer with the line quoted, to
- * send to the orchestrator like any message. Chat comes to the front to show it.
+ * A line's "+": Add to chat. The line goes into the composer quoted, as text selected in an
+ * answer does, to say something about it there. Chat comes to the front to show it.
  */
-const CommentBox: FC<{ path: string; line: DiffLine; onClose: () => void }> = ({
-  path,
-  line,
-  onClose,
-}) => {
+function useAddToChat(path: string): (line: DiffLine) => void {
   const aui = useAui();
-  const { conversationId } = useContext(ReviewContext);
-  const [text, setText] = useState("");
-  const number = line.kind === "del" ? line.old : line.new;
-  const submit = () => {
-    const composer = aui.composer();
-    const current = composer.getState().text;
-    const quote = `\`${path}\` line ${number}:\n> ${line.text.trim()}\n${text.trim()}`;
-    composer.setText(current.trim() ? `${current.trimEnd()}\n\n${quote}` : quote);
-    onClose();
-    selectTab(conversationId, CHAT_TAB);
-    requestAnimationFrame(() => document.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus());
-  };
-  return (
-    <div className="border-border bg-card my-1 mx-3 flex flex-col gap-2 rounded-xl border p-2 font-sans text-sm whitespace-normal">
-      <textarea
-        autoFocus
-        rows={2}
-        value={text}
-        placeholder="Add a comment…"
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") onClose();
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && text.trim()) submit();
-        }}
-        className="placeholder:text-muted-foreground resize-none bg-transparent outline-none"
-      />
-      <div className="flex justify-end gap-1">
-        <Button variant="ghost" size="xs" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button size="xs" disabled={!text.trim()} onClick={submit}>
-          Comment
-        </Button>
-      </div>
-    </div>
+  const conversationId = useContext(ReviewContext);
+  return useCallback(
+    (line: DiffLine) => {
+      const composer = aui.composer();
+      const current = composer.getState().text;
+      const number = line.kind === "del" ? line.old : line.new;
+      const quote = `\`${path}\` line ${number}:\n> ${line.text.trim()}`;
+      composer.setText(current.trim() ? `${current.trimEnd()}\n\n${quote}\n\n` : `${quote}\n\n`);
+      selectTab(conversationId, CHAT_TAB);
+      requestAnimationFrame(() => document.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus());
+    },
+    [aui, conversationId, path],
   );
-};
+}

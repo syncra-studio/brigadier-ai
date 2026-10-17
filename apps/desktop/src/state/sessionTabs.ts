@@ -16,9 +16,9 @@ export const REVIEW_TAB = "review";
 /** The session's mockup (SESSION-FIXES-PLAN.md Q10): one tab, there while it builds and after. */
 export const MOCKUP_TAB = "mockup";
 
-/** What the Review tab shows: every change (its scope picker), or one file's diff. */
+/** What the Review tab shows: a Source panel group's diffs ("Open Changes"), or one file's diff. */
 export type ReviewTarget =
-  | { type: "all" }
+  | { type: "changes"; staged: boolean }
   | { type: "file"; path: string; staged: boolean };
 
 /**
@@ -641,6 +641,8 @@ export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSave
     const remapped = new Map<string, string>();
     const tabs = (session.tabs as (SessionTab | LegacyDocumentTab)[]).flatMap((tab): SessionTab[] => {
       if (tab.kind === "terminal") return [{ ...tab, title: "" }];
+      // The old Review tab of every change and its scope picker is gone.
+      if (tab.kind === "review" && tab.target.type !== "changes" && tab.target.type !== "file") return [];
       // A popup its opener wrote (about:blank) is gone with its page: its tab starts empty.
       if (tab.kind === "browser" && !/^https?:/i.test(tab.url)) return [{ ...tab, url: "" }];
       if (tab.kind !== "document") return [tab];

@@ -311,16 +311,25 @@ test("New tab tools replace in place, preserving identity and opener", () => {
   }
 });
 
+test("a saved Review tab of every change is gone after a restart; a Source panel one stays (issue 255)", () => {
+  const changes = { kind: "review", id: "review", opener: null, target: { type: "changes", staged: true } } as const;
+  const file = { kind: "file", id: "file:src/a.ts", path: "src/a.ts", line: null, reveal: 0, preview: false, opener: null } as const;
+  const old = { kind: "review", id: "review", opener: null, target: { type: "all" } } as never;
+  const restored = restoreSessionTabs({ a: { tabs: [file, old], active: "review" }, b: { tabs: [changes], active: "review" } });
+  assert.deepEqual(restored.a, { tabs: [file], active: CHAT_TAB });
+  assert.deepEqual(restored.b, { tabs: [changes], active: "review" });
+});
+
 test("Review replaces a placeholder in place, or consumes it and selects the existing Review", () => {
   const first = newSessionTab("review-new", "browser");
   const placeholder = newSessionTab("review-new", "newTab");
   const last = newSessionTab("review-new", "browser");
-  openReviewTab("review-new", { type: "all" }, placeholder);
+  openReviewTab("review-new", { type: "changes", staged: false }, placeholder);
   assert.deepEqual(sessionTabs("review-new").tabs.map((tab) => tab.id), [first, "review", last]);
   assert.equal(sessionTabs("review-new").active, "review");
   selectTab("review-new", last);
   const duplicate = newSessionTab("review-new", "newTab");
-  openReviewTab("review-new", { type: "all" }, duplicate);
+  openReviewTab("review-new", { type: "changes", staged: false }, duplicate);
   assert.deepEqual(sessionTabs("review-new").tabs.map((tab) => tab.id), [first, "review", last]);
   assert.equal(sessionTabs("review-new").active, "review");
 });

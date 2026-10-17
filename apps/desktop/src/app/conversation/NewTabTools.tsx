@@ -3,7 +3,6 @@ import { useContext, useEffect, useState } from "react";
 
 import { WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
-import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -14,7 +13,7 @@ import { browserHistory } from "@/state/browserData";
 import { useBrowsers } from "@/state/browsers";
 import { useBrowserOn } from "@/state/links";
 import { onPageChanged } from "@/state/pageChanges";
-import { openPageTab, openReviewTab, replaceNewTab, useSessionTabs } from "@/state/sessionTabs";
+import { openPageTab, replaceNewTab, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { setTerminalOpen } from "@/state/terminalPlaces";
 
@@ -58,7 +57,6 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
   const pages = useRecentPages();
   const sites = browserOn ? suggestedSites(history, dismissed) : [];
   const tools = [
-    { label: "Review changes", Icon: DiffGlyph, shortcut: null, run: () => openReviewTab(conversationId, { type: "all" }, tabId) },
     { label: "Find file", Icon: Search, shortcut: "⌘P", disabled: !workspace?.enabled, run: () => workspace?.openFilesSearch(tabId) },
   ];
   return (
