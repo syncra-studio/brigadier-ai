@@ -3163,7 +3163,7 @@ mod environment_tests {
         });
         assert!(!worktree.contains("propose_merge"));
         assert!(worktree.contains("you may say so once, in plain text"));
-        assert!(worktree.contains("([merge]: call finish_session without user_words)"));
+        assert!(worktree.contains("[merge] (call finish_session without user_words)"));
         assert!(worktree.contains("the user's own words"));
         assert!(worktree.contains("stays with the session through merges"));
         assert!(!worktree.contains("there is no card"));
