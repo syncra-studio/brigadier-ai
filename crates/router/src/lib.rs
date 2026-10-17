@@ -106,8 +106,9 @@
 //!
 //! # Tie order
 //!
-//! Scores that tie follow the Phase 3 table's vendor order, then each CLI's own order (newest
-//! first). Write work starts on Claude and read-only work on Codex, so in a typical session the
+//! Scores that tie go to the vendor with more quota left (its tightest window that limits the
+//! model, in whole percent), then follow the Phase 3 table's vendor order, then each CLI's own
+//! order (newest first). Write work starts on Claude and read-only work on Codex, so in a typical session the
 //! two draw on different quotas and every write lands on a vendor whose change the other
 //! reviews:
 //!

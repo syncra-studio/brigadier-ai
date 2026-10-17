@@ -176,7 +176,8 @@ pub fn default_floor(category: TaskCategory) -> QualityTier {
 
 /// Whether a category's work goes to the smallest, fastest model that can take it: models
 /// are tried tier by tier from the lowest up, by score within a tier. Short git text needs no
-/// more than a light model, and the user waits for it.
+/// more than a light model, and the user waits for it. A cheapest model short on quota gives
+/// way to another vendor's with more to spare at most one tier up.
 pub fn cheapest_first(category: TaskCategory) -> bool {
     category == TaskCategory::GitText
 }
@@ -285,6 +286,9 @@ struct Candidate<'q> {
     /// The quota penalty in `score`, and the window behind it.
     penalty: f64,
     penalty_window: Option<String>,
+    /// How much of its provider's tightest window that limits it is used, in whole percent:
+    /// on a tie, the one with more quota left goes first.
+    used: i64,
     /// The load penalty in `score`, and what it says.
     load: f64,
     load_note: Option<String>,
@@ -506,8 +510,8 @@ pub fn preview(query: &Query) -> Preview {
         cross_vendor,
     } = assessed(query);
 
-    // Order: score (for cheap-first work the lowest tier first, then score), then the
-    // table's vendor order, then each CLI's own order.
+    // Order: score (for cheap-first work the lowest tier first, then score), then more quota
+    // left, then the table's vendor order, then each CLI's own order.
     let order = table::row(query.category).order;
     let rank = |c: &Candidate| {
         order
@@ -532,8 +536,34 @@ pub fn preview(query: &Query) -> Preview {
                 .filter(|_| (a.score - b.score).abs() > TIE)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
+        .then(a.used.cmp(&b.used))
         .then(rank(a).cmp(&rank(b)))
     });
+    // Cheap-first work: a cheapest model short on quota gives way to another vendor's model
+    // with more to spare at a similar cost (at most one tier up).
+    if cheap
+        && let Some(&first) = ranked.first()
+        && candidates[first].penalty > 0.0
+    {
+        let short = &candidates[first];
+        if let Some(position) = ranked.iter().position(|i| {
+            let c = &candidates[*i];
+            c.model.provider != short.model.provider
+                && c.penalty < short.penalty
+                && c.model.tier <= next_tier(short.model.tier)
+        }) {
+            let instead = ranked.remove(position);
+            ranked.insert(0, instead);
+            notes.push(format!(
+                "{} is cheaper, but {}",
+                short.label(),
+                short
+                    .penalty_window
+                    .as_deref()
+                    .unwrap_or("it is short on quota")
+            ));
+        }
+    }
     if cheaper_when_near(query.category)
         && let Some(best) = ranked.first().map(|i| candidates[*i].score)
     {
@@ -738,10 +768,19 @@ pub fn preview(query: &Query) -> Preview {
         limited_rival(&candidates, pick, cheap, rank)
     };
 
-    let tie = ranked
+    let tied: Vec<usize> = ranked
         .iter()
-        .filter(|i| **i != chosen && league(i))
-        .any(|i| (candidates[*i].score - pick.score).abs() <= TIE);
+        .copied()
+        .filter(|i| *i != chosen && league(i))
+        .filter(|i| (candidates[*i].score - pick.score).abs() <= TIE)
+        .collect();
+    let tie = if tied.is_empty() {
+        Tie::None
+    } else if tied.iter().any(|i| candidates[*i].used != pick.used) {
+        Tie::Quota
+    } else {
+        Tie::Order
+    };
     // A chore's pick that a better-scored model was passed over for, as the cheaper one.
     let cheaper = cheaper_when_near(query.category)
         && ranked
@@ -1142,6 +1181,7 @@ fn candidates<'q>(query: &'q Query) -> Vec<Candidate<'q>> {
             score: 0.0,
             penalty: 0.0,
             penalty_window: None,
+            used: 0,
             load: 0.0,
             load_note: None,
             learned: None,
@@ -1319,6 +1359,7 @@ fn assess<'q>(
             delta: -LEGACY_PENALTY,
         });
     }
+    candidate.used = used(query, &model);
     if let Some((penalty, window)) = penalty(query, &model) {
         candidate.penalty = penalty;
         candidate.penalty_window = Some(window.clone());
@@ -1485,6 +1526,32 @@ fn availability(
         ),
         resets_at_ms: resets,
     })
+}
+
+/// How much of the tightest window that limits a model is used, in whole percent; 0 unknown.
+fn used(query: &Query, model: &MergedModel) -> i64 {
+    query
+        .providers
+        .iter()
+        .find(|s| s.provider == model.provider)
+        .and_then(|state| state.quota.as_ref())
+        .into_iter()
+        .flat_map(|quota| quota.windows.iter())
+        .filter(|w| window_applies(&w.window, model, query.registry))
+        .filter(|w| !has_reset(w.window.resets_at_ms, query.now_ms))
+        .map(|w| w.window.used_percent.round() as i64)
+        .max()
+        .unwrap_or(0)
+}
+
+/// The tier just above, for "a similar cost" when a cheap pick gives way.
+fn next_tier(tier: QualityTier) -> QualityTier {
+    match tier {
+        QualityTier::Unrated => QualityTier::Light,
+        QualityTier::Light => QualityTier::Standard,
+        QualityTier::Standard => QualityTier::Strong,
+        QualityTier::Strong | QualityTier::Frontier => QualityTier::Frontier,
+    }
 }
 
 /// The quota penalty for a model, from the hottest window that limits it.
@@ -1910,10 +1977,20 @@ fn join_rules(rules: &[&OverrideRule]) -> String {
 
 // ----- explanation ---------------------------------------------------------------------------
 
+/// Whether the pick tied on score with another model, and what broke the tie.
+#[derive(Clone, Copy, PartialEq)]
+enum Tie {
+    None,
+    /// The vendor with more quota left.
+    Quota,
+    /// The table's vendor order.
+    Order,
+}
+
 fn score_why(
     query: &Query,
     pick: &Candidate,
-    tie: bool,
+    tie: Tie,
     cheaper: bool,
     only: Option<&str>,
 ) -> String {
@@ -1927,8 +2004,15 @@ fn score_why(
         evidence.push_str("; ");
         evidence.push_str(&evidence_short(learned));
     }
-    if tie {
-        evidence.push_str(&format!("; ties go to {} here", name(pick.model.provider)));
+    match tie {
+        Tie::None => {}
+        Tie::Quota => evidence.push_str(&format!(
+            "; a tie, and {} has more quota left",
+            name(pick.model.provider)
+        )),
+        Tie::Order => {
+            evidence.push_str(&format!("; ties go to {} here", name(pick.model.provider)));
+        }
     }
     let lead = if cheapest_first(query.category) {
         "the fastest, cheapest model that can take it".to_owned()
@@ -2343,6 +2427,126 @@ mod tests {
         q.category = TaskCategory::Verify;
         q.floor = default_floor(TaskCategory::Verify);
         assert_eq!(routed(&q).model, "gpt-6-astra");
+    }
+
+    fn quota(provider: ProviderKind, used_percent: f64) -> ProviderState {
+        ProviderState {
+            provider,
+            logged_in: true,
+            quota: Some(ProviderQuota {
+                provider,
+                windows: vec![crate::WindowState {
+                    window: brigadier_providers::QuotaWindow {
+                        id: "weekly".into(),
+                        label: "Weekly".into(),
+                        used_percent,
+                        resets_at_ms: Some(86_400_000),
+                        window_minutes: None,
+                        bucket: None,
+                        model: None,
+                    },
+                    forecast: None,
+                    heat: Heat::Cool,
+                }],
+                limit: None,
+                heat: Heat::Cool,
+                observed_at_ms: Some(0),
+            }),
+        }
+    }
+
+    /// On a score tie the vendor with more quota left goes first; with the same left, the
+    /// table's vendor order decides.
+    #[test]
+    fn a_tie_goes_to_the_vendor_with_more_quota_left() {
+        let registry = Registry::bundled();
+        let mut models = catalog(&registry);
+        for model in &mut models {
+            let value = if model.id == "sonnet" || model.id == "gpt-6-luna" {
+                9.0
+            } else {
+                5.0
+            };
+            model.strengths.insert(TaskCategory::Research, value);
+        }
+        let busy_codex = [
+            quota(ProviderKind::Claude, 20.0),
+            quota(ProviderKind::Codex, 60.0),
+        ];
+        let route = routed(&query(&registry, &models, &busy_codex));
+        assert_eq!(route.model, "sonnet");
+        assert!(route.reason.contains("more quota left"), "{}", route.reason);
+        let same = [
+            quota(ProviderKind::Claude, 40.0),
+            quota(ProviderKind::Codex, 40.0),
+        ];
+        let route = routed(&query(&registry, &models, &same));
+        assert_eq!(route.model, "gpt-6-luna");
+        assert!(
+            route.reason.contains("ties go to Codex"),
+            "{}",
+            route.reason
+        );
+    }
+
+    /// A commit message's cheapest model short on quota gives way to the other vendor's at a
+    /// similar cost; not to a much dearer one, and not when it has quota to spare.
+    #[test]
+    fn git_text_leaves_a_vendor_short_on_quota_at_a_similar_cost() {
+        let registry = Registry::bundled();
+        let models = crate::merge(
+            &registry,
+            &[
+                (
+                    ProviderKind::Claude,
+                    &[info("sonnet", "Sonnet 5.5", Some("claude-sonnet-5-5"))],
+                ),
+                (
+                    ProviderKind::Codex,
+                    &[info("gpt-6-luna", "GPT-6-Luna", None)],
+                ),
+            ],
+            &[],
+            &[],
+        );
+        let ask = |providers: &[ProviderState]| {
+            let mut q = query(&registry, &models, providers);
+            q.category = TaskCategory::GitText;
+            q.floor = default_floor(TaskCategory::GitText);
+            routed(&q)
+        };
+        let cool = [
+            quota(ProviderKind::Claude, 20.0),
+            quota(ProviderKind::Codex, 20.0),
+        ];
+        assert_eq!(ask(&cool).model, "gpt-6-luna");
+        let short = [
+            quota(ProviderKind::Claude, 20.0),
+            quota(ProviderKind::Codex, 92.0),
+        ];
+        let route = ask(&short);
+        assert_eq!(route.model, "sonnet");
+        assert!(route.reason.contains("is cheaper, but"), "{}", route.reason);
+
+        let dearer = crate::merge(
+            &registry,
+            &[
+                (
+                    ProviderKind::Claude,
+                    &[info("opus[1m]", "Opus 5.5", Some("claude-opus-5-5[1m]"))],
+                ),
+                (
+                    ProviderKind::Codex,
+                    &[info("gpt-6-luna", "GPT-6-Luna", None)],
+                ),
+            ],
+            &[],
+            &[],
+        );
+        let mut q = query(&registry, &dearer, &short);
+        q.category = TaskCategory::GitText;
+        q.floor = default_floor(TaskCategory::GitText);
+        assert_eq!(routed(&q).model, "gpt-6-luna");
     }
 
     /// Git text goes to the lowest tier that can take it, at low effort, whatever scores more;
