@@ -308,11 +308,11 @@ async fn parallel_workers_land_at_once_and_the_integrated_tree_is_checked_once()
 }
 
 /// A worker's change breaks the full checks: the thread hears the failing command, its output
-/// and the task whose change it was, and the merge the user asked for is held; the fix goes
-/// back to that worker's own session, lands, the checks pass at the new tip and the merge
-/// comes due.
+/// and the task whose change it was; the fix goes back to that worker's own session. The
+/// merge the user asked for waits only for that writer, never for the checks (#241), and says
+/// where they stand; a failed tip reads as failed.
 #[tokio::test]
-async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
+async fn a_failure_goes_back_to_the_worker_that_broke_it_and_the_merge_states_it() {
     #[derive(Default)]
     struct Seen {
         inputs: Vec<String>,
@@ -367,7 +367,7 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
                     return Reply::text("[quiet]");
                 }
                 if turn.input.contains("[checks failed at ") {
-                    // The landings' reviews end first: what holds the merge is the checks.
+                    // The landings' reviews end first: what the merge says is the checks.
                     let deadline = std::time::Instant::now() + super::PATIENCE;
                     loop {
                         let board = turn.host.core.board(&turn.conversation().unwrap()).await;
@@ -379,11 +379,6 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
                         assert!(std::time::Instant::now() < deadline);
                         tokio::time::sleep(Duration::from_millis(50)).await;
                     }
-                    let merge = turn
-                        .call("finish_session", json!({"user_words": "merge it"}))
-                        .await;
-                    assert!(merge.is_error, "{}", merge.text);
-                    log.lock().unwrap().merges.push(merge.text);
                     let reply = turn
                         .call(
                             "delegate_task",
@@ -393,6 +388,12 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
+                    // The merge waits for the fix's writer, not for the checks.
+                    let merge = turn
+                        .call("finish_session", json!({"user_words": "merge it"}))
+                        .await;
+                    assert!(!merge.is_error, "{}", merge.text);
+                    log.lock().unwrap().merges.push(merge.text);
                     return Reply::text("[quiet]");
                 }
                 if turn.input.contains("[merge due]") {
@@ -416,13 +417,20 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
     *flow.manager.integrated.settle.lock().unwrap() = Some(Duration::from_secs(3));
     flow.say("Add a.txt and broken.txt, and merge it.").await;
     let log = seen.clone();
-    flow.until("the merge", move |_| {
-        log.lock()
-            .unwrap()
-            .merges
-            .iter()
-            .any(|text| text.contains("[finished]"))
-    })
+    flow.until(
+        "the merge and the checks passing after the fix",
+        move |board| {
+            log.lock()
+                .unwrap()
+                .merges
+                .iter()
+                .any(|text| text.contains("[finished]"))
+                && board
+                    .integrated_checks
+                    .values()
+                    .any(|check| matches!(check.state, IntegratedCheckState::Passed { .. }))
+        },
+    )
     .await;
     let board = flow.settled().await;
     let seen = std::mem::take(&mut *seen.lock().unwrap());
@@ -442,9 +450,16 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
         "{failed}"
     );
     assert!(failed.contains("role fix"), "{failed}");
-    // The merge was held by the failure, on the user's consent.
+    // The merge was held for the fix's writer only, then went ahead saying where the checks
+    // stood at the tip it merged.
     assert!(
-        seen.merges[0].contains("[not merged]") && seen.merges[0].contains("failed at"),
+        seen.merges[0].contains("[merge held]"),
+        "{:#?}",
+        seen.merges
+    );
+    assert!(
+        seen.merges[1].contains("[finished]")
+            && seen.merges[1].contains("The session's full checks: "),
         "{:#?}",
         seen.merges
     );
@@ -455,7 +470,7 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
         .find(|(n, _)| *n == 2)
         .map(|(_, id)| id.clone());
     assert_eq!(seen.fix_session, broke);
-    // Two runs: the failure, then the pass at the fixed tip, which merged.
+    // Two runs: the failure, then the pass at the fixed tip.
     let dirs = started_in(&flow.repo);
     assert_eq!(dirs.len(), 2, "{:#?}", runs(&flow.repo));
     let mut checks: Vec<_> = board.integrated_checks.values().collect();
@@ -474,11 +489,25 @@ async fn a_failure_goes_back_to_the_worker_that_broke_it_and_holds_the_merge() {
         main.contains("a.txt") && !main.contains("broken.txt"),
         "{main}"
     );
+    // A merge of the failed tip would have said so.
+    let failed = flow
+        .manager
+        .checks_line(
+            &flow.conversation,
+            &checks[0].branch,
+            &brigadier_git::Oid(checks[0].tip.clone()),
+        )
+        .await;
+    assert!(
+        failed.contains("The session's full checks: failed at")
+            && failed.contains("full-checks.sh"),
+        "{failed}"
+    );
     flow.stop().await;
 }
 
-/// A merge asked while the checks run is held; a restart cuts the run off and runs it again;
-/// its pass makes the merge due. Another session archived mid-run ends its run: its process
+/// A merge asked while the checks run goes ahead and says they still run (#241); a restart
+/// cuts the run off and runs it again, and it passes. Another session archived mid-run ends its run: its process
 /// stops, its checkout goes, and the thread hears nothing of it; restored, it runs again.
 #[tokio::test]
 async fn a_run_cut_off_by_a_restart_runs_again_and_an_archive_ends_it() {
@@ -538,29 +567,29 @@ async fn a_run_cut_off_by_a_restart_runs_again_and_an_archive_ends_it() {
     .await;
     std::fs::write(hold(&flow.repo), "").unwrap();
     flow.say("Add a.txt, and merge it.").await;
-    // The merge waited for the run, then held.
+    // The merge went ahead while the run went on.
     let log = merges.clone();
-    flow.until("the held merge", move |_| !log.lock().unwrap().is_empty())
+    flow.until("the merge", move |_| !log.lock().unwrap().is_empty())
         .await;
     {
         let merges = merges.lock().unwrap();
         assert!(
-            merges[0].contains("[not merged]") && merges[0].contains("still run at"),
+            merges[0].contains("[finished]") && merges[0].contains("The session's full checks: "),
             "{merges:#?}"
         );
     }
-    assert_eq!(started_in(&flow.repo).len(), 1, "{:#?}", runs(&flow.repo));
-    // A restart cuts the run off: it runs again, and its pass lets the merge through.
+    let repo = flow.repo.clone();
+    super::eventually("the run", || started_in(&repo).len() == 1).await;
+    // A restart cuts the run off: it runs again, and passes.
     flow.restart().await;
     let repo = flow.repo.clone();
     super::eventually("the run again", || started_in(&repo).len() == 2).await;
     std::fs::remove_file(hold(&flow.repo)).unwrap();
-    let log = merges.clone();
-    flow.until("the merge", move |_| {
-        log.lock()
-            .unwrap()
-            .iter()
-            .any(|text| text.contains("[finished]"))
+    flow.until("the pass", |board| {
+        board
+            .integrated_checks
+            .values()
+            .any(|check| matches!(check.state, IntegratedCheckState::Passed { .. }))
     })
     .await;
     let board = flow.settled().await;
@@ -570,6 +599,16 @@ async fn a_run_cut_off_by_a_restart_runs_again_and_an_archive_ends_it() {
         .filter(|check| matches!(check.state, IntegratedCheckState::Passed { .. }))
         .count();
     assert_eq!(passed, 1, "{:#?}", board.integrated_checks);
+    // The merge went ahead while they ran: their checkout goes once they end.
+    let line = runs(&flow.repo)
+        .into_iter()
+        .rfind(|line| line.starts_with("start "))
+        .unwrap();
+    let tree = PathBuf::from(line.splitn(3, ' ').nth(2).unwrap());
+    super::eventually("the merged session's check checkout to go", || {
+        !tree.exists()
+    })
+    .await;
 
     // Another session, archived while its checks run.
     let other = flow

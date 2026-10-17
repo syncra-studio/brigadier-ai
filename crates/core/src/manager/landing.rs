@@ -1542,59 +1542,6 @@ impl SessionManager {
                 unrecorded.join(", ")
             )));
         }
-        // The session's full checks passed at the exact tip it merges (SESSION-FIXES-PLAN.md
-        // §11): until then the merge is held on the user's consent.
-        let checked = match self
-            .checks_gate(
-                id,
-                Path::new(&repo),
-                &branch,
-                super::integrated_checks::MERGE_WAIT,
-            )
-            .await?
-        {
-            super::integrated_checks::ChecksGate::Passed(tip) => tip,
-            gate => {
-                if pending.is_none() {
-                    let (git, repo_path, branch_name) =
-                        (self.git.clone(), PathBuf::from(&repo), branch.clone());
-                    let tip = blocking(move || {
-                        git.open(&repo_path)
-                            .map_err(git_error)?
-                            .branch_tip(&branch_name)
-                            .map_err(git_error)?
-                            .ok_or_else(|| Error::Invalid("the session branch is gone".into()))
-                    })
-                    .await?;
-                    self.orchestrator_step(
-                        id,
-                        OrchestratorStepKind::MergeHeld {
-                            branch: branch.clone(),
-                            base: base.clone(),
-                            asked_in: consent.asked_in.clone(),
-                            consented_at_ms: consent.at_ms,
-                            condition: consent.condition,
-                            waiting: Vec::new(),
-                            tip: tip.0,
-                        },
-                    )
-                    .await;
-                }
-                return Err(Error::Invalid(match gate {
-                    super::integrated_checks::ChecksGate::Failed(why) => {
-                        *conv.merge_told.lock().unwrap() = Some((consent.asked_in, "checks"));
-                        format!(
-                            "[not merged] The session's full checks {why}. Nothing was merged, and the user's consent holds: have the failure fixed (send it back to the task that broke it), and Brigadier tells you [merge due] once they pass."
-                        )
-                    }
-                    super::integrated_checks::ChecksGate::Waiting(why) => format!(
-                        "[not merged] The session's full checks {why}, and nothing merges before they pass at the tip it merges. Nothing was merged, and the user's consent holds: Brigadier tells you [merge due] once they pass. Reply {} meanwhile.",
-                        super::prompts::QUIET
-                    ),
-                    super::integrated_checks::ChecksGate::Passed(_) => unreachable!(),
-                }));
-            }
-        };
         let message = self.commit_message(
             message
                 .filter(|m| !m.trim().is_empty())
@@ -1605,8 +1552,6 @@ impl SessionManager {
             Conflicts(Vec<String>, Oid),
             /// Other work landed on the branch since the held consent.
             Moved,
-            /// Work landed on the branch since its checks passed.
-            Unchecked,
         }
         let (git, repo_path, base_name, branch_name, covered) = (
             self.git.clone(),
@@ -1625,9 +1570,6 @@ impl SessionManager {
                 .ok_or_else(|| Error::Invalid("the session branch is gone".into()))?;
             if covered.is_some_and(|covered| covered != tip.0) {
                 return Ok(Prepared::Moved);
-            }
-            if tip != checked {
-                return Ok(Prepared::Unchecked);
             }
             let outcome = repo
                 .prepare_merge_commit(&base_name, &tip, &message)
@@ -1656,11 +1598,6 @@ impl SessionManager {
             Prepared::Moved => {
                 return Err(Error::Invalid(format!(
                     "[not merged] Other work landed on `{branch}` since the user consented, and their consent doesn't cover it. Nothing was merged. Tell the user; it merges on their next words asking for it."
-                )));
-            }
-            Prepared::Unchecked => {
-                return Err(Error::Invalid(format!(
-                    "[not merged] `{branch}` moved while the merge was being prepared, past where its full checks passed. Nothing was merged; call finish_session again."
                 )));
             }
             Prepared::Conflicts(paths, tip) => {
@@ -1767,6 +1704,7 @@ impl SessionManager {
             Err(_) => String::new(),
         };
         let since = self.wrote_since_consent(id, &consent).await;
+        let checks = self.checks_line(id, &branch, &session_tip).await;
         self.orchestrator_step(
             id,
             OrchestratorStepKind::Merged {
@@ -1789,7 +1727,7 @@ impl SessionManager {
             .follow_merge(&repo, &branch, &base, session_tip, new_tip.clone())
             .await;
         Ok(format!(
-            "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{reviews}{released}{since}",
+            "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{checks}{reviews}{released}{since}",
             if commits == 1 { "" } else { "s" },
             short(&new_tip)
         ))
@@ -1841,37 +1779,10 @@ impl SessionManager {
                 // thread's turn on it looks again when it ends.
                 Gate::Due if wrote_since(&board, held.consented_at_ms) => return,
                 Gate::Due => {
-                    // The session's full checks pass at its tip first (§11): a pass, or a
-                    // check's end, looks again.
-                    let gate = match self.recorded_workspace(id) {
-                        Some(workspace) => self
-                            .checks_gate(
-                                id,
-                                &workspace.repo,
-                                &held.branch,
-                                std::time::Duration::ZERO,
-                            )
-                            .await
-                            .ok(),
-                        None => None,
-                    };
-                    match gate {
-                        Some(super::integrated_checks::ChecksGate::Waiting(_)) => return,
-                        Some(super::integrated_checks::ChecksGate::Failed(why)) => {
-                            if told("checks") {
-                                return;
-                            }
-                            format!(
-                                "[merge waiting] The workers have finished, but the session's full checks {why}: the user's merge waits until they pass. Have the failure fixed (send it back to the task that broke it); Brigadier tells you [merge due] once they pass."
-                            )
-                        }
-                        _ => {
-                            if told("due") {
-                                return;
-                            }
-                            "[merge due] The workers have finished and nothing stops it: the user's merge is due. Call finish_session now; their held consent covers it, so don't ask them again.".to_owned()
-                        }
+                    if told("due") {
+                        return;
                     }
+                    "[merge due] The workers have finished and nothing stops it: the user's merge is due. Call finish_session now; their held consent covers it, so don't ask them again.".to_owned()
                 }
             }
         };

@@ -123,7 +123,7 @@ How to work:
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) with run_check, not your shell, before your final answer. {CHECK_PREFIXES} Never background a command yourself (`&`, nohup): one still going after a minute goes to the background by itself. Run dev servers and apps with start_preview.
 - {own_commits}
-- Never run the full suite or ask the user how much to check: the session's full checks run once per request, on their own. [checks failed …]: fix it; [checks couldn't run …]: fix the cause, then rerun_checks.
+- Never run the full suite or ask the user how much to check: the session's full checks run once per request, on their own. [checks failed …]: fix what's the code's; [checks couldn't run …]: fix the cause, then rerun_checks.
 - Reviews by the other vendor scale with risk: one per landing of a worker's; your own changes get one once, since the last review, they pass 150 lines or 5 files of code (not tests/docs), or you mark one risky (run_check's risky); a tiny edit gets none. While a review of your work runs, reply {quiet}; fix its valid findings before your final answer.
 - A big job (many parts, several workers, or hours of work): one plan reviewed with review_plan before building, and start_verifier at the end.
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
@@ -802,6 +802,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, when you fix a defect in a worker's deliverable, keep your corrected copy with store_output as that task's output (it takes the place of the worker's file of the same name) and link it as [name](outputs/name): it gets the same Save and outlives your workspace.",
         worker: "",
     },
+    Revision {
+        number: CHECKS_INFORM_REVISION,
+        thread: "From now on, the session's full checks inform a merge, never hold it: finish_session merges whatever they say, and its result states where they stand at that tip. [checks failed …] names failing tests that open issues name; you judge what follows.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1089,6 +1094,9 @@ pub(crate) const SAVE_ONLY_REVISION: u32 = 87;
 /// The thread keeps its corrected copy of a worker's deliverable as that task's output with
 /// store_output (issue #27).
 pub(crate) const STORED_FIX_REVISION: u32 = 88;
+/// The session's full checks inform a merge instead of holding it, and a failure names the
+/// failing tests open issues name (#241).
+pub(crate) const CHECKS_INFORM_REVISION: u32 = 89;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -3311,7 +3319,7 @@ mod environment_tests {
             assert!(text.contains("the session's full checks run once per request, on their own"));
             assert!(WORKER_RULES.contains("each report at once"));
             assert!(text.contains("Never run the full suite or ask the user how much to check"));
-            assert!(text.contains("[checks failed …]: fix it;"));
+            assert!(text.contains("[checks failed …]: fix what's the code's;"));
             assert!(WORKER_RULES.contains(
                 "one fix task (role fix, subject the task that broke it) with the failing lines"
             ));

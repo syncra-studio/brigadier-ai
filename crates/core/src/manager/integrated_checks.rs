@@ -152,6 +152,60 @@ pub(crate) fn tip_checked(board: &crate::board::Board, branch: &str, tip: &str) 
     }
 }
 
+/// The failing tests a full-checks output names: a `path::to::test` on a line that says it
+/// failed (cargo, nextest, pytest), cargo's `test name ... FAILED`, nextest's
+/// `FAIL [time] crate name`, or Go's `--- FAIL: Name`.
+pub(crate) fn failing_tests(output: &str) -> Vec<String> {
+    let mut tests: Vec<String> = Vec::new();
+    for line in output.lines().filter(|line| line.contains("FAIL")) {
+        let trimmed = line.trim_start();
+        let named = line
+            .split_once("--- FAIL: ")
+            .map(|(_, rest)| rest)
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("test ")
+                    .filter(|_| trimmed.ends_with("... FAILED"))
+            })
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("FAIL [")
+                    .and_then(|rest| rest.split_whitespace().last())
+            });
+        let words = named
+            .into_iter()
+            .chain(line.split_whitespace().filter(|word| word.contains("::")));
+        for word in words {
+            let name = word
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .trim_matches(|c: char| !(c.is_alphanumeric() || c == '_'));
+            if !name.is_empty() && !tests.iter().any(|known| known == name) {
+                tests.push(name.to_owned());
+            }
+        }
+    }
+    tests
+}
+
+/// The failing `tests` an open issue names (`issues`: number and text), as "`test` (#230)".
+pub(crate) fn named_in_issues(tests: &[String], issues: &[(u64, String)]) -> Vec<String> {
+    tests
+        .iter()
+        .filter_map(|test| {
+            let last = test.rsplit("::").next().unwrap_or(test);
+            let key = if last.len() >= 8 { last } else { test.as_str() };
+            let numbers: Vec<String> = issues
+                .iter()
+                .filter(|(_, text)| text.contains(key))
+                .map(|(number, _)| format!("#{number}"))
+                .collect();
+            (!numbers.is_empty()).then(|| format!("`{test}` ({})", numbers.join(", ")))
+        })
+        .collect()
+}
+
 /// Whether a check of the session runs, or is due, for `request`: its answer waits for it.
 pub(crate) fn checking_for(board: &crate::board::Board, request: &str) -> bool {
     board
@@ -612,11 +666,13 @@ impl SessionManager {
                         .cloned(),
                     Err(_) => None,
                 };
-                if next.is_none() {
-                    if jobs.get(id).is_some_and(|now| Arc::ptr_eq(now, job)) {
-                        jobs.remove(id);
+                if next.is_none() && jobs.get(id).is_some_and(|now| Arc::ptr_eq(now, job)) {
+                    // Nothing more is due: a merge made while they ran takes their checkout
+                    // now, before another runner can start and use it.
+                    if self.merged_since_checks(id).await {
+                        self.drop_check_checkout(id).await;
                     }
-                    return;
+                    jobs.remove(id);
                 }
                 next
             };
@@ -1142,6 +1198,14 @@ impl SessionManager {
                     Some(alias) => self.output_excerpt(&check.conversation_id, alias).await,
                     None => String::new(),
                 };
+                let known = self
+                    .known_failures(&check.conversation_id, output.as_deref())
+                    .await;
+                let known = if known.is_empty() {
+                    String::new()
+                } else {
+                    format!("\nOpen issues name failing tests: {}.", known.join(", "))
+                };
                 let landed = if tasks.is_empty() {
                     "Nothing a worker landed is new since they last passed: your own commits, or what was there already.".to_owned()
                 } else {
@@ -1156,7 +1220,7 @@ impl SessionManager {
                 };
                 Some((
                     format!(
-                        "[checks failed at {at}] The session's full checks failed on `{branch}`: `{command}` ({status}).{excerpt}{whole}\n{landed}\nJudge which change broke it and send it back to that task's worker in one fix task (role fix, subject that task: it resumes the worker's own session), with the failing command and the lines that show why. Don't run the full checks yourself: once the fix lands they run again on their own. A failure that isn't the code's (a flaky test, the machine): rerun_checks.",
+                        "[checks failed at {at}] The session's full checks failed on `{branch}`: `{command}` ({status}).{excerpt}{whole}\n{landed}{known}\nThey don't hold a merge; you judge what follows. A break in the code goes back to the task that broke it in one fix task (role fix, subject that task: it resumes the worker's own session), with the failing command and the lines that show why; once it lands they run again on their own. A failure that isn't the code's (a flaky test, the machine): rerun_checks, or leave it.",
                         branch = check.branch,
                         whole = output
                             .as_ref()
@@ -1168,13 +1232,77 @@ impl SessionManager {
             }
             IntegratedCheckState::Interrupted { reason } => Some((
                 format!(
-                    "[checks couldn't run at {at}] The session's full checks on `{}` couldn't finish: {reason}. That tip is unchecked, so nothing merges until they pass. Fix what stops them if you can, then call rerun_checks.",
+                    "[checks couldn't run at {at}] The session's full checks on `{}` couldn't finish: {reason}. That tip is unchecked. Fix what stops them if you can, then call rerun_checks.",
                     check.branch
                 ),
                 false,
             )),
             IntegratedCheckState::Due | IntegratedCheckState::Running { .. } => None,
         }
+    }
+
+    /// A stored output's whole text.
+    async fn output_text(&self, id: &ConversationId, alias: &str) -> Option<String> {
+        let board = self.core.board(id).await.ok()?;
+        let blob = board.outputs.get(alias)?.blob.parse().ok()?;
+        let bytes = self.core.store().blobs().get(blob).await.ok()??;
+        Some(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// The failing tests in a check's output (`alias`) that open issues of the session's
+    /// repository name, as "`test` (#230)"; none when there are none or `gh` can't say.
+    async fn known_failures(&self, id: &ConversationId, alias: Option<&str>) -> Vec<String> {
+        let Some(alias) = alias else {
+            return Vec::new();
+        };
+        let Some(text) = self.output_text(id, alias).await else {
+            return Vec::new();
+        };
+        let tests = failing_tests(&text);
+        if tests.is_empty() {
+            return Vec::new();
+        }
+        let Some(workspace) = self.recorded_workspace(id) else {
+            return Vec::new();
+        };
+        match self.open_issues(&workspace.repo).await {
+            Some(issues) => named_in_issues(&tests, &issues),
+            None => Vec::new(),
+        }
+    }
+
+    /// Where the full checks of `branch` stand at `tip`, for a merge's result: they inform the
+    /// merge, they don't hold it (#241).
+    pub(crate) async fn checks_line(&self, id: &ConversationId, branch: &str, tip: &Oid) -> String {
+        let Ok(board) = self.core.board(id).await else {
+            return String::new();
+        };
+        let at = short(&tip.0);
+        let state = match tip_checked(&board, branch, &tip.0) {
+            TipChecked::Passed => format!("passed at {at}"),
+            TipChecked::Never => format!("not run at {at}"),
+            TipChecked::Pending => format!("still running at {at}"),
+            TipChecked::Couldnt { reason } => format!("couldn't run at {at}: {reason}"),
+            TipChecked::Failed { command, status } => {
+                let output = board
+                    .integrated_checks
+                    .values()
+                    .filter(|check| check.branch == branch && check.tip == tip.0)
+                    .max_by_key(|check| integrated_check_number(&check.id))
+                    .and_then(|check| match &check.state {
+                        IntegratedCheckState::Failed { output, .. } => output.clone(),
+                        _ => None,
+                    });
+                let known = self.known_failures(id, output.as_deref()).await;
+                let known = if known.is_empty() {
+                    String::new()
+                } else {
+                    format!("; open issues name {}", known.join(", "))
+                };
+                format!("failed at {at}: `{command}` ({status}){known}")
+            }
+        };
+        format!(" The session's full checks: {state}.")
     }
 
     /// The end of a stored output, for a failure's message.
@@ -1251,7 +1379,28 @@ impl SessionManager {
         }
     }
 
-    /// The session's work merged: its check checkout goes, unless a check is still due there.
+    /// Whether the session merged after its newest check became due: its checkout then has
+    /// nothing left to check.
+    async fn merged_since_checks(&self, id: &ConversationId) -> bool {
+        let Ok(board) = self.core.board(id).await else {
+            return false;
+        };
+        let merged = board
+            .orchestrator_steps
+            .iter()
+            .filter(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. }))
+            .map(|step| step.at_ms)
+            .max();
+        let due = board
+            .integrated_checks
+            .values()
+            .map(|check| check.due_at_ms)
+            .max();
+        merged.is_some_and(|merged| due.is_none_or(|due| merged > due))
+    }
+
+    /// The session's work merged: its check checkout goes, or once the checks due or running
+    /// there end.
     pub(crate) async fn drop_check_checkout(&self, id: &ConversationId) {
         let Ok(board) = self.core.board(id).await else {
             return;
@@ -1261,6 +1410,7 @@ impl SessionManager {
             .values()
             .any(|check| !check.state.is_final())
         {
+            // It goes once they end: their queue runner sees the merge.
             return;
         }
         let leftovers = self.runtime.ledger().dispose(&checks_owner(id)).await;
@@ -1416,6 +1566,45 @@ fn install_fingerprint(root: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failing_tests_that_open_issues_name_are_listed_with_their_numbers() {
+        let output = "\
+    PASS [   0.4s] brigadier-core manager::flow::tests::fine
+    FAIL [   0.0s] brigadier-providers claude::tests::a_denied_session_refuses_every_tool
+test manager::flow::peer_chain_tests::the_ninth_message_waits ... FAILED
+test root_level_test ... FAILED
+    FAIL [   0.1s] brigadier-cli another_root_test
+--- FAIL: TestUpload (0.01s)
+FAILED tests/test_api.py::test_login - assert 1 == 2
+test result: FAILED. 1 passed; 3 failed";
+        let tests = failing_tests(output);
+        assert_eq!(
+            tests,
+            [
+                "claude::tests::a_denied_session_refuses_every_tool",
+                "manager::flow::peer_chain_tests::the_ninth_message_waits",
+                "root_level_test",
+                "another_root_test",
+                "TestUpload",
+                "tests/test_api.py::test_login",
+            ]
+        );
+        let issues = [
+            (
+                230,
+                "Flaky: the_ninth_message_waits times out on CI\n".to_owned(),
+            ),
+            (12, "Something else\ntest_login".to_owned()),
+        ];
+        assert_eq!(
+            named_in_issues(&tests, &issues),
+            [
+                "`manager::flow::peer_chain_tests::the_ninth_message_waits` (#230)",
+                "`tests/test_api.py::test_login` (#12)",
+            ]
+        );
+    }
 
     fn check(id: &str, tip: &str, state: IntegratedCheckState) -> IntegratedCheck {
         IntegratedCheck {

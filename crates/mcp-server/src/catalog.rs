@@ -227,7 +227,7 @@ checks. Each landing gets one background review by the other vendor, unless the 
 were reviewed already; its findings arrive later as a [review …] message. If the branch moved meanwhile, the commits are rebased onto it and \
 land at once. Each landing also makes the session's full checks due: they run once, in the \
 background, on the branch as it is then, for every landing close together; a failure comes as \
-a [checks failed …] message for you to send back. Conflicts come back to you: delegate a merge \
+a [checks failed …] message for you to judge; they don't hold a merge. Conflicts come back to you: delegate a merge \
 task.";
 
 const FINISH_SESSION: &str = "New-worktree sessions only: merge the session branch into its \
@@ -239,7 +239,7 @@ the merge is. Pass in consent the card's id, or their words quoted exactly from 
 Brigadier checks only that it is the user's and no earlier merge used it. \"merge it when \
 done\" is consent. While workers write it holds the merge ([merge held]) and tells you [merge \
 due] once they land: call it again then, without asking. The session keeps its worktree and \
-branch after the merge. Returns when merged.";
+branch after the merge. Returns when merged, saying where its full checks and reviews stand.";
 
 const STOP_MERGE: &str = "Stop the held merge when the user's words since their consent take it \
 back or put it off (\"wait\", \"don't merge yet\", a new condition on it). A question about the \

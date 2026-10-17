@@ -141,6 +141,26 @@ async fn plant_merge_card(flow: &Flow, answer: Option<&str>) -> Question {
     question
 }
 
+/// Waits until the session's full checks have ended and the thread is idle again, its scratch
+/// swept: the checks run in the background (a merge no longer waits for them, #241), and a
+/// Close workspace during the sweep that follows a request is refused as working.
+async fn quiet(flow: &Flow) -> crate::board::Board {
+    flow.until("the full checks to end", |board| {
+        board
+            .integrated_checks
+            .values()
+            .all(|check| check.state.is_final())
+    })
+    .await;
+    let board = flow.settled().await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    super::eventually_async("the thread to be idle, its scratch swept", || async {
+        !conv.scratch_used.load(std::sync::atomic::Ordering::SeqCst) && conv.scratch_idle().await
+    })
+    .await;
+    board
+}
+
 fn merged(board: &crate::board::Board) -> usize {
     board
         .orchestrator_steps
@@ -617,7 +637,7 @@ async fn an_archived_sessions_unfinished_removal_still_goes() {
 async fn clean_up_keeps_a_workspace_whose_close_failed() {
     let (flow, _) = session("merge-close-failed-clean-up").await;
     flow.say("Add notes.").await;
-    flow.settled().await;
+    quiet(&flow).await;
     let (path, _) = workspace(&flow);
     let path = path.unwrap();
     // The folder can't be removed (a locked file, say), so the Close fails.
@@ -651,7 +671,7 @@ async fn clean_up_keeps_a_workspace_whose_close_failed() {
 async fn a_failed_close_workspace_says_so_at_the_next_start() {
     let (mut flow, _) = session("merge-close-failed-restart").await;
     flow.say("Add notes.").await;
-    flow.settled().await;
+    quiet(&flow).await;
     let path = workspace(&flow).0.unwrap();
     flow.manager
         .runtime
@@ -691,7 +711,7 @@ async fn a_failed_close_workspace_says_so_at_the_next_start() {
 async fn close_workspace_removes_it_only_when_asked() {
     let (flow, log) = session("merge-close").await;
     flow.say("Add notes.").await;
-    flow.settled().await;
+    quiet(&flow).await;
     let (path, branch) = workspace(&flow);
     let path = path.unwrap();
     // Uncommitted work is kept on the branch.
@@ -743,7 +763,7 @@ async fn close_workspace_after_a_merge_tells_the_thread_once() {
     flow.say("Add notes.").await;
     flow.settled().await;
     flow.say("Now just merge it.").await;
-    let board = flow.settled().await;
+    let board = quiet(&flow).await;
     assert_eq!(merged(&board), 1, "{:#?}", log.lock().unwrap());
     let (path, branch) = workspace(&flow);
     let path = path.unwrap();
@@ -774,7 +794,7 @@ async fn close_workspace_after_a_merge_tells_the_thread_once() {
 async fn a_message_during_close_workspace_waits_for_it() {
     let (flow, log) = session("merge-close-fence").await;
     flow.say("Add notes.").await;
-    flow.settled().await;
+    quiet(&flow).await;
     let path = workspace(&flow).0.unwrap();
     // The workspace's removal holds until released, so the message comes while it runs.
     let removing = Arc::new(tokio::sync::Notify::new());
