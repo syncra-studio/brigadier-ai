@@ -622,7 +622,7 @@ impl SessionManager {
             .any(|constraint| constraint.words.len() > super::constraints::WORDS_MAX);
         let search = Part::new(
             "search",
-            "[Older context] search_transcript searches this conversation's whole transcript; query_brain finds decisions (by id or words), reports and findings; read_report gives a task's report in full.".into(),
+            "[Older context] Not all of this conversation is carried here: before you answer that something from it is unknown or ask the user again, look it up. search_transcript searches its whole transcript, your earlier commands, reads and tool calls too; query_brain finds decisions (by id or words), reports and findings; read_report gives a task's report in full.".into(),
             0,
         );
         let mut brain = self.brain_part(id, carried).await;

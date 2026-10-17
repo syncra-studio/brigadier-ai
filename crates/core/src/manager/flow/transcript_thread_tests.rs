@@ -301,3 +301,58 @@ async fn an_indexed_conversation_gets_its_whole_thread_stream_indexed() {
     );
     flow.stop().await;
 }
+
+/// A reborn Codex thread is told to look up what its briefing doesn't carry before it answers
+/// "unknown" (issue #112): nothing but the briefing tells a fresh session it can.
+#[tokio::test]
+async fn a_reborn_codex_thread_is_told_to_look_up_before_it_answers_unknown() {
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "transcript-codex-lookup",
+        Options {
+            thread: ProviderKind::Codex,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.input.contains("Write the handoff note") {
+                    return Reply::text("Goal and open threads: none.\nWhat to do next: wait.");
+                }
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("Grow.") && !turn.input.contains("[Brigadier briefing") {
+                    return Reply {
+                        text: "Grown.".into(),
+                        context_tokens: Some(FULL),
+                        ..Reply::default()
+                    };
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Grow.").await;
+    flow.settled().await;
+    flow.say("After the rebirth.").await;
+    flow.settled().await;
+    assert_eq!(rebirths(&flow).await, 1, "reborn once");
+    let inputs = inputs.lock().unwrap().clone();
+    let briefing = inputs
+        .iter()
+        .find(|input| input.contains("[Brigadier briefing"))
+        .expect("the reborn session's briefing");
+    let older = briefing
+        .split("[Older context]")
+        .nth(1)
+        .expect("what the briefing says of older context");
+    assert!(
+        older.contains("before you answer that something from it is unknown")
+            && older.contains("look it up")
+            && older.contains("search_transcript")
+            && older.contains("query_brain"),
+        "{briefing}"
+    );
+    flow.stop().await;
+}
