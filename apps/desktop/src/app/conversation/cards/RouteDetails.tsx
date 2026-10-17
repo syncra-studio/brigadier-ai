@@ -21,6 +21,7 @@ import {
   withResetTime,
 } from "@/lib/routing";
 import { cn } from "@/lib/utils";
+import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
 
 /**
@@ -300,6 +301,17 @@ export function RouteSections({
           {task.areas.length > 0 && ` · touches ${task.areas.join(", ")}`}
         </p>
         {route.explanation && <ExplanationView explanation={route.explanation} groups={groups} />}
+        <p className="text-muted-foreground text-xs">
+          You choose which models get each kind of work in{" "}
+          <button
+            type="button"
+            data-slot="routing-hint"
+            onClick={() => openSettings("routing")}
+            className="text-link rounded-control hover:underline"
+          >
+            Settings › Routing
+          </button>
+        </p>
       </Section>
       {(task.attempts.length > 1 ||
         task.attempts.some((attempt) => attempt.end !== null) ||
