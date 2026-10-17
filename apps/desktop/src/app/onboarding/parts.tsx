@@ -49,9 +49,13 @@ export function StepHeader({
   );
 }
 
+/** What takes a plain Enter itself, so the footer leaves it be. */
+const FOCUS_TAKERS = "button, a[href], input, textarea, select, [contenteditable], [role=menuitem], [role=option]";
+
 /**
  * The footer: Back (also on ⌘[, Alt ← elsewhere), then the step's action (also on ⌘⏎, Ctrl ⏎
- * elsewhere), each showing its keys, and a quiet line under them.
+ * elsewhere, and on Enter while no control has the focus), each showing its keys, and a quiet
+ * line under them.
  */
 export function StepFooter({
   onBack,
@@ -74,7 +78,11 @@ export function StepFooter({
   useEffect(() => {
     if (!onClick) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Enter" || event.repeat || !(mac ? event.metaKey : event.ctrlKey)) return;
+      if (event.key !== "Enter" || event.repeat || event.isComposing) return;
+      // A plain Enter counts too when no control has the focus: one let go of it, as Select
+      // none does once it can't be pressed again.
+      const unfocused = event.target instanceof Element && event.target.closest(FOCUS_TAKERS) === null;
+      if (!(mac ? event.metaKey : event.ctrlKey) && !unfocused) return;
       event.preventDefault();
       if (!blocked) onClick();
     };
