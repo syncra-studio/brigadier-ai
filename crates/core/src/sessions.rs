@@ -2074,11 +2074,16 @@ impl Core {
     /// Records the models an agent's list names as known; one seen after the agent's first
     /// list gets no worker tasks until the user allows it
     /// ([`crate::routing::availability::note_models`]).
-    pub async fn note_models(&self, provider: ProviderKind, ids: &[String]) -> Result<()> {
+    pub async fn note_models(
+        &self,
+        provider: ProviderKind,
+        ids: &[String],
+        older: &[(String, Option<String>)],
+    ) -> Result<()> {
         let _writes = self.settings_writes.lock().await;
         let settings = self.settings();
         if let Some(next) =
-            crate::routing::availability::note_models(&settings, provider, ids, now_ms())
+            crate::routing::availability::note_models(&settings, provider, ids, older, now_ms())
         {
             self.write_settings(next).await?;
         }

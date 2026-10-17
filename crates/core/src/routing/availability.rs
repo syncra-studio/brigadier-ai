@@ -8,6 +8,9 @@
 //! - A model seen after its agent's first list ([`Settings::known_models`]) starts with that
 //!   rule, so it gets no work until the user allows it; its agent's first list is taken as
 //!   known, so turning this on (or signing in) changes nothing for the models already there.
+//! - An older model ([`ModelInfo::legacy`]) starts unavailable, once
+//!   ([`Settings::older_models_off`]): the user turns on the ones they want, and that choice
+//!   stands. One the user's rules or orders already name stays as it is.
 
 use brigadier_providers::{ModelInfo, ProviderKind};
 use brigadier_router::{
@@ -123,11 +126,14 @@ pub fn is_worker_rule(rule: &OverrideRule, provider: ProviderKind, id: &str) -> 
 }
 
 /// The settings with the models of `provider`'s list recorded as known, or `None` when all
-/// of them already are. Each model seen after the agent's first list gets [`worker_rule`].
+/// of them already are. Each model seen after the agent's first list gets [`worker_rule`];
+/// each older one (`older`: the list's legacy models, each its id and the id it resolves to)
+/// is turned off the first time.
 pub fn note_models(
     settings: &Settings,
     provider: ProviderKind,
     ids: &[String],
+    older: &[(String, Option<String>)],
     now_ms: i64,
 ) -> Option<Settings> {
     let first_list = !settings
@@ -157,7 +163,52 @@ pub fn note_models(
                 .push(worker_rule(provider, id, now_ms));
         }
     }
+    for (id, resolved) in older {
+        let model = ModelRef {
+            provider,
+            id: id.clone(),
+        };
+        if next.older_models_off.contains(&model) {
+            continue;
+        }
+        next.older_models_off.push(model.clone());
+        let named = |name: &str| name == id || resolved.as_deref() == Some(name);
+        if !next.hidden_models.contains(&model) && !named_by_user(&next, provider, named) {
+            next.hidden_models.push(model);
+        }
+    }
     (next != *settings).then_some(next)
+}
+
+/// Whether the user's own choices name this model (`named` matches its id or the id it
+/// resolves to): an order, a prefer or only rule, the default chat or orchestrator model, or
+/// the commit message writer. It is in use by choice.
+fn named_by_user(
+    settings: &Settings,
+    provider: ProviderKind,
+    named: impl Fn(&str) -> bool,
+) -> bool {
+    let names = |target: &OverrideTarget| matches!(target, OverrideTarget::Model { provider: p, id } if *p == provider && named(id));
+    let chosen = |choice: &Option<ModelChoice>| {
+        choice.as_ref().is_some_and(|choice| {
+            choice.provider == provider && choice.model.as_deref().is_some_and(&named)
+        })
+    };
+    settings
+        .routing_rankings
+        .iter()
+        .any(|ranking| ranking.entries.iter().any(|entry| names(&entry.target)))
+        || settings
+            .routing_overrides
+            .iter()
+            .any(|rule| rule.effect != OverrideEffect::Never && names(&rule.target))
+        || [
+            &settings.default_chat_model,
+            &settings.default_orchestrator,
+            &settings.git_writer,
+        ]
+        .into_iter()
+        .any(chosen)
 }
 
 /// Settings a client sent, written over `current`: a model the core recorded as known since
@@ -181,6 +232,16 @@ pub fn rebase(current: &Settings, mut incoming: Settings) -> Settings {
             {
                 incoming.routing_overrides.push(rule.clone());
             }
+        }
+    }
+    // An older model turned off since the client read its copy stays off.
+    for model in &current.older_models_off {
+        if incoming.older_models_off.contains(model) {
+            continue;
+        }
+        incoming.older_models_off.push(model.clone());
+        if current.hidden_models.contains(model) && !incoming.hidden_models.contains(model) {
+            incoming.hidden_models.push(model.clone());
         }
     }
     incoming.settings_version = incoming.settings_version.max(current.settings_version);
@@ -285,10 +346,92 @@ mod tests {
     #[test]
     fn an_agents_first_list_is_known_without_rules() {
         let settings = Settings::default();
-        let next = note_models(&settings, ProviderKind::Claude, &ids(&["opus", "haiku"]), 1)
-            .expect("the models are new");
+        let next = note_models(
+            &settings,
+            ProviderKind::Claude,
+            &ids(&["opus", "haiku"]),
+            &[],
+            1,
+        )
+        .expect("the models are new");
         assert_eq!(next.known_models.len(), 2);
         assert!(next.routing_overrides.is_empty());
+    }
+
+    #[test]
+    fn an_older_model_starts_off_once_and_the_users_choice_stands() {
+        let opus = ModelRef {
+            provider: ProviderKind::Claude,
+            id: "opus".into(),
+        };
+        let old = ModelRef {
+            provider: ProviderKind::Claude,
+            id: "opus-4-8".into(),
+        };
+        let list = ids(&["opus", "opus-4-8"]);
+        let older = [("opus-4-8".to_owned(), Some("claude-opus-4-8".to_owned()))];
+        let next = note_models(&Settings::default(), ProviderKind::Claude, &list, &older, 1)
+            .expect("the models are new");
+        assert_eq!(next.hidden_models, vec![old.clone()]);
+        assert!(!model_available(&next, ProviderKind::Claude, "opus-4-8"));
+        assert!(model_available(&next, ProviderKind::Claude, "opus"));
+        // The user turns it on: the next list leaves it on.
+        let on = Settings {
+            hidden_models: Vec::new(),
+            ..next
+        };
+        assert!(note_models(&on, ProviderKind::Claude, &list, &older, 2).is_none());
+        // Settings from before: an older model already known is turned off once too.
+        let before = Settings {
+            known_models: vec![opus.clone(), old.clone()],
+            ..Settings::default()
+        };
+        let after =
+            note_models(&before, ProviderKind::Claude, &list, &older, 3).expect("turned off once");
+        assert_eq!(after.hidden_models, vec![old.clone()]);
+        // One the user's order names stays on.
+        let ranked = Settings {
+            routing_rankings: vec![brigadier_router::Ranking {
+                id: "r".into(),
+                category: TaskCategory::Implement,
+                areas: Vec::new(),
+                project_id: None,
+                manual: true,
+                entries: vec![brigadier_router::RankedEntry {
+                    target: OverrideTarget::Model {
+                        provider: ProviderKind::Claude,
+                        id: "opus-4-8".into(),
+                    },
+                    effort: None,
+                }],
+                only: false,
+                updated_at_ms: 0,
+            }],
+            ..before
+        };
+        let kept = note_models(&ranked, ProviderKind::Claude, &list, &older, 4).expect("noted");
+        assert!(kept.hidden_models.is_empty());
+        assert_eq!(kept.older_models_off, vec![old.clone()]);
+        // So does the default chat model.
+        let chat = Settings {
+            default_chat_model: Some(ModelChoice {
+                provider: ProviderKind::Claude,
+                model: Some("opus-4-8".into()),
+                effort: None,
+                fast: None,
+                account: None,
+            }),
+            ..Settings {
+                known_models: vec![opus.clone(), old.clone()],
+                ..Settings::default()
+            }
+        };
+        let kept = note_models(&chat, ProviderKind::Claude, &list, &older, 5).expect("noted");
+        assert!(kept.hidden_models.is_empty());
+        // A page open from before can't turn it back on by writing its old copy.
+        let stale = Settings::default();
+        let written = rebase(&after, stale);
+        assert!(!model_available(&written, ProviderKind::Claude, "opus-4-8"));
     }
 
     #[test]
@@ -297,11 +440,18 @@ mod tests {
             &Settings::default(),
             ProviderKind::Claude,
             &ids(&["opus"]),
+            &[],
             1,
         )
         .expect("the models are new");
-        let next = note_models(&settings, ProviderKind::Claude, &ids(&["opus", "fresh"]), 2)
-            .expect("fresh is new");
+        let next = note_models(
+            &settings,
+            ProviderKind::Claude,
+            &ids(&["opus", "fresh"]),
+            &[],
+            2,
+        )
+        .expect("fresh is new");
         assert_eq!(next.routing_overrides.len(), 1);
         let rule = &next.routing_overrides[0];
         assert!(is_worker_rule(rule, ProviderKind::Claude, "fresh"));
@@ -311,7 +461,16 @@ mod tests {
         // Seen again: nothing changes, and a rule the user removed stays removed.
         let mut allowed = next.clone();
         allowed.routing_overrides.clear();
-        assert!(note_models(&allowed, ProviderKind::Claude, &ids(&["opus", "fresh"]), 3).is_none());
+        assert!(
+            note_models(
+                &allowed,
+                ProviderKind::Claude,
+                &ids(&["opus", "fresh"]),
+                &[],
+                3
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -320,11 +479,12 @@ mod tests {
             &Settings::default(),
             ProviderKind::Claude,
             &ids(&["opus"]),
+            &[],
             1,
         )
         .expect("the models are new");
-        let next =
-            note_models(&settings, ProviderKind::Codex, &ids(&["sol"]), 2).expect("sol is new");
+        let next = note_models(&settings, ProviderKind::Codex, &ids(&["sol"]), &[], 2)
+            .expect("sol is new");
         assert!(next.routing_overrides.is_empty());
     }
 
@@ -489,12 +649,19 @@ mod tests {
             &Settings::default(),
             ProviderKind::Claude,
             &ids(&["opus"]),
+            &[],
             1,
         )
         .expect("the models are new");
         // The core sees `fresh` while a page still holds `read`, then the page writes.
-        let current = note_models(&read, ProviderKind::Claude, &ids(&["opus", "fresh"]), 2)
-            .expect("fresh is new");
+        let current = note_models(
+            &read,
+            ProviderKind::Claude,
+            &ids(&["opus", "fresh"]),
+            &[],
+            2,
+        )
+        .expect("fresh is new");
         let sent = Settings {
             disabled_providers: vec![ProviderKind::Codex],
             ..read.clone()
@@ -532,9 +699,10 @@ mod tests {
         assert!(wakes_waiting_work(&off, &agent_on));
         assert!(wakes_waiting_work(&off, &model_on));
         let worker_allowed = note_models(
-            &note_models(&off, ProviderKind::Claude, &ids(&["opus"]), 1).expect("new"),
+            &note_models(&off, ProviderKind::Claude, &ids(&["opus"]), &[], 1).expect("new"),
             ProviderKind::Claude,
             &ids(&["opus", "fresh"]),
+            &[],
             2,
         )
         .expect("fresh is new");

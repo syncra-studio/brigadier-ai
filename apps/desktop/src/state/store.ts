@@ -221,6 +221,7 @@ export const useApp = create<AppState>()(() => ({
     disabledProviders: [],
     hiddenModels: [],
     knownModels: [],
+    olderModelsOff: [],
     omitAiCoauthors: true,
     gitWriter: null,
     commitStyle: "repository",

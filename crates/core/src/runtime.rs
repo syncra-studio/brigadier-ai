@@ -899,7 +899,13 @@ impl Runtime {
                 .iter()
                 .map(|model| model.id.clone())
                 .collect();
-            if let Err(err) = self.core.note_models(overview.provider, &ids).await {
+            let older: Vec<(String, Option<String>)> = catalog
+                .models
+                .iter()
+                .filter(|model| model.legacy)
+                .map(|model| (model.id.clone(), model.resolved.clone()))
+                .collect();
+            if let Err(err) = self.core.note_models(overview.provider, &ids, &older).await {
                 tracing::warn!(error = %err, "could not record the models seen");
             }
         }

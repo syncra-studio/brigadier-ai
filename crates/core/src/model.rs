@@ -892,6 +892,9 @@ pub struct Settings {
     /// list starts without worker tasks (a "Don't give work" rule, which the user removes in
     /// Settings → Providers).
     pub known_models: Vec<ModelRef>,
+    /// Older models Brigadier has turned off once, when it first saw them: from then on the
+    /// user's switch decides.
+    pub older_models_off: Vec<ModelRef>,
     /// The user's extra CLI accounts (Settings → Accounts), in the order they were added. The
     /// user's own login, the one their terminal uses, is each provider's first account and is
     /// not listed.
@@ -1060,6 +1063,7 @@ impl Default for Settings {
             disabled_providers: Vec::new(),
             hidden_models: Vec::new(),
             known_models: Vec::new(),
+            older_models_off: Vec::new(),
             accounts: Vec::new(),
             switch_accounts: true,
             dictation_language: String::new(),

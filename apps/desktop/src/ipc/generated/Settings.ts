@@ -162,6 +162,11 @@ hiddenModels: Array<ModelRef>,
  */
 knownModels: Array<ModelRef>, 
 /**
+ * Older models Brigadier has turned off once, when it first saw them: from then on the
+ * user's switch decides.
+ */
+olderModelsOff: Array<ModelRef>, 
+/**
  * The user's extra CLI accounts (Settings → Accounts), in the order they were added. The
  * user's own login, the one their terminal uses, is each provider's first account and is
  * not listed.
