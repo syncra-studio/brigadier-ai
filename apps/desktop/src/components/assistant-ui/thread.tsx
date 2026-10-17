@@ -321,10 +321,6 @@ const ThreadRoot: FC<{
             tabIndex={-1}
             className="thread-scroll-padding flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto focus:outline-none"
           >
-            {/* Under the top bar the thread fades out. */}
-            <div aria-hidden className="pointer-events-none sticky top-0 z-10 h-0 shrink-0">
-              <div className="thread-top-fade absolute inset-x-0 top-0" />
-            </div>
             {/* The column: the pane may move it aside for the pinned summary. */}
             <div
               ref={setColumn}
@@ -361,6 +357,9 @@ const ThreadRoot: FC<{
               {isEmpty ? <div className="flex grow basis-0 flex-col justify-end">{pad}</div> : pad}
             </div>
           </div>
+          {/* Under the top bar the thread fades out: over the view, never in what scrolls, so a
+              rubber-band overscroll moves the content under it and never the fade (#232). */}
+          <div aria-hidden className="thread-top-fade pointer-events-none absolute inset-x-0 top-0 z-10" />
           {/* The user's messages, beside the column (see `message-rail.tsx`). */}
           <MessageRail viewport={viewport} scroller={scroller} />
           {Find && <Find viewport={viewport} scroller={scroller} />}

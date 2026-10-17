@@ -413,6 +413,9 @@ const steps = {
       button: buttonState(),
       // How far the fades reach: under the top bar, and above the floating footer.
       topFade: fade(".thread-top-fade"),
+      // Over the view, not in what scrolls: an overscroll leaves it at the view's top.
+      topFadeScrolls: viewport().contains($(".thread-top-fade")),
+      topFadeAt: round($(".thread-top-fade")!.getBoundingClientRect().top - viewTop()),
       bottomFade: round(fade(".thread-bottom-fade") - footer),
       // How far the scroll button reaches above the fade's top, over the text.
       buttonOverText: round($(".thread-bottom-fade")!.getBoundingClientRect().top - $(".aui-thread-scroll-to-bottom")!.getBoundingClientRect().top),

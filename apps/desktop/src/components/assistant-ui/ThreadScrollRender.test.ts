@@ -16,7 +16,7 @@ function near(actual: number | null, expected: number, label: string): void {
 test("the thread keeps its place, follows from the bottom and places a sent turn in the conversation view", { timeout: 180000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "thread-scroll.html?drive=1", "thread-scroll-result", 150000)) as {
     error?: string;
-    firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; bottomFade: number; buttonOverText: number };
+    firstOpen: { distance: number; lastGap: number; button: Button; topFade: number; topFadeScrolls: boolean; topFadeAt: number; bottomFade: number; buttonOverText: number };
     button: { at8: Button; at9: Button };
     switchBack: { top: number; restored: number; offset: number; restoredOffset: number | null; early: number[]; loading: boolean; placeholders: number };
     revealedBack: { offset: number; restoredOffset: number | null };
@@ -60,6 +60,9 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(firstOpen.button.shown, false);
   assert.equal(firstOpen.button.tabbable, false);
   near(firstOpen.topFade, 20, "fade under the top bar");
+  // The top fade is over the view, outside what scrolls, so an overscroll never moves it (#232).
+  assert.equal(firstOpen.topFadeScrolls, false);
+  near(firstOpen.topFadeAt, 0, "top fade from the view's top");
   // Solid only behind the composer, then a 32px fade right above it, as the design reference
   // does: text runs down to the composer and fades over its last line, and the scroll button
   // floats over it. At the bottom the last row, 32px above the composer, stays clear of the fade.
