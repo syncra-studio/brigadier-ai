@@ -269,7 +269,17 @@ impl SessionManager {
             _ if merging.is_some() => {
                 (merging.map(|merge| merge.message).unwrap_or_default(), None)
             }
-            _ if amend => (String::new(), None),
+            _ if amend => {
+                let git = self.git.clone();
+                let path = path.clone();
+                let last = blocking(move || {
+                    git.open(&path)
+                        .and_then(|repo| repo.read_only(&["log", "-1", "--format=%B", "HEAD"]))
+                        .map_err(git_error)
+                })
+                .await?;
+                (last.trim_end().to_owned(), None)
+            }
             _ => {
                 let patch = self.pending_patch(&path, include_unstaged).await?;
                 self.write_commit_message(project.as_ref(), &path, &patch)

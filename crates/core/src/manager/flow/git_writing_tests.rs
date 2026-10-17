@@ -908,6 +908,27 @@ async fn the_source_panel_merges_resolves_and_commits_with_the_merge_message() {
         "writing a message commits nothing"
     );
 
+    // An amend with a blank message keeps the last commit's, AI co-author lines left out.
+    git(
+        repo,
+        &[
+            "commit",
+            "-qm",
+            "Draft\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        ],
+    );
+    let outcome = manager
+        .commit_project_changes(&project, None, false, false, true)
+        .await
+        .unwrap();
+    assert_eq!(outcome.message.trim(), "Draft");
+    assert_eq!(git(repo, &["log", "-1", "--format=%B"]).trim(), "Draft");
+    assert_eq!(
+        git(repo, &["log", "-1", "--format=%s", "HEAD~1"]).trim(),
+        "Merge branch 'feature'",
+        "amended in place"
+    );
+
     staged_change(&flow).await;
     let session = WorkspaceTarget::Conversation {
         conversation_id: flow.conversation.clone(),
