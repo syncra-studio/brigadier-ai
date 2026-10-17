@@ -160,6 +160,15 @@ pub(crate) struct Progress {
     previous: HashMap<String, ProviderEvent>,
     commands: HashMap<String, (CommandKind, i64)>,
     waits: std::collections::HashSet<String>,
+    last_call: Option<LastCall>,
+}
+
+#[derive(Debug)]
+struct LastCall {
+    id: String,
+    label: String,
+    started: Option<i64>,
+    ended: Option<i64>,
 }
 
 impl Progress {
@@ -189,7 +198,13 @@ impl Progress {
                 command,
                 status,
                 ..
-            } => Some((item_id, *status, command_kind(command), false)),
+            } => Some((
+                item_id,
+                *status,
+                command_kind(command),
+                false,
+                command.clone(),
+            )),
             ProviderEvent::ToolCall {
                 item_id,
                 name,
@@ -206,6 +221,14 @@ impl Progress {
                             .and_then(|v| v.as_str())
                             .map(str::to_owned)
                     });
+                // Streamed tool arguments can arrive after the start event. Enrich the
+                // label without restarting the call's elapsed-time clock.
+                if let Some(command) = &command
+                    && let Some(call) = &mut self.last_call
+                    && call.id == *item_id
+                {
+                    call.label = command.clone();
+                }
                 let leaf = name.rsplit(['.', ':']).next().unwrap_or(name);
                 let leaf = leaf
                     .rsplit("__")
@@ -221,11 +244,41 @@ impl Progress {
                         || leaf.starts_with("wait_")
                         || leaf.ends_with("_wait")
                         || leaf.ends_with("_await"),
+                    command.unwrap_or_else(|| name.clone()),
                 ))
             }
             _ => None,
         };
-        if let Some((id, status, kind, wait)) = running {
+        if let Some((id, status, kind, wait, label)) = running {
+            if status == ItemStatus::InProgress {
+                if !self.commands.contains_key(id) {
+                    self.last_call = Some(LastCall {
+                        id: id.clone(),
+                        label,
+                        started: Some(now),
+                        ended: None,
+                    });
+                }
+            } else if let Some(call) = &mut self.last_call
+                && call.id == *id
+                && call.ended.is_none()
+            {
+                call.ended = Some(now);
+            } else if !self.commands.contains_key(id)
+                && self.last_call.as_ref().is_none_or(|call| call.id != *id)
+            {
+                // Some providers emit only a completed item, with its own duration.
+                let duration = match event {
+                    ProviderEvent::Command { duration_ms, .. } => *duration_ms,
+                    _ => None,
+                };
+                self.last_call = Some(LastCall {
+                    id: id.clone(),
+                    label,
+                    started: duration.map(|ms| now.saturating_sub(ms)),
+                    ended: Some(now),
+                });
+            }
             if status == ItemStatus::InProgress {
                 self.commands
                     .entry(id.clone())
@@ -260,6 +313,25 @@ impl Progress {
             self.previous.clear();
         }
         moved
+    }
+
+    /// The latest call and its own elapsed time, kept after it finishes.
+    pub(crate) fn last_command(&self, now: i64) -> Option<String> {
+        self.last_call.as_ref().map(|call| {
+            let Some(started) = call.started else {
+                return call.label.clone();
+            };
+            format!(
+                "{} ({} {} min)",
+                call.label,
+                if call.ended.is_some() {
+                    "ran"
+                } else {
+                    "running"
+                },
+                (call.ended.unwrap_or(now) - started).max(0) / 60_000
+            )
+        })
     }
 
     pub(crate) fn waiting(&self) -> bool {
@@ -434,6 +506,98 @@ mod tests {
             duration_ms: None,
             kept: None,
         }
+    }
+
+    #[test]
+    fn watchdog_command_fact_keeps_elapsed_time_after_completion() {
+        let mut evidence = Progress::default();
+        let mut event = command("cargo test");
+        evidence.observe(&event, 0);
+        evidence.observe(&event, 5 * 60_000);
+        assert_eq!(
+            evidence.last_command(14 * 60_000).as_deref(),
+            Some("cargo test (running 14 min)")
+        );
+        if let ProviderEvent::Command { status, .. } = &mut event {
+            *status = ItemStatus::Completed;
+        }
+        evidence.observe(&event, 14 * 60_000);
+        assert_eq!(
+            evidence.last_command(20 * 60_000).as_deref(),
+            Some("cargo test (ran 14 min)")
+        );
+    }
+
+    #[test]
+    fn watchdog_completed_only_command_fact_uses_the_provider_duration() {
+        let mut evidence = Progress::default();
+        let mut event = command("cargo test");
+        if let ProviderEvent::Command {
+            status,
+            duration_ms,
+            ..
+        } = &mut event
+        {
+            *status = ItemStatus::Completed;
+            *duration_ms = Some(14 * 60_000);
+        }
+        evidence.observe(&event, 20 * 60_000);
+        assert_eq!(
+            evidence.last_command(30 * 60_000).as_deref(),
+            Some("cargo test (ran 14 min)")
+        );
+    }
+
+    #[test]
+    fn watchdog_tool_fact_names_the_command_and_ignores_older_call_snapshots() {
+        let mut evidence = Progress::default();
+        let old = command("cargo test");
+        evidence.observe(&old, 0);
+        let mut tool = ProviderEvent::ToolCall {
+            item_id: "tool".into(),
+            name: "exec_command".into(),
+            input: Some(r#"{"cmd":"git status"}"#.into()),
+            status: ItemStatus::InProgress,
+            output: None,
+            kept: None,
+        };
+        evidence.observe(&tool, 60_000);
+        evidence.observe(&old, 120_000);
+        if let ProviderEvent::ToolCall { status, .. } = &mut tool {
+            *status = ItemStatus::Completed;
+        }
+        evidence.observe(&tool, 180_000);
+        assert_eq!(
+            evidence.last_command(240_000).as_deref(),
+            Some("git status (ran 2 min)")
+        );
+    }
+
+    #[test]
+    fn watchdog_streamed_tool_arguments_enrich_the_fact_without_resetting_time() {
+        let mut evidence = Progress::default();
+        let mut event = ProviderEvent::ToolCall {
+            item_id: "tool".into(),
+            name: "mcp__brigadier__run".into(),
+            input: None,
+            status: ItemStatus::InProgress,
+            output: None,
+            kept: None,
+        };
+        evidence.observe(&event, 0);
+        if let ProviderEvent::ToolCall { input, .. } = &mut event {
+            *input = Some(r#"{"command":"cargo test"}"#.into());
+        }
+        evidence.observe(&event, 2 * 60_000);
+        if let ProviderEvent::ToolCall { input, status, .. } = &mut event {
+            *input = None;
+            *status = ItemStatus::Completed;
+        }
+        evidence.observe(&event, 14 * 60_000);
+        assert_eq!(
+            evidence.last_command(20 * 60_000).as_deref(),
+            Some("cargo test (ran 14 min)")
+        );
     }
 
     #[test]

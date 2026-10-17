@@ -17,8 +17,6 @@
 //!   checks.md says so, and run_check's cache key still has them.
 //! - **Same model, same attempt.** It is not a reroute: the task keeps its model, attempt and
 //!   access. A limit or error hand-on still wins when both are due.
-//! - **Stalls too.** The stall watchdog ([`super::watchdog`]) hands a worker that went silent
-//!   mid-turn, and didn't answer a nudge, over the same way, closing its stuck turn.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -215,7 +213,7 @@ impl SessionManager {
     }
 
     /// Continues `task` in a fresh session of the same model: closes its CLI (between turns,
-    /// or mid-turn when it stalled), writes the hand-off files, and starts the new session with
+    /// or after its process ended), writes the hand-off files, and starts the new session with
     /// `note`, the last messages and `pending` (a message still to act on). `from` is the CLI
     /// session the hand-over was decided for ([`TaskLive::generation`]). Boxed: the worker it
     /// starts can come back here, and a recursive future must name its `Send` bound.
@@ -235,7 +233,7 @@ impl SessionManager {
     }
 
     /// [`Self::hand_over_worker`] for a caller that holds the task's `reroute` lock (the
-    /// stall watchdog, which closed the stalled session itself).
+    /// recovery path, which closed the previous session itself).
     pub(crate) fn hand_over_held<'a>(
         &'a self,
         live: &'a Arc<TaskLive>,
@@ -309,12 +307,6 @@ impl SessionManager {
             Handover::Size => tokens.map_or_else(String::new, |tokens| {
                 format!(" at about {}k tokens", tokens / 1_000)
             }),
-            Handover::Stalled { silent } => {
-                format!(
-                    " after {} without activity",
-                    super::watchdog::spoken(silent)
-                )
-            }
             Handover::Interrupted => " after its process ended".to_owned(),
             Handover::Restarted => {
                 " after Brigadier restarted and its session couldn't be resumed".to_owned()
@@ -616,8 +608,6 @@ fn checks_text(checks: &[PassedCheck]) -> String {
 pub(crate) enum Handover {
     /// Its context passed the hand-off size.
     Size,
-    /// It went silent mid-turn (for `silent` ms) and didn't answer a nudge.
-    Stalled { silent: i64 },
     /// Its process ended before it reported, and its session couldn't be resumed.
     Interrupted,
     /// Brigadier restarted while it worked, and its session couldn't be resumed (its CLI's
@@ -757,12 +747,6 @@ fn handover_text(
                  turns to give you room"
             )
         }
-        Handover::Stalled { silent } => format!(
-            "Your earlier session went silent mid-turn for {} and didn't answer a nudge (a \
-             command or the CLI may have hung), so it was closed. Don't run a command that may \
-             hang without a timeout, or start a server in the foreground",
-            super::watchdog::spoken(silent)
-        ),
         Handover::Interrupted => "Your earlier session's process ended before it reported, and \
              the session couldn't be resumed. Check what was running (its output may be lost)"
             .to_owned(),

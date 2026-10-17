@@ -72,8 +72,6 @@ const DELTA_WINDOW: Duration = Duration::from_millis(30);
 /// The CLIs' own limit on a worker's MCP calls: as long as `ask_orchestrator` waits for its
 /// answer ([`QUESTION_TIMEOUT`]); no other worker tool waits that long.
 pub(crate) const WORKER_TOOL_TIMEOUT_SECS: u64 = QUESTION_TIMEOUT.as_secs();
-/// How long the watchdog's nudge may take to reach a silent worker's CLI.
-const NUDGE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a fix Brigadier lands waits for the worker's turn that reported it to end.
 const TURN_END_WAIT: Duration = Duration::from_secs(30);
 /// How long `ask_orchestrator` waits for the orchestrator's answer.
@@ -201,8 +199,8 @@ struct TaskLiveState {
     /// Its turn ended while it waits for its background jobs: their end starts its next turn,
     /// so it keeps its place in an overnight run meanwhile.
     background_waiting: bool,
-    /// When the watchdog nudged the silent worker of this CLI session.
-    stall_nudged_at_ms: Option<i64>,
+    /// When the watchdog reported silence from this CLI session.
+    stall_reported_at_ms: Option<i64>,
     /// Fresh sessions the watchdog started for stalls in the current attempt.
     stalls: u32,
     /// Since when the task is live without a running CLI, as the watchdog saw it.
@@ -238,6 +236,7 @@ impl TaskLiveState {
     fn begin_turn(&mut self) {
         self.busy = true;
         self.last_event_ms = now_ms();
+        self.stall_reported_at_ms = None;
         self.progress = super::watchdog::progress::Progress::default();
     }
 
@@ -248,6 +247,7 @@ impl TaskLiveState {
         }
         if self.progress.observe(event, now) {
             self.last_event_ms = now;
+            self.stall_reported_at_ms = None;
         }
     }
 
@@ -615,55 +615,29 @@ impl TaskLive {
                 .command_deadline(&super::watchdog::Timing::current()),
             waiting: state.progress.waiting(),
             last_event_ms: state.last_event_ms,
-            nudged_at_ms: state.stall_nudged_at_ms,
+            reported_at_ms: state.stall_reported_at_ms,
+            last_command: state.progress.last_command(now),
             stalls: state.stalls,
             orphaned_at_ms: state.orphaned_at_ms,
             reroute_free,
         }
     }
 
-    /// Asks the silent worker (a steer) whether it is stuck, if `due` still holds for it as it
-    /// is now ([`super::watchdog::still_due`]). The steer is bounded and runs without the
-    /// worker's state held, so a CLI that stopped reading holds up nothing else. Delivered or
-    /// not, the nudge counts for the CLI session it was meant for: a worker that stays silent
-    /// is handed over after the grace. `None` when it was no longer due; else whether it
-    /// was delivered.
-    pub(crate) async fn nudge_stall(
+    /// Claims one silence report under the same lock as provider progress, without
+    /// steering the worker or changing its turn.
+    pub(crate) async fn report_stall(
         &self,
         due: impl FnOnce(&WorkerWatch) -> bool,
-        text: String,
-    ) -> Option<bool> {
+        at: i64,
+    ) -> bool {
         let reroute_free = self.reroute.try_lock().is_ok();
-        let (cli, generation) = {
-            let mut state = self.state.lock().await;
-            if !due(&Self::watched(&mut state, now_ms(), reroute_free)) {
-                return None;
-            }
-            (state.cli.clone()?, state.generation)
-        };
-        // Activity from here on shows the worker heard it, or was never stuck.
-        let at = now_ms();
-        let delivered = match tokio::time::timeout(
-            NUDGE_TIMEOUT,
-            cli.session.steer(TurnInput::text(text)),
-        )
-        .await
-        {
-            Ok(Ok(())) => true,
-            Ok(Err(err)) => {
-                tracing::warn!(task = %self.id, error = %err, "could not nudge a silent worker");
-                false
-            }
-            Err(_) => {
-                tracing::warn!(task = %self.id, "nudging a silent worker timed out");
-                false
-            }
-        };
         let mut state = self.state.lock().await;
-        if state.generation == generation {
-            state.stall_nudged_at_ms = Some(at);
+        let watch = Self::watched(&mut state, at, reroute_free);
+        if !watch.alive || !due(&watch) {
+            return false;
         }
-        Some(delivered)
+        state.stall_reported_at_ms = Some(at);
+        true
     }
 
     /// Takes the CLI session of a stalled worker off its task, if `due` still holds for it as
@@ -2072,7 +2046,7 @@ impl SessionManager {
             state.background_jobs = 0;
             state.background_overdue = false;
             state.background_waiting = false;
-            state.stall_nudged_at_ms = None;
+            state.stall_reported_at_ms = None;
             state.orphaned_at_ms = None;
             state.allowed_models = Some(allowed_models);
             if !resumed {
@@ -6501,12 +6475,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_nudge_no_longer_due_is_not_sent_or_counted() {
+    async fn a_silence_report_no_longer_due_is_not_counted() {
         let live = TaskLive::new(TaskId("t1".into()), ConversationId("c1".into()));
-        assert_eq!(live.nudge_stall(|_| false, "carry on".into()).await, None);
-        // Without a CLI there is nothing to nudge either.
-        assert_eq!(live.nudge_stall(|_| true, "carry on".into()).await, None);
-        assert_eq!(live.watch(0).await.nudged_at_ms, None);
+        assert!(!live.report_stall(|_| false, 1).await);
+        // Without a CLI there is no live silence to report either.
+        assert!(!live.report_stall(|_| true, 1).await);
+        assert_eq!(live.watch(0).await.reported_at_ms, None);
     }
 
     #[test]
