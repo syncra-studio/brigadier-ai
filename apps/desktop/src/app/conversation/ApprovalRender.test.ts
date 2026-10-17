@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
-test("approval cards show safe session scopes, dispatch decisions and stack on narrow cards", { timeout: 60000 }, async (t) => {
+test("approval cards show safe session scopes, dispatch decisions, send a peer message on Enter in the focused card, and stack on narrow cards", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "approvals.html?drive=1", "approvals-result")) as {
     buttons: Record<string, string[]>;
     narrow: { x: number; y: number; width: number; height: number }[];
@@ -10,6 +10,9 @@ test("approval cards show safe session scopes, dispatch decisions and stack on n
     calls: { id: string; decision: string }[];
     network: string | null;
     networkBody: string | null;
+    peerFocused: boolean;
+    peerHint: string;
+    peerHintBlurred: string;
   };
   assert.equal(seen.network, "Allow connecting to https://example.com?");
   assert.equal(seen.networkBody, "example.com isn’t on this session’s list of allowed sites.");
@@ -21,14 +24,19 @@ test("approval cards show safe session scopes, dispatch decisions and stack on n
   for (const id of ["outside", "permissions", "tool", "unscoped-command"]) {
     assert.deepEqual(seen.buttons[id], ["DenyEsc", "Allow once"]);
   }
-  assert.deepEqual(seen.buttons["peer"], ["Don't sendEsc", "Send"]);
+  assert.deepEqual(seen.buttons["peer"], ["Don't sendEsc", "Send⏎"]);
   assert.deepEqual(seen.calls, [
     // A window-wide Enter allows nothing: allowing takes a click or Enter on a focused Allow.
     { id: "command", decision: "allowSimilar" },
     { id: "command", decision: "deny" },
     { id: "network", decision: "allowSimilar" },
     { id: "files", decision: "allowSimilar" },
+    // The message to another session: Enter on the focused card sends it, a window-wide one doesn't.
+    { id: "peer", decision: "allow" },
   ]);
+  assert.equal(seen.peerFocused, true);
+  assert.equal(seen.peerHint, "contents", "its ⏎ shows while the card has focus");
+  assert.equal(seen.peerHintBlurred, "none");
   assert.equal(seen.narrow.length, 3);
   const [deny, session, once] = seen.narrow;
   assert.ok(session!.y >= deny!.y + deny!.height);
