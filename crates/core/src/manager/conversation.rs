@@ -2188,6 +2188,29 @@ impl SessionManager {
         interrupted
     }
 
+    /// After a start, before any request settles: the requests whose thread left their answer
+    /// to checks or a review still wait for it, as they did before the stop.
+    pub(crate) async fn recover_deferred(&self, id: &ConversationId) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        let deferred: Vec<String> = board
+            .requests
+            .values()
+            .filter(|request| {
+                request.deferred
+                    && matches!(request.state, RequestState::Working | RequestState::Waiting)
+            })
+            .map(|request| request.id.clone())
+            .collect();
+        if deferred.is_empty() {
+            return;
+        }
+        if let Ok(conv) = self.conv(id) {
+            conv.state.lock().await.deferred.extend(deferred);
+        }
+    }
+
     /// After a start: the request whose thread turn the daemon's last stop cut off (a quit
     /// or a crash) ends interrupted, never as answered, and the thread's Continue picks it up.
     pub(crate) async fn mark_cut_off_turn(&self, id: &ConversationId) {
@@ -5439,6 +5462,17 @@ impl SessionManager {
                 unshown,
             )
         };
+        // Whether it left its answer to what wakes the thread next outlives a restart.
+        if let Some(request) = &served {
+            let deferred = conv.state.lock().await.deferred.contains(request);
+            if let Err(err) = self
+                .core
+                .set_request_deferred(&conv.id, request, deferred)
+                .await
+            {
+                crate::logging::private_trace!(conv.private_logs, warn, "could not keep a request's deferred answer"; conversation = %conv.id, error = %err);
+            }
+        }
         if let Some(text) = unshown {
             self.notice(&conv.id, brigadier_providers::NoticeLevel::Warning, &text)
                 .await;

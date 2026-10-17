@@ -2353,6 +2353,11 @@ pub struct UserRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub suggestion: Option<String>,
+    /// Its thread's last turn for it left the answer to what wakes the thread next (checks or a
+    /// review still running): kept so it still waits for that after a restart.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub deferred: bool,
 }
 
 /// A stretch of time a request worked.
