@@ -129,7 +129,8 @@ const old: Plan = {
 };
 const board = emptyBoard(session.id);
 board.plans = Object.fromEntries([...plans, old].map((plan) => [plan.id, plan]));
-// Only WorkerChip's fields are needed by this synthetic board.
+// Only the fields WorkerChip and the context card's Workers row read are needed by this
+// synthetic board.
 board.tasks = Object.fromEntries(
   [
     {
@@ -139,6 +140,9 @@ board.tasks = Object.fromEntries(
       state: "done",
       kind: "read",
       quotaWait: null,
+      attempts: [],
+      createdAtMs: now,
+      updatedAtMs: now,
     },
     {
       id: "worker-live",
@@ -147,8 +151,11 @@ board.tasks = Object.fromEntries(
       state: "running",
       kind: "write",
       quotaWait: null,
+      attempts: [],
+      createdAtMs: now,
+      updatedAtMs: now,
     },
-  ].map((task) => [task.id, task as Task]),
+  ].map((task) => [task.id, task as unknown as Task]),
 );
 useBoard.setState({ board });
 useApp.setState({
@@ -583,3 +590,11 @@ function FixturePage() {
 }
 
 createRoot(document.getElementById("root")!).render(<FixturePage />);
+
+// For PlanCardsRender.test.ts: the plan sections the page drew once it settled.
+setTimeout(() => {
+  const result = document.createElement("pre");
+  result.id = "plan-cards-result";
+  result.textContent = JSON.stringify([...document.querySelectorAll("[data-card=plan]")].map((card) => card.id));
+  document.body.append(result);
+}, 1000);
