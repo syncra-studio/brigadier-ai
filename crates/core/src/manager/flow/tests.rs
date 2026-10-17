@@ -3359,6 +3359,78 @@ async fn a_stopped_snapshot_workers_kept_work_survives_the_ref_check() {
     flow.stop().await;
 }
 
+/// A worker's start fails as the user stops it (the stop closes what it was starting): the
+/// stop ends the task and keeps its work. The failure ends nothing, so the worktree isn't taken
+/// from under the stop's keeping (#164).
+#[tokio::test]
+async fn a_start_that_fails_while_its_task_is_stopped_leaves_the_stop_its_work() {
+    let flow = Flow::start(
+        "stop-fails-start",
+        Options::default(),
+        script(|turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("Add the notes.") {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Add notes", "kind": "implement", "spec": "Create notes.txt."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                return Reply::text("[quiet]");
+            }
+            std::future::pending::<()>().await;
+            Reply::text("Never.")
+        }),
+    )
+    .await;
+    flow.say("Add the notes.").await;
+    let board = flow
+        .until("task-1 at work", |board| {
+            board.tasks.values().any(|task| {
+                task.number == 1
+                    && task.state == TaskState::Running
+                    && task
+                        .workspace
+                        .as_ref()
+                        .is_some_and(|w| w.worktree.is_some())
+            })
+        })
+        .await;
+    let task = Flow::task(&board, 1).clone();
+    let worktree = std::path::PathBuf::from(task.workspace.clone().unwrap().worktree.unwrap());
+    std::fs::write(worktree.join("notes.txt"), "notes\n").unwrap();
+    // The stop is under way when the start it cut short reports its failure, with the task as
+    // it was before it had a workspace.
+    flow.manager.stopping_lock().insert(task.id.clone());
+    let starting = crate::work::Task {
+        workspace: None,
+        ..task.clone()
+    };
+    flow.manager
+        .worker_failed(&starting, "The worker's session ended as it started.")
+        .await;
+    flow.manager.stopping_lock().remove(&task.id);
+    assert!(worktree.join("notes.txt").exists(), "the worktree stays");
+    assert_eq!(Flow::task(&flow.board().await, 1).state, TaskState::Running);
+    flow.manager.stop_task(task.id.clone()).await.unwrap();
+    let board = flow
+        .until("task-1 stopped", |board| {
+            Flow::task(board, 1).state == TaskState::Stopped
+        })
+        .await;
+    assert!(
+        matches!(
+            Flow::task(&board, 1).kept,
+            Some(crate::work::KeptWork::Branch { .. })
+        ),
+        "kept on its branch: {:?}",
+        Flow::task(&board, 1).kept
+    );
+    flow.stop().await;
+}
+
 /// A landing replays the task branch without its litter: the engine's own rewrite, recorded
 /// under the ref lock as it is made. A check made for the thread right after it, with the
 /// worker's CLI gone, keeps the rewritten branch (PLAN bug 6 step 5).

@@ -5027,6 +5027,11 @@ impl SessionManager {
         {
             return;
         }
+        // Being stopped (a start the stop cut short fails too): the stop ends it, keeping its
+        // work; ending it here as well would take its worktree from under that (#164).
+        if self.is_stopping(&task.id) {
+            return;
+        }
         let reviewing = task.gate_link.is_some();
         let mut kept = None;
         if let Some(live) = self.existing_task_live(&task.id) {
