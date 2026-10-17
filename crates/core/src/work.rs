@@ -2427,6 +2427,13 @@ pub struct UserRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub changes: Option<RequestChanges>,
+    /// Where the user's review left each file it changed, once it settled.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[ts(
+        as = "Option<std::collections::BTreeMap<String, FileReview>>",
+        optional
+    )]
+    pub review: std::collections::BTreeMap<String, FileReview>,
     /// The thread's CLI's own guess at the user's next message after this request's last
     /// turn, for the empty composer once it is over. Never sent by itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2524,6 +2531,65 @@ pub struct HeldPath {
 pub struct UndoOutcome {
     pub restored: Vec<String>,
     pub held: Vec<HeldPath>,
+}
+
+/// Where the user's review left one file a request changed (a turn diff card's row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum FileReview {
+    /// Its changes wait for the user's Keep or Undo.
+    Pending,
+    /// Still waiting, but a later request changed it too: that request's card has it now.
+    Later,
+    /// The user kept its changes (some of them, at least).
+    Kept,
+    /// Its changes are gone: the user undid them, or the file is back as it was.
+    Undone,
+}
+
+/// The changes agents made that the user hasn't kept or undone yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingChanges {
+    pub files: Vec<PendingFile>,
+}
+
+/// One file's changes waiting for review: from its review base (the file as the user last
+/// accepted it) to the file in the checkout now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingFile {
+    pub path: String,
+    /// The request whose card lists it: the latest that changed it.
+    pub request_id: String,
+    /// Its text at the review base and now (`None`: no file), when both are text small enough
+    /// to show. Without them only the whole file can be kept or undone.
+    #[ts(optional)]
+    pub base: Option<String>,
+    #[ts(optional)]
+    pub current: Option<String>,
+    /// Whether its text is shown, whatever `base` and `current` hold.
+    pub text: bool,
+    /// Each run of changed lines, numbered in `base` (old) and `current` (new).
+    pub hunks: Vec<PendingHunk>,
+    pub insertions: u32,
+    pub deletions: u32,
+    /// Why Undo leaves it as it is: someone else changed it too.
+    #[ts(optional)]
+    pub held: Option<String>,
+}
+
+/// One run of changed lines in a pending file, as git numbers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingHunk {
+    /// Taken from where it is and its lines: Keep or Undo of an id the file no longer has is
+    /// refused.
+    pub id: String,
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
 }
 
 /// The user's Undo and Reapply of what a request's workers landed (the turn diff card).

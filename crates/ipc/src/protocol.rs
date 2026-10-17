@@ -18,12 +18,12 @@ use brigadier_core::{
     ConventionsExport, Conversation, ConversationActivity, ConversationId, ConversationKind,
     ConversationStatus, ConversationView, DiffStat, FolderCheck, FolderListing, FolderTrustReport,
     ForkPlace, GitState, Mention, Message, MessagePage, MessageQueue, OrchestratorPage,
-    OvernightRun, OvernightRunId, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch,
-    ProposedPlan, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage,
-    RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff,
-    ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, Setup, SetupRequest,
-    SourceAction, SourceBranch, SourceChange, SourceScope, SourceState, StoredCopy, TaskId,
-    ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
+    OvernightRun, OvernightRunId, PendingChanges, ProbeBurst, Project, ProjectCandidate, ProjectId,
+    ProjectPatch, ProposedPlan, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals,
+    RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome,
+    ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, Setup,
+    SetupRequest, SourceAction, SourceBranch, SourceChange, SourceScope, SourceState, StoredCopy,
+    TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
     UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
     WorkspaceTree,
 };
@@ -639,6 +639,37 @@ pub enum Request {
         conversation_id: ConversationId,
         request_id: String,
         reapply: bool,
+    },
+    /// The changes agents made in a session's checkout that the user hasn't kept or undone yet
+    /// (the file review, a turn diff card's Undo All and Keep All): every file, or `path`'s.
+    GetPendingChanges {
+        conversation_id: ConversationId,
+        #[serde(default)]
+        #[ts(optional)]
+        path: Option<String>,
+    },
+    /// Keeps pending changes: every file's, `path`'s, or some of its (`hunks`, by id). No file
+    /// changes; a change the file no longer has is refused.
+    KeepChanges {
+        conversation_id: ConversationId,
+        #[serde(default)]
+        #[ts(optional)]
+        path: Option<String>,
+        #[serde(default)]
+        #[ts(optional)]
+        hunks: Option<Vec<String>>,
+    },
+    /// Undoes pending changes, picked as `KeepChanges` picks them: their lines go back in the
+    /// checkout, uncommitted, or by a commit on the session's branch when they were committed.
+    /// A file someone else changed too is left as it is.
+    UndoPendingChanges {
+        conversation_id: ConversationId,
+        #[serde(default)]
+        #[ts(optional)]
+        path: Option<String>,
+        #[serde(default)]
+        #[ts(optional)]
+        hunks: Option<Vec<String>>,
     },
     /// Whether the user can see a conversation's composer now. Only while they can does its
     /// CLI guess their next message (`UserRequest::suggestion`), so a hidden one costs nothing.
@@ -1462,6 +1493,13 @@ pub enum Response {
     },
     PinDraftAttachments,
     UndoChanges {
+        outcome: UndoOutcome,
+    },
+    GetPendingChanges {
+        pending: PendingChanges,
+    },
+    KeepChanges,
+    UndoPendingChanges {
         outcome: UndoOutcome,
     },
     SetComposerShown,

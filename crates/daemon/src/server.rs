@@ -1761,6 +1761,27 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 heap(|| sessions.undo_request(conversation_id, request_id, reapply)).await?;
             Response::UndoChanges { outcome }
         }
+        Request::GetPendingChanges {
+            conversation_id,
+            path,
+        } => Response::GetPendingChanges {
+            pending: heap(|| sessions.pending_changes(conversation_id, path)).await?,
+        },
+        Request::KeepChanges {
+            conversation_id,
+            path,
+            hunks,
+        } => {
+            heap(|| sessions.keep_changes(conversation_id, path, hunks)).await?;
+            Response::KeepChanges
+        }
+        Request::UndoPendingChanges {
+            conversation_id,
+            path,
+            hunks,
+        } => Response::UndoPendingChanges {
+            outcome: heap(|| sessions.undo_pending_changes(conversation_id, path, hunks)).await?,
+        },
         Request::SetComposerShown {
             conversation_id,
             shown,

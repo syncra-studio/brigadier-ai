@@ -346,6 +346,16 @@ impl Record {
     }
 }
 
+impl Record {
+    /// Each file the request changed: what it held before, and why Undo leaves it, if it does.
+    pub(super) fn changed(&self) -> impl Iterator<Item = (&str, Option<&Blob>, Option<&str>)> {
+        self.paths
+            .iter()
+            .filter(|(_, owned)| owned.first != owned.last)
+            .map(|(path, owned)| (path.as_str(), owned.first.as_ref(), owned.held.as_deref()))
+    }
+}
+
 impl SessionManager {
     /// Both session environments count, but overnight workspaces and Chats do not.
     pub(super) fn changes_checkout(
@@ -458,16 +468,26 @@ impl SessionManager {
             Refresh::Settle => Pass::Settle,
             Refresh::Recover => Pass::Recover,
         };
+        let settle = matches!(pass, Pass::Settle);
         let lock = self.change_records.lock(id);
         let mut clock = lock.lock().await;
         self.drain_changes(id, &checkout, &mut clock).await;
         pace(&mut clock).await;
         self.apply_changes(id, request, &checkout, &mut clock, pass)
-            .await
+            .await?;
+        if settle {
+            self.absorb_pending(id, request, &checkout).await?;
+        }
+        Ok(())
     }
 
     /// Applies what the thread reported before anything that comes after it.
-    async fn drain_changes(&self, id: &ConversationId, checkout: &Path, clock: &mut SnapshotClock) {
+    pub(super) async fn drain_changes(
+        &self,
+        id: &ConversationId,
+        checkout: &Path,
+        clock: &mut SnapshotClock,
+    ) {
         while self.change_records.pending(id) {
             // Events reported while this waits join the same snapshot.
             pace(clock).await;
@@ -1396,6 +1416,7 @@ impl SessionManager {
     }
 
     pub(super) async fn delete_change_records(&self, id: &ConversationId) -> Result<()> {
+        self.delete_pending(id).await?;
         if let Some(Setup::Session { repo, .. }) = self.core.conversation(id)?.setup
             && Path::new(&repo).exists()
         {

@@ -22,7 +22,7 @@ pub use command::{FoundRepo, Git};
 pub use merging::{BranchRef, ConflictFile, MergeState};
 pub use refname::{branch_name_problem, branch_prefix_problem};
 pub use repo::Repo;
-pub use request_changes::FileBlob;
+pub use request_changes::{FileBlob, FileHunk};
 pub use trailers::strip_ai_coauthors;
 pub use worktree::Worktree;
 

@@ -740,6 +740,7 @@ impl Core {
                         held_by: None,
                         background_jobs: None,
                         changes: None,
+                        review: Default::default(),
                         suggestion: None,
                         deferred: false,
                     },
@@ -1733,6 +1734,38 @@ impl Core {
     }
 
     /// Records the user's Undo or Reapply of what a request's workers landed.
+    /// Where the user's review left a request's files (`UserRequest::review`).
+    pub(crate) async fn set_request_review(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        review: std::collections::BTreeMap<String, crate::work::FileReview>,
+    ) -> Result<()> {
+        let mut boards = self.boards.lock().await;
+        if !boards.contains_key(id) {
+            boards.insert(id.clone(), self.load_board(id).await?);
+        }
+        let Some(mut request) = boards
+            .get(id)
+            .and_then(|board| board.requests.get(request_id))
+            .cloned()
+        else {
+            return Err(Error::NotFound(format!("request {request_id}")));
+        };
+        if request.review == review {
+            return Ok(());
+        }
+        request.review = review;
+        let event = DomainEvent::RequestUpdated { request };
+        let stored = self
+            .record(vec![(streams::conversation(id), event.clone())])
+            .await?;
+        if let Some(board) = boards.get_mut(id) {
+            board.apply(&event, stored[0]);
+        }
+        Ok(())
+    }
+
     pub(crate) async fn set_request_undo(
         &self,
         id: &ConversationId,

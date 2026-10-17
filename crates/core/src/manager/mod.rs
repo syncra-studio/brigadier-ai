@@ -66,6 +66,7 @@ mod past_projects;
 mod peer_answers;
 mod peer_wait;
 mod peers;
+mod pending_changes;
 mod phases;
 mod preview;
 mod preview_ready;

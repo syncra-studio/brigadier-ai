@@ -7,6 +7,21 @@ use std::path::{Component, Path};
 use crate::command::{TempIndex, valid_oid, valid_path};
 use crate::{Error, LandOutcome, LandRequest, Oid, Repo, Result, parse};
 
+/// One run of changed lines between two versions of a file, numbered as git numbers them: a
+/// run that only adds lines starts at the old line it follows (0 at the top), and one that only
+/// removes them starts at the new line it follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileHunk {
+    /// The first old line of the run, or the one it follows when it removes none.
+    pub old_start: u32,
+    /// How many old lines it replaces.
+    pub old_lines: u32,
+    /// The first new line of the run, or the one it follows when it adds none.
+    pub new_start: u32,
+    /// How many new lines it puts in.
+    pub new_lines: u32,
+}
+
 /// A file's object and executable/symlink mode in a tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileBlob {
@@ -243,6 +258,76 @@ impl Repo {
             .map_or_else(String::new, |at| text[at..].to_owned()))
     }
 
+    /// Where one file's two versions differ, line by line with no context, as each hunk's
+    /// `(old start, old lines, new start, new lines)` in git's numbering; `None` when git can
+    /// only call the change binary.
+    pub fn file_hunks(
+        &self,
+        path: &str,
+        before: Option<&FileBlob>,
+        after: Option<&FileBlob>,
+    ) -> Result<Option<Vec<FileHunk>>> {
+        let tree = |blob: Option<&FileBlob>| {
+            self.blob_tree(None, &BTreeMap::from([(path.to_owned(), blob.cloned())]))
+        };
+        let (from, to) = (tree(before)?, tree(after)?);
+        let out = self.cmd(
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--no-renames",
+                "-U0",
+                &from.0,
+                &to.0,
+            ],
+            true,
+        )?;
+        let mut hunks = Vec::new();
+        for line in out.split(|byte| *byte == b'\n') {
+            if line.starts_with(b"Binary files ") || line.starts_with(b"GIT binary patch") {
+                return Ok(None);
+            }
+            let Some(header) = line.strip_prefix(b"@@ -") else {
+                continue;
+            };
+            let header = parse::text(header)?;
+            let range = |text: &str| -> Result<(u32, u32)> {
+                let (start, count) = text.split_once(',').unwrap_or((text, "1"));
+                Ok((
+                    start
+                        .parse()
+                        .map_err(|_| Error::Parse("invalid hunk header".into()))?,
+                    count
+                        .parse()
+                        .map_err(|_| Error::Parse("invalid hunk header".into()))?,
+                ))
+            };
+            let mut fields = header.split(' ');
+            let old = range(fields.next().unwrap_or_default())?;
+            let new = range(
+                fields
+                    .next()
+                    .and_then(|field| field.strip_prefix('+'))
+                    .ok_or_else(|| Error::Parse("invalid hunk header".into()))?,
+            )?;
+            hunks.push(FileHunk {
+                old_start: old.0,
+                old_lines: old.1,
+                new_start: new.0,
+                new_lines: new.1,
+            });
+        }
+        Ok(Some(hunks))
+    }
+
+    /// A blob's bytes as git stores them.
+    pub fn blob_bytes(&self, blob: &FileBlob) -> Result<Vec<u8>> {
+        valid_oid(&Oid(blob.oid.clone()))?;
+        self.cmd(&["cat-file", "blob", &blob.oid], true)
+    }
+
     /// Reconstructs the old file by reverse applying an unclipped unified patch to its new blob.
     pub fn before_patch(
         &self,
@@ -432,6 +517,47 @@ mod tests {
         repo.restore_file_blobs(&BTreeMap::from([("crlf.txt".into(), checkout)]))
             .unwrap();
         assert_eq!(fs::read(dir.0.join("crlf.txt")).unwrap(), b"one\r\ntwo\r\n");
+    }
+
+    #[test]
+    fn request_changes_git_file_hunks_number_each_run_of_lines() {
+        let (_dir, repo) = setup();
+        let before = repo
+            .store_file_blob(b"one\ntwo\nthree\nfour\n", "100644")
+            .unwrap();
+        let after = repo
+            .store_file_blob(b"zero\none\nthree\nFOUR\n", "100644")
+            .unwrap();
+        let hunks = repo
+            .file_hunks("f.txt", Some(&before), Some(&after))
+            .unwrap()
+            .unwrap();
+        let ranges: Vec<_> = hunks
+            .iter()
+            .map(|h| (h.old_start, h.old_lines, h.new_start, h.new_lines))
+            .collect();
+        assert_eq!(ranges, [(0, 0, 1, 1), (2, 1, 2, 0), (4, 1, 4, 1)]);
+        assert_eq!(
+            repo.blob_bytes(&after).unwrap(),
+            b"zero\none\nthree\nFOUR\n"
+        );
+        let added = repo
+            .file_hunks("f.txt", None, Some(&after))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            added
+                .iter()
+                .map(|h| (h.old_start, h.old_lines, h.new_start, h.new_lines))
+                .collect::<Vec<_>>(),
+            [(0, 0, 1, 4)]
+        );
+        let binary = repo.store_file_blob(b"a\0b", "100644").unwrap();
+        assert_eq!(
+            repo.file_hunks("f.txt", Some(&before), Some(&binary))
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

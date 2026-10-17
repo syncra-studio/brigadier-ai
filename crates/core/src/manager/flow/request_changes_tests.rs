@@ -2242,3 +2242,295 @@ async fn request_changes_never_split_a_shell_move() {
     assert_eq!(read("kept.txt").as_deref(), Some("first\n"));
     flow.stop().await;
 }
+
+const LINES: &str = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n";
+const EDITED: &str = "ONE\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n";
+
+fn review_options() -> Options {
+    Options {
+        thread: ProviderKind::Claude,
+        files: vec![("a.txt", LINES), ("b.txt", "base\n")],
+        ..Default::default()
+    }
+}
+
+/// One request's edits to `a.txt` (two runs of lines) and `b.txt`, settled.
+async fn reviewed(flow: &Flow) -> Board {
+    flow.say("Edit a and b.").await;
+    flow.until("its changes in review", |board| {
+        board
+            .latest_request()
+            .is_some_and(|request| request.review.len() == 2)
+    })
+    .await
+}
+
+fn edit_a_and_b() -> Script {
+    script(move |turn| async move {
+        let id = turn.conversation().unwrap();
+        let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+        edit(&turn, &workspace.join("a.txt"), "edit-a", LINES, EDITED).await;
+        observed(&turn, 1).await;
+        edit(
+            &turn,
+            &workspace.join("b.txt"),
+            "edit-b",
+            "base\n",
+            "thread b\n",
+        )
+        .await;
+        observed(&turn, 2).await;
+        Reply::text("Changed a and b.")
+    })
+}
+
+/// Keep one change and the other stays to review; Undo puts back only its own lines; a whole
+/// file's Undo puts it back as it was; each card row says where the review left it, and the
+/// user's checkout keeps the restores uncommitted.
+#[tokio::test]
+async fn pending_changes_keep_and_undo_change_by_change_on_the_users_checkout() {
+    use crate::work::FileReview;
+    let mut flow = Flow::start(
+        "20261017-0213-issues-run-w41-pending-local",
+        review_options(),
+        edit_a_and_b(),
+    )
+    .await;
+    local(&mut flow).await;
+    let board = reviewed(&flow).await;
+    let request = board.latest_request().unwrap().id.clone();
+    let review = |board: &Board| board.requests[&request].review.clone();
+    assert_eq!(
+        review(&board).into_iter().collect::<Vec<_>>(),
+        [
+            ("a.txt".to_owned(), FileReview::Pending),
+            ("b.txt".to_owned(), FileReview::Pending)
+        ]
+    );
+    let head = git(&flow.repo, &["rev-parse", "HEAD"]);
+    let id = flow.conversation.clone();
+    let pending = flow
+        .manager
+        .pending_changes(id.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(pending.files.len(), 2);
+    let a = &pending.files[0];
+    assert_eq!(
+        (a.path.as_str(), a.request_id.as_str()),
+        ("a.txt", request.as_str())
+    );
+    assert_eq!(a.base.as_deref(), Some(LINES));
+    assert_eq!(a.current.as_deref(), Some(EDITED));
+    assert_eq!((a.insertions, a.deletions, a.hunks.len()), (2, 1, 2));
+    flow.manager
+        .keep_changes(
+            id.clone(),
+            Some("a.txt".into()),
+            Some(vec![a.hunks[0].id.clone()]),
+        )
+        .await
+        .unwrap();
+    let a = flow
+        .manager
+        .pending_changes(id.clone(), Some("a.txt".into()))
+        .await
+        .unwrap()
+        .files
+        .remove(0);
+    assert_eq!(a.hunks.len(), 1);
+    assert_eq!(
+        a.base.as_deref(),
+        Some("ONE\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n")
+    );
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join("a.txt")).unwrap(),
+        EDITED
+    );
+    let undone = flow
+        .manager
+        .undo_pending_changes(
+            id.clone(),
+            Some("a.txt".into()),
+            Some(vec![a.hunks[0].id.clone()]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(undone.restored, ["a.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join("a.txt")).unwrap(),
+        "ONE\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n"
+    );
+    flow.manager
+        .undo_pending_changes(id.clone(), Some("b.txt".into()), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join("b.txt")).unwrap(),
+        "base\n"
+    );
+    let board = flow
+        .until("both files reviewed", |board| {
+            !board.requests[&request]
+                .review
+                .values()
+                .any(|state| *state == FileReview::Pending)
+        })
+        .await;
+    assert_eq!(review(&board)["a.txt"], FileReview::Kept);
+    assert_eq!(review(&board)["b.txt"], FileReview::Undone);
+    assert!(
+        flow.manager
+            .pending_changes(id.clone(), None)
+            .await
+            .unwrap()
+            .files
+            .is_empty()
+    );
+    assert_eq!(git(&flow.repo, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        git(
+            &flow.repo,
+            &["status", "--porcelain", "--", "a.txt", "b.txt"]
+        )
+        .trim(),
+        "M a.txt"
+    );
+    flow.stop().await;
+}
+
+/// A change named from before the user edited its lines is refused, and the file stays as the
+/// user left it.
+#[tokio::test]
+async fn pending_changes_refuse_a_change_the_file_no_longer_has() {
+    let mut flow = Flow::start(
+        "20261017-0213-issues-run-w41-pending-refused",
+        review_options(),
+        edit_a_and_b(),
+    )
+    .await;
+    local(&mut flow).await;
+    reviewed(&flow).await;
+    let id = flow.conversation.clone();
+    let a = flow
+        .manager
+        .pending_changes(id.clone(), Some("a.txt".into()))
+        .await
+        .unwrap()
+        .files
+        .remove(0);
+    let mine = "MINE\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\n";
+    std::fs::write(flow.repo.join("a.txt"), mine).unwrap();
+    let error = flow
+        .manager
+        .undo_pending_changes(
+            id.clone(),
+            Some("a.txt".into()),
+            Some(vec![a.hunks[0].id.clone()]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), "The file changed since; review it again");
+    assert_eq!(
+        std::fs::read_to_string(flow.repo.join("a.txt")).unwrap(),
+        mine
+    );
+    flow.stop().await;
+}
+
+/// In a worktree, Undo of a change the thread committed lands as a commit; a file a later
+/// request changed again moves to that request's card, and Keep All keeps it for both.
+#[tokio::test]
+async fn pending_changes_undo_a_committed_change_by_a_commit_and_pass_files_on() {
+    use crate::work::FileReview;
+    let flow = Flow::start(
+        "20261017-0213-issues-run-w41-pending-worktree",
+        review_options(),
+        script(move |turn| async move {
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            if turn.input.contains("again") {
+                edit(
+                    &turn,
+                    &workspace.join("b.txt"),
+                    "edit-b2",
+                    "thread b\n",
+                    "thread b\nagain\n",
+                )
+                .await;
+                observed(&turn, 1).await;
+                return Reply::text("Changed b again.");
+            }
+            edit(&turn, &workspace.join("a.txt"), "edit-a", LINES, EDITED).await;
+            observed(&turn, 1).await;
+            edit(
+                &turn,
+                &workspace.join("b.txt"),
+                "edit-b",
+                "base\n",
+                "thread b\n",
+            )
+            .await;
+            observed(&turn, 2).await;
+            git(&workspace, &["add", "a.txt", "b.txt"]);
+            git(&workspace, &["commit", "-q", "-m", "Thread edits"]);
+            Reply::text("Changed a and b.")
+        }),
+    )
+    .await;
+    let board = reviewed(&flow).await;
+    let first = board.latest_request().unwrap().id.clone();
+    let id = flow.conversation.clone();
+    let (workspace, _) = flow.manager.changes_checkout(&id).unwrap();
+    let head = git(&workspace, &["rev-parse", "HEAD"]);
+    flow.manager
+        .undo_pending_changes(id.clone(), Some("a.txt".into()), None)
+        .await
+        .unwrap();
+    assert_ne!(git(&workspace, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        git(&workspace, &["log", "-1", "--format=%s"]),
+        "Undo changes in a.txt"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        LINES
+    );
+    assert!(git(&workspace, &["status", "--porcelain"]).is_empty());
+
+    flow.say("Edit b again.").await;
+    let board = flow
+        .until("b on the later card", |board| {
+            board
+                .latest_request()
+                .is_some_and(|request| request.id != first && !request.review.is_empty())
+        })
+        .await;
+    let second = board.latest_request().unwrap().id.clone();
+    assert_eq!(board.requests[&first].review["b.txt"], FileReview::Later);
+    assert_eq!(board.requests[&second].review["b.txt"], FileReview::Pending);
+    let pending = flow
+        .manager
+        .pending_changes(id.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(pending.files.len(), 1);
+    assert_eq!(pending.files[0].request_id, second);
+    assert_eq!(pending.files[0].base.as_deref(), Some("base\n"));
+    flow.manager
+        .keep_changes(id.clone(), None, None)
+        .await
+        .unwrap();
+    let board = flow
+        .until("b kept on both cards", |board| {
+            board.requests[&second].review["b.txt"] == FileReview::Kept
+        })
+        .await;
+    assert_eq!(board.requests[&first].review["b.txt"], FileReview::Kept);
+    assert_eq!(board.requests[&first].review["a.txt"], FileReview::Undone);
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("b.txt")).unwrap(),
+        "thread b\nagain\n"
+    );
+    flow.stop().await;
+}
