@@ -32,6 +32,8 @@ const INHERITED_PROVEN: u32 = 3;
 pub const ASSUMED_CONTEXT_WINDOW: i64 = 128_000;
 /// Scores this close count as a tie.
 const TIE: f64 = 1e-6;
+/// For chores, scores within this of the best are near-equal and the cheaper model goes first.
+const NEAR_EQUAL: f64 = 1.0;
 /// The reason sentence stops adding notes past this length.
 const REASON_BUDGET: usize = 180;
 
@@ -177,6 +179,13 @@ pub fn default_floor(category: TaskCategory) -> QualityTier {
 /// more than a light model, and the user waits for it.
 pub fn cheapest_first(category: TaskCategory) -> bool {
     category == TaskCategory::GitText
+}
+
+/// Whether a category is a chore (scouting, running checks) that goes to the cheapest model
+/// among near-equal scores: a lower tier costs less, and a score within [`NEAR_EQUAL`] of the
+/// best does the job about as well.
+pub fn cheaper_when_near(category: TaskCategory) -> bool {
+    matches!(category, TaskCategory::Scout | TaskCategory::Verify)
 }
 
 /// Whether a category is low-risk work a model on trial may take.
@@ -517,6 +526,15 @@ pub fn preview(query: &Query) -> Preview {
         })
         .then(rank(a).cmp(&rank(b)))
     });
+    if cheaper_when_near(query.category)
+        && let Some(best) = ranked.first().map(|i| candidates[*i].score)
+    {
+        let near = ranked
+            .iter()
+            .take_while(|i| candidates[**i].score >= best - NEAR_EQUAL - TIE)
+            .count();
+        ranked[..near].sort_by_key(|i| candidates[*i].model.tier);
+    }
     let manual = ranking.map(|ranking| manual_pick(query, ranking, &candidates, &ranked));
     let places = manual
         .as_ref()
@@ -716,7 +734,12 @@ pub fn preview(query: &Query) -> Preview {
         .iter()
         .filter(|i| **i != chosen && league(i))
         .any(|i| (candidates[*i].score - pick.score).abs() <= TIE);
-    let why = why.unwrap_or_else(|| score_why(query, pick, tie, rule_text.as_deref()));
+    // A chore's pick that a better-scored model was passed over for, as the cheaper one.
+    let cheaper = cheaper_when_near(query.category)
+        && ranked
+            .iter()
+            .any(|i| candidates[*i].score > pick.score + TIE);
+    let why = why.unwrap_or_else(|| score_why(query, pick, tie, cheaper, rule_text.as_deref()));
 
     let ranked_effort = ranking.zip(place).and_then(|(ranking, entry)| {
         let effort = ranking.entries.get(entry)?.effort.as_deref()?;
@@ -1833,7 +1856,13 @@ fn join_rules(rules: &[&OverrideRule]) -> String {
 
 // ----- explanation ---------------------------------------------------------------------------
 
-fn score_why(query: &Query, pick: &Candidate, tie: bool, only: Option<&str>) -> String {
+fn score_why(
+    query: &Query,
+    pick: &Candidate,
+    tie: bool,
+    cheaper: bool,
+    only: Option<&str>,
+) -> String {
     let purpose = table::row(query.category).purpose;
     let mut evidence = if pick.model.status == ModelStatus::Curated {
         format!("registry {}", number(pick.base))
@@ -1849,6 +1878,8 @@ fn score_why(query: &Query, pick: &Candidate, tie: bool, only: Option<&str>) -> 
     }
     let lead = if cheapest_first(query.category) {
         "the fastest, cheapest model that can take it".to_owned()
+    } else if cheaper && only.is_none() {
+        format!("the cheapest model near the top {purpose} score")
     } else if only.is_some() {
         format!("the best {purpose} score your rule allows")
     } else {
@@ -2205,6 +2236,58 @@ mod tests {
             (ProviderKind::Codex, "gpt-6.1-sol")
         );
         assert_eq!(route.effort.as_deref(), Some("medium"));
+    }
+
+    /// Scouting and checks take the cheaper model when its score is near the best; other work
+    /// still takes the top score, and a clearly better score still wins a chore.
+    #[test]
+    fn chores_take_the_cheaper_of_near_equal_models() {
+        assert!(cheaper_when_near(TaskCategory::Scout));
+        assert!(cheaper_when_near(TaskCategory::Verify));
+        assert!(!cheaper_when_near(TaskCategory::Research));
+        let registry = Registry::bundled();
+        let mut models = catalog(&registry);
+        let set = |models: &mut Vec<MergedModel>, id: &str, value: f64| {
+            let model = models.iter_mut().find(|m| m.id == id).unwrap();
+            for category in TaskCategory::ALL {
+                model.strengths.insert(category, value);
+            }
+        };
+        for model in models.clone() {
+            set(&mut models, &model.id, 5.0);
+        }
+        set(&mut models, "gpt-6-astra", 9.0);
+        set(&mut models, "opus[1m]", 8.5);
+        set(&mut models, "gpt-6-luna", 8.0);
+        let both = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
+            provider,
+            logged_in: true,
+            quota: None,
+        });
+        for category in [TaskCategory::Scout, TaskCategory::Verify] {
+            let mut q = query(&registry, &models, &both);
+            q.category = category;
+            q.floor = default_floor(category);
+            let route = routed(&q);
+            assert_eq!(route.model, "gpt-6-luna", "{category:?}");
+            assert!(
+                route.reason.contains("the cheapest model near the top"),
+                "{}",
+                route.reason
+            );
+            if category == TaskCategory::Verify {
+                assert_eq!(route.effort.as_deref(), Some("medium"));
+            }
+        }
+        let mut q = query(&registry, &models, &both);
+        q.category = TaskCategory::Research;
+        q.floor = default_floor(TaskCategory::Research);
+        assert_eq!(routed(&q).model, "gpt-6-astra");
+        set(&mut models, "gpt-6-luna", 7.5);
+        let mut q = query(&registry, &models, &both);
+        q.category = TaskCategory::Verify;
+        q.floor = default_floor(TaskCategory::Verify);
+        assert_eq!(routed(&q).model, "gpt-6-astra");
     }
 
     /// Git text goes to the lowest tier that can take it, at low effort, whatever scores more;
