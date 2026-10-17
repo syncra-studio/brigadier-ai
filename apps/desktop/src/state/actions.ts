@@ -118,7 +118,13 @@ export async function loadCatalog(): Promise<void> {
  * Loads a conversation's view (newest messages, tasks, cards, queue, run state), replacing
  * what was loaded. Live events that arrived meanwhile are kept.
  */
-export async function loadConversation(id: string): Promise<void> {
+/**
+ * Reads a conversation's view: its newest page of messages, its board. History older than the
+ * page that the thread already holds stays (#14): messages never change, and a thread kept in
+ * the store takes every new one live, so what it holds joins the page, unless `fresh` says
+ * events may have been missed (a resync), when only the page is trusted.
+ */
+export async function loadConversation(id: string, { fresh = false }: { fresh?: boolean } = {}): Promise<void> {
   updateThread(id, (thread) => ({ ...thread, loading: true }));
   const before = useApp.getState().conversations[id];
   const arrived = collectBoardEvents(id);
@@ -127,18 +133,24 @@ export async function loadConversation(id: string): Promise<void> {
     const events = arrived();
     const page = view.messages;
     const newest = page.messages.at(-1)?.seq ?? 0;
-    updateThread(id, (thread) => ({
-      ...thread,
-      // Keep only what the live feed delivered after the page was read. Older items may be
-      // stale (e.g. after missing events) and would leave a gap below this page.
-      items: mergeMessages(
-        page.messages,
-        thread.items.filter((message) => message.seq > newest),
-      ),
-      hasMore: page.hasMore,
-      loading: false,
-      loadError: null,
-    }));
+    updateThread(id, (thread) => {
+      // The pages read before, older than this one, when they reach it: no gap between them.
+      const oldest = page.messages[0];
+      const joined = !fresh && page.hasMore && !!oldest && thread.items.some((message) => message.id === oldest.id);
+      const earlier = joined ? thread.items.filter((message) => message.seq < oldest.seq) : [];
+      return {
+        ...thread,
+        // Keep what the live feed delivered after the page was read. Without `earlier`, older
+        // items may be stale (e.g. after missing events) and would leave a gap below this page.
+        items: mergeMessages(
+          [...earlier, ...page.messages],
+          thread.items.filter((message) => message.seq > newest),
+        ),
+        hasMore: earlier.length > 0 ? thread.hasMore : page.hasMore,
+        loading: false,
+        loadError: null,
+      };
+    });
     // A copy live events changed while the view was read is newer (a new conversation is
     // renamed by its first message), and one they removed was deleted; whatever else the
     // view holds arrives as events too.

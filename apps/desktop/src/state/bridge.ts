@@ -71,7 +71,7 @@ async function resync() {
   await Promise.all([loadCatalog(), loadActivity(), loadUpdates()]);
   const log = useBoard.getState().orchestrator;
   if (log) void openOrchestratorLog(log.conversationId);
-  await Promise.all([...shown.map((id) => loadConversation(id)), reloadSessionTasks()]);
+  await Promise.all([...shown.map((id) => loadConversation(id, { fresh: true })), reloadSessionTasks()]);
 }
 
 /** Whether the daemon has answered yet: startup marks the first time. */
