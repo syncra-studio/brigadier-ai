@@ -2,9 +2,11 @@ import { type FC, useContext, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { WORKERS_LABEL } from "@/app/conversation/Agents";
+import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { outcomeWords, workerDone } from "@/app/conversation/workerPresentation";
 import {
   AgentsPanelContext,
+  useWorkerName,
   WorkerGlyph,
 } from "@/app/conversation/WorkerChip";
 import { SummaryRowButton, SummarySection } from "@/components/assistant-ui/elements/summary-section";
@@ -85,6 +87,19 @@ export function WorkerDiffs({ conversationId }: { conversationId: string }) {
   return null;
 }
 
+/** What a worker at work is doing now ("$ pnpm build · 4m"), after its name when several work. */
+const WorkerNow: FC<{ taskId: string; named: boolean }> = ({ taskId, named }) => {
+  const { ref, first, firstWorking } = useTaskActivityLine(taskId);
+  const name = useWorkerName(taskId);
+  if (!first) return null;
+  return (
+    <div ref={ref} data-slot="workers-summary-activity" className="min-w-0 truncate">
+      {named && name && `${name}: `}
+      <span className={cn(firstWorking && "shimmer")}>{first}</span>
+    </div>
+  );
+};
+
 /** The summary keeps every worker openable, including helpers and finished workers. */
 export function WorkersSummary({ conversationId }: { conversationId: string }) {
   const tasks = useBoard(useShallow((s) => s.board?.conversationId === conversationId
@@ -110,6 +125,11 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
           </span>
         }
         meta={active.length > 0 && finished ? finished : undefined}
+        description={active.length > 0 && (
+          <span className="flex min-w-0 flex-col">
+            {active.slice(0, 3).map((task) => <WorkerNow key={task.id} taskId={task.id} named={active.length > 1} />)}
+          </span>
+        )}
       >
         {active.length ? `${active.length} working` : finished}
       </SummaryRowButton>
