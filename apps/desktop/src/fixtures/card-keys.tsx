@@ -38,6 +38,10 @@ const ask: Question = {
     recommended: 0,
   }],
 };
+// Answered by hand after a visit to Settings, which unmounts the card.
+const keep: Question = { ...ask, id: "keep" };
+// A merge card left lit and unanswered, apart from the one the other cases mount: an open card keeps what is lit.
+const mergeLeftLit: Question = { ...merge, id: "merge-left-lit" };
 const plan = (id: string, body: string | null): Plan => ({
   id, conversationId, requestId: null, position: 1, title: "Windows support", body,
   steps: [], state: { type: "proposed" }, createdAtMs: 0, decidedAtMs: null,
@@ -46,7 +50,7 @@ useBoard.setState({
   board: {
     ...emptyBoard(conversationId),
     loaded: true,
-    questions: { merge, ask },
+    questions: { merge, ask, keep, "merge-left-lit": mergeLeftLit },
     plans: { document: plan("document", "Handle drive letters, then run the platform checks."), phases: plan("phases", null) },
   },
 });
@@ -144,7 +148,31 @@ async function run(drive: (seen: Record<string, unknown>, since: () => Call[]) =
 
 const question: PendingAction = { type: "question", id: "merge" };
 const sent = (from: number) => () => calls.length > from;
-const results = {
+/** The card goes, as when Settings takes the window, and comes back. */
+async function visitSettings(action: PendingAction) {
+  root.render(<p>Settings</p>);
+  await until("the card to go", () => document.querySelector("[data-slot=action-card]") === null);
+  await mountCard(action);
+}
+const field = () => document.querySelector<HTMLInputElement>("[data-slot=action-card] input")!;
+const results = new URLSearchParams(location.search).get("case") === "kept" ? {
+  // The answer the user lit, and then the text typed in the free-text row, survive a visit to Settings.
+  kept: await run(async (seen) => {
+    const action: PendingAction = { type: "question", id: "keep" };
+    await fixtureInput({ type: "pointer", x: 4, y: 4 });
+    await mountCard(action);
+    seen.litFresh = lit();
+    await key("ArrowDown");
+    seen.litBefore = lit();
+    await visitSettings(action);
+    seen.litAfter = lit();
+    await fixtureClick(field());
+    for (const letter of "tiers") await key(letter);
+    seen.typedBefore = field().value;
+    await visitSettings(action);
+    seen.typedAfter = field().value;
+  }),
+} : {
   mountEnter: await run(async (seen) => {
     await mountCard(question);
     seen.focused = focused();
@@ -176,7 +204,7 @@ const results = {
   }),
   // A lit answer, then Enter from elsewhere in the window: the danger a window-wide Enter was.
   enterOutside: await run(async (seen) => {
-    await mountCard(question);
+    await mountCard({ type: "question", id: "merge-left-lit" });
     await key("ArrowDown");
     seen.lit = lit();
     seen.targets = [];

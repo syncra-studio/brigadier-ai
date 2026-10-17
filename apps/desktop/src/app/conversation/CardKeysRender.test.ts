@@ -57,3 +57,13 @@ test("every question card takes Enter only on the focused card, and consequentia
   assert.deepEqual(implementPlan!.afterEnter, [], "Enter right after mount builds nothing");
   assert.deepEqual(implementPlan!.calls, [{ method: "decidePlan", cardId: "document", approve: true, message: null }]);
 });
+
+test("a question card keeps the answer the user lit and the text typed after a visit to Settings", { timeout: 90000 }, async (t) => {
+  const { kept } = JSON.parse(await renderFixtureLive(t, "card-keys.html?case=kept", "card-keys-result", 60000)) as Record<string, Seen>;
+  assert.equal(kept!.error, undefined, `kept: ${kept!.error}`);
+  assert.notDeepEqual(kept!.litBefore, kept!.litFresh, "↓ lights an answer");
+  assert.deepEqual(kept!.litAfter, kept!.litBefore);
+  assert.equal(kept!.typedBefore, "tiers");
+  assert.equal(kept!.typedAfter, "tiers");
+  assert.deepEqual(kept!.calls, []);
+});

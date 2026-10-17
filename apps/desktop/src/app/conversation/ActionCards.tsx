@@ -121,6 +121,37 @@ export function showCard(conversationId: string, cardId: string): void {
   );
 }
 
+/** Where the user is on an open question card: what a visit to Settings must not lose. */
+type KeptQuestion = {
+  page: number;
+  answers: readonly (string | null)[];
+  /** Text typed on a question but not sent yet. */
+  drafts: readonly (string | undefined)[];
+  /** The answer lit on each question; -1 is the free-text row, null none. */
+  lit: readonly (number | null | undefined)[];
+};
+
+const FRESH: KeptQuestion = { page: 0, answers: [], drafts: [], lit: [] };
+
+/** Open question cards' state, by card id, until each is answered. */
+const useKept = create<{ byCard: Readonly<Record<string, KeptQuestion>> }>(() => ({
+  byCard: {},
+}));
+
+function keepQuestion(id: string, change: Partial<KeptQuestion>): void {
+  useKept.setState((s) => ({
+    byCard: { ...s.byCard, [id]: { ...(s.byCard[id] ?? FRESH), ...change } },
+  }));
+}
+
+function forgetQuestion(id: string): void {
+  useKept.setState((s) => {
+    const byCard = { ...s.byCard };
+    delete byCard[id];
+    return { byCard };
+  });
+}
+
 /** What an answer to a skipped question says, so the asker carries on. */
 const SKIPPED = "Skipped: use your best judgment.";
 
@@ -710,6 +741,7 @@ function ChoiceCard({
   extra,
   choices,
   initial,
+  kept,
   consequential = false,
   initialText = "",
   placeholder,
@@ -719,6 +751,7 @@ function ChoiceCard({
   onChoose,
   onText,
   onTyped,
+  onLit,
   onSkip,
   onDismiss,
   busy,
@@ -734,6 +767,8 @@ function ChoiceCard({
   choices: { label: string; description?: ReactNode; recommended?: boolean }[];
   /** The answer lit at first (none on a consequential card). */
   initial: number;
+  /** The answer lit when the card was last shown, before the user went elsewhere. */
+  kept?: number | null | undefined;
   /** Its answers are hard to undo: only a deliberate pick answers it. */
   consequential?: boolean;
   /** What the free-text row holds at first (an answer typed before paging back). */
@@ -751,6 +786,8 @@ function ChoiceCard({
   onText: (text: string) => void;
   /** What the free-text row holds as it is typed, so paging away and back keeps it. */
   onTyped?: (text: string) => void;
+  /** The answer lit as it changes, so a visit elsewhere keeps it. */
+  onLit?: (index: number | null) => void;
   onSkip: (input: AnswerInput) => void;
   onDismiss: () => void;
   busy: boolean;
@@ -761,8 +798,10 @@ function ChoiceCard({
 }) {
   // The lit answer; -1 is the free-text row, null none yet.
   const [highlight, setHighlight] = useState<number | null>(
-    choices.length === 0 ? -1 : consequential ? null : initial,
+    choices.length === 0 ? -1 : kept !== undefined ? kept : consequential ? null : initial,
   );
+  const lit = useEffectEvent((index: number | null) => onLit?.(index));
+  useEffect(() => lit(highlight), [highlight]);
   const [chosen, setChosen] = useState<number | null>(null);
   const [typed, setTyped] = useState(initialText);
   // Dictated words go after what is typed, into this card alone: each mounted card (one per
@@ -980,10 +1019,9 @@ function QuestionAction({
       : null,
   );
   const action = useAction();
-  const [page, setPage] = useState(0);
-  const [answers, setAnswers] = useState<(string | null)[]>([]);
-  // Text typed on a question but not sent yet, kept while the user pages through the round.
-  const [drafts, setDrafts] = useState<(string | undefined)[]>([]);
+  // Kept by card id, not in the card: opening Settings unmounts it, and coming back finds the
+  // round's answers, the text typed and the answer lit as they were.
+  const { page, answers, drafts, lit } = useKept((s) => s.byCard[id] ?? FRESH);
   if (!question) return null;
 
   const round = questionRound(question);
@@ -993,11 +1031,12 @@ function QuestionAction({
   // Back to any question answered so far, or on to the first one still open.
   const reachable = (to: number) =>
     to >= 0 && to < round.length && to <= answers.filter((answer) => answer !== null).length;
+  const setPage = (to: number) => keepQuestion(id, { page: to });
   const draft = (text: string | undefined) =>
-    setDrafts((kept) => round.map((_, index) => (index === at ? text : kept[index])));
+    keepQuestion(id, { drafts: round.map((_, index) => (index === at ? text : useKept.getState().byCard[id]?.drafts[index])) });
   const answer = (text: string, input: AnswerInput) => {
     const next = round.map((_, index) => (index === at ? text : (answers[index] ?? null)));
-    setAnswers(next);
+    keepQuestion(id, { answers: next });
     draft(undefined);
     const open = next.findIndex((given) => given === null);
     if (open >= 0) {
@@ -1005,7 +1044,9 @@ function QuestionAction({
       return;
     }
     action.run(() =>
-      answerQuestion(question.conversationId, question.id, next.map((given) => given ?? SKIPPED), input),
+      answerQuestion(question.conversationId, question.id, next.map((given) => given ?? SKIPPED), input).then(() =>
+        forgetQuestion(id),
+      ),
     );
   };
   const given = answers[at] ?? null;
@@ -1059,6 +1100,7 @@ function QuestionAction({
         recommended: item.recommended === index,
       }))}
       initial={picked >= 0 ? picked : (item.recommended ?? 0)}
+      kept={lit[at]}
       consequential={question.kind.type === "merge"}
       initialText={drafts[at] ?? (given !== null && picked < 0 && given !== SKIPPED ? given : "")}
       placeholder={
@@ -1072,6 +1114,9 @@ function QuestionAction({
       onChoose={(index, input) => answer(item.options[index]?.label ?? "", input)}
       onText={(text) => answer(text, "typed")}
       onTyped={draft}
+      onLit={(index) =>
+        keepQuestion(id, { lit: round.map((_, other) => (other === at ? index : useKept.getState().byCard[id]?.lit[other])) })
+      }
       // A merge card's Skip is its "Not yet": words typed there are a new request instead.
       onSkip={(input) => answer(question.kind.type === "merge" ? (item.options.at(-1)?.label ?? SKIPPED) : SKIPPED, input)}
       onDismiss={onDismiss}
