@@ -74,7 +74,7 @@ export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   const { kind } = step;
   if (kind.type === "machine") return <MachineRow kind={kind} />;
   if (kind.type === "decided") return <DecidedRow kind={kind} />;
-  if (isTeamStep(kind)) return <TeamStep kind={kind} />;
+  if (isTeamStep(kind)) return <TeamStep kind={kind} atMs={step.atMs} />;
   if (kind.type === "fullAccessSuggested") return <SandboxLimitNotice reason={kind.reason} />;
   if (kind.type === "merged") {
     return (

@@ -31,8 +31,13 @@ test("team rows join possessives to names, time stopped work, and omit blank She
       const text = html.replace(/<[^>]+>/g, "");
       assert.equal(text, `${kind.type === "landed" ? "Landed" : kind.type === "reviewed" ? "Reviewed" : "Answered"} Add QIF exporter’s ${kind.type === "answered" ? "question" : "change"}`);
     }
-    const stopped = render(React.createElement(TeamStep, { kind: { type: "stopped", taskId: "t1", reason: "Enough" } }));
+    const stopped = render(React.createElement(TeamStep, { kind: { type: "stopped", taskId: "t1", reason: "Enough" }, atMs: 9000 }));
     assert.match(stopped, /after 4s/);
+    // A handoff's earlier attempt counts; a restart after the stop doesn't change the row.
+    const handedOff = { ...task, attempts: [{ startedAtMs: 1000, endedAtMs: 3000 }, { startedAtMs: 5000, endedAtMs: 9000 }, { startedAtMs: 20000, endedAtMs: null }] } as unknown as Task;
+    const handedOffStore = createStore(() => ({ board: { ...emptyBoard("c"), tasks: { t1: handedOff } }, orchestrator: null }));
+    assert.match(ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: handedOffStore },
+      React.createElement(TeamStep, { kind: { type: "stopped", taskId: "t1", reason: "Enough" }, atMs: 9000 }))), /after 6s/);
     Object.assign(globalThis, { document: { documentElement: {} }, getComputedStyle: () => ({ getPropertyValue: () => "" }) });
     const shell = render(React.createElement(ShellBox, { command: "echo done", output: "\n  \r\n  done\n", status: "completed", exit: 0 }));
     assert.match(shell, />  done<\/pre>/);

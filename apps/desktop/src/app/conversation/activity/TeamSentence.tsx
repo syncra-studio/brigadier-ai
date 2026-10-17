@@ -161,13 +161,13 @@ const Quiet: FC<{ children: ReactNode }> = ({ children }) => (
 );
 
 /** A row of the lead managing its team: "Messaged Thread rows", "Stopped Fix uploads"; it opens to what it said. */
-export const TeamStep: FC<{ kind: TeamStepKind }> = ({ kind }) => {
+export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = ({ kind, atMs }) => {
+  // How long the worker had run when it was stopped: its attempts up to the step's own time, so
+  // a later restart or handoff never changes what this row says.
   const stoppedMs = useBoard((s) => {
-    if (kind.type !== "stopped") return 0;
-    const task = s.board?.tasks[kind.taskId];
-    const attempt = task?.attempts.at(-1);
-    return attempt?.endedAtMs != null ? attempt.endedAtMs - attempt.startedAtMs
-      : task?.state === "stopped" && attempt ? task.updatedAtMs - attempt.startedAtMs : 0;
+    if (kind.type !== "stopped" || atMs === undefined) return 0;
+    const attempts = s.board?.tasks[kind.taskId]?.attempts ?? [];
+    return attempts.reduce((sum, a) => (a.startedAtMs < atMs ? sum + Math.min(a.endedAtMs ?? atMs, atMs) - a.startedAtMs : sum), 0);
   });
   let icon: ReactNode;
   let line: ReactNode;
