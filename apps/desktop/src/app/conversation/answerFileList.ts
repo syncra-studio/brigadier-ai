@@ -3,11 +3,12 @@ import type { ArtifactRef, Task } from "@/ipc/generated";
 import { fileNameOf } from "@/app/conversation/FileList";
 
 /**
- * The files a finished request's workers left in their outputs folders, offered with Save under
- * its answer (BUILD-PLAN A2): one per file name, the latest task's copy, in the order the tasks
- * started. A file the answer links by its destination name or link label somewhere else
- * (the thread's corrected copy in its workspace, BUILD-PLAN A6) replaces it: the link is the
- * deliverable, so the
+ * The files a finished request's answer hands over, offered with Save under it (BUILD-PLAN A2):
+ * the stored outputs of its workers that the answer links (`outputs/notes.md`, or the path in a
+ * worker's scratch folder), one per file name, the latest task's copy, in the order the tasks
+ * started. The rest of the workers' outputs (screenshots, scripts, notes) stay on their task
+ * cards (#218). A file the answer also links by its destination name or link label somewhere
+ * else (the thread's corrected copy in its workspace, BUILD-PLAN A6) is the deliverable, so the
  * worker's original isn't offered as if it were.
  */
 export function answerFiles(tasks: readonly Task[], requestIds: readonly string[], answer = ""): ArtifactRef[] {
@@ -24,15 +25,17 @@ export function answerFiles(tasks: readonly Task[], requestIds: readonly string[
     }
   }
   const scratch = ordered.flatMap((task) => (task.workspace?.scratch ? [task.workspace.scratch.replace(/\/$/, "")] : []));
-  const corrected = new Set(correctedNames(answer, scratch));
-  return [...byName.entries()].filter(([name]) => !corrected.has(name)).map(([, output]) => output);
+  const { linked, corrected } = linkedNames(answer, scratch);
+  return [...byName.entries()].filter(([name]) => linked.has(name) && !corrected.has(name)).map(([, output]) => output);
 }
 
 /**
- * The destination names and original-file labels `answer` links outside the workers' scratch folders: a link to `outputs/…` or
- * into a scratch folder names the stored output itself, any other file link a copy of its own.
+ * What `answer` links: `linked`, the stored outputs' names (a link to `outputs/…` or into a
+ * worker's outputs folder); `corrected`, the destination names and original-file labels of the
+ * file links elsewhere, each a copy of its own.
  */
-function correctedNames(answer: string, scratch: readonly string[]): string[] {
+function linkedNames(answer: string, scratch: readonly string[]): { linked: Set<string>; corrected: Set<string> } {
+  const linked = new Set<string>();
   const names: string[] = [];
   for (const [, label, angled, plain] of answer.matchAll(/(?:\[([^\]\n]+))?\]\((?:<([^>\n]+)>|([^\s)]+))\)/g)) {
     const href = angled ?? plain;
@@ -44,7 +47,13 @@ function correctedNames(answer: string, scratch: readonly string[]): string[] {
       // Keep it as written.
     }
     path = path.replace(/(?::|#L)\d+(?:[-:]L?\d+)?$/, "");
-    if (path.startsWith("#") || /^(?:\.\/)?outputs\//.test(path)) continue;
+    if (path.startsWith("#")) continue;
+    const stored = /^(?:\.\/)?outputs\/(.+)$/.exec(path)?.[1]
+      ?? scratch.flatMap((root) => (path.startsWith(`${root}/outputs/`) ? [path.slice(root.length + 9)] : []))[0];
+    if (stored !== undefined) {
+      linked.add(stored);
+      continue;
+    }
     if (scratch.some((root) => path === root || path.startsWith(`${root}/`))) continue;
     const name = path.split("/").pop();
     if (name) names.push(name);
@@ -56,7 +65,7 @@ function correctedNames(answer: string, scratch: readonly string[]): string[] {
       if (original && extension(original) === extension(name)) names.push(original);
     }
   }
-  return names;
+  return { linked, corrected: new Set(names) };
 }
 
 /** ".md" of "rates.md", lower-cased; "" for a name without one. */

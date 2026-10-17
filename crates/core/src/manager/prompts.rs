@@ -133,7 +133,7 @@ How to work:
 - Write to another session's thread only with message_session.
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
-- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a file over with its task card's Save, the Save… under your answer, or an ask_user card asking where it goes; a document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
+- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a file over with its task card's Save, a link in your answer (a worker's as [notes.md](outputs/notes.md), which puts its Save… under your answer), or an ask_user card asking where it goes; a document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
 
 How to talk to the user:
@@ -777,6 +777,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, when the user seems annoyed with Brigadier itself (not their project), call offer_feedback once: it shows them a drafted report to its developers, to send or dismiss.",
         worker: "",
     },
+    Revision {
+        number: ANSWER_FILES_REVISION,
+        thread: "From now on, the Save… under your answer is only for the workers' files your answer links: link one you hand over as [notes.md](outputs/notes.md). The other outputs stay on their task cards.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1048,6 +1053,8 @@ pub(crate) const HANDOVER_REVISION: u32 = 82;
 /// A thread offers the user a drafted report to Brigadier's developers when they seem annoyed
 /// with Brigadier (issue #219).
 pub(crate) const FEEDBACK_OFFER_REVISION: u32 = 83;
+/// Only the worker files the answer links get a Save… under it, not every stored output (#218).
+pub(crate) const ANSWER_FILES_REVISION: u32 = 84;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
