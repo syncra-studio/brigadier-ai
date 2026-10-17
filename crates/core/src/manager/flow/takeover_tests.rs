@@ -419,11 +419,20 @@ async fn stop_archive_and_delete_end_the_terminal_without_handing_back() {
             .await
             .unwrap();
         let specs = worker_specs(&flow).len();
-        // The process ends on its own as the user's Stop comes.
+        // The process ends on its own as the user's Stop comes: once the Stop holds the
+        // terminal's reservation (one that ended before the Stop began is handed back first).
         let ending = {
             let host = host.clone();
             let terminal = opened.terminal_id.clone();
-            tokio::spawn(async move { host.exit(&terminal) })
+            let live = flow.manager.existing_task_live(&id).unwrap();
+            tokio::spawn(async move {
+                while live.takeover.try_lock().is_ok()
+                    && !host.terminated.lock().unwrap().contains(&terminal)
+                {
+                    tokio::task::yield_now().await;
+                }
+                host.exit(&terminal);
+            })
         };
         match how {
             "stop" => flow.manager.stop_task(id.clone()).await.unwrap(),
