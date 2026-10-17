@@ -9,6 +9,7 @@ import { ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import type { OrchestratorStepKind, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
+import { formatDuration } from "@/lib/format";
 import { useBoard } from "@/state/board";
 
 /**
@@ -22,10 +23,10 @@ import { useBoard } from "@/state/board";
  * A worker's name as a button that opens its thread, with its glyph unless the sentence shows
  * the glyphs up front. The one way a worker is named in the thread, the live line and the strip.
  */
-export const WorkerName: FC<{ taskId: string; glyph?: boolean }> = ({ taskId, glyph = true }) => {
+export const WorkerName: FC<{ taskId: string; glyph?: boolean; suffix?: string }> = ({ taskId, glyph = true, suffix = "" }) => {
   const { setPanel } = useContext(AgentsPanelContext);
   const name = useWorkerName(taskId);
-  if (name === null) return <span className="shrink-0">a worker</span>;
+  if (name === null) return <span className="shrink-0">{`a worker${suffix}`}</span>;
   return (
     <button
       type="button"
@@ -38,21 +39,21 @@ export const WorkerName: FC<{ taskId: string; glyph?: boolean }> = ({ taskId, gl
       className="text-foreground/90 hover:text-foreground rounded-control inline-flex max-w-full min-w-0 items-center gap-1 align-bottom"
     >
       {glyph && <WorkerGlyph taskId={taskId} className="size-icon-xs shrink-0" />}
-      <span className="min-w-0 truncate">{name}</span>
+      <span className="min-w-0 truncate">{name + suffix}</span>
     </button>
   );
 };
 
 /** "A", "A and B", "A, B and C"; past three, "A, B and 4 more", the more opening the Workers list. */
-export const Names: FC<{ taskIds: readonly string[]; glyph?: boolean }> = ({ taskIds, glyph = false }) => {
+export const Names: FC<{ taskIds: readonly string[]; glyph?: boolean; suffix?: string }> = ({ taskIds, glyph = false, suffix = "" }) => {
   const { setPanel } = useContext(AgentsPanelContext);
   const named = taskIds.length > 3 ? taskIds.slice(0, 2) : taskIds;
   const more = taskIds.length - named.length;
-  const parts: ReactNode[] = named.map((id) => <WorkerName key={id} taskId={id} glyph={glyph} />);
+  const parts: ReactNode[] = named.map((id, index) => <WorkerName key={id} taskId={id} glyph={glyph} suffix={more === 0 && index === named.length - 1 ? suffix : ""} />);
   if (more > 0) {
     parts.push(
       <button key="more" type="button" className="hover:text-foreground rounded-control" onClick={() => setPanel(null)}>
-        {more} more
+        {`${more} more${suffix}`}
       </button>,
     );
   }
@@ -155,15 +156,19 @@ export function isTeamStep(kind: { type: string }): kind is TeamStepKind {
   return ["messaged", "answered", "stopped", "landed", "reviewed"].includes(kind.type);
 }
 
-/** "’s change", following a name closely. */
-const Possessive: FC<{ many: boolean }> = ({ many }) => <span className="-ms-1 shrink-0">{many ? "’ changes" : "’s change"}</span>;
-
 const Quiet: FC<{ children: ReactNode }> = ({ children }) => (
   <p className="bg-code-surface rounded-control text-foreground/80 max-h-60 overflow-y-auto px-3 py-2 whitespace-pre-wrap">{children}</p>
 );
 
 /** A row of the lead managing its team: "Messaged Thread rows", "Stopped Fix uploads"; it opens to what it said. */
-export const TeamStep: FC<{ kind: TeamStepKind }> = ({ kind }) => {
+export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = ({ kind, atMs }) => {
+  // How long the worker had run when it was stopped: its attempts up to the step's own time, so
+  // a later restart or handoff never changes what this row says.
+  const stoppedMs = useBoard((s) => {
+    if (kind.type !== "stopped" || atMs === undefined) return 0;
+    const attempts = s.board?.tasks[kind.taskId]?.attempts ?? [];
+    return attempts.reduce((sum, a) => (a.startedAtMs < atMs ? sum + Math.min(a.endedAtMs ?? atMs, atMs) - a.startedAtMs : sum), 0);
+  });
   let icon: ReactNode;
   let line: ReactNode;
   let detail: ReactNode = undefined;
@@ -177,8 +182,7 @@ export const TeamStep: FC<{ kind: TeamStepKind }> = ({ kind }) => {
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
       line = (
         <>
-          Answered <WorkerName taskId={kind.taskId} glyph={false} />
-          <span className="-ms-1 shrink-0">’s question</span>
+          Answered <WorkerName taskId={kind.taskId} glyph={false} suffix="’s question" />
         </>
       );
       detail = (
@@ -202,7 +206,7 @@ export const TeamStep: FC<{ kind: TeamStepKind }> = ({ kind }) => {
       break;
     case "stopped":
       icon = <StopCircle aria-hidden className="size-4 shrink-0" />;
-      line = <>Stopped <WorkerName taskId={kind.taskId} glyph={false} /></>;
+      line = <>Stopped <WorkerName taskId={kind.taskId} glyph={false} />{stoppedMs >= 1000 && ` after ${formatDuration(stoppedMs)}`}</>;
       detail = kind.reason ? <Quiet>{kind.reason}</Quiet> : undefined;
       break;
     case "landed":
@@ -210,8 +214,7 @@ export const TeamStep: FC<{ kind: TeamStepKind }> = ({ kind }) => {
       line =
         kind.taskIds.length > 0 ? (
           <>
-            Landed <Names taskIds={kind.taskIds} />
-            <Possessive many={kind.taskIds.length > 1} />
+            Landed <Names taskIds={kind.taskIds} suffix={kind.taskIds.length > 1 ? "’ changes" : "’s change"} />
           </>
         ) : (
           <>Landed the changes</>
@@ -226,8 +229,7 @@ export const TeamStep: FC<{ kind: TeamStepKind }> = ({ kind }) => {
       icon = <CheckCircle aria-hidden className="size-4 shrink-0" />;
       line = (
         <>
-          Reviewed <Names taskIds={kind.taskIds} />
-          <Possessive many={kind.taskIds.length > 1} />
+          Reviewed <Names taskIds={kind.taskIds} suffix={kind.taskIds.length > 1 ? "’ changes" : "’s change"} />
         </>
       );
       detail = <span>{kind.findings === 0 ? "No findings" : kind.findings === 1 ? "1 finding" : `${kind.findings} findings`}</span>;

@@ -295,12 +295,16 @@ export function WorkerThread({ task }: { task: Task }) {
   const last = visibleEntries.at(-1);
   // A thought with no words yet is the live line's "Thinking".
   const thinking = working && last?.kind === "item" && last.item.kind === "reasoning" && last.item.streaming && last.item.text.trim() ? last.item : null;
+  const now = working ? liveLabel(entries) : null;
+  // The newest group's own row says the live line, one step or several, as the lead's thread does.
+  const nowInGroup = !!now && activity.at(-1)?.type === "group";
   const show = (item: (typeof activity)[number], index: number) =>
     item.type === "group" ? (
       <ActivityGroup
         key={`group:${item.key}`}
         items={item.items}
         live={working && index === activity.length - 1}
+        liveLabel={now && nowInGroup && index === activity.length - 1 ? { text: now, tone: "busy" } : null}
         describe={(step) => {
           const call = itemCall(step);
           return { words: stepWords(call), status: call.status, exit: exitOf(step) };
@@ -331,7 +335,6 @@ export function WorkerThread({ task }: { task: Task }) {
     if (pinned.current) element.scrollTop = element.scrollHeight;
   }, [entries, working]);
 
-  const now = working ? liveLabel(entries) : null;
   return (
     <div
       ref={scrollRef}
@@ -368,7 +371,7 @@ export function WorkerThread({ task }: { task: Task }) {
         )}
         {recent.map((item, index) => show(item, previous.length + index))}
         {thinking && <ThinkingLine text={thinking.text} />}
-        {now && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}
+        {now && !nowInGroup && <div className="shimmer truncate text-sm motion-reduce:animate-none">{now}</div>}
         {!working && !workerDone(task) && <p className="text-foreground/65 text-sm">{workerPreview(task)}</p>}
         <Answer task={task} text={finalReply} />
         {task.error && <p className="text-destructive text-sm">{task.error}</p>}

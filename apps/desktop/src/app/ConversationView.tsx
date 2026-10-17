@@ -902,7 +902,7 @@ export function ConversationView({
                                 {summary && <PinnedSummary conversation={conversation} />}
                                 {conversation?.kind === "session" && <WorkerDiffs conversationId={conversation.id} />}
                                 <Thread
-                                  components={THREAD_COMPONENTS}
+                                  components={embedded ? EMBEDDED_THREAD_COMPONENTS : THREAD_COMPONENTS}
                                   // One placeholder, in every conversation.
                                   placeholder="Do anything"
                                   scrollKey={conversation?.id}
@@ -1195,3 +1195,5 @@ const THREAD_COMPONENTS: ThreadComponents = {
   PeerMessage: PeerUserMessage,
   Find: ThreadFind,
 };
+
+const EMBEDDED_THREAD_COMPONENTS: ThreadComponents = { ...THREAD_COMPONENTS, Find: undefined };

@@ -380,6 +380,7 @@
   /* The page's find bar: 340 wide, a 44 high row. */
   --spacing-browser-find: 21.25rem;
   --spacing-browser-find-row: 2.75rem;
+  --spacing-thread-find-top: calc(var(--spacing-browser-find-row) + 1.5rem);
   /* Find in the chat's bar: 384 wide, never more than 70% of the window. */
   --spacing-thread-find: 24rem;
   --container-thread-find-max: 70vw;
