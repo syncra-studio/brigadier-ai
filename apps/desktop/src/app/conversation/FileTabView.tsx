@@ -18,6 +18,7 @@ import {
   useState,
 } from "react";
 
+import { FileReviewBar, FileReviewBody, useFileReview } from "@/app/conversation/FileReview";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -37,7 +38,8 @@ import { onWorkspaceChanged } from "@/state/workspaceCache";
 /**
  * A file tab: one of the session checkout's files, read only, with its line numbers and
  * colours, ⌘F to find in it and ⌃G to go to a line. It reads the file again each time it
- * comes to the front.
+ * comes to the front. While agents' changes to it wait for review, it shows them inline to
+ * keep or undo (`FileReview`).
  */
 
 /** Matches marked at most; past that, finding says so. */
@@ -118,6 +120,7 @@ export function FileTabView({
     };
   }, [active, conversationId]);
   const read = useFile(conversationId, tab.path, again);
+  const review = useFileReview(conversationId, tab.path, again, active);
   const { isCopied, copyToClipboard } = useCopyToClipboard();
   const mac = useApp((s) => s.info?.platform === "macos");
   const absolute = root ? `${root.replace(/\/$/, "")}/${tab.path}` : tab.path;
@@ -130,7 +133,11 @@ export function FileTabView({
           <span className="font-medium">{baseName(tab.path)}</span>
           {dirName(tab.path) && <span className="text-muted-foreground"> {dirName(tab.path)}</span>}
         </h2>
-        {file && <span className="text-muted-foreground shrink-0 text-xs">{formatBytes(file.size)}</span>}
+        {review.shown ? (
+          <FileReviewBar review={review} />
+        ) : (
+          file && <span className="text-muted-foreground shrink-0 text-xs">{formatBytes(file.size)}</span>
+        )}
         <TooltipIconButton
           tooltip={isCopied ? "Copied" : "Copy path"}
           size="icon-sm"
@@ -151,7 +158,9 @@ export function FileTabView({
           <FolderOpen />
         </TooltipIconButton>
       </header>
-      {read.state === "gone" ? (
+      {review.file ? (
+        <FileReviewBody review={review} />
+      ) : read.state === "gone" ? (
         <p className="text-muted-foreground m-auto p-4 text-sm">This file was deleted or moved</p>
       ) : read.state === "failed" ? (
         <p role="alert" className="text-destructive p-4 text-sm">

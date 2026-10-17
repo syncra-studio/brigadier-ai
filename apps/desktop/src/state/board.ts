@@ -180,7 +180,7 @@ useBoard.getState = mainBoard.getState;
 useBoard.setState = mainBoard.setState;
 useBoard.subscribe = mainBoard.subscribe;
 
-/** Something about the board that changes the checkout: a landing, an Undo or Reapply. */
+/** Something about the board that changes the checkout: a landing, an Undo or Reapply, a review. */
 export function useCheckoutChanges(conversationId: string): string {
   return useBoard((s) => {
     const board = s.board;
@@ -191,7 +191,11 @@ export function useCheckoutChanges(conversationId: string): string {
     const undone = Object.values(board.requests)
       .map((entry) => entry.undo?.commits.at(-1) ?? "")
       .join();
-    return `${landed}|${undone}`;
+    // A review's Undo puts lines back; its Keep moves what is left to review.
+    const reviewed = Object.values(board.requests)
+      .map((entry) => Object.entries(entry.review ?? {}).join())
+      .join("|");
+    return `${landed}|${undone}|${reviewed}`;
   });
 }
 

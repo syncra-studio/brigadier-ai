@@ -15,13 +15,14 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import type { DiffStat, FileStat, HeldPath, ReviewDiff } from "@/ipc/generated";
+import type { DiffStat, FileReview, FileStat, HeldPath, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { filePatch } from "@/lib/patch";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
+import { keepChanges, undoChanges } from "@/state/pendingChanges";
 import { setReviewScope } from "@/state/review";
-import { openReviewTab } from "@/state/sessionTabs";
+import { openFileTab, openReviewTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 
 /** The files listed before "Show {n} more files". */
@@ -175,6 +176,45 @@ const FileRow: FC<{
   );
 };
 
+/** Where the review left a file, as its row says it. */
+const REVIEWED: Record<Exclude<FileReview, "pending">, string> = { later: "Changed later", kept: "Kept", undone: "Undone" };
+
+/**
+ * One changed file of a reviewed turn: a row that opens the file's tab (its review while it
+ * waits), with Undo and Keep on hover while it waits, and where the review left it once it
+ * doesn't.
+ */
+const ReviewRow: FC<{
+  file: FileStat;
+  state: FileReview | undefined;
+  busy: boolean;
+  onOpen: () => void;
+  onAct: (what: "keep" | "undo") => void;
+}> = ({ file, state, busy, onOpen, onAct }) => (
+  <li data-slot="turn-diff-file" data-review={state} className="group/file hover:bg-foreground/5 flex h-9 items-center gap-2 px-3 text-sm transition-colors">
+    <button type="button" onClick={onOpen} className={cn("flex min-w-0 flex-1 items-center text-start", state !== "pending" && "opacity-60")}>
+      <PathWords path={file.path} />
+    </button>
+    {state === "pending" ? (
+      <span className="hidden shrink-0 items-center gap-1 group-hover/file:flex group-focus-within/file:flex">
+        <Button size="xs" variant="ghost" className="font-normal" disabled={busy} onClick={() => onAct("undo")}>
+          Undo
+        </Button>
+        <Button size="xs" variant="ghost" className="font-normal" disabled={busy} onClick={() => onAct("keep")}>
+          Keep
+        </Button>
+      </span>
+    ) : (
+      state && <span data-slot="turn-diff-reviewed" className="text-muted-foreground shrink-0 text-xs">{REVIEWED[state]}</span>
+    )}
+    {file.binary ? (
+      <span className="text-muted-foreground text-xs">binary</span>
+    ) : (
+      <Counts insertions={file.insertions} deletions={file.deletions} />
+    )}
+  </li>
+);
+
 /**
  * The card under a finished turn's answer: "Edited 3 files" (or the one file's name) over
  * "+a −d", which says "View changes ↗" while hovered, then Undo (where one request's changes can
@@ -208,6 +248,10 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
   const reverts = useBoard(
     useShallow((s) => requests.map((id) => s.board?.requests[id]?.undo?.reverted ?? false)),
   );
+  // Where the review left each file, the turn's latest request that changed it deciding.
+  const reviews = useBoard(useShallow((s) => requests.map((id) => s.board?.requests[id]?.review)));
+  const review: Record<string, FileReview> = Object.assign({}, ...reviews.map((each) => each ?? {}));
+  const reviewing = Object.keys(review).length > 0;
   const reverted = reverts.length > 0 && reverts.every(Boolean);
   // Undo takes back one request's changes whole: a turn of several requests (whose undos would
   // clash on a file both changed) has none, nor an old landing straight onto the branch (no candidate).
@@ -243,7 +287,7 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
   if (!diff || !conversationId || first === undefined) return null;
 
   // The Changes tab shows one request: the turn's first that landed.
-  const review = () => {
+  const openChanges = () => {
     setReviewScope(conversationId, { type: "lastTurn", requestId: first });
     openReviewTab(conversationId, { type: "all" });
   };
@@ -256,6 +300,18 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
   const title = one ? `Edited ${one}` : `Edited ${diff.files.length} files`;
   const shown = all ? diff.files : diff.files.slice(0, FIRST_FILES);
   const more = diff.files.length - FIRST_FILES;
+  const waiting = diff.files.filter((file) => review[file.path] === "pending").map((file) => file.path);
+  const tally = (state: FileReview) => Object.values(review).filter((each) => each === state).length;
+  // Undo All and Keep All take this card's files that wait, one after another.
+  const each = (what: "keep" | "undo", paths: readonly string[]) => {
+    setBusy(true);
+    void paths
+      .reduce<Promise<boolean>>(
+        (before, path) => before.then((ok) => ok && (what === "keep" ? keepChanges(conversationId, path) : undoChanges(conversationId, path))),
+        Promise.resolve(true),
+      )
+      .finally(() => setBusy(false));
+  };
   const toggle = () => {
     setBusy(true);
     // Undo goes newest first; Reapply oldest first.
@@ -294,7 +350,7 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
         <button
           type="button"
           aria-label="View changed files"
-          onClick={review}
+          onClick={reviewing ? () => openFileTab(conversationId, waiting[0] ?? diff.files[0]!.path) : openChanges}
           className="flex min-w-0 flex-1 items-center gap-3 text-start"
         >
           <span className="bg-foreground/5 text-foreground rounded-control flex size-control-lg shrink-0 items-center justify-center">
@@ -305,20 +361,46 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
               data-slot="turn-diff-title"
               className="text-foreground truncate text-sm font-medium"
             >
-              {title}
+              {reviewing && waiting.length > 0 ? `${diff.files.length} ${diff.files.length === 1 ? "File" : "Files"}` : title}
             </span>
-            <Counts
-              insertions={diff.insertions}
-              deletions={diff.deletions}
-              className="text-xs group-hover/diff:hidden"
-            />
-            <span className="text-muted-foreground hidden items-center gap-0.5 text-xs group-hover/diff:flex">
-              View changes
-              <ArrowUpRight className="size-icon-xs" />
-            </span>
+            {reviewing ? (
+              <span className="text-xs">
+                <Counts insertions={diff.insertions} deletions={diff.deletions} />
+                <span data-slot="turn-diff-review" className="text-muted-foreground">
+                  {waiting.length > 0
+                    ? ` · ${waiting.length} to review`
+                    : ` · ${[tally("kept") > 0 && `kept ${tally("kept")}`, tally("undone") > 0 && `undid ${tally("undone")}`].filter(Boolean).join(", ")}`}
+                </span>
+              </span>
+            ) : (
+              <>
+                <Counts
+                  insertions={diff.insertions}
+                  deletions={diff.deletions}
+                  className="text-xs group-hover/diff:hidden"
+                />
+                <span className="text-muted-foreground hidden items-center gap-0.5 text-xs group-hover/diff:flex">
+                  View changes
+                  <ArrowUpRight className="size-icon-xs" />
+                </span>
+              </>
+            )}
           </span>
         </button>
-        {undoable && <Button
+        {reviewing && waiting.length > 0 && (
+          <>
+            <Button variant="ghost" size="sm" disabled={busy} aria-busy={busy || undefined} onClick={() => each("undo", waiting)} className="text-foreground font-normal">
+              Undo All
+            </Button>
+            <Button size="sm" disabled={busy} onClick={() => each("keep", waiting)} className="font-normal">
+              Keep All
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => openFileTab(conversationId, waiting[0]!)} className="border-border border font-normal">
+              Review Changes
+            </Button>
+          </>
+        )}
+        {!reviewing && undoable && <Button
           variant="ghost"
           size="sm"
           data-held={held.length || undefined}
@@ -337,26 +419,39 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
             <ArrowRotateCcw className="size-icon-sm" />
           )}
         </Button>}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={review}
-          className="border-border border font-normal"
-        >
-          View changes
-        </Button>
+        {!reviewing && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={openChanges}
+            className="border-border border font-normal"
+          >
+            View changes
+          </Button>
+        )}
       </div>
       {!one && (
         <ul className="border-border border-t">
-          {shown.map((file) => (
-            <FileRow
-              key={file.path}
-              file={file}
-              open={opened.has(file.path)}
-              onToggle={() => flip(file.path)}
-              patch={fetched}
-            />
-          ))}
+          {shown.map((file) =>
+            reviewing ? (
+              <ReviewRow
+                key={file.path}
+                file={file}
+                state={review[file.path]}
+                busy={busy}
+                onOpen={() => openFileTab(conversationId, file.path)}
+                onAct={(what) => each(what, [file.path])}
+              />
+            ) : (
+              <FileRow
+                key={file.path}
+                file={file}
+                open={opened.has(file.path)}
+                onToggle={() => flip(file.path)}
+                patch={fetched}
+              />
+            ),
+          )}
           {more > 0 && (
             <li>
               <button

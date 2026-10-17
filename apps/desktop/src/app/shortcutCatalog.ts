@@ -160,6 +160,11 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "zoom-out", name: "Zoom out", line: "Make the web page smaller", area: "Files and browser", keys: ["⌘-"], menu: "zoom-out" },
   { id: "zoom-reset", name: "Actual size", line: "Show the web page at 100%", area: "Files and browser", keys: ["⌘0"], menu: "zoom-reset" },
   { id: "commit", name: "Commit", line: "Commit with the message typed", area: "Files and browser", keys: ["⌘⏎"] },
+  { id: "review-keep", name: "Keep change", line: "Keep the change in view of the file under review", area: "Files and browser", keys: ["⌘Y"] },
+  { id: "review-undo", name: "Undo change", line: "Undo the change in view of the file under review", area: "Files and browser", keys: ["⌘N"] },
+  { id: "review-keep-file", name: "Keep file", line: "Keep every change of the file under review", area: "Files and browser", keys: ["⌘⏎"] },
+  { id: "review-next-file", name: "Next file to review", line: "Open the next file with changes to review", area: "Files and browser", keys: ["⌥L"] },
+  { id: "review-previous-file", name: "Previous file to review", line: "Open the previous file with changes to review", area: "Files and browser", keys: ["⌥H"] },
 ];
 
 /**
