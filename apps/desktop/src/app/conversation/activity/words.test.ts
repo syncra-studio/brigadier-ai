@@ -271,6 +271,7 @@ test("Brigadier's own tools read in plain words, never as their internal names",
   assert.equal(done("record_findings"), "Wrote down its findings");
   assert.equal(done("approve_outline"), "Checked a worker’s outline");
   assert.equal(done("watch_ci"), "Watched CI");
+  assert.equal(done("store_output"), "Kept a file for you");
   // A web search's site operator reads after a bar.
   assert.equal(stepWords({ name: "WebSearch", detail: "node lts site:nodejs.org", status: "completed" }).done, "Searched the web for node lts | nodejs.org");
 });

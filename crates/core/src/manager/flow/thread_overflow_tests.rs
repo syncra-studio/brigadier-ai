@@ -16,8 +16,8 @@ use crate::knowledge::RebirthTrigger;
 use crate::manager::fault::{FaultKey, InjectedError};
 use crate::manager::prompts::{
     ANSWER_DETAILS_REVISION, ANSWER_FILES_REVISION, COMMIT_FIRST_REVISION, LEAN_TOOLS_REVISION,
-    OVERFLOW_REVISION, SAVE_ONLY_REVISION, SHORT_START_REVISION, THREAD_STEPS_REVISION,
-    revision_note,
+    OVERFLOW_REVISION, SAVE_ONLY_REVISION, SHORT_START_REVISION, STORED_FIX_REVISION,
+    THREAD_STEPS_REVISION, revision_note,
 };
 use crate::model::{DomainEvent, streams};
 use crate::work::{OrchestratorEntry, RequestState};
@@ -568,6 +568,16 @@ async fn a_session_from_before_save_only_is_told_once() {
     told_once(
         SAVE_ONLY_REVISION,
         "never offer a card to copy it somewhere (Downloads, the Desktop)",
+    )
+    .await;
+}
+
+/// Rule R for keeping a corrected deliverable with store_output (#27).
+#[tokio::test]
+async fn a_session_from_before_stored_fixes_is_told_once() {
+    told_once(
+        STORED_FIX_REVISION,
+        "keep your corrected copy with store_output as that task's output",
     )
     .await;
 }

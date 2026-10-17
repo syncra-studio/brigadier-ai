@@ -515,6 +515,9 @@ impl SessionManager {
                     }
                 ))
             }
+            OrchestratorCall::StoreOutput(args) => {
+                crate::heap(|| self.store_output_tool(id, args)).await
+            }
             OrchestratorCall::QueryBrain(args) => {
                 crate::heap(|| {
                     self.query_brain_tool(

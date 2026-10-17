@@ -19,7 +19,7 @@ use brigadier_providers::redact::Redactor;
 
 use super::{SessionManager, blocking, secrets};
 use crate::ConversationId;
-use crate::tools::ArtifactInput;
+use crate::tools::{ArtifactInput, StoreOutput};
 use crate::work::{ArtifactKind, ArtifactRef, StoredCopy, Task, TaskKind};
 use crate::{Error, Result};
 
@@ -282,6 +282,69 @@ impl SessionManager {
             }
         }
         (stored != task.outputs).then_some(stored)
+    }
+
+    /// `store_output`: a file the thread wrote kept as a task's output under its file name, in
+    /// place of the task's output of that name, so an `outputs/<name>` link opens it and the
+    /// task card and the answer's Save… save it (issue #27). While the task's outputs folder is
+    /// still there, the file goes in it too, so what the task's end stores keeps it.
+    pub(crate) async fn store_output_tool(
+        &self,
+        id: &ConversationId,
+        args: StoreOutput,
+    ) -> Result<String> {
+        let task = self.find_task(id, &args.task).await?;
+        let base = match self.effective_workspace(id).await {
+            Ok(Some(workspace)) => workspace.path,
+            _ => std::env::temp_dir(),
+        };
+        let path = super::reads::absolute(&base, args.path.trim());
+        let size = {
+            let path = path.clone();
+            blocking(move || std::fs::metadata(&path).map_err(|err| io_error(&path, err))).await?
+        };
+        if !size.is_file() {
+            return Err(Error::Invalid(format!("{} is not a file", path.display())));
+        }
+        if size.len() > FILE_MAX_BYTES {
+            return Err(Error::Invalid(format!(
+                "{} is larger than 8 MB; store a smaller file",
+                path.display()
+            )));
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .ok_or_else(|| Error::Invalid(format!("{} has no file name", path.display())))?;
+        let redactor = self.task_redactor(&task).await;
+        let artifact = self.store_file(&path, name.clone(), &redactor).await?;
+        if let Some(workspace) = &task.workspace {
+            let outputs = outputs_dir(Path::new(&workspace.scratch));
+            if outputs.is_dir() {
+                let bytes = self.artifact_bytes(&artifact.id).await?;
+                let name = name.clone();
+                blocking(move || write_unfollowed(&outputs, &name, &bytes)).await?;
+            }
+        }
+        let replaced = task
+            .outputs
+            .iter()
+            .any(|output| output.file_name.as_deref() == Some(name.as_str()));
+        self.update_task(id, &task.id, |task| {
+            task.outputs
+                .retain(|output| output.file_name.as_deref() != Some(name.as_str()));
+            task.outputs.push(artifact);
+        })
+        .await?;
+        Ok(format!(
+            "Kept {name} as task-{}'s output{}. Link it as [{name}](outputs/{name}): the user opens and saves it from there and from the task card.",
+            task.number,
+            if replaced {
+                ", in place of the worker's"
+            } else {
+                ""
+            }
+        ))
     }
 
     /// Copies an image a Codex worker generated into its outputs folder.

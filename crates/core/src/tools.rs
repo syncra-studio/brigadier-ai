@@ -285,6 +285,18 @@ pub struct StopWorker {
     pub reason: String,
 }
 
+/// `store_output`: keep a file the thread wrote (a corrected copy of a worker's deliverable) as
+/// a task's output.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StoreOutput {
+    /// The task whose output it becomes, e.g. "task-3": the one whose file it corrects.
+    pub task: String,
+    /// The file, by its full path or a path in your workspace. It takes the place of the
+    /// task's output with the same file name.
+    pub path: String,
+}
+
 /// `read_report`: a task of this session, or a report from another session of the project.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1115,6 +1127,7 @@ pub enum OrchestratorCall {
     AskUser(AskUser),
     ReadReport(ReportRef),
     ReadArtifact(ReadArtifact),
+    StoreOutput(StoreOutput),
     QueryBrain(QueryBrain),
     Remember(Remember),
     SearchTranscript(SearchTranscript),
@@ -1169,6 +1182,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "ask_user",
     "read_report",
     "read_artifact",
+    "store_output",
     "query_brain",
     "remember",
     "search_transcript",
@@ -1223,6 +1237,7 @@ impl OrchestratorCall {
             Self::AskUser(_) => "ask_user",
             Self::ReadReport(_) => "read_report",
             Self::ReadArtifact(_) => "read_artifact",
+            Self::StoreOutput(_) => "store_output",
             Self::QueryBrain(_) => "query_brain",
             Self::Remember(_) => "remember",
             Self::SearchTranscript(_) => "search_transcript",

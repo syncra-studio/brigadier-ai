@@ -10,7 +10,7 @@ use brigadier_core::tools::{
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, RecordFindings,
     RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck,
     RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, SettleWait,
-    StartPreview, StopMerge, StopPreview, StopWorker, SubmitOutline, SubmitReport,
+    StartPreview, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
     SuggestFullAccess, TabChatCall, TabTools, TaskRef, ThreadRunCheck, ToolCall, WaitForReplies,
     WorkerCall, WritePage, WriteTabFile,
 };
@@ -94,6 +94,11 @@ continues.";
 const READ_REPORT: &str = "Read a task's final report again: summary, changes, decisions, \
 verification, open questions and artifact ids. A report from another session of this project \
 is read by the task id a Brain answer names.";
+
+const STORE_OUTPUT: &str = "Keep a file you wrote, such as your corrected copy of a worker's \
+deliverable, as that task's output, in place of its output with the same file name. Link it as \
+[name](outputs/name): it opens and saves from there and from the task card, and outlives your \
+workspace and scratch.";
 
 const READ_ARTIFACT: &str = "Read part of an artifact named in a report or a Brain answer (full \
 transcript, diff, command output, note), from any session of this project, by its id. At most 16000 bytes per call, starting at `offset`; the \
@@ -555,6 +560,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             READ_ARTIFACT,
             input_schema::<ReadArtifact>(),
         ),
+        tool("store_output", STORE_OUTPUT, input_schema::<StoreOutput>()),
         tool("query_brain", QUERY_BRAIN, input_schema::<QueryBrain>()),
         tool("remember", REMEMBER, input_schema::<Remember>()),
         tool(
@@ -728,6 +734,10 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
     ("message_worker", "worker"),
     ("answer_worker", "worker question"),
     ("read_report", "worker report"),
+    (
+        "store_output",
+        "corrected file, fixed deliverable, worker output, Save",
+    ),
     ("run", "shell command, long output, background"),
     (
         "offer_feedback",
@@ -895,6 +905,7 @@ pub fn parse_call(
                 "ask_user" => OrchestratorCall::AskUser(args(name, arguments)?),
                 "read_report" => OrchestratorCall::ReadReport(args(name, arguments)?),
                 "read_artifact" => OrchestratorCall::ReadArtifact(args(name, arguments)?),
+                "store_output" => OrchestratorCall::StoreOutput(args(name, arguments)?),
                 "query_brain" => OrchestratorCall::QueryBrain(args(name, arguments)?),
                 "remember" => OrchestratorCall::Remember(args(name, arguments)?),
                 "search_transcript" => {

@@ -133,7 +133,7 @@ How to work:
 - Write to another session's thread only with message_session.
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
-- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer ([notes.md](outputs/notes.md), which puts its Save… under your answer): Save lets the user pick where it goes, so never offer to copy it somewhere. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
+- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer ([notes.md](outputs/notes.md), which puts its Save… under your answer): Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
 
 How to talk to the user:
@@ -141,7 +141,7 @@ How to talk to the user:
 - {LEAD}
 - While work runs, write one line only for: a failure of what you started (what failed, its key error line, what you do about it); work the user didn't ask for, before it starts; and [status due]: what runs and what's left.
 - When the request is done (work, a question or an error explained alike), write one final answer: at most about five short lines of what changed and what to know, and, when a review ran, what it found and what you fixed. Then, if any, one line "To check: …" only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). Then a last heading `### Details`, shown folded, which always holds three labelled lines: `Checks:` each check you ran in this request with its result (or "none run"), `Review:` its state (none for a tiny edit, off, still running, or what it found and what you fixed) and `Not checked:` what nobody checked (or "nothing"). Say code compiles, works or runs only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text.
-- Fix a known defect in a deliverable yourself, with no card (write a fixed copy in your workspace and link its full path), or send it back, before you answer.
+- Fix a known defect in a deliverable yourself, with no card (write a fixed copy; store a worker's with store_output and link it as outputs/<name>, else link its full path), or send it back, before you answer.
 - {LATE_EVENT} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that request: answer about it briefly.{voice}
 - {AUTHORITY}{code_rules}{preferences}"#,
@@ -797,6 +797,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, hand a worker's file over with its task card's Save or a link in your answer: Save lets the user pick where it goes, so never offer a card to copy it somewhere (Downloads, the Desktop). Ask where a file goes only for a document the user asked you to write.",
         worker: "",
     },
+    Revision {
+        number: STORED_FIX_REVISION,
+        thread: "From now on, when you fix a defect in a worker's deliverable, keep your corrected copy with store_output as that task's output (it takes the place of the worker's file of the same name) and link it as [name](outputs/name): it gets the same Save and outlives your workspace.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1081,6 +1086,9 @@ pub(crate) const MERGE_JUDGED_REVISION: u32 = 86;
 /// A worker's file is handed over with its Save only, never with an unasked card offering to
 /// copy it somewhere (issue #43).
 pub(crate) const SAVE_ONLY_REVISION: u32 = 87;
+/// The thread keeps its corrected copy of a worker's deliverable as that task's output with
+/// store_output (issue #27).
+pub(crate) const STORED_FIX_REVISION: u32 = 88;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -3267,9 +3275,10 @@ mod environment_tests {
             assert!(text.contains("at most about five short lines"));
             assert!(text.contains("\"To check: …\""));
             assert!(text.contains("\"You'll need to: …\""));
-            // A6: a known defect is fixed with no card, the fixed copy linked by its full path.
+            // A6: a known defect is fixed with no card; a worker's fixed copy is kept as its
+            // task's output (#27), any other linked by its full path.
             assert!(text.contains("Fix a known defect in a deliverable yourself, with no card"));
-            assert!(text.contains("and link its full path"));
+            assert!(text.contains("else link its full path"));
             assert!(text.contains("`### Details`, shown folded"));
             // Every final answer has them, a question's or an explained error's too (E3).
             assert!(text.contains("(work, a question or an error explained alike)"));
@@ -3501,15 +3510,33 @@ mod environment_tests {
             true,
         );
         assert!(!prompt.contains("or an ask_user card asking where it goes"));
-        assert!(prompt.contains(
-            "Save lets the user pick where it goes, so never offer to copy it somewhere"
-        ));
+        assert!(prompt.contains("Save picks where it goes, so never offer to copy it."));
         assert!(prompt.contains(
             "Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked"
         ));
         let note = revision_note(SAVE_ONLY_REVISION - 1, false).unwrap();
         assert!(note.contains("never offer a card to copy it somewhere (Downloads, the Desktop)"));
         assert!(revision_note(SAVE_ONLY_REVISION - 1, true).is_none());
+    }
+
+    /// A corrected copy of a worker's deliverable is kept as its task's output (issue #27).
+    #[test]
+    fn a_thread_keeps_its_corrected_copy_of_a_deliverable_with_store_output() {
+        let prompt = thread(
+            &session("fullAccess"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Codex,
+            true,
+        );
+        assert!(
+            prompt.contains("store a worker's with store_output and link it as outputs/<name>")
+        );
+        let note = revision_note(STORED_FIX_REVISION - 1, false).unwrap();
+        assert!(note.contains("keep your corrected copy with store_output as that task's output"));
+        assert!(revision_note(STORED_FIX_REVISION - 1, true).is_none());
     }
 
     /// The voice is fixed (BUILD-PLAN §1.4): a thread whose instructions had Short replies off

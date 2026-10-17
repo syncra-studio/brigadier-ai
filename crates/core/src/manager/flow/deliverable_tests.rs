@@ -196,6 +196,115 @@ async fn a_scouts_output_linked_by_its_scratch_path_opens_the_stored_copy_after_
     flow.stop().await;
 }
 
+/// The thread fixes a defect in an ended scout's output (issue #27): store_output keeps its
+/// corrected copy as that task's output in place of the worker's, so `outputs/rounding.md`
+/// opens the fixed file after the scratch folder went, and the card lists it once.
+#[tokio::test]
+async fn the_threads_corrected_copy_of_an_ended_tasks_output_is_kept_in_its_place() {
+    const FIXED: &str =
+        "# Rounding\n\n- round_cents (src/money.ts:14)\n- to_minor (src/money.ts:30)\n";
+    let stored_reply: Arc<Mutex<Option<String>>> = Arc::default();
+    let reply_log = stored_reply.clone();
+    let flow = Flow::start(
+        "deliverable-corrected",
+        Options::default(),
+        script(move |turn| {
+            let reply_log = reply_log.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    if turn.input.contains("List the rounding functions") {
+                        let reply = turn
+                            .call(
+                                "delegate_task",
+                                json!({"effort": "low", "title": "List rounding functions",
+                                       "kind": "scout", "spec": "List them in outputs/rounding.md."}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text(QUIET);
+                    }
+                    if let Some(fixed) = turn.input.lines().find_map(|line| line.strip_prefix("Fix it in ")) {
+                        let fixed = fixed.trim().to_owned();
+                        std::fs::write(&fixed, FIXED).unwrap();
+                        let reply = turn
+                            .call("store_output", json!({"task": "task-1", "path": fixed}))
+                            .await;
+                        *reply_log.lock().unwrap() = Some(format!("{}{}", reply.is_error, reply.text));
+                        return Reply::text("Fixed the line number: [rounding.md](outputs/rounding.md).");
+                    }
+                    return Reply::text(QUIET);
+                }
+                let outputs = outputs_folder(&turn);
+                std::fs::create_dir_all(&outputs).unwrap();
+                std::fs::write(outputs.join("rounding.md"), LIST).unwrap();
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Listed the rounding functions in outputs/rounding.md."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("List the rounding functions.").await;
+    let board = flow
+        .until("the scout to end", |board| {
+            board
+                .tasks
+                .values()
+                .any(|task| task.number == 1 && task.state.is_final())
+        })
+        .await;
+    let task = Flow::task(&board, 1).clone();
+    let scratch = PathBuf::from(&task.workspace.as_ref().unwrap().scratch);
+    flow.settled().await;
+    flow.until("the scratch folder to go", |_| !scratch.exists())
+        .await;
+    let fixed_dir = flow.repo.parent().unwrap().join("thread-fix");
+    std::fs::create_dir_all(&fixed_dir).unwrap();
+    let fixed = fixed_dir.join("rounding.md");
+    flow.say(&format!("Line 12 is wrong.\nFix it in {}", fixed.display()))
+        .await;
+    flow.settled().await;
+
+    let reply = stored_reply
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("store_output ran");
+    assert!(
+        reply.starts_with("false")
+            && reply.contains("Kept rounding.md as task-1's output, in place of the worker's")
+            && reply.contains("[rounding.md](outputs/rounding.md)"),
+        "{reply}"
+    );
+    let board = flow.core.board(&flow.conversation).await.unwrap();
+    let outputs = &Flow::task(&board, 1).outputs;
+    let named: Vec<_> = outputs
+        .iter()
+        .filter(|output| output.file_name.as_deref() == Some("rounding.md"))
+        .collect();
+    assert_eq!(named.len(), 1, "{outputs:#?}");
+    let stored = flow
+        .manager
+        .stored_output(&flow.conversation, "outputs/rounding.md", None)
+        .await
+        .unwrap()
+        .expect("outputs/rounding.md has a stored copy");
+    assert_eq!(stored.task_id, task.id);
+    assert_eq!(stored.artifact.id, named[0].id);
+    let copy = flow
+        .manager
+        .artifact_copy(stored.artifact.id.clone(), "rounding.md".into())
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(copy).unwrap(), FIXED);
+    flow.stop().await;
+}
+
 /// Rule R: a session told the instructions before this change hears revision 30 once, at its
 /// next message, and its workers hear theirs. (Links are resolved when opened, so the test
 /// above covers messages written before the change too.)

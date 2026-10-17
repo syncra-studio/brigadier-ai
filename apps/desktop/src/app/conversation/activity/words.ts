@@ -87,6 +87,7 @@ export function isPlumbing(name: string): boolean {
 /** What `other` calls Brigadier knows are called; anything else is "Used {name}". */
 const OTHER: Record<string, [doing: string, done: string]> = {
   search_transcript: ["Searching earlier messages", "Searched earlier messages"],
+  store_output: ["Keeping a file for you", "Kept a file for you"],
   plan_phases: ["Planning the work", "Planned the work"],
   propose_plan: ["Writing plan", "Wrote a plan"],
   propose_overnight: ["Planning the work", "Planned the work"],

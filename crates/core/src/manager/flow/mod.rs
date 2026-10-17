@@ -340,6 +340,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "stop_worker" => ToolCall::Orchestrator(O::StopWorker(arg(name, args))),
         "ask_user" => ToolCall::Orchestrator(O::AskUser(arg(name, args))),
         "read_report" => ToolCall::Orchestrator(O::ReadReport(arg(name, args))),
+        "store_output" => ToolCall::Orchestrator(O::StoreOutput(arg(name, args))),
         "query_brain" if orchestrator => ToolCall::Orchestrator(O::QueryBrain(arg(name, args))),
         "query_brain" => ToolCall::Worker(W::QueryBrain(arg(name, args))),
         "remember" => ToolCall::Orchestrator(O::Remember(arg(name, args))),

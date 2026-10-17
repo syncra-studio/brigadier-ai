@@ -356,7 +356,7 @@ fn resolve(
 /// the file system has it: by the file system itself for a path that exists, as a `..` after
 /// a symlink leaves the symlink's target, which resolving it by name gets wrong. A leading `~`
 /// is the user's home, as the shell reads it, never a folder named `~` under `base`.
-fn absolute(base: &Path, path: &str) -> PathBuf {
+pub(super) fn absolute(base: &Path, path: &str) -> PathBuf {
     let home = match path.strip_prefix('~') {
         Some(rest) if rest.is_empty() || rest.starts_with('/') => {
             std::env::home_dir().map(|home| home.join(rest.trim_start_matches('/')))
