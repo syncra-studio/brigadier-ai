@@ -529,6 +529,12 @@ async fn a_session_from_before_the_lean_tools_is_told_once() {
         "A try by hand or a one-off script is a shell call of its own, never run_check or part of its command.",
     )
     .await;
+    // The shell stops a command at two minutes, so a longer one still goes through run.
+    told_once(
+        LEAN_TOOLS_REVISION,
+        "your shell stops a command at two minutes, so one that may run longer still goes through run",
+    )
+    .await;
 }
 
 /// A session told the instructions at the revision before `revision` hears its note (which

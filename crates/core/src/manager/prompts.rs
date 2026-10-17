@@ -206,7 +206,7 @@ const CODEX_COMMANDS: &str = "\n- Use @run for builds, tests, logs and long list
 /// whole, a failure's included; where its own shell starts (its CLI runs in its scratch
 /// folder, so a workspace change can resume the same session) and what that shell's long
 /// output looks like (its output hook trims it).
-const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Run builds, tests, logs and listings in your own shell. It starts in a scratch folder: run a command there as `cd <your workspace> && …`. Its output up to 30 KB comes back whole; for a longer one you need whole, @run keeps it behind a `read_artifact out-…` id. Below Full access, run_unsandboxed runs a command the sandbox blocked once it is approved for you.\n- Your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context. A try by hand or a one-off script is a shell call of its own, never run_check or part of its command.";
+const CLAUDE_COMMANDS: &str = "\n- Brigadier's tools are named here as you call them, with their mcp__brigadier__ prefix; one not in your tool list yet loads through ToolSearch by its name.\n- Run builds, tests, logs and listings in your own shell. It starts in a scratch folder: run a command there as `cd <your workspace> && …`. Its output up to 30 KB comes back whole; for a longer one you need whole, @run keeps it behind a `read_artifact out-…` id. Your shell stops a command at two minutes: one that may run longer goes through @run (run_check for a check), which goes on in the background. Below Full access, run_unsandboxed runs a command the sandbox blocked once it is approved for you.\n- Your last edit, any try of it by hand and the run_check that checks it go in one message: they run in order, and each separate call costs a whole turn of context. A try by hand or a one-off script is a shell call of its own, never run_check or part of its command.";
 
 /// Command tools supplied by the CLI when Brigadier has no supported sandbox wrapper.
 const NATIVE_COMMANDS: &str = "\n- Use your own CLI shell for builds, tests, logs and listings. Your shell starts in a scratch folder: change to your workspace before running project commands.";
@@ -745,7 +745,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: LEAN_TOOLS_REVISION,
-        thread: "From now on, on a Claude thread, run builds, tests, logs and listings in your own shell (`cd <your workspace> && …`; output up to 30 KB comes back whole). run leaves your tool list from the start, at your next resume: load it through ToolSearch by its name when you need it. Send a note_for_user in the same message as your last run_check, never in a call of its own. A try by hand or a one-off script is a shell call of its own, never run_check or part of its command.",
+        thread: "From now on, on a Claude thread, run builds, tests, logs and listings in your own shell (`cd <your workspace> && …`; output up to 30 KB comes back whole); your shell stops a command at two minutes, so one that may run longer still goes through run (run_check for a check). run leaves your tool list from the start, at your next resume: load it through ToolSearch by its name when you need it. Send a note_for_user in the same message as your last run_check, never in a call of its own. A try by hand or a one-off script is a shell call of its own, never run_check or part of its command.",
         worker: "",
     },
 ];
@@ -3115,6 +3115,12 @@ mod environment_tests {
         );
         assert_eq!(
             claude.contains("Its output up to 30 KB comes back whole;"),
+            cfg!(target_os = "macos")
+        );
+        // The CLI's shell stops a command at BASH_MAX_TIMEOUT_MS, two minutes: a longer one
+        // goes through run, which moves it to the background.
+        assert_eq!(
+            claude.contains("Your shell stops a command at two minutes: one that may run longer goes through mcp__brigadier__run"),
             cfg!(target_os = "macos")
         );
         assert!(claude.contains("Your workspace: (none yet)"));
