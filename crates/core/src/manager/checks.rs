@@ -1623,7 +1623,7 @@ fn check_root(tree: Option<&Path>, cwd_grant: Option<&Path>, workdir: &Path) -> 
 /// checkout `tree` (see `launch_admitted`): a Codex worker that doesn't write works from its
 /// `scratch` folder, since Codex can't run in a read-only folder. A Claude worker's access is
 /// made for its checkout, and a writing Codex worker starts in it.
-fn cwd_grant(
+pub(super) fn cwd_grant(
     provider: ProviderKind,
     writes: bool,
     tree: Option<&Path>,

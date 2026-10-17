@@ -200,6 +200,31 @@ impl Previews {
     }
 }
 
+/// A worker's `access` for its preview, which may run in another folder than its CLI: the write
+/// its working directory has goes to `root`, the folder its CLI was granted (its checkout, or
+/// its scratch folder when it works from there), as for its checks, never to the preview's.
+fn pinned_access(access: Access, root: &Path) -> Access {
+    match access {
+        Access::Scoped {
+            write_cwd: true,
+            mut writable_roots,
+            network,
+            deny_read,
+            unix_sockets,
+        } => {
+            writable_roots.push(root.to_owned());
+            Access::Scoped {
+                write_cwd: false,
+                writable_roots,
+                network,
+                deny_read,
+                unix_sockets,
+            }
+        }
+        access => access,
+    }
+}
+
 impl SessionManager {
     /// `start_preview`: starts `args.command` in the thread's workspace and answers once it is
     /// running (or has already ended), with its first output.
@@ -253,16 +278,23 @@ impl SessionManager {
             Some(live) => live.tool_access().await,
             None => None,
         }
-        .ok_or_else(|| Error::Invalid("the task's worker isn't running".into()))?
-        .access;
-        let workspace = self
-            .task_by_id(id, task_id)
-            .await?
+        .ok_or_else(|| Error::Invalid("the task's worker isn't running".into()))?;
+        let task = self.task_by_id(id, task_id).await?;
+        let workspace = task
             .workspace
             .ok_or_else(|| Error::Invalid("the task has no folder yet".into()))?;
         let scratch = PathBuf::from(&workspace.scratch);
+        let tree = workspace.worktree.as_ref().map(PathBuf::from);
+        let root = super::checks::cwd_grant(
+            access.provider,
+            task.kind.writes(),
+            tree.as_deref(),
+            &scratch,
+        )
+        .or(tree)
+        .unwrap_or_else(|| scratch.clone());
         let starter = Starter {
-            access,
+            access: pinned_access(access.access, &root),
             workspace: workspace
                 .worktree
                 .map_or_else(|| scratch.clone(), PathBuf::from),
@@ -440,6 +472,8 @@ impl SessionManager {
         let pid = child
             .id()
             .ok_or_else(|| Error::Invalid("the preview ended before it started".into()))?;
+        // A worker's CLI ending sweeps its folder, where its preview runs: spare it till it ends.
+        let spared = brigadier_providers::process::spare(pid);
         let artifact = Artifact::Process {
             pid,
             started_at_ms: platform.processes().start_time_ms(pid).ok(),
@@ -506,6 +540,7 @@ impl SessionManager {
             }
             this.spawn(this.clone().watch_ready(watched.clone()));
             this.watch_preview(watched, child, artifact).await;
+            drop(spared);
         });
         let recorded = recorded_rx.await.unwrap_or_else(|_| {
             Err(Error::Invalid(
@@ -2369,6 +2404,41 @@ fn io_error(path: &Path, err: &std::io::Error) -> Error {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// A worker's preview writes where its CLI may write, never more: a read-only Codex
+    /// worker's CLI may write only its scratch folder (Codex needs a writable working
+    /// directory), so its preview in the checkout can't write the checkout, and a writer's
+    /// preview in a subfolder writes its whole checkout (a build's target folder).
+    #[test]
+    fn a_workers_preview_writes_only_where_its_cli_may() {
+        let (tree, scratch) = (Path::new("/w/checkout"), Path::new("/w/scratch"));
+        let workdir = tree.join("apps/web");
+        let access = Access::Scoped {
+            write_cwd: true,
+            writable_roots: vec![PathBuf::from("/w/tests")],
+            network: false,
+            deny_read: Vec::new(),
+            unix_sockets: Vec::new(),
+        };
+        let writable = |writes: bool| {
+            let root =
+                super::super::checks::cwd_grant(ProviderKind::Codex, writes, Some(tree), scratch)
+                    .unwrap_or_else(|| tree.to_owned());
+            super::super::run::seatbelt_policy(&pinned_access(access.clone(), &root), &workdir)
+                .writable_roots
+        };
+        let reader = writable(false);
+        assert!(reader.contains(&scratch.to_owned()), "{reader:?}");
+        assert!(
+            !reader.iter().any(|root| workdir.starts_with(root)),
+            "{reader:?}"
+        );
+        let writer = writable(true);
+        assert!(writer.contains(&tree.to_owned()), "{writer:?}");
+        // Unpinned, the access would grant whatever folder the preview runs in.
+        let unpinned = super::super::run::seatbelt_policy(&access, &workdir).writable_roots;
+        assert!(unpinned.contains(&workdir), "{unpinned:?}");
+    }
 
     /// A dev app built and launched in one command reads Building while its log shows the
     /// build under way, and no longer once the build finished.

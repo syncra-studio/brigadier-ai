@@ -12,7 +12,7 @@
 //! however it goes, and each group or session leader among them is also recorded in the
 //! cleanup ledger, so the crash sweep finds it after the daemon died.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -35,6 +35,30 @@ const STDERR_TAIL_LINES: usize = 40;
 const REAP_WAIT: Duration = Duration::from_secs(2);
 /// How often the tracker walks the CLI's process tree.
 const TRACK_EVERY: Duration = Duration::from_secs(1);
+
+/// Process groups no CLI's folder sweep ends: the daemon's previews, which a worker starts in
+/// its own folder through Brigadier and which outlive its CLI. Group ids are system-wide, so one
+/// list serves every CLI.
+static SPARED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// Keeps the process group led by a pid, and what runs below that leader, out of every CLI's
+/// folder sweep until dropped.
+pub struct Spared(u32);
+
+/// Spares the process group `leader` leads from folder sweeps while the result is held.
+pub fn spare(leader: u32) -> Spared {
+    lock(&SPARED).push(leader);
+    Spared(leader)
+}
+
+impl Drop for Spared {
+    fn drop(&mut self) {
+        let mut spared = lock(&SPARED);
+        if let Some(at) = spared.iter().position(|leader| *leader == self.0) {
+            spared.swap_remove(at);
+        }
+    }
+}
 
 /// How a CLI process ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,8 +165,8 @@ impl Tree {
     }
 
     /// Kills every process seen that still runs and is still the one seen (same start time),
-    /// with its own tree and group, then whatever still works inside the swept folder. Returns
-    /// how many were running.
+    /// with its own tree and group, then whatever still works inside the swept folder but a
+    /// spared group's ([`spare`]). Returns how many were running.
     fn end_all(&self) -> usize {
         let processes = self.platform.processes();
         let seen: Vec<(u32, Option<f64>)> = lock(&self.seen).drain().collect();
@@ -158,7 +182,19 @@ impl Tree {
         if let Some(dir) = &self.sweep_dir {
             match processes.in_dir(dir) {
                 Ok(pids) => {
+                    let leaders = lock(&SPARED).clone();
+                    let mut spared: HashSet<u32> = leaders.iter().copied().collect();
+                    for leader in &leaders {
+                        spared.extend(processes.descendants(*leader).unwrap_or_default());
+                    }
                     for pid in pids {
+                        if spared.contains(&pid)
+                            || processes
+                                .group_of(pid)
+                                .is_some_and(|group| leaders.contains(&group))
+                        {
+                            continue;
+                        }
                         if let Err(err) = processes.kill_tree(pid) {
                             crate::logging::private_trace!(self.private_logs, debug, "could not end a process in its folder"; pid, error = %err);
                         }
@@ -520,6 +556,53 @@ mod tests {
         assert!(
             ended.is_ok(),
             "sweeping the shared folder should end the other CLI"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A spared group (a worker's preview, run by the daemon in the worker's folder) outlives
+    /// the sweep of that folder when the worker's CLI ends; once no longer spared, it doesn't.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_folder_sweep_spares_a_spared_group() {
+        let root = std::env::temp_dir().join(format!("brigadier-spare-{}", uuid::Uuid::new_v4()));
+        let own = root.join("own");
+        std::fs::create_dir_all(&own).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        let start = |program: &str, arg: Option<&str>, sweep_dir: Option<PathBuf>| {
+            let mut spec = SpawnSpec::new(program);
+            if let Some(arg) = arg {
+                spec = spec.arg(arg);
+            }
+            spec.cwd = Some(own.clone());
+            spawn(
+                platform.clone(),
+                &spec,
+                Options {
+                    sweep_dir,
+                    ..Options::default()
+                },
+            )
+            .unwrap()
+            .process
+        };
+
+        let preview = start("sleep", Some("30"), None);
+        let spared = spare(preview.pid());
+        let cli = start("cat", None, Some(own.clone()));
+        cli.shutdown(Duration::from_secs(5)).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(preview.is_running(), "the sweep ended a spared group");
+
+        drop(spared);
+        let cli = start("cat", None, Some(own.clone()));
+        cli.shutdown(Duration::from_secs(5)).await;
+        let ended = tokio::time::timeout(Duration::from_secs(5), preview.exited()).await;
+        assert!(
+            ended.is_ok(),
+            "the sweep should end a group no longer spared"
         );
         std::fs::remove_dir_all(&root).unwrap();
     }
