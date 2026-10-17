@@ -178,6 +178,56 @@ async fn the_session_diff_counts_commits_whose_sum_changes_nothing() {
     flow.stop().await;
 }
 
+/// #233: the local `main` fell behind GitHub's, and the session merged GitHub's `main` in. Its
+/// size is what it changed since that merge base, its own notes only, not every file
+/// GitHub's `main` gained.
+#[tokio::test]
+async fn the_session_diff_counts_from_the_upstream_it_merged() {
+    let (flow, _log) = session("merge-diff-upstream").await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let (path, branch) = workspace(&flow);
+    let path = path.expect("the worktree");
+    // GitHub's `main` (as last fetched) gains three files the local `main` lacks.
+    let main = git(&flow.repo, &["rev-parse", "main"]);
+    git(
+        &flow.repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/repo.git",
+        ],
+    );
+    git(&flow.repo, &["branch", "upstream-work", &main]);
+    git(&path, &["checkout", "-q", "upstream-work"]);
+    for n in 1..=3 {
+        std::fs::write(path.join(format!("base-{n}.txt")), "base work\n").unwrap();
+    }
+    git(&path, &["add", "-A"]);
+    git(&path, &["commit", "-q", "-m", "Base work"]);
+    let upstream = git(&path, &["rev-parse", "HEAD"]);
+    git(&path, &["checkout", "-q", &branch]);
+    git(
+        &flow.repo,
+        &["update-ref", "refs/remotes/origin/main", &upstream],
+    );
+    git(
+        &flow.repo,
+        &["branch", "--set-upstream-to=origin/main", "main"],
+    );
+    git(&path, &["merge", "-q", "--no-edit", "origin/main"]);
+    let (stat, _) = flow
+        .manager
+        .session_diff_stat(&flow.conversation)
+        .await
+        .unwrap()
+        .expect("a worktree session");
+    let files: Vec<&str> = stat.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(files, ["NOTES.md"], "{stat:?}");
+    flow.stop().await;
+}
+
 /// The click merges, once: it is recorded with where it came from, the thread merges on its
 /// [merge], and a second finish_session on the same click is refused. Nothing was ever put on a
 /// card, and the workspace stays with its branch at the merge.

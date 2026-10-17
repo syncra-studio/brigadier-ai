@@ -2615,3 +2615,100 @@ async fn pending_changes_leave_the_users_later_edits_and_outlast_gc() {
     );
     flow.stop().await;
 }
+
+/// #233: the thread merges the base into its branch with a command. What the merge brings from
+/// the other side is that side's work, not the request's: the request counts its own files
+/// only: a file of its own it deleted alongside the merge, and a topic branch it merged.
+#[tokio::test]
+async fn a_merge_of_the_base_counts_none_of_its_files_as_the_requests() {
+    let flow = Flow::start(
+        "request-changes-merge-in",
+        options(ProviderKind::Claude),
+        script(|turn| async move {
+            if !turn.input.contains("Edit a and merge the base in.") || turn.earlier > 1 {
+                return Reply::text("Finished.");
+            }
+            let id = turn.conversation().unwrap();
+            let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+            edit(
+                &turn,
+                &workspace.join("a.txt"),
+                "edit-a",
+                "base\n",
+                "thread a\n",
+            )
+            .await;
+            observed(&turn, 1).await;
+            git(&workspace, &["commit", "-q", "-am", "Thread edit"]);
+            // A file the other side never had, deleted in the same command as the merge.
+            git(&workspace, &["rm", "-q", "own.txt"]);
+            git(&workspace, &["commit", "-q", "-m", "Drop own"]);
+            // A topic branch of its own, merged in: its file is the request's.
+            let session = git(&workspace, &["branch", "--show-current"]);
+            git(&workspace, &["checkout", "-q", "-b", "topic"]);
+            std::fs::write(workspace.join("topic.txt"), "topic\n").unwrap();
+            git(&workspace, &["add", "topic.txt"]);
+            git(&workspace, &["commit", "-q", "-m", "Topic"]);
+            git(&workspace, &["checkout", "-q", &session]);
+            git(
+                &workspace,
+                &["merge", "-q", "--no-ff", "--no-edit", "topic"],
+            );
+            git(&workspace, &["merge", "-q", "--no-edit", "upstream"]);
+            turn.emit(ProviderEvent::Command {
+                kept: None,
+                item_id: "merge".into(),
+                command: "git merge upstream".into(),
+                cwd: None,
+                status: ItemStatus::Completed,
+                exit_code: Some(0),
+                output: Some("Merge made".into()),
+                duration_ms: None,
+            })
+            .await;
+            Reply::text("Merged the base in.")
+        }),
+    )
+    .await;
+    // The base moves on with three files of its own.
+    let main = git(&flow.repo, &["rev-parse", "HEAD"]);
+    git(&flow.repo, &["branch", "upstream", &main]);
+    let side = flow.repo.join("../request-changes-merge-in-side");
+    git(
+        &flow.repo,
+        &["worktree", "add", "-q", side.to_str().unwrap(), "upstream"],
+    );
+    for n in 1..=3 {
+        std::fs::write(side.join(format!("base-{n}.txt")), "base work\n").unwrap();
+    }
+    git(&side, &["add", "-A"]);
+    git(&side, &["commit", "-q", "-m", "Base work"]);
+    flow.say("Get ready.").await;
+    flow.settled().await;
+    let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+    std::fs::write(workspace.join("own.txt"), "session only\n").unwrap();
+    git(&workspace, &["add", "own.txt"]);
+    git(&workspace, &["commit", "-q", "-m", "Own file"]);
+    // `upstream` stands in for the base's upstream (GitHub's main).
+    git(
+        &flow.repo,
+        &["branch", "--set-upstream-to=upstream", "main"],
+    );
+    flow.say("Edit a and merge the base in.").await;
+    let board = flow
+        .until("the settled record", |board| {
+            board
+                .latest_request()
+                .and_then(|r| r.changes.as_ref())
+                .is_some_and(|c| c.settled)
+        })
+        .await;
+    let changes = board.latest_request().unwrap().changes.clone().unwrap();
+    let files: Vec<&str> = changes.stat.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(files, ["a.txt", "own.txt", "topic.txt"], "{changes:?}");
+    git(
+        &flow.repo,
+        &["worktree", "remove", "--force", side.to_str().unwrap()],
+    );
+    flow.stop().await;
+}

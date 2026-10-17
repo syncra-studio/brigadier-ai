@@ -754,6 +754,20 @@ impl SessionManager {
         clock.at = Some(tokio::time::Instant::now());
         let evidence_seen = !keys.is_empty();
         let previous_paths = record.paths.clone();
+        // The branch the session's work goes onto, and whether that branch is the checkout's
+        // own: a merge brings in other work only from it or its upstream, and only from the
+        // upstream when the checkout's branch is the base itself.
+        let base = match self.core.conversation(id).ok().and_then(|c| c.setup) {
+            Some(Setup::Session {
+                environment: Environment::NewWorktree { base, .. },
+                ..
+            }) => Some((base, false)),
+            Some(Setup::Session {
+                environment: Environment::LocalCheckout { branch },
+                ..
+            }) => Some((branch, true)),
+            _ => None,
+        };
         let (git, checkout, id_owned, request_owned) = (
             self.git.clone(),
             checkout.to_owned(),
@@ -772,6 +786,62 @@ impl SessionManager {
                     .map_err(git_error)?
             };
             let current = repo.file_blobs(&latest).map_err(git_error)?;
+            // What a merge of the base brought in (`git merge main`) is the base's work, not
+            // this request's change (#233): per merge, the files the base changed since the
+            // merge base, at their version there (none: deleted). A merge of anything else (a
+            // worker's topic branch) is the request's own.
+            let bases: Vec<Oid> = base
+                .iter()
+                .flat_map(|(base, checked_out)| {
+                    let local = (!checked_out)
+                        .then(|| repo.resolve(&format!("refs/heads/{base}")).ok())
+                        .flatten();
+                    let upstream = repo.upstream_tip(base).ok().flatten();
+                    local.into_iter().chain(upstream)
+                })
+                .collect();
+            let from_base = |commit: &Oid| {
+                bases
+                    .iter()
+                    .any(|tip| repo.ancestor(commit, tip).unwrap_or(false))
+            };
+            type Changed = BTreeMap<String, Option<FileBlob>>;
+            let incoming = |from: &Oid, to: &Oid| -> Vec<Changed> {
+                repo.merged_in(from, to)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|(_, theirs)| from_base(theirs))
+                    .filter_map(|(first, theirs)| {
+                        let fork = repo
+                            .file_blobs(&repo.merge_base(first, theirs).ok()?)
+                            .ok()?;
+                        let theirs = repo.file_blobs(theirs).ok()?;
+                        Some(
+                            fork.keys()
+                                .chain(theirs.keys())
+                                .filter(|path| fork.get(*path) != theirs.get(*path))
+                                .map(|path| (path.clone(), theirs.get(path).cloned()))
+                                .collect(),
+                        )
+                    })
+                    .collect()
+            };
+            // The other side changed `path` to the version it has now, deleted included.
+            let brought_in = |sides: &[Changed],
+                              path: &str,
+                              before: Option<&FileBlob>,
+                              after: Option<&FileBlob>| {
+                sides.iter().any(|changed| {
+                    changed
+                        .get(path)
+                        .is_some_and(|theirs| theirs.as_ref() == after && after != before)
+                })
+            };
+            let merged = if record.latest.is_empty() {
+                Vec::new()
+            } else {
+                incoming(&Oid(record.latest.clone()), &latest)
+            };
             let mut explained = BTreeSet::new();
             // Each shell command's item and the files its evidence gave the record.
             let mut shells = Vec::new();
@@ -878,8 +948,17 @@ impl SessionManager {
             if let Some((from, tip)) = landing {
                 let before = repo.file_blobs(&from).map_err(git_error)?;
                 let after = repo.file_blobs(&tip).map_err(git_error)?;
+                let landed_in = incoming(&from, &tip);
                 for path in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
                     if before.get(path) == after.get(path) {
+                        continue;
+                    }
+                    if !record.paths.contains_key(path)
+                        && brought_in(&landed_in, path, before.get(path), after.get(path))
+                    {
+                        if current.get(path) == after.get(path) {
+                            explained.insert(path.to_owned());
+                        }
                         continue;
                     }
                     record.own(
@@ -906,6 +985,13 @@ impl SessionManager {
                     .collect::<BTreeSet<_>>()
                 {
                     if previous.get(path) == current.get(path) || explained.contains(path) {
+                        continue;
+                    }
+                    // A file this request already changed is reconciled below, whoever
+                    // changed it since.
+                    if !record.paths.contains_key(path)
+                        && brought_in(&merged, path, previous.get(path), current.get(path))
+                    {
                         continue;
                     }
                     // A prior edit or landing can already explain this version.

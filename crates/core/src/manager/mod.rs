@@ -566,6 +566,7 @@ impl SessionManager {
             return Ok(None);
         };
         let git = self.git.clone();
+        let base_name = base.clone();
         blocking(move || {
             let repo = git.open(Path::new(&repo)).map_err(git_error)?;
             let (Some(base), Some(tip)) = (
@@ -574,9 +575,20 @@ impl SessionManager {
             ) else {
                 return Ok(None);
             };
-            let fork = repo.merge_base(&base, &tip).map_err(git_error)?;
+            let mut fork = repo.merge_base(&base, &tip).map_err(git_error)?;
+            let mut from = base;
+            // The branch merged in the base's upstream, newer than the local base (#233): what
+            // it changed is counted from there, not from where it first left the base.
+            if let Some(upstream) = repo.upstream_tip(&base_name).map_err(git_error)?
+                && let Ok(newer) = repo.merge_base(&upstream, &tip)
+                && newer != fork
+                && repo.ancestor(&fork, &newer).map_err(git_error)?
+            {
+                fork = newer;
+                from = upstream;
+            }
             let stat = repo.diff_stat(&fork, &tip).map_err(git_error)?;
-            let commits = repo.count_commits(&base, &tip).map_err(git_error)?;
+            let commits = repo.count_commits(&from, &tip).map_err(git_error)?;
             Ok(Some((landing::diff_stat_of(&stat), commits)))
         })
         .await

@@ -366,7 +366,7 @@ impl Repo {
     pub fn upstream_tip(&self, branch: &str) -> Result<Option<Oid>> {
         self.validate_branch(branch)?;
         for spec in [
-            format!("refs/heads/{branch}@{{upstream}}"),
+            format!("{branch}@{{upstream}}"),
             format!("refs/remotes/origin/{branch}"),
         ] {
             let spec = format!("{spec}^{{commit}}");
@@ -848,6 +848,42 @@ impl Repo {
         valid_oid(a)?;
         valid_oid(b)?;
         parse::oid(&self.cmd(&["merge-base", &a.0, &b.0], true)?)
+    }
+
+    /// The merges made on the way from `from` to `to`, each as its first parent and a commit it
+    /// brought in from elsewhere: every parent but the first of each merge commit on `to`'s
+    /// first-parent line after `from` (merges inside what came in are not counted), and the
+    /// commit a merge under way brings in (MERGE_HEAD) onto HEAD.
+    pub fn merged_in(&self, from: &Oid, to: &Oid) -> Result<Vec<(Oid, Oid)>> {
+        valid_oid(from)?;
+        valid_oid(to)?;
+        let range = format!("{}..{}", from.0, to.0);
+        let out = self.cmd(
+            &[
+                "rev-list",
+                "--merges",
+                "--first-parent",
+                "--parents",
+                &range,
+                "--",
+            ],
+            true,
+        )?;
+        let mut incoming = Vec::new();
+        for line in parse::text(&out)?.lines() {
+            let mut commits = line.split_whitespace().skip(1);
+            let Some(first) = commits.next() else {
+                continue;
+            };
+            let first = parse::oid(first.as_bytes())?;
+            for parent in commits {
+                incoming.push((first.clone(), parse::oid(parent.as_bytes())?));
+            }
+        }
+        if let (Ok(head), Ok(merging)) = (self.resolve("HEAD"), self.resolve("MERGE_HEAD")) {
+            incoming.push((head, merging));
+        }
+        Ok(incoming)
     }
 
     /// Count commits reachable from to but not from from.
