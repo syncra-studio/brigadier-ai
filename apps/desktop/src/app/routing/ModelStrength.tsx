@@ -69,7 +69,7 @@ export function ModelStrength({
       const strength = strengthFor(model, category);
       return strength === null ? [] : [{ model, strength }];
     })
-    .sort((a, b) => b.strength - a.strength);
+    .toSorted((a, b) => b.strength - a.strength);
   // What each model is picked for now: a review asked without an author has a pick per vendor's
   // change, as it goes to the other vendor.
   const marks = new Map<string, string[]>();
