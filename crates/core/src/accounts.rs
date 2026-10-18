@@ -86,7 +86,7 @@ pub struct Candidate {
 
 /// The provider's account work starts on (for `model`, when it has windows of its own). With
 /// switching on: of the accounts that can take work (signed in, not in `avoid`, room left for
-/// `model`, under 99% of their 5-hour window), the one whose weekly window resets soonest, so
+/// `model`, every window that limits it under the share routing counts as used up), the one whose weekly window resets soonest, so
 /// the quota that is lost first is used first. An unknown reset sorts last; a tie goes to the
 /// most left, then to the earliest added. With switching off, or with no account ready, the
 /// default (it then reads as limited, and routing moves the work to another provider).
@@ -123,9 +123,10 @@ pub fn soonest_ready(
         candidate.account.provider == provider
             && candidate.logged_in
             && !avoid.contains(&candidate.account)
-            && candidate.quota.as_ref().is_none_or(|quota| {
-                headroom(quota, model).is_some() && !five_hour_full(quota, model)
-            })
+            && candidate
+                .quota
+                .as_ref()
+                .is_none_or(|quota| headroom(quota, model).is_some() && !used_up(quota, model))
     };
     candidates
         .iter()
@@ -175,11 +176,12 @@ pub(crate) fn span(window: &QuotaWindow) -> Option<i64> {
     })
 }
 
-/// Whether a 5-hour window that applies to `model` is at 99% or more: the account is all but
-/// out for the next hours, and new work would stop at once.
-fn five_hour_full(quota: &QuotaSnapshot, model: Option<&str>) -> bool {
+/// Whether a window that applies to `model` is at the share routing counts as used up
+/// (`brigadier_router::forecast::LIMITED_USED`, 97%): new work would stop at once, and routing
+/// would read the whole provider as limited while this account leads it.
+fn used_up(quota: &QuotaSnapshot, model: Option<&str>) -> bool {
     quota.windows.iter().any(|window| {
-        span(window) == Some(FIVE_HOURS) && applies(window, model) && window.used_percent >= 99.0
+        applies(window, model) && window.used_percent >= brigadier_router::forecast::LIMITED_USED
     })
 }
 
@@ -364,10 +366,18 @@ mod tests {
     fn an_account_at_99_percent_of_its_5_hour_window_is_skipped() {
         let all = [
             weekly(None, 99.0, Some(5)),
-            weekly(Some("work"), 98.0, Some(20)),
+            weekly(Some("work"), 96.0, Some(20)),
             weekly(Some("home"), 0.0, Some(50)),
         ];
         assert_eq!(pick(&settings(None, true), &all), Some("work".into()));
+        // At the share routing counts as used up (97%), of any window, it is skipped too:
+        // routing would read the whole provider as limited while it leads.
+        let all = [
+            weekly(None, 99.0, Some(5)),
+            weekly(Some("work"), 98.0, Some(20)),
+            weekly(Some("home"), 0.0, Some(50)),
+        ];
+        assert_eq!(pick(&settings(None, true), &all), Some("home".into()));
         // Codex names its 5-hour window `primary` and its weekly one `secondary`.
         let codex = |id: Option<&str>, five_hour: f64, hours: i64| {
             let mut candidate = candidate(id, 0.0, false);
@@ -411,10 +421,15 @@ mod tests {
             candidate
         };
         let all = [
-            weekly_primary(None, 99.5, 5),
+            weekly_primary(None, 50.0, 5),
             weekly_primary(Some("work"), 10.0, 30),
         ];
         assert_eq!(pick(&settings(None, true), &all), None);
+        let all = [
+            weekly_primary(None, 98.0, 5),
+            weekly_primary(Some("work"), 10.0, 30),
+        ];
+        assert_eq!(pick(&settings(None, true), &all), Some("work".into()));
     }
 
     #[test]
