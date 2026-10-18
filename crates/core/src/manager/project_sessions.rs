@@ -526,7 +526,6 @@ impl SessionManager {
                         item.attachments,
                         item.mentions,
                         Some(index as u32),
-                        false,
                     )
                     .await?;
                 return Ok(format!(

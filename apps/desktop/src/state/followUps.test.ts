@@ -8,7 +8,7 @@ import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { applyEvents, emptyThread, useApp } from "@/state/store";
 
 const id = "follow-ups";
-const item: QueuedMessage = { id: "queued", text: "Also fix this", attachments: [], mentions: [], queuedAtMs: 20, editedAtMs: null, deciding: true };
+const item: QueuedMessage = { id: "queued", text: "Also fix this", attachments: [], mentions: [], queuedAtMs: 20, editedAtMs: null };
 const message: Message = { id: "joined", conversationId: id, seq: 3, role: "user", text: item.text, attachments: [], mentions: [], createdAtMs: 30, blob: null, model: null, requestId: "joined", parentId: null };
 let reply: (outcome: SendOutcome) => void;
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -36,7 +36,7 @@ function queue(items: QueuedMessage[], seq = 1) {
 function start() { return send({ text: item.text, attachments: item.attachments, mentions: [] }); }
 function chatCount() { return useApp.getState().pending.length + (useApp.getState().threads[id]?.items.length ?? 0); }
 
-test("a deciding queue event removes the stale-board echo before a delayed send response", async () => {
+test("a queue event removes the stale-board echo before a delayed send response", async () => {
   const sent = start();
   assert.equal(chatCount(), 1, "idle sends still echo immediately");
   queue([item]);
@@ -60,7 +60,7 @@ test("a queued response clears the echo before publishing the rail item", async 
 test("queued and removed follow-ups leave no ghost; a late response cannot restore them", async () => {
   const sent = start();
   queue([item]);
-  queue([{ ...item, deciding: false }], 2);
+  queue([{ ...item }], 2);
   assert.equal(chatCount(), 0);
   queue([], 3);
   reply({ type: "queued", item });
@@ -97,7 +97,7 @@ test("replaying or settling a queue item does not consume a second identical sen
   useApp.setState({ pending: [pending, { ...pending, localId: "second" }] });
   queue([item]);
   assert.deepEqual(useApp.getState().pending.map((entry) => entry.localId), ["second"]);
-  queue([{ ...item, deciding: false }], 2);
+  queue([{ ...item }], 2);
   assert.deepEqual(useApp.getState().pending.map((entry) => entry.localId), ["second"]);
   queue([item, { ...item, id: "second-item" }], 3);
   assert.equal(useApp.getState().pending.length, 0);
@@ -106,7 +106,7 @@ test("replaying or settling a queue item does not consume a second identical sen
 test("an older identical queued item cannot consume a new send", async () => {
   queue([item]);
   const sent = start();
-  queue([{ ...item, deciding: false }], 2);
+  queue([{ ...item }], 2);
   assert.equal(useApp.getState().pending.length, 1);
   reply({ type: "sent", message });
   await sent;

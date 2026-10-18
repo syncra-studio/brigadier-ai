@@ -1801,7 +1801,6 @@ async fn a_queued_message_edited_while_the_merge_is_prepared_is_named_in_its_res
             Vec::new(),
             Vec::new(),
             None,
-            false,
         )
         .await
         .unwrap();
@@ -3616,10 +3615,10 @@ async fn a_ci_fixs_push_under_the_users_yes_to_watching_goes_through_and_then_as
     flow.stop().await;
 }
 
-/// A message the user queues while the CI fix's turn runs ends their yes to watching CI as a
-/// sent one does: the fix's push is their card again, and the reviewer isn't told of the yes.
+/// A message the user sends while the CI fix's turn runs (it joins that turn) ends their yes
+/// to watching CI: the fix's push is their card again, and the reviewer isn't told of the yes.
 #[tokio::test]
-async fn a_message_queued_while_a_ci_fix_runs_ends_the_yes_its_push_would_go_under() {
+async fn a_message_sent_while_a_ci_fix_runs_ends_the_yes_its_push_would_go_under() {
     let asked: Arc<Mutex<Vec<String>>> = Arc::default();
     let pushes = Arc::new(tokio::sync::Semaphore::new(0));
     let (reviewer_log, gate) = (asked.clone(), pushes.clone());
@@ -3689,8 +3688,13 @@ async fn a_message_queued_while_a_ci_fix_runs_ends_the_yes_its_push_would_go_und
         .await;
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     flow.say("Wait, don't push anything yet.").await;
-    flow.until("the message waits", |board| !board.queue.items.is_empty())
-        .await;
+    flow.until("the message joins the turn", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.steered_into.is_some())
+    })
+    .await;
     pushes.add_permits(1);
     flow.until("the push's card", |board| {
         board
@@ -3708,7 +3712,7 @@ async fn a_message_queued_while_a_ci_fix_runs_ends_the_yes_its_push_would_go_und
 /// allowing verdict doesn't count. The consents are read again, the reviewer runs once more
 /// without the yes, and the push is the user's card.
 #[tokio::test]
-async fn a_message_queued_while_the_reviewer_weighs_a_ci_fixs_push_takes_back_the_yes() {
+async fn a_message_sent_while_the_reviewer_weighs_a_ci_fixs_push_takes_back_the_yes() {
     let asked: Arc<Mutex<Vec<String>>> = Arc::default();
     let pushes = Arc::new(tokio::sync::Semaphore::new(0));
     let reviewing = Arc::new(tokio::sync::Semaphore::new(0));
@@ -3794,8 +3798,13 @@ async fn a_message_queued_while_the_reviewer_weighs_a_ci_fixs_push_takes_back_th
     reviewing.acquire().await.unwrap().forget();
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     flow.say("Wait, don't push anything yet.").await;
-    flow.until("the message waits", |board| !board.queue.items.is_empty())
-        .await;
+    flow.until("the message joins the turn", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.steered_into.is_some())
+    })
+    .await;
     verdict.add_permits(1);
     flow.until("the push's card", |board| {
         board

@@ -40,7 +40,7 @@ const request = {
   id: "r1", conversationId: id, preview: "one", state: { type: "done" }, startedAtMs: start,
   endedAtMs: start + 30_000, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false,
 } as unknown as UserRequest;
-const queued: QueuedMessage = { id: "q1", text: QUEUED, attachments: [], mentions: [], queuedAtMs: start, editedAtMs: null, deciding: false } as QueuedMessage;
+const queued: QueuedMessage = { id: "q1", text: QUEUED, attachments: [], mentions: [], queuedAtMs: start, editedAtMs: null } as QueuedMessage;
 
 localStorage.setItem("brigadier.drafts", JSON.stringify({
   [id]: {

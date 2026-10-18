@@ -175,7 +175,7 @@ test("a message steered in before the turn did anything sits under the first, ab
 
 test("a message steered in while a command runs sums the work above it up at once", { timeout: 120000 }, async (t) => {
   const seen = await drive<{
-    before: Seen; after: Seen; bubble: string | null; deciding: { note: string | null; shimmer: string | null };
+    before: Seen; after: Seen; bubble: string | null;
     steerHeld: string | null; steerRead: string | null;
   }>(t, "drive=steer");
   assert.deepEqual([seen.before.newest, seen.before.newestShimmers], ["Running sleep 30", true]);
@@ -183,8 +183,7 @@ test("a message steered in while a command runs sums the work above it up at onc
   // The live line moves under the bubble, though the command still runs.
   assert.deepEqual([seen.after.status, seen.after.statusInWork], ["Thinking", true]);
   assert.match(seen.bubble ?? "", /^Use banker's rounding instead/);
-  // Behind the thread's command, a follow-up and a steered message say when they are read, not "Deciding".
-  assert.deepEqual(seen.deciding, { note: "Read when the current command ends · running 2m", shimmer: null });
+  // Behind the thread's command, a message sent in says when it is read.
   assert.equal(seen.steerHeld, "Read when the current command ends · running 2m");
   assert.equal(seen.steerRead, null);
 });

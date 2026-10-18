@@ -51,7 +51,7 @@ const request = {
   id: "r1", conversationId: id, preview: "earlier", state: { type: "done" }, startedAtMs: start,
   endedAtMs: start + 30_000, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false,
 } as unknown as UserRequest;
-const queued = { id: "q1", text: QUEUED, attachments: [paste], mentions: [], queuedAtMs: start, editedAtMs: null, deciding: false } as QueuedMessage;
+const queued = { id: "q1", text: QUEUED, attachments: [paste], mentions: [], queuedAtMs: start, editedAtMs: null } as QueuedMessage;
 
 localStorage.setItem("brigadier.drafts", JSON.stringify({
   [id]: { text: DRAFT, attachments: [image, paste], atMs: Date.now(), mentions: [] },

@@ -583,11 +583,14 @@ async fn sessions_in_two_repositories_of_a_project_overlap_only_within_one() {
     flow.stop().await;
 }
 
-/// How the next follow-up is routed (its `follow_up` id is filled in), what route_follow_up
-/// answered, and the gate the routing turn waits at after it routed.
+/// How the next queued message is routed (its `follow_up` id is filled in), what
+/// route_follow_up answered, and the gates the routing turn waits at: for the queued message,
+/// and after it routed.
 #[derive(Default)]
 struct Routing {
     args: std::sync::Mutex<serde_json::Value>,
+    queued: std::sync::Mutex<String>,
+    ready: tokio::sync::Notify,
     results: std::sync::Mutex<Vec<String>>,
     gate: tokio::sync::Notify,
 }
@@ -604,8 +607,8 @@ fn bash(status: brigadier_providers::ItemStatus) -> brigadier_providers::Provide
 }
 
 /// A thread that, besides [`writing`] and merging on the user's click, runs a long command on
-/// "Run the tests.", routes the follow-up it gets meanwhile as `routing` says, and waits at
-/// the gate. Every thread input is logged by worktree.
+/// "Run the tests.", routes the message queued meanwhile as `routing` says, and waits at the
+/// gate. Every thread input is logged by worktree.
 fn routing(inputs: Inputs, routing: Arc<Routing>) -> Script {
     let write = writing(None);
     script(move |turn| {
@@ -636,13 +639,8 @@ fn routing(inputs: Inputs, routing: Arc<Routing>) -> Script {
             }
             turn.emit(bash(brigadier_providers::ItemStatus::InProgress))
                 .await;
-            let block = turn.steered().await.unwrap_or_default();
-            let id = block
-                .split("[follow-up ")
-                .nth(1)
-                .and_then(|rest| rest.split(']').next())
-                .unwrap_or_default()
-                .to_owned();
+            routing.ready.notified().await;
+            let id = routing.queued.lock().unwrap().clone();
             let mut args = routing.args.lock().unwrap().clone();
             args["follow_up"] = serde_json::Value::String(id);
             let reply = turn.call("route_follow_up", args).await;
@@ -661,8 +659,9 @@ fn routing(inputs: Inputs, routing: Arc<Routing>) -> Script {
 }
 
 impl Routing {
-    /// Runs one routed follow-up on `tab`: "Run the tests.", then `follow_up` while it works,
-    /// routed by `args`. Returns route_follow_up's answer, with the turn still at the gate.
+    /// Runs one routed message on `tab`: "Run the tests.", then `follow_up` waiting in the
+    /// queue while it works (as one queued while paused, or by an older build), routed by
+    /// `args`. Returns route_follow_up's answer, with the turn still at the gate.
     async fn route(
         &self,
         flow: &Flow,
@@ -679,7 +678,13 @@ impl Routing {
             })
         })
         .await;
-        flow.say_to(tab, follow_up).await;
+        let item = flow
+            .core
+            .enqueue(tab, follow_up.into(), Vec::new(), Vec::new(), None)
+            .await
+            .unwrap();
+        *self.queued.lock().unwrap() = item.id;
+        self.ready.notify_one();
         super::eventually("the follow-up routed", || {
             self.results.lock().unwrap().len() > before
         })
@@ -708,7 +713,7 @@ fn last_queue(flow: &Flow, id: &ConversationId) -> crate::work::MessageQueue {
 }
 
 /// Queued routes: the thread's choice is carried out as it says. join steers it in; wait
-/// keeps it queued; new_session keeps it queued with the offer and starts nothing; session
+/// keeps it queued; new_session keeps it queued too and starts nothing; session
 /// sends it to the sibling as the user's message, with a notice here that Undo takes back;
 /// session to a sibling that merged goes through with that fact; a session that isn't there
 /// leaves it unsorted.
@@ -758,56 +763,34 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
         )
         .await;
     assert!(waits.starts_with("It waits in the queue"), "{waits}");
-    let queue = last_queue(&flow, &a);
-    assert_eq!(queue.items.len(), 1);
-    assert!(!queue.items[0].deciding && !queue.items[0].offer_tab);
+    assert_eq!(last_queue(&flow, &a).items.len(), 1);
     routes.release(&flow, &a).await;
 
-    // new_session: the offer, and no session started.
+    // new_session: it waits too, and no session starts.
     let tabs = flow.core.catalog().conversations.len();
+    let notes = "Draft the release notes.";
+    let heard_before = heard(&inputs, &folder_a, notes);
     let offered = routes
         .route(
             &flow,
             &a,
-            "Draft the release notes.",
+            notes,
             serde_json::json!({ "route": "new_session" }),
         )
         .await;
-    assert!(
-        offered.contains("\"Open as a new session\" or \"Run here\""),
-        "{offered}"
-    );
-    let queue = last_queue(&flow, &a);
-    assert_eq!(queue.items.len(), 1);
-    assert!(queue.items[0].offer_tab && !queue.items[0].deciding);
+    assert!(offered.starts_with("It waits in the queue"), "{offered}");
+    assert!(!offered.contains("Run here"), "{offered}");
+    assert_eq!(last_queue(&flow, &a).items.len(), 1);
     assert_eq!(
         flow.core.catalog().conversations.len(),
         tabs,
         "no session started"
     );
-    // The turn ends and the offer stays until the user picks; "Run here" sends it here.
-    routes.gate.notify_one();
-    flow.settled_in(&a).await;
-    let queue = last_queue(&flow, &a);
-    assert!(
-        queue.items.len() == 1 && queue.items[0].offer_tab,
-        "still offered"
-    );
-    let notes = "Draft the release notes.";
-    let heard_before = heard(&inputs, &folder_a, notes);
-    flow.manager
-        .run_queued_here(&a, &queue.items[0].id)
-        .await
-        .unwrap();
-    flow.until_in(&a, "the queue to empty", |board| {
-        board.queue.items.is_empty()
-    })
-    .await;
-    flow.settled_in(&a).await;
+    routes.release(&flow, &a).await;
     assert_eq!(
         heard(&inputs, &folder_a, notes),
         heard_before + 1,
-        "ran here"
+        "it ran here once the work was done"
     );
 
     // A session that isn't there: a fact, and the follow-up stays the thread's to sort.
@@ -824,9 +807,12 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
         "{nowhere}"
     );
     assert!(nowhere.contains(&b.0), "lists the sessions: {nowhere}");
-    // Still unsorted: deciding, or already joined by itself after the judging wait.
+    // Still waiting in the queue.
     let queue = last_queue(&flow, &a);
-    assert!(queue.moved.is_empty() && queue.items.iter().all(|item| item.deciding));
+    assert!(
+        queue.moved.is_empty() && queue.items.len() == 1,
+        "{queue:?}"
+    );
     routes.release(&flow, &a).await;
 
     // session: it goes to B as the user's message; A keeps a notice.
@@ -1029,12 +1015,13 @@ async fn an_open_thread_resumes_with_the_sessions_note_and_the_older_names_still
             serde_json::json!({ "route": "new_tab" }),
         )
         .await;
-    assert!(offered.contains("\"Open as a new session\""), "{offered}");
-    assert!(last_queue(&flow, &a).items[0].offer_tab);
+    assert!(offered.starts_with("It waits in the queue"), "{offered}");
     routes.gate.notify_one();
     flow.settled_in(&a).await;
-    let item = last_queue(&flow, &a).items[0].id.clone();
-    flow.core.take_queued(&a, &item).await.unwrap();
+    let queue = last_queue(&flow, &a);
+    if let Some(item) = queue.items.first() {
+        flow.core.take_queued(&a, &item.id).await.unwrap();
+    }
     let specs = flow.thread_specs();
     assert!(
         matches!(

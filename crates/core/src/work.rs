@@ -1764,20 +1764,10 @@ pub struct QueuedMessage {
     pub mentions: Vec<Mention>,
     pub queued_at_ms: i64,
     pub edited_at_ms: Option<i64>,
-    /// Sent to a session while its answer works: the orchestrator is judging whether it
-    /// belongs to that answer (it joins it) or is a request of its own (it waits here).
-    #[serde(default)]
-    pub deciding: bool,
-    /// The thread's command it waits behind while being judged: the thread reads it once
-    /// that command ends.
+    /// The thread's command it waits behind: the thread reads it once that command ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub held_by: Option<HeldBy>,
-    /// The thread judged it could run apart (`route_follow_up` route "new_session"): it waits for
-    /// the user's pick, "Open as a new session" or "Run here", and is never sent until then.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[ts(as = "Option<bool>", optional)]
-    pub offer_tab: bool,
 }
 
 /// A queued message the thread sent on to another session of its project (`route_follow_up`
@@ -1837,9 +1827,10 @@ pub struct MessageQueue {
 }
 
 impl MessageQueue {
-    /// The message sent next: the first one not waiting for the user's pick on a new-tab offer.
+    /// The message sent next: the first. (Older builds' `deciding` and `offer_tab` marks are
+    /// ignored when a queue is read, so nothing waits on them.)
     pub fn next_to_send(&self) -> Option<&QueuedMessage> {
-        self.items.iter().find(|item| !item.offer_tab)
+        self.items.first()
     }
 }
 
