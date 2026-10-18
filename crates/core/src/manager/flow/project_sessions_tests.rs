@@ -1101,7 +1101,11 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
     let (_, _, branch) = worktree(&flow, &a);
     let head = git(&flow.repo, &["rev-parse", &branch]);
     assert_eq!(board.ready.values().next().unwrap().0, head);
-    assert_eq!(state(&a).await, Some(crate::work::TabState::Ready));
+    // The request reads done a moment before its turn's run does (#296).
+    super::eventually_async("the tab to read ready", || async {
+        state(&a).await == Some(crate::work::TabState::Ready)
+    })
+    .await;
     let settled = |flow: &Flow| {
         let manager = flow.manager.clone();
         async move {
@@ -1171,7 +1175,10 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
     })
     .await;
     flow.settled_in(&a).await;
-    assert_eq!(state(&a).await, Some(crate::work::TabState::Merged));
+    super::eventually_async("the tab to read merged", || async {
+        state(&a).await == Some(crate::work::TabState::Merged)
+    })
+    .await;
     assert_eq!(
         settled(&flow).await,
         [(a.clone(), crate::work::TabState::Merged)]
