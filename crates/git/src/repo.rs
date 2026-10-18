@@ -579,13 +579,20 @@ impl Repo {
     /// Create a worktree at the supplied path using a new branch, existing branch or detached HEAD.
     /// Adds, removals, prunes and listings in one repository run one at a time: git reads the
     /// other worktrees' entries while it writes its own, and fails on a half-written one (#207).
+    /// Another program's add can't take that lock, so an add that met its half-written entry is
+    /// tried again a few times (#268).
     pub fn add_worktree(&self, path: &Path, spec: WorktreeSpec) -> Result<Worktree> {
         let path = absolute(path)?;
         let mut args: Vec<OsString> = vec!["worktree".into(), "add".into()];
+        // A failed `add -b` leaves its new branch behind: a retry checks that one out.
+        let mut retry_args = None;
         match spec {
             WorktreeSpec::NewBranch { name, start } => {
                 self.validate_branch(&name)?;
                 valid_oid(&start)?;
+                let mut existing = args.clone();
+                existing.extend(["--".into(), path.as_os_str().to_owned(), (&name).into()]);
+                retry_args = Some((name.clone(), start.clone(), existing));
                 args.extend([
                     "-b".into(),
                     name.into(),
@@ -613,7 +620,24 @@ impl Repo {
         }
         let lock = self.worktree_lock();
         let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-        self.cmd(&args, false)?;
+        let mut attempt = 0;
+        loop {
+            match self.cmd(&args, false) {
+                Err(error) if attempt < 8 && half_written_worktree(&error) => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(25 * attempt));
+                    if let Some((name, start, existing)) = &retry_args
+                        && self.branch_tip(name)?.as_ref() == Some(start)
+                    {
+                        args = existing.clone();
+                    }
+                }
+                result => {
+                    result?;
+                    break;
+                }
+            }
+        }
         drop(guard);
         self.git.open_worktree(&path)
     }
@@ -2114,6 +2138,12 @@ pub(crate) fn vanished(
     gone.into_values().collect()
 }
 
+/// Whether git failed on another worktree's entry that was still being written.
+fn half_written_worktree(error: &Error) -> bool {
+    matches!(error, Error::Command { stderr, .. }
+        if stderr.contains("failed to read") && stderr.contains("worktrees/"))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::vanished;
@@ -2885,5 +2915,46 @@ pub(crate) mod tests {
             }
         }
         assert_eq!(repo.worktrees().expect("the worktrees").len(), 49);
+    }
+
+    #[test]
+    fn a_worktree_add_waits_out_another_programs_half_written_worktree() {
+        let (dir, git) = test_git("half-written");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        fs::write(root.join("a.txt"), "a\n").expect("a file");
+        let base = repo.commit_changes("Base", true).expect("a commit");
+        let specs = [
+            crate::WorktreeSpec::Detached { at: base.clone() },
+            crate::WorktreeSpec::NewBranch {
+                name: "task-1".into(),
+                start: base.clone(),
+            },
+        ];
+        for (index, spec) in specs.into_iter().enumerate() {
+            // Another program's `git worktree add` midway: its entry has no commondir yet.
+            let entry = root.join(format!(".git/worktrees/other-{index}"));
+            fs::create_dir_all(&entry).expect("the entry");
+            let other = dir.join(format!("other-{index}"));
+            fs::write(
+                entry.join("gitdir"),
+                format!("{}\n", other.join(".git").display()),
+            )
+            .expect("its gitdir");
+            fs::write(entry.join("HEAD"), format!("{}\n", base.0)).expect("its HEAD");
+            fs::write(entry.join("commondir"), "").expect("its commondir, not written yet");
+            let finish = std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                fs::write(entry.join("commondir"), "../..\n").expect("its commondir");
+            });
+            let path = dir.join(format!("wt-{index}"));
+            let worktree = repo
+                .add_worktree(&path, spec)
+                .expect("the worktree is added");
+            finish.join().expect("no panic");
+            assert_eq!(worktree.head().expect("its head"), base);
+        }
+        assert_eq!(repo.branch_tip("task-1").expect("the branch"), Some(base));
     }
 }
