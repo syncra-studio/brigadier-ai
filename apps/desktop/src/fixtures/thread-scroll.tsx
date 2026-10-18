@@ -214,7 +214,7 @@ async function answer(command: string, payload: unknown): Promise<unknown> {
 useApp.setState({
   conversations,
   connection: { status: "connected", daemon: null, reason: null },
-  pinnedSummary: false,
+  summaryShown: Object.fromEntries(Object.keys(conversations).map((key) => [key, false])),
 });
 
 /** The app's main column (App.tsx): one conversation view, a new one for each conversation. */

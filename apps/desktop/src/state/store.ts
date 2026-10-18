@@ -20,7 +20,7 @@ import type {
   Settings,
 } from "@/ipc/generated";
 import { applyDensity, cachedDensity } from "@/lib/density";
-import { cachedPinnedSummary } from "@/lib/pinnedSummary";
+import { cachedSummaryShown } from "@/lib/pinnedSummary";
 import { confirmPending } from "@/state/shownIds";
 
 /** A page of Settings. */
@@ -164,9 +164,10 @@ export type AppState = {
   expandedProjects: Record<string, boolean>;
   windowVisible: boolean;
   coldStartMs: number | null;
-  /** The summary card pinned at the top end of a session's thread is shown: one pin for every
-      conversation, kept across launches. */
-  pinnedSummary: boolean;
+  /** Whether each conversation's summary card, pinned at the top end of its thread, is shown (by
+      `summaryKey`): as the user left it, or as it opened by itself for its first real content.
+      None is shown before that; kept across launches. */
+  summaryShown: Record<string, boolean>;
   inspector: {
     tab: InspectorTab;
     /** Newest first. */
@@ -245,7 +246,7 @@ export const useApp = create<AppState>()(() => ({
   expandedProjects: {},
   windowVisible: true,
   coldStartMs: null,
-  pinnedSummary: cachedPinnedSummary(),
+  summaryShown: cachedSummaryShown(),
   inspector: {
     tab: "events",
     events: [],
@@ -717,4 +718,14 @@ export function selectedConversation(state: AppState): Conversation | null {
   return state.selection.type === "conversation"
     ? (state.conversations[state.selection.id] ?? null)
     : null;
+}
+
+/** The key a selection's summary card is kept under: its conversation, or one for every new one. */
+export function summaryKey(selection: Selection): string {
+  return selection.type === "conversation" ? selection.id : "draft";
+}
+
+/** Whether the summary card of the conversation in front is shown. */
+export function summaryShownOf(state: AppState): boolean {
+  return state.summaryShown[summaryKey(state.selection)] ?? false;
 }

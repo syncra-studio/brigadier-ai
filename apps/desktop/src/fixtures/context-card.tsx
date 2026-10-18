@@ -30,7 +30,7 @@ const conversation: Conversation = {
   forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
 };
 useApp.setState({
-  conversations: { [id]: conversation }, selection: { type: "conversation", id }, pinnedSummary: true,
+  conversations: { [id]: conversation }, selection: { type: "conversation", id }, summaryShown: { [id]: true },
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },
 });

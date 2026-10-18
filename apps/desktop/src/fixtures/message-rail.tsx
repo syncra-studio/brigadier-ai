@@ -135,7 +135,8 @@ function appended(message: Message): void {
   useBoard.setState(({ board }) => (board?.conversationId === message.conversationId ? { board: applyToBoard(board, envelope) } : {}));
 }
 
-useApp.setState({ conversations, connection: { status: "connected", daemon: null, reason: null }, pinnedSummary: false });
+useApp.setState({ conversations, connection: { status: "connected", daemon: null, reason: null },
+  summaryShown: Object.fromEntries(Object.keys(conversations).map((key) => [key, false])) });
 
 function Page() {
   const selection = useApp((s) => s.selection);

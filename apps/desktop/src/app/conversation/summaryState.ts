@@ -2,7 +2,6 @@ import { create } from "zustand";
 
 import { jumpInThread } from "@/components/assistant-ui/thread-scroll";
 import type { EventEnvelope } from "@/ipc/generated";
-import { CHAT_TAB, sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { useBoard } from "@/state/board";
 
@@ -10,12 +9,12 @@ import { setPinnedSummary } from "@/state/actions";
 
 export const useSummary = create<{
   layout: "beside" | "shift" | "float";
+  /** The layout is the thread pane's own, not the default before it is measured. */
+  measured: boolean;
   floating: boolean;
-  /** The next floating open keeps focus in the composer. */
-  automatic: boolean;
   /** A plan the thread asked to see; the Plan section shows it until another plan takes over. */
   plan: string | null;
-}>(() => ({ layout: "beside", floating: false, automatic: false, plan: null }));
+}>(() => ({ layout: "beside", measured: false, floating: false, plan: null }));
 
 /** Where each summary card, and their column, was scrolled to: `<session>/<card>` → offset. */
 export const keptScroll = new Map<string, number>();
@@ -43,8 +42,7 @@ function reveal(elementId: () => string): void {
   // The session's cards open where the plan is, not where they were left.
   const session = `${useBoard.getState().board?.conversationId}/`;
   for (const key of keptScroll.keys()) if (key.startsWith(session)) keptScroll.delete(key);
-  if (useSummary.getState().layout === "float")
-    useSummary.setState({ floating: true, automatic: false });
+  if (useSummary.getState().layout === "float") useSummary.setState({ floating: true });
   else setPinnedSummary(true);
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
@@ -64,6 +62,17 @@ function reveal(elementId: () => string): void {
   );
 }
 
+/**
+ * Opens a conversation's card by itself, for real content it has to show: only where the thread
+ * keeps its own room beside the card, and only while the card was never left shown or hidden, so
+ * one the user closed stays closed.
+ */
+export function openSummaryByItself(key: string): void {
+  const { layout, measured } = useSummary.getState();
+  if (!measured || layout === "float" || key in useApp.getState().summaryShown) return;
+  setPinnedSummary(true, key);
+}
+
 /** Only live arrivals in the loaded, visible conversation reveal its context. */
 export function revealNewPreviews(events: readonly EventEnvelope[]): void {
   const { board } = useBoard.getState();
@@ -72,8 +81,5 @@ export function revealNewPreviews(events: readonly EventEnvelope[]): void {
   if (!events.some(({ stream, event }) => stream === `conversation:${board.conversationId}`
     && event.type === "previewUpdated" && event.preview.conversationId === board.conversationId
     && !board.previews[event.preview.id])) return;
-  if (useSummary.getState().layout === "float") {
-    if (sessionTabs(board.conversationId).active !== CHAT_TAB) return;
-    if (!useSummary.getState().floating) useSummary.setState({ floating: true, automatic: true });
-  } else useApp.setState({ pinnedSummary: true });
+  openSummaryByItself(board.conversationId);
 }

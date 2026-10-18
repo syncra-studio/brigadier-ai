@@ -88,7 +88,7 @@ useApp.setState((state) => ({
   threads: { [ID]: { ...emptyThread, items } },
   selection: { type: "conversation", id: ID },
   // The session's summary, pinned: its Workers row opens the Workers panel.
-  pinnedSummary: layout,
+  summaryShown: { [ID]: layout },
 }));
 useSessionTabs.setState({ sessions: {} });
 // Opened as is (a dev window pointed at this page, for a look at the real window): a long page

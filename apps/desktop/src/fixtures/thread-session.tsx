@@ -107,7 +107,7 @@ useApp.setState({
   selection: { type: "conversation", id },
   conversations: { [id]: conversation },
   threads: { [id]: { ...emptyThread, items: messages } },
-  pinnedSummary: query.get("summary") === "1",
+  summaryShown: { [id]: query.get("summary") === "1" },
   connection: { status: "connected", daemon: null, reason: null },
 });
 

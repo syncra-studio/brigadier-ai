@@ -38,7 +38,7 @@ import { contextPlanId, contextPlanIds, latestPlanRequest } from "@/app/conversa
 import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { ChecksRow, ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
-import { keptScroll, useSummary } from "@/app/conversation/summaryState";
+import { keptScroll, openSummaryByItself, useSummary } from "@/app/conversation/summaryState";
 import { RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { CHAT_TAB, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
@@ -75,7 +75,7 @@ import {
   setPinnedSummary,
 } from "@/state/actions";
 import { useBoard } from "@/state/board";
-import { useApp } from "@/state/store";
+import { summaryShownOf, useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
 const NO_TASKS: Readonly<Record<string, Task>> = {};
@@ -444,8 +444,9 @@ function AskButton({ conversationId, label, text }: { conversationId: string; la
 
 /**
  * Where the thread's pane puts the pinned summary, by the room either side of the thread's
- * column: beside the column, beside it with the column moved aside to make room, or (too little
- * room) floating over the thread, opened from the top bar.
+ * column: beside the column, beside it with the column moved aside (and narrowed where it must)
+ * to leave the card its own gutter, or (a pane too narrow for that) floating over the thread,
+ * opened from the top bar.
  */
 type SummaryLayout = "beside" | "shift" | "float";
 
@@ -462,33 +463,34 @@ export function SummaryPane({
   summary: boolean;
   children: ReactNode;
 }) {
-  const pinned = useApp((s) => s.pinnedSummary);
+  const pinned = useApp(summaryShownOf);
   const pane = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const element = pane.current;
     if (!summary || !element) return;
     const column = tokenPx("--container-thread");
-    const floatBelow = tokenPx("--spacing-summary-float-below");
+    const gutterFrom = tokenPx("--spacing-summary-gutter-from");
     const besideFrom = tokenPx("--spacing-summary-beside-from");
     let frame = 0;
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
-      const room = (entry.contentRect.width - column) / 2;
+      const { width } = entry.contentRect;
+      const room = (width - column) / 2;
       const layout: SummaryLayout =
-        room < floatBelow ? "float" : room < besideFrom ? "shift" : "beside";
+        width < gutterFrom ? "float" : room < besideFrom ? "shift" : "beside";
       element.dataset.summary = layout;
       if (!("settled" in element.dataset)) {
         frame = requestAnimationFrame(() => {
           element.dataset.settled = "";
         });
       }
-      // A summary the user showed stays shown as the window changes: floating where it floats,
-      // pinned beside the thread elsewhere. One that opened on its own goes with the float.
+      // A summary shown stays shown as the window changes: floating where it floats, pinned
+      // beside the thread elsewhere.
       const state = useSummary.getState();
-      if (state.layout === layout) return;
-      if (state.layout === "float" && state.floating && !state.automatic) setPinnedSummary(true);
-      const floating = layout === "float" && (state.floating || useApp.getState().pinnedSummary);
-      useSummary.setState({ layout, floating, automatic: floating && state.automatic });
+      if (state.layout === layout && state.measured) return;
+      if (state.layout === "float" && state.floating) setPinnedSummary(true);
+      const floating = layout === "float" && (state.floating || summaryShownOf(useApp.getState()));
+      useSummary.setState({ layout, measured: true, floating });
     });
     observer.observe(element);
     return () => {
@@ -496,14 +498,14 @@ export function SummaryPane({
       cancelAnimationFrame(frame);
       delete element.dataset.summary;
       delete element.dataset.settled;
-      useSummary.setState({ layout: "beside", floating: false, automatic: false });
+      useSummary.setState({ layout: "beside", measured: false, floating: false });
     };
   }, [summary]);
   return (
     <div
       ref={pane}
       data-pinned={(summary && pinned) || undefined}
-      className="group/pane relative min-h-0 flex-1 overflow-x-clip data-pinned:data-[summary=shift]:thread-column:-translate-x-(--spacing-summary-shift) motion-safe:data-settled:thread-column:transition-[translate] motion-safe:data-settled:thread-column:duration-350 motion-safe:data-settled:thread-column:ease-summary-shift"
+      className="group/pane relative min-h-0 flex-1 overflow-x-clip data-pinned:data-[summary=shift]:thread-column:-translate-x-(--spacing-summary-shift) data-pinned:data-[summary=shift]:thread-column:max-w-thread-beside-summary motion-safe:data-settled:thread-column:transition-[translate] motion-safe:data-settled:thread-column:duration-350 motion-safe:data-settled:thread-column:ease-summary-shift"
     >
       {children}
     </div>
@@ -621,9 +623,16 @@ export function PinnedSummary({
 }: {
   conversation: Conversation | null;
 }) {
-  const shown = useApp((s) => s.pinnedSummary);
+  const shown = useApp(summaryShownOf);
   const float = useSummary((s) => s.layout === "float");
   const visible = shown && !float;
+  // A session's card opens by itself once it has its project and branch to show, never to say
+  // there is nothing here yet.
+  const measured = useSummary((s) => s.measured);
+  const ready = conversation?.kind === "session" && conversation.setup?.type === "session" ? conversation.id : null;
+  useEffect(() => {
+    if (ready && measured) openSummaryByItself(ready);
+  }, [ready, measured]);
   // The cards stay for their easing in and out; what they show is kept only while they can be seen.
   const [content, setContent] = useState(visible);
   if (visible && !content) setContent(true);
@@ -680,13 +689,11 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
   const shownPanel = useRef(panel);
   const shownTab = useRef(mainTab);
   const movedOn = useRef(false);
-  const automaticOpen = useRef(false);
-  const focusEntered = useRef(false);
   useEffect(() => {
     const away = panel !== shownPanel.current || (mainTab !== shownTab.current && mainTab !== CHAT_TAB);
     if (away && useSummary.getState().floating) {
       movedOn.current = true;
-      useSummary.setState({ floating: false, automatic: false });
+      useSummary.setState({ floating: false });
     }
     shownPanel.current = panel;
     shownTab.current = mainTab;
@@ -704,22 +711,14 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
         // It stays over the thread while the user reads or types there: only the top bar's
         // button or Escape closes it.
         onInteractOutside={(event) => event.preventDefault()}
-        onFocusCapture={() => { focusEntered.current = true; }}
         // Focus the summary itself, not its first button (whose tip would open with it).
         onOpenAutoFocus={(event) => {
           event.preventDefault();
-          automaticOpen.current = useSummary.getState().automatic;
-          focusEntered.current = false;
-          if (automaticOpen.current) {
-            useSummary.setState({ automatic: false });
-            return;
-          }
           if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
         }}
         onCloseAutoFocus={(event) => {
-          if (movedOn.current || (automaticOpen.current && !focusEntered.current)) event.preventDefault();
+          if (movedOn.current) event.preventDefault();
           movedOn.current = false;
-          automaticOpen.current = false;
         }}
         className={cn(
           STACK,
@@ -744,7 +743,7 @@ export function SummaryFloat({ children }: { children: ReactNode }) {
       onOpenChange={(open) => {
         // The user's show or hide holds for every window size.
         setPinnedSummary(open);
-        useSummary.setState({ floating: open, automatic: false });
+        useSummary.setState({ floating: open });
       }}
     >
       {children}
@@ -900,7 +899,7 @@ function SessionSummaryContent({
  * unpins it; where the summary floats, it opens it over the thread, under the top bar.
  */
 export function PinnedSummaryToggle() {
-  const pinned = useApp((s) => s.pinnedSummary);
+  const pinned = useApp(summaryShownOf);
   const float = useSummary((s) => s.layout === "float");
   const floating = useSummary((s) => s.floating);
   if (!float) {

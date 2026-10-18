@@ -167,7 +167,7 @@ function appended(message: Message): void {
 useApp.setState((state) => ({
   conversations: { long: conversation },
   connection: { status: "connected", daemon: null, reason: null },
-  pinnedSummary: false,
+  summaryShown: { long: false },
   info: { ...state.info, platform: "macos" } as typeof state.info,
 }));
 

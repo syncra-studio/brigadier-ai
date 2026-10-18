@@ -31,7 +31,7 @@ const STATES: Record<string, PullRequest> = {
 };
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true } });
 useApp.setState({
-  pinnedSummary: true, selection: { type: "conversation", id }, conversations: { [id]: conversation },
+  summaryShown: { [id]: true }, selection: { type: "conversation", id }, conversations: { [id]: conversation },
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },
 });

@@ -20,6 +20,7 @@ import { SummarySection } from "@/components/assistant-ui/elements/summary-secti
 import { TitlebarTips } from "@/components/titlebar-button";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import type { Conversation, EventEnvelope, Request } from "@/ipc/generated";
+import { setPinnedSummary } from "@/state/actions";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -29,7 +30,7 @@ const id = "toolbar-fixture";
 const conversation: Conversation = { id, kind: "chat", title: "Toolbar", projectId: null,
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
   forkedFrom: null, sideOf: null, fallback: null, quotaWait: null };
-useApp.setState({ conversations: { [id]: { ...conversation, kind: "session" } }, selection: { type: "conversation", id }, pinnedSummary: true,
+useApp.setState({ conversations: { [id]: { ...conversation, kind: "session" } }, selection: { type: "conversation", id }, summaryShown: { [id]: true },
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 } });
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: { preview: {
   id: "preview", conversationId: id, name: "Web", command: "pnpm dev",
@@ -225,40 +226,47 @@ function Fixture() {
 
       await until(() => !document.querySelector("[data-fold-probe]"), "the fold probe to go");
       useSummary.setState({ floating: false });
-      useApp.setState({ pinnedSummary: false });
+      // A card never shown nor hidden yet: a preview may open it by itself.
+      useApp.setState({ summaryShown: {} });
+      const shownHere = () => !!useApp.getState().summaryShown[id];
       document.querySelector<HTMLTextAreaElement>('[aria-label="Fixture composer"]')?.focus();
       const board = useBoard.getState().board!;
       useBoard.setState({ board: { ...board, loaded: false, previews: {} } });
       arrival("loading");
-      seen.loadingClosed = !floating() && !useApp.getState().pinnedSummary;
+      seen.loadingClosed = !floating() && !shownHere();
       useBoard.setState({ board });
       seen.loadedClosed = !floating();
       arrival("preview");
-      seen.updateClosed = !floating() && !useApp.getState().pinnedSummary;
+      seen.updateClosed = !floating() && !shownHere();
       arrival("background", "other");
-      seen.backgroundClosed = !floating() && !useApp.getState().pinnedSummary;
+      seen.backgroundClosed = !floating() && !shownHere();
+      // Where it would float over the thread, a new preview leaves it closed.
+      arrival("narrow-preview");
+      seen.narrowClosed = !floating() && !shownHere();
       const layout = useSummary.getState().layout;
       useSummary.setState({ layout: "beside" });
-      localStorage.setItem("brigadier.pinnedSummary", "false");
       arrival("beside-preview");
-      seen.besideOpened = useApp.getState().pinnedSummary;
-      seen.preferenceKept = localStorage.getItem("brigadier.pinnedSummary") === "false";
-      useApp.setState({ pinnedSummary: false, selection: { type: "conversation", id: "other" } });
+      seen.besideOpened = shownHere();
+      // Closed by the user, it stays closed: another preview doesn't open it again.
+      setPinnedSummary(false);
+      arrival("closed-preview");
+      seen.closedKept = !shownHere();
+      seen.preferenceKept = (JSON.parse(localStorage.getItem("brigadier.summaryShown") ?? "{}") as Record<string, boolean>)[id] === false;
+      useApp.setState({ selection: { type: "conversation", id: "other" } });
       arrival("offscreen-preview");
       useApp.setState({ selection: { type: "conversation", id } });
-      seen.returnClosed = !useApp.getState().pinnedSummary && !floating();
+      seen.returnClosed = !shownHere() && !floating();
       useSummary.setState({ layout });
       for (const tab of ["file:README.md", "browser:fixture"]) {
         useSessionTabs.setState({ sessions: { [id]: { tabs: [], active: tab } } });
         arrival(tab);
         seen[tab.startsWith("file") ? "fileTabClosed" : "browserTabClosed"] = !floating();
       }
-      // Back on the chat, a preview that arrived over another tab doesn't open the card late.
       useSessionTabs.setState({ sessions: { [id]: { tabs: [], active: CHAT_TAB } } });
       seen.chatReturnClosed = !floating();
-      arrival("new-preview");
+      click("Context");
 
-      await until(() => floating() && document.querySelector("[data-activities]"), "a new preview to open the card");
+      await until(() => floating() && document.querySelector("[data-activities]"), "Context to open the card");
       setFoldProbe(true);
       seen.activitiesUnfolded = !!document.querySelector('[data-activities]:not([data-folded])');
       escape();
@@ -266,16 +274,6 @@ function Fixture() {
       await closed("Escape to close the card");
       await until(() => document.querySelector("[data-fold-probe]"), "the fold probe to come back");
       seen.activitiesFoldKept = !!document.querySelector('[data-fold-probe][data-folded]');
-      seen.autoEscapeClosed = !floating();
-      seen.autoEscapeFocus = focused();
-      arrival("focus-preview");
-
-      await until(() => floating() && chip(), "a preview to open the card again");
-      chip()!.focus();
-      escape();
-
-      await closed("Escape to close the entered card");
-      seen.enteredEscapeFocus = focused();
       click("Context");
 
       // Opened by hand the card takes the keyboard, its Escape heard from then on.
@@ -285,11 +283,10 @@ function Fixture() {
 
       await closed("Escape to close the opened card");
       seen.manualEscapeFocus = focused();
-      document.querySelector<HTMLTextAreaElement>('[aria-label="Fixture composer"]')?.focus();
-      arrival("nested-preview");
+      click("Context");
 
-      await until(() => floating() && chip(), "a preview to open the card under the composer");
-      seen.autoOpened = floating() && !!chip(); seen.composerKeptFocus = focused() === "Fixture composer"; showPreviews();
+      await until(() => floating() && chip(), "Context to open the card again");
+      showPreviews();
 
       await until(previewsOpen, "the previews to open");
       seen.nestedOpened = previewsOpen() && !!chip();

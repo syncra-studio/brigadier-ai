@@ -121,7 +121,8 @@ useBoard.setState({
 useApp.setState({
   conversations: { [id]: conversation },
   threads: { [id]: { ...emptyThread, items: messages } },
-  pinnedSummary: true,
+  selection: { type: "conversation", id },
+  summaryShown: { [id]: true },
   connection: { status: "connected", daemon: null, reason: null },
 });
 mockIPC((command, payload) => {

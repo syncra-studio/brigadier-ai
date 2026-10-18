@@ -24,7 +24,7 @@ mockIPC((command, payload) => {
   if (req.method === "listFiles") return { method: req.method, files: [], truncated: false };
   return { method: req.method };
 });
-useApp.setState({ threads: { [id]: emptyThread }, pending: [], pinnedSummary: false });
+useApp.setState({ threads: { [id]: emptyThread }, pending: [], summaryShown: { [id]: false } });
 useBoard.setState({ board: emptyBoard(id) });
 
 let seq = 0;

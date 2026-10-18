@@ -44,7 +44,7 @@ useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks: { [worker.i
   // The worker goes on with other work while its dev app builds.
   activity: { "task-2": "$ cargo clippy --workspace" } } });
 useApp.setState({
-  pinnedSummary: true, selection: { type: "conversation", id }, conversations: { [id]: conversation },
+  summaryShown: { [id]: true }, selection: { type: "conversation", id }, conversations: { [id]: conversation },
   info: { platform: "macos", version: "fixture", processStartMs: now, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },
 });

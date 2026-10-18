@@ -160,7 +160,8 @@ board.tasks = Object.fromEntries(
 useBoard.setState({ board });
 useApp.setState({
   conversations: { [session.id]: session, [automatic.id]: automatic },
-  pinnedSummary: true,
+  selection: { type: "conversation", id: session.id },
+  summaryShown: { [session.id]: true },
 });
 
 const calls: unknown[] = [];

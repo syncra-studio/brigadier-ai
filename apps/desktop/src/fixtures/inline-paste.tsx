@@ -57,6 +57,6 @@ mockIPC(async (command, payload) => {
 useApp.setState((state) => ({
   conversations: Object.fromEntries(Object.entries(state.conversations).map(([id, conversation]) => [id, { ...conversation, kind: "chat", setup: { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false } }, title: "Inline image paste" }])),
   threads: Object.fromEntries(Object.entries(state.threads).map(([id, thread]) => [id, { ...thread, items: [] }])),
-  pinnedSummary: false,
+  summaryShown: {},
 }));
 useBoard.setState(({ board }) => board ? { board: { ...board, tasks: {}, requests: {}, plans: {}, approvals: {}, waiting: {}, orchestratorSteps: [], run: "idle", runRequest: null } } : {});

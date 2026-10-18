@@ -32,7 +32,7 @@ import type {
   ThreadItem,
   UnlandedBranch,
 } from "@/ipc/generated";
-import { savePinnedSummary } from "@/lib/pinnedSummary";
+import { saveSummaryShown } from "@/lib/pinnedSummary";
 import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
 import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
@@ -63,6 +63,7 @@ import {
   type Selection,
   type SettingsPageId,
   type Thread,
+  summaryKey,
   upsertRawSession,
   useApp,
 } from "@/state/store";
@@ -1590,9 +1591,11 @@ export async function setDensity(density: Density): Promise<void> {
   await setSetting("density", density);
 }
 
-export function setPinnedSummary(shown: boolean): void {
-  savePinnedSummary(shown);
-  useApp.setState({ pinnedSummary: shown });
+/** Shows or hides a conversation's summary card, the one in front by default, until changed. */
+export function setPinnedSummary(shown: boolean, key = summaryKey(useApp.getState().selection)): void {
+  const summaryShown = { ...useApp.getState().summaryShown, [key]: shown };
+  saveSummaryShown(summaryShown);
+  useApp.setState({ summaryShown });
 }
 
 /** Opens the Inspector's page in Settings, on `tab` when given. */

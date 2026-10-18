@@ -161,7 +161,7 @@ useApp.setState((state) => ({
   conversations,
   connection: { status: "connected", daemon: null, reason: null },
   // The background drive reads the context card beside the thread.
-  pinnedSummary: drive === "background",
+  summaryShown: { [ID]: drive === "background" },
   settings: { ...state.settings, followUp: "queue" },
 }));
 openConversation(ID);

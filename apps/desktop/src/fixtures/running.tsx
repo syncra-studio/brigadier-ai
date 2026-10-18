@@ -31,7 +31,7 @@ const rows: Preview[] = [
 ].map((row) => ({ conversationId: id, pid: 42, workdir: "/work/session", workspace: "/work/session", log: null, kind: "web", ...row }) as Preview);
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: Object.fromEntries(rows.map((row) => [row.id, row])) } });
 useApp.setState({
-  pinnedSummary: true, selection: { type: "conversation", id }, conversations: { [id]: conversation },
+  summaryShown: { [id]: true }, selection: { type: "conversation", id }, conversations: { [id]: conversation },
   info: { platform: params.get("platform") === "windows" ? "windows" : "macos", version: "fixture", processStartMs: now, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },
 });

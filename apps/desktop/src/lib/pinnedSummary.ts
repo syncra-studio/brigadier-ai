@@ -1,19 +1,20 @@
-const STORAGE_KEY = "brigadier.pinnedSummary";
+const STORAGE_KEY = "brigadier.summaryShown";
 
-/** Whether the pinned summary is pinned, as last left: pinned until it is unpinned. */
-export function cachedPinnedSummary(): boolean {
+/** Each conversation's summary card, shown or hidden as last left; one never left starts hidden. */
+export function cachedSummaryShown(): Record<string, boolean> {
   try {
-    return localStorage.getItem(STORAGE_KEY) !== "false";
+    const stored: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
+    return stored && typeof stored === "object" ? (stored as Record<string, boolean>) : {};
   } catch {
-    return true;
+    return {};
   }
 }
 
-/** Keeps the pin for the next launch. */
-export function savePinnedSummary(pinned: boolean): void {
+/** Keeps every conversation's card as left for the next launch. */
+export function saveSummaryShown(shown: Record<string, boolean>): void {
   try {
-    localStorage.setItem(STORAGE_KEY, String(pinned));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(shown));
   } catch {
-    // Storage can be unavailable; the pin then lasts until the app quits.
+    // Storage can be unavailable; the cards are then kept until the app quits.
   }
 }
