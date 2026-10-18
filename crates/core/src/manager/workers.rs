@@ -1625,13 +1625,26 @@ impl SessionManager {
             .as_ref()
             .map(|p| p.prefs.secret_files.clone())
             .unwrap_or_default();
+        // A writer's new worktree with the repository's setup script runs it first, as any of
+        // its commands (never a reader's, never in a folder the user doesn't trust).
+        let setup = match (&workspace.worktree, &origin) {
+            (Some(worktree), Origin::New) if task.kind.writes() && task.attempts.len() <= 1 => {
+                self.repo_trust(&conversation_id) == Some(true) && {
+                    let (git, worktree) = (self.git.clone(), worktree.clone());
+                    blocking(move || Ok(has_setup(&git, &worktree)))
+                        .await
+                        .unwrap_or(false)
+                }
+            }
+            _ => false,
+        };
         // A successor taking the task over finds the worktree's secrets already in place.
         let mut secret_values = match (&workspace.worktree, &origin) {
             (Some(worktree), Origin::New) if task.attempts.len() <= 1 => {
                 secrets::copy_secrets(self, &owner, &workspace.repo, worktree, &secret_files)
                     .await?
             }
-            _ => secrets::values(&workspace.repo, &secret_files).await,
+            _ => secrets::values(&self.git, &workspace.repo, &secret_files).await,
         };
 
         let provider = task.route.choice.provider;
@@ -1716,6 +1729,7 @@ impl SessionManager {
             run_repo: task.run.as_ref().map(|_| workspace.repo.as_path()),
             branch: workspace.branch.as_deref(),
             low_priority: true,
+            setup,
         }));
         let native = match &workspace.worktree {
             Some(worktree) => instructions::for_worker(provider, worktree, &task.spec).await,
@@ -2598,7 +2612,13 @@ impl SessionManager {
                     Some(_) => None,
                 };
                 let newer = fresh.as_ref().and_then(|(_, gap)| gap.clone());
-                let (made, warmed) = blocking(move || {
+                let secret_files = conversation
+                    .project_id
+                    .as_ref()
+                    .and_then(|id| self.core.project(id).ok())
+                    .map(|project| project.prefs.secret_files)
+                    .unwrap_or_default();
+                let (made, warmed, copied, setup) = blocking(move || {
                     let repo = git.open(&repo_path).map_err(git_error)?;
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)
@@ -2624,6 +2644,18 @@ impl SessionManager {
                     };
                     repo.add_worktree(&path, spec).map_err(git_error)?;
                     super::sidecars::stand_in_at(&git, &path);
+                    // A new branch's worktree gets the checkout's gitignored env files (and
+                    // what `.worktreeinclude` names), so the app runs here as it does there.
+                    let copied = match made {
+                        Some(_) => super::secrets::copy_into(&git, &repo_path, &path, &secret_files)
+                            .map(|(copied, _)| copied)
+                            .unwrap_or_else(|err| {
+                                tracing::warn!(worktree = %path.display(), %err, "couldn't copy the checkout's env files in");
+                                Vec::new()
+                            }),
+                        None => Vec::new(),
+                    };
+                    let setup = made.is_some() && has_setup(&git, &path);
                     // The thread builds and tests here as a worker does in its own worktree,
                     // so it starts from the same copies of the checkout's dependency installs
                     // and build caches (best effort; see `warm`): without them its first check
@@ -2648,9 +2680,27 @@ impl SessionManager {
                             Vec::new()
                         }
                     };
-                    Ok((made, warmed))
+                    Ok((made, warmed, copied, setup))
                 })
                 .await?;
+                if !copied.is_empty()
+                    && let Ok(conv) = self.conv(conversation_id)
+                {
+                    conv.note(format!(
+                        "[setup] {}",
+                        super::prompts::copied_files_line(&copied)
+                    ))
+                    .await;
+                }
+                // The setup script runs as any command of the thread does, under its access;
+                // never in a folder the user doesn't trust.
+                if setup
+                    && self.repo_trust(conversation_id) == Some(true)
+                    && let Ok(conv) = self.conv(conversation_id)
+                {
+                    conv.note(format!("[setup] {}", super::prompts::SETUP_LINE))
+                        .await;
+                }
                 if !warmed.is_empty()
                     && let Ok(conv) = self.conv(conversation_id)
                 {
@@ -6698,4 +6748,14 @@ mod handoff_gap_tests {
             ]
         );
     }
+}
+
+/// Whether the worktree at `path` holds the repository's tracked setup script for new
+/// worktrees ([`super::prompts::SETUP_SCRIPT`]).
+pub(super) fn has_setup(git: &brigadier_git::Git, path: &Path) -> bool {
+    path.join(super::prompts::SETUP_SCRIPT).is_file()
+        && git
+            .open(path)
+            .and_then(|worktree| worktree.tracks_under(super::prompts::SETUP_SCRIPT))
+            .unwrap_or(false)
 }

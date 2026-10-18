@@ -719,6 +719,41 @@ impl Repo {
         Ok((ignored, truncated))
     }
 
+    /// The ignored files a new worktree of this checkout gets copies of, relative to its root
+    /// and sorted: every `.env*` file git ignores outside ignored folders, and what the
+    /// checkout's `.worktreeinclude` names (gitignore syntax, as Claude Code reads it) among
+    /// the files git ignores. Tracked files never: a worktree has them already. At most `limit`.
+    pub fn worktree_copies(&self, limit: usize) -> Result<Vec<String>> {
+        let (ignored, _) = self.ignored(limit)?;
+        let mut copies: Vec<String> = ignored
+            .into_iter()
+            .filter(|path| {
+                !path.ends_with('/')
+                    && Path::new(path)
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().starts_with(".env"))
+            })
+            .collect();
+        let include = self.root.join(".worktreeinclude");
+        if include.is_file() {
+            let from = format!("--exclude-from={}", include.display());
+            let out = self.cmd(&["ls-files", "-z", "--others", "--ignored", &from], true)?;
+            for path in out
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .map(|path| String::from_utf8_lossy(path).into_owned())
+                .take(limit)
+            {
+                if !copies.contains(&path) && self.is_ignored(&path)? {
+                    copies.push(path);
+                }
+            }
+        }
+        copies.sort();
+        copies.truncate(limit);
+        Ok(copies)
+    }
+
     /// The files whose change changes what `git status` says beyond the checkout's own files,
     /// wherever git keeps them (a linked worktree's are outside it): its index and HEAD, the
     /// branch HEAD names and the branch that one follows (a reset, a commit from elsewhere or
@@ -2658,6 +2693,42 @@ pub(crate) mod tests {
         run(&["remote", "add", "fork", origin.to_str().expect("path")]);
         run(&["config", "branch.main.remote", "fork"]);
         assert_eq!(repo.upstream_gap("main").expect("gap"), None);
+    }
+
+    #[test]
+    fn a_new_worktree_gets_the_ignored_env_files_and_what_worktreeinclude_names() {
+        let (dir, git) = test_git("worktree-copies");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        let write = |path: &str, text: &str| {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().expect("a parent")).expect("a folder");
+            fs::write(path, text).expect("a file");
+        };
+        write(
+            ".gitignore",
+            ".env*\n!.env.example\nnode_modules/\nconfig/local.json\nbuild.log\n",
+        );
+        write(".env.example", "KEY=\n");
+        repo.commit_changes("Base", true).expect("a commit");
+        write(".env", "KEY=one\n");
+        write(".env.local", "KEY=two\n");
+        write("apps/web/.env", "KEY=three\n");
+        write("node_modules/pkg/.env", "KEY=four\n");
+        write("config/local.json", "{}\n");
+        write("build.log", "log\n");
+        write("notes.txt", "not ignored\n");
+        assert_eq!(
+            repo.worktree_copies(100).expect("copies"),
+            [".env", ".env.local", "apps/web/.env"],
+        );
+        // `.worktreeinclude` adds ignored files; one git doesn't ignore is never taken.
+        write(".worktreeinclude", "config/local.json\nnotes.txt\n");
+        assert_eq!(
+            repo.worktree_copies(100).expect("copies"),
+            [".env", ".env.local", "apps/web/.env", "config/local.json"],
+        );
     }
 
     #[test]

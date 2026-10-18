@@ -598,7 +598,7 @@ async fn a_runs_output_hides_the_projects_secrets() {
                     return Reply::text("Done.");
                 }
                 for args in [
-                    // The session's worktree has no copy of the user's `.env`: read the checkout's.
+                    // The user's `.env`, read from their checkout.
                     json!({ "command": "cat \"$(git rev-parse --git-common-dir)/../.env\"" }),
                     // A byte that isn't UTF-8 doesn't let the rest through.
                     json!({ "command": "cat \"$(git rev-parse --git-common-dir)/../.env\"; printf '\\377\\n'" }),

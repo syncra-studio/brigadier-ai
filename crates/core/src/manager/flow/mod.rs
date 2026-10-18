@@ -2128,5 +2128,7 @@ mod worker_turns_tests;
 mod workspace_tests;
 #[cfg(test)]
 mod workspaces_tests;
+#[cfg(test)]
+mod worktree_copies_tests;
 
 mod watchdog_tests;
