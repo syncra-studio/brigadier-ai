@@ -60,6 +60,9 @@ struct State {
     artifacts: HashMap<String, Vec<Artifact>>,
     /// Owners whose artifacts are all to be removed.
     disposing: HashSet<String>,
+    /// Owners whose latest disposal request was a Close workspace (counts only while they
+    /// are disposing).
+    closing: HashSet<String>,
     /// Every CLI session Brigadier ever started, by its CLI's own id, kept after its files
     /// went: what proves a session's files found later are Brigadier's.
     native: HashMap<String, NativeSession>,
@@ -234,7 +237,12 @@ impl CleanupLedger {
                             }
                         }
                     }
-                    DomainEvent::CleanupRequested { owner } => {
+                    DomainEvent::CleanupRequested { owner, close } => {
+                        if close {
+                            state.closing.insert(owner.clone());
+                        } else {
+                            state.closing.remove(&owner);
+                        }
                         state.disposing.insert(owner);
                     }
                     DomainEvent::CleanupFinished { owner } => {
@@ -335,6 +343,7 @@ impl CleanupLedger {
             // next launch sweeps.
             self.append(DomainEvent::CleanupRequested {
                 owner: owner.to_owned(),
+                close: false,
             })
             .await?;
             let mut state = self.state();
@@ -439,20 +448,49 @@ impl CleanupLedger {
     /// Removes everything `owner` created. What cannot be removed now stays recorded and is
     /// retried by the next sweep.
     pub async fn dispose(&self, owner: &str) -> Leftovers {
-        let requested = self.state().disposing.contains(owner);
+        self.dispose_as(owner, false).await
+    }
+
+    /// [`Self::dispose`] for the user's Close workspace (`session:` owners): a restart that
+    /// takes the disposal back knows it was one ([`Self::closing`]).
+    pub async fn dispose_closing(&self, owner: &str) -> Leftovers {
+        self.dispose_as(owner, true).await
+    }
+
+    /// Whether `owner` is disposing because of the user's Close workspace.
+    pub fn closing(&self, owner: &str) -> bool {
+        let state = self.state();
+        state.disposing.contains(owner) && state.closing.contains(owner)
+    }
+
+    async fn dispose_as(&self, owner: &str, close: bool) -> Leftovers {
+        let (requested, marked) = {
+            let state = self.state();
+            (
+                state.disposing.contains(owner),
+                state.closing.contains(owner),
+            )
+        };
         if !requested && self.artifacts(owner).is_empty() {
             return Leftovers::default();
         }
-        if !requested {
+        if !requested || (close && !marked) {
             if let Err(err) = self
                 .append(DomainEvent::CleanupRequested {
                     owner: owner.to_owned(),
+                    close,
                 })
                 .await
             {
                 crate::logging::private_trace!(owner.starts_with(TAB_CHAT_OWNER), warn, "could not record a cleanup request"; owner, error = %err);
             }
-            self.state().disposing.insert(owner.to_owned());
+            let mut state = self.state();
+            state.disposing.insert(owner.to_owned());
+            if close {
+                state.closing.insert(owner.to_owned());
+            } else {
+                state.closing.remove(owner);
+            }
         }
         let artifacts = self.artifacts(owner);
         // Processes first, so nothing is still writing the files removed next.
@@ -503,6 +541,7 @@ impl CleanupLedger {
             if self
                 .append(DomainEvent::CleanupRequested {
                     owner: owner.to_owned(),
+                    close: false,
                 })
                 .await
                 .is_err()
@@ -998,7 +1037,7 @@ impl CleanupLedger {
         let stream = match &event {
             DomainEvent::CleanupRecorded { owner, .. }
             | DomainEvent::CleanupRemoved { owner, .. }
-            | DomainEvent::CleanupRequested { owner }
+            | DomainEvent::CleanupRequested { owner, .. }
             | DomainEvent::CleanupFinished { owner }
             | DomainEvent::CleanupCompleted { owner, .. } => owner_stream(owner),
             _ => streams::CLEANUP.to_owned(),
@@ -1432,7 +1471,7 @@ mod tests {
                 .filter_map(|event| {
                     let decoded = crate::sessions::decode(event).unwrap();
                     match &decoded {
-                        DomainEvent::CleanupRequested { owner: held }
+                        DomainEvent::CleanupRequested { owner: held, .. }
                         | DomainEvent::CleanupRecorded { owner: held, .. }
                         | DomainEvent::CleanupRemoved { owner: held, .. }
                         | DomainEvent::CleanupCompleted { owner: held, .. }
@@ -1480,6 +1519,7 @@ mod tests {
         // A request left by an older daemon, with no artifacts to acknowledge.
         let request = DomainEvent::CleanupRequested {
             owner: owner.into(),
+            close: false,
         };
         fixture.append(request.clone()).await;
         let ledger = fixture.load().await;
@@ -1709,6 +1749,7 @@ mod tests {
         fixture
             .append(DomainEvent::CleanupRequested {
                 owner: owner.into(),
+                close: false,
             })
             .await;
         drop(ledger);

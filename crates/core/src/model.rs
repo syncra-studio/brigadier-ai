@@ -2142,6 +2142,11 @@ pub enum DomainEvent {
     /// Everything `owner` created is to be removed; what fails is retried at the next launch.
     CleanupRequested {
         owner: String,
+        /// The user's Close workspace asked for it (a session's own worktree), so a restart
+        /// that takes it back says it didn't finish.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(skip)]
+        close: bool,
     },
     /// An empty disposal finished. Artifacts recorded meanwhile remain owned.
     CleanupFinished {

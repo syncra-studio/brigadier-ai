@@ -66,6 +66,17 @@ async fn session(name: &str) -> (Flow, Log) {
                     log(format!("head: {head}"));
                     return Reply::text("More notes are in.");
                 }
+                if turn.input.contains("Run the long one.") {
+                    let reply = turn
+                        .call("run", json!({ "command": "sleep 60; echo late" }))
+                        .await;
+                    log(format!("run: {} {}", reply.is_error, reply.text));
+                    return Reply::text("It runs.");
+                }
+                if turn.input.contains("Draft it.") {
+                    std::fs::write(turn.add_dirs[0].join("DRAFT.md"), "draft\n").unwrap();
+                    return Reply::text("Drafted, not committed.");
+                }
                 // Last: a resumed thread's input may carry the earlier messages too.
                 if turn.input.contains("Add notes.") {
                     commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
@@ -635,6 +646,7 @@ async fn plant_failed_removal(flow: &Flow) -> PathBuf {
             crate::model::streams::CLEANUP.to_owned(),
             DomainEvent::CleanupRequested {
                 owner: format!("session:{}", flow.conversation),
+                close: false,
             },
         )])
         .await
@@ -791,6 +803,126 @@ async fn a_failed_close_workspace_says_so_at_the_next_start() {
             ))),
         "{:#?}",
         board.notices
+    );
+    flow.stop().await;
+}
+
+/// An older removal that also left the session's folder recorded, taken back at a restart, was
+/// no Close workspace: the session isn't told one didn't finish (#182).
+#[tokio::test]
+async fn an_older_removal_that_kept_its_folder_recorded_says_nothing_at_the_next_start() {
+    let (mut flow, _) = session("merge-old-removal-path").await;
+    flow.say("Add notes.").await;
+    quiet(&flow).await;
+    let path = workspace(&flow).0.unwrap();
+    flow.core
+        .record(vec![(
+            crate::model::streams::CLEANUP.to_owned(),
+            DomainEvent::CleanupRequested {
+                owner: format!("session:{}", flow.conversation),
+                close: false,
+            },
+        )])
+        .await
+        .unwrap();
+    flow.restart().await;
+    flow.settled().await;
+    let owner = format!("session:{}", flow.conversation);
+    assert!(!flow.manager.runtime.ledger().disposing().contains(&owner));
+    assert!(path.join(".git").exists());
+    let board = flow.board().await;
+    assert!(
+        !board
+            .notices
+            .iter()
+            .any(|notice| notice.text.contains("didn't finish")),
+        "{:#?}",
+        board.notices
+    );
+    flow.stop().await;
+}
+
+/// Close workspace right after a turn, while the sweep that follows it still holds the
+/// thread, waits for the sweep and closes instead of saying the session is working (#180).
+#[tokio::test]
+async fn close_workspace_right_after_a_turn_waits_for_its_sweep() {
+    let (flow, _) = session("merge-close-sweep").await;
+    flow.say("Add notes.").await;
+    quiet(&flow).await;
+    let path = workspace(&flow).0.unwrap();
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    assert!(conv.begin_scratch_sweep().await, "the sweep after the turn");
+    let closing = tokio::spawn({
+        let manager = flow.manager.clone();
+        let id = flow.conversation.clone();
+        async move { manager.close_workspace(&id).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !closing.is_finished(),
+        "it waits for the sweep, not refuses"
+    );
+    conv.end_scratch_sweep().await;
+    closing.await.unwrap().unwrap();
+    assert!(!path.exists());
+    flow.stop().await;
+}
+
+/// A command the thread left running in the background keeps its request working: Close
+/// workspace stops it and closes, without waiting for it to end (Codex review of #180).
+#[tokio::test]
+async fn close_workspace_stops_a_background_run_and_closes() {
+    let (flow, _) = session("merge-close-background").await;
+    flow.say("Add notes.").await;
+    quiet(&flow).await;
+    let path = workspace(&flow).0.unwrap();
+    flow.background_commands();
+    flow.say("Run the long one.").await;
+    flow.until("the run in the background, the turn over", |board| {
+        board
+            .background_runs
+            .values()
+            .any(|run| run.state == crate::work::BackgroundRunState::Running)
+            && board.run == RunState::Idle
+    })
+    .await;
+    let started = std::time::Instant::now();
+    flow.manager
+        .close_workspace(&flow.conversation)
+        .await
+        .unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert!(!path.exists());
+    flow.stop().await;
+}
+
+/// A message sent while Close workspace waits for the sweep may get its turn first: what that
+/// turn leaves uncommitted is still kept on the branch, never removed with the folder (Codex
+/// review of #180).
+#[tokio::test]
+async fn a_turn_that_overtakes_a_waiting_close_keeps_its_changes() {
+    let (flow, _) = session("merge-close-sweep-turn").await;
+    flow.say("Add notes.").await;
+    quiet(&flow).await;
+    let (path, branch) = workspace(&flow);
+    let path = path.unwrap();
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    assert!(conv.begin_scratch_sweep().await, "the sweep after the turn");
+    let closing = tokio::spawn({
+        let manager = flow.manager.clone();
+        let id = flow.conversation.clone();
+        async move { manager.close_workspace(&id).await }
+    });
+    flow.say("Draft it.").await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    conv.end_scratch_sweep().await;
+    flow.manager.kick(&conv);
+    closing.await.unwrap().unwrap();
+    flow.settled().await;
+    let files = git(&flow.repo, &["ls-tree", "-r", "--name-only", &branch]);
+    assert!(
+        files.contains("DRAFT.md") || path.join("DRAFT.md").exists(),
+        "the draft went with the folder: {files}"
     );
     flow.stop().await;
 }

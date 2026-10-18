@@ -932,6 +932,21 @@ impl ConvLive {
         true
     }
 
+    /// [`Self::begin_scratch_sweep`], waiting up to `limit` for what holds the scratch to let
+    /// go: the sweep right after a turn, say (#180).
+    pub(super) async fn begin_scratch_sweep_within(&self, limit: std::time::Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + limit;
+        loop {
+            if self.begin_scratch_sweep().await {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
     /// The sweep is over: turns may start again (the caller looks for one).
     pub(super) async fn end_scratch_sweep(&self) {
         self.state.lock().await.sweeping = false;

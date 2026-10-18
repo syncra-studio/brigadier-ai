@@ -727,13 +727,16 @@ impl SessionManager {
             {
                 continue;
             }
+            // Read before the disposal is taken back, which ends it.
+            let closing = ledger.closing(&owner);
             if let Err(err) = ledger.cancel_disposal(&owner).await {
                 tracing::warn!(conversation = %conversation.id, error = %err, "could not keep a merged session's workspace");
                 continue;
             }
             tracing::info!(conversation = %conversation.id, "kept a merged session's workspace");
-            // A Close workspace that couldn't remove the folder: the session still records it,
-            // and the user hears that it stays rather than finding it there unannounced.
+            // The session still records its folder: it stays. Only a Close workspace that
+            // couldn't remove it says so (#182); the user hears it stays rather than finding
+            // it there unannounced.
             if let Some(Setup::Session {
                 environment:
                     Environment::NewWorktree {
@@ -742,6 +745,9 @@ impl SessionManager {
                 ..
             }) = &conversation.setup
             {
+                if !closing {
+                    continue;
+                }
                 self.notice(
                     &conversation.id,
                     brigadier_providers::NoticeLevel::Warning,
@@ -838,19 +844,14 @@ impl SessionManager {
             ));
         }
         self.quiet_for_close(id).await?;
-        // What runs in the folder stops before it goes.
-        let _ = self.stop_previews(id, "the workspace closed").await;
-        self.stop_background_runs(id);
-        self.drop_check_checkout(id).await;
-        if !self.keep_session_changes(&conversation).await {
-            return Err(Error::Invalid(
-                "Its uncommitted changes couldn't be kept, so the workspace stays.".into(),
-            ));
-        }
         // No turn starts from here until the folder is gone: a message or a worker's report
-        // that comes meanwhile waits for the turn after, in a fresh worktree.
+        // that comes meanwhile waits for the turn after, in a fresh worktree. The sweep right
+        // after a turn holds the thread a moment: the close waits for it (#180).
         let conv = self.conv(id)?;
-        if !conv.begin_scratch_sweep().await {
+        if !conv
+            .begin_scratch_sweep_within(std::time::Duration::from_secs(10))
+            .await
+        {
             return Err(Error::Invalid(
                 "The session is working: stop it first, then close its workspace.".into(),
             ));
@@ -876,10 +877,32 @@ impl SessionManager {
         // Asked again just before the folder goes: a turn or worker that started meanwhile
         // keeps it (Codex review, phase A verify).
         self.quiet_for_close(id).await?;
+        // What runs in the folder stops before it goes; a request a background run kept
+        // working ends with it.
+        let _ = self.stop_previews(id, "the workspace closed").await;
+        self.stop_background_runs(id);
+        self.drop_check_checkout(id).await;
+        // A request that just ended takes its last snapshot of the folder right after: it
+        // runs before the folder goes.
+        if !self
+            .requests_snapshotted_within(id, std::time::Duration::from_secs(10))
+            .await
+        {
+            return Err(Error::Invalid(
+                "The session is still finishing its last request: try again in a moment.".into(),
+            ));
+        }
+        // Its changes are kept only now, with no turn able to start: a turn the wait for the
+        // sweep let through can't leave changes behind unkept.
+        if !self.keep_session_changes(conversation).await {
+            return Err(Error::Invalid(
+                "Its uncommitted changes couldn't be kept, so the workspace stays.".into(),
+            ));
+        }
         let leftovers = self
             .runtime
             .ledger()
-            .dispose(&format!("session:{id}"))
+            .dispose_closing(&format!("session:{id}"))
             .await;
         if !leftovers.is_clean() {
             return Err(Error::Invalid(format!(
@@ -900,6 +923,37 @@ impl SessionManager {
         ))
         .await;
         Ok(format!("Closed the workspace. {branch_line}"))
+    }
+
+    /// Whether every request of the session that isn't waiting ended and took its last
+    /// snapshot of the folder (its changes settled), waiting up to `limit` for them.
+    async fn requests_snapshotted_within(
+        &self,
+        id: &ConversationId,
+        limit: std::time::Duration,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + limit;
+        loop {
+            let Ok(board) = self.core.board(id).await else {
+                return true;
+            };
+            // A request still shown working with its turn over is about to end and settle.
+            let pending = board.requests.values().any(|request| match request.state {
+                crate::work::RequestState::Working => true,
+                crate::work::RequestState::Waiting => false,
+                _ => request
+                    .changes
+                    .as_ref()
+                    .is_some_and(|changes| !changes.settled),
+            });
+            if !pending {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
     }
 
     /// Why the session's workspace can't close now: its thread works, or a worker of it runs

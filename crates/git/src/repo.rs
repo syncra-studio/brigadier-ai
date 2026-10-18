@@ -23,6 +23,9 @@ pub struct Repo {
     pub(crate) common_dir: PathBuf,
 }
 
+/// A lock per repository (common git dir), each made on first use and dropped when unused.
+type RepoLocks = OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>>;
+
 pub(crate) enum TreeMerge {
     Ready(Oid),
     Conflicts(Vec<String>),
@@ -560,6 +563,8 @@ impl Repo {
     }
 
     /// Create a worktree at the supplied path using a new branch, existing branch or detached HEAD.
+    /// Adds, removals, prunes and listings in one repository run one at a time: git reads the
+    /// other worktrees' entries while it writes its own, and fails on a half-written one (#207).
     pub fn add_worktree(&self, path: &Path, spec: WorktreeSpec) -> Result<Worktree> {
         let path = absolute(path)?;
         let mut args: Vec<OsString> = vec!["worktree".into(), "add".into()];
@@ -592,7 +597,10 @@ impl Repo {
                 ]);
             }
         }
+        let lock = self.worktree_lock();
+        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         self.cmd(&args, false)?;
+        drop(guard);
         self.git.open_worktree(&path)
     }
 
@@ -605,8 +613,10 @@ impl Repo {
                 "cannot remove the repository's own checkout".into(),
             ));
         }
+        let lock = self.worktree_lock();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         if path.try_exists()? {
-            let registered = self.worktrees()?.iter().any(|w| {
+            let registered = self.list_worktrees()?.iter().any(|w| {
                 w.path == path || fs::canonicalize(&w.path).ok() == fs::canonicalize(&path).ok()
             });
             if !registered {
@@ -625,12 +635,21 @@ impl Repo {
 
     /// Remove the records of worktrees whose folders are gone (`git worktree prune`).
     pub fn prune_worktrees(&self) -> Result<()> {
+        let lock = self.worktree_lock();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         self.cmd(&["worktree", "prune", "--expire=now"], false)?;
         Ok(())
     }
 
     /// List registered worktrees using NUL-delimited porcelain metadata.
     pub fn worktrees(&self) -> Result<Vec<WorktreeInfo>> {
+        let lock = self.worktree_lock();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.list_worktrees()
+    }
+
+    /// [`Self::worktrees`], for a caller already holding the worktree lock.
+    fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
         parse::worktrees(&self.cmd(&["worktree", "list", "--porcelain", "-z"], true)?)
     }
 
@@ -989,8 +1008,19 @@ impl Repo {
     }
 
     pub(crate) fn landing_lock(&self) -> Arc<Mutex<()>> {
-        static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
-        let mut locks = LOCKS
+        static LOCKS: RepoLocks = OnceLock::new();
+        self.lock_in(&LOCKS)
+    }
+
+    /// The lock worktree adds, removals, prunes and listings of this repository take.
+    fn worktree_lock(&self) -> Arc<Mutex<()>> {
+        static LOCKS: RepoLocks = OnceLock::new();
+        self.lock_in(&LOCKS)
+    }
+
+    /// This repository's lock (per common git dir) in `locks`.
+    fn lock_in(&self, locks: &RepoLocks) -> Arc<Mutex<()>> {
+        let mut locks = locks
             .get_or_init(Default::default)
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -2645,5 +2675,60 @@ pub(crate) mod tests {
                 .expect("pgrep");
             assert!(left.stdout.is_empty(), "left running: {left:?}");
         }
+    }
+
+    #[test]
+    fn eight_worktrees_added_at_once_in_one_repository_all_start_while_others_list_them() {
+        let (dir, git) = test_git("concurrent-adds");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        fs::write(root.join("a.txt"), "a\n").expect("a file");
+        let base = repo.commit_changes("Base", true).expect("a commit");
+        for round in 0..6 {
+            let start = std::sync::Arc::new(std::sync::Barrier::new(12));
+            let lists: Vec<_> = (0..4)
+                .map(|_| {
+                    let (git, root, start) = (git.clone(), root.clone(), start.clone());
+                    std::thread::spawn(move || {
+                        let repo = git.open(&root).expect("the repository");
+                        start.wait();
+                        (0..4).try_for_each(|_| repo.worktrees().map(|_| ()))
+                    })
+                })
+                .collect();
+            let adds: Vec<_> = (0..8)
+                .map(|index| {
+                    let (git, root, start, base) =
+                        (git.clone(), root.clone(), start.clone(), base.clone());
+                    let path = dir.join(format!("wt-{round}-{index}"));
+                    std::thread::spawn(move || {
+                        // Each its own handle, as separate sessions open the repository.
+                        let repo = git.open(&root).expect("the repository");
+                        start.wait();
+                        let spec = if index % 2 == 0 {
+                            crate::WorktreeSpec::Detached { at: base }
+                        } else {
+                            crate::WorktreeSpec::NewBranch {
+                                name: format!("task-{round}-{index}"),
+                                start: base,
+                            }
+                        };
+                        repo.add_worktree(&path, spec).map(|_| ())
+                    })
+                })
+                .collect();
+            for add in adds {
+                add.join()
+                    .expect("no panic")
+                    .expect("the worktree is added");
+            }
+            for list in lists {
+                list.join()
+                    .expect("no panic")
+                    .expect("the worktrees are listed");
+            }
+        }
+        assert_eq!(repo.worktrees().expect("the worktrees").len(), 49);
     }
 }
