@@ -90,8 +90,11 @@ impl SessionManager {
     /// the merged head stays where it is: the thread sees it ahead of the base. A pull request
     /// into another branch than the session's base isn't its merge, and one whose merge commit
     /// can't be fetched yet is left for a later request's end. `request`: the one ending, whose
-    /// turn may have merged it.
-    pub(super) async fn reconcile_pr_merge(&self, id: &ConversationId, request: &str) {
+    /// turn may have merged it; none when a new request is about to start (the user merged it
+    /// on GitHub while the tab was idle), so that one starts from the new base too. Sibling tabs
+    /// hear of the merge as of a local one, and the thread that its remote branch may still
+    /// hold the commits the merge rewrote.
+    pub(super) async fn reconcile_pr_merge(&self, id: &ConversationId, request: Option<&str>) {
         if self.overnight.active.get(id).is_some() {
             return;
         }
@@ -214,9 +217,13 @@ impl SessionManager {
         };
         tracing::info!(conversation = %id, pr = pr.number, moved, onto = %onto.0, "a merged pull request recorded");
         // The ending request's work is in it only while its head is the merged one.
-        if at_head && !requests.iter().any(|covered| covered == request) {
+        if let Some(request) = request
+            && at_head
+            && !requests.iter().any(|covered| covered == request)
+        {
             requests.push(request.to_owned());
         }
+        let (named, onto_base) = (branch.clone(), base.clone());
         self.orchestrator_step_in(
             id,
             requests.last().cloned(),
@@ -227,13 +234,24 @@ impl SessionManager {
                 asked_in: None,
                 upstream: None,
                 head: Some(head),
-                merge_commit: Some(onto.0),
+                merge_commit: Some(onto.0.clone()),
                 pr: Some(pr.number),
                 auto: self.auto_merge_in(id),
                 requests,
             },
         )
         .await;
+        self.tell_merged(id, &onto_base, &onto.0).await;
+        // GitHub may keep the pull request's branch: a push of the moved branch to it is no
+        // fast-forward then. A fact for the thread to judge.
+        if moved && let Ok(conv) = self.conv(id) {
+            let short = &onto.0[..onto.0.len().min(12)];
+            conv.hold_fact(format!(
+                "[pull request] PR #{} was merged on GitHub; your branch `{named}` now starts from `{onto_base}` at {short}. If GitHub kept the branch, its copy there still holds the commits before the merge: a push of new work to it needs `--force-with-lease`, or use a new branch.",
+                pr.number,
+            ))
+            .await;
+        }
     }
 }
 

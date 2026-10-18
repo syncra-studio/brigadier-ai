@@ -405,15 +405,34 @@ fn covered_upto(
     commit: &Oid,
 ) -> (Oid, Option<ReviewRun>) {
     // A review of a snapshot with the candidate's very files (an uncommitted change it read
-    // before the thread committed it) covers the candidate.
+    // before the thread committed it) covers the candidate, when what comes before its base
+    // is covered too: a landing's review of only its own commits leaves the thread's earlier
+    // ones out.
     let tree = repo.tree_of(&commit.0).ok();
     if let Some(same) = reviews
         .iter()
         .filter(|review| tree.is_some() && repo.tree_of(&review.tip).ok() == tree)
+        .filter(|review| {
+            let base = Oid(review.base.clone());
+            base == *start
+                || repo.ancestor(&base, start).unwrap_or(false)
+                || (repo.ancestor(start, &base).unwrap_or(false)
+                    && chain_upto(repo, reviews, start, &base).0 == base)
+        })
         .max_by_key(|review| (review.started_at_ms, review.number))
     {
         return (commit.clone(), Some(same.clone()));
     }
+    chain_upto(repo, reviews, start, commit)
+}
+
+/// [`covered_upto`] along commits only: the chain of reviews from `start` towards `commit`.
+fn chain_upto(
+    repo: &brigadier_git::Repo,
+    reviews: &[ReviewRun],
+    start: &Oid,
+    commit: &Oid,
+) -> (Oid, Option<ReviewRun>) {
     let mut from = start.clone();
     let mut last: Option<ReviewRun> = None;
     loop {
@@ -3002,5 +3021,56 @@ mod tests {
             }
         );
         assert!(unverified(&status));
+    }
+
+    /// A review whose tip has the candidate's files covers it only with what comes before its
+    /// base covered too: a landing's review of its own commits leaves the thread's earlier
+    /// commit to review (phase 3 verify).
+    #[test]
+    fn a_review_of_the_same_files_covers_the_candidate_only_from_where_it_started() {
+        let dir =
+            std::env::temp_dir().join(format!("brigadier-covered-upto-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let git_in = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        let commit = |file: &str| {
+            std::fs::write(dir.join(file), file).unwrap();
+            git_in(&["add", "-A"]);
+            git_in(&["commit", "-q", "-m", file]);
+            Oid(git_in(&["rev-parse", "HEAD"]))
+        };
+        git_in(&["init", "-q", "-b", "main"]);
+        let base = commit("base.txt");
+        let own = commit("own.txt");
+        let landed = commit("landed.txt");
+        let repo = brigadier_git::Git::new("git".into(), std::env::vars_os().collect())
+            .open(&dir)
+            .unwrap();
+        // The landing's review: own..landed, the thread's own commit left out.
+        let mut landing = review("landing", ReviewKind::Code, &own.0, &landed.0);
+        landing.number = 1;
+        let (from, last) = covered_upto(&repo, std::slice::from_ref(&landing), &base, &landed);
+        assert_eq!(from, base);
+        assert!(last.is_none());
+        // With the thread's own commit reviewed as well, the whole range is.
+        let mut earlier = review("own", ReviewKind::Code, &base.0, &own.0);
+        earlier.number = 2;
+        let (from, last) = covered_upto(&repo, &[earlier, landing.clone()], &base, &landed);
+        assert_eq!(from, landed);
+        assert_eq!(last.map(|review| review.id), Some("landing".to_owned()));
+        // A review from the base itself covers it alone.
+        let mut whole = review("whole", ReviewKind::Code, &base.0, &landed.0);
+        whole.number = 3;
+        let (from, _) = covered_upto(&repo, &[whole], &base, &landed);
+        assert_eq!(from, landed);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

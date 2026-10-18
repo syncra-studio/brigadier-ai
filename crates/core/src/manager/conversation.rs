@@ -2935,6 +2935,16 @@ impl SessionManager {
         self.set_run_for(&conv.id, RunState::Starting, None, request.clone())
             .await;
         if session && !users.is_empty() {
+            // Work left ready whose pull request was merged on GitHub since (by the user, while
+            // the tab was idle) is recorded first, so this request starts from the new base.
+            if self
+                .core
+                .board(&conv.id)
+                .await
+                .is_ok_and(|board| !board.unmerged_ready().is_empty())
+            {
+                Box::pin(self.reconcile_pr_merge(&conv.id, None)).await;
+            }
             // The user's message brings back the session's worktree a merge removed
             // (THREAD-PLAN.md Q9), from the base's tip now.
             if let Err(err) = self.effective_workspace(&conv.id).await {

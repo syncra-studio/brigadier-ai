@@ -298,7 +298,7 @@ impl SessionManager {
                 // A pull request its turn merged on GitHub is recorded, and the session
                 // branch moved onto the new base, first. Boxed: its future stays off this
                 // one's stack.
-                Box::pin(self.reconcile_pr_merge(conversation_id, id)).await;
+                Box::pin(self.reconcile_pr_merge(conversation_id, Some(id))).await;
                 self.note_ready(conversation_id, id).await;
                 if !told_overlaps {
                     told_overlaps = true;

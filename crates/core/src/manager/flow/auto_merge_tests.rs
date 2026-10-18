@@ -270,6 +270,143 @@ async fn squash_merged(name: &str, single_branch: bool) {
     flow.stop().await;
 }
 
+/// The thread leaves its pushed work ready and the user squash-merges the pull request on
+/// GitHub while the tab is idle (merging on its own off): the user's next message records the
+/// merge on the ready request before its turn, which starts from the new base and hears that
+/// GitHub may have kept the old branch.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_pull_request_the_user_merged_while_the_tab_was_idle_is_recorded_before_the_next_turn() {
+    let scratch: Arc<OnceLock<PathBuf>> = Arc::default();
+    let log: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (dir, said) = (scratch.clone(), log.clone());
+    let flow = Flow::start(
+        "auto-merge-idle-pr",
+        Options::default(),
+        script(move |turn| {
+            let (dir, said) = (dir.clone(), said.clone());
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("Done.");
+                }
+                let workspace = turn.add_dirs[0].clone();
+                if turn.input.contains("Ship the notes.") {
+                    std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
+                    git(&workspace, &["add", "NOTES.md"]);
+                    git(&workspace, &["commit", "-q", "-m", "Add notes"]);
+                    git(&workspace, &["push", "-q", "-u", "origin", "HEAD"]);
+                    let _ = dir.get();
+                    return Reply::text("It's ready: PR #7 is open.");
+                }
+                if turn.input.contains("Add more.") {
+                    let parent = git(&workspace, &["rev-parse", "HEAD"]);
+                    said.lock().unwrap().push(format!("started at: {parent}"));
+                    said.lock().unwrap().push(format!("input: {}", turn.input));
+                    return Reply::text("More is in.");
+                }
+                said.lock().unwrap().push(format!("other: {}", turn.input));
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    let root = flow.repo.parent().unwrap().to_path_buf();
+    scratch.set(root.clone()).unwrap();
+    let origin = root.join("origin.git");
+    git(
+        &flow.repo,
+        &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
+    );
+    git(
+        &flow.repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&flow.repo, &["fetch", "-q", "origin"]);
+    git(
+        &flow.repo,
+        &["branch", "--set-upstream-to=origin/main", "main"],
+    );
+    *flow.manager.gh_override.lock().unwrap() = Some(stub_gh(&root.join("gh")));
+    // A sibling tab in the same workspace.
+    let workspace = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .workspace_id
+        .unwrap();
+    let sibling = flow.manager.create_tab(&workspace, None).await.unwrap().id;
+
+    flow.say("Ship the notes.").await;
+    let board = flow.settled().await;
+    let ready = board.latest_request().unwrap().id.clone();
+    assert!(
+        !board
+            .orchestrator_steps
+            .iter()
+            .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+    );
+    // The user merges it on GitHub while the tab is idle.
+    let workspace = PathBuf::from(flow.manager.checkout_dir(&flow.conversation).unwrap());
+    let head = git(&workspace, &["rev-parse", "HEAD"]);
+    let branch = git(&workspace, &["branch", "--show-current"]);
+    let squash = squash_merge(&origin, &root, &branch);
+    std::fs::write(
+        root.join("gh").join("pr-list"),
+        json!([{
+            "number": 7,
+            "title": "Add notes",
+            "url": "https://github.com/o/n/pull/7",
+            "state": "MERGED",
+            "isDraft": false,
+            "headRefOid": head,
+            "baseRefName": "main",
+            "mergeCommit": { "oid": squash },
+        }])
+        .to_string(),
+    )
+    .unwrap();
+
+    flow.say("Add more.").await;
+    let board = flow.settled().await;
+    let said = |what: &str| {
+        log.lock()
+            .unwrap()
+            .iter()
+            .find_map(|line| line.strip_prefix(what).map(str::to_owned))
+            .unwrap()
+    };
+    assert_eq!(said("started at: "), squash);
+    let input = said("input: ");
+    assert!(
+        input.contains("[pull request] PR #7 was merged on GitHub"),
+        "{input}"
+    );
+    assert!(input.contains("`--force-with-lease`"), "{input}");
+    let merged: Vec<_> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::Merged {
+                pr, auto, requests, ..
+            } => Some((*pr, *auto, requests.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(merged, [(Some(7), false, vec![ready])]);
+    // The sibling tab hears of it as of a local merge.
+    flow.say_to(&sibling, "Hello.").await;
+    flow.settled_in(&sibling).await;
+    let told = format!("merged into `main` at {}", &squash[..12]);
+    assert!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.starts_with("other: ") && line.contains(&told)),
+        "{told}"
+    );
+    flow.stop().await;
+}
+
 /// A merged pull request into another branch than the tab's base isn't its merge, and one
 /// whose merge commit isn't here yet (the fetch failed) is left for later: nothing is recorded
 /// and the branch stays where it is.
