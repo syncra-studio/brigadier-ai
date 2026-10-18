@@ -8,13 +8,14 @@
 //! left unanswered for long), as Settings › General › Notifications allows.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use brigadier_core::{
-    ApprovalSubject, CardState, ConversationId, DomainEvent, NotifyFinished, Question,
-    QuotaWarning, RequestState, Settings, UserRequest, WaitingItem, WaitingSource,
+    AccountsView, ApprovalSubject, CardState, ConversationId, DomainEvent, NotifyFinished,
+    Question, QuotaWarning, RequestState, Settings, UserRequest, WaitingItem, WaitingSource,
 };
 use brigadier_ipc::app::BridgeEvent;
 use brigadier_ipc::protocol::{
@@ -97,8 +98,8 @@ struct Inner {
     in_front: InFront,
     open_setup: OpenSetup,
     /// What was already notified (a "Waiting on you" item, an approval, a question, a request's
-    /// finish), so an update doesn't notify again.
-    notified: Mutex<HashSet<String>>,
+    /// finish), so an update doesn't notify again. Quota keys persist across restarts.
+    notified: Mutex<NotificationKeys>,
 }
 
 impl Bridge {
@@ -111,6 +112,12 @@ impl Bridge {
         open_setup: OpenSetup,
     ) -> Self {
         let (requests, queue) = mpsc::channel(QUEUED_REQUESTS);
+        let notified = NotificationKeys::load(
+            platform
+                .paths()
+                .data_dir
+                .join("notified-quota-warnings.json"),
+        );
         let bridge = Self {
             inner: Arc::new(Inner {
                 platform,
@@ -127,7 +134,7 @@ impl Bridge {
                 notify,
                 in_front,
                 open_setup,
-                notified: Mutex::new(HashSet::new()),
+                notified: Mutex::new(notified),
             }),
         };
         let task = bridge.clone();
@@ -340,11 +347,20 @@ impl Bridge {
             },
             reply: None,
         };
-        let mut first = Some(subscribe);
+        // The first subscription skips history. Recover active quota warnings from the
+        // snapshot; repeat on reconnect in case an earlier snapshot request failed.
+        let mut first = [
+            subscribe,
+            Outgoing {
+                request: Request::GetAccounts,
+                reply: None,
+            },
+        ]
+        .into_iter();
 
         let reason = loop {
-            let outgoing = if let Some(subscribe) = first.take() {
-                Some(subscribe)
+            let outgoing = if let Some(outgoing) = first.next() {
+                Some(outgoing)
             } else {
                 tokio::select! {
                     frame = frames.recv() => {
@@ -397,6 +413,13 @@ impl Bridge {
     ) -> Option<String> {
         match frame {
             ServerFrame::Response { id, result } => {
+                if pending.get(&id).is_some_and(Option::is_none)
+                    && let Outcome::Ok {
+                        value: Response::GetAccounts { accounts },
+                    } = &result
+                {
+                    self.notify_warnings(accounts);
+                }
                 if let Some(Some(reply)) = pending.remove(&id) {
                     let _ = reply.send(match result {
                         Outcome::Ok { value } => Ok(value),
@@ -454,21 +477,32 @@ impl Bridge {
     /// the daemon's head and resumes after the last event forwarded, so older ones don't notify
     /// again. Whether it shows is up to the settings, read when it happens.
     fn notify(&self, event: &EventEnvelope) {
-        // Not while the app quits: what the quit cuts off isn't news, and telling it would read
-        // a window, which waits on the main thread while that thread waits on the daemon.
-        if crate::shell::is_quitting() {
-            return;
-        }
-        let Some(notice) = notice_for(event) else {
-            return;
-        };
-        if !self
-            .inner
-            .notified
-            .lock()
-            .expect("notified lock")
-            .insert(notice.key.clone())
+        // Restored warned markers may precede the provider's first quota check. Its later
+        // snapshot recovers warnings that were absent from the first GetAccounts response.
+        let raw = event.event.0.get();
+        if raw.contains("\"accountsChecked\"")
+            && let Ok(DomainEvent::AccountsChecked { accounts }) = serde_json::from_str(raw)
         {
+            self.notify_warnings(&accounts);
+        }
+        if let Some(notice) = notice_for(event) {
+            self.notify_notice(notice);
+        }
+    }
+
+    fn notify_warnings(&self, accounts: &AccountsView) {
+        let now = brigadier_core::now_ms();
+        for warning in &accounts.warnings {
+            if warning.resets_at_ms > now {
+                self.notify_notice(quota_notice(warning, now));
+            }
+        }
+    }
+
+    fn notify_notice(&self, notice: Notice) {
+        // Not while the app quits: reading a window waits on the main thread, which
+        // is waiting on the daemon.
+        if crate::shell::is_quitting() {
             return;
         }
         let bridge = self.clone();
@@ -478,6 +512,15 @@ impl Bridge {
                 return;
             };
             if !allowed(notice.kind, &catalog.settings, (bridge.inner.in_front)()) {
+                return;
+            }
+            if !bridge
+                .inner
+                .notified
+                .lock()
+                .expect("notified lock")
+                .insert(notice.key.clone(), brigadier_core::now_ms())
+            {
                 return;
             }
             // A finished request is told under its conversation's name.
@@ -588,24 +631,7 @@ fn notice_for(event: &EventEnvelope) -> Option<Notice> {
         });
     }
     if let Some(warning) = lost_quota(event) {
-        let hours = (warning.resets_at_ms - event.at_ms).max(0) as u64;
-        let hours = hours.div_ceil(3_600_000);
-        return Some(Notice {
-            key: format!(
-                "quota:{}:{}:{}:{}",
-                warning.account.provider,
-                warning.account.key(),
-                warning.window,
-                warning.resets_at_ms / 3_600_000
-            ),
-            kind: Kind::NeedsYou,
-            title: Title::Fixed("Weekly quota resets soon".to_owned()),
-            body: format!(
-                "{} has {}% of its weekly quota left; it resets in {hours} h.",
-                warning.who,
-                warning.left_percent.round()
-            ),
-        });
+        return Some(quota_notice(&warning, event.at_ms));
     }
     let request = finished_request(event)?;
     let body = match &request.state {
@@ -628,6 +654,90 @@ fn notice_for(event: &EventEnvelope) -> Option<Notice> {
         },
         body,
     })
+}
+
+/// Snapshot recovery and live events share the same key and notification text.
+fn quota_notice(warning: &QuotaWarning, at_ms: i64) -> Notice {
+    let hours = ((warning.resets_at_ms - at_ms).max(0) as u64).div_ceil(3_600_000);
+    Notice {
+        key: format!(
+            "quota:{}:{}:{}:{}",
+            warning.account.provider,
+            warning.account.key(),
+            warning.window,
+            warning.resets_at_ms
+        ),
+        kind: Kind::NeedsYou,
+        title: Title::Fixed("Weekly quota resets soon".to_owned()),
+        body: format!(
+            "{} has {}% of its weekly quota left; it resets in {hours} h.",
+            warning.who,
+            warning.left_percent.round()
+        ),
+    }
+}
+
+/// Ordinary notices resume from the live cursor. Quota warnings also come from a snapshot,
+/// so their keys survive app restarts. The bridge's mutex serializes writes and live events.
+struct NotificationKeys {
+    path: PathBuf,
+    keys: HashSet<String>,
+}
+
+impl NotificationKeys {
+    fn load(path: PathBuf) -> Self {
+        let keys = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+                tracing::warn!(%error, "could not read quota notification keys");
+                HashSet::new()
+            }),
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(%error, "could not read quota notification keys");
+                }
+                HashSet::new()
+            }
+        };
+        Self { path, keys }
+    }
+
+    fn insert(&mut self, key: String, now_ms: i64) -> bool {
+        let durable = key.starts_with("quota:");
+        if durable && let Some((window, _)) = key.rsplit_once(':') {
+            // Match the monitor: a provider may nudge a reset's timestamp. Until the
+            // original notified reset passes, this account/window is already told.
+            if self.keys.iter().any(|told| {
+                told.rsplit_once(':').is_some_and(|(previous, reset)| {
+                    previous == window && reset.parse::<i64>().is_ok_and(|reset| reset > now_ms)
+                })
+            }) {
+                return false;
+            }
+        }
+        if !self.keys.insert(key) {
+            return false;
+        }
+        if durable {
+            let keys: Vec<_> = self
+                .keys
+                .iter()
+                .filter(|key| key.starts_with("quota:"))
+                .collect();
+            let temporary = self.path.with_extension("json.tmp");
+            let result = (|| -> std::io::Result<()> {
+                use std::io::Write;
+                let mut file = std::fs::File::create(&temporary)?;
+                file.write_all(&serde_json::to_vec(&keys)?)?;
+                file.sync_all()?;
+                std::fs::rename(&temporary, &self.path)
+            })();
+            if let Err(error) = result {
+                let _ = std::fs::remove_file(&temporary);
+                tracing::warn!(%error, "could not save quota notification keys");
+            }
+        }
+        true
+    }
 }
 
 /// A request an event says is over, done or failed, as the daemon settles requests from what
@@ -982,3 +1092,7 @@ mod tests {
         assert!(!allowed(Kind::NeedsYou, &settings, true));
     }
 }
+
+#[cfg(test)]
+#[path = "bridge_tests.rs"]
+mod connection_tests;
