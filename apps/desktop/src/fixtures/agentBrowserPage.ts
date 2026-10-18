@@ -77,4 +77,15 @@ seen.notField = agent({ kind: "type", target: refOf("add"), text: "x", submit: f
 seen.link = agent({ kind: "click", target: refAt('a[href="#docs"]') });
 seen.hash = location.hash;
 
+// Filled by the user or autofill: a password shown as text, a card number and a code are read
+// as filled, never by their value.
+const shownPassword = Object.assign(document.createElement("input"), { value: "s3cret" });
+shownPassword.setAttribute("autocomplete", "current-password");
+shownPassword.setAttribute("aria-label", "Shown password");
+document.body.append(shownPassword);
+byId<HTMLInputElement>("card").value = "4242424242424242";
+byId<HTMLInputElement>("code").value = "123456";
+seen.filled = (agent({ kind: "read", max: 20000 }) as { text: string }).text.split("\n")
+  .filter((line) => /assword|Card number|Code|PIN/.test(line));
+
 byId("agent-browser-result").textContent = JSON.stringify(seen);

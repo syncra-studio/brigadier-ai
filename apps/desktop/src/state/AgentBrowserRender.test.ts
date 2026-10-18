@@ -70,4 +70,11 @@ test("browser tool: the page script reads, clicks, types and asks first", { time
   assert.deepEqual(seen.stale, { error: "There is no e999 on the page now: read it again for its controls' refs." });
   assert.deepEqual(seen.notField, { error: "e2 isn't a field to type in (it is a button)." });
   assert.deepEqual([seen.link, seen.hash], [done, "#docs"], "a link goes, a filled password elsewhere on the page or not");
+  assert.deepEqual(seen.filled, [
+    '[e9] textbox "Password" (filled) (password field)',
+    '[e11] textbox "Card number" (filled) (card field)',
+    '[e12] textbox "Code" (filled) (one-time code field)',
+    '[e14] textbox "PIN" (filled) (password field)',
+    '[e17] textbox "Shown password" (filled) (password field)',
+  ], "no secret's value is read out");
 });

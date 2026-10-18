@@ -120,6 +120,7 @@ async function act(tab: string, op: Exclude<BrowserOp, { op: "open" }>, conversa
       return page(tab, hands);
     case "click":
     case "type": {
+      const before = new Set(sessionTabs(conversationId).tabs.map((each) => each.id));
       const answer = await hands.script(tab, {
         kind: op.op,
         target: op.target,
@@ -142,7 +143,7 @@ async function act(tab: string, op: Exclude<BrowserOp, { op: "open" }>, conversa
       const error = errorOf(answer);
       if (error) return failed(error);
       await settled(tab);
-      return page(tab, hands);
+      return withPopups(await page(tab, hands), conversationId, tab, before);
     }
     case "screenshot": {
       const png = await hands.capture(tab);
@@ -152,6 +153,20 @@ async function act(tab: string, op: Exclude<BrowserOp, { op: "open" }>, conversa
       closeTab(conversationId, tab);
       return { result: "closed", tab };
   }
+}
+
+/**
+ * The page after an action, naming the tabs it opened (a popup, such as a sign-in window): the
+ * agent goes on in them by their ids.
+ */
+function withPopups(result: BrowserResult, conversationId: string, tab: string, before: Set<string>): BrowserResult {
+  if (result.result !== "page") return result;
+  const opened = sessionTabs(conversationId).tabs.filter(
+    (each): each is BrowserTabState => each.kind === "browser" && each.opener === tab && !before.has(each.id),
+  );
+  if (!opened.length) return result;
+  const lines = opened.map((each) => `(This opened a new tab: ${each.id} at ${each.url}. Use its id with the browser tools.)`);
+  return { ...result, page: { ...result.page, text: `${result.page.text}\n\n${lines.join("\n")}` } };
 }
 
 /** The address of the user's yes, while the tab is still on the page it was given on. */

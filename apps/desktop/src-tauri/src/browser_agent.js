@@ -153,7 +153,8 @@
       if (role === "textbox" || role === "searchbox" || role === "combobox" || role === "slider" || role === "spinbutton") {
         const value = element.isContentEditable ? element.innerText
           : element.localName === "select" ? element.selectedOptions?.[0]?.text : element.value;
-        if (element.type === "password") text += value ? " (filled)" : "";
+        // A password, card number or code is never read out, only whether it is filled.
+        if (fieldKind(element)) text += value ? " (filled)" : "";
         else if (value) text += ` value=${quoted(value)}`;
         if (element.localName === "select") {
           const options = [...element.options].slice(0, 12).map((option) => clean(option.text));

@@ -206,6 +206,26 @@ test("calls on a tab that isn't an agent's, or with the browser off, fail in pla
   useApp.setState((state) => ({ settings: { ...state.settings, browserEnabled: true } }));
 });
 
+test("a click that opens a popup names its tab, and the agent works there", async () => {
+  useApp.setState((state) => ({ settings: { ...state.settings, browserEnabled: true } }));
+  const { openPopupTab } = await import("./sessionTabs");
+  let opener = "";
+  const shell = fakeShell((op) => {
+    // The page's sign-in button opens a window, as the shell reports one: its page made, a tab next.
+    if (op.kind === "click") openPopupTab(opener, "browser:popup-1", "http://127.0.0.1:4000/sign-in");
+    return reads(op);
+  });
+  opener = tabOf(await answered(shell, { op: "open", url: "http://127.0.0.1:4000/" }));
+  const clicked = await answered(shell, { op: "click", tab: opener, target: "e1", guard: { declared: null, approved: null } });
+  assert.equal(clicked.result === "page" && clicked.page.text,
+    '[e1] button "Buy"\n\n(This opened a new tab: browser:popup-1 at http://127.0.0.1:4000/sign-in. Use its id with the browser tools.)');
+  assert.equal(sessionTabs(SESSION).active, CHAT_TAB, "it opened behind, like its opener");
+  useBrowsers.setState(({ pages }) => ({ pages: { ...pages, "browser:popup-1": { ...pages[opener]!, url: "http://127.0.0.1:4000/sign-in" } } }));
+  assert.equal(tabOf(await answered(shell, { op: "read", tab: "browser:popup-1" })), "browser:popup-1");
+  const again = await answered(shell, { op: "click", tab: opener, target: "e1", guard: { declared: null, approved: null } });
+  assert.equal(again.result === "page" && again.page.text, '[e1] button "Buy"', "only a tab this action opened is named");
+});
+
 test("a picture's bytes go as base64, however many", () => {
   assert.equal(base64(new Uint8Array([104, 105])), "aGk=");
   const big = new Uint8Array(100_000).fill(65);
