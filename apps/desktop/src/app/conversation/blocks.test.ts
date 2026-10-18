@@ -693,6 +693,12 @@ test("an overnight run's usage limit reset keeps its divider (issue 128)", () =>
   assert.deepEqual(keyed(blocks, "run-1").orchestratorSteps.map((step) => step.kind.type), ["quotaResumed"]);
 });
 
+test("an overnight run's attached proof reaches its merge message", () => {
+  const proof: OrchestratorStep = { requestId: "run-1", atMs: 3000, position: 3, kind: { type: "proof", id: "proof-1", name: "shot.png", mime: "image/png" } };
+  const blocks = buildBlocks([said("run-1-said", 2, "assistant", "run-1"), said("run-1-done", 5, "assistant", "run-1")], {}, false, peerDigest([peerRequest("run-1", 1)], [], [proof]), []);
+  assert.deepEqual(keyed(blocks, "run-1").orchestratorSteps.map((step) => step.kind.type), ["proof"]);
+});
+
 test("another session's message opens its request's turn where the user's message would stand", () => {
   const blocks = buildBlocks([fromPeer("m1", 1, "m1"), said("m1-answer", 3, "assistant", "m1")], {}, false, peerDigest([peerRequest("m1", 1, { fromPeer: "api" })]), []);
   const block = keyed(blocks, "m1");

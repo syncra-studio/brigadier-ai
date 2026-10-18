@@ -129,16 +129,20 @@ impl SessionManager {
         id: &ConversationId,
         args: crate::tools::AttachProof,
     ) -> Result<String> {
-        let given = PathBuf::from(args.path.trim());
-        let source = if given.is_absolute() {
-            given
-        } else {
-            let base = self
-                .changes_checkout(id)
-                .map(|(path, _)| path)
-                .unwrap_or_else(|| self.owned_dir("orch", &id.0));
-            base.join(given)
+        let base = match self.effective_workspace(id).await {
+            Ok(Some(workspace)) => workspace.path,
+            _ => self.owned_dir("orch", &id.0),
         };
+        // Resolved, links followed: Brigadier's private folder is never read, as in the sandbox.
+        let source = super::reads::absolute(&base, args.path.trim());
+        let run_dir = self.runtime.platform().paths().run_dir.clone();
+        let private = run_dir.canonicalize().unwrap_or_else(|_| run_dir.clone());
+        if source.starts_with(&private) || source.starts_with(&run_dir) {
+            return Err(Error::Invalid(format!(
+                "{} is in Brigadier's private folder: attach a file you made",
+                source.display()
+            )));
+        }
         let name = source
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())

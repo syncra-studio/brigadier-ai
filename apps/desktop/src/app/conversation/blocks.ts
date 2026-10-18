@@ -518,9 +518,9 @@ export function buildBlocks(
     }
     // Plumbing shows by what came of it: a worker's sentence, a card, the merge.
     if (step.kind.type === "tool" && isPlumbing(step.kind.name)) continue;
-    // A run's own steps show as its phases, but a refused message and a usage limit's reset
-    // have no other trace.
-    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool" && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed")) continue;
+    // A run's own steps show as its phases, but a refused message, a usage limit's reset and
+    // a proof the thread attached have no other trace.
+    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool" && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "proof")) continue;
     if (step.kind.type === "tool" && toolHasOwnResult(step.kind, authoredResults, step.requestId, step.position)) continue;
     placed.push({
       kind: "orchestrator",

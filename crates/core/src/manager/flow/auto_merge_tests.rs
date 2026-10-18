@@ -468,16 +468,20 @@ async fn a_merge_held_on_its_own_needs_consent_once_the_switch_is_off() {
 
 /// The thread attaches a screenshot it made of the change: Brigadier keeps a copy, records it
 /// for the merge message, and serves it by its id. Not an image or recording, or over 11 MB:
-/// the call says so and nothing is attached.
+/// the call says so and nothing is attached; nor is anything from Brigadier's private folder.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
     let log: Log = Arc::default();
     let said = log.clone();
+    let private: Arc<OnceLock<PathBuf>> = Arc::default();
+    let run_dir = private.clone();
     let flow = Flow::start(
         "auto-merge-proof",
         Options::default(),
         script(move |turn| {
             let said = said.clone();
+            let run_dir = run_dir.get().cloned();
             async move {
                 if !turn.is_orchestrator() || !turn.input.contains("Show it.") {
                     return Reply::text("Done.");
@@ -487,10 +491,13 @@ async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
                 std::fs::write(workspace.join("notes.txt"), "notes").unwrap();
                 let big = std::fs::File::create(workspace.join("big.png")).unwrap();
                 big.set_len(12 * 1024 * 1024).unwrap();
+                // A link into Brigadier's private folder, named like a screenshot.
+                std::os::unix::fs::symlink(run_dir.unwrap(), workspace.join("token.png")).unwrap();
                 for (path, caption) in [
                     ("shot.png", Some("The new switch")),
                     ("notes.txt", None),
                     ("big.png", None),
+                    ("token.png", None),
                 ] {
                     let reply = turn
                         .call("attach_proof", json!({ "path": path, "caption": caption }))
@@ -504,6 +511,9 @@ async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
         }),
     )
     .await;
+    let run_dir = flow.manager.runtime.platform().paths().run_dir.clone();
+    std::fs::create_dir_all(&run_dir).unwrap();
+    private.set(run_dir).unwrap();
     flow.say("Show it.").await;
     let board = flow.settled().await;
     let log = log.lock().unwrap().clone();
@@ -513,6 +523,7 @@ async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
     );
     assert!(log[1].starts_with("notes.txt: true "), "{log:?}");
     assert!(log[2].contains("over 11 MB"), "{log:?}");
+    assert!(log[3].contains("private folder"), "{log:?}");
     let proofs: Vec<_> = board
         .orchestrator_steps
         .iter()
