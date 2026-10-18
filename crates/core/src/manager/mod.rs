@@ -947,7 +947,11 @@ impl ToolHost for SessionManager {
                         conversation_id, ..
                     },
                     ToolCall::Browser(call),
-                ) => manager.browser_tool(conversation_id, None, call).await,
+                ) => {
+                    // On the heap: its guard's wait makes a future big enough that every other
+                    // arm's caller (a landing flow) ran out of a runtime thread's stack.
+                    crate::heap(|| manager.browser_tool(conversation_id, None, call)).await
+                }
                 (
                     Role::Worker {
                         conversation_id,
@@ -956,9 +960,7 @@ impl ToolHost for SessionManager {
                     },
                     ToolCall::Browser(call),
                 ) => {
-                    manager
-                        .browser_tool(conversation_id, Some(task_id), call)
-                        .await
+                    crate::heap(|| manager.browser_tool(conversation_id, Some(task_id), call)).await
                 }
                 (Role::BrainJob { project_id, job_id }, ToolCall::Job(call)) => {
                     manager.job_call(project_id, job_id, call).await
