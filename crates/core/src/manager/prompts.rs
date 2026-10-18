@@ -1140,20 +1140,35 @@ Ship it the way a careful engineer would; you judge how much a change needs. Wha
 - for a change you judge big or risky: a fresh verifier (start_verifier with fresh: true) that tries to break it against the original request.
 When something can't be had (CI broken on main, the other vendor out of quota), decide whether to merge or wait, and say what was missing. The merge message (your reply that says it merged) shows what was verified: the pull request or commit, the checks on the final commit, the review and how each finding was settled, CI, the proof, the verifier's verdict if one ran, and anything left out. \"Beyond this request:\" lists what you found outside it (filed as issues when the repo is on GitHub); never drop a finding without saying so.";
 
+/// How a change on a web page is proved where agents have the browser tools (Q82): the same
+/// tool that works pages drives the preview's.
+pub(crate) const BROWSER_PROOF: &str = "For a change on a web page (a web app's preview, a site), get the proof with your browser tools: browser_open on the preview's URL opens it in a background Browser tab, use the change there (browser_click, browser_type), then browser_screenshot; attach_proof takes the file it saves. A change in a desktop app's own window is shown with computer use.";
+
+/// What the thread is told about merging on its own: with the browser tools, how a web page's
+/// change is proved with them.
+fn auto_merge_text(browser_tools: bool) -> String {
+    if browser_tools {
+        format!("{AUTO_MERGE}\n{BROWSER_PROOF}")
+    } else {
+        AUTO_MERGE.to_owned()
+    }
+}
+
 /// The instructions' paragraph while the tab merges on its own; nothing while it doesn't.
-pub(crate) fn auto_merge_section(on: bool) -> String {
+pub(crate) fn auto_merge_section(on: bool, browser_tools: bool) -> String {
     if on {
-        format!("\n\n{AUTO_MERGE}")
+        format!("\n\n{}", auto_merge_text(browser_tools))
     } else {
         String::new()
     }
 }
 
 /// Tells a running session the user switched "Merge on its own".
-pub(crate) fn auto_merge_note(on: bool) -> String {
+pub(crate) fn auto_merge_note(on: bool, browser_tools: bool) -> String {
     if on {
         format!(
-            "[settings] Merging on its own is now on. From now on: {AUTO_MERGE} Don't mention this note."
+            "[settings] Merging on its own is now on. From now on: {} Don't mention this note.",
+            auto_merge_text(browser_tools)
         )
     } else {
         "[settings] Merging on its own is now off. From now on, when the work is ready, say so in one line and leave the merge to the user: finish_session needs their consent again, as your instructions say. This replaces what an earlier note said about merging on its own. Don't mention this note.".to_owned()
@@ -1173,7 +1188,7 @@ pub(crate) fn browser_section(on: bool) -> String {
 /// instructions it started with.
 pub(crate) fn browser_note(on: bool) -> String {
     if on {
-        "[settings] The user turned Brigadier's built-in browser back on: links and preview URLs you give the user may open in its Browser tab, which only the user uses (you can't see or drive it). This replaces what your instructions or earlier notes said about it. Don't mention this note.".to_owned()
+        "[settings] The user turned Brigadier's built-in browser back on: links and preview URLs you give the user may open in its Browser tab, and the browser tools work again if you have them. This replaces what your instructions or earlier notes said about it. Don't mention this note.".to_owned()
     } else {
         format!(
             "[settings] The user turned Brigadier's built-in browser off. From now on: {BROWSER_OFF} Don't mention this note."
@@ -1728,7 +1743,10 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
         // Instructions from before the setting never said the tab merges on its own.
         if told.auto_merge.unwrap_or(false) != now.auto_merge {
             notes.push(Note {
-                text: auto_merge_note(now.auto_merge),
+                text: auto_merge_note(
+                    now.auto_merge,
+                    super::browser_tool::agents_browse(now.browser),
+                ),
                 label: if now.auto_merge {
                     AUTO_MERGE_ON_LABEL
                 } else {
@@ -4203,8 +4221,8 @@ mod environment_tests {
         now.auto_merge = true;
         assert_eq!(now.told().auto_merge, Some(true));
         assert_eq!(Current::chat(vec![]).told().auto_merge, None);
-        assert!(auto_merge_section(false).is_empty());
-        assert_eq!(auto_merge_section(true), format!("\n\n{AUTO_MERGE}"));
+        assert!(auto_merge_section(false, true).is_empty());
+        assert_eq!(auto_merge_section(true, false), format!("\n\n{AUTO_MERGE}"));
     }
 
     /// The Q68 bar is guidance the agent judges (the user, 10-18: the LLM stays free): what
@@ -4255,8 +4273,8 @@ mod environment_tests {
         );
     }
 
-    /// No agent can reach Brigadier's built-in browser: while it is on, nothing in the
-    /// instructions mentions it, so turning it off has nothing to take away but the note.
+    /// While the built-in browser is on, the instructions don't mention it: the browser tools
+    /// describe themselves, and turning it off has nothing to take away but the note.
     #[test]
     fn instructions_never_mention_the_built_in_browser_while_it_is_on() {
         let mentions = |text: &str| {
@@ -4280,6 +4298,28 @@ mod environment_tests {
         assert!(!mentions(&worker_system("")));
         assert!(browser_section(true).is_empty());
         assert!(mentions(&browser_section(false)));
+    }
+
+    /// Q82: where agents have the browser tools, a web page's UI proof for a merge comes from
+    /// them (the preview's URL opened, the change used, a screenshot attached); without them,
+    /// and for a desktop app's window, the proof is had as before.
+    #[test]
+    fn the_merge_proof_of_a_web_change_comes_from_the_browser_tools_where_agents_have_them() {
+        let with = auto_merge_section(true, true);
+        assert!(with.starts_with(&format!("\n\n{AUTO_MERGE}\n")), "{with}");
+        for words in [
+            "browser_open on the preview's URL",
+            "use the change there (browser_click, browser_type)",
+            "browser_screenshot; attach_proof takes the file it saves",
+            "desktop app's own window is shown with computer use",
+        ] {
+            assert!(with.contains(words), "{words}");
+        }
+        assert!(!auto_merge_section(true, false).contains("browser_open"));
+        assert!(auto_merge_note(true, true).contains(BROWSER_PROOF));
+        assert!(!auto_merge_note(true, false).contains("browser_open"));
+        assert!(!auto_merge_note(false, true).contains("browser_open"));
+        assert!(!browser_note(true).contains("can't see or drive"));
     }
 
     /// Q81: a research worker's report came after the thread's answer as one translated

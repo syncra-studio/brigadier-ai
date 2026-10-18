@@ -330,6 +330,7 @@ impl SessionManager {
         ));
         prompt.push_str(&super::prompts::auto_merge_section(
             self.auto_merge_in(&conversation.id),
+            super::browser_tool::agents_browse(self.core.settings().browser_enabled),
         ));
         if let Some(workspace) = workspace {
             prompt.push_str(&super::instructions::for_thread(&workspace.path, provider).await);

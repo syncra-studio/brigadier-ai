@@ -730,3 +730,120 @@ async fn a_worker_waits_for_the_user_s_answer_to_a_password() {
     assert!(matches!(approved_of(&shop).as_slice(), [None, Some(_)]));
     flow.stop().await;
 }
+
+/// Q82: with merging on its own, the thread proves a web change with the browser tools: the
+/// preview's page opened in a background tab, the change used, its screenshot attached to the
+/// merge message as proof.
+#[tokio::test]
+async fn the_thread_attaches_a_preview_s_screenshot_from_the_browser_tool_as_merge_proof() {
+    let said: Arc<Mutex<Vec<ToolReply>>> = Arc::default();
+    let log = said.clone();
+    let flow = Flow::start(
+        "browser-tool-proof",
+        Options {
+            auto_merge: true,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if !turn.is_orchestrator() || !turn.input.contains("Ship the dark mode.") {
+                    return Reply::text("Done.");
+                }
+                let mut replies = Vec::new();
+                for (name, args) in [
+                    (
+                        "browser_open",
+                        json!({"url": "http://127.0.0.1:5173/settings"}),
+                    ),
+                    (
+                        "browser_click",
+                        json!({"tab": "browser:agent-1", "target": "e1"}),
+                    ),
+                    ("browser_screenshot", json!({"tab": "browser:agent-1"})),
+                ] {
+                    replies.push(turn.call(name, args).await);
+                }
+                let path = replies[2]
+                    .text
+                    .split("Saved as ")
+                    .nth(1)
+                    .and_then(|rest| rest.split(" (attach_proof").next())
+                    .unwrap_or_default()
+                    .to_owned();
+                replies.push(
+                    turn.call(
+                        "attach_proof",
+                        json!({"path": path, "caption": "Dark mode on in Settings"}),
+                    )
+                    .await,
+                );
+                log.lock().unwrap().extend(replies);
+                Reply::text("Merged: dark mode, with its proof.")
+            }
+        }),
+    )
+    .await;
+    let heard = window(&flow);
+    flow.say("Ship the dark mode.").await;
+    let board = flow.settled().await;
+    let said = said.lock().unwrap().clone();
+    assert_eq!(said.len(), 4, "{said:#?}");
+    for reply in &said {
+        assert!(!reply.is_error, "{}", reply.text);
+    }
+    assert!(
+        said[3].text.starts_with("Attached shot-"),
+        "{}",
+        said[3].text
+    );
+    let ops: Vec<_> = heard
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|call| call.op.clone())
+        .collect();
+    assert!(
+        matches!(
+            ops.as_slice(),
+            [
+                BrowserOp::Open { .. },
+                BrowserOp::Click { .. },
+                BrowserOp::Screenshot { .. }
+            ]
+        ),
+        "{ops:#?}"
+    );
+    let proofs: Vec<_> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            crate::work::OrchestratorStepKind::Proof {
+                id,
+                name,
+                mime,
+                caption,
+                ..
+            } => Some((id.clone(), name.clone(), mime.clone(), caption.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(proofs.len(), 1, "{proofs:?}");
+    let (id, name, mime, caption) = proofs[0].clone();
+    assert!(
+        name.starts_with("shot-") && name.ends_with(".png"),
+        "{name}"
+    );
+    assert_eq!(
+        (mime.as_str(), caption.as_deref()),
+        ("image/png", Some("Dark mode on in Settings"))
+    );
+    let (data, served) = flow
+        .manager
+        .read_thread_image(&flow.conversation, &id)
+        .await
+        .unwrap();
+    assert_eq!(served, "image/png");
+    assert_eq!(data, PNG);
+    flow.stop().await;
+}

@@ -243,6 +243,13 @@ impl BrowserHub {
     }
 }
 
+/// Whether agents get the browser tools with the built-in browser `on`: they drive it on macOS
+/// for now (Windows: a GitHub issue; Linux has no built-in browser).
+pub(crate) fn agents_browse(on: bool) -> bool {
+    // Kept to development runs until it is wired.
+    cfg!(target_os = "macos") && std::env::var_os("BRIGADIER_BROWSER_TOOL").is_some() && on
+}
+
 /// The op a tool call asks of the app; a call that says too little or too much is refused.
 fn browser_op(call: BrowserToolCall) -> Result<BrowserOp, String> {
     Ok(match call {
@@ -436,10 +443,7 @@ impl SessionManager {
     /// Whether the thread and its workers get the browser tools: the built-in browser is on,
     /// and agents can drive it on this platform (macOS for now).
     pub(crate) fn browser_tools_on(&self) -> bool {
-        // Kept to development runs until the takeover and the guards are in.
-        cfg!(target_os = "macos")
-            && std::env::var_os("BRIGADIER_BROWSER_TOOL").is_some()
-            && self.core.settings().browser_enabled
+        agents_browse(self.core.settings().browser_enabled)
     }
 
     /// A browser tool's call from the thread (`task_id` none) or one of its workers.
