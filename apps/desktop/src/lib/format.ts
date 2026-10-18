@@ -101,6 +101,25 @@ function daysAgo(epochMs: number, nowMs: number): number {
   return Math.round((startOfDay(nowMs) - startOfDay(epochMs)) / DAY_MS);
 }
 
+/** "1 day ago", "3 days ago". */
+function countAgo(n: number, unit: string): string {
+  return `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+}
+
+/**
+ * When something was last used, in words: "now", "5m ago" and "2h ago" today, then
+ * "Yesterday", "3 days ago", "2 weeks ago", "4 months ago", "2 years ago".
+ */
+export function formatLastUsed(epochMs: number, nowMs: number): string {
+  const days = daysAgo(epochMs, nowMs);
+  if (days <= 0) return formatAgo(epochMs, nowMs);
+  if (days === 1) return "Yesterday";
+  if (days < 7) return countAgo(days, "day");
+  if (days < 30) return countAgo(Math.floor(days / 7), "week");
+  if (days < 365) return countAgo(Math.floor(days / 30), "month");
+  return countAgo(Math.floor(days / 365), "year");
+}
+
 /**
  * When a message was sent, as its hover label: "3:09 AM", "Yesterday 3:09 AM", "Thursday
  * 3:09 AM", "Mon, Sep 18 at 3:09 AM", "Sep 18, 2025 at 3:09 AM" (the same words as a time

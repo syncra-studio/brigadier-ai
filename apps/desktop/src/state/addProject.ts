@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import { pickFolders, request, takeOpenedFolders } from "@/ipc/client";
-import type { FolderCheck, FolderListing, Project } from "@/ipc/generated";
+import type { FolderCheck, Project, RepoSuggestion } from "@/ipc/generated";
 import { select, setProjectExpanded } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
@@ -36,9 +36,10 @@ export function showProject(id: string): void {
   select({ type: "draft", kind: "session", projectId: id });
 }
 
-export async function browseFolders(path: string): Promise<FolderListing> {
-  const { listing } = await request({ method: "browseFolders", path });
-  return listing;
+/** The git repositories on this computer, most recent first: the Add project dialog's list. */
+export async function findRepos(): Promise<RepoSuggestion[]> {
+  const { repos } = await request({ method: "findRepos" });
+  return repos;
 }
 
 export async function checkFolder(path: string): Promise<FolderCheck> {

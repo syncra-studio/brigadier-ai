@@ -46,6 +46,7 @@ mod fallback;
 #[cfg(debug_assertions)]
 pub mod fault;
 mod files;
+mod find_repos;
 #[cfg(all(test, unix))]
 mod flow;
 mod fork;

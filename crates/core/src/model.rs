@@ -1409,6 +1409,21 @@ pub struct ProjectCandidate {
     pub project_id: Option<ProjectId>,
 }
 
+/// A git repository on this computer, offered in the Add project dialog's list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoSuggestion {
+    /// The repository's top-level folder (absolute).
+    pub path: String,
+    /// The folder's name.
+    pub name: String,
+    /// When it was last worked in: the newest of its git activity and the user's own CLI
+    /// sessions there.
+    pub last_used_ms: i64,
+    /// The project that already has this repository.
+    pub project_id: Option<ProjectId>,
+}
+
 /// A folder offered while a path is typed in the Add project dialog.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

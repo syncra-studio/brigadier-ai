@@ -357,6 +357,7 @@ export type { ReplaceSkip } from "./ReplaceSkip";
 export type { ReplyHold } from "./ReplyHold";
 export type { RepoAccess } from "./RepoAccess";
 export type { RepoInfo } from "./RepoInfo";
+export type { RepoSuggestion } from "./RepoSuggestion";
 export type { Report } from "./Report";
 export type { Request } from "./Request";
 export type { RequestChanges } from "./RequestChanges";

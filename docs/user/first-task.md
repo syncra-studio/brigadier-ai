@@ -17,12 +17,13 @@ You can run this again from **Settings › General › Run setup again**.
 
 ## Add a project
 
-A project is a git repository on your Mac. In the sidebar, press **+** next to **Projects**, then
-type or pick its folder:
+A project is a git repository on your Mac. In the sidebar, press **+** next to **Projects**:
+**Add project** lists the git repositories on your Mac, most recent first. Pick one and press
+**Add**, or:
 
-- **Folder on this computer**: a repository you have, or a plain folder (Brigadier can start git
-  in it, or create the folder).
-- **Clone from URL**: a repository to clone.
+- **Choose folder…**: any folder (Brigadier starts git in one that has none).
+- **Clone from URL**: a repository to clone, into `~/code` unless you change where.
+- **New repository**: a new, empty repository, named as you like.
 
 The first time you open a project, Brigadier asks **Trust this folder?** Trust it to let agents
 work on their own; if you don't, every session there asks you before each step.

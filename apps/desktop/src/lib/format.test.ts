@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { formatDaySeparator, formatSentAt, formatTime, separatesTurn } from "@/lib/format";
+import { formatDaySeparator, formatLastUsed, formatSentAt, formatTime, separatesTurn } from "@/lib/format";
 
 test("a message from yesterday says Yesterday under it, as its day's separator does", () => {
   // Sunday 10:00 local; the message was sent Saturday 2:37 local.
@@ -38,4 +38,14 @@ test("a time separator marks a user's message more than an hour after the one be
   // The first message: only when sent more than an hour ago, across midnight or not.
   assert.equal(separatesTurn(now - 30 * 60_000, null, now), false);
   assert.equal(separatesTurn(now - 2 * hour, null, now), true);
+});
+
+test("a repository's last use reads in hours today, then Yesterday, days, weeks", () => {
+  const now = new Date(2026, 9, 18, 15, 0).getTime();
+  assert.equal(formatLastUsed(new Date(2026, 9, 18, 13, 0).getTime(), now), "2h ago");
+  assert.equal(formatLastUsed(new Date(2026, 9, 17, 23, 0).getTime(), now), "Yesterday");
+  assert.equal(formatLastUsed(new Date(2026, 9, 15, 9, 0).getTime(), now), "3 days ago");
+  assert.equal(formatLastUsed(new Date(2026, 9, 4, 9, 0).getTime(), now), "2 weeks ago");
+  assert.equal(formatLastUsed(new Date(2026, 8, 10, 9, 0).getTime(), now), "1 month ago");
+  assert.equal(formatLastUsed(new Date(2024, 9, 1, 9, 0).getTime(), now), "2 years ago");
 });

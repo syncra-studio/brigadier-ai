@@ -225,7 +225,7 @@ impl SessionManager {
     }
 
     /// Every project's repositories, to tell which folders are projects already.
-    fn project_repos(&self) -> Vec<(ProjectId, String)> {
+    pub(super) fn project_repos(&self) -> Vec<(ProjectId, String)> {
         self.core
             .catalog()
             .projects

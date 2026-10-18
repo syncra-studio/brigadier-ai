@@ -22,10 +22,10 @@ use brigadier_core::{
     MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, PendingChanges,
     ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView,
     PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
-    ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview,
-    SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest, SourceAction,
-    SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy, TaskId,
-    ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
+    ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope,
+    RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest,
+    SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy,
+    TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
     UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
     WorkspaceTree,
 };
@@ -256,6 +256,10 @@ pub enum Request {
     /// The repositories the user's own Claude Code and Codex sessions worked in, most recent
     /// first: the first run's project suggestions.
     FindProjects,
+    /// The git repositories on this computer, most recent first: the ones the user's own CLI
+    /// sessions worked in, the projects', and a quick look through the usual code folders.
+    /// The Add project dialog's list.
+    FindRepos,
     /// The folders a typed path points into (`~` is the home folder): the Add project
     /// dialog's suggestions.
     BrowseFolders {
@@ -1413,6 +1417,9 @@ pub enum Response {
     },
     FindProjects {
         candidates: Vec<ProjectCandidate>,
+    },
+    FindRepos {
+        repos: Vec<RepoSuggestion>,
     },
     BrowseFolders {
         listing: FolderListing,

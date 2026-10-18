@@ -1,181 +1,570 @@
 import {
-  CheckCircle,
+  ArrowLeft,
+  Check,
   Folder,
   FolderOpen,
-  InfoCircle,
-  Warning,
+  Link,
+  Plus,
+  Search,
+  X,
 } from "@openai/apps-sdk-ui/components/Icon";
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type FormEvent,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
+import { useEffect, useEffectEvent, useId, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
-import { ErrorLine, errorText, Field } from "@/app/dialogs/fields";
+import { ErrorLine, errorText } from "@/app/dialogs/fields";
+import { DialogPill } from "@/app/dialogs/pills";
 import { Spinner } from "@/components/glyphs/spinner";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { useNow } from "@/hooks/use-now";
 import { pickFolder } from "@/ipc/client";
-import type { FolderCheck, FolderListing } from "@/ipc/generated";
-import { shortPath } from "@/lib/format";
+import type { FolderCheck, RepoSuggestion } from "@/ipc/generated";
+import { formatLastUsed, shortPath } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
   addProject,
-  browseFolders,
   checkFolder,
   closeAddProject,
   cloneProject,
+  findRepos,
   showProject,
   useAddProject,
 } from "@/state/addProject";
-import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
-/** Typing pauses this long before the folder is listed or checked. */
-const LIST_DELAY_MS = 80;
-const CHECK_DELAY_MS = 150;
-
-/**
- * Adds a project: a folder on this computer (typed with suggestions, or chosen in the system
- * picker) or a clone of a repository URL.
+/*
+ * Add project, drawn to the user's design: pick a git repository found on this computer (or
+ * choose a folder), or clone one from a URL, or start a new one. Its colours and type are the
+ * redesigned Settings pages' (`settings-*`).
  */
+
+/** Where clones and new repositories go unless the user changes it (made when missing). */
+const DEFAULT_PARENT = "~/code/";
+
 export function AddProjectDialog() {
   const open = useAddProject((s) => s.open);
   const path = useAddProject((s) => s.path);
   const opening = useAddProject((s) => s.opening);
   return (
     <Dialog open={open} onOpenChange={(next) => !next && closeAddProject()}>
-      <DialogContent className="max-w-lg">
-        {/* Remounted per opening so the fields start over. */}
-        {open && <AddProjectForm key={opening} initialPath={path} />}
+      <DialogContent
+        data-testid="add-project-dialog"
+        showCloseButton={false}
+        className="bg-settings-surface border-settings-border rounded-design-dialog max-w-add-project shadow-design-dialog text-settings-text gap-0 border p-0 ring-0"
+      >
+        {/* Remounted per opening so it starts over. */}
+        {open && <AddProject key={opening} initialPath={path} />}
       </DialogContent>
     </Dialog>
   );
 }
 
-/** The folder new projects usually sit in: the newest project's parent, else home. */
-function usualParent(): string {
-  const newest = Object.values(useApp.getState().projects)
-    .filter((project) => project.repos.length > 0)
-    .toSorted((a, b) => b.createdAtMs - a.createdAtMs)[0];
-  const repo = newest?.repos[0]?.path;
-  if (!repo) return "~/";
-  const cut = Math.max(repo.lastIndexOf("/"), repo.lastIndexOf("\\"));
-  return cut > 0 ? `${shortPath(repo.slice(0, cut))}/` : "~/";
+type View = { kind: "pick" } | { kind: "clone" } | { kind: "new"; parent: string; name: string };
+
+function AddProject({ initialPath }: { initialPath: string }) {
+  const [view, setView] = useState<View>({ kind: "pick" });
+  const back = () => setView({ kind: "pick" });
+  switch (view.kind) {
+    case "pick":
+      return (
+        <PickView
+          initialPath={initialPath}
+          onClone={() => setView({ kind: "clone" })}
+          onNew={(parent = DEFAULT_PARENT, name = "") => setView({ kind: "new", parent, name })}
+        />
+      );
+    case "clone":
+      return <CloneView onBack={back} />;
+    case "new":
+      return <NewRepoView initialParent={view.parent} initialName={view.name} onBack={back} />;
+  }
 }
 
-function AddProjectForm({ initialPath }: { initialPath: string }) {
-  const [tab, setTab] = useState<"folder" | "clone">("folder");
-  const [start] = useState(usualParent);
+// ----- the parts -----------------------------------------------------------------------------
+
+/** The title, its line and the close button; with `onBack`, a back arrow before them. */
+function Header({ title, line, onBack }: { title: string; line: string; onBack?: (() => void) | undefined }) {
   return (
-    <Tabs value={tab} onValueChange={(next) => setTab(next as "folder" | "clone")}>
-      <DialogHeader>
-        <DialogTitle>Add project</DialogTitle>
-        <DialogDescription>
-          A project is a git repository your sessions work in.
-        </DialogDescription>
-      </DialogHeader>
-      <TabsList className="mt-2 w-full">
-        <TabsTrigger value="folder">Folder on this computer</TabsTrigger>
-        <TabsTrigger value="clone">Clone from URL</TabsTrigger>
-      </TabsList>
-      <TabsContent value="folder" className="mt-2">
-        <FolderForm initialPath={initialPath ? shortPath(initialPath) : start} />
-      </TabsContent>
-      <TabsContent value="clone" className="mt-2">
-        <CloneForm initialParent={start} />
-      </TabsContent>
-    </Tabs>
+    <div className={cn("flex gap-3.5 pt-6 pr-5 pb-5", onBack ? "pl-6" : "pl-7")}>
+      {onBack && (
+        <button
+          type="button"
+          aria-label="Back"
+          onClick={onBack}
+          className="bg-settings-raised text-settings-text hover:bg-settings-border rounded-capsule focus-visible:ring-settings-accent flex size-7 shrink-0 items-center justify-center outline-none focus-visible:ring-2"
+        >
+          <ArrowLeft className="size-icon-sm" />
+        </button>
+      )}
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <DialogTitle className="text-dialog-title text-settings-text font-medium">{title}</DialogTitle>
+        <DialogDescription className="text-settings-text-secondary text-settings-small">{line}</DialogDescription>
+      </div>
+      <DialogClose
+        aria-label="Close"
+        className="text-settings-text-secondary hover:bg-settings-raised hover:text-settings-text rounded-capsule focus-visible:ring-settings-accent flex size-7 shrink-0 items-center justify-center outline-none focus-visible:ring-2"
+      >
+        <X className="size-design-icon-close" />
+      </DialogClose>
+    </div>
   );
 }
 
-// ----- a folder on this computer ----------------------------------------------------------
-
-/** What submitting does for a checked folder, and whether Enter in the path may do it. */
-type Plan = {
-  label: string;
-  /** Adding makes a repository (and maybe the folder): only a click or ⌘Enter does it. */
-  writes: boolean;
-  disabled: boolean;
-};
-
-function planFor(check: FolderCheck | null, browsing: boolean): Plan {
-  if (!check || (browsing && check.kind !== "repo")) {
-    return { label: "Add project", writes: false, disabled: true };
-  }
-  switch (check.kind) {
-    case "repo":
-      return check.projectId
-        ? { label: "Open project", writes: false, disabled: false }
-        : { label: "Add project", writes: false, disabled: false };
-    case "plain":
-      return { label: "Initialize git & add", writes: true, disabled: false };
-    case "missing":
-      return { label: "Create folder & add", writes: true, disabled: false };
-    case "invalid":
-      return { label: "Add project", writes: false, disabled: true };
-  }
+/** The bar along the bottom: `start` on the left, Cancel and the main button on the right. */
+function Footer({ start, children }: { start?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="border-settings-divider flex items-center gap-2 border-t py-4 pr-6 pl-5">
+      <div className="flex min-w-0 flex-1 items-center gap-1">{start}</div>
+      {children}
+    </div>
+  );
 }
 
-function FolderForm({ initialPath }: { initialPath: string }) {
-  const id = useId();
-  const [path, setPath] = useState(initialPath);
-  const [name, setName] = useState("");
-  const [checked, setChecked] = useState<{ path: string; check: FolderCheck } | null>(null);
+function CancelButton({ label = "Cancel" }: { label?: string }) {
+  return (
+    <DialogPill look="quiet" onClick={closeAddProject}>
+      {label}
+    </DialogPill>
+  );
+}
+
+/** A field's label, with an optional note on the right. */
+function FieldLabel({ htmlFor, label, aside }: { htmlFor?: string; label: string; aside?: string | undefined }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <label htmlFor={htmlFor} className="text-settings-text text-settings-small font-medium">
+        {label}
+      </label>
+      {aside && <span className="text-settings-text-tertiary text-settings-meta">{aside}</span>}
+    </div>
+  );
+}
+
+/** A 42-high box for a field: its icon, then its content. */
+const BOX =
+  "bg-settings-inset rounded-design-row flex h-10.5 items-center gap-2.5 border [&>svg]:size-icon-sm [&>svg]:shrink-0 [&>svg]:text-settings-text-tertiary";
+
+/**
+ * Save to: the folder it goes in (`parent`, dimmer) and its own name a step brighter, with
+ * Change… to choose another parent folder.
+ */
+function SaveTo({
+  parent,
+  name,
+  aside,
+  disabled,
+  onParent,
+  onError,
+}: {
+  parent: string;
+  name: string;
+  aside?: string;
+  disabled?: boolean;
+  onParent: (parent: string) => void;
+  onError: (error: string) => void;
+}) {
+  const change = () => {
+    pickFolder(parent)
+      .then((picked) => {
+        if (picked) onParent(`${shortPath(picked).replace(/[/\\]+$/, "")}/`);
+      })
+      .catch((cause: unknown) => onError(errorText(cause)));
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      <FieldLabel label="Save to" aside={aside} />
+      <div className={cn(BOX, "border-settings-divider pr-1.5 pl-3")}>
+        <Folder />
+        <p data-slot="save-to" className="text-settings-meta flex min-w-0 flex-1 font-mono">
+          <span className="text-settings-text-tertiary min-w-0 truncate">{parent}</span>
+          <span className="text-settings-text shrink-0">{name}</span>
+        </p>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={change}
+          className="bg-settings-raised border-settings-ring text-settings-text hover:bg-settings-border rounded-capsule text-settings-small focus-visible:ring-settings-accent flex h-7 shrink-0 items-center border px-3 font-medium outline-none focus-visible:ring-2 disabled:opacity-50"
+        >
+          Change…
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The folder a path ends in, and the folder it is in ("~/code/" and "app" for ~/code/app). */
+function splitPath(path: string): { parent: string; name: string } {
+  const trimmed = path.replace(/[/\\]+$/, "");
+  const cut = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\")) + 1;
+  return { parent: trimmed.slice(0, cut), name: trimmed.slice(cut) };
+}
+
+// ----- Pick ----------------------------------------------------------------------------------
+
+/** A row of the list: a repository found, or a folder the user chose. */
+type Row = {
+  path: string;
+  name: string;
+  lastUsedMs: number | null;
+  projectId: string | null;
+  /** A folder in no repository: adding it starts one there. */
+  plain?: boolean;
+};
+
+function rowOf(repo: RepoSuggestion): Row {
+  return { path: repo.path, name: repo.name, lastUsedMs: repo.lastUsedMs, projectId: repo.projectId };
+}
+
+function PickView({
+  initialPath,
+  onClone,
+  onNew,
+}: {
+  initialPath: string;
+  onClone: () => void;
+  onNew: (parent?: string, name?: string) => void;
+}) {
+  const [repos, setRepos] = useState<Row[] | null>(null);
+  // A folder chosen (or dropped, or opened), first in the list.
+  const [chosen, setChosen] = useState<Row | null>(null);
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const formRef = useRef<HTMLFormElement>(null);
+  const now = useNow(60_000);
 
-  const typed = path.trim();
   useEffect(() => {
-    if (!typed) return;
     let live = true;
-    const timer = window.setTimeout(() => {
-      checkFolder(typed)
-        .then((check) => {
-          if (live) setChecked({ path: typed, check });
-        })
-        .catch((cause: unknown) => {
-          if (live) setError(errorText(cause));
-        });
-    }, CHECK_DELAY_MS);
+    findRepos()
+      .then((found) => {
+        if (live) setRepos(found.map(rowOf));
+      })
+      .catch((cause: unknown) => {
+        if (live) {
+          setRepos([]);
+          setError(errorText(cause));
+        }
+      });
     return () => {
       live = false;
-      window.clearTimeout(timer);
     };
-  }, [typed]);
+  }, []);
 
-  // Only a check of what is typed now counts.
-  const check = typed && checked?.path === typed ? checked.check : null;
-  // A full path ending in a separator is still being browsed.
-  const browsing = /[/\\]$/.test(typed) && /^(~|[/\\]|[A-Za-z]:)/.test(typed);
-  const plan = planFor(check, browsing);
+  /** Puts a checked folder at the top of the list and picks it; a project shows itself. */
+  const apply = (check: FolderCheck) => {
+    setError(null);
+    switch (check.kind) {
+      case "repo":
+        if (check.projectId) {
+          closeAddProject();
+          showProject(check.projectId);
+          return;
+        }
+        setChosen({ path: check.root, name: check.name, lastUsedMs: null, projectId: null });
+        setSelected(check.root);
+        return;
+      case "plain":
+        setChosen({ path: check.path, name: check.name, lastUsedMs: null, projectId: null, plain: true });
+        setSelected(check.path);
+        return;
+      case "missing": {
+        const { parent, name } = splitPath(shortPath(check.path));
+        onNew(parent, name);
+        return;
+      }
+      case "invalid":
+        setError(check.reason);
+    }
+  };
+  const take = (path: string) =>
+    checkFolder(path).then(apply, (cause: unknown) => setError(errorText(cause)));
+
+  // The folder the dialog opened on (dropped, or opened from the file manager).
+  const applyInitial = useEffectEvent(apply);
+  useEffect(() => {
+    if (!initialPath) return;
+    let live = true;
+    checkFolder(initialPath).then(
+      (check) => live && applyInitial(check),
+      (cause: unknown) => live && setError(errorText(cause)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [initialPath]);
+
+  const rows = useMemo(() => {
+    const all = [...(chosen ? [chosen] : []), ...(repos ?? []).filter((repo) => repo.path !== chosen?.path)];
+    const words = query.trim().toLowerCase();
+    if (!words) return all;
+    return all.filter((row) => row.name.toLowerCase().includes(words) || shortPath(row.path).toLowerCase().includes(words));
+  }, [chosen, repos, query]);
+  const pickable = rows.filter((row) => !row.projectId);
+  // The row picked, else the first that can be.
+  const current = pickable.find((row) => row.path === selected) ?? pickable[0] ?? null;
+
+  const add = async (row: Row | null = current) => {
+    if (!row || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const project = await addProject(row.path, "", row.plain ?? false);
+      closeAddProject();
+      showProject(project.id);
+    } catch (cause) {
+      setError(errorText(cause));
+      setBusy(false);
+    }
+  };
+
+  const onSearchKey = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void add();
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (pickable.length === 0) return;
+      const at = current ? pickable.indexOf(current) : -1;
+      const next = event.key === "ArrowDown" ? Math.min(at + 1, pickable.length - 1) : Math.max(at - 1, 0);
+      setSelected(pickable[next]!.path);
+    }
+  };
+
+  const choose = () => {
+    setError(null);
+    pickFolder()
+      .then((picked) => (picked ? take(picked) : undefined))
+      .catch((cause: unknown) => setError(errorText(cause)));
+  };
+
+  return (
+    <div className="flex flex-col">
+      <Header title="Add project" line="Pick a git repository for your sessions to work in." />
+      <div className="flex items-center gap-2.5 px-7">
+        <label className="bg-settings-inset border-settings-divider rounded-capsule focus-within:border-settings-ring flex h-9 min-w-0 flex-1 items-center gap-2 border px-3.5">
+          <Search className="size-icon-sm text-settings-text-tertiary shrink-0" />
+          <input
+            value={query}
+            autoFocus
+            spellCheck={false}
+            autoComplete="off"
+            aria-label="Search repositories"
+            placeholder="Search repositories"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={onSearchKey}
+            className="text-settings-text text-settings-small placeholder:text-settings-text-tertiary min-w-0 flex-1 bg-transparent outline-none"
+          />
+        </label>
+        <DialogPill look="secondary" className="h-9" onClick={choose}>
+          <FolderOpen className="size-icon-sm" />
+          Choose folder…
+        </DialogPill>
+      </div>
+      <div className="flex flex-col gap-2 px-4 pt-5.5 pb-4">
+        <div className="flex items-center justify-between px-3">
+          <span className="text-settings-text-tertiary text-settings-small">On this Mac</span>
+          <span className="text-settings-text-tertiary text-settings-meta">Most recent first</span>
+        </div>
+        <div
+          role="radiogroup"
+          aria-label="On this Mac"
+          className="max-h-add-project-list flex flex-col gap-0.5 overflow-y-auto"
+        >
+          {rows.map((row) => (
+            <RepoRow
+              key={row.path}
+              row={row}
+              now={now}
+              chosen={row === current}
+              onPick={() => setSelected(row.path)}
+              onAdd={() => void add(row)}
+            />
+          ))}
+          {rows.length === 0 && (
+            <p className="text-settings-text-tertiary text-settings-small flex h-14.5 items-center px-3">
+              {repos === null
+                ? "Looking for repositories…"
+                : query.trim()
+                  ? "No repository matches."
+                  : "No git repositories found. Choose a folder, or clone or start one."}
+            </p>
+          )}
+        </div>
+        {error && (
+          <div className="px-3">
+            <ErrorLine error={error} />
+          </div>
+        )}
+      </div>
+      <Footer
+        start={
+          <>
+            <DialogPill look="quiet" onClick={onClone}>
+              <Link className="size-design-icon-sm" />
+              Clone from URL
+            </DialogPill>
+            <DialogPill look="quiet" onClick={() => onNew()}>
+              <Plus className="size-design-icon-sm" />
+              New repository
+            </DialogPill>
+          </>
+        }
+      >
+        <CancelButton />
+        <DialogPill look="primary" disabled={!current || busy} onClick={() => void add()}>
+          {busy && <Spinner className="size-icon-xs animate-spin" />}
+          {current ? `Add ${current.name}` : "Add project"}
+        </DialogPill>
+      </Footer>
+    </div>
+  );
+}
+
+/** A repository in the list: its mark, name, path and last use, and its radio or Added. */
+function RepoRow({
+  row,
+  now,
+  chosen,
+  onPick,
+  onAdd,
+}: {
+  row: Row;
+  now: number;
+  chosen: boolean;
+  onPick: () => void;
+  onAdd: () => void;
+}) {
+  const added = row.projectId !== null;
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={chosen}
+      disabled={added}
+      tabIndex={chosen ? 0 : -1}
+      onClick={onPick}
+      onDoubleClick={onAdd}
+      className={cn(
+        "rounded-design-row focus-visible:ring-settings-accent flex h-14.5 w-full shrink-0 cursor-default items-center gap-3 border px-3 text-left outline-none focus-visible:ring-2",
+        chosen ? "bg-design-row-chosen border-settings-ring" : "hover:bg-design-row-chosen border-transparent",
+        added && "opacity-55",
+      )}
+    >
+      <span className="bg-settings-chosen rounded-design-mark flex size-8.5 shrink-0 items-center justify-center">
+        <Folder className={cn("size-icon-md", chosen ? "text-settings-text" : "text-settings-text-secondary")} />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.75">
+        <span className="text-settings-text text-settings-body truncate font-medium">{row.name}</span>
+        <span className="text-settings-text-tertiary text-settings-meta truncate font-mono">{shortPath(row.path)}</span>
+      </span>
+      {added ? (
+        <span className="bg-settings-border rounded-design-badge flex shrink-0 items-center gap-1.25 px-2 py-0.75">
+          <Check className="size-design-icon-xs text-settings-text-secondary" />
+          <span className="text-design-badge-text text-settings-meta font-medium">Added</span>
+        </span>
+      ) : (
+        <>
+          <span className="text-settings-text-tertiary text-settings-meta shrink-0">
+            {row.plain ? "Not a repository" : row.lastUsedMs ? formatLastUsed(row.lastUsedMs, now) : ""}
+          </span>
+          <span
+            aria-hidden
+            className={cn(
+              "rounded-capsule flex size-4.5 shrink-0 items-center justify-center",
+              chosen ? "bg-settings-accent text-design-on-accent" : "shadow-design-radio",
+            )}
+          >
+            {chosen && <Check className="size-icon-xs" />}
+          </span>
+        </>
+      )}
+    </button>
+  );
+}
+
+// ----- Clone from URL ------------------------------------------------------------------------
+
+/** `owner/name` is a GitHub repository; anything else is taken as typed. */
+function cloneUrl(typed: string): string {
+  const url = typed.trim();
+  return /^[\w.-]+\/[\w.-]+$/.test(url) ? `https://github.com/${url.replace(/\.git$/, "")}.git` : url;
+}
+
+/** The folder a clone of `url` goes in: its last path part, without `.git`. */
+function folderFromUrl(url: string): string {
+  const last = url.trim().replace(/[/\\]+$/, "").split(/[/:\\]/).pop() ?? "";
+  return last.replace(/\.git$/, "");
+}
+
+function CloneView({ onBack }: { onBack: () => void }) {
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const folder = folderFromUrl(url);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (busy || !folder) return;
+    setBusy(true);
+    try {
+      const project = await cloneProject(cloneUrl(url), DEFAULT_PARENT, folder, "");
+      closeAddProject();
+      showProject(project.id);
+      toast(`Cloned ${project.name}`);
+    } catch (cause) {
+      setError(errorText(cause));
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={(event) => void submit(event)} className="flex flex-col">
+      <Header title="Clone from URL" line="Paste a link to a git repository." onBack={onBack} />
+      <div className="flex flex-col gap-2 px-7 pb-7">
+        <input
+          value={url}
+          autoFocus
+          aria-label="Repository URL"
+          onChange={(event) => setUrl(event.target.value)}
+          className="bg-settings-inset border-settings-divider rounded-design-row text-settings-meta h-10.5 border px-3 font-mono outline-none"
+        />
+        <ErrorLine error={error} />
+      </div>
+      <Footer>
+        <CancelButton />
+        <DialogPill look="primary" type="submit" disabled={busy}>
+          Clone and add
+        </DialogPill>
+      </Footer>
+    </form>
+  );
+}
+
+// ----- New repository ------------------------------------------------------------------------
+
+function NewRepoView({
+  initialParent,
+  initialName,
+  onBack,
+}: {
+  initialParent: string;
+  initialName: string;
+  onBack: () => void;
+}) {
+  const id = useId();
+  const [name, setName] = useState(initialName);
+  const [parent, setParent] = useState(initialParent);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const folder = name.trim();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!check || plan.disabled || busy) return;
-    if (check.kind === "repo" && check.projectId) {
-      closeAddProject();
-      showProject(check.projectId);
+    if (busy) return;
+    if (!folder || folder === "." || folder === ".." || /[/\\]/.test(folder)) {
+      setError(folder ? `"${folder}" can't be a folder name.` : "Name the repository.");
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const project = await addProject(typed, name.trim(), plan.writes);
+      const project = await addProject(`${parent}${folder}`, "", true);
       closeAddProject();
       showProject(project.id);
     } catch (cause) {
@@ -185,441 +574,44 @@ function FolderForm({ initialPath }: { initialPath: string }) {
   };
 
   return (
-    <form ref={formRef} onSubmit={(event) => void submit(event)} className="grid gap-4">
-      <Field label="Folder" htmlFor={`${id}-path`}>
-        <PathInput
-          id={`${id}-path`}
-          value={path}
-          onChange={(next) => {
-            setPath(next);
-            setError(null);
-          }}
-          onEnter={(force) => {
-            if (force || !plan.writes) formRef.current?.requestSubmit();
-          }}
-          placeholder="~/path/to/project"
-          autoFocus
-        />
-        <FolderStatus check={check} browsing={browsing} empty={!typed} />
-      </Field>
-      <Field label="Name" htmlFor={`${id}-name`}>
-        <Input
-          id={`${id}-name`}
-          value={name}
-          maxLength={200}
-          placeholder={
-            check?.kind === "repo" ||
-            (!browsing && (check?.kind === "plain" || check?.kind === "missing"))
-              ? check.name
-              : "Named after the folder"
-          }
-          disabled={check?.kind === "repo" && check.projectId !== null}
-          onChange={(event) => setName(event.target.value)}
-        />
-      </Field>
-      <ErrorLine error={error} />
-      <DialogFooter>
-        <Button type="button" variant="ghost" onClick={closeAddProject}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={plan.disabled || busy}>
-          {busy && <Spinner className="animate-spin" />}
-          {plan.label}
-        </Button>
-      </DialogFooter>
-    </form>
-  );
-}
-
-/** What adding the typed folder does, under the path. */
-function FolderStatus({
-  check,
-  browsing,
-  empty,
-}: {
-  check: FolderCheck | null;
-  browsing: boolean;
-  empty: boolean;
-}) {
-  const projects = useApp((state) => state.projects);
-  if (empty) return <StatusLine>Type a folder's path, or choose it.</StatusLine>;
-  if (!check) return <StatusLine>&nbsp;</StatusLine>;
-  if (browsing && check.kind !== "repo") {
-    return <StatusLine>Pick a folder below, or type a new folder's name.</StatusLine>;
-  }
-  switch (check.kind) {
-    case "repo":
-      if (check.projectId) {
-        const project = projects[check.projectId];
-        return (
-          <StatusLine icon={<InfoCircle />}>
-            Already the project <strong className="font-medium">{project?.name ?? check.name}</strong>.
-          </StatusLine>
-        );
-      }
-      return check.nested ? (
-        <StatusLine icon={<InfoCircle />}>
-          In the repository at <code className="font-mono">{shortPath(check.root)}</code>, which
-          the project uses.
-        </StatusLine>
-      ) : (
-        <StatusLine icon={<CheckCircle />} tone="success">
-          Git repository
-        </StatusLine>
-      );
-    case "plain":
-      return (
-        <StatusLine icon={<Warning />} tone="warning">
-          Not a git repository. Adding it runs <code className="font-mono">git init</code> here
-          and makes an empty first commit.
-        </StatusLine>
-      );
-    case "missing":
-      return (
-        <StatusLine icon={<Warning />} tone="warning">
-          Doesn't exist yet. Adding it creates the folder with a new git repository.
-        </StatusLine>
-      );
-    case "invalid":
-      return (
-        <StatusLine icon={<Warning />} tone="error">
-          {check.reason}
-        </StatusLine>
-      );
-  }
-}
-
-function StatusLine({
-  icon,
-  tone,
-  children,
-}: {
-  icon?: ReactNode;
-  tone?: "success" | "warning" | "error";
-  children: ReactNode;
-}) {
-  return (
-    <p
-      role="status"
-      className={cn(
-        "text-muted-foreground flex min-h-4 items-start gap-1.5 text-xs [&_svg]:mt-px [&_svg]:size-icon-sm [&_svg]:shrink-0",
-        tone === "success" && "[&_svg]:text-success",
-        tone === "warning" && "[&_svg]:text-warning",
-        tone === "error" && "text-destructive",
-      )}
-    >
-      {icon}
-      <span>{children}</span>
-    </p>
-  );
-}
-
-// ----- a clone ----------------------------------------------------------------------------
-
-/** `owner/name` is a GitHub repository; anything else is taken as typed. */
-function cloneUrl(typed: string): string {
-  const url = typed.trim();
-  return /^[\w.-]+\/[\w.-]+$/.test(url) ? `https://github.com/${url.replace(/\.git$/, "")}.git` : url;
-}
-
-/** The folder a clone of `url` goes in by default: its last path part, without `.git`. */
-function folderFromUrl(url: string): string {
-  const last = url.trim().replace(/[/\\]+$/, "").split(/[/:\\]/).pop() ?? "";
-  return last.replace(/\.git$/, "");
-}
-
-function CloneForm({ initialParent }: { initialParent: string }) {
-  const id = useId();
-  const [url, setUrl] = useState("");
-  const [parent, setParent] = useState(initialParent);
-  const [folder, setFolder] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const mounted = useRef(false);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-
-  const target = folder.trim() || folderFromUrl(url);
-  const into = parent.trim().replace(/[/\\]+$/, "");
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (busy) return;
-    if (!url.trim()) {
-      setError("Paste the repository's URL.");
-      return;
-    }
-    if (!target) {
-      setError("Name the folder to clone into.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    // The clone goes on if the dialog closes; its outcome then shows as a toast.
-    try {
-      const project = await cloneProject(cloneUrl(url), into || "/", target, "");
-      if (mounted.current) closeAddProject();
-      showProject(project.id);
-      toast(`Cloned ${project.name}`);
-    } catch (cause) {
-      if (mounted.current) {
-        setError(errorText(cause));
-        setBusy(false);
-      } else {
-        toast(`Could not clone ${target}: ${errorText(cause)}`, { tone: "error" });
-      }
-    }
-  };
-
-  return (
-    <form onSubmit={(event) => void submit(event)} className="grid gap-4">
-      <Field label="Repository URL" htmlFor={`${id}-url`}>
-        <Input
-          id={`${id}-url`}
-          value={url}
-          spellCheck={false}
-          autoComplete="off"
-          placeholder="https://github.com/owner/repo.git or owner/repo"
-          className="font-mono text-xs"
-          disabled={busy}
-          onChange={(event) => {
-            setUrl(event.target.value);
-            setError(null);
-          }}
-        />
-      </Field>
-      <Field label="Clone into" htmlFor={`${id}-parent`}>
-        <PathInput
-          id={`${id}-parent`}
-          value={parent}
-          onChange={setParent}
-          onEnter={() => undefined}
-          placeholder="~/code"
-          disabled={busy}
-        />
-      </Field>
-      <Field
-        label="Folder name"
-        htmlFor={`${id}-folder`}
-        hint={
-          target ? (
-            <>
-              Clones to <code className="font-mono">{`${into}/${target}`}</code>
-            </>
-          ) : undefined
-        }
-      >
-        <Input
-          id={`${id}-folder`}
-          value={folder}
-          spellCheck={false}
-          autoComplete="off"
-          placeholder={folderFromUrl(url) || "repo"}
-          className="font-mono text-xs"
-          disabled={busy}
-          onChange={(event) => setFolder(event.target.value)}
-        />
-      </Field>
-      <ErrorLine error={error} />
-      <DialogFooter>
-        <Button type="button" variant="ghost" onClick={closeAddProject}>
-          {busy ? "Close" : "Cancel"}
-        </Button>
-        <Button type="submit" disabled={busy}>
-          {busy && <Spinner className="animate-spin" />}
-          {busy ? "Cloning…" : "Clone & add"}
-        </Button>
-      </DialogFooter>
-    </form>
-  );
-}
-
-// ----- the path field ---------------------------------------------------------------------
-
-/** The typed path up to and including its last separator: where a picked folder is added. */
-function base(path: string): string {
-  if (path === "~") return "~/";
-  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return cut < 0 ? "" : path.slice(0, cut + 1);
-}
-
-/**
- * A folder path with the folders it points into listed below as it is typed: ↑↓ pick one,
- * Tab or Enter goes into it, Enter with none picked hands over to `onEnter` (⌘Enter forces).
- * "Choose…" opens the system folder picker.
- */
-function PathInput({
-  id,
-  value,
-  onChange,
-  onEnter,
-  placeholder,
-  autoFocus,
-  disabled,
-}: {
-  id: string;
-  value: string;
-  onChange: (value: string) => void;
-  onEnter: (force: boolean) => void;
-  placeholder: string;
-  autoFocus?: boolean;
-  disabled?: boolean;
-}) {
-  const [listing, setListing] = useState<{ path: string; listing: FolderListing } | null>(null);
-  // Listed once the field is used; blurring keeps the list, so the buttons below don't move
-  // under a click.
-  const [engaged, setEngaged] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
-  const [highlight, setHighlight] = useState(-1);
-  const [error, setError] = useState<string | null>(null);
-  const listId = `${id}-list`;
-
-  const typed = value.trim();
-  useEffect(() => {
-    if (!typed) return;
-    let live = true;
-    const timer = window.setTimeout(() => {
-      browseFolders(typed)
-        .then((found) => {
-          if (live) setListing({ path: typed, listing: found });
-        })
-        .catch(() => {
-          if (live) setListing({ path: typed, listing: { dir: "", entries: [], truncated: false } });
-        });
-    }, LIST_DELAY_MS);
-    return () => {
-      live = false;
-      window.clearTimeout(timer);
-    };
-  }, [typed]);
-
-  // The last listing stays up while the next loads, so the list doesn't flicker.
-  const entries = typed ? (listing?.listing.entries ?? []) : [];
-  const shown = engaged && !dismissed && !disabled && entries.length > 0;
-
-  const change = (next: string) => {
-    onChange(next);
-    setHighlight(-1);
-    setDismissed(false);
-  };
-  const enter = (index: number) => {
-    const entry = entries[index];
-    if (entry) change(`${base(value)}${entry.name}/`);
-  };
-
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      if (shown && highlight >= 0 && !(event.metaKey || event.ctrlKey)) enter(highlight);
-      else onEnter(event.metaKey || event.ctrlKey);
-      return;
-    }
-    if (!shown) return;
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      // Past either end, nothing is picked: Enter then hands over again.
-      const down = event.key === "ArrowDown";
-      setHighlight((at) => {
-        if (down) return at >= entries.length - 1 ? -1 : at + 1;
-        return at < 0 ? entries.length - 1 : at - 1;
-      });
-    } else if (event.key === "Tab" && !event.shiftKey) {
-      event.preventDefault();
-      enter(Math.max(highlight, 0));
-    } else if (event.key === "Escape") {
-      // Closes the list, not the dialog.
-      event.preventDefault();
-      event.stopPropagation();
-      setDismissed(true);
-      setHighlight(-1);
-    }
-  };
-
-  return (
-    <div className="grid gap-1">
-      <div className="flex gap-2">
-        <div className="min-w-0 flex-1">
-          <Input
-            id={id}
-            value={value}
-            autoFocus={autoFocus}
-            disabled={disabled}
-            spellCheck={false}
-            autoComplete="off"
-            placeholder={placeholder}
-            className="font-mono text-xs"
-            role="combobox"
-            aria-expanded={shown}
-            aria-controls={listId}
-            aria-autocomplete="list"
-            aria-activedescendant={shown && highlight >= 0 ? `${listId}-${highlight}` : undefined}
-            onFocus={() => setEngaged(true)}
-            onKeyDown={onKeyDown}
-            onChange={(event) => change(event.target.value)}
-          />
+    <form onSubmit={(event) => void submit(event)} className="flex flex-col">
+      <Header
+        title="New repository"
+        line="Name it and choose where it goes. Brigadier starts git in it and adds it."
+        onBack={onBack}
+      />
+      <div className="flex flex-col gap-5.5 px-7 pt-1 pb-7">
+        <div className="flex flex-col gap-2">
+          <FieldLabel htmlFor={`${id}-name`} label="Name" />
+          <div className={cn(BOX, "border-settings-divider focus-within:border-settings-accent px-3")}>
+            <Plus />
+            <input
+              id={`${id}-name`}
+              value={name}
+              autoFocus
+              spellCheck={false}
+              autoComplete="off"
+              maxLength={200}
+              disabled={busy}
+              placeholder="my-project"
+              onChange={(event) => {
+                setName(event.target.value);
+                setError(null);
+              }}
+              className="text-settings-text text-settings-meta placeholder:text-settings-text-tertiary caret-settings-link min-w-0 flex-1 bg-transparent font-mono outline-none"
+            />
+          </div>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={disabled}
-          onClick={() => {
-            setError(null);
-            pickFolder(listing?.listing.dir || undefined)
-              .then((picked) => {
-                if (picked) change(shortPath(picked));
-              })
-              .catch((cause: unknown) => setError(errorText(cause)));
-          }}
-        >
-          <FolderOpen />
-          Choose…
-        </Button>
+        <SaveTo parent={parent} name={folder} disabled={busy} onParent={setParent} onError={setError} />
+        <ErrorLine error={error} />
       </div>
-      {shown && (
-        <div
-          id={listId}
-          role="listbox"
-          aria-label="Folders"
-          className="bg-muted/30 rounded-menu max-h-48 overflow-y-auto border p-1"
-        >
-          {entries.map((entry, index) => (
-            <button
-              type="button"
-              tabIndex={-1}
-              key={entry.path}
-              id={`${listId}-${index}`}
-              role="option"
-              aria-selected={index === highlight}
-              // Keeps the focus in the field.
-              onPointerDown={(event) => event.preventDefault()}
-              onPointerMove={() => setHighlight(index)}
-              onClick={() => enter(index)}
-              className={cn(
-                "rounded-capsule min-h-control-sm flex w-full cursor-default items-center gap-2 px-2 text-start text-sm [&_svg]:size-icon-md [&_svg]:shrink-0",
-                index === highlight && "bg-foreground/8",
-              )}
-            >
-              <Folder className="text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-              {entry.projectId ? (
-                <span className="text-muted-foreground text-xs">Added</span>
-              ) : entry.repo ? (
-                <span className="text-muted-foreground text-xs">git</span>
-              ) : null}
-            </button>
-          ))}
-          {listing?.listing.truncated && (
-            <p className="text-muted-foreground px-2 py-1 text-xs">
-              More folders match. Keep typing to narrow them.
-            </p>
-          )}
-        </div>
-      )}
-      <ErrorLine error={error} />
-    </div>
+      <Footer>
+        <CancelButton />
+        <DialogPill look="primary" type="submit" disabled={busy}>
+          {busy && <Spinner className="size-icon-xs animate-spin" />}
+          Create and add
+        </DialogPill>
+      </Footer>
+    </form>
   );
 }

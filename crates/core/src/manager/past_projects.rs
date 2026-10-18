@@ -86,7 +86,7 @@ fn provider_order(kind: ProviderKind) -> usize {
 
 /// Brigadier's data folder (its orchestrators, chats and worker worktrees run there) and the
 /// temporary folders, canonical so they match canonical working folders.
-fn skipped_roots(data_dir: &Path) -> BTreeSet<PathBuf> {
+pub(super) fn skipped_roots(data_dir: &Path) -> BTreeSet<PathBuf> {
     let mut roots = vec![data_dir.to_owned(), std::env::temp_dir()];
     if cfg!(unix) {
         roots.push(PathBuf::from("/tmp"));

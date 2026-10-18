@@ -689,6 +689,16 @@
   /* The search palette's key hints and rows (the user's design). */
   --radius-palette-key: 0.3125rem;
   --radius-palette-row: 0.5rem;
+  /* Add project: the chosen row, the white tick on a chosen radio, an Added badge's text, an
+     unchosen radio's 1.5px edge, its list's height (five rows), and the 15, 13 and 11px icons. */
+  --color-design-row-chosen: #262626;
+  --color-design-on-accent: #ffffff;
+  --color-design-badge-text: #cfcfcf;
+  --shadow-design-radio: inset 0 0 0 1.5px var(--color-settings-grip);
+  --spacing-add-project-list: 18.625rem;
+  --spacing-design-icon-close: 0.9375rem;
+  --spacing-design-icon-sm: 0.8125rem;
+  --spacing-design-icon-xs: 0.6875rem;
 }
 
 @theme inline {

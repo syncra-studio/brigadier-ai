@@ -645,9 +645,11 @@ impl Session {
                 return Ok(Flow::Continue);
             }
             // Long: answered beside the connection's other requests. A site's icon waits on the
-            // site itself, which may take its whole timeout; the tabs' settled states read git
+            // site itself, which may take its whole timeout; the repositories on this computer
+            // take a look through the code folders; the tabs' settled states read git
             // in every tab.
             request @ (Request::SiteIcon { .. }
+            | Request::FindRepos
             | Request::ScanStorage { .. }
             | Request::PreviewDelete { .. }
             | Request::CleanStorage { .. }
@@ -1631,6 +1633,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         },
         Request::FindProjects => Response::FindProjects {
             candidates: heap(|| sessions.find_projects()).await?,
+        },
+        Request::FindRepos => Response::FindRepos {
+            repos: heap(|| sessions.find_repos()).await?,
         },
         Request::BrowseFolders { path } => Response::BrowseFolders {
             listing: heap(|| sessions.browse_folders(path)).await?,
