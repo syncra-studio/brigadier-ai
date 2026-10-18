@@ -263,7 +263,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
         set(next);
         emitWorkspaceChanged(cacheTarget);
         const conflicted = next.changes.filter((file) => file.status === "conflicted").map((file) => file.path);
-        const merged = (action.type === "merge" || action.type === "pull") && next.merging;
+        const merged = (action.type === "merge" || action.type === "pull" || action.type === "sync") && next.merging;
         const rebased = (action.type === "rebase" || action.type === "continueRebase") && next.rebasing;
         if ((merged || rebased || action.type === "applyStash") && conflicted.length > 0) {
           showConflicts(conflicted);
@@ -284,10 +284,9 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
   const fetch = () => void run({ type: "fetch" }, "Failed to fetch", () => "Fetched");
   const abortMerge = () => void run({ type: "abortMerge" }, "Failed to abort the merge");
   const abortRebase = () => void run({ type: "abortRebase" }, "Failed to abort the rebase");
-  // Commit & Sync, after its commit: pull, then push unless the pull stopped.
-  const sync = () => {
-    void run({ type: "pull" }, "Failed to pull").then((next) => next && push());
-  };
+  // Commit & Sync, after its commit: pull, then push unless the pull stopped (no pull of the
+  // commits GitHub kept after a squash merge: the push replaces them).
+  const sync = () => void run({ type: "sync" }, "Failed to sync", (next) => `Pushed ${next.branch ?? "the branch"}`);
 
   const rebase = (onto: string) =>
     void run({ type: "rebase", branch: onto }, "Failed to rebase", (next) => `Rebased ${next.branch ?? "the branch"} onto ${onto}`);

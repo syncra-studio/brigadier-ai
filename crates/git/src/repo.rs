@@ -1821,6 +1821,18 @@ impl Repo {
         self.push_leased(branch, Some(merged)).map_err(|_| refused)
     }
 
+    /// Whether local `branch` starts from `merge_commit`, the commit a pull request's squash
+    /// or rebase merge made from its head `merged`, and its upstream as last fetched is still
+    /// exactly `merged`: the commits GitHub kept on the merged pull request's branch, which a
+    /// pull would merge back (#331). Not when either can't be read.
+    pub fn kept_after_merge(&self, branch: &str, merged: &Oid, merge_commit: &Oid) -> bool {
+        let from_merge = self
+            .branch_commit(branch)
+            .and_then(|tip| self.ancestor(merge_commit, &tip));
+        matches!(from_merge, Ok(true))
+            && matches!(self.upstream_gap(branch), Ok(Some(gap)) if gap.tip == *merged)
+    }
+
     fn push_leased(&self, branch: &str, lease: Option<&Oid>) -> Result<()> {
         let state = self.remote_state(branch)?;
         let remote = state

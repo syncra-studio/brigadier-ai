@@ -52,6 +52,22 @@ impl MergedPr {
             None => repo.push(branch),
         }
     }
+
+    /// Commit & Sync of `branch`: no pull when this is its merge and the remote branch is
+    /// still the merged head, as last fetched (#331), so the commits GitHub kept aren't
+    /// merged back; else the pull, then [`Self::push`] unless the pull stopped on conflicts.
+    fn sync(merged: Option<&Self>, repo: &Repo, branch: &str) -> brigadier_git::Result<()> {
+        if let Some(merged) = merged.filter(|merged| merged.branch == branch) {
+            repo.fetch()?;
+            if repo.kept_after_merge(branch, &merged.head, &merged.merge_commit) {
+                return repo.push_after_merge(branch, &merged.head, &merged.merge_commit);
+            }
+        }
+        if repo.pull()? {
+            return Ok(());
+        }
+        Self::push(merged, repo, branch)
+    }
 }
 
 impl SessionManager {
@@ -141,9 +157,10 @@ impl SessionManager {
         };
         let path = self.source_dir(target)?;
         let merged = match (target, &action) {
-            (WorkspaceTarget::Conversation { conversation_id }, SourceAction::Push) => {
-                self.merged_pr(conversation_id).await
-            }
+            (
+                WorkspaceTarget::Conversation { conversation_id },
+                SourceAction::Push | SourceAction::Sync,
+            ) => self.merged_pr(conversation_id).await,
             _ => None,
         };
         // Brigadier's branches stay: the sessions' and their tasks'.
@@ -455,6 +472,7 @@ fn act(repo: &Repo, action: SourceAction, merged: Option<&MergedPr>) -> brigadie
         SourceAction::Checkout { branch } => repo.switch_branch(&branch),
         SourceAction::Pull => repo.pull().map(drop),
         SourceAction::Push => MergedPr::push(merged, repo, &branch()?),
+        SourceAction::Sync => MergedPr::sync(merged, repo, &branch()?),
         SourceAction::Fetch => repo.fetch(),
         // Rebased and continued above, under the ref lock.
         SourceAction::Rebase { .. } | SourceAction::ContinueRebase => Ok(()),

@@ -495,3 +495,94 @@ async fn push_replaces_the_kept_branch_of_a_squash_merged_pull_request_and_nothi
     assert_eq!(on_github(), more);
     flow.stop().await;
 }
+
+/// Commit & Sync after a pull request GitHub squash-merged with its branch kept (#331): the
+/// session's branch starts from the merge and the kept branch is still the merged head, so
+/// Sync doesn't pull the merged commits back; its push replaces the kept branch.
+#[tokio::test]
+async fn sync_after_a_squash_merge_pulls_nothing_back_and_pushes() {
+    let flow = Flow::start(
+        "source-sync-squashed",
+        Options::default(),
+        std::sync::Arc::new(|_turn| Box::pin(async { Reply::text("Done.") })),
+    )
+    .await;
+    flow.say("Hi.").await;
+    flow.settled().await;
+    let manager = &flow.manager;
+    let repo = &flow.repo;
+    let (checkout, branch) = match flow.core.conversation(&flow.conversation).unwrap().setup {
+        Some(Setup::Session {
+            environment:
+                Environment::NewWorktree {
+                    path: Some(path),
+                    branch,
+                    ..
+                },
+            ..
+        }) => (std::path::PathBuf::from(path), branch),
+        other => panic!("a session with a worktree, not {other:?}"),
+    };
+    let session = WorkspaceTarget::Conversation {
+        conversation_id: flow.conversation.clone(),
+    };
+    let remote = repo.parent().unwrap().join("origin.git");
+    git(
+        repo.parent().unwrap(),
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    );
+    git(repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    git(repo, &["push", "-q", "-u", "origin", "main"]);
+
+    std::fs::write(checkout.join("work.txt"), "work\n").unwrap();
+    git(&checkout, &["add", "work.txt"]);
+    git(&checkout, &["commit", "-qm", "Work"]);
+    git(&checkout, &["push", "-q", "-u", "origin", &branch]);
+    let head = git(&checkout, &["rev-parse", "HEAD"]);
+    git(repo, &["merge", "-q", "--squash", &branch]);
+    git(repo, &["commit", "-qm", "Work (#7)"]);
+    git(repo, &["push", "-q", "origin", "main"]);
+    let squashed = git(repo, &["rev-parse", "HEAD"]);
+    git(&checkout, &["reset", "-q", "--hard", &squashed]);
+    std::fs::write(checkout.join("more.txt"), "more\n").unwrap();
+    git(&checkout, &["add", "more.txt"]);
+    git(&checkout, &["commit", "-qm", "More"]);
+    manager.record_session_refs(&flow.conversation, &checkout);
+    let more = git(&checkout, &["rev-parse", "HEAD"]);
+    manager
+        .orchestrator_step_in(
+            &flow.conversation,
+            None,
+            OrchestratorStepKind::Merged {
+                branch: branch.clone(),
+                base: "main".into(),
+                commits: 1,
+                asked_in: None,
+                upstream: None,
+                head: Some(head.clone()),
+                merge_commit: Some(squashed.clone()),
+                pr: Some(7),
+                auto: false,
+                requests: Vec::new(),
+                record: None,
+            },
+        )
+        .await;
+
+    let state = manager
+        .source_action(&session, SourceAction::Sync)
+        .await
+        .unwrap();
+    assert!(state.merging.is_none(), "{state:?}");
+    // Nothing pulled: the branch is the merge and the new work, no merge of the kept commits.
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), more);
+    assert!(
+        !git(&checkout, &["log", "--format=%H"]).contains(&head),
+        "the merged commits came back"
+    );
+    assert_eq!(
+        git(&remote, &["rev-parse", &format!("refs/heads/{branch}")]),
+        more
+    );
+    flow.stop().await;
+}

@@ -3010,6 +3010,10 @@ pub enum SourceAction {
     },
     Pull,
     Push,
+    /// Commit & Sync's pull, then its push unless the pull stopped on conflicts. A session
+    /// branch starting from its pull request's squash or rebase merge, whose kept remote
+    /// branch is still the merged head, isn't pulled: its push replaces that (#331).
+    Sync,
     Fetch,
     /// Rebases the checked-out branch onto a branch (local, or remote as `origin/main`); one
     /// that stops on conflicts stays in progress for them to be resolved.
