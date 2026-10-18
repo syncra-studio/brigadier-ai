@@ -4,4 +4,4 @@
  * Where a session stands, as its chat tab and its sidebar row show it; the first
  * that holds wins ([`crate::board::Board::tab_state`]).
  */
-export type TabState = "needsYou" | "working" | "ready" | "merged";
+export type TabState = "needsYou" | "working" | "ready" | "merging" | "merged" | "reverted";

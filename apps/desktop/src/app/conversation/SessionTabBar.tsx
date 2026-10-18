@@ -14,6 +14,7 @@ import {
 
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TitlebarButton } from "@/components/titlebar-button";
+import { SessionStatusLabel } from "@/app/SessionStatus";
 import { UNTITLED } from "@/app/TopBar";
 import { sessionTabKey } from "@/state/sessionTabKeys";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
@@ -368,6 +369,7 @@ export function SessionTabBar({
             >
               {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
               <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">{chatTitle}</span>
+              {!archived && <SessionStatusLabel conversationId={id} place="tab" />}
             </button>
             <ChatActions
               conversation={conversation}

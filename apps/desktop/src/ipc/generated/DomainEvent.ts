@@ -30,6 +30,7 @@ import type { Project } from "./Project";
 import type { ProjectId } from "./ProjectId";
 import type { ProviderEvent } from "./ProviderEvent";
 import type { ProviderOverview } from "./ProviderOverview";
+import type { PullRequest } from "./PullRequest";
 import type { Question } from "./Question";
 import type { QuotaWait } from "./QuotaWait";
 import type { QuotaWarning } from "./QuotaWarning";
@@ -68,7 +69,7 @@ phase?: TextPhase, } | { "type": "thinkingDelta", conversationId: ConversationId
 /**
  * The request the turn serves.
  */
-requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, } | { "type": "requestReady", conversationId: ConversationId, requestId: string, head: string, } | { "type": "workerStepped", step: WorkerStep, } | { "type": "orchestratorStepped", step: OrchestratorStep, } | { "type": "machineStepped", conversationId: ConversationId, step: MachineStep, } | { "type": "compactionUpdated", compaction: Compaction, } | { "type": "messageRated", 
+requestId: string | null, } | { "type": "requestUpdated", request: UserRequest, } | { "type": "requestReady", conversationId: ConversationId, requestId: string, head: string, } | { "type": "pullRequestSeen", conversationId: ConversationId, pullRequest: PullRequest | null, } | { "type": "workerStepped", step: WorkerStep, } | { "type": "orchestratorStepped", step: OrchestratorStep, } | { "type": "machineStepped", conversationId: ConversationId, step: MachineStep, } | { "type": "compactionUpdated", compaction: Compaction, } | { "type": "messageRated", 
 /**
  * The answer: a message id, or `task:<id>` for a worker's report; `plan:<id>` for a plan.
  */

@@ -100,6 +100,8 @@ function summary(event: DomainEvent): string {
       return `request ${event.request.state.type}`;
     case "requestReady":
       return `ready at ${event.head.slice(0, 12)}`;
+    case "pullRequestSeen":
+      return event.pullRequest ? `pull request #${event.pullRequest.number} ${event.pullRequest.state}` : "no pull request";
     case "workerStepped":
       return `${event.step.kind} ${event.step.taskId}`;
     case "orchestratorStepped":

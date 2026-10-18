@@ -22,6 +22,8 @@ type Activity = {
   questions: ReadonlySet<string>;
   /** What it is busy with that its row names, keyed by what runs it (`ci:`, `merge:`, …). */
   phases: Readonly<Record<string, SessionPhase>>;
+  /** Its latest request or its run failed, and nothing ran since. */
+  failed: boolean;
 };
 
 const IDLE: Activity = {
@@ -30,6 +32,7 @@ const IDLE: Activity = {
   approvals: new Set(),
   questions: new Set(),
   phases: {},
+  failed: false,
 };
 
 const FINAL: ReadonlySet<TaskState> = new Set(["landed", "done", "rejected", "stopped", "failed"]);
@@ -60,13 +63,14 @@ export const useActivity = create<{ byConversation: Record<string, Activity> }>(
   byConversation: {},
 }));
 
-function fromSnapshot(activity: ConversationActivity): Activity {
+export function fromSnapshot(activity: ConversationActivity): Activity {
   return {
     run: activity.run,
     tasks: Object.fromEntries(activity.tasks),
     approvals: new Set(activity.approvals),
     questions: new Set(activity.questions),
     phases: Object.fromEntries(activity.phases),
+    failed: activity.failed ?? false,
   };
 }
 
@@ -134,11 +138,16 @@ function stepped(current: Activity, kind: OrchestratorStepKind): Activity {
 function apply(current: Activity, { event }: EventEnvelope): Activity {
   switch (event.type) {
     case "runStateChanged": {
-      const next = { ...current, run: event.state };
+      const running = event.state === "running" || event.state === "starting";
+      const failed = event.state === "failed" ? true : running ? false : current.failed;
+      const next = { ...current, run: event.state, failed };
       // A call the turn left in progress isn't running any more.
-      return event.state === "running" || event.state === "starting"
-        ? next
-        : unphased(next, "tool:");
+      return running ? next : unphased(next, "tool:");
+    }
+    case "requestUpdated": {
+      const { type } = event.request.state;
+      const failed = type === "failed" ? true : type === "working" ? false : current.failed;
+      return failed === current.failed ? current : { ...current, failed };
     }
     case "taskUpdated": {
       const { id, state, kind } = event.task;
@@ -212,6 +221,8 @@ function conversationOf({ stream, event }: EventEnvelope): string | null {
       return event.run.conversationId;
     case "runStateChanged":
       return event.conversationId;
+    case "requestUpdated":
+      return event.request.conversationId;
     case "taskUpdated":
       return event.task.conversationId;
     case "approvalUpdated":
@@ -243,16 +254,18 @@ export function applyActivityEvents(batch: readonly EventEnvelope[]): void {
 }
 
 /**
- * What a sidebar row shows: a pill while it waits for the user, else a spinner while it runs or
- * is in a phase, with the phase's name.
+ * What a sidebar row shows: a pill while it waits for the user (a card, a question, or its last
+ * turn failed), else a spinner while it runs or is in a phase, with the phase's name, and how
+ * many of its workers run.
  */
 export type RowActivity = {
   running: boolean;
-  awaiting: "approval" | "input" | null;
+  awaiting: "approval" | "input" | "failed" | null;
   phase: SessionPhase | null;
+  workers: number;
 };
 
-const QUIET: RowActivity = { running: false, awaiting: null, phase: null };
+const QUIET: RowActivity = { running: false, awaiting: null, phase: null, workers: 0 };
 
 export function rowActivity(activity: Activity | undefined): RowActivity {
   if (!activity) return QUIET;
@@ -266,10 +279,13 @@ export function rowActivity(activity: Activity | undefined): RowActivity {
       ? "approval"
       : activity.questions.size > 0
         ? "input"
-        : null;
+        : activity.failed && !running
+          ? "failed"
+          : null;
   const phases = new Set(Object.values(activity.phases));
   const phase = PHASE_ORDER.find((each) => phases.has(each)) ?? null;
-  return running || awaiting || phase ? { running, awaiting, phase } : QUIET;
+  const workers = states.filter((state) => WORKING.has(state)).length;
+  return running || awaiting || phase ? { running, awaiting, phase, workers } : QUIET;
 }
 
 /** The row activity of one conversation; re-renders only when it changes. */
@@ -284,5 +300,6 @@ export function useRowActivity(conversationId: string): RowActivity {
   const running = useActivity((s) => rowActivity(s.byConversation[conversationId]).running);
   const awaiting = useActivity((s) => rowActivity(s.byConversation[conversationId]).awaiting);
   const phase = useActivity((s) => rowActivity(s.byConversation[conversationId]).phase);
-  return running || awaiting || phase ? { running, awaiting, phase } : QUIET;
+  const workers = useActivity((s) => rowActivity(s.byConversation[conversationId]).workers);
+  return running || awaiting || phase ? { running, awaiting, phase, workers } : QUIET;
 }

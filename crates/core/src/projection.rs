@@ -142,6 +142,7 @@ impl Projection {
             | DomainEvent::RunStateChanged { .. }
             | DomainEvent::RequestUpdated { .. }
             | DomainEvent::RequestReady { .. }
+            | DomainEvent::PullRequestSeen { .. }
             | DomainEvent::WorkerStepped { .. }
             | DomainEvent::OrchestratorStepped { .. }
             | DomainEvent::MachineStepped { .. }

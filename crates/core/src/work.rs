@@ -1940,6 +1940,10 @@ pub struct ConversationActivity {
     /// What it is busy with that its row names, keyed by what runs it: `task:`, `review:`,
     /// `check:`, `run:`, `tool:`, `merge:` or `ci:` and its id.
     pub phases: Vec<(String, SessionPhase)>,
+    /// Its latest request or its run failed, and nothing ran since: it needs the user.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub failed: bool,
 }
 
 /// What a conversation is busy with, as its sidebar row names it ("Watching CI").
@@ -1962,14 +1966,18 @@ pub enum SessionPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum TabState {
-    /// An open approval, plan, question or quota wait.
+    /// An open approval, plan or question, or its last run failed.
     NeedsYou,
-    /// Its turn, a worker or a phase runs.
+    /// Its turn, a worker or a phase runs, or its messages wait for a usage limit to reset.
     Working,
     /// Idle, with commits its base doesn't have since its last merge.
     Ready,
+    /// A merge of its work runs.
+    Merging,
     /// Its work merged, and nothing newer is unmerged.
     Merged,
+    /// Its latest merge was reverted on the base, and nothing newer is unmerged.
+    Reverted,
 }
 
 /// A tab that is ready or merged, whatever runs in it now: the part of its state the app can't
@@ -1979,6 +1987,14 @@ pub enum TabState {
 pub struct SettledTab {
     pub conversation_id: ConversationId,
     pub state: TabState,
+    /// Its branch's pull request as last seen on GitHub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pull_request: Option<PullRequestState>,
+    /// The thread attached proof (`attach_proof`) since its last merge.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub proof: bool,
 }
 
 impl TabState {
@@ -1988,7 +2004,9 @@ impl TabState {
             Self::NeedsYou => "needs the user",
             Self::Working => "working",
             Self::Ready => "ready to merge",
+            Self::Merging => "merging",
             Self::Merged => "merged",
+            Self::Reverted => "merged, then reverted",
         }
     }
 }

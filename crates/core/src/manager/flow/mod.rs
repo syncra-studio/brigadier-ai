@@ -2129,6 +2129,8 @@ mod thread_items_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(test)]
 mod project_sessions_tests;
+#[cfg(test)]
+mod session_states_tests;
 #[cfg(all(test, debug_assertions))]
 mod thread_overflow_tests;
 #[cfg(test)]

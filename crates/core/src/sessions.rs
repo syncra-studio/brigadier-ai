@@ -160,9 +160,24 @@ impl Core {
         catalog
     }
 
-    /// What runs and what waits for the user, per conversation (those whose board is loaded:
-    /// every conversation that ran or changed since the daemon started).
+    /// What runs and what waits for the user, per conversation: those whose board is loaded
+    /// (every conversation that ran or changed since the daemon started), and every open
+    /// session, whose last run may have failed before a restart.
     pub async fn activity(&self) -> Vec<ConversationActivity> {
+        let open: Vec<ConversationId> = self
+            .visible_catalog()
+            .conversations
+            .into_iter()
+            .filter(|conversation| {
+                conversation.is_tab() && conversation.lifecycle != crate::model::Lifecycle::Archived
+            })
+            .map(|conversation| conversation.id)
+            .collect();
+        for id in &open {
+            if let Err(err) = self.board(id).await {
+                tracing::debug!(conversation = %id, error = %err, "could not load a board");
+            }
+        }
         let boards = self.boards.lock().await;
         let mut activity: Vec<_> = boards
             .iter()
@@ -1534,6 +1549,37 @@ impl Core {
     /// Records that request `request_id` of `id` settled with its branch ahead of base at
     /// `head`, unless it is recorded at that head already (checked under the board's lock, so
     /// concurrent settles record it once).
+    /// Records [`DomainEvent::PullRequestSeen`] when `pull_request` isn't what `id`'s board
+    /// last saw.
+    pub(crate) async fn record_pull_request(
+        &self,
+        id: &ConversationId,
+        pull_request: Option<crate::work::PullRequest>,
+    ) -> Result<()> {
+        let mut boards = self.boards.lock().await;
+        if !boards.contains_key(id) {
+            let board = self.load_board(id).await?;
+            boards.insert(id.clone(), board);
+        }
+        if boards
+            .get(id)
+            .is_some_and(|board| board.pull_request == pull_request)
+        {
+            return Ok(());
+        }
+        let event = DomainEvent::PullRequestSeen {
+            conversation_id: id.clone(),
+            pull_request,
+        };
+        let stored = self
+            .record(vec![(streams::conversation(id), event.clone())])
+            .await?;
+        if let Some(board) = boards.get_mut(id) {
+            board.apply(&event, stored[0]);
+        }
+        Ok(())
+    }
+
     pub(crate) async fn record_ready(
         &self,
         id: &ConversationId,

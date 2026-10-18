@@ -181,10 +181,16 @@ impl SessionManager {
             let Ok(board) = self.core.board(&tab.id).await else {
                 continue;
             };
-            if let Some(state) = board.settled_state(ahead) {
+            let reverted = self.merge_reverted(tab, &board, ahead).await;
+            if let Some(state) = board.settled_state(ahead, reverted) {
+                if state == TabState::Ready {
+                    self.refresh_pull_request_soon(&tab.id);
+                }
                 settled.push(SettledTab {
                     conversation_id: tab.id.clone(),
                     state,
+                    pull_request: board.pull_request.as_ref().map(|pr| pr.state),
+                    proof: board.proof_since_merge(),
                 });
             }
         }
@@ -192,11 +198,46 @@ impl SessionManager {
     }
 
     /// Where `tab` stands ([`crate::board::Board::tab_state`]), with its branch's commits
-    /// ahead of base counted now.
+    /// ahead of base counted now, and whether its latest merge is reverted.
     pub(super) async fn tab_state(&self, tab: &Conversation) -> Option<TabState> {
         let ahead = self.tab_ahead(tab).await.map(|(_, ahead)| ahead);
         let board = self.core.board(&tab.id).await.ok()?;
-        board.tab_state(&tab.id, tab.quota_wait.is_some(), ahead)
+        let reverted = self.merge_reverted(tab, &board, ahead).await;
+        board.tab_state(&tab.id, tab.quota_wait.is_some(), ahead, reverted)
+    }
+
+    /// Whether `tab`'s latest recorded merge is reverted on its base now (asked of git only
+    /// when it would read merged: nothing of it ahead).
+    async fn merge_reverted(
+        &self,
+        tab: &Conversation,
+        board: &crate::board::Board,
+        ahead: Option<u32>,
+    ) -> bool {
+        if ahead.is_some_and(|ahead| ahead > 0) {
+            return false;
+        }
+        let Some((merge_commit, commits)) = board.latest_merge() else {
+            return false;
+        };
+        let Some(Setup::Session {
+            repo,
+            environment: crate::model::Environment::NewWorktree { base, .. },
+            ..
+        }) = tab.setup.clone()
+        else {
+            return false;
+        };
+        let git = self.git.clone();
+        super::blocking(move || {
+            let repo = git
+                .open(std::path::Path::new(&repo))
+                .map_err(super::git_error)?;
+            repo.merge_reverted(&brigadier_git::Oid(merge_commit), commits, &base)
+                .map_err(super::git_error)
+        })
+        .await
+        .unwrap_or(false)
     }
 
     /// A worktree tab's branch tip, and how many of its commits its base lacks.

@@ -668,6 +668,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "runStateChanged":
     case "requestUpdated":
     case "requestReady":
+    case "pullRequestSeen":
     case "branchSwitched":
     case "workerStepped":
     case "orchestratorStepped":

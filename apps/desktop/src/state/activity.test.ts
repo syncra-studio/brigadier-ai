@@ -43,7 +43,7 @@ const ciWatch = (result?: string) =>
 test("a CI watch has an idle session's row say Watching CI until it ends", () => {
   applyActivityEvents([ciWatch()]);
   assert.deepEqual(rowActivity(useActivity.getState().byConversation.c2), {
-    running: false, awaiting: null, phase: "watchingCi",
+    running: false, awaiting: null, phase: "watchingCi", workers: 0,
   });
   applyActivityEvents([ciWatch("passed")]);
   assert.equal(rowActivity(useActivity.getState().byConversation.c2).phase, null);

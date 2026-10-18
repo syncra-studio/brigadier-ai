@@ -14,10 +14,10 @@ import { AppSidebar, AppStrip } from "@/app/AppSidebar";
 import { SessionTabBar } from "@/app/conversation/SessionTabBar";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { Conversation, EventEnvelope, Project, Request } from "@/ipc/generated";
-import { applyActivityEvents } from "@/state/activity";
+import type { Conversation, ConversationActivity, EventEnvelope, Project, Request } from "@/ipc/generated";
+import { fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
-import { applySettledTabEvents } from "@/state/tabStates";
+import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
 
 const params = new URLSearchParams(location.search);
 const requests: string[] = [];
@@ -33,6 +33,8 @@ const session = (id: string, title: string, updatedAtMs: number, extra: Partial<
   id, kind: "session", projectId: project, title, pinnedAtMs: null, createdAtMs: updatedAtMs, updatedAtMs, setup: null,
   lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null, ...extra,
 });
+// Resets at 14:05 today, as the "waiting for reset" row says.
+const RESET = new Date(new Date().setHours(14, 5, 0, 0)).getTime();
 const conversations = [
   // Two sessions working that once shared a workspace: a row each; an archived third is left out.
   session("w1-a", "Header", 10),
@@ -40,6 +42,11 @@ const conversations = [
   session("w1-gone", "Gone", 12, { lifecycle: "archived" }),
   session("w2-a", "Fix the login", 9),
   session("w3-a", "Tidy the docs", 8),
+  session("w4-a", "Waiting on a limit", 7, { quotaWait: { reason: "limit", resetsAtMs: RESET, rule: null, ranking: null, sinceMs: 0 } }),
+  session("w6-a", "Deploy the site", 6),
+  session("w7-a", "Broken build", 4),
+  session("w8-a", "Old fix", 3),
+  session("w9-a", "Ship the release", 2),
   session("w5-a", "Lone worker", 5),
 ];
 useApp.setState({
@@ -50,12 +57,28 @@ useApp.setState({
   conversations: Object.fromEntries(conversations.map((each) => [each.id, each])),
   selection: { type: "none" },
 });
+const activity = (id: string, extra: Partial<ConversationActivity>): [string, ReturnType<typeof fromSnapshot>] =>
+  [id, fromSnapshot({ conversationId: id, run: "idle", tasks: [], approvals: [], questions: [], phases: [], ...extra })];
+useActivity.setState({
+  byConversation: Object.fromEntries([
+    activity("w1-a", { run: "running", tasks: [["t-1", "running"], ["t-2", "running"]] }),
+    activity("w1-b", { run: "running", phases: [["ci:o/n main abc", "watchingCi"]] }),
+    activity("w5-a", { run: "running" }),
+    activity("w6-a", { approvals: ["a-1"] }),
+    activity("w7-a", { failed: true }),
+    activity("w9-a", { run: "running", phases: [["tool:fin-1", "merging"]] }),
+  ]),
+});
 let seq = 0;
 const envelope = (stream: string, event: EventEnvelope["event"]): EventEnvelope => ({ seq: ++seq, stream, streamSeq: seq, atMs: seq, event });
-applyActivityEvents(["w1-a", "w1-b", "w5-a"].map((id) =>
-  envelope(`conversation:${id}`, { type: "runStateChanged", conversationId: id, state: "running", error: null, requestId: null })));
+useSettledTabs.setState({ byTab: { "w8-a": { state: "reverted" } } });
 applySettledTabEvents([
   envelope("conversation:w2-a", { type: "requestReady", conversationId: "w2-a", requestId: "r-1", head: "abc" }),
+  envelope("conversation:w2-a", { type: "pullRequestSeen", conversationId: "w2-a", pullRequest: { number: 7, title: "Login", url: "https://github.com/o/n/pull/7", state: "open" } }),
+  envelope("conversation:w2-a", {
+    type: "orchestratorStepped",
+    step: { requestId: "r-1", atMs: 1, position: 1, kind: { type: "proof", id: "p-1", name: "login.png", mime: "image/png" } },
+  }),
   envelope("conversation:w3-a", { type: "requestReady", conversationId: "w3-a", requestId: "r-2", head: "def" }),
   envelope("conversation:w3-a", {
     type: "orchestratorStepped",
@@ -101,7 +124,9 @@ async function closeAndReopen() {
   rowButton("Lone worker")!.click();
   await until(() => close() !== null);
   seen.reopened = useApp.getState().selection;
-  seen.chatTab = document.querySelector('[data-slot="session-tabs"] [data-tab-id="chat"] [role="tab"]')?.textContent?.trim();
+  const chatTab = document.querySelector('[data-slot="session-tabs"] [data-tab-id="chat"] [role="tab"]');
+  seen.chatTab = chatTab?.querySelector(".session-tab-title")?.textContent?.trim();
+  seen.chatTabStatus = chatTab?.querySelector('[data-slot="tab-status"]')?.textContent?.trim();
   return seen;
 }
 

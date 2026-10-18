@@ -453,6 +453,7 @@ useActivity.setState({
       approvals: new Set(Object.keys(pending)),
       questions: new Set(),
       phases: {},
+      failed: false,
     },
   },
 });

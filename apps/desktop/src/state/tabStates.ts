@@ -1,17 +1,27 @@
 import { create } from "zustand";
 
 import { request } from "@/ipc/client";
-import type { Conversation, EventEnvelope, TabState } from "@/ipc/generated";
-import { type RowActivity, rowActivity, useActivity } from "@/state/activity";
+import type { Conversation, EventEnvelope, PullRequestState, TabState } from "@/ipc/generated";
+import { type RowActivity, rowActivity, useActivity, useRowActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
+
+/** What a session's row knows beyond its activity: its settled state, and why it reads so. */
+export type Settled = {
+  state?: "ready" | "merged" | "reverted";
+  /** Its branch's pull request as last seen on GitHub. */
+  pullRequest?: PullRequestState;
+  /** The thread attached proof since its last merge. */
+  proof?: boolean;
+};
 
 /**
  * Where sessions stand (WORKSPACES-PLAN.md "States"), as their chat tab and sidebar rows show
- * it. Needs you and Working come from the activity the sidebar already folds; Ready and
- * Merged need git, so the daemon gives them at connect and its events keep them: a request that
- * settles ahead of base is ready, a merge of the tab's work is merged.
+ * it. Needs you and Working come from the activity the sidebar already folds; Ready, Merged and
+ * Reverted need git, so the daemon gives them at connect and its events keep them: a request
+ * that settles ahead of base is ready, a merge of the session's work is merged. Its pull
+ * request and proof come the same way.
  */
-export const useSettledTabs = create<{ byTab: Readonly<Record<string, "ready" | "merged">> }>(() => ({
+export const useSettledTabs = create<{ byTab: Readonly<Record<string, Settled>> }>(() => ({
   byTab: {},
 }));
 
@@ -19,8 +29,10 @@ export async function loadSettledTabs(): Promise<void> {
   const { tabs } = await request({ method: "getSettledTabs" });
   useSettledTabs.setState({
     byTab: Object.fromEntries(
-      tabs.flatMap(({ conversationId, state }) =>
-        state === "ready" || state === "merged" ? [[conversationId, state] as const] : [],
+      tabs.flatMap(({ conversationId, state, pullRequest, proof }) =>
+        state === "ready" || state === "merged" || state === "reverted"
+          ? [[conversationId, { state, ...(pullRequest ? { pullRequest } : {}), ...(proof ? { proof } : {}) }] as const]
+          : [],
       ),
     ),
   });
@@ -30,7 +42,7 @@ let refreshing: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Reads the settled states again once a watched checkout has been quiet for a moment: a commit
- * or merge made by hand (Source, a terminal) has no event of its own.
+ * or merge made by hand (Source, a terminal) has no event of its own, nor does a revert.
  */
 export function refreshSettledTabsSoon(): void {
   if (refreshing) clearTimeout(refreshing);
@@ -40,50 +52,123 @@ export function refreshSettledTabsSoon(): void {
   }, 3000);
 }
 
-/** Folds a batch of events into the tabs' ready and merged marks. */
+/** Folds a batch of events into the sessions' settled marks and their reasons. */
 export function applySettledTabEvents(batch: readonly EventEnvelope[]): void {
-  let changed: Record<string, "ready" | "merged"> | null = null;
-  const mark = (id: string, state: "ready" | "merged") => {
-    const current = changed ?? useSettledTabs.getState().byTab;
-    if (current[id] === state) return;
-    changed = { ...current, [id]: state };
+  let changed: Record<string, Settled> | null = null;
+  let refresh = false;
+  const update = (id: string, next: (current: Settled) => Settled) => {
+    const all = changed ?? useSettledTabs.getState().byTab;
+    const current = all[id] ?? {};
+    const value = next(current);
+    if (value.state === current.state && value.pullRequest === current.pullRequest && value.proof === current.proof) return;
+    changed = { ...all, [id]: value };
   };
   for (const { stream, event } of batch) {
-    if (event.type === "requestReady") mark(event.conversationId, "ready");
-    else if (
-      event.type === "orchestratorStepped" &&
-      event.step.kind.type === "merged" &&
-      stream.startsWith("conversation:")
-    ) {
-      mark(stream.slice("conversation:".length), "merged");
+    const id = stream.startsWith("conversation:") ? stream.slice("conversation:".length) : null;
+    if (event.type === "requestReady") update(event.conversationId, (current) => ({ ...current, state: "ready" }));
+    else if (event.type === "pullRequestSeen") {
+      const state = event.pullRequest?.state;
+      update(event.conversationId, ({ pullRequest: _old, ...current }) => (state ? { ...current, pullRequest: state } : current));
+    } else if (event.type === "orchestratorStepped" && id) {
+      if (event.step.kind.type === "merged") update(id, (current) => ({ ...current, state: "merged", proof: false }));
+      else if (event.step.kind.type === "proof") update(id, (current) => ({ ...current, proof: true }));
+    } else if (event.type === "runStateChanged" && event.state === "idle") {
+      // A turn may have reverted its merge on the base: git tells.
+      const state = (changed ?? useSettledTabs.getState().byTab)[event.conversationId]?.state;
+      if (state === "merged" || state === "reverted") refresh = true;
     }
   }
   if (changed) useSettledTabs.setState({ byTab: changed });
+  if (refresh) refreshSettledTabsSoon();
 }
 
-/** The first that holds wins: needs you, working, then the settled mark. */
-export function tabState(
-  activity: RowActivity,
-  quotaWait: boolean,
-  settled: "ready" | "merged" | undefined,
-): TabState | null {
-  if (quotaWait || activity.awaiting) return "needsYou";
-  if (activity.running || activity.phase) return "working";
+/**
+ * The first that holds wins, as the daemon's `Board::tab_state` decides it: needs you (a card,
+ * a question, or its last turn failed, unless it waits for a limit), merging, working (a turn,
+ * a worker, a phase, or its messages wait for a limit to reset), then the settled mark.
+ */
+export function tabState(activity: RowActivity, quotaWait: boolean, settled: Settled["state"]): TabState | null {
+  if (activity.awaiting === "approval" || activity.awaiting === "input") return "needsYou";
+  if (activity.awaiting === "failed" && !quotaWait) return "needsYou";
+  if (activity.phase === "merging") return "merging";
+  if (activity.running || activity.phase || quotaWait) return "working";
   return settled ?? null;
 }
 
 /** Strongest first. */
-export const TAB_STATES: readonly TabState[] = ["needsYou", "working", "ready", "merged"];
+export const TAB_STATES: readonly TabState[] = ["needsYou", "merging", "working", "ready", "merged", "reverted"];
 
 /** A state's words alone ("Needs you"), and after a count of sessions ("2 need you"). */
 export const TAB_STATE_WORDS: Record<TabState, { one: string; many: string }> = {
   needsYou: { one: "Needs you", many: "need you" },
   working: { one: "Working", many: "working" },
   ready: { one: "Ready", many: "ready" },
+  merging: { one: "Merging", many: "merging" },
   merged: { one: "Merged", many: "merged" },
+  reverted: { one: "Reverted", many: "reverted" },
 };
 
-/** One tab's state; re-renders only when it changes. */
+/** A session's state and, when there is one, why: "Working" and "watching CI". */
+export type SessionStatus = { state: TabState; reason: string | null };
+
+const twoDigits = (value: number) => String(value).padStart(2, "0");
+
+/** A time of day as HH:MM. */
+function clock(ms: number): string {
+  const at = new Date(ms);
+  return `${twoDigits(at.getHours())}:${twoDigits(at.getMinutes())}`;
+}
+
+/**
+ * Its state with the reason its row names: Working · watching CI / · N workers / · waiting for
+ * reset HH:MM, Needs you · approval / · question / · failed, Ready · PR open, proof attached.
+ * `quotaWait`: its messages wait for a limit, which resets at the time given (null: unknown).
+ */
+export function sessionStatus(
+  activity: RowActivity,
+  quotaWait: { resetsAtMs: number | null } | null,
+  settled: Settled | undefined,
+): SessionStatus | null {
+  const state = tabState(activity, quotaWait !== null, settled?.state);
+  if (!state) return null;
+  let reason: string | null = null;
+  if (state === "needsYou") {
+    reason = activity.awaiting === "approval" ? "approval" : activity.awaiting === "input" ? "question" : "failed";
+  } else if (state === "working") {
+    if (activity.phase === "watchingCi") reason = "watching CI";
+    else if (activity.workers > 0) reason = activity.workers === 1 ? "1 worker" : `${activity.workers} workers`;
+    else if (activity.phase === "reviewing") reason = "reviewing";
+    else if (activity.phase === "checking") reason = "checking";
+    else if (quotaWait && !activity.running) {
+      reason = quotaWait.resetsAtMs === null ? "waiting for a usage limit" : `waiting for reset ${clock(quotaWait.resetsAtMs)}`;
+    }
+  } else if (state === "ready") {
+    const why = [
+      ...(settled?.pullRequest === "open" || settled?.pullRequest === "draft" ? ["PR open"] : []),
+      ...(settled?.proof ? ["proof attached"] : []),
+    ];
+    reason = why.length > 0 ? why.join(", ") : null;
+  }
+  return { state, reason };
+}
+
+/** One session's state and reason; re-renders only when they change. */
+export function useSessionStatus(id: string): SessionStatus | null {
+  const activity = useRowActivity(id);
+  const resets = useApp((s) => {
+    const wait = s.conversations[id]?.quotaWait;
+    return wait ? (wait.resetsAtMs ?? NaN) : null;
+  });
+  const settled = useSettledTabs((s) => s.byTab[id]);
+  const status = sessionStatus(
+    activity,
+    resets === null ? null : { resetsAtMs: Number.isNaN(resets) ? null : resets },
+    settled,
+  );
+  return status;
+}
+
+/** One session's state; re-renders only when it changes. */
 export function useTabState(id: string): TabState | null {
   return useTabStates([id])[0] ?? null;
 }
@@ -93,25 +178,18 @@ const NONE = "-";
 /** The states of `ids`, in order; re-renders only when one changes. */
 export function useTabStates(ids: readonly string[]): (TabState | null)[] {
   // Each store gives a string, so a change elsewhere renders nothing here.
-  const live = useActivity((s) =>
-    ids
-      .map((id) => {
-        const activity = rowActivity(s.byConversation[id]);
-        return activity.awaiting ? "needsYou" : activity.running || activity.phase ? "working" : NONE;
-      })
-      .join(" "),
-  );
   const waiting = useApp((s) => ids.map((id) => (s.conversations[id]?.quotaWait ? "1" : "0")).join(""));
-  const settled = useSettledTabs((s) => ids.map((id) => s.byTab[id] ?? NONE).join(" "));
+  const live = useActivity((s) =>
+    ids.map((id, index) => tabState(rowActivity(s.byConversation[id]), waiting[index] === "1", undefined) ?? NONE).join(" "),
+  );
+  const settled = useSettledTabs((s) => ids.map((id) => s.byTab[id]?.state ?? NONE).join(" "));
   const lives = live.split(" ");
   const settles = settled.split(" ");
   return ids.map((_, index) => {
+    const own = lives[index];
+    if (own && own !== NONE) return own as TabState;
     const mark = settles[index];
-    return tabState(
-      { running: lives[index] === "working", awaiting: lives[index] === "needsYou" ? "approval" : null, phase: null },
-      waiting[index] === "1",
-      mark === "ready" || mark === "merged" ? mark : undefined,
-    );
+    return mark === "ready" || mark === "merged" || mark === "reverted" ? mark : null;
   });
 }
 

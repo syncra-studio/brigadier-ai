@@ -27,4 +27,8 @@ questions: Array<CardId>,
  * What it is busy with that its row names, keyed by what runs it: `task:`, `review:`,
  * `check:`, `run:`, `tool:`, `merge:` or `ci:` and its id.
  */
-phases: Array<[string, SessionPhase]>, };
+phases: Array<[string, SessionPhase]>, 
+/**
+ * Its latest request or its run failed, and nothing ran since: it needs the user.
+ */
+failed?: boolean, };

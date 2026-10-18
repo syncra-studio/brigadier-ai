@@ -116,6 +116,62 @@ impl SessionManager {
     }
 }
 
+/// The pull request of `checkout`'s session branch `name`, when that branch was pushed: none
+/// when it wasn't (no `gh` call), an error when `gh` couldn't tell. Only a branch that was
+/// pushed can have a pull request. A push without `-u` leaves no upstream, but its
+/// remote-tracking branch; a clone that fetches only main leaves no remote-tracking branch,
+/// but the upstream `-u` set.
+async fn lookup_pushed(
+    git: brigadier_git::Git,
+    checkout: PathBuf,
+    name: String,
+    gh: super::ci::Gh,
+) -> Option<std::result::Result<Option<FoundPr>, String>> {
+    blocking(move || {
+        let repo = git.open(&checkout).map_err(git_error)?;
+        let state = repo.remote_state(&name).map_err(git_error)?;
+        let pushed = state.upstream.is_some()
+            || repo.upstream_configured(&name).map_err(git_error)?
+            || state.remote.is_some_and(|remote| {
+                repo.resolve(&format!("refs/remotes/{remote}/{name}"))
+                    .is_ok()
+            });
+        if !pushed {
+            return Ok(None);
+        }
+        Ok(Some(run_gh(&gh.program, &checkout, &name, &gh.vars, false)))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// How often a connect may look up a ready session's pull request again.
+const PR_LOOKUP_EVERY: Duration = Duration::from_secs(120);
+
+impl SessionManager {
+    /// Looks `id`'s pull request up in the background (a ready session, read at a connect),
+    /// at most every [`PR_LOOKUP_EVERY`]: a pull request opened, closed or merged on GitHub
+    /// between its turns reaches its row. A turn's start and end look it up anyway
+    /// ([`Self::reconcile_pr_merge`]).
+    pub(super) fn refresh_pull_request_soon(&self, id: &ConversationId) {
+        {
+            let mut looked_up = self.pr_looked_up.lock().unwrap();
+            if looked_up
+                .get(id)
+                .is_some_and(|at| at.elapsed() < PR_LOOKUP_EVERY)
+            {
+                return;
+            }
+            looked_up.insert(id.clone(), Instant::now());
+        }
+        let (manager, id) = (self.arc(), id.clone());
+        self.spawn(async move {
+            manager.session_pr(&id).await;
+        });
+    }
+}
+
 /// A session's worktree and the pull request of its pushed branch.
 struct SessionPr {
     found: FoundPr,
@@ -144,7 +200,7 @@ const PR_WATCH_SOON_FOR: Duration = Duration::from_secs(30 * 60);
 
 impl SessionManager {
     /// The pull request of `id`'s session branch, when it has a worktree whose branch was
-    /// pushed and `gh` finds one.
+    /// pushed and `gh` finds one. What `gh` answered is recorded for the session's row.
     async fn session_pr(&self, id: &ConversationId) -> Option<SessionPr> {
         let conversation = self.core.conversation(id).ok()?;
         let Some(crate::model::Setup::Session {
@@ -163,28 +219,17 @@ impl SessionManager {
         };
         let gh = self.gh()?;
         let (git, checkout, name) = (self.git.clone(), PathBuf::from(&worktree), branch.clone());
-        // Only a branch that was pushed can have a pull request: no `gh` call otherwise. A push
-        // without `-u` leaves no upstream, but its remote-tracking branch; a clone that fetches
-        // only main leaves no remote-tracking branch, but the upstream `-u` set.
-        let found = blocking(move || {
-            let repo = git.open(&checkout).map_err(git_error)?;
-            let state = repo.remote_state(&name).map_err(git_error)?;
-            let pushed = state.upstream.is_some()
-                || repo.upstream_configured(&name).map_err(git_error)?
-                || state.remote.is_some_and(|remote| {
-                    repo.resolve(&format!("refs/remotes/{remote}/{name}"))
-                        .is_ok()
-                });
-            if !pushed {
-                return Ok(None);
-            }
-            Ok(run_gh(&gh.program, &checkout, &name, &gh.vars, false)
-                .ok()
-                .flatten())
-        })
-        .await
-        .ok()
-        .flatten()?;
+        let found = lookup_pushed(git, checkout, name, gh).await;
+        // What it was seen as, for its row ("PR open"): only when `gh` answered.
+        if let Some(Ok(seen)) = &found
+            && let Err(err) = self
+                .core
+                .record_pull_request(id, seen.as_ref().map(|found| found.pr.clone()))
+                .await
+        {
+            tracing::debug!(conversation = %id, error = %err, "could not record a pull request");
+        }
+        let found = found.and_then(|found| found.ok()).flatten()?;
         Some(SessionPr {
             found,
             repo,

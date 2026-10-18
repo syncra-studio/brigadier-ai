@@ -39,7 +39,6 @@ import {
   besideStrip,
 } from "@/app/sidebar/nav";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
-import { Spinner } from "@/components/glyphs/spinner";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { Button } from "@/components/ui/button";
 import {
@@ -61,7 +60,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { openFolder } from "@/ipc/client";
-import type { Conversation, Project, SessionPhase } from "@/ipc/generated";
+import type { Conversation, Project } from "@/ipc/generated";
+import { SessionStatusLabel } from "@/app/SessionStatus";
 import { cn } from "@/lib/utils";
 import {
   archive,
@@ -73,7 +73,6 @@ import {
   setProjectExpanded,
   stepHistory,
 } from "@/state/actions";
-import { useRowActivity } from "@/state/activity";
 import { openAddProject } from "@/state/addProject";
 import { exportProjectConventions } from "@/state/brain";
 import { useCanStep } from "@/state/history";
@@ -824,75 +823,25 @@ const ProjectRow = memo(function ProjectRow({
   );
 });
 
-/** What a row says next to its spinner while its conversation is in a phase. */
-const PHASE_WORDS: Record<SessionPhase, string> = {
-  merging: "Merging",
-  reviewing: "Reviewing",
-  checking: "Checking",
-  watchingCi: "Watching CI",
-};
-
 /**
- * At the end of a row, showing a chat's state: a green "Awaiting approval" or "Needs input"
- * pill while it waits for the user, else a spinner while it runs, named by its phase when it is
- * in one ("Watching CI"), else a small dot when it finished something since the user last had
- * it open. The row's actions take its place on hover.
+ * At the end of a row, its state with the reason on one line ("Working · watching CI", "Needs
+ * you · approval", "Ready · PR open"), else a small dot when it finished something since the
+ * user last had it open. The row's actions take its place on hover.
  */
 function RowStatus({ conversationId }: { conversationId: string }) {
-  const { running, awaiting, phase } = useRowActivity(conversationId);
   const seen = useLastOpened((s) => s.at[conversationId]);
   const finishedAtMs = useApp((s) => lastFinished(s.conversations[conversationId]));
   const open = useApp((s) => s.selection.type === "conversation" && s.selection.id === conversationId);
-  if (!running && !awaiting && !phase) {
-    if (!unread(finishedAtMs, seen, open)) return null;
-    return (
-      <span
-        data-slot="row-status"
-        data-status="unread"
-        role="img"
-        aria-label="Unread"
-        className={cn("bg-link size-1.5 shrink-0 rounded-full me-1", hideOnRowHover)}
-      />
-    );
-  }
-  if (awaiting) {
-    return (
-      <span
-        data-slot="row-status"
-        data-status={awaiting}
-        className={cn(
-          "bg-success/15 text-success rounded-capsule h-pill px-pill flex shrink-0 items-center text-2xs whitespace-nowrap",
-          hideOnRowHover,
-        )}
-      >
-        {awaiting === "approval" ? "Awaiting approval" : "Needs input"}
-      </span>
-    );
-  }
-  const spinner = "size-icon-sm shrink-0 animate-spin motion-reduce:animate-none";
-  if (phase) {
-    return (
-      <span
-        data-slot="row-status"
-        data-status={phase}
-        className={cn(
-          "text-muted-foreground flex shrink-0 items-center gap-1 text-2xs whitespace-nowrap",
-          hideOnRowHover,
-        )}
-      >
-        <Spinner className={spinner} />
-        {PHASE_WORDS[phase]}
-      </span>
-    );
-  }
-  return (
-    <Spinner
+  const dot = unread(finishedAtMs, seen, open) ? (
+    <span
       data-slot="row-status"
-      data-status="running"
-      aria-label="Running"
-      className={cn("text-muted-foreground", spinner, hideOnRowHover)}
+      data-status="unread"
+      role="img"
+      aria-label="Unread"
+      className={cn("bg-link size-1.5 shrink-0 rounded-full me-1", hideOnRowHover)}
     />
-  );
+  ) : null;
+  return <SessionStatusLabel conversationId={conversationId} place="row" className={hideOnRowHover} fallback={dot} />;
 }
 
 /**

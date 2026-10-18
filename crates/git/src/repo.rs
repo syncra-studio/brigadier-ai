@@ -995,6 +995,79 @@ impl Repo {
         .map_err(|_| Error::Parse("invalid commit count".into()))
     }
 
+    /// Whether a merge's work is reverted on local branch `base` (or its upstream) now: the
+    /// newest commit there since `merge_commit` that reverts one of the merge's commits, or
+    /// reverts such a revert, and so on ("This reverts commit <sha>"), is a revert of the work
+    /// rather than of a revert. A merge reverted and then restored reads not reverted.
+    /// `commits`: how many commits a squash or rebase merge put on the base (a merge commit
+    /// brings its second parent's).
+    pub fn merge_reverted(&self, merge_commit: &Oid, commits: u32, base: &str) -> Result<bool> {
+        valid_oid(merge_commit)?;
+        let mut tips = vec![self.branch_commit(base)?];
+        tips.extend(self.upstream_tip(base)?);
+        let parents = parse::line(&self.cmd(
+            &[
+                "rev-list",
+                "--parents",
+                "--max-count=1",
+                &merge_commit.0,
+                "--",
+            ],
+            true,
+        )?)?
+        .split_whitespace()
+        .count()
+        .saturating_sub(1);
+        let brought = if parents > 1 {
+            self.cmd(
+                &["rev-list", &format!("{0}^1..{0}", merge_commit.0), "--"],
+                true,
+            )?
+        } else {
+            self.cmd(
+                &[
+                    "rev-list",
+                    "--first-parent",
+                    &format!("--max-count={}", commits.max(1)),
+                    &merge_commit.0,
+                    "--",
+                ],
+                true,
+            )?
+        };
+        // Whether each known commit puts the work in (true) or takes it out (false).
+        let mut puts_in: HashMap<String, bool> = String::from_utf8_lossy(&brought)
+            .lines()
+            .map(|sha| (sha.trim().to_owned(), true))
+            .collect();
+        let mut args = vec![
+            "log".to_owned(),
+            "--reverse".to_owned(),
+            "--topo-order".to_owned(),
+            "--format=%H%x00%B%x1e".to_owned(),
+            format!("^{}", merge_commit.0),
+        ];
+        args.extend(tips.iter().map(|tip| tip.0.clone()));
+        args.push("--".to_owned());
+        let log = self.cmd(&args, true)?;
+        let mut latest = None;
+        for entry in String::from_utf8_lossy(&log).split('\x1e') {
+            let Some((sha, body)) = entry.trim_start_matches('\n').split_once('\0') else {
+                continue;
+            };
+            let undone = body.lines().find_map(|line| {
+                let named = line.trim().strip_prefix("This reverts commit ")?;
+                let named = named.split(|c: char| !c.is_ascii_hexdigit()).next()?;
+                puts_in.get(named).copied()
+            });
+            if let Some(undone) = undone {
+                puts_in.insert(sha.to_owned(), !undone);
+                latest = Some(!undone);
+            }
+        }
+        Ok(latest == Some(false))
+    }
+
     pub(crate) fn tree_changes(
         &self,
         from: &Oid,
@@ -2225,6 +2298,54 @@ pub(crate) mod tests {
             env.push((key.into(), value.into()));
         }
         (dir, Git::new(PathBuf::from("git"), env))
+    }
+
+    /// A merge reads reverted after a revert of it, merged again after the revert is
+    /// reverted, and reverted once more after that; a squash merge's revert counts as one of a
+    /// merge commit does, and unrelated commits since change nothing.
+    #[test]
+    fn a_merge_reverted_then_restored_reads_as_the_latest_revert_leaves_it() {
+        let (dir, git) = test_git("merge-reverted");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        let run = |args: &[&str]| repo.cmd(args, false).expect("git");
+        run(&["checkout", "-q", "-b", "main"]);
+        fs::write(root.join("a.txt"), "a\n").unwrap();
+        repo.commit_changes("Start", true).unwrap();
+        // A merge commit of a branch with two commits.
+        run(&["checkout", "-q", "-b", "work"]);
+        fs::write(root.join("b.txt"), "b\n").unwrap();
+        repo.commit_changes("Add b", true).unwrap();
+        fs::write(root.join("c.txt"), "c\n").unwrap();
+        repo.commit_changes("Add c", true).unwrap();
+        run(&["checkout", "-q", "main"]);
+        run(&["merge", "-q", "--no-ff", "-m", "Merge work", "work"]);
+        let merge = repo.resolve("HEAD").unwrap();
+        let reverted = || repo.merge_reverted(&merge, 2, "main").unwrap();
+        assert!(!reverted(), "just merged");
+        fs::write(root.join("d.txt"), "d\n").unwrap();
+        repo.commit_changes("Unrelated", true).unwrap();
+        assert!(!reverted());
+        run(&["revert", "--no-edit", "-m", "1", &merge.0]);
+        assert!(reverted(), "reverted");
+        let revert = repo.resolve("HEAD").unwrap();
+        run(&["revert", "--no-edit", &revert.0]);
+        assert!(!reverted(), "the revert reverted: merged again");
+        let restore = repo.resolve("HEAD").unwrap();
+        run(&["revert", "--no-edit", &restore.0]);
+        assert!(reverted(), "reverted once more");
+
+        // A squash merge: one commit on the base.
+        run(&["checkout", "-q", "-b", "more"]);
+        fs::write(root.join("e.txt"), "e\n").unwrap();
+        repo.commit_changes("Add e", true).unwrap();
+        run(&["checkout", "-q", "main"]);
+        run(&["merge", "-q", "--squash", "more"]);
+        let squash = repo.commit_changes("Squash more", true).unwrap();
+        assert!(!repo.merge_reverted(&squash, 1, "main").unwrap());
+        run(&["revert", "--no-edit", &squash.0]);
+        assert!(repo.merge_reverted(&squash, 1, "main").unwrap());
     }
 
     #[test]

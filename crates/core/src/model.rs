@@ -2310,6 +2310,12 @@ pub enum DomainEvent {
         request_id: String,
         head: String,
     },
+    /// What a session branch's pull request on GitHub was last seen as (none: it has none
+    /// now); recorded when that changed. Its row's "PR open".
+    PullRequestSeen {
+        conversation_id: ConversationId,
+        pull_request: Option<crate::work::PullRequest>,
+    },
     /// A worker started, finished, waits for the user, and so on.
     WorkerStepped {
         step: WorkerStep,
@@ -2633,6 +2639,7 @@ impl DomainEvent {
             Self::RunStateChanged { .. } => "conversation.run",
             Self::RequestUpdated { .. } => "request.updated",
             Self::RequestReady { .. } => "request.ready",
+            Self::PullRequestSeen { .. } => "pull_request.seen",
             Self::WorkerStepped { .. } => "worker.step",
             Self::OrchestratorStepped { .. } => "orchestrator.step",
             Self::MachineStepped { .. } => "machine.step",
