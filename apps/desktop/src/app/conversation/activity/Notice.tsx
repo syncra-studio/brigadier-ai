@@ -6,6 +6,7 @@ import type { BlockOrchestratorStep, DecidedStep, MachineWords } from "@/app/con
 import { FeedbackOffer } from "@/app/conversation/FeedbackOffer";
 import { machineWords } from "@/app/conversation/rowWords";
 import { SandboxLimitNotice } from "@/app/conversation/SandboxLimitNotice";
+import { SessionOffer } from "@/app/conversation/SessionOffer";
 import { WorkerLine } from "@/app/conversation/WorkerChip";
 import { ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
@@ -96,6 +97,7 @@ export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   if (isTeamStep(kind)) return <TeamStep kind={kind} atMs={step.atMs} />;
   if (kind.type === "fullAccessSuggested") return <SandboxLimitNotice reason={kind.reason} />;
   if (kind.type === "feedbackOffered") return <FeedbackOffer id={kind.id} kind={kind.kind} title={kind.title} body={kind.body} />;
+  if (kind.type === "sessionOffered") return <SessionOffer id={kind.id} title={kind.title} task={kind.task} />;
   if (kind.type === "merged") {
     return (
       <div data-slot="orchestrator-step" data-kind="merged" className={ROW}>

@@ -480,14 +480,14 @@ export function buildBlocks(
       segment, atMs: segment.startedAtMs });
   }
   const authoredResults = [
-    ...board.orchestratorSteps.filter((step) => step.kind.type === "tool" || (!ON_TASK_ROW.has(step.kind.type) && step.kind.type !== "feedbackAnswered" && !isRunRequest(step.requestId))),
+    ...board.orchestratorSteps.filter((step) => step.kind.type === "tool" || (!ON_TASK_ROW.has(step.kind.type) && step.kind.type !== "feedbackAnswered" && step.kind.type !== "sessionOfferTaken" && !isRunRequest(step.requestId))),
     ...board.decisions.filter(judgementCall).map((decision) => ({
       requestId: decision.requestId, position: decision.position, kind: { type: "decided" },
     })),
   ].toSorted((a, b) => a.position - b.position);
   for (const step of board.orchestratorSteps) {
-    // The user's answer to a feedback offer shows on the offer itself.
-    if (step.kind.type === "feedbackAnswered") continue;
+    // The user's answer to a feedback or session offer shows on the offer itself.
+    if (step.kind.type === "feedbackAnswered" || step.kind.type === "sessionOfferTaken") continue;
     // A plan being written shows as its card, "Writing plan", until the plan itself arrives.
     if (step.kind.type === "tool" && toolName(step.kind.name) === "propose_plan") {
       const written = Object.values(board.plans).some(
@@ -1219,7 +1219,7 @@ export function foldsAway(entry: SequenceEntry, answer: number | null): boolean 
   if (entry.kind === "text") return answer === null || entry.index < answer;
   // So do the workers the thread started: their card says how each ended.
   if (startsWorkers(entry)) return false;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested" || step.kind.type === "feedbackOffered")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested" || step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 
