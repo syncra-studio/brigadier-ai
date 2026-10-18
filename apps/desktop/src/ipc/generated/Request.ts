@@ -38,6 +38,7 @@ import type { TabTarget } from "./TabTarget";
 import type { TaskId } from "./TaskId";
 import type { UninstallApp } from "./UninstallApp";
 import type { UpdateTarget } from "./UpdateTarget";
+import type { WorkspaceId } from "./WorkspaceId";
 import type { WorkspaceTarget } from "./WorkspaceTarget";
 
 /**
@@ -80,7 +81,7 @@ audio: string, } | { "method": "finishDictation", dictationId: string, } | { "me
 /**
  * A message id, or `task:<id>` for a worker's report; `plan:<id>` for a plan.
  */
-subject: string, rating: Rating | null, } | { "method": "getSessionDiff", id: ConversationId, } | { "method": "getWorkerDiffs", conversationId: ConversationId, } | { "method": "createConversation", kind: ConversationKind, projectId: ProjectId | null, title: string | null, setup: SetupRequest | null, } | { "method": "forkConversation", conversationId: ConversationId, messageId: string, place: ForkPlace, } | { "method": "updateSetup", id: ConversationId, setup: Setup, } | { "method": "getConversation", id: ConversationId, limit: number, } | { "method": "sendMessage", conversationId: ConversationId, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, steer: boolean, 
+subject: string, rating: Rating | null, } | { "method": "getSessionDiff", id: ConversationId, } | { "method": "getWorkerDiffs", conversationId: ConversationId, } | { "method": "createConversation", kind: ConversationKind, projectId: ProjectId | null, title: string | null, setup: SetupRequest | null, } | { "method": "createTab", workspaceId: WorkspaceId, setup: SetupRequest | null, } | { "method": "startTab", workspaceId: WorkspaceId, setup: SetupRequest | null, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, } | { "method": "forkConversation", conversationId: ConversationId, messageId: string, place: ForkPlace, } | { "method": "updateSetup", id: ConversationId, setup: Setup, } | { "method": "getConversation", id: ConversationId, limit: number, } | { "method": "sendMessage", conversationId: ConversationId, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, steer: boolean, 
 /**
  * Queue it at this slot whenever it would wait (a turn runs, an answer works, or the
  * queue is paused): a queued message pulled into the composer to edit, or a deleted

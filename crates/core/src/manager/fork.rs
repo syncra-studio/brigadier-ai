@@ -152,6 +152,7 @@ impl SessionManager {
                     }),
                     side_of: None,
                     tab_chat: None,
+                    workspace: None,
                 },
             )
             .await?;

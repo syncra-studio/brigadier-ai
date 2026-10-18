@@ -267,13 +267,33 @@ impl Projection {
             .find(|workspace| workspace.id == *id)
     }
 
-    /// Every workspace, recorded or implicit, with the most recent activity of its tabs.
+    /// Whether the workspace `id` was recorded without a title, and has none yet.
+    pub(crate) fn untitled(&self, id: &WorkspaceId) -> bool {
+        self.workspaces
+            .get(id)
+            .is_some_and(|workspace| workspace.title.is_empty())
+    }
+
+    /// Whether the workspace `id` was recorded (not only an older session's implicit one).
+    pub(crate) fn is_recorded(&self, id: &WorkspaceId) -> bool {
+        self.workspaces.contains_key(id)
+    }
+
+    /// Every workspace, recorded or implicit, with the most recent activity of its tabs. One
+    /// recorded without a title has its oldest tab's (a new chat's, titled from its first
+    /// message).
     pub(crate) fn workspaces(&self) -> Vec<Workspace> {
         let mut workspaces = self.workspaces.clone();
+        // The oldest tab of each, for a title.
+        let mut oldest: HashMap<&WorkspaceId, &Conversation> = HashMap::new();
         for conversation in self.conversations.values() {
             let Some(id) = &conversation.workspace_id else {
                 continue;
             };
+            let first = oldest.entry(id).or_insert(conversation);
+            if (conversation.created_at_ms, &conversation.id) < (first.created_at_ms, &first.id) {
+                *first = conversation;
+            }
             if !workspaces.contains_key(id)
                 && *id == WorkspaceId::implicit(&conversation.id)
                 && let Some(workspace) = implicit_workspace(conversation)
@@ -282,6 +302,13 @@ impl Projection {
             }
             if let Some(workspace) = workspaces.get_mut(id) {
                 workspace.updated_at_ms = workspace.updated_at_ms.max(conversation.updated_at_ms);
+            }
+        }
+        for (id, tab) in oldest {
+            if let Some(workspace) = workspaces.get_mut(id)
+                && workspace.title.is_empty()
+            {
+                workspace.title.clone_from(&tab.title);
             }
         }
         let mut workspaces: Vec<Workspace> = workspaces.into_values().collect();

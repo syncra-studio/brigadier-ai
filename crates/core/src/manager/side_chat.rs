@@ -103,6 +103,7 @@ impl SessionManager {
                     forked_from: None,
                     side_of: Some(parent.clone()),
                     tab_chat: None,
+                    workspace: None,
                 },
             )
             .await
@@ -182,6 +183,7 @@ impl SessionManager {
                     forked_from: None,
                     side_of: Some(parent.clone()),
                     tab_chat: Some(TabChat { tab_id, target }),
+                    workspace: None,
                 },
             )
             .await

@@ -25,7 +25,7 @@ use brigadier_core::{
     ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, Setup,
     SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState,
     StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget,
-    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceId,
     WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
@@ -491,6 +491,21 @@ pub enum Request {
         project_id: Option<ProjectId>,
         title: Option<String>,
         setup: Option<SetupRequest>,
+    },
+    /// A new task tab in a workspace: a session of its own on a new worktree from the
+    /// workspace's base. `setup` is the composer's (its model, permission and plan mode);
+    /// absent, the project's remembered model.
+    CreateTab {
+        workspace_id: WorkspaceId,
+        setup: Option<Box<SetupRequest>>,
+    },
+    /// A new task tab in a workspace that starts on `text` in the background (⌘⏎).
+    StartTab {
+        workspace_id: WorkspaceId,
+        setup: Option<Box<SetupRequest>>,
+        text: String,
+        attachments: Vec<AttachmentRef>,
+        mentions: Vec<Mention>,
     },
     /// "Fork chat from here": a new conversation with the thread up to the answer
     /// `message_id`; a session's fork works from the commit current then, in `place`.
@@ -1461,6 +1476,13 @@ pub enum Response {
     },
     CreateConversation {
         conversation: Box<Conversation>,
+    },
+    CreateTab {
+        conversation: Box<Conversation>,
+    },
+    StartTab {
+        conversation: Box<Conversation>,
+        outcome: SendOutcome,
     },
     ForkConversation {
         conversation: Box<Conversation>,

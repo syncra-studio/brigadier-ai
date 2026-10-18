@@ -114,6 +114,7 @@ mod worker_handoff;
 mod worker_resume;
 mod workers;
 pub mod workspace;
+mod workspaces;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -668,8 +669,9 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Creates a session or Chat. A local-checkout session asked to start on a new branch gets
-    /// that branch created from `create_from` first.
+    /// Creates a session or Chat. A session starts a workspace of its own, as its first tab. A
+    /// local-checkout session asked to start on a new branch gets that branch created from
+    /// `create_from` first.
     pub async fn create_conversation(
         &self,
         kind: ConversationKind,
@@ -708,8 +710,25 @@ impl SessionManager {
         let id = ConversationId::generate();
         let (prefix, _) = self.branch_prefix_of(project_id.as_ref());
         let setup = setup.map(|request| Setup::from_request(request, &id, &prefix));
+        // A new chat in a project starts a workspace, this its first tab.
+        let workspace = match (kind, &project_id, &setup) {
+            (ConversationKind::Session, Some(project), Some(setup)) => {
+                workspaces::new_workspace(project, setup)
+            }
+            _ => None,
+        };
         self.core
-            .create_conversation(id, kind, project_id, title, setup, Origin::default())
+            .create_conversation(
+                id,
+                kind,
+                project_id,
+                title,
+                setup,
+                Origin {
+                    workspace,
+                    ..Origin::default()
+                },
+            )
             .await
     }
 

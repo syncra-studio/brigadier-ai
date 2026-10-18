@@ -2099,5 +2099,7 @@ mod usage_tests;
 mod warm_session_tests;
 #[cfg(test)]
 mod workspace_tests;
+#[cfg(test)]
+mod workspaces_tests;
 
 mod watchdog_tests;
