@@ -35,7 +35,7 @@ import {
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { AttachmentRef, MovedMessage, QueuedMessage } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { deleteQueued, openQueuedAsTab, openQueuedInSideChat, resumeQueue, settleMoved } from "@/state/actions";
+import { deleteQueued, openQueuedAsTab, openQueuedInSideChat, resumeQueue, runQueuedHere, settleMoved } from "@/state/actions";
 import { HeldNote } from "@/app/conversation/HeldNote";
 import { useBoard } from "@/state/board";
 import { setSetting } from "@/state/settings";
@@ -95,7 +95,8 @@ function attachmentLabel(attachments: readonly AttachmentRef[]): string | null {
 /**
  * The queue card on the composer rail: what waits for the running turn, one row each (glyph,
  * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover. A message
- * the thread judged could run apart offers "Open as a new tab"; one it sent on to another tab
+ * the thread judged could run apart waits for the user's pick, "Open as a new tab" or "Run
+ * here"; one it sent on to another tab
  * leaves a one-line notice with Undo. Its ⋯ edits
  * the message, opens it in a new Side chat tab instead (in a session), or turns queueing off,
  * so follow-ups steer into the turn.
@@ -187,15 +188,26 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                   Deciding
                 </span>
               ) : item.offerTab && (
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  title="It can run apart from the work in progress"
-                  disabled={action.busy}
-                  onClick={() => action.run(() => openQueuedAsTab(conversationId, item))}
-                >
-                  Open as a new tab
-                </Button>
+                <>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    title="It can run apart from the work in progress"
+                    disabled={action.busy}
+                    onClick={() => action.run(() => openQueuedAsTab(conversationId, item))}
+                  >
+                    Open as a new tab
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    title="It runs in this tab once the work in progress is done"
+                    disabled={action.busy}
+                    onClick={() => action.run(() => runQueuedHere(conversationId, item.id))}
+                  >
+                    Run here
+                  </Button>
+                </>
               )}
               <TooltipIconButton
                 tooltip="Submit without interrupting the model"

@@ -1444,6 +1444,21 @@ impl SessionManager {
             .await
     }
 
+    /// "Run here" on a message the thread offered as a new tab: it waits like any other and is
+    /// sent once nothing works.
+    pub async fn run_queued_here(
+        &self,
+        id: &ConversationId,
+        item_id: &str,
+    ) -> Result<crate::work::MessageQueue> {
+        let conv = self.conv(id)?;
+        let queue = conv
+            .user_write(self.core.run_queued_here(id, item_id))
+            .await?;
+        self.kick(&conv);
+        Ok(queue)
+    }
+
     /// Sends a queued message now, into the running turn or a session's working answer (or
     /// as a new turn when nothing works).
     pub async fn steer_queued(&self, id: ConversationId, item_id: String) -> Result<()> {
@@ -1803,9 +1818,9 @@ impl SessionManager {
             FollowUpRoute::NewTab => {
                 self.core.offer_queued_as_tab(id, item_id).await?;
                 Ok(
-                    "It waits in the queue offering the user \"Open as a new tab?\": a click \
-                     starts it in a new tab of this workspace; otherwise it reaches you as its \
-                     own request once this work is done."
+                    "It waits in the queue offering the user \"Open as a new tab\" or \"Run \
+                     here\" until they pick: a new tab of this workspace starts with it, or it \
+                     reaches you as its own request once this work is done."
                         .into(),
                 )
             }
@@ -1901,7 +1916,10 @@ impl SessionManager {
             return false;
         }
         let ready = match self.core.board(&conv.id).await {
-            Ok(board) => board.queue.items.first().is_some_and(|item| !item.deciding),
+            Ok(board) => board
+                .queue
+                .next_to_send()
+                .is_some_and(|item| !item.deciding),
             Err(_) => false,
         };
         if !ready {

@@ -627,7 +627,8 @@ impl Session {
                 return Ok(Flow::Continue);
             }
             // Long: answered beside the connection's other requests. A site's icon waits on the
-            // site itself, which may take its whole timeout.
+            // site itself, which may take its whole timeout; the tabs' settled states read git
+            // in every tab.
             request @ (Request::SiteIcon { .. }
             | Request::ScanStorage { .. }
             | Request::PreviewDelete { .. }
@@ -636,7 +637,8 @@ impl Session {
             | Request::RemoveProject { .. }
             | Request::FreeUpProjects { .. }
             | Request::PreviewUninstall { .. }
-            | Request::Uninstall { .. }) => {
+            | Request::Uninstall { .. }
+            | Request::GetSettledTabs) => {
                 let daemon = self.daemon.clone();
                 let late = self.late_tx.clone();
                 self.daemon.supervisor.spawn(async move {
@@ -1283,8 +1285,9 @@ fn lifecycle_outcomes(
         .collect()
 }
 
-/// A new task tab in a workspace, empty or started on a message, and the notice of a message
-/// sent on to a tab (in its own boxed future: the dispatch stays under its size).
+/// A new task tab in a workspace, empty or started on a message, the notice of a message sent
+/// on to a tab, and "Run here" on one offered as a tab (in its own boxed future: the dispatch
+/// stays under its size).
 async fn open_tab(sessions: &SessionManager, request: Request) -> Result<Response, IpcError> {
     Ok(match request {
         Request::CreateTab {
@@ -1328,6 +1331,12 @@ async fn open_tab(sessions: &SessionManager, request: Request) -> Result<Respons
                 .await?;
             Response::SettleMoved
         }
+        Request::RunQueuedHere {
+            conversation_id,
+            item_id,
+        } => Response::RunQueuedHere {
+            queue: sessions.run_queued_here(&conversation_id, &item_id).await?,
+        },
         Request::GetSettledTabs => Response::GetSettledTabs {
             tabs: sessions.settled_tabs().await,
         },
@@ -1392,6 +1401,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         request @ (Request::CreateTab { .. }
         | Request::StartTab { .. }
         | Request::SettleMoved { .. }
+        | Request::RunQueuedHere { .. }
         | Request::GetSettledTabs) => heap(|| open_tab(sessions, request)).await?,
         Request::ForkConversation {
             conversation_id,

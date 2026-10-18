@@ -26,6 +26,20 @@ export async function loadSettledTabs(): Promise<void> {
   });
 }
 
+let refreshing: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Reads the settled states again once a watched checkout has been quiet for a moment: a commit
+ * or merge made by hand (Source, a terminal) has no event of its own.
+ */
+export function refreshSettledTabsSoon(): void {
+  if (refreshing) clearTimeout(refreshing);
+  refreshing = setTimeout(() => {
+    refreshing = null;
+    void loadSettledTabs().catch(() => {});
+  }, 3000);
+}
+
 /** Folds a batch of events into the tabs' ready and merged marks. */
 export function applySettledTabEvents(batch: readonly EventEnvelope[]): void {
   let changed: Record<string, "ready" | "merged"> | null = null;

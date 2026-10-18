@@ -18,7 +18,7 @@ deciding: boolean,
  */
 heldBy?: HeldBy, 
 /**
- * The thread judged it could run apart: it offers the user "Open as a new tab?" while it
- * waits (`route_follow_up` route "new_tab").
+ * The thread judged it could run apart (`route_follow_up` route "new_tab"): it waits for
+ * the user's pick, "Open as a new tab" or "Run here", and is never sent until then.
  */
 offerTab?: boolean, };

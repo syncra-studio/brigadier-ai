@@ -12,7 +12,7 @@ import {
   toggleSettings,
 } from "@/state/actions";
 import { applyActivityEvents, loadActivity } from "@/state/activity";
-import { applySettledTabEvents, loadSettledTabs } from "@/state/tabStates";
+import { applySettledTabEvents, loadSettledTabs, refreshSettledTabsSoon } from "@/state/tabStates";
 import { openFolderPicker, takeFolders } from "@/state/addProject";
 import { applyBoardEvents, sideBoardIds, useBoard } from "@/state/board";
 import { applyBrainEvents, reloadSessionTasks } from "@/state/brain";
@@ -142,6 +142,7 @@ function onBridgeEvent(message: BridgeEvent) {
       break;
     case "workspaceChanged":
       emitWorkspaceChanged(message.target);
+      refreshSettledTabsSoon();
       break;
     case "search":
       emitSearchUpdate(message.id, message.update);

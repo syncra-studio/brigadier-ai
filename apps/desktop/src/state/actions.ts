@@ -825,7 +825,8 @@ export async function openQueuedInSideChat(conversationId: string, item: QueuedM
 
 /**
  * "Open as a new tab" on a message the thread offered as one: it leaves the queue first, then
- * starts in a new background tab of the same workspace on the tab's own model and permission;
+ * starts in a new background tab of the same workspace on the tab's own model, permission and
+ * plan mode;
  * the user stays where they are. If that fails, it goes back in its slot and the error is
  * thrown; one the queue already sent goes nowhere (`false`).
  */
@@ -848,7 +849,7 @@ export async function openQueuedAsTab(conversationId: string, item: QueuedMessag
   }
 }
 
-/** A new tab's setup: `source` tab's model and permission, on a worktree of its workspace's base. */
+/** A new tab's setup: `source` tab's model, permission and plan mode, on a worktree of its workspace's base. */
 function tabSetupFrom(source: Conversation): SetupRequest | null {
   return source.setup?.type === "session"
     ? {
@@ -858,7 +859,8 @@ function tabSetupFrom(source: Conversation): SetupRequest | null {
       environment: { type: "newWorktree", base: "", branch: null },
       permission: source.setup.permission,
       orchestrator: source.setup.orchestrator,
-      planMode: false,
+      // Plan mode on in the tab it came from holds the new tab to a plan too.
+      planMode: source.setup.planMode,
     }
     : null;
 }
@@ -901,6 +903,12 @@ export async function settleMoved(conversationId: string, itemId: string, undo: 
 
 export async function steerQueued(conversationId: string, itemId: string): Promise<void> {
   await request({ method: "steerQueued", conversationId, itemId });
+}
+
+/** "Run here" on a message the thread offered as a new tab: it waits like any other and is sent once nothing works. */
+export async function runQueuedHere(conversationId: string, itemId: string): Promise<void> {
+  const { queue } = await request({ method: "runQueuedHere", conversationId, itemId });
+  showQueue(conversationId, queue);
 }
 
 export async function resumeQueue(conversationId: string): Promise<void> {

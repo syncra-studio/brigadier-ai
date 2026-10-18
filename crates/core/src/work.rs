@@ -1768,8 +1768,8 @@ pub struct QueuedMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub held_by: Option<HeldBy>,
-    /// The thread judged it could run apart: it offers the user "Open as a new tab?" while it
-    /// waits (`route_follow_up` route "new_tab").
+    /// The thread judged it could run apart (`route_follow_up` route "new_tab"): it waits for
+    /// the user's pick, "Open as a new tab" or "Run here", and is never sent until then.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub offer_tab: bool,
@@ -1829,6 +1829,13 @@ pub struct MessageQueue {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<MovedMessage>>", optional)]
     pub moved: Vec<MovedMessage>,
+}
+
+impl MessageQueue {
+    /// The message sent next: the first one not waiting for the user's pick on a new-tab offer.
+    pub fn next_to_send(&self) -> Option<&QueuedMessage> {
+        self.items.iter().find(|item| !item.offer_tab)
+    }
 }
 
 // ----- the conversation's live state --------------------------------------------------------

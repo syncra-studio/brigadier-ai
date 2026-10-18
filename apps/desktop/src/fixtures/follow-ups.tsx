@@ -17,7 +17,10 @@ const settled: unknown[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
-  if (req.method === "settleMoved") settled.push(req);
+  if (req.method === "settleMoved" || req.method === "runQueuedHere" || req.method === "deleteQueued" || req.method === "startTab") settled.push(req.method === "startTab" ? { method: req.method, workspaceId: req.workspaceId, text: req.text } : req);
+  if (req.method === "runQueuedHere") return { method: req.method, queue: { items: [{ ...item, deciding: false }], paused: false } };
+  if (req.method === "deleteQueued") return { method: req.method, queue: { items: [], paused: false } };
+  if (req.method === "startTab") return { method: req.method, conversation: { ...useApp.getState().conversations[id], id: "new-tab" }, outcome: { type: "sent", message } };
   if (req.method === "sendMessage") return new Promise((resolve) => { respond = (outcome) => resolve({ method: req.method, outcome }); });
   if (req.method === "getRunDiff") return { method: req.method, diff: null };
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
@@ -43,6 +46,9 @@ function view() {
     chat: [...document.querySelectorAll('[data-role="user"]')].filter((node) => node.textContent?.includes(text)).length,
   };
 }
+/** The offer's choices on the queued rows. */
+const choices = () => [...document.querySelectorAll('[data-slot="message-queue-item"] button')].map((node) => node.textContent).filter((label) => label === "Open as a new tab" || label === "Run here");
+const click = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[data-slot="message-queue-item"] button')].find((node) => node.textContent === label)?.click();
 async function drive() {
   await pause();
   const sending = send({ text, attachments: [], mentions: [] });
@@ -67,10 +73,21 @@ async function drive() {
   apply([queued([])]);
   await pause();
   const removed = view();
-  // The thread offers it as a new tab: one button on its row.
+  // The thread offers it as a new tab: its row waits with two choices until the user picks.
   apply([queued([{ ...item, deciding: false, offerTab: true }])]);
   await pause();
-  const offered = [...document.querySelectorAll('[data-slot="message-queue-item"] button')].filter((node) => node.textContent === "Open as a new tab").length;
+  const offered = choices();
+  // "Run here": the offer goes and it waits like any other.
+  click("Run here");
+  await pause();
+  const ranHere = { choices: choices(), rail: view().rail };
+  // "Open as a new tab": it leaves the queue and starts in a new tab of the workspace.
+  useApp.setState((state) => ({ conversations: { ...state.conversations, [id]: { ...state.conversations[id]!, workspaceId: "ws-1" } } }));
+  apply([queued([{ ...item, deciding: false, offerTab: true }])]);
+  await pause();
+  click("Open as a new tab");
+  await pause();
+  const opened = { choices: choices(), rail: view().rail };
   // The thread sent it on to another tab: a notice with Undo, which asks the daemon to take it back.
   const sentOn: MovedMessage = { id: "moved", text: "Rename the login file.", attachments: [], mentions: [], to: "other-tab", toTitle: "Login page", movedAtMs: Date.now(), sent: { type: "sent", messageId: "m-1" } };
   apply([queued([], [sentOn])]);
@@ -81,7 +98,7 @@ async function drive() {
   await pause();
   const result = document.createElement("pre");
   result.id = "follow-ups-result";
-  result.textContent = JSON.stringify({ idle, deciding, lateResponse, waiting, joined, removed, offered, noticeText, settled });
+  result.textContent = JSON.stringify({ idle, deciding, lateResponse, waiting, joined, removed, offered, ranHere, opened, noticeText, settled });
   document.body.append(result);
 }
 void drive();

@@ -666,7 +666,10 @@ async fn a_follow_up_joins_waits_offers_a_tab_or_goes_to_a_sibling() {
             serde_json::json!({ "route": "new_tab" }),
         )
         .await;
-    assert!(offered.contains("\"Open as a new tab?\""), "{offered}");
+    assert!(
+        offered.contains("\"Open as a new tab\" or \"Run here\""),
+        "{offered}"
+    );
     let queue = last_queue(&flow, &a);
     assert_eq!(queue.items.len(), 1);
     assert!(queue.items[0].offer_tab && !queue.items[0].deciding);
@@ -675,7 +678,30 @@ async fn a_follow_up_joins_waits_offers_a_tab_or_goes_to_a_sibling() {
         tabs,
         "no tab opened"
     );
-    routes.release(&flow, &a).await;
+    // The turn ends and the offer stays until the user picks; "Run here" sends it here.
+    routes.gate.notify_one();
+    flow.settled_in(&a).await;
+    let queue = last_queue(&flow, &a);
+    assert!(
+        queue.items.len() == 1 && queue.items[0].offer_tab,
+        "still offered"
+    );
+    let notes = "Draft the release notes.";
+    let heard_before = heard(&inputs, &folder_a, notes);
+    flow.manager
+        .run_queued_here(&a, &queue.items[0].id)
+        .await
+        .unwrap();
+    flow.until_in(&a, "the queue to empty", |board| {
+        board.queue.items.is_empty()
+    })
+    .await;
+    flow.settled_in(&a).await;
+    assert_eq!(
+        heard(&inputs, &folder_a, notes),
+        heard_before + 1,
+        "ran here"
+    );
 
     // A tab that isn't there: a fact, and the follow-up stays the thread's to sort.
     let nowhere = routes

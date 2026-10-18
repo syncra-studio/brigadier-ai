@@ -2168,14 +2168,32 @@ impl Core {
         taken.ok_or_else(|| Error::NotFound(format!("moved message {item_id}")))
     }
 
-    /// Takes the next message to send, unless the queue is paused or empty.
+    /// The user's "Run here" on a message the thread offered as a new tab: the offer goes and
+    /// it waits like any other. Fails if it is no longer queued.
+    pub async fn run_queued_here(
+        &self,
+        id: &ConversationId,
+        item_id: &str,
+    ) -> Result<MessageQueue> {
+        self.change_queue(id, |queue| {
+            find_queued(queue, item_id)?.offer_tab = false;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Takes the next message to send, unless the queue is paused or holds none. One offered
+    /// as a new tab waits for the user's pick, so the next one goes past it.
     pub async fn pop_queued(&self, id: &ConversationId) -> Result<Option<QueuedMessage>> {
         let board = self.board(id).await?;
-        if board.queue.paused || board.queue.items.is_empty() {
+        if board.queue.paused {
             return Ok(None);
         }
-        let first = board.queue.items[0].id.clone();
-        self.take_queued(id, &first).await.map(Some)
+        let Some(next) = board.queue.next_to_send() else {
+            return Ok(None);
+        };
+        let next = next.id.clone();
+        self.take_queued(id, &next).await.map(Some)
     }
 
     pub async fn set_queue_paused(

@@ -574,6 +574,12 @@ pub enum Request {
         item_id: String,
         undo: bool,
     },
+    /// "Run here" on a queued message the thread offered as a new tab: it waits like any other
+    /// and is sent once nothing works.
+    RunQueuedHere {
+        conversation_id: ConversationId,
+        item_id: String,
+    },
     /// Stops the running turn; the queue pauses.
     Interrupt {
         conversation_id: ConversationId,
@@ -1522,6 +1528,9 @@ pub enum Response {
         queue: MessageQueue,
     },
     SettleMoved,
+    RunQueuedHere {
+        queue: MessageQueue,
+    },
     Interrupt,
     Resume,
     StopPreview,

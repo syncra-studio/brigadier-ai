@@ -80,7 +80,8 @@ const ROUTE_FOLLOW_UP: &str = "Sort a [follow-up …] the user sent while you wo
 request. route \"join\": it belongs to this work; it reaches you at once as the user's message, \
 and your final answer covers it too. \"wait\": a request of its own; it waits in the user's queue \
 and reaches you once this work is done. \"new_tab\": a request of its own that could run apart; \
-it waits the same, offering the user \"Open as a new tab?\" (you never open tabs). \"tab\" with \
+it waits offering the user \"Open as a new tab\" or \"Run here\" until they pick (you never \
+open tabs). \"tab\" with \
 `tab` (another tab's session id): it belongs to that tab of this workspace; it goes there as the \
 user's message and this tab shows the user a notice with Undo; the result says if that tab \
 already merged. Optional: one left unsorted joins this work shortly.";
