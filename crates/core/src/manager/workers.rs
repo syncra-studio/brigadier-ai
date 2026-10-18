@@ -4073,6 +4073,10 @@ impl SessionManager {
                 text.push('\n');
                 text.push_str(&super::reruns::rerun_note(&shown, rerun));
             }
+            if task.kind == TaskKind::Research {
+                text.push('\n');
+                text.push_str(prompts::RESEARCH_REPORT_NOTE);
+            }
             let envelope = Envelope {
                 kind: InjectionKind::Report,
                 label: format!("report task-{}", task.number),

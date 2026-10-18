@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::peer_kit::{Peers, is_reply};
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::manager::prompts::QUIET;
+use crate::manager::prompts::{QUIET, RESEARCH_REPORT_NOTE};
 use crate::model::MessageRole;
 use crate::work::RequestState;
 
@@ -112,6 +112,68 @@ async fn a_line_before_delegating_reaches_the_user_and_the_worker_starts() {
             ("The exporter writes CSV only.".to_owned(), Some(request)),
         ],
     );
+    flow.stop().await;
+}
+
+/// #319: a research worker's report reaches the thread with the answer's no-bold-lines rule,
+/// where the thread writes its answer from it; a scout's comes without it.
+#[tokio::test]
+async fn a_research_report_reaches_the_thread_with_the_no_bold_lines_rule() {
+    let inputs = Log::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "honesty-research-report-note",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    let reply = turn
+                        .call("submit_report", json!({"summary": "Surveyed it."}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reported.");
+                }
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("[report task-") {
+                    return Reply::text(QUIET);
+                }
+                for kind in ["research", "scout"] {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "medium", "title": format!("Survey ({kind})"),
+                                   "kind": kind, "spec": "Say what the exporter writes."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                Reply::text(QUIET)
+            }
+        }),
+    )
+    .await;
+    flow.say("What does the exporter write?").await;
+    flow.until("both reports", |board| {
+        board.tasks.len() == 2
+            && board
+                .tasks
+                .values()
+                .all(|task| task.state == crate::work::TaskState::Done)
+    })
+    .await;
+    flow.settled().await;
+    let inputs = inputs.lock().unwrap().join("\n");
+    let report = |n: u32| {
+        let start = inputs
+            .find(&format!("[report task-{n}"))
+            .expect("the report");
+        let end = start + inputs[start..].find("[/report]").unwrap();
+        inputs[end..].lines().nth(1).unwrap_or("").to_owned()
+    };
+    assert_eq!(report(1), RESEARCH_REPORT_NOTE, "{inputs}");
+    assert_ne!(report(2), RESEARCH_REPORT_NOTE, "{inputs}");
+    assert_eq!(inputs.matches(RESEARCH_REPORT_NOTE).count(), 1, "{inputs}");
     flow.stop().await;
 }
 

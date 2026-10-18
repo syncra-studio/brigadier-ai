@@ -15,7 +15,7 @@ use super::{Flow, Options, Reply, Script, Turn};
 use crate::knowledge::RebirthTrigger;
 use crate::manager::fault::{FaultKey, InjectedError};
 use crate::manager::prompts::{
-    ANSWER_DETAILS_REVISION, ANSWER_FILES_REVISION, ANSWER_FORMAT_REVISION, BREAKDOWN_REVISION,
+    ANSWER_DETAILS_REVISION, ANSWER_FILES_REVISION, ANSWER_FORMAT_REVISION, BOLD_LEAD_REVISION,
     COMMIT_FIRST_REVISION, LEAN_TOOLS_REVISION, OFFER_SESSION_REVISION, OVERFLOW_REVISION,
     REVISED_ANSWER_REVISION, SAVE_ONLY_REVISION, SHORT_START_REVISION, STORED_FIX_REVISION,
     THREAD_STEPS_REVISION, revision_note,
@@ -515,10 +515,14 @@ async fn a_session_from_before_the_answer_format_is_told_once() {
     told_once(ANSWER_FORMAT_REVISION, "End with one `### Sources` heading").await;
 }
 
-/// Rule R for the research breakdown without bold-labelled items (Q79).
+/// Rule R for the research breakdown with no line starting in bold (Q79, #319).
 #[tokio::test]
-async fn a_session_from_before_the_breakdown_rule_is_told_once() {
-    told_once(BREAKDOWN_REVISION, "an item never opens with a bold name").await;
+async fn a_session_from_before_the_bold_lead_rule_is_told_once() {
+    told_once(
+        BOLD_LEAD_REVISION,
+        "No line or list item starts with bold text",
+    )
+    .await;
 }
 
 /// Rule R for the revised whole answer after a worker's findings (Q81).

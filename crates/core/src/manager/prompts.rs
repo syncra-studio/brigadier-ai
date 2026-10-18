@@ -55,10 +55,10 @@ A research answer (you looked things up to answer):
 }
 
 /// How the breakdown is written: the voice's no-bold-labels rule, said where research answers
-/// broke it (Q79, the 10-18 live check).
+/// broke it (Q79, the 10-18 live checks: a bold name with a colon, then one without).
 macro_rules! research_breakdown {
     () => {
-        " Write it in sentences, or a plain list whose items are sentences: an item never opens with a bold name and a colon (not \"- **Option:** costs …\" but \"- Option costs …\")."
+        " Write it in sentences, or a plain list whose items are sentences. No line or list item starts with bold text, with or without a colon, even where what you read (a source, a worker's notes, a report) does: names stay plain (not \"- **Option:** costs …\" or \"- **Option** costs …\" but \"- Option costs …\"). Bold only for one critical warning, if at all."
     };
 }
 
@@ -80,7 +80,7 @@ macro_rules! details_rule {
 /// When a research question fans out to workers (Q79).
 macro_rules! research_fan_out {
     () => {
-        "A research question that is broad or costly to get wrong (many options to compare, prices, a purchase or a choice hard to undo): split it across 2 to 4 research workers, each on its own angle (the options, prices and limits, independent tests and reviews), and write the answer from their reports. A quick fact you look up yourself."
+        "A research question that is broad or costly to get wrong (many options to compare, prices, a purchase or a choice hard to undo): split it across 2 to 4 research workers, each on its own angle (the options, prices and limits, independent tests and reviews), and write the answer from their reports and notes in your own sentences. A quick fact you look up yourself."
     };
 }
 
@@ -1005,12 +1005,10 @@ pub(crate) const REVISIONS: &[Revision] = &[
         ),
         worker: "",
     },
+    // Its rule now comes tightened in BOLD_LEAD_REVISION's note: said once, not twice.
     Revision {
         number: BREAKDOWN_REVISION,
-        thread: concat!(
-            "From now on, a research answer's breakdown follows this:",
-            research_breakdown!()
-        ),
+        thread: "",
         worker: "",
     },
     Revision {
@@ -1026,6 +1024,14 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: OFFER_SESSION_REVISION,
         thread: concat!("From now on: ", offer_session_rule!()),
+        worker: "",
+    },
+    Revision {
+        number: BOLD_LEAD_REVISION,
+        thread: concat!(
+            "From now on, a research answer's breakdown follows this:",
+            research_breakdown!()
+        ),
         worker: "",
     },
 ];
@@ -1055,13 +1061,13 @@ pub(crate) fn revision_note(told: u32, worker: bool) -> Option<String> {
 
 /// A Chat's contract: its instructions didn't change with the thread's. Version 2 gives Chats and
 /// tab chats the thread's voice and the research answer's format (Q79); 3 its breakdown in
-/// sentences.
-const CHAT_CONTRACT: u32 = 3;
+/// sentences; 4 no bold at the start of any of its lines, colon or not.
+const CHAT_CONTRACT: u32 = 4;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
-/// The first Chat contract with the breakdown rule; a Chat told the voice before hears
-/// [`CHAT_BREAKDOWN_NOTE`].
-const CHAT_BREAKDOWN_CONTRACT: u32 = 3;
+/// The first Chat contract with the breakdown rule as it is now; a Chat told the voice before
+/// hears [`CHAT_BREAKDOWN_NOTE`].
+const CHAT_BREAKDOWN_CONTRACT: u32 = 4;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1466,6 +1472,10 @@ pub(crate) const BREAKDOWN_REVISION: u32 = 107;
 pub(crate) const REVISED_ANSWER_REVISION: u32 = 108;
 /// Out-of-scope work is offered as a session with offer_session, a Start as session card (Q73).
 pub(crate) const OFFER_SESSION_REVISION: u32 = 109;
+/// No breakdown line starts with bold text, colon or not, even where what the thread read does
+/// (#319: it copied its research workers' bold labels). Research workers' briefs say the same of
+/// their notes; a brief is each worker's first message, so no worker note is needed.
+pub(crate) const BOLD_LEAD_REVISION: u32 = 110;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -2133,7 +2143,7 @@ pub(crate) fn worker_brief(task: &Task, repo_note: &str, extra: &str, reviewed: 
             "scout: look around the repository and answer the question. Change nothing."
         }
         TaskKind::Research => {
-            "research: check current official docs, changelogs and sources on the web and answer the question. Change nothing in the repository."
+            "research: check current official docs, changelogs and sources on the web and answer the question. Change nothing in the repository. The thread writes its answer from your report and notes, so write them in plain sentences: no line or list item starts with bold text."
         }
         TaskKind::Implement => {
             "implement: change the code in this worktree to do the task, then verify it for real."
@@ -2425,6 +2435,10 @@ pub(crate) fn chat(memories: &[String]) -> String {
     }
     text
 }
+
+/// Follows a research worker's report into the thread, which writes its answer from it: the
+/// rule held in the system prompt alone lost to the reports' turn (#319).
+pub(crate) const RESEARCH_REPORT_NOTE: &str = "[research answer] Write your answer from this as your instructions say: no line or list item starts with bold text, whatever this report or its notes do.";
 
 /// A report as the orchestrator reads it.
 pub(crate) fn report_envelope(task: &Task, report: &Report, route: &str) -> String {
@@ -3196,6 +3210,17 @@ mod tests {
         assert!(!lead.contains("How to operate"));
     }
 
+    /// #319: a research worker writes its report and notes without bold-led lines, since the
+    /// thread's answer copied their bold labels; other kinds don't hear it.
+    #[test]
+    fn a_research_worker_writes_notes_without_bold_led_lines() {
+        let mut researcher = task("codex", None);
+        researcher.kind = TaskKind::Research;
+        let words = "The thread writes its answer from your report and notes, so write them in plain sentences: no line or list item starts with bold text.";
+        assert!(worker_brief(&researcher, "", "", true).contains(words));
+        assert!(!worker_brief(&task("codex", None), "", "", true).contains(words));
+    }
+
     /// Q10: a mockup's worker builds a preview, not the change, and skips the lead's outline
     /// and review; the real work matches the mockup and captures the live app to compare; a
     /// plain task hears neither.
@@ -3801,8 +3826,9 @@ mod environment_tests {
         // the restored voice, the research answer's layout and report, and the research fan-out
         // (Q79), to 13,300 for the breakdown without bold-labelled items (Q79), and to 13,700
         // for a revised whole answer after a worker's findings, with no file promised (Q81),
-        // then to 13,900 for offering out-of-scope work as a session (Q73).
-        assert!(codex.len() < 13_900, "{}", codex.len());
+        // then to 13,900 for offering out-of-scope work as a session (Q73), and to 14,100 for no
+        // bold-led breakdown line, even where what the thread read has one (#319).
+        assert!(codex.len() < 14_100, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -4412,7 +4438,10 @@ mod environment_tests {
         }
         let note = revision_note(REVISED_ANSWER_REVISION, false).unwrap();
         assert!(note.contains(OFFER_SESSION_RULE), "{note}");
-        assert!(revision_note(OFFER_SESSION_REVISION, false).is_none());
+        assert!(
+            !revision_note(OFFER_SESSION_REVISION, false)
+                .is_some_and(|note| note.contains(OFFER_SESSION_RULE))
+        );
         assert!(revision_note(REVISED_ANSWER_REVISION, true).is_none());
     }
 
@@ -4922,7 +4951,7 @@ mod environment_tests {
     const RESEARCH_RULES: &[&str] = &[
         "Your recommendation first, in 3 to 5 lines",
         "Then a short breakdown: only what changes the choice.",
-        "an item never opens with a bold name and a colon (not \"- **Option:** costs …\" but \"- Option costs …\")",
+        "No line or list item starts with bold text, with or without a colon, even where what you read (a source, a worker's notes, a report) does: names stay plain (not \"- **Option:** costs …\" or \"- **Option** costs …\" but \"- Option costs …\"). Bold only for one critical warning, if at all.",
         "Mark each fact from a source with its number, [1] or [2, 3]",
         "End with one `### Sources` heading, in English whatever language you write in",
         "Never list sources anywhere else",
@@ -4986,6 +5015,11 @@ mod environment_tests {
             assert!(text.contains("An answer that changed no code (a question, research, an explained error) has no Details."));
             assert!(!text.contains("which always holds three labelled lines"));
             assert!(text.contains("split it across 2 to 4 research workers"));
+            assert!(
+                text.contains(
+                    "write the answer from their reports and notes in your own sentences."
+                )
+            );
             assert!(text.contains("A quick fact you look up yourself."));
         }
         assert!(WORKER_WRITING.contains(RESTORED_VOICE[2]));
@@ -5011,20 +5045,21 @@ mod environment_tests {
         assert!(revision_note(ANSWER_FORMAT_REVISION - 1, true).is_none());
     }
 
-    /// Q79, the 10-18 live check: a research answer broke the voice's no-bold-labels rule in its
-    /// breakdown, so a thread told the answer format hears the breakdown rule once.
+    /// Q79, the 10-18 live checks (#319): a research answer broke the voice's no-bold-labels rule
+    /// in its breakdown, a thread's after its workers' formatting, so a thread told the answer
+    /// format hears the tightened rule once, whether or not it heard revision 107's.
     #[test]
-    fn open_threads_hear_once_that_a_breakdown_has_no_bold_labelled_items() {
-        let note = revision_note(ANSWER_FORMAT_REVISION, false).unwrap();
-        assert!(note.contains("a research answer's breakdown follows this:"));
-        assert!(note.contains(RESEARCH_RULES[2]));
-        assert!(!note.contains("### Sources"));
-        assert!(
-            !revision_note(BREAKDOWN_REVISION, false)
-                .unwrap()
-                .contains(RESEARCH_RULES[2])
-        );
-        assert!(revision_note(ANSWER_FORMAT_REVISION, true).is_none());
+    fn open_threads_hear_once_that_no_breakdown_line_starts_with_bold() {
+        assert_eq!(revision(), BOLD_LEAD_REVISION);
+        for told in [ANSWER_FORMAT_REVISION, BREAKDOWN_REVISION] {
+            let note = revision_note(told, false).unwrap();
+            assert!(note.contains("a research answer's breakdown follows this:"));
+            assert_eq!(note.matches(RESEARCH_RULES[2]).count(), 1, "{note}");
+            assert!(!note.contains("an item never opens with a bold name and a colon"));
+            assert!(!note.contains("### Sources"));
+            assert!(revision_note(told, true).is_none());
+        }
+        assert!(revision_note(BOLD_LEAD_REVISION, false).is_none());
     }
 
     /// Q79: a Chat or tab chat told the contract before hears the voice once, the report only
@@ -5046,14 +5081,18 @@ mod environment_tests {
             assert_eq!(sent[0].text.contains("save_report"), reports);
             took(&mut told, &sent);
             assert!(notes(&told, &now).is_empty());
-            // Told the voice before the breakdown rule: only that rule comes.
-            told.contract = Some(CHAT_VOICE_CONTRACT);
-            let sent = notes(&told, &now);
-            assert_eq!(labels(&sent), vec![CHAT_BREAKDOWN_LABEL]);
-            assert!(sent[0].text.contains(RESEARCH_RULES[2]));
-            assert!(!sent[0].text.contains("### Sources"));
-            took(&mut told, &sent);
-            assert!(notes(&told, &now).is_empty());
+            // Told the voice before the breakdown rule, or before it was tightened (#319): only
+            // that rule comes, once.
+            for contract in [CHAT_VOICE_CONTRACT, 3] {
+                told.contract = Some(contract);
+                let sent = notes(&told, &now);
+                assert_eq!(labels(&sent), vec![CHAT_BREAKDOWN_LABEL]);
+                assert!(sent[0].text.contains(RESEARCH_RULES[2]));
+                assert!(!sent[0].text.contains("### Sources"));
+                took(&mut told, &sent);
+                assert_eq!(told.contract, Some(CHAT_CONTRACT));
+                assert!(notes(&told, &now).is_empty());
+            }
         }
     }
 
