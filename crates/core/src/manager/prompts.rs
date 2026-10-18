@@ -42,11 +42,23 @@ macro_rules! thread_voice {
 /// at the end by the app.
 macro_rules! research_format {
     () => {
-        "
+        concat!(
+            "
 
 A research answer (you looked things up to answer):
-- Your recommendation first, in 3 to 5 lines: what to pick or do, and why. Then a short breakdown: only what changes the choice.
+- Your recommendation first, in 3 to 5 lines: what to pick or do, and why. Then a short breakdown: only what changes the choice.",
+            research_breakdown!(),
+            "
 - Mark each fact from a source with its number, [1] or [2, 3]. End with one `### Sources` heading, in English whatever language you write in, over a numbered list: `1. [Title](https://…)`. Nothing after it except `### Details` when that applies. Never list sources anywhere else: the app folds the list and links the numbers."
+        )
+    };
+}
+
+/// How the breakdown is written: the voice's no-bold-labels rule, said where research answers
+/// broke it (Q79, the 10-18 live check).
+macro_rules! research_breakdown {
+    () => {
+        " Write it in sentences, or a plain list whose items are sentences: an item never opens with a bold name and a colon (not \"- **Option:** costs …\" but \"- Option costs …\")."
     };
 }
 
@@ -964,6 +976,14 @@ pub(crate) const REVISIONS: &[Revision] = &[
         ),
         worker: "",
     },
+    Revision {
+        number: BREAKDOWN_REVISION,
+        thread: concat!(
+            "From now on, a research answer's breakdown follows this:",
+            research_breakdown!()
+        ),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -990,10 +1010,14 @@ pub(crate) fn revision_note(told: u32, worker: bool) -> Option<String> {
 }
 
 /// A Chat's contract: its instructions didn't change with the thread's. Version 2 gives Chats and
-/// tab chats the thread's voice and the research answer's format (Q79).
-const CHAT_CONTRACT: u32 = 2;
+/// tab chats the thread's voice and the research answer's format (Q79); 3 its breakdown in
+/// sentences.
+const CHAT_CONTRACT: u32 = 3;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
+/// The first Chat contract with the breakdown rule; a Chat told the voice before hears
+/// [`CHAT_BREAKDOWN_NOTE`].
+const CHAT_BREAKDOWN_CONTRACT: u32 = 3;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1014,6 +1038,12 @@ const CHAT_VOICE: &str = concat!(voice_core!(), research_format!(), research_rep
 /// The same for a tab chat, which has no `save_report`.
 const TAB_CHAT_VOICE: &str = concat!(voice_core!(), research_format!());
 
+/// Tells a Chat or tab chat told the voice before the breakdown rule (Q79).
+const CHAT_BREAKDOWN_NOTE: &str = concat!(
+    "[instructions] From now on, a research answer's breakdown follows this:",
+    research_breakdown!()
+);
+
 /// Tells a Chat or tab chat told an older contract how it writes now (Q79).
 fn chat_voice_note(reports: bool) -> String {
     format!(
@@ -1024,6 +1054,7 @@ fn chat_voice_note(reports: bool) -> String {
 
 const CONTRACT_LABEL: &str = "notes replace instructions";
 const CHAT_VOICE_LABEL: &str = "voice and answer format";
+const CHAT_BREAKDOWN_LABEL: &str = "research breakdown";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
@@ -1369,6 +1400,8 @@ pub(crate) const MESSAGES_JOIN_REVISION: u32 = 105;
 /// The 10-04 voice restored, research answers laid out recommendation first with folded sources
 /// and a saved report, Details only when code changed, and research fanned out (Q79).
 pub(crate) const ANSWER_FORMAT_REVISION: u32 = 106;
+/// A research answer's breakdown in sentences, never bold-labelled items (Q79).
+pub(crate) const BREAKDOWN_REVISION: u32 = 107;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1537,7 +1570,16 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             text: chat_voice_note(now.reports),
             label: CHAT_VOICE_LABEL,
             told: Told {
-                contract: Some(CHAT_VOICE_CONTRACT),
+                contract: Some(CHAT_BREAKDOWN_CONTRACT),
+                ..Told::default()
+            },
+        });
+    } else if now.chat && told.contract.unwrap_or(0) < CHAT_BREAKDOWN_CONTRACT {
+        notes.push(Note {
+            text: CHAT_BREAKDOWN_NOTE.to_owned(),
+            label: CHAT_BREAKDOWN_LABEL,
+            told: Told {
+                contract: Some(CHAT_BREAKDOWN_CONTRACT),
                 ..Told::default()
             },
         });
@@ -3681,8 +3723,8 @@ mod environment_tests {
         // checks its to judge), then to 11,700 for git and gh on the user's sign-in needing no
         // approval: tokens are a tripwire, not a gate (Q58), so no trimming. Then to 13,100 for
         // the restored voice, the research answer's layout and report, and the research fan-out
-        // (Q79).
-        assert!(codex.len() < 13_100, "{}", codex.len());
+        // (Q79), and to 13,300 for the breakdown without bold-labelled items (Q79).
+        assert!(codex.len() < 13_300, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -4704,6 +4746,7 @@ mod environment_tests {
     const RESEARCH_RULES: &[&str] = &[
         "Your recommendation first, in 3 to 5 lines",
         "Then a short breakdown: only what changes the choice.",
+        "an item never opens with a bold name and a colon (not \"- **Option:** costs …\" but \"- Option costs …\")",
         "Mark each fact from a source with its number, [1] or [2, 3]",
         "End with one `### Sources` heading, in English whatever language you write in",
         "Never list sources anywhere else",
@@ -4782,7 +4825,6 @@ mod environment_tests {
             .find(|revision| revision.number == ANSWER_FORMAT_REVISION)
             .unwrap();
         assert!(added.worker.is_empty());
-        assert_eq!(revision(), ANSWER_FORMAT_REVISION);
         let note = revision_note(ANSWER_FORMAT_REVISION - 1, false).unwrap();
         for words in RESTORED_VOICE.iter().chain(RESEARCH_RULES) {
             assert!(note.contains(words), "{words}");
@@ -4790,8 +4832,20 @@ mod environment_tests {
         assert!(note.contains("save it with save_report"));
         assert!(note.contains("An answer that changed no code (a question, research, an explained error) has no Details."));
         assert!(note.contains("split it across 2 to 4 research workers"));
-        assert!(revision_note(ANSWER_FORMAT_REVISION, false).is_none());
         assert!(revision_note(ANSWER_FORMAT_REVISION - 1, true).is_none());
+    }
+
+    /// Q79, the 10-18 live check: a research answer broke the voice's no-bold-labels rule in its
+    /// breakdown, so a thread told the answer format hears the breakdown rule once.
+    #[test]
+    fn open_threads_hear_once_that_a_breakdown_has_no_bold_labelled_items() {
+        assert_eq!(revision(), BREAKDOWN_REVISION);
+        let note = revision_note(ANSWER_FORMAT_REVISION, false).unwrap();
+        assert!(note.contains("a research answer's breakdown follows this:"));
+        assert!(note.contains(RESEARCH_RULES[2]));
+        assert!(!note.contains("### Sources"));
+        assert!(revision_note(BREAKDOWN_REVISION, false).is_none());
+        assert!(revision_note(ANSWER_FORMAT_REVISION, true).is_none());
     }
 
     /// Q79: a Chat or tab chat told the contract before hears the voice once, the report only
@@ -4811,6 +4865,14 @@ mod environment_tests {
                 assert!(sent[0].text.contains(words), "{words}");
             }
             assert_eq!(sent[0].text.contains("save_report"), reports);
+            took(&mut told, &sent);
+            assert!(notes(&told, &now).is_empty());
+            // Told the voice before the breakdown rule: only that rule comes.
+            told.contract = Some(CHAT_VOICE_CONTRACT);
+            let sent = notes(&told, &now);
+            assert_eq!(labels(&sent), vec![CHAT_BREAKDOWN_LABEL]);
+            assert!(sent[0].text.contains(RESEARCH_RULES[2]));
+            assert!(!sent[0].text.contains("### Sources"));
             took(&mut told, &sent);
             assert!(notes(&told, &now).is_empty());
         }
