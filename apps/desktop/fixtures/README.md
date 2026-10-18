@@ -139,8 +139,8 @@ production build.
 # Composer polish
 
 `/fixtures/composer-polish.html?case=<case>` opens a Chat in the app's own conversation view and
-drives one of the composer's small behaviours with the real keys (`focus`: Find in the chat keeps
-the keyboard when the composer would focus itself). It records what the composer sends and writes
+drives one of the composer's small behaviours with the real keys (Find keeping the keyboard, Send
+waiting for uploads, and so on). It records what the composer sends and writes
 JSON into `#composer-polish-result`; `ComposerPolishRender.test.ts` checks it. IPC stays mocked.
 This entry is absent from the production build.
 

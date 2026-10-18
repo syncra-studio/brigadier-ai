@@ -44,10 +44,19 @@ const request = {
 
 /** What the composer sent, by method. */
 const sent: Request[] = [];
+/** Stores the file being attached, once the case lets it (`null`: none waits). */
+let finishUpload: (() => void) | null = null;
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
+    case "addAttachment": {
+      const { name, mime } = req;
+      const attachment = { id: `blob-${name}`, name, mime, bytes: 4, pasted: false, inline: null };
+      return new Promise((resolve) => {
+        finishUpload = () => resolve({ method: req.method, attachment });
+      });
+    }
     case "getConversation":
       return {
         method: req.method,
@@ -112,8 +121,32 @@ async function focusCase(seen: Record<string, unknown>) {
   setState({ type: "done" });
 }
 
+/** The composer's send button. */
+const sendButton = () => document.querySelector<HTMLButtonElement>(".aui-composer-send");
+
+/** #302: while an attached file is still being stored, Send waits and says why; Enter waits too. */
+async function uploadingCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  await fixtureClick(field()!);
+  await fixtureInput({ type: "type", text: "see notes" });
+  await until("the typed text", () => field()?.textContent === "see notes");
+  const files = new DataTransfer();
+  files.items.add(new File(["notes"], "notes.txt", { type: "text/plain" }));
+  field()!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: files, bubbles: true, cancelable: true }));
+  await until("the upload", () => finishUpload !== null);
+  await sleep(100);
+  seen.whileUploading = { disabled: sendButton()?.disabled, tip: sendButton()?.textContent };
+  await fixtureInput({ type: "key", key: "Enter" });
+  await sleep(200);
+  seen.enterWhileUploading = sent.some((req) => req.method === "sendMessage");
+  finishUpload!();
+  await until("the upload done", () => sendButton()?.disabled === false);
+  seen.afterUpload = { disabled: sendButton()?.disabled, tip: sendButton()?.textContent };
+}
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
   focus: focusCase,
+  uploading: uploadingCase,
 };
 
 async function drive() {

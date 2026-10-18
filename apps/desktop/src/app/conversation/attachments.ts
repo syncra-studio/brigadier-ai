@@ -12,6 +12,14 @@ import type { AttachmentRef } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
 import { addAttachment } from "@/state/actions";
 
+/** Send's tip while attached files are still being stored. */
+export const FILES_UPLOADING = "Files uploading…";
+
+/** Whether one of `attachments` is still being stored: the message waits for it. */
+export function uploading(attachments: readonly Attachment[]): boolean {
+  return attachments.some((attachment) => attachment.status.type === "running");
+}
+
 /** The daemon's limit per attachment (MAX_ATTACHMENT_BYTES in the core). */
 const MAX_BYTES = 10 * 1024 * 1024;
 

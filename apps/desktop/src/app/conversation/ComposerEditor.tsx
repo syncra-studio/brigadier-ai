@@ -34,7 +34,7 @@ import {
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import { WorkerGlyph, useWorkerName } from "@/app/conversation/WorkerChip";
-import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
+import { type BlobAttachmentAdapter, FILES_UPLOADING, uploading } from "@/app/conversation/attachments";
 import { usePromptHistory } from "@/app/conversation/composerDraft";
 import { enterAction } from "@/app/conversation/composerKeys";
 import { clearBackgroundSend, markBackgroundSend } from "@/state/backgroundSend";
@@ -350,13 +350,13 @@ function ComposerKeys({
           if (action === "background" && taskTab) {
             // Not this conversation's send: it goes to a new tab (on the same model), running
             // or not.
-            if (aui.composer().getState().isEmpty || refuseBlockedImages(imagesBlocked)) return true;
+            if (aui.composer().getState().isEmpty || refuseBlockedImages(imagesBlocked) || refuseUploading(aui)) return true;
             markBackgroundSend(taskTab);
             aui.composer().send();
             return true;
           }
           if (thread.isRunning && !thread.capabilities.queue) return true;
-          if (refuseBlockedImages(imagesBlocked)) return true;
+          if (refuseBlockedImages(imagesBlocked) || refuseUploading(aui)) return true;
           aui.composer().send(
             action === "other" && thread.isRunning ? { steer: followUp === "queue" } : undefined,
           );
@@ -506,6 +506,13 @@ type PasteContext = {
 function refuseBlockedImages(blocked: { current: boolean }): boolean {
   if (!blocked.current) return false;
   toast(IMAGES_BLOCKED, { tone: "error" });
+  return true;
+}
+
+/** Files still being stored: the message waits, as the send button says. */
+function refuseUploading(aui: ReturnType<typeof useAui>): boolean {
+  if (!uploading(aui.composer().getState().attachments)) return false;
+  toast(FILES_UPLOADING);
   return true;
 }
 

@@ -15,3 +15,10 @@ test("Find in the chat keeps the keyboard: the composer focuses itself (on load,
   assert.equal(seen.runStart, "Find in chat");
   assert.equal(seen.runStartFree, "Message input");
 });
+
+test("Send waits while attached files upload: disabled, its tip Files uploading…, and Enter sends nothing until they are stored (issue 302)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "uploading");
+  assert.deepEqual(seen.whileUploading, { disabled: true, tip: "Files uploading…" });
+  assert.equal(seen.enterWhileUploading, false);
+  assert.deepEqual(seen.afterUpload, { disabled: false, tip: "Send message" });
+});

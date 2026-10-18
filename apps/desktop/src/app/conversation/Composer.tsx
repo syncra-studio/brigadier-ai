@@ -52,7 +52,7 @@ import { ComposerStatusSlot } from "@/app/conversation/ComposerStatusSlot";
 import { QueueCard } from "@/app/conversation/QueueCard";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { useComposerDraft } from "@/app/conversation/composerDraft";
-import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
+import { type BlobAttachmentAdapter, FILES_UPLOADING, uploading as anyUploading } from "@/app/conversation/attachments";
 import { useImagesBlocked, useImagesUnsupportedToast } from "@/app/conversation/imageInput";
 import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import { StatusCard, StatusCardContext } from "@/app/conversation/StatusCard";
@@ -599,9 +599,11 @@ function SendControls({
   const projectSession = target?.conversation && isTaskTab(target.conversation) ? target.conversation.id : null;
   const modHeld = useModHeld(mac, projectSession !== null);
   const chip = useBackgroundArmed(projectSession);
-  // Images for a model that takes none hold the message until they go or the model changes.
+  // Images for a model that takes none hold the message until they go or the model changes;
+  // files still being stored hold it until they are.
   const imagesBlocked = useImagesBlocked();
   useImagesUnsupportedToast();
+  const uploading = useAuiState((s) => anyUploading(s.composer.attachments));
   const state: SendState =
     armed
       ? "armed"
@@ -620,7 +622,9 @@ function SendControls({
   const tooltip =
     sending && imagesBlocked
       ? IMAGES_BLOCKED
-      : background
+      : sending && uploading
+        ? FILES_UPLOADING
+        : background
         ? START_TIP
         : sending && projectSession
           ? `${state === "send" ? "Send" : tip} ${shortcutKeys("send", mac)} · ${START_TIP} ${shortcutKeys("start-in-tab", mac)}`
@@ -630,7 +634,7 @@ function SendControls({
       tooltip={tooltip}
       side="bottom"
       type="button"
-      disabled={sending && imagesBlocked}
+      disabled={sending && (imagesBlocked || uploading)}
       variant={state === "starting" ? "secondary" : "default"}
       size="icon-md"
       data-state={state}
