@@ -63,7 +63,8 @@ pin: Pin | null,
  */
 needs: Array<Capability>, state: TaskState, 
 /**
- * Set while it is paused waiting for quota.
+ * Set while it is paused waiting for quota. Boxed: it is rarely set, and engine futures
+ * hold several tasks (`run_orchestrator_call` stays under 16 KB).
  */
 quotaWait: QuotaWait | null, 
 /**

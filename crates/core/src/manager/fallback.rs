@@ -458,7 +458,7 @@ impl SessionManager {
                 .update_task(&task.conversation_id, &task.id, |task| {
                     task.state = TaskState::Paused;
                     task.blocked_reason = Some(format!("Waiting for quota: {}", wait.reason));
-                    task.quota_wait = Some(wait.clone());
+                    task.quota_wait = Some(Box::new(wait.clone()));
                 })
                 .await;
             if let Err(err) = paused {

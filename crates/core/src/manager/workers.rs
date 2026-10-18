@@ -1291,7 +1291,7 @@ impl SessionManager {
             blocked_reason: wait
                 .as_ref()
                 .map(|wait| format!("Waiting for quota: {}", wait.reason)),
-            quota_wait: wait,
+            quota_wait: wait.map(Box::new),
             subject: subject.as_ref().map(|task| task.id.clone()),
             target: extra.target,
             end_state: extra.end_state,

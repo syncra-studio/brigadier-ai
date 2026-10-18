@@ -811,9 +811,10 @@ pub struct Task {
     #[serde(default)]
     pub needs: Vec<Capability>,
     pub state: TaskState,
-    /// Set while it is paused waiting for quota.
+    /// Set while it is paused waiting for quota. Boxed: it is rarely set, and engine futures
+    /// hold several tasks (`run_orchestrator_call` stays under 16 KB).
     #[serde(default)]
-    pub quota_wait: Option<QuotaWait>,
+    pub quota_wait: Option<Box<QuotaWait>>,
     /// The task this one reviews or merges.
     pub subject: Option<TaskId>,
     /// An operate task's app, dev build or URL, and the window if known.

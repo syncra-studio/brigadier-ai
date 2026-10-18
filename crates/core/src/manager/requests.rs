@@ -949,16 +949,18 @@ mod tests {
             let mut board = board.clone();
             let mut task = task_of("r1", state);
             task.id = TaskId("held".into());
-            task.quota_wait = quota.then(|| crate::work::QuotaWait {
-                reason: "The 5-hour window resets at 21:10".into(),
-                resets_at_ms: None,
-                rule: None,
-                ranking: None,
-                since_ms: 0,
-                messages: Vec::new(),
-                model: None,
-                request: None,
-                first_reset_ms: None,
+            task.quota_wait = quota.then(|| {
+                Box::new(crate::work::QuotaWait {
+                    reason: "The 5-hour window resets at 21:10".into(),
+                    resets_at_ms: None,
+                    rule: None,
+                    ranking: None,
+                    since_ms: 0,
+                    messages: Vec::new(),
+                    model: None,
+                    request: None,
+                    first_reset_ms: None,
+                })
             });
             board.tasks.insert(task.id.clone(), task);
             wait(&board, "r1")
