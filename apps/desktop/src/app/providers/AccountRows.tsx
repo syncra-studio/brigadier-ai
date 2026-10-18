@@ -5,7 +5,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { SetupTerminal } from "@/app/onboarding/SetupTerminal";
-import { ProvidersButton, UsageMeter as PageMeter } from "@/app/providers/parts";
+import { ProvidersButton, UsageMeter } from "@/app/providers/parts";
 import { SettingsButton, SettingsCard, SettingsRow } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,6 @@ import { hasEmail, maskEmailsIn } from "@/lib/email";
 import { VENDOR_LABELS } from "@/lib/routing";
 import { formatCountdown } from "@/lib/format";
 import { glance, ordered, usageTone, used } from "@/lib/quota";
-import { cn } from "@/lib/utils";
 import {
   accountLabel,
   addAccount,
@@ -70,27 +69,24 @@ type SigningIn = { id: string | null; fresh: boolean; exitedAtMs: number | null 
 
 /**
  * One agent's accounts as a card (the computer's own login first), ending in a row that adds
- * another and shows its sign-in. `wide` lays them out as Settings › Providers does: rows split by
- * hairlines, each window's usage on the row itself, and a link that adds another. `page` is an
- * agent's page's: the same, drawn to the user's design, for a card the caller draws.
+ * another and shows its sign-in. `page` lays them out as Settings › Providers' agent page does,
+ * drawn to the user's design for a card the caller draws: every window's usage on the row
+ * itself, and a link that adds another.
  */
 export function ProviderAccounts({
   provider,
   views,
   now,
   revealed,
-  wide = false,
   page = false,
 }: {
   provider: ProviderKind;
   views: AccountView[] | null;
   now: number;
   revealed: Revealed;
-  wide?: boolean;
   page?: boolean;
 }) {
-  wide ||= page;
-  const label = wide ? VENDOR_LABELS[provider] : PROVIDER_LABELS[provider];
+  const label = page ? VENDOR_LABELS[provider] : PROVIDER_LABELS[provider];
   const [signing, setSigning] = useState<SigningIn | null>(null);
   const signingId = useRef<string | null>(null);
   // Off the page: a new account added only after that goes again with its sign-in.
@@ -163,8 +159,6 @@ export function ProviderAccounts({
     views === null ? (
       page ? (
         <p className="text-settings-text-secondary py-4.5 text-settings-body">Reading the accounts…</p>
-      ) : wide ? (
-        <p className="text-muted-foreground px-1 py-3.5 text-sm">Reading the accounts…</p>
       ) : (
         <SettingsRow label="Reading the accounts…" />
       )
@@ -176,7 +170,6 @@ export function ProviderAccounts({
           ownLogin={ownLogin}
           now={now}
           busy={active !== null}
-          wide={wide}
           page={page}
           revealed={revealed.has(revealKey(view))}
           onReveal={() => revealed.toggle(revealKey(view))}
@@ -216,26 +209,6 @@ export function ProviderAccounts({
           </button>
         )}
       </>
-    );
-  }
-
-  if (wide) {
-    return (
-      <div data-slot="provider-accounts" className="divide-divider flex flex-col divide-y border-divider border-b">
-        {rows}
-        {terminal || (
-          <button
-            type="button"
-            aria-label={addLabel}
-            disabled={views === null}
-            onClick={() => start(null)}
-            className="text-link flex w-fit items-center gap-2 px-1 py-3.5 text-sm hover:underline disabled:opacity-50"
-          >
-            <Plus className="size-icon-sm" />
-            {addLabel}
-          </button>
-        )}
-      </div>
     );
   }
 
@@ -292,7 +265,6 @@ function AccountRow({
   ownLogin,
   now,
   busy,
-  wide,
   page,
   revealed,
   onReveal,
@@ -303,8 +275,6 @@ function AccountRow({
   ownLogin: boolean;
   now: number;
   busy: boolean;
-  /** Settings › Providers' row: who on the start, every window's usage across, Use on the end. */
-  wide: boolean;
   /** An agent's page's row, drawn to the user's design. */
   page: boolean;
   revealed: boolean;
@@ -362,16 +332,9 @@ function AccountRow({
         Sign in
       </SettingsButton>
     ) : view.default ? (
-      wide ? (
-        <span className="flex shrink-0 items-center gap-1 text-sm" title="New chats start on this account">
-          <CheckMd aria-hidden className="text-success size-icon-sm" />
-          In use
-        </span>
-      ) : (
-        <Badge variant="secondary" title="New chats start on this account">
-          In use
-        </Badge>
-      )
+      <Badge variant="secondary" title="New chats start on this account">
+        In use
+      </Badge>
     ) : (
       <SettingsButton
         disabled={action.busy || !signedIn}
@@ -424,7 +387,7 @@ function AccountRow({
     const pageWindows = signedIn && view.quota ? ordered(view.quota) : [];
     return (
       <div data-slot="account-row" className="flex items-center gap-6 py-4.5">
-        <div className="flex min-w-0 flex-1 flex-col gap-1.25">
+        <div className="flex min-w-48 flex-1 flex-col gap-1.25">
           {nameField || (
             <span className="flex min-w-0 items-center gap-2">
               <span
@@ -462,9 +425,10 @@ function AccountRow({
           {view.error && <span className="text-destructive text-xs">{view.error}</span>}
           <ErrorLine error={action.error} />
         </div>
-        <div className="flex shrink-0 gap-5">
+        {/* Many windows wrap under each other before the account's name gives way. */}
+        <div className="flex min-w-0 flex-wrap justify-end gap-x-5 gap-y-3">
           {pageWindows.map((window) => (
-            <PageMeter key={window.id} window={window} now={now} />
+            <UsageMeter key={window.id} window={window} now={now} />
           ))}
         </div>
         <div className="flex w-24 shrink-0 items-center justify-end gap-1.5">
@@ -508,48 +472,6 @@ function AccountRow({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-        </div>
-      </div>
-    );
-  }
-
-  if (wide) {
-    // Who it is: the email (masked) over its plan and what it is to the user.
-    const wideTitle = status?.email ? (revealed ? status.email : maskEmailsIn(status.email)) : title;
-    const wideDetails: string[] = [];
-    if (!status) wideDetails.push("Checking…");
-    else if (!status.path) wideDetails.push(`${PROVIDER_LABELS[provider]} isn't installed`);
-    else if (!signedIn) wideDetails.push("Not signed in");
-    else {
-      if (status.plan) wideDetails.push(`${capitalize(status.plan)} plan`);
-      if (view.quotaAtMs === null) wideDetails.push("usage not read yet");
-    }
-    if (ownLogin) wideDetails.push("This computer's login");
-    else if (wideTitle !== title) wideDetails.push(title);
-    const all = signedIn && view.quota ? ordered(view.quota) : [];
-    return (
-      <div data-slot="account-row" className="flex items-center gap-6 px-1 py-3.5">
-        <div className="flex w-60 min-w-0 shrink-0 flex-col gap-0.5">
-          {nameField || (
-            <span className="flex min-w-0 items-center gap-1">
-              <span data-slot="account-title" className="text-label truncate font-mono">
-                {wideTitle}
-              </span>
-              {eye}
-            </span>
-          )}
-          <span className="text-foreground/65 truncate text-xs">{wideDetails.join(" · ")}</span>
-          {view.error && <span className="text-destructive text-xs">{view.error}</span>}
-          <ErrorLine error={action.error} />
-        </div>
-        <div className="flex min-w-0 flex-1 flex-wrap gap-x-5 gap-y-2">
-          {all.map((window) => (
-            <UsageMeter key={window.id} window={window} now={now} />
-          ))}
-        </div>
-        <div className="flex shrink-0 items-center justify-end gap-3">
-          {use}
-          {menu}
         </div>
       </div>
     );
@@ -613,62 +535,6 @@ function UsageBar({ window, now }: { window: QuotaWindow; now: number }) {
       </span>
       <span className={usage.text}>{percent}%</span>
     </span>
-  );
-}
-
-/** Segments in a usage meter's bar. */
-const METER_SEGMENTS = 32;
-
-/**
- * A window's short name on a meter: what it is limited to ("Fable"), else its length ("5h",
- * "7d"), else its label.
- */
-export function meterName(window: QuotaWindow): string {
-  const named = /\((.+)\)$/.exec(window.label);
-  if (named?.[1]) return named[1];
-  const scope = window.model ?? window.bucket;
-  if (scope) return scope;
-  const minutes = window.windowMinutes;
-  if (minutes !== null && minutes > 0) {
-    if (minutes % 1440 === 0) return `${minutes / 1440}d`;
-    if (minutes % 60 === 0) return `${minutes / 60}h`;
-  }
-  return SHORT_WINDOW[window.label] ?? window.label;
-}
-
-/**
- * A usage window on Settings › Providers: its name and the share used over a bar of segments,
- * and when it resets; coloured only near its limit.
- */
-function UsageMeter({ window, now }: { window: QuotaWindow; now: number }) {
-  const percent = used(window);
-  const usage = usageTone(percent, { normal: { text: "text-foreground", fill: "bg-foreground/80" } });
-  const name = meterName(window);
-  const resets = window.resetsAtMs !== null ? formatCountdown(window.resetsAtMs, now) : null;
-  const filled = Math.round((percent / 100) * METER_SEGMENTS);
-  return (
-    <div
-      data-slot="account-usage"
-      className="flex w-56 min-w-0 flex-col gap-1.5 font-mono text-xs"
-      title={`${window.label}: ${percent}% used${resets ? `, resets in ${resets}` : ""}`}
-    >
-      <span className="flex items-baseline justify-between gap-2 whitespace-nowrap">
-        <span>
-          <span className="text-muted-foreground">{name} · </span>
-          <span className={usage.text}>{percent}% used</span>
-        </span>
-        {resets && <span className="text-muted-foreground truncate">resets {resets}</span>}
-      </span>
-      <span aria-hidden className="flex h-2 gap-px">
-        {Array.from({ length: METER_SEGMENTS }, (_, index) => (
-          <span
-            // oxlint-disable-next-line react/no-array-index-key -- the segments are positions.
-            key={index}
-            className={cn("flex-1 rounded-xs", index < filled ? usage.fill : "bg-foreground/12")}
-          />
-        ))}
-      </span>
-    </div>
   );
 }
 

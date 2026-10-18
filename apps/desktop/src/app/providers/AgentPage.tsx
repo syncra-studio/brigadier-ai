@@ -4,7 +4,7 @@ import { type ReactNode, useState } from "react";
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
 import { agentState, SetupTerminal } from "@/app/onboarding/SetupTerminal";
-import { ProviderAccounts, type Revealed } from "@/app/providers/AccountRows";
+import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows";
 import { CLI_NAMES } from "@/app/providers/AgentsOverview";
 import {
   CheckAgainButton,
@@ -14,24 +14,27 @@ import {
   ProvidersSection,
   StateDot,
 } from "@/app/providers/parts";
-import { EXPENSIVE_NOTE, useModelRow } from "@/app/providers/ProviderPanel";
+import { bestFor } from "@/app/routing/models";
 import { SettingsPage, SettingsSwitch } from "@/app/settings/parts";
-import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { pickFile, request } from "@/ipc/client";
 import type { AccountView, MergedModel, ModelInfo, ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";
-import { VENDOR_LABELS } from "@/lib/routing";
+import { isExpensive, TIER_LABELS, VENDOR_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { refreshProviders } from "@/state/actions";
 import { refreshAccounts } from "@/state/accounts";
-import { modelAvailable, providerOn, setProviderOn } from "@/state/providers";
+import { modelAvailable, providerOn, setModelAvailable, setProviderOn } from "@/state/providers";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 import { startUpdate, useUpdates } from "@/state/updates";
 
 /** Who makes each agent's CLI, on its page's line. */
 const MAKERS: Record<ProviderKind, string> = { claude: "Claude Code by Anthropic", codex: "Codex CLI" };
+
+/** The line under a model Brigadier gives no tasks to whatever the user chooses. */
+const EXPENSIVE_NOTE =
+  "Expensive: Brigadier uses it only where you pick it, in a chat, a session, your order or a rule";
 
 /** What an agent switched off means, on its page's line. */
 const OFF_NOTE = "Off: its models are hidden from the model picker, and it gets no work";
@@ -116,22 +119,20 @@ export function AgentPage({
   overview,
   accounts,
   merged,
-  groups,
   now,
-  revealed,
   signIn = false,
 }: {
   provider: ProviderKind;
   overview: ProviderOverview | undefined;
   accounts: AccountView[] | null;
   merged: readonly MergedModel[] | null;
-  groups: readonly ModelGroup[];
   now: number;
-  revealed: Revealed;
   /** Starts its sign-in when the page opens (the agents list's Sign in). */
   signIn?: boolean;
 }) {
   const on = useApp((s) => providerOn(s.settings, provider));
+  // Its own: going back to the agents hides the emails again.
+  const revealed = useRevealedEmails();
   const checkedAtMs = overview?.checkedAtMs ?? null;
   return (
     <div data-slot="agent-page" className="flex flex-col gap-10">
@@ -146,7 +147,7 @@ export function AgentPage({
           <ProviderAccounts page provider={provider} views={accounts} now={now} revealed={revealed} />
         </ProvidersCard>
       </ProvidersSection>
-      {on && <AgentModels provider={provider} overview={overview} merged={merged} groups={groups} />}
+      {on && <AgentModels provider={provider} overview={overview} merged={merged} />}
     </div>
   );
 }
@@ -261,9 +262,10 @@ function Installation({
             <span className="text-settings-text text-settings-body font-medium">Location</span>
             <span
               className="text-settings-text-secondary truncate font-mono text-settings-meta"
-              title={chosen ?? status?.path ?? undefined}
+              title={status?.path ?? chosen ?? undefined}
             >
-              {chosen ?? status?.path ?? "Checking…"}
+              {/* The one it runs: a chosen file that went away falls back to the one on PATH. */}
+              {status?.path ?? chosen ?? "Checking…"}
             </span>
             <ErrorLine error={location.error} />
           </div>
@@ -287,12 +289,10 @@ function AgentModels({
   provider,
   overview,
   merged,
-  groups,
 }: {
   provider: ProviderKind;
   overview: ProviderOverview | undefined;
   merged: readonly MergedModel[] | null;
-  groups: readonly ModelGroup[];
 }) {
   const models = overview?.models?.models ?? [];
   const label = VENDOR_LABELS[provider];
@@ -304,7 +304,7 @@ function AgentModels({
   const aside =
     models.length > 0 ? [`${onCount} on`, older.length > 0 && `${older.length} older`].filter(Boolean).join(" · ") : undefined;
   const row = (model: ModelInfo) => (
-    <AgentModelRow key={model.id} provider={provider} model={model} merged={merged} groups={groups} />
+    <AgentModelRow key={model.id} provider={provider} model={model} merged={merged} />
   );
   return (
     <ProvidersSection title="Models" aside={aside}>
@@ -343,19 +343,39 @@ function AgentModels({
   );
 }
 
+/**
+ * What a model's row shows and does: its switch, and its line (Expensive for a model Brigadier
+ * never gives tasks, else how good it is and what for, else the agent's own words).
+ */
+function useModelRow(provider: ProviderKind, model: ModelInfo, merged: readonly MergedModel[] | null) {
+  const ref = { provider, id: model.id };
+  const available = useApp((s) => modelAvailable(s.settings, ref));
+  const toggle = useAction();
+  const known = merged?.find((entry) => entry.provider === provider && entry.id === model.id);
+  const description =
+    known && known.tier !== "unrated"
+      ? [TIER_LABELS[known.tier], bestFor(known)].filter(Boolean).join(" · ")
+      : model.description || null;
+  return {
+    available,
+    toggle,
+    expensive: isExpensive(model),
+    description,
+    setAvailable: (next: boolean) => toggle.run(() => setModelAvailable(ref, next)),
+  };
+}
+
 /** A model on an agent's page: its name and id, its line, its switch. */
 function AgentModelRow({
   provider,
   model,
   merged,
-  groups,
 }: {
   provider: ProviderKind;
   model: ModelInfo;
   merged: readonly MergedModel[] | null;
-  groups: readonly ModelGroup[];
 }) {
-  const { available, toggle, expensive, description, setAvailable } = useModelRow(provider, model, merged, groups);
+  const { available, toggle, expensive, description, setAvailable } = useModelRow(provider, model, merged);
   const text = "text-settings-text-secondary text-settings-small";
   return (
     <div data-slot="provider-model" data-setting={model.displayName} className="flex items-center gap-6 py-4">
