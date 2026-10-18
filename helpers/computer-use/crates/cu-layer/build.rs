@@ -2,6 +2,10 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() != "macos" {
         return;
     }
+    // The ScreenCaptureKit Swift runtime rpath must also reach this crate's
+    // test executables; dependency build scripts do not propagate link args.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+
     // The in-process Apple Event runner and its Objective-C exception
     // boundary for the page tool (src/browser/browser_js.rs). Its own library
     // and symbol names, so it can be linked next to the older helper crates.
