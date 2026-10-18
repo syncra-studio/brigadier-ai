@@ -73,7 +73,12 @@ function subscribeSearching(heard: () => void): () => void {
 
 /** Whether a find bar searches now: a closed work fold mounts its rows, hidden, so they are found. */
 export function useFindSearching(): boolean {
-  return useSyncExternalStore(subscribeSearching, () => searching.size > 0);
+  // The same read serves a server render, as worker history renders on the server in tests.
+  return useSyncExternalStore(subscribeSearching, findSearching, findSearching);
+}
+
+function findSearching(): boolean {
+  return searching.size > 0;
 }
 
 /** The closed work fold holding `range`, if one does. */
