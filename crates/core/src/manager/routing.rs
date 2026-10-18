@@ -24,6 +24,8 @@ pub(crate) struct Ask<'a> {
     pub category: TaskCategory,
     pub areas: &'a [Area],
     pub floor: QualityTier,
+    /// The floor holds for a ranked or named model too (a rerun one tier up).
+    pub floor_binds: bool,
     pub needs: Needs,
     pub pin: Option<Pin>,
     /// The pin binds: a hand-off or a resume stays with the pinned vendor, or waits.
@@ -67,6 +69,7 @@ impl TaskQuestion {
             category: super::workers::category(task.kind),
             areas: &task.areas,
             floor: task.floor,
+            floor_binds: task.rerun.is_some(),
             needs: self.needs,
             pin: task.pin.clone(),
             hold_pin,
@@ -228,6 +231,7 @@ impl SessionManager {
             category: ask.category,
             areas: ask.areas,
             floor: ask.floor,
+            floor_binds: ask.floor_binds,
             needs: ask.needs,
             pin: ask.pin.clone(),
             hold_pin: ask.hold_pin,
@@ -736,6 +740,7 @@ mod tests {
                 category,
                 areas: &[],
                 floor: brigadier_router::default_floor(category),
+                floor_binds: false,
                 needs: Needs::default(),
                 pin: None,
                 hold_pin: false,

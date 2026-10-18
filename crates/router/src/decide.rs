@@ -74,6 +74,9 @@ pub struct Query<'a> {
     pub areas: &'a [Area],
     /// The least capable model it may run on (see [`default_floor`]).
     pub floor: QualityTier,
+    /// The floor holds for a model the user ranked or named too (a rerun one tier up, see
+    /// [`rerun_floor`]); otherwise their choice waives the category's own floor.
+    pub floor_binds: bool,
     pub needs: Needs,
     /// A provider, model or effort asked for by the orchestrator or the user.
     pub pin: Option<Pin>,
@@ -1309,7 +1312,9 @@ fn assess<'q>(
     } else if candidate.listed.is_some() || named {
         // The user ranked or named it: the category's own floor is waived, a floor raised for
         // this task holds.
-        if query.floor > default_floor(query.category) && model.tier < query.floor {
+        if (query.floor > default_floor(query.category) || query.floor_binds)
+            && model.tier < query.floor
+        {
             Some(Block::Floor(format!(
                 "below the {} quality floor asked for this task",
                 tier_name(query.floor)
@@ -2410,6 +2415,58 @@ mod tests {
         assert_ne!(rerun.model, first.model);
     }
 
+    /// Research the user ranked onto a light model runs there (their order waives the
+    /// category's floor), but its rerun one tier up never does: that floor binds.
+    #[test]
+    fn a_rerun_floor_binds_over_the_users_ranking() {
+        let registry = Registry::bundled();
+        let models = catalog(&registry);
+        let both = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
+            provider,
+            logged_in: true,
+            quota: None,
+        });
+        let light = models
+            .iter()
+            .find(|model| {
+                !model.excluded
+                    && model.tier_for(TaskCategory::Research) == Some(QualityTier::Light)
+            })
+            .expect("a light model");
+        let rankings = [Ranking {
+            id: "research".into(),
+            category: TaskCategory::Research,
+            areas: vec![],
+            project_id: None,
+            manual: true,
+            only: false,
+            updated_at_ms: 0,
+            entries: vec![crate::RankedEntry {
+                target: OverrideTarget::Model {
+                    provider: light.provider,
+                    id: light.id.clone(),
+                },
+                effort: None,
+            }],
+        }];
+        let mut q = query(&registry, &models, &both);
+        q.category = TaskCategory::Research;
+        q.floor = default_floor(TaskCategory::Research);
+        q.rankings = &rankings;
+        let first = routed(&q);
+        assert_eq!(first.model, light.id);
+        q.floor = rerun_floor(TaskCategory::Research, first.tier, q.floor).unwrap();
+        assert_eq!(q.floor, default_floor(TaskCategory::Research));
+        q.floor_binds = true;
+        let rerun = routed(&q);
+        assert!(
+            rerun.tier > first.tier,
+            "{} after {}",
+            rerun.model,
+            first.model
+        );
+    }
+
     #[test]
     fn an_operator_runs_on_a_strong_model_at_medium() {
         assert_eq!(default_floor(TaskCategory::Operate), QualityTier::Strong);
@@ -3374,6 +3431,7 @@ mod tests {
                     category,
                     areas: &[],
                     floor: default_floor(category),
+                    floor_binds: false,
                     needs: Needs::default(),
                     pin: None,
                     hold_pin: false,
@@ -3459,6 +3517,7 @@ mod tests {
             category: TaskCategory::Research,
             areas: &[],
             floor: QualityTier::Standard,
+            floor_binds: false,
             needs: Needs::default(),
             pin: None,
             hold_pin: false,

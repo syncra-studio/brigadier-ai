@@ -469,6 +469,7 @@ impl SessionManager {
             category: TaskCategory::GitText,
             areas: &[],
             floor: brigadier_router::default_floor(TaskCategory::GitText),
+            floor_binds: false,
             needs: Needs::default(),
             pin,
             hold_pin: false,

@@ -311,6 +311,7 @@ impl SessionManager {
             category,
             areas,
             floor: brigadier_router::default_floor(category),
+            floor_binds: false,
             // An operator looks at the screen, whatever it is sent.
             needs: brigadier_router::Needs {
                 image_input: category == TaskCategory::Operate,

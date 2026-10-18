@@ -5620,6 +5620,7 @@ impl SessionManager {
                 category,
                 areas: &[],
                 floor: brigadier_router::default_floor(category),
+                floor_binds: false,
                 needs: brigadier_router::Needs::default(),
                 pin: None,
                 hold_pin: false,

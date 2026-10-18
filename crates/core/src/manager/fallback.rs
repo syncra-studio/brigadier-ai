@@ -419,7 +419,14 @@ impl SessionManager {
             ))
             .await;
         match decision {
-            brigadier_router::Decision::Run(routed) => Ok(super::routing::route_from(routed)),
+            brigadier_router::Decision::Run(routed) => {
+                let mut route = super::routing::route_from(routed);
+                // A rerun one tier up stays one, on whichever model takes it.
+                if let Some(rerun) = &task.rerun {
+                    super::reruns::mark_route(&mut route, rerun);
+                }
+                Ok(route)
+            }
             brigadier_router::Decision::Wait(waiting) => Err(waiting),
         }
     }

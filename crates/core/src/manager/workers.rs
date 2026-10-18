@@ -1150,6 +1150,7 @@ impl SessionManager {
                 category,
                 areas: &areas,
                 floor,
+                floor_binds: extra.rerun.is_some(),
                 needs: needs_of(kind, &attachments, &needs),
                 pin: pin.clone(),
                 hold_pin: false,
@@ -1211,13 +1212,7 @@ impl SessionManager {
         let waits = wait.is_some();
         let mut route = route;
         if let Some(rerun) = &extra.rerun {
-            route.reason = format!(
-                "Rerun one tier up from {} {}: {}",
-                rerun.provider.label(),
-                rerun.model,
-                route.reason
-            );
-            route.explanation.get_or_insert_default().rerun = Some(Box::new(rerun.clone()));
+            super::reruns::mark_route(&mut route, rerun);
         }
         // A fix of landed work resumes its worker's session: on the account it ran on, from
         // the instructions it last heard (SESSION-FIXES-PLAN.md Q6.1).

@@ -21,7 +21,7 @@ use brigadier_router::{QualityTier, Rerun};
 use super::SessionManager;
 use super::workers::{TaskExtra, category, route_label};
 use crate::model::ConversationId;
-use crate::work::{OrchestratorStepKind, Task};
+use crate::work::{OrchestratorStepKind, Route, Task};
 use crate::{Error, Result};
 
 /// The most bytes of a failed check or the thread's reason a rerun's note quotes.
@@ -35,6 +35,36 @@ pub(crate) fn failed_check(done_when: &[String]) -> Option<&str> {
     done_when.iter().map(|line| line.trim()).find(|line| {
         super::evidence::met(line).is_none() && line.to_ascii_lowercase().contains("[not met]")
     })
+}
+
+/// Marks a rerun's route: its reason says what it reruns, and its explanation keeps the
+/// cheaper model and why.
+pub(crate) fn mark_route(route: &mut Route, rerun: &Rerun) {
+    route.reason = format!(
+        "Rerun one tier up from {} {}: {}",
+        rerun.provider.label(),
+        rerun.model,
+        route.reason
+    );
+    route.explanation.get_or_insert_default().rerun = Some(Box::new(rerun.clone()));
+}
+
+/// A rerun's spec: the task's own, with what the thread told the first run since (oldest
+/// first), so the stronger model works on the task as it stands.
+fn rerun_spec(task: &Task) -> String {
+    if task.messages.is_empty() {
+        return task.spec.clone();
+    }
+    let later: Vec<String> = task
+        .messages
+        .iter()
+        .map(|message| format!("- {}", message.trim()))
+        .collect();
+    format!(
+        "{}\n\nWhat the thread told the task's first run after this spec, oldest first:\n{}",
+        task.spec,
+        later.join("\n")
+    )
 }
 
 /// What the thread is told of `rerun`, the rerun of `task`.
@@ -111,6 +141,8 @@ impl SessionManager {
                 task.number
             ));
         }
+        // Held until the rerun is on the board: two at once can't both find none there.
+        let _starting = self.reruns_starting.lock().await;
         let board = self
             .core
             .board(&task.conversation_id)
@@ -154,7 +186,7 @@ impl SessionManager {
                 &task.conversation_id,
                 task.title.clone(),
                 task.kind,
-                task.spec.clone(),
+                rerun_spec(task),
                 pin,
                 None,
                 Vec::new(),
@@ -212,7 +244,36 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
-    use super::failed_check;
+    use super::{failed_check, rerun_spec};
+    use crate::work::Task;
+
+    /// A rerun works on the task as the thread left it: its spec, then what the thread told
+    /// the first run since, oldest first.
+    #[test]
+    fn a_rerun_gets_what_the_thread_told_the_first_run() {
+        let mut task: Task = serde_json::from_value(serde_json::json!({
+            "id": "t1",
+            "conversationId": "c1",
+            "number": 1,
+            "position": 0,
+            "title": "Find the parser",
+            "kind": "scout",
+            "spec": "Find the parser.",
+            "access": { "repo": "read", "network": false, "unsandboxed": false },
+            "route": { "choice": { "provider": "codex", "model": "gpt-6-luna", "effort": null }, "reason": "" },
+            "state": "done",
+            "attachments": [],
+            "createdAtMs": 0,
+            "updatedAtMs": 0
+        }))
+        .expect("a task");
+        assert_eq!(rerun_spec(&task), "Find the parser.");
+        task.messages = vec!["Only the CLI's parser.".into(), " Skip tests. ".into()];
+        assert_eq!(
+            rerun_spec(&task),
+            "Find the parser.\n\nWhat the thread told the task's first run after this spec, oldest first:\n- Only the CLI's parser.\n- Skip tests."
+        );
+    }
 
     fn lines(lines: &[&str]) -> Vec<String> {
         lines.iter().map(|line| (*line).to_owned()).collect()

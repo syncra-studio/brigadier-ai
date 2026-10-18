@@ -223,8 +223,8 @@ async fn a_broken_citation_is_no_reason_to_rerun() {
 }
 
 /// The thread judges a scout's answer unsupported: `rerun_task` reruns it once, one tier up,
-/// with the thread's words as the reason. Asked again, or for the rerun, it says why not and
-/// starts nothing.
+/// with the thread's words as the reason. Asked twice at once, again, or for the rerun, it
+/// says why not and starts nothing.
 #[tokio::test]
 async fn the_thread_reruns_an_unsupported_answer_once() {
     let replies: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -244,14 +244,21 @@ async fn the_thread_reruns_an_unsupported_answer_once() {
                         return Reply::text("[quiet]");
                     }
                     if turn.input.contains("[report task-1 ") {
-                        for (task, why) in [
-                            ("task-1", "It names a file but no caller"),
-                            ("task-1", "Still unsure"),
-                            ("task-2", "Unsure"),
-                        ] {
-                            let reply = turn
-                                .call("rerun_task", json!({"task": task, "why": why}))
-                                .await;
+                        // Two at once: one reruns it, the other hears it already did.
+                        let (one, two) = tokio::join!(
+                            turn.call(
+                                "rerun_task",
+                                json!({"task": "task-1", "why": "It names a file but no caller"}),
+                            ),
+                            turn.call(
+                                "rerun_task",
+                                json!({"task": "task-1", "why": "It names a file but no caller"}),
+                            ),
+                        );
+                        let again = turn
+                            .call("rerun_task", json!({"task": "task-2", "why": "Unsure"}))
+                            .await;
+                        for reply in [one, two, again] {
                             assert!(!reply.is_error, "{}", reply.text);
                             seen.lock().unwrap().push(reply.text);
                         }
@@ -280,8 +287,12 @@ async fn the_thread_reruns_an_unsupported_answer_once() {
         of.reason,
         "you judged that its answer lacks support: It names a file but no caller"
     );
-    let replies = replies.lock().unwrap().clone();
+    let mut replies = replies.lock().unwrap().clone();
     assert_eq!(replies.len(), 3, "{replies:#?}");
+    // Whichever of the two at once came first reruns it.
+    if !replies[0].starts_with("[rerun task-1]") {
+        replies.swap(0, 1);
+    }
     assert!(
         replies[0].starts_with("[rerun task-1] task-1 ran on ")
             && replies[0].contains("and you judged that its answer lacks support: It names a file but no caller, so Brigadier reruns it once, one tier up, as task-2"),

@@ -232,6 +232,8 @@ pub struct SessionManager {
     /// Held while a fix of landed work is checked and created, so two can't both find none
     /// running (SESSION-FIXES-PLAN.md Q6.1: one fix at a time resumes a session).
     fixes_starting: tokio::sync::Mutex<()>,
+    /// Held while a rerun one tier up is checked and made, so a task reruns once.
+    reruns_starting: tokio::sync::Mutex<()>,
     /// Held while a message to another session is checked against the hop and rate rules
     /// and recorded, so two sends can't both pass the same last place.
     peer_sends: tokio::sync::Mutex<()>,
@@ -400,6 +402,7 @@ impl SessionManager {
             waiting: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),
             fixes_starting: tokio::sync::Mutex::new(()),
+            reruns_starting: tokio::sync::Mutex::new(()),
             peer_sends: tokio::sync::Mutex::new(()),
             cut_off: Mutex::new(HashSet::new()),
             workspace_overlaps: Mutex::new(HashMap::new()),

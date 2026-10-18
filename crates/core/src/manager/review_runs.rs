@@ -1447,6 +1447,7 @@ impl SessionManager {
                 category: TaskCategory::Review,
                 areas: &[],
                 floor: QualityTier::Frontier,
+                floor_binds: false,
                 needs: Needs::default(),
                 pin: Some(Pin {
                     provider: Some(reviewer),
