@@ -19,6 +19,8 @@ read-only over a Brigadier data dir and the projects' repos. Run with `python3 -
 - Wasted quota at reset. Per account window that reset: 100 − used_percent at its last sample
   before the reset; weekly (`seven_day*`, Codex `secondary`) and 5-hour (`five_hour`, Codex
   `primary`) apart.
+- Brain quota per window (#135). For each account window, the Brain jobs' share of its tokens
+  and that share of its used percent.
 - Tokens per merged change (report only). `turn_usage` of the tab and its tasks from the opening
   message to the merge, by model: input + cached input + cache writes + output.
 
@@ -290,10 +292,12 @@ def window_kind(window):
     return window
 
 
-def wasted_quota(routing, until):
-    out = collections.defaultdict(list)
-    if routing is None:
-        return {}
+WINDOW_MS = {"five_hour": 5 * 3_600_000, "weekly": 7 * DAY_MS}
+
+
+def windows(routing, until):
+    """Each account window the samples up to `until` saw, by its last sample: provider, account,
+    window, reset time, used percent, and whether it reset."""
     samples = collections.defaultdict(list)
     for provider, account, window, used, resets, at in routing.execute(
             "SELECT provider, account, window, used_percent, resets_at_ms, at_ms FROM quota_samples "
@@ -305,19 +309,59 @@ def wasted_quota(routing, until):
             # end). A reset time that moves back is another login on the same account slot.
             later = rows[i + 1] if i + 1 < len(rows) else None
             if resets is None:
+                last = later is None or later[1] < used
                 reset = later is not None and later[1] < used
             elif later is None:
-                reset = resets <= until
+                last, reset = True, resets <= until
             else:
-                reset = ((later[2] is None or abs(later[2] - resets) > RESET_SLACK_MS)
-                         and resets <= min(later[0], until))
-            if reset:
-                out[window_kind(window)].append({"provider": provider, "account": account, "window": window,
-                                                 "resets_at_ms": resets, "used_percent": used,
-                                                 "wasted_percent": round(100 - used, 2)})
+                last = later[2] is None or abs(later[2] - resets) > RESET_SLACK_MS
+                reset = last and resets <= min(later[0], until)
+            if last:
+                yield {"provider": provider, "account": account, "window": window, "resets_at_ms": resets,
+                       "used_percent": used, "reset": reset}
+
+
+def wasted_quota(routing, until):
+    out = collections.defaultdict(list)
+    if routing is None:
+        return {}
+    for w in windows(routing, until):
+        if w["reset"]:
+            out[window_kind(w["window"])].append({k: v for k, v in w.items() if k != "reset"}
+                                                 | {"wasted_percent": round(100 - w["used_percent"], 2)})
     return {kind: {"resets": len(rows), "wasted_percent": [r["wasted_percent"] for r in rows],
                    "mean": round(sum(r["wasted_percent"] for r in rows) / len(rows), 2), "windows": rows}
             for kind, rows in sorted(out.items())}
+
+
+def brain_per_window(routing, until):
+    """Brain jobs' share of each account window (#135), from `turn_usage` as it is recorded all
+    the time: the window's Brain tokens over all its tokens on that account, times its used
+    percent at the last sample, is the Brain's estimated part of the window. A model-scoped
+    weekly window (`seven_day_<family>`) counts only that family's rows."""
+    if routing is None:
+        return []
+    columns = {row[1] for row in routing.execute("PRAGMA table_info(turn_usage)")}
+    if "step" not in columns:
+        return []
+    account = "account" if "account" in columns else "''"
+    out = []
+    for w in windows(routing, until):
+        length = WINDOW_MS.get(window_kind(w["window"]))
+        if length is None or w["resets_at_ms"] is None:
+            continue
+        family = w["window"][len("seven_day_"):] if w["window"].startswith("seven_day_") else ""
+        total, brain = routing.execute(
+            "SELECT COALESCE(SUM(input + cached_input + cache_write + output), 0), "
+            "COALESCE(SUM(CASE WHEN step = 'brain' THEN input + cached_input + cache_write + output END), 0) "
+            f"FROM turn_usage WHERE provider = ? AND {account} = ? AND at_ms > ? AND at_ms <= ? AND model LIKE ?",
+            (w["provider"], w["account"], w["resets_at_ms"] - length, min(w["resets_at_ms"], until),
+             f"%{family}%")).fetchone()
+        share = brain / total if total else 0.0
+        out.append({k: v for k, v in w.items()} | {
+            "tokens": total, "brain_tokens": brain, "brain_share": round(share, 4),
+            "brain_percent": round(share * w["used_percent"], 2)})
+    return out
 
 
 def main():
@@ -342,6 +386,7 @@ def main():
                         for c in changes]},
         "escaped_bugs": escaped_bugs(log, changes, args.repo),
         "wasted_quota_at_reset": wasted_quota(routing, until),
+        "brain_quota_per_window": brain_per_window(routing, until),
         "tokens_per_merged_change": [{"conversation": c["conversation"], "merge_commit": c["merge_commit"],
                                       "by_model": c["tokens"], "total": sum(c["tokens"].values())} for c in changes],
         "skipped_untyped": log.skipped,

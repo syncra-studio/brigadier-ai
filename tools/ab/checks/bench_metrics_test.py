@@ -124,13 +124,21 @@ def build_routing(path):
     db = sqlite3.connect(path)
     db.execute("CREATE TABLE turn_usage (at_ms INTEGER, provider TEXT, model TEXT, conversation_id TEXT, "
                "project_id TEXT, task_id TEXT, input INTEGER, cached_input INTEGER, cache_write INTEGER, "
-               "output INTEGER)")
-    db.executemany("INSERT INTO turn_usage VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)", [
+               "output INTEGER, step TEXT, account TEXT NOT NULL DEFAULT '')")
+    db.executemany("INSERT INTO turn_usage (at_ms, provider, model, conversation_id, project_id, task_id, input, "
+                   "cached_input, cache_write, output, step, account) VALUES (?, ?, ?, NULL, 'p1', NULL, ?, 0, 0, 0, "
+                   "'brain', ?)", [
+        (T + 2 * HOUR, "claude", "opus", 1_494, ""),  # in the first 5-hour window: 1,494 of 3,000
+        (T + 3 * HOUR, "claude", "opus", 9_000, "acct-y"),  # another account
+    ])
+    db.executemany("INSERT INTO turn_usage (at_ms, provider, model, conversation_id, task_id, input, cached_input, "
+                   "cache_write, output) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
         (T + 500, "claude", "opus", "c1", None, 7, 0, 0, 0),  # before the opening message
         (T + 1_500, "claude", "opus", "c1", None, 100, 800, 50, 50),
         (T + 3_000, "claude", "sonnet", "c1", "t1", 400, 0, 0, 100),  # its task
         (T + 9_000, "claude", "opus", "c1", None, 999, 0, 0, 0),  # after the merge
         (T + 2_000, "codex", "gpt", "c4", "t2", 200, 50, 0, 50),
+        (T + 5 * HOUR // 2, "claude", "opus", "c9", None, 1_506, 0, 0, 0),  # a tab's turn in the 5-hour window
     ])
     db.execute("CREATE TABLE quota_samples (provider TEXT, window TEXT, used_percent REAL, resets_at_ms INTEGER, "
                "at_ms INTEGER, account TEXT NOT NULL DEFAULT '')")
@@ -201,6 +209,18 @@ class BenchMetrics(unittest.TestCase):
         self.assertEqual({k: (v["resets"], v["wasted_percent"]) for k, v in wasted.items()},
                          {"five_hour": (1, [30.0]), "weekly": (2, [40.0, 10.0])})
         self.assertEqual(wasted["weekly"]["mean"], 25.0)
+
+    def test_brain_quota_per_window(self):
+        rows = {(w["provider"], w["account"], w["window"], w["resets_at_ms"]): w
+                for w in self.out["brain_quota_per_window"]}
+        first = rows[("claude", "", "five_hour", T + 5 * HOUR + 30_000)]
+        self.assertEqual((first["tokens"], first["brain_tokens"], first["brain_share"], first["brain_percent"],
+                          first["reset"]), (3_000, 1_494, 0.498, 34.86, True))
+        # The weekly window began a week before its reset: c1's rows count too (5,506 in all).
+        weekly = rows[("claude", "", "seven_day", T + 3 * HOUR)]
+        self.assertEqual((weekly["tokens"], weekly["brain_tokens"], weekly["brain_percent"]), (5_506, 1_494, 16.28))
+        # Codex's windows saw no Brain rows.
+        self.assertEqual(rows[("codex", "acct-x", "secondary", T + 5 * HOUR)]["brain_tokens"], 0)
 
     def test_tokens_per_merged_change(self):
         tokens = [(t["conversation"], t["by_model"], t["total"]) for t in self.out["tokens_per_merged_change"]]
