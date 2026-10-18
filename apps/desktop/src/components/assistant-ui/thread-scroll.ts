@@ -151,6 +151,8 @@ export class ThreadScroller {
   private expected = 0;
   /** When the user last wheeled, touched, pressed or typed in the thread, or jumped in it. */
   private inputAtMs = Number.NEGATIVE_INFINITY;
+  /** The code is moving the view for the user (`release`), and its scroll isn't heard yet. */
+  private jumped = false;
   /** A pointer is held down in the thread (dragging the scrollbar, selecting text). */
   private pressed = false;
   /** When a scroll last was the user's. */
@@ -309,6 +311,9 @@ export class ThreadScroller {
     // Shown again: the browser may have reset the view's top while it was hidden.
     const shown = this.hidden;
     this.hidden = false;
+    // A jump's move made in a frame callback is heard as a scroll only with the next frame, after
+    // a resize in this one: the view is where the jump put it, not at the anchor from before.
+    if (this.jumped && Math.abs(viewport.scrollTop - this.expected) >= 1) this.scrolled();
     const wasAtBottom = this.atBottom;
     this.updateRoom();
     const contentChanged = layout.content() !== this.contentHeight;
@@ -358,6 +363,7 @@ export class ThreadScroller {
       this.resized();
       return;
     }
+    this.jumped = false;
     const max = maxScroll(viewport);
     const clamped = this.expected > max && Math.abs(viewport.scrollTop - max) < 1;
     if (clamped || Math.abs(viewport.scrollTop - this.expected) < 1) {
@@ -423,6 +429,7 @@ export class ThreadScroller {
    */
   release = (): void => {
     this.inputAtMs = performance.now();
+    this.jumped = true;
     this.interrupt();
     this.follow = false;
     this.watch = false;

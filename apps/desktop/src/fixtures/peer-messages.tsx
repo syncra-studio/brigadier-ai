@@ -733,6 +733,10 @@ async function driveGallery(): Promise<object> {
 }
 
 async function driveJump(): Promise<object> {
+  // The replies' renderer loads with the first reply. A slow dev server (a loaded machine) could
+  // have it arrive just after a landing, its replies' loading lines giving way and moving the
+  // message off the centre: the app's own bundle has it at once.
+  await import("@/components/assistant-ui/markdown-text");
   await shown(API);
   await wait(300);
   const before = dots();

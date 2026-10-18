@@ -1093,6 +1093,23 @@ test("a jump the code makes for the user (a message revealed) stays; a scroll wi
   assert.equal(scroller.following, false);
 });
 
+test("a jump's move is kept when the content resizes before its scroll is heard", () => {
+  const fake = new Fake();
+  conversation(fake, 10);
+  const scroller = open(fake);
+  assert.equal(fake.scrollTop, fake.max);
+  // A message revealed from a frame callback: the view moved, and in the same frame the content
+  // below it shrinks, its resize heard before the jump's scroll (which comes with the next frame).
+  jumpInThread({ closest: () => fake } as unknown as Element);
+  fake.scrollTop = 800;
+  fake.rows.at(-1)!.height = 100;
+  scroller.resized();
+  assert.equal(fake.scrollTop, 800);
+  scroller.scrolled();
+  assert.equal(fake.scrollTop, 800);
+  assert.equal(scroller.following, false);
+});
+
 test("a fling that goes on long after the user's touch is still theirs, and reaching the bottom follows again", () => {
   const now = performance.now;
   let clock = 10_000;
