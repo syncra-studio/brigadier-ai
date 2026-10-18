@@ -49,9 +49,9 @@ export function SessionStatusLabel({
       )}
     >
       {busy && <Spinner aria-hidden className="size-icon-sm shrink-0 animate-spin motion-reduce:animate-none" />}
-      <span className="min-w-0 overflow-hidden text-ellipsis">{TAB_STATE_WORDS[state].one}</span>
-      {/* It gives way first. */}
-      {status.reason && <span className="min-w-0 shrink-1000 overflow-hidden text-ellipsis"> · {status.reason}</span>}
+      <span className="shrink-0">{TAB_STATE_WORDS[state].one}</span>
+      {/* Only the reason gives way: a weighted shrink isn't kept to in WebKit. */}
+      {status.reason && <span className="min-w-0 overflow-hidden text-ellipsis"> · {status.reason}</span>}
     </span>
   );
 }
