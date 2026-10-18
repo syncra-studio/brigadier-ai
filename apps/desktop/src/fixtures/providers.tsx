@@ -7,8 +7,9 @@ import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { accounts, overviews, previewRoutes, projects, rankings, rules, usageView } from "@/fixtures/routingData";
-import type { Request } from "@/ipc/generated";
+import type { AgentConnect, ProviderOverview, Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
+import { applyConnectEvents } from "@/state/connect";
 import { useApp } from "@/state/store";
 import { useUpdates } from "@/state/updates";
 
@@ -18,6 +19,8 @@ import { useUpdates } from "@/state/updates";
  * page's link, searches for a row that moved to Routing and shows this computer's login added
  * again, writing what it saw to #providers-result (ProvidersPageRender.test.ts reads it).
  * Without it the page stays as it opens, for screenshots; ?agent=claude opens Claude's page.
+ * ?drive=missing starts with Codex not on this computer and walks its Set up (Connect) through
+ * a failed install, Try again, its sign-in and the agent coming in, to #providers-result too.
  */
 const params = new URLSearchParams(location.search);
 // Driven, nothing animates or blurs (see the archived chats fixture).
@@ -28,14 +31,41 @@ if (params.has("drive")) {
   document.head.append(still);
 }
 
+const missing = params.get("drive") === "missing";
+/** Codex as the daemon finds it, in the missing drive: nowhere at first. */
+const missingCodex = (fields: Partial<NonNullable<ProviderOverview["status"]>>) =>
+  overviews.map((entry) =>
+    entry.provider === "codex" && entry.status ? { ...entry, status: { ...entry.status, ...fields } } : entry,
+  );
+
 useApp.setState((state) => ({
   info: { ...state.info, platform: "macos" } as typeof state.info,
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
   settings: { ...state.settings, routingOverrides: rules, routingRankings: rankings, switchAccounts: true },
   projects,
   accounts: { accounts, warnings: [] },
-  providers: { ...state.providers, view: { providers: overviews, sessions: [], fixtures: [] } },
+  providers: {
+    ...state.providers,
+    view: {
+      providers: missing ? missingCodex({ path: null, version: null, loggedIn: false, plan: null }) : overviews,
+      sessions: [],
+      fixtures: [],
+    },
+  },
 }));
+
+/** What the faked daemon publishes as Connect's view, in the missing drive. */
+const codexAt = (progress: AgentConnect["progress"] | null) =>
+  applyConnectEvents([
+    {
+      seq: 0,
+      stream: "connect",
+      kind: "agent.connectChanged",
+      atMs: Date.now(),
+      event: { type: "agentConnectChanged", connect: { agents: progress ? [{ provider: "codex", progress }] : [] } },
+    },
+  ] as never);
+const asked: string[] = [];
 
 /** What Location's Change picks, in turn. */
 const picks = ["/opt/elsewhere/claude", "/opt/homebrew/bin/claude"];
@@ -78,6 +108,14 @@ mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
+    case "connectAgent":
+      asked.push(`connectAgent ${req.provider}`);
+      codexAt({ type: "installing" });
+      return { method: req.method };
+    case "cancelConnect":
+      asked.push(`cancelConnect ${req.provider}`);
+      codexAt(null);
+      return { method: req.method };
     case "getAccounts":
       return { method: req.method, accounts: { accounts: listed, warnings: [] } };
     case "updateSettings": {
@@ -145,7 +183,51 @@ function Fixture() {
     }
     if (!params.has("drive")) return;
     const seen: Record<string, unknown> = {};
-    const steps: (() => void)[] = [
+    const notSetUp = () =>
+      all('[data-slot="agent-not-set-up"]').map((row) => ({
+        text: text(row.querySelector(".flex-1")),
+        status: text(row.querySelector('[data-slot="connect-status"] [role="status"]')),
+        buttons: all<HTMLButtonElement>("button", row).map((element) => `${text(element)}${element.disabled ? " (off)" : ""}`),
+      }));
+    const steps: (() => void)[] = missing
+      ? [
+          () => {
+            seen.agents = all('[data-slot="agent-row"]').map((row) => row.dataset.setting);
+            seen.before = notSetUp();
+            all<HTMLButtonElement>("button", document.querySelector('[data-slot="agent-not-set-up"]') ?? document)
+              .find((element) => text(element) === "Set up")
+              ?.click();
+          },
+          () => {
+            seen.installing = notSetUp();
+            codexAt({ type: "failed", step: "install", error: "Codex couldn't be installed. Try again." });
+          },
+          () => {
+            seen.failed = notSetUp();
+            button("Try again")?.click();
+          },
+          () => {
+            // Installed and found: it moves up to the agents, its sign-in open in the browser.
+            useApp.setState((state) => ({
+              providers: {
+                ...state.providers,
+                view: { providers: missingCodex({ path: "/Users/me/.local/bin/codex", loggedIn: false, plan: null }), sessions: [], fixtures: [] },
+              },
+            }));
+            codexAt({ type: "signingIn" });
+          },
+          () => {
+            seen.signingIn = all('[data-slot="agent-row"]').map((row) => ({
+              name: row.dataset.setting,
+              state: text(row.querySelector('[data-slot="agent-state"]')),
+            }));
+            seen.notSetUpAfter = notSetUp().length;
+            seen.terminals = document.querySelectorAll(".xterm").length;
+            seen.asked = asked;
+            setResult(JSON.stringify(seen));
+          },
+        ]
+      : [
       () => {
         seen.title = text(document.querySelector('[data-slot="settings-page"] h1'));
         const column = document.querySelector('[data-slot="settings-page"] h1')?.closest(".mx-auto");

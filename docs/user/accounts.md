@@ -6,9 +6,10 @@ Brigadier account.
 ## Your own login
 
 The account your terminal's `claude` or `codex` is signed in to is the first account. Brigadier
-and your terminal share it. If a CLI isn't signed in yet, Brigadier's first screen and
-**Settings › Providers** offer **Sign in**: it runs the CLI's own sign-in (`claude auth login`,
-`codex login`).
+and your terminal share it. If a CLI isn't installed or signed in yet, Brigadier's first screen
+(**Connect**) and **Settings › Providers** (**Set up**, **Sign in**) install it with its maker's
+own installer and run its own sign-in (`claude auth login`, `codex login`), which opens in your
+browser.
 
 ## More than one account
 

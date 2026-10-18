@@ -1,9 +1,10 @@
 import { ChevronRight, InfoCircle } from "@openai/apps-sdk-ui/components/Icon";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
-import { agentState, SetupTerminal } from "@/app/onboarding/SetupTerminal";
+import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
+import { agentState } from "@/app/onboarding/SetupTerminal";
 import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows";
 import { CLI_NAMES } from "@/app/providers/AgentsOverview";
 import {
@@ -24,6 +25,7 @@ import { isExpensive, TIER_LABELS, VENDOR_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { refreshProviders } from "@/state/actions";
 import { refreshAccounts } from "@/state/accounts";
+import { connectAgent, connecting, useConnectProgress } from "@/state/connect";
 import { modelAvailable, providerOn, setModelAvailable, setProviderOn } from "@/state/providers";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
@@ -168,11 +170,16 @@ function Installation({
   const updateError = useUpdates((s) => s.errors[provider] ?? null);
   const chosen = useApp((s) => s.settings.agentPaths.find((entry) => entry.provider === provider)?.path ?? null);
   const location = useAction();
-  // Installing or signing in; its terminal closes by itself once that is done.
-  const [setup, setSetup] = useState<{ install: boolean } | null>(
-    signIn && state === "signIn" ? { install: false } : null,
-  );
-  const settingUp = setup && state === (setup.install ? "install" : "signIn") ? setup : null;
+  // Install and Sign in are Connect: the agent's own installer, then its own sign-in.
+  const progress = useConnectProgress(provider);
+  const settingUp = connecting(progress);
+  // The agents list's Sign in starts it as the page opens, once.
+  const started = useRef(false);
+  useEffect(() => {
+    if (!signIn || started.current || state !== "signIn") return;
+    started.current = true;
+    void connectAgent(provider);
+  }, [signIn, state, provider]);
 
   let version: string;
   let action = null;
@@ -180,7 +187,7 @@ function Installation({
   else if (state === "install") {
     version = "Not installed";
     action = (
-      <ProvidersButton disabled={settingUp !== null} onClick={() => setSetup({ install: true })}>
+      <ProvidersButton disabled={settingUp} onClick={() => void connectAgent(provider)}>
         Install
       </ProvidersButton>
     );
@@ -192,7 +199,7 @@ function Installation({
     else version = `${current} · up to date`;
     if (state === "signIn") {
       action = (
-        <ProvidersButton disabled={settingUp !== null} onClick={() => setSetup({ install: false })}>
+        <ProvidersButton disabled={settingUp} onClick={() => void connectAgent(provider)}>
           Sign in
         </ProvidersButton>
       );
@@ -242,19 +249,7 @@ function Installation({
           </div>
           {action}
         </div>
-        {settingUp && (
-          <div className="pt-3">
-            <SetupTerminal
-              key={String(settingUp.install)}
-              provider={provider}
-              install={settingUp.install}
-              onClose={() => {
-                setSetup(null);
-                void refreshProviders(provider).catch(() => {});
-              }}
-            />
-          </div>
-        )}
+        {state !== "ready" && <ConnectStatus provider={provider} className="pt-3" />}
       </div>
       {state !== "install" && (
         <div data-slot="agent-location" className="flex items-center gap-6 py-4">

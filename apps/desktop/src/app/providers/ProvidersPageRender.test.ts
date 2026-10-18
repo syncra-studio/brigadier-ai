@@ -116,3 +116,26 @@ test("an account's name and editor keep its email masked unless its row is revea
     await server.close();
   }
 });
+
+// An agent not on this computer: its Set up is Connect (its own installer, then its own sign-in,
+// no terminal): it says how the install goes, a failure plainly with Try again, and once
+// installed the agent joins the list, signing in.
+test("Providers sets up a missing agent with Connect", { timeout: 60000 }, async (t) => {
+  const dump = await renderFixtureLive(t, "providers.html?drive=missing", "providers-result", 30000);
+  const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
+  assert.deepEqual(seen.agents, ["Claude"]);
+  assert.deepEqual(seen.before, [{ text: "CodexCodex CLI · not installed", status: "", buttons: ["Set up"] }]);
+  assert.deepEqual(seen.installing, [
+    { text: "CodexCodex CLI · not installed", status: "Installing Codex… This takes a minute or two.", buttons: ["Set up (off)", "Cancel"] },
+  ]);
+  assert.deepEqual(seen.failed, [
+    { text: "CodexCodex CLI · not installed", status: "Codex couldn't be installed. Try again.", buttons: ["Set up", "Try again"] },
+  ]);
+  assert.deepEqual(seen.signingIn, [
+    { name: "Claude", state: "Ready · 3 accounts · v2.1.0" },
+    { name: "Codex", state: "Not signed in" },
+  ]);
+  assert.equal(seen.notSetUpAfter, 0);
+  assert.equal(seen.terminals, 0);
+  assert.deepEqual(seen.asked, ["connectAgent codex", "connectAgent codex"]);
+});

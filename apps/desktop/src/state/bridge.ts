@@ -27,6 +27,7 @@ import { emitSearchUpdate } from "@/state/workspaceSearch";
 import { startAppUpdate } from "@/state/appUpdate";
 import { startPagesFlush } from "@/state/pagesFlush";
 import { applyUpdateEvents, loadUpdates } from "@/state/updates";
+import { applyConnectEvents, loadConnect } from "@/state/connect";
 import { applyUsageEvents } from "@/state/usage";
 import { onDictationDisconnected, onDictationUpdate } from "@/state/dictation";
 import { openFeedback } from "@/state/feedback";
@@ -51,6 +52,7 @@ function flush() {
   applyBrainEvents(batch);
   applyUsageEvents(batch);
   applyUpdateEvents(batch);
+  applyConnectEvents(batch);
   noteFlush(started, batch.map(({ event }) => event.type));
   for (const { atMs, event } of batch) {
     markApplied(atMs, event.type === "probe" ? event.burstId : null);
@@ -73,7 +75,7 @@ async function resync() {
   });
   // Ready and merged count commits in each tab's worktree: they come when they come.
   void loadSettledTabs().catch(() => {});
-  await Promise.all([loadCatalog(), loadActivity(), loadUpdates()]);
+  await Promise.all([loadCatalog(), loadActivity(), loadUpdates(), loadConnect()]);
   const log = useBoard.getState().orchestrator;
   if (log) void openOrchestratorLog(log.conversationId);
   await Promise.all([...shown.map((id) => loadConversation(id, { fresh: true })), reloadSessionTasks()]);

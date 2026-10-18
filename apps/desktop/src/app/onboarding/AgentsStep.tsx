@@ -3,8 +3,9 @@ import { useEffect, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
+import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
 import { SectionLabel, StepFooter, StepHeader } from "@/app/onboarding/parts";
-import { type AgentState, agentState, checkAgents, SetupTerminal } from "@/app/onboarding/SetupTerminal";
+import { type AgentState, agentState, checkAgents } from "@/app/onboarding/SetupTerminal";
 import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -16,18 +17,13 @@ import { shortPath } from "@/lib/format";
 import { providerStatusText } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { accountsOf, loadAccounts, refreshAccounts } from "@/state/accounts";
+import { connectAgent, connecting, useConnectProgress } from "@/state/connect";
 import { useApp } from "@/state/store";
 
 const PROVIDERS: readonly ProviderKind[] = ["claude", "codex"];
 
-/** Whose account each agent works with, in its column's line. */
-const ACCOUNT_OF: Record<ProviderKind, string> = { claude: "Claude", codex: "OpenAI" };
-
 /** The note under the step's buttons. */
 const MORE_LATER = "You can connect more accounts anytime in Settings.";
-
-/** An agent's own page: which one, and whether its install or sign-in should start at once. */
-type Detail = { provider: ProviderKind; start: boolean };
 
 function useAgents() {
   const providers = useApp((s) => s.providers.view?.providers);
@@ -38,10 +34,10 @@ function useAgents() {
 }
 
 /**
- * Connecting the agents: Claude Code and Codex side by side, each with its logo, how it stands
- * and the one button that gets it working (Install, Sign in) or, once it works, opens its page
- * with its accounts. While an agent's page is open it takes Escape (through `onEscape`), back to
- * both.
+ * Connecting the agents: Claude Code and Codex side by side, each with its logo, Connected or
+ * Not connected, and the one button that gets it working (Connect: Brigadier installs what is
+ * missing and opens the agent's own sign-in) or, once it works, opens its page with its
+ * accounts. While an agent's page is open it takes Escape (through `onEscape`), back to both.
  */
 export function AgentsStep({
   name,
@@ -57,7 +53,7 @@ export function AgentsStep({
 }) {
   const connected = useApp((s) => s.connection.status === "connected");
   const agents = useAgents();
-  const [detail, setDetail] = useState<Detail | null>(null);
+  const [detail, setDetail] = useState<ProviderKind | null>(null);
   const recheck = useAction();
 
   useEffect(() => {
@@ -74,14 +70,13 @@ export function AgentsStep({
   }, [detail, onEscape]);
 
   if (detail) {
-    const agent = agents.find((entry) => entry.provider === detail.provider);
+    const agent = agents.find((entry) => entry.provider === detail);
     return (
       <AgentPage
-        key={detail.provider}
-        provider={detail.provider}
+        key={detail}
+        provider={detail}
         overview={agent?.overview}
         state={agent?.state ?? "checking"}
-        start={detail.start}
         onBack={() => setDetail(null)}
       />
     );
@@ -95,7 +90,7 @@ export function AgentsStep({
       : ready > 0
         ? "You're connected and ready to go. Add the other agent anytime."
         : allChecked
-          ? "Sign in to an agent you already use. Brigadier works through it with your own subscription."
+          ? "Connect Claude Code or Codex with your own subscription. Brigadier sets up whatever is missing."
           : "Looking for the agents on this computer…";
 
   return (
@@ -113,7 +108,7 @@ export function AgentsStep({
               provider={provider}
               overview={overview}
               state={state}
-              onOpen={(start) => setDetail({ provider, start })}
+              onOpen={() => setDetail(provider)}
             />
           ))}
         </div>
@@ -121,7 +116,7 @@ export function AgentsStep({
           <div className="bg-muted/25 rounded-surface max-w-onboarding-agents mx-auto flex w-full items-center gap-3 border px-4 py-3">
             <ExclamationMarkCircle className="text-warning size-icon-md shrink-0" />
             <p className="min-w-0 flex-1 text-sm">
-              Sign in to at least one agent to continue: sessions run through it.
+              Connect at least one agent to continue: your work runs through it.
             </p>
             <Button size="sm" variant="ghost" disabled={recheck.busy} onClick={() => recheck.run(checkAgents)}>
               <Reload />
@@ -155,23 +150,25 @@ function AgentColumn({
   provider: ProviderKind;
   overview: ProviderOverview | undefined;
   state: AgentState;
-  /** Opens its page; `start`: begin its install or sign-in there at once. */
-  onOpen: (start: boolean) => void;
+  /** Opens its page (once it is connected). */
+  onOpen: () => void;
 }) {
   const label = PROVIDER_LABELS[provider];
+  const progress = useConnectProgress(provider);
   const ready = state === "ready";
+  // Connect said Connected and the agent's check is on its way: still busy until it arrives.
+  const busy = !ready && (connecting(progress) || progress?.type === "connected");
+  const plan = overview?.status?.plan;
   return (
-    <section className="flex min-w-0 flex-col items-center text-center">
+    <section data-slot="agent-column" className="flex min-w-0 flex-col items-center text-center">
       <AgentMark provider={provider} />
       <h2 className="mt-8 text-xl font-medium">{label}</h2>
-      <p className="text-muted-foreground mt-1.5 mb-6 text-sm">
-        Work with your {ACCOUNT_OF[provider]} account.
-      </p>
+      <p className="text-muted-foreground mt-1.5 mb-6 text-sm">Works with your own subscription.</p>
       <Button
         size="lg"
-        disabled={state === "checking"}
+        disabled={state === "checking" || busy}
         aria-label={ready ? `Manage ${label}` : undefined}
-        onClick={() => onOpen(!ready)}
+        onClick={() => (ready ? onOpen() : void connectAgent(provider))}
         className={cn(
           "w-full gap-2",
           ready && "bg-success/15 text-success hover:bg-success/20",
@@ -187,36 +184,52 @@ function AgentColumn({
             Connected
             <Check />
           </>
+        ) : busy ? (
+          <>
+            <Spinner className="animate-spin" />
+            Connecting…
+          </>
         ) : (
           <>
-            {state === "install" ? `Install ${label}` : `Sign in to ${label}`}
+            {progress?.type === "failed" ? "Try again" : "Connect"}
             <ArrowRight />
           </>
         )}
       </Button>
-      <output className="text-muted-foreground mt-2.5 min-h-4 truncate text-xs">
-        {state === "checking" ? "" : providerStatusText(overview)}
-      </output>
+      <div className="mt-2.5 flex min-h-8 w-full flex-col items-center">
+        {busy || progress?.type === "failed" ? (
+          <ConnectStatus provider={provider} retry={false} className="w-full justify-center text-start" />
+        ) : (
+          <output data-slot="agent-connection" className="text-muted-foreground truncate text-xs">
+            {state === "checking"
+              ? ""
+              : ready
+                ? plan
+                  ? `Connected · ${plan.charAt(0).toUpperCase()}${plan.slice(1)} plan`
+                  : "Connected"
+                : "Not connected"}
+          </output>
+        )}
+      </div>
     </section>
   );
 }
 
 /**
- * One agent's page: how it stands (with Check again), its install or sign-in in a terminal
- * while it needs one, and once it works its accounts, where another can be added. Leaving it
- * cancels a sign-in still under way (ProviderAccounts removes an account that never signed in).
+ * One agent's page: how it stands (with Check again), Connect while it needs installing or
+ * signing in, and once it works its accounts, where another can be added. Leaving it cancels
+ * an extra account's sign-in still under way (ProviderAccounts removes an account that never
+ * signed in).
  */
 function AgentPage({
   provider,
   overview,
   state,
-  start,
   onBack,
 }: {
   provider: ProviderKind;
   overview: ProviderOverview | undefined;
   state: AgentState;
-  start: boolean;
   onBack: () => void;
 }) {
   const label = PROVIDER_LABELS[provider];
@@ -224,11 +237,8 @@ function AgentPage({
   const revealed = useRevealedEmails();
   const now = useNow(30_000);
   const recheck = useAction();
+  const progress = useConnectProgress(provider);
   const needs = state === "install" || state === "signIn";
-  // The install or sign-in under way, and the state it began from: its terminal closes by
-  // itself once the agent moves on.
-  const [setup, setSetup] = useState<AgentState | null>(() => (start && needs ? state : null));
-  const settingUp = setup !== null && setup === state;
 
   useEffect(() => {
     loadAccounts().catch((error: unknown) => console.error("reading the accounts failed", error));
@@ -269,28 +279,15 @@ function AgentPage({
           {needs && (
             <section className="flex flex-col gap-3">
               <SectionLabel label="Get started" />
-              {settingUp ? (
-                <SetupTerminal
-                  key={state}
-                  provider={provider}
-                  install={state === "install"}
-                  onClose={() => {
-                    setSetup(null);
-                    void checkAgents();
-                  }}
-                />
-              ) : (
-                <div className="bg-muted/25 rounded-surface flex items-center gap-3 border px-4 py-3">
-                  <p className="min-w-0 flex-1 text-sm">
-                    {state === "install"
-                      ? `${label} isn't installed on this computer yet.`
-                      : `${label} is installed but not signed in.`}
-                  </p>
-                  <Button size="sm" onClick={() => setSetup(state)}>
-                    {state === "install" ? "Install" : "Sign in"}
+              <div className="bg-muted/25 rounded-surface flex flex-col gap-3 border px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <p className="min-w-0 flex-1 text-sm">{label} isn't connected yet.</p>
+                  <Button size="sm" disabled={connecting(progress)} onClick={() => void connectAgent(provider)}>
+                    Connect
                   </Button>
                 </div>
-              )}
+                <ConnectStatus provider={provider} retry={false} />
+              </div>
             </section>
           )}
           {state === "ready" && (

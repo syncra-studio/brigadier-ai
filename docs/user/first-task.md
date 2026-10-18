@@ -6,9 +6,10 @@ The first time you open Brigadier it walks you through four short screens.
 
 1. **Welcome.** Press **Continue**.
 2. **Your name.** What Brigadier calls you.
-3. **Connect your agents.** Claude Code and Codex side by side. Each shows **Install**,
-   **Sign in** or **Connected ✓**. Install runs the agent's official install script; Sign in runs
-   its own sign-in. You need at least one connected to continue; both is better, because each
+3. **Connect your agents.** Claude Code and Codex side by side, each **Connected** or
+   **Not connected**. **Connect** installs the agent with its maker's own installer when it's
+   missing, then opens its own sign-in in your browser; once you've signed in there it shows
+   **Connected ✓**. You need at least one connected to continue; both is better, because each
    reviews the other's work.
 4. **Choose your projects.** Brigadier suggests the repositories you have used with Claude Code or
    Codex lately. Pick some, **Add a folder…**, or **Continue without projects**.

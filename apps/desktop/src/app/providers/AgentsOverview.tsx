@@ -1,9 +1,10 @@
 import { ArrowUpRight, ChevronRight, Plus } from "@openai/apps-sdk-ui/components/Icon";
-import { type KeyboardEvent, type MouseEvent, useState } from "react";
+import type { KeyboardEvent, MouseEvent } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
-import { agentState, SetupTerminal } from "@/app/onboarding/SetupTerminal";
+import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
+import { agentState } from "@/app/onboarding/SetupTerminal";
 import {
   AgentMark,
   PlanChip,
@@ -25,8 +26,9 @@ import type { AccountView, ProviderKind, ProviderOverview, QuotaWindow } from "@
 import { used, windowTitle } from "@/lib/quota";
 import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
-import { openSettings, refreshProviders } from "@/state/actions";
+import { openSettings } from "@/state/actions";
 import { accountsOf, oneRowPerAccount } from "@/state/accounts";
+import { connectAgent, connecting, useConnect } from "@/state/connect";
 import { providerOn, setProviderOn } from "@/state/providers";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
@@ -48,7 +50,8 @@ export const CLI_NAMES: Record<ProviderKind, string> = { claude: "Claude Code CL
 /**
  * Settings › Providers' first page: the fallback switch, the agents Brigadier runs (how each
  * stands, the busiest limit of the account in use, its switch; a row opens the agent's page),
- * the agents not installed yet with Set up, and Add another agent.
+ * the agents not installed yet with Set up (Connect: installed by their own installer, then
+ * signed in), and Add another agent.
  */
 export function AgentsOverview({
   overviews,
@@ -64,12 +67,13 @@ export function AgentsOverview({
 }) {
   const settings = useApp((s) => s.settings);
   const switching = useAction();
-  // The agent being installed; its terminal closes by itself once the agent is found.
-  const [installing, setInstalling] = useState<ProviderKind | null>(null);
   const overviewOf = (provider: ProviderKind) => overviews?.find((entry) => entry.provider === provider);
   const installed = PROVIDERS.filter((provider) => agentState(overviewOf(provider)) !== "install");
   const missing = PROVIDERS.filter((provider) => agentState(overviewOf(provider)) === "install");
-  const settingUp = installing && missing.includes(installing) ? installing : null;
+  // The agents Connect is installing or signing in now.
+  const connects = useConnect((s) => s.view?.agents);
+  const settingUp = (provider: ProviderKind) =>
+    connects?.some((agent) => agent.provider === provider && connecting(agent.progress)) ?? false;
 
   return (
     <div data-slot="agents-overview" className="flex flex-col gap-10">
@@ -143,22 +147,11 @@ export function AgentsOverview({
                     {CLI_NAMES[provider]} · not installed
                   </span>
                 </div>
-                <SetUpButton disabled={settingUp !== null} onClick={() => setInstalling(provider)}>
+                <SetUpButton disabled={settingUp(provider)} onClick={() => void connectAgent(provider)}>
                   Set up
                 </SetUpButton>
               </div>
-              {settingUp === provider && (
-                <div className="px-3 pb-3.5">
-                  <SetupTerminal
-                    provider={provider}
-                    install
-                    onClose={() => {
-                      setInstalling(null);
-                      void refreshProviders(provider).catch(() => {});
-                    }}
-                  />
-                </div>
-              )}
+              <ConnectStatus provider={provider} className="px-3 pb-3.5" />
             </div>
           ))}
           <DropdownMenu modal={false}>
@@ -177,8 +170,8 @@ export function AgentsOverview({
                 return (
                   <DropdownMenuItem
                     key={provider}
-                    disabled={added || settingUp !== null}
-                    onSelect={() => setInstalling(provider)}
+                    disabled={added || settingUp(provider)}
+                    onSelect={() => void connectAgent(provider)}
                   >
                     <AgentMark provider={provider} idle />
                     <span className="flex-1">{VENDOR_LABELS[provider]}</span>
