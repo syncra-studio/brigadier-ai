@@ -911,7 +911,7 @@ async fn parted_note(repo: &Path, branch: &str, sha: &str) -> String {
 
 /// What the thread does on a red run: the fix reaches the watched branch the way its changes
 /// always do, so a base branch here and on the remote never part.
-pub(crate) const FIX_THE_FAILURE: &str = "\nFix the failure (a worker, or a tiny fix of your own) and land it the way the watched branch takes changes: a session branch directly; a base branch like `main` only through the usual merge into it here, then push that branch, never a commit the local branch doesn't have. Then watch again: the user's yes to watching covers the push and the watch, and nothing else; the merge follows its usual rules.";
+pub(crate) const FIX_THE_FAILURE: &str = "\nFix the failure (a worker, or a tiny fix of your own) and land it the way the watched branch takes changes: a session branch directly; a base branch like `main` only through the usual merge into it here, then push that branch, never a commit the local branch doesn't have. Then watch again; the merge follows its usual rules.";
 
 /// How the thread says a CI result that isn't a failure to fix: the request's answer when it
 /// has none yet, else one update line under it (`prompts::LATE_EVENT`), never a new ending.
