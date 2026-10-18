@@ -3,7 +3,8 @@
  * with its own title and state, archived sessions left out, and a click that opens the session.
  * The sessions of what was once a workspace are plain sessions too. `close=1` adds the open
  * session's tab bar: closing a working session's tab stops nothing and a click on its row opens
- * it again. Writes what it saw to #sessions-result (SessionsRender.test.ts reads it).
+ * it again. The sessions that need the user come first, and the project counts them; one that
+ * starts needing the user moves up. Writes what it saw to #sessions-result (SessionsRender.test.ts reads it).
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -101,6 +102,10 @@ const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const until = async (check: () => boolean) => { for (let n = 0; n < 200 && !check(); n++) await wait(20); };
 const rowButton = (title: string) => [...document.querySelectorAll<HTMLButtonElement>("li li button")].find((button) => button.textContent?.includes(title));
+const needYou = () => {
+  const count = document.querySelector<HTMLElement>('[data-slot="need-you-count"]');
+  return count ? { text: count.textContent?.trim(), title: count.title } : null;
+};
 const rowStatus = (title: string) => rows().find((row) => row.title === title)?.status ?? null;
 
 const close = () => document.querySelector<HTMLButtonElement>('[data-slot="session-tabs"] button[aria-label="Close Lone worker tab"]');
@@ -151,12 +156,18 @@ function Fixture() {
       return () => { disposed = true; };
     }
     const timer = setTimeout(() => {
-      const seen: Record<string, unknown> = { rows: rows() };
+      const seen: Record<string, unknown> = { rows: rows(), count: needYou() };
       rowButton("Header")!.click();
       setTimeout(() => {
         seen.opened = useApp.getState().selection;
         seen.activeAfter = rows().filter((row) => row.active).map((row) => row.title);
-        setResult(JSON.stringify(seen));
+        // "Old fix" asks for an approval: it moves up among those that need the user.
+        useActivity.setState((state) => ({ byConversation: { ...state.byConversation, ...Object.fromEntries([activity("w8-a", { approvals: ["a-2"] })]) } }));
+        setTimeout(() => {
+          seen.rowsAfter = rows().map((row) => row.title);
+          seen.countAfter = needYou();
+          setResult(JSON.stringify(seen));
+        }, 100);
       }, 100);
     }, 300);
     return () => clearTimeout(timer);
