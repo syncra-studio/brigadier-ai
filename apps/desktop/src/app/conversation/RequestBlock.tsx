@@ -24,6 +24,7 @@ import { WorkFold } from "@/app/conversation/WorkFold";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { ImagesRow, MadeImages } from "@/app/conversation/activity/ImageRows";
+import { MergeMessage } from "@/app/conversation/activity/MergeMessage";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
@@ -890,6 +891,7 @@ export const RequestBlock: FC = () => {
       </StoppedBy.Provider>
       {/* A run's work is merged from its card, never undone behind the run's back. */}
       {!live && <MadeImages steps={meta.orchestratorSteps} />}
+      {!live && <MergeMessage steps={meta.orchestratorSteps} />}
       {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestIds={meta.requestIds} />}
       {!live && answer !== null && <AnswerFilesOf index={answer} requestIds={meta.requestIds} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}

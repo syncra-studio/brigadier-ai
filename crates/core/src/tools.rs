@@ -325,6 +325,19 @@ pub struct ReviewCandidate {
     pub wait_seconds: Option<u64>,
 }
 
+/// `attach_proof`: a screenshot or short recording the thread made of the change, shown with
+/// its reply (the merge message's proof).
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AttachProof {
+    /// The image (PNG, JPEG, GIF, WebP) or recording (MP4, MOV, WebM) file, at most 11 MB;
+    /// relative to your checkout.
+    pub path: String,
+    /// What it shows, in a few words.
+    #[serde(default)]
+    pub caption: Option<String>,
+}
+
 /// `start_verifier`: a verifier of a reported implement task, or with `fresh` one that gets
 /// only the request, the constraints, the criteria and the candidate commit.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -1220,6 +1233,7 @@ pub enum OrchestratorCall {
     ApproveOutline(ApproveOutline),
     StartVerifier(StartVerifier),
     ReviewCandidate(ReviewCandidate),
+    AttachProof(AttachProof),
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
     FinishSession(FinishSession),
@@ -1275,6 +1289,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "approve_outline",
     "start_verifier",
     "review_candidate",
+    "attach_proof",
     "request_approval",
     "land_phase",
     "finish_session",
@@ -1331,6 +1346,7 @@ impl OrchestratorCall {
             Self::ApproveOutline(_) => "approve_outline",
             Self::StartVerifier(_) => "start_verifier",
             Self::ReviewCandidate(_) => "review_candidate",
+            Self::AttachProof(_) => "attach_proof",
             Self::RequestApproval(_) => "request_approval",
             Self::LandPhase(_) => "land_phase",
             Self::FinishSession(_) => "finish_session",

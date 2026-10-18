@@ -66,6 +66,8 @@ const PLUMBING = new Set([
   "remember",
   // Its review shows as the review's own row.
   "review_candidate",
+  // Its proof shows under the reply.
+  "attach_proof",
   "route_follow_up",
   "list_tasks",
   "land_phase",

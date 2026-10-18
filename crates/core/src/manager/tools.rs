@@ -550,6 +550,9 @@ impl SessionManager {
             OrchestratorCall::ReviewCandidate(args) => {
                 crate::heap(|| self.review_candidate(id, args)).await
             }
+            OrchestratorCall::AttachProof(args) => {
+                crate::heap(|| self.attach_proof(id, args)).await
+            }
             OrchestratorCall::RequestApproval(args) => {
                 crate::heap(|| {
                     self.open_approval(

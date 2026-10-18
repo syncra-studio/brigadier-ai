@@ -2125,6 +2125,20 @@ pub enum OrchestratorStepKind {
         branch: String,
         head: String,
     },
+    /// A screenshot or recording the thread attached to its reply (`attach_proof`): the merge
+    /// message's proof, read with `readThreadImage` by its `id`.
+    Proof {
+        id: String,
+        /// Its file name as the thread gave it.
+        name: String,
+        mime: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        caption: Option<String>,
+        /// Brigadier's copy.
+        #[ts(skip)]
+        file: String,
+    },
     /// "Merged {branch} into {base}": the user asked for it in the thread.
     Merged {
         branch: String,

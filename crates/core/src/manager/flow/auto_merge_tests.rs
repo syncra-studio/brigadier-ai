@@ -465,3 +465,83 @@ async fn a_merge_held_on_its_own_needs_consent_once_the_switch_is_off() {
     assert!(!super::thread_tests::on_main(&flow, "NOTES.md"));
     flow.stop().await;
 }
+
+/// The thread attaches a screenshot it made of the change: Brigadier keeps a copy, records it
+/// for the merge message, and serves it by its id. Not an image or recording, or over 11 MB:
+/// the call says so and nothing is attached.
+#[tokio::test]
+async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
+    let log: Log = Arc::default();
+    let said = log.clone();
+    let flow = Flow::start(
+        "auto-merge-proof",
+        Options::default(),
+        script(move |turn| {
+            let said = said.clone();
+            async move {
+                if !turn.is_orchestrator() || !turn.input.contains("Show it.") {
+                    return Reply::text("Done.");
+                }
+                let workspace = &turn.add_dirs[0];
+                std::fs::write(workspace.join("shot.png"), b"\x89PNG proof").unwrap();
+                std::fs::write(workspace.join("notes.txt"), "notes").unwrap();
+                let big = std::fs::File::create(workspace.join("big.png")).unwrap();
+                big.set_len(12 * 1024 * 1024).unwrap();
+                for (path, caption) in [
+                    ("shot.png", Some("The new switch")),
+                    ("notes.txt", None),
+                    ("big.png", None),
+                ] {
+                    let reply = turn
+                        .call("attach_proof", json!({ "path": path, "caption": caption }))
+                        .await;
+                    said.lock()
+                        .unwrap()
+                        .push(format!("{path}: {} {}", reply.is_error, reply.text));
+                }
+                Reply::text("Merged.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Show it.").await;
+    let board = flow.settled().await;
+    let log = log.lock().unwrap().clone();
+    assert!(
+        log[0].starts_with("shot.png: false Attached shot.png"),
+        "{log:?}"
+    );
+    assert!(log[1].starts_with("notes.txt: true "), "{log:?}");
+    assert!(log[2].contains("over 11 MB"), "{log:?}");
+    let proofs: Vec<_> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::Proof {
+                id,
+                name,
+                mime,
+                caption,
+                ..
+            } => Some((id.clone(), name.clone(), mime.clone(), caption.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(proofs.len(), 1, "{proofs:?}");
+    let (id, name, mime, caption) = proofs[0].clone();
+    assert_eq!(
+        (name.as_str(), mime.as_str(), caption.as_deref()),
+        ("shot.png", "image/png", Some("The new switch"))
+    );
+    // Served from Brigadier's copy, even once the thread's own file is gone.
+    let checkout = PathBuf::from(flow.manager.checkout_dir(&flow.conversation).unwrap());
+    std::fs::remove_file(checkout.join("shot.png")).ok();
+    let (data, served) = flow
+        .manager
+        .read_thread_image(&flow.conversation, &id)
+        .await
+        .unwrap();
+    assert_eq!(served, "image/png");
+    assert_eq!(data, brigadier_providers::image_base64(b"\x89PNG proof"));
+    flow.stop().await;
+}

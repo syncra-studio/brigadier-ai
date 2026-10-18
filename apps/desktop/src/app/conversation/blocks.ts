@@ -1038,7 +1038,8 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     ...source.compactions
       .filter((compaction) => compaction.inTurn)
       .map((compaction) => ({ kind: "compaction" as const, compaction, position: compaction.position })),
-    ...source.orchestratorSteps.map((step) => ({
+    // A proof shows with the merge message, under the answer, not in the work.
+    ...source.orchestratorSteps.filter((step) => step.kind.type !== "proof").map((step) => ({
       kind: "orchestrator" as const,
       steps: [step],
       position: step.position,

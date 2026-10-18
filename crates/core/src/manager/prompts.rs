@@ -962,7 +962,7 @@ Ship it the way a careful engineer would; you judge how much a change needs. Wha
 - tests and type checks run on the final commit, after your last change;
 - the other vendor's review of the final commit (review_candidate reuses a review that covers it), each finding fixed or answered in one line; a running review is usually worth waiting for;
 - with a pull request, green CI on it (ci_status reads its checks);
-- for a change the user can see: the dev app run in the background (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message;
+- for a change the user can see: the dev app run in the background (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message (attach_proof);
 - for a change you judge big or risky: a fresh verifier (start_verifier with fresh: true) that tries to break it against the original request.
 When something can't be had (CI broken on main, the other vendor out of quota), decide whether to merge or wait, and say what was missing. The merge message (your reply that says it merged) shows what was verified: the pull request or commit, the checks on the final commit, the review and how each finding was settled, CI, the proof, the verifier's verdict if one ran, and anything left out. \"Beyond this request:\" lists what you found outside it (filed as issues when the repo is on GitHub); never drop a finding without saying so.";
 
@@ -4002,6 +4002,7 @@ mod environment_tests {
             "green CI",
             "start_preview",
             "a screenshot or short recording attached to the merge message",
+            "(attach_proof)",
             "a change you judge big or risky",
             "start_verifier with fresh: true",
             "decide whether to merge or wait, and say what was missing",

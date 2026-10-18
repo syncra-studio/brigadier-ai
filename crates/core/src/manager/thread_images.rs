@@ -1,4 +1,5 @@
-//! Images are opened only through the image step that named them in this conversation.
+//! Images are opened only through the image step that named them in this conversation, and a
+//! proof (a screenshot or recording the thread attached, `attach_proof`) through its step.
 
 use std::path::{Path, PathBuf};
 
@@ -27,6 +28,9 @@ fn mime(path: &Path) -> Option<&'static str> {
         "bmp" => Some("image/bmp"),
         "tif" | "tiff" => Some("image/tiff"),
         "heic" => Some("image/heic"),
+        "mp4" | "m4v" => Some("video/mp4"),
+        "mov" => Some("video/quicktime"),
+        "webm" => Some("video/webm"),
         _ => None,
     }
 }
@@ -118,13 +122,95 @@ impl SessionManager {
         .await;
     }
 
-    /// Returns the image named by an image row of this conversation, bounded before and during read.
+    /// `attach_proof`: keeps a copy of the thread's screenshot or recording and shows it with
+    /// the reply it is writing, the merge message.
+    pub(crate) async fn attach_proof(
+        &self,
+        id: &ConversationId,
+        args: crate::tools::AttachProof,
+    ) -> Result<String> {
+        let given = PathBuf::from(args.path.trim());
+        let source = if given.is_absolute() {
+            given
+        } else {
+            let base = self
+                .changes_checkout(id)
+                .map(|(path, _)| path)
+                .unwrap_or_else(|| self.owned_dir("orch", &id.0));
+            base.join(given)
+        };
+        let name = source
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mime = mime(&source)
+            .filter(|mime| *mime != "image/heic" && *mime != "image/tiff" && *mime != "image/bmp");
+        let Some(mime) = mime else {
+            return Err(Error::Invalid(format!(
+                "{name} isn't a PNG, JPEG, GIF or WebP image or an MP4, MOV or WebM recording"
+            )));
+        };
+        let proof = format!("proof-{}", uuid::Uuid::new_v4().simple());
+        let ext = source
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("bin")
+            .to_ascii_lowercase();
+        let target = self.thread_images_dir(id).join(format!("{proof}.{ext}"));
+        let kept = target.clone();
+        blocking(move || {
+            let meta = std::fs::metadata(&source)
+                .map_err(|_| Error::Invalid(format!("{} isn't there", source.display())))?;
+            if !meta.is_file() {
+                return Err(Error::Invalid(format!("{} isn't a file", source.display())));
+            }
+            if meta.len() > MAX_IMAGE {
+                return Err(Error::Invalid(
+                    "It is over 11 MB: attach a smaller screenshot or a shorter recording".into(),
+                ));
+            }
+            std::fs::create_dir_all(kept.parent().expect("image folder")).map_err(image_io)?;
+            std::fs::copy(&source, &kept).map_err(image_io)?;
+            Ok(())
+        })
+        .await?;
+        self.orchestrator_step(
+            id,
+            OrchestratorStepKind::Proof {
+                id: proof,
+                name: name.clone(),
+                mime: mime.to_owned(),
+                caption: args
+                    .caption
+                    .map(|caption| caption.trim().to_owned())
+                    .filter(|caption| !caption.is_empty()),
+                file: target.to_string_lossy().into_owned(),
+            },
+        )
+        .await;
+        Ok(format!(
+            "Attached {name}: the user sees it under your reply. Don't link or describe the file again."
+        ))
+    }
+
+    /// Returns the image named by an image row of this conversation, or a proof the thread
+    /// attached, bounded before and during read.
     pub async fn read_thread_image(
         &self,
         id: &ConversationId,
         item: &str,
     ) -> Result<(String, String)> {
         let board = self.core.board(id).await?;
+        let proof = board
+            .orchestrator_steps
+            .iter()
+            .find_map(|step| match &step.kind {
+                OrchestratorStepKind::Proof { id, file, .. } if id == item => Some(file.clone()),
+                _ => None,
+            });
+        if let Some(file) = proof {
+            return read_bounded(PathBuf::from(file)).await;
+        }
         let row = board
             .orchestrator_steps
             .iter()
@@ -197,26 +283,7 @@ impl SessionManager {
                 .unwrap_or_else(|| self.owned_dir("orch", &id.0));
             base.join(path)
         };
-        blocking(move || {
-            use std::io::Read;
-            let mut file = std::fs::File::open(&path)
-                .map_err(|_| Error::Invalid("This image is no longer there".into()))?;
-            if file.metadata().map_err(image_io)?.len() > MAX_IMAGE {
-                return Err(Error::Invalid("This image is over 11 MB".into()));
-            }
-            let mut bytes = Vec::new();
-            file.by_ref()
-                .take(MAX_IMAGE + 1)
-                .read_to_end(&mut bytes)
-                .map_err(image_io)?;
-            if bytes.len() as u64 > MAX_IMAGE {
-                return Err(Error::Invalid("This image is over 11 MB".into()));
-            }
-            let mime = mime(&path)
-                .ok_or_else(|| Error::Invalid("This file is not a supported image".into()))?;
-            Ok((brigadier_providers::image_base64(&bytes), mime.to_owned()))
-        })
-        .await
+        read_bounded(path).await
     }
 
     pub(super) async fn delete_thread_images(&self, id: &ConversationId) -> Result<()> {
@@ -228,4 +295,28 @@ impl SessionManager {
         })
         .await
     }
+}
+
+/// The file at `path` as base64 with its type, bounded before and during the read.
+async fn read_bounded(path: PathBuf) -> Result<(String, String)> {
+    blocking(move || {
+        use std::io::Read;
+        let mut file = std::fs::File::open(&path)
+            .map_err(|_| Error::Invalid("This image is no longer there".into()))?;
+        if file.metadata().map_err(image_io)?.len() > MAX_IMAGE {
+            return Err(Error::Invalid("This image is over 11 MB".into()));
+        }
+        let mut bytes = Vec::new();
+        file.by_ref()
+            .take(MAX_IMAGE + 1)
+            .read_to_end(&mut bytes)
+            .map_err(image_io)?;
+        if bytes.len() as u64 > MAX_IMAGE {
+            return Err(Error::Invalid("This image is over 11 MB".into()));
+        }
+        let mime = mime(&path)
+            .ok_or_else(|| Error::Invalid("This file is not a supported image".into()))?;
+        Ok((brigadier_providers::image_base64(&bytes), mime.to_owned()))
+    })
+    .await
 }

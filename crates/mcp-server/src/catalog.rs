@@ -4,14 +4,14 @@
 use std::sync::{Arc, OnceLock};
 
 use brigadier_core::tools::{
-    AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, ChatCall, CiPush, CodeRefs, CodeSearch,
-    DelegateTask, EndRun, FinishSession, JobCall, LandPhase, ListSessions, MessageSession,
-    MessageWorker, NoteForUser, OfferFeedback, OrchestratorCall, PlanPhases, PreviewLog,
-    ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, RecordFindings,
-    RecordNodes, Remember, ReportRef, RequestApproval, ReviewCandidate, ReviewPlan, Role,
-    RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript,
-    SettleStep, SettleWait, StartPreview, StartVerifier, StopMerge, StopPreview, StopWorker,
-    StoreOutput, SubmitOutline, SubmitReport, SuggestFullAccess, TabChatCall, TabTools,
+    AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, AttachProof, ChatCall, CiPush,
+    CodeRefs, CodeSearch, DelegateTask, EndRun, FinishSession, JobCall, LandPhase, ListSessions,
+    MessageSession, MessageWorker, NoteForUser, OfferFeedback, OrchestratorCall, PlanPhases,
+    PreviewLog, ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession,
+    RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, ReviewCandidate, ReviewPlan,
+    Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory,
+    SearchTranscript, SettleStep, SettleWait, StartPreview, StartVerifier, StopMerge, StopPreview,
+    StopWorker, StoreOutput, SubmitOutline, SubmitReport, SuggestFullAccess, TabChatCall, TabTools,
     ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
@@ -179,6 +179,10 @@ checkout's HEAD by default), small changes too. What earlier reviews already cov
 reviewed again: only what came after, and after findings their fix is re-checked. It waits \
 for the findings (wait_seconds) and returns them in its reply; one still running then \
 arrives as a message. With no other-vendor reviewer, or reviews off, it says so.";
+
+const ATTACH_PROOF: &str = "Attach a screenshot or short recording you made of the change \
+(PNG, JPEG, GIF, WebP, MP4, MOV or WebM, at most 11 MB) to your reply: the user sees it under \
+the reply, the merge message's proof. Brigadier keeps a copy, so a temporary file is fine.";
 
 const SETTLE_STEP: &str = "Only during an overnight run: settle a step of the run's plan, by \
 its number, once you have judged its whole scope and every \"done when\" (your own edits \
@@ -598,6 +602,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             REVIEW_CANDIDATE,
             input_schema::<ReviewCandidate>(),
         ),
+        tool("attach_proof", ATTACH_PROOF, input_schema::<AttachProof>()),
         tool(
             "propose_overnight",
             "Fill the user's unstarted overnight proposal from their brief or source files. Keep source phase numbers, dependencies, done-when and Rules verbatim; no invented scope. Include every phase the user's words select, also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. A bare goal keeps empty phases: the thread plans it once the run starts. Does not start, review or implement anything: only the user's Start does that. Use the run_id and revision from the proposal briefing.",
@@ -938,6 +943,7 @@ pub fn parse_call(
                 "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
                 "start_verifier" => OrchestratorCall::StartVerifier(args(name, arguments)?),
                 "review_candidate" => OrchestratorCall::ReviewCandidate(args(name, arguments)?),
+                "attach_proof" => OrchestratorCall::AttachProof(args(name, arguments)?),
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
                 "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),
