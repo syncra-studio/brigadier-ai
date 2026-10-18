@@ -5,6 +5,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { SetupTerminal } from "@/app/onboarding/SetupTerminal";
+import { ProvidersButton, UsageMeter as PageMeter } from "@/app/providers/parts";
 import { SettingsButton, SettingsCard, SettingsRow } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -70,7 +71,8 @@ type SigningIn = { id: string | null; fresh: boolean; exitedAtMs: number | null 
 /**
  * One agent's accounts as a card (the computer's own login first), ending in a row that adds
  * another and shows its sign-in. `wide` lays them out as Settings › Providers does: rows split by
- * hairlines, each window's usage on the row itself, and a link that adds another.
+ * hairlines, each window's usage on the row itself, and a link that adds another. `page` is an
+ * agent's page's: the same, drawn to the user's design, for a card the caller draws.
  */
 export function ProviderAccounts({
   provider,
@@ -78,13 +80,16 @@ export function ProviderAccounts({
   now,
   revealed,
   wide = false,
+  page = false,
 }: {
   provider: ProviderKind;
   views: AccountView[] | null;
   now: number;
   revealed: Revealed;
   wide?: boolean;
+  page?: boolean;
 }) {
+  wide ||= page;
   const label = wide ? VENDOR_LABELS[provider] : PROVIDER_LABELS[provider];
   const [signing, setSigning] = useState<SigningIn | null>(null);
   const signingId = useRef<string | null>(null);
@@ -156,7 +161,9 @@ export function ProviderAccounts({
 
   const rows =
     views === null ? (
-      wide ? (
+      page ? (
+        <p className="text-settings-text-secondary py-4.5 text-settings-body">Reading the accounts…</p>
+      ) : wide ? (
         <p className="text-muted-foreground px-1 py-3.5 text-sm">Reading the accounts…</p>
       ) : (
         <SettingsRow label="Reading the accounts…" />
@@ -170,6 +177,7 @@ export function ProviderAccounts({
           now={now}
           busy={active !== null}
           wide={wide}
+          page={page}
           revealed={revealed.has(revealKey(view))}
           onReveal={() => revealed.toggle(revealKey(view))}
           onSignIn={start}
@@ -188,6 +196,28 @@ export function ProviderAccounts({
     />
   );
   const addLabel = anySignedIn ? `Add another ${label} account` : `Add a ${label} account`;
+
+  if (page) {
+    return (
+      <>
+        {rows}
+        {terminal ? (
+          <div className="py-3.5">{terminal}</div>
+        ) : (
+          <button
+            type="button"
+            aria-label={addLabel}
+            disabled={views === null}
+            onClick={() => start(null)}
+            className="text-settings-link flex w-full items-center gap-2 py-3.5 text-settings-body font-medium hover:underline disabled:opacity-50"
+          >
+            <Plus aria-hidden className="size-3.5" />
+            {addLabel}
+          </button>
+        )}
+      </>
+    );
+  }
 
   if (wide) {
     return (
@@ -263,6 +293,7 @@ function AccountRow({
   now,
   busy,
   wide,
+  page,
   revealed,
   onReveal,
   onSignIn,
@@ -274,6 +305,8 @@ function AccountRow({
   busy: boolean;
   /** Settings › Providers' row: who on the start, every window's usage across, Use on the end. */
   wide: boolean;
+  /** An agent's page's row, drawn to the user's design. */
+  page: boolean;
   revealed: boolean;
   onReveal: () => void;
   /** Signs in to the account `id` again. */
@@ -375,6 +408,110 @@ function AccountRow({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+
+  if (page) {
+    const shownEmail = status?.email ? (revealed ? status.email : maskEmailsIn(status.email)) : title;
+    const lines: string[] = [];
+    if (!status) lines.push("Checking…");
+    else if (!status.path) lines.push(`${PROVIDER_LABELS[provider]} isn't installed`);
+    else if (!signedIn) lines.push("Not signed in");
+    else {
+      if (status.plan) lines.push(`${capitalize(status.plan)} plan`);
+      if (view.quotaAtMs === null) lines.push("usage not read yet");
+    }
+    if (ownLogin) lines.push("This computer's login");
+    else if (shownEmail !== title) lines.push(title);
+    const pageWindows = signedIn && view.quota ? ordered(view.quota) : [];
+    return (
+      <div data-slot="account-row" className="flex items-center gap-6 py-4.5">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.25">
+          {nameField || (
+            <span className="flex min-w-0 items-center gap-2">
+              <span
+                data-slot="account-title"
+                className="text-settings-text truncate font-mono text-settings-small"
+              >
+                {shownEmail}
+              </span>
+              {hidden && (
+                <button
+                  type="button"
+                  aria-label={revealed ? "Hide email" : "Show email"}
+                  aria-pressed={revealed}
+                  className="text-settings-text-tertiary hover:text-settings-text-secondary shrink-0"
+                  onClick={onReveal}
+                >
+                  {revealed ? <EyeOff className="size-3.25" /> : <Eye className="size-3.25" />}
+                </button>
+              )}
+              {view.default && (
+                <span
+                  data-slot="in-use"
+                  title="New chats start on this account"
+                  className="bg-settings-success-soft text-settings-success rounded-capsule flex shrink-0 items-center gap-1 px-2 py-0.5 text-settings-badge font-medium"
+                >
+                  <CheckMd aria-hidden className="size-2.75" />
+                  In use
+                </span>
+              )}
+            </span>
+          )}
+          <span className="text-settings-text-secondary truncate text-settings-small">
+            {lines.join(" · ")}
+          </span>
+          {view.error && <span className="text-destructive text-xs">{view.error}</span>}
+          <ErrorLine error={action.error} />
+        </div>
+        <div className="flex shrink-0 gap-5">
+          {pageWindows.map((window) => (
+            <PageMeter key={window.id} window={window} now={now} />
+          ))}
+        </div>
+        <div className="flex w-24 shrink-0 items-center justify-end gap-1.5">
+          {!signedIn && !own && status?.path ? (
+            <ProvidersButton disabled={busy} onClick={() => id && onSignIn(id)}>
+              Sign in
+            </ProvidersButton>
+          ) : (
+            !view.default && (
+              <ProvidersButton
+                disabled={action.busy || !signedIn}
+                title="Start new chats on this account"
+                onClick={() => action.run(() => makeDefaultAccount(provider, id))}
+              >
+                Use
+              </ProvidersButton>
+            )
+          )}
+          {own ? (
+            <span aria-hidden className="size-7 shrink-0" />
+          ) : (
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`${title}: more`}
+                  disabled={action.busy}
+                  className="text-settings-text-secondary hover:bg-settings-raised rounded-providers-menu flex size-7 shrink-0 items-center justify-center"
+                >
+                  <DotsHorizontal className="size-3.75" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem>
+                <DropdownMenuItem disabled={busy} onSelect={() => onSignIn(id)}>
+                  Sign in again
+                </DropdownMenuItem>
+                <DropdownMenuItem variant="destructive" onSelect={() => action.run(() => removeAccount(id))}>
+                  Remove
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (wide) {
     // Who it is: the email (masked) over its plan and what it is to the user.

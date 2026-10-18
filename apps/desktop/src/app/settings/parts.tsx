@@ -48,7 +48,8 @@ export function SettingsPage({
   scrollable = true,
   children,
 }: {
-  title: string;
+  /** Its name; a node when something sits beside it (an agent's plan). */
+  title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
   /** A page inside another: its name over the title goes back to it. */

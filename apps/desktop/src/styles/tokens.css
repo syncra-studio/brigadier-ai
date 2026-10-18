@@ -278,6 +278,11 @@
   --spacing-attachment-sent: 5rem;
   /* The image viewer's backdrop: near-black in both themes, so the image reads as itself. */
   --color-image-viewer: oklch(0 0 0 / 90%);
+  /* Settings › Providers' own colours in the user's design, beside the settings-* palette: its
+     usage bars and plan chips' text (small, large). */
+  --color-providers-bar: #d4d4d4;
+  --color-providers-chip-text: #bdbdbd;
+  --color-providers-chip-text-strong: #cfcfcf;
   --spacing-attachment-card: 14rem;
   /* A mockup's tab (SESSION-FIXES-PLAN.md Q10): its header band, a floating control's height,
      a note's marker and the gap from it to the note's box, the box's width and heights
@@ -490,6 +495,14 @@
   /* An icon on the sidebar's strip or at its foot, and a flyout's trigger: its highlight. */
   --radius-strip-button: 0.625rem;
   --radius-settings: 0.875rem;
+  /* Settings › Providers' cards, agent marks, plan chips (small, large), its
+     row menus and usage bars, from the user's design. */
+  --radius-providers-card: 0.75rem;
+  --radius-providers-mark: 0.5625rem;
+  --radius-providers-chip: 0.3125rem;
+  --radius-providers-chip-lg: 0.375rem;
+  --radius-providers-menu: 0.4375rem;
+  --radius-providers-bar: 0.125rem;
 
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
@@ -1068,4 +1081,24 @@
   --welcome-title-tracking: -0.035em;
   --welcome-title-gap: 1.75rem;
   --onboarding-heading-tracking: -0.035em;
+}
+
+/* Settings › Providers' switches, as the user's design draws them: 36 by 20, a white thumb
+   travelling 18, its own blue when on and grey when off. */
+[data-slot="providers"] {
+  --spacing-switch-width: 2.25rem;
+  --spacing-switch-height: 1.25rem;
+  --spacing-switch-thumb: 1rem;
+  --spacing-switch-travel: 1.125rem;
+  --toggle-on: var(--color-settings-accent);
+}
+
+[data-slot="providers"] [data-slot="switch"][data-state="unchecked"] {
+  background-color: var(--color-settings-ring);
+}
+
+[data-slot="providers"] [data-slot="switch-thumb"] {
+  border-color: #ffffff;
+  background-color: #ffffff;
+  box-shadow: none;
 }

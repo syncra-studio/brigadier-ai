@@ -248,22 +248,17 @@ function rulesAbout(rules: readonly OverrideRule[], provider: ProviderKind, mode
 }
 
 /**
- * A model: its name, id and whether it is the agent's default, a tag for each rule about it, what
- * it's like in a few words, and its switch (in the pickers, and given work). A model Brigadier saw
+ * What a model's row shows and does: its switch, its rule tags, and its line (New with Allow in
+ * Routing, kept from tasks, Expensive, else how good it is and what for). A model Brigadier saw
  * after its agent's first list is tagged New: it gets no tasks until the user allows it in
  * Routing; one the user keeps from tasks says so. Fable models never get tasks.
  */
-function ModelRow({
-  provider,
-  model,
-  merged,
-  groups,
-}: {
-  provider: ProviderKind;
-  model: ModelInfo;
-  merged: readonly MergedModel[] | null;
-  groups: readonly ModelGroup[];
-}) {
+export function useModelRow(
+  provider: ProviderKind,
+  model: ModelInfo,
+  merged: readonly MergedModel[] | null,
+  groups: readonly ModelGroup[],
+) {
   const ref = { provider, id: model.id };
   const available = useApp((s) => modelAvailable(s.settings, ref));
   const projects = useApp((s) => s.projects);
@@ -281,30 +276,73 @@ function ModelRow({
     openSettings("routing");
     revealSetting(ruleSentence(rule, groups, projects));
   };
+  // What it is: its tier and what it's best for, else the agent's own words.
+  const description =
+    known && known.tier !== "unrated"
+      ? [TIER_LABELS[known.tier], bestFor(known)].filter(Boolean).join(" · ")
+      : model.description || null;
+  const line: { kind: "new"; rule: OverrideRule } | { kind: "expensive" } | { kind: "text"; text: string } | null =
+    newRule
+      ? { kind: "new", rule: newRule }
+      : noWork
+        ? { kind: "text", text: NO_WORK_NOTE }
+        : expensive
+          ? { kind: "expensive" }
+          : description
+            ? { kind: "text", text: description }
+            : null;
+  return {
+    available,
+    toggle,
+    fresh,
+    tags,
+    line,
+    expensive,
+    description,
+    showRule,
+    ruleTitle: (rule: OverrideRule) => `${ruleSentence(rule, groups, projects)}: open it in Routing`,
+    tagText: ruleTag,
+    setAvailable: (next: boolean) => toggle.run(() => setModelAvailable(ref, next)),
+  };
+}
 
-  let description: ReactNode;
-  if (fresh) {
+/** A model: its name, id and whether it is the agent's default, its tags, its line, its switch. */
+function ModelRow({
+  provider,
+  model,
+  merged,
+  groups,
+}: {
+  provider: ProviderKind;
+  model: ModelInfo;
+  merged: readonly MergedModel[] | null;
+  groups: readonly ModelGroup[];
+}) {
+  const { available, toggle, fresh, tags, line, showRule, ruleTitle, setAvailable } = useModelRow(
+    provider,
+    model,
+    merged,
+    groups,
+  );
+  let description: ReactNode = null;
+  if (line?.kind === "new") {
     description = (
       <span className="flex flex-wrap items-center gap-x-2">
         Brigadier gives it no tasks until you allow it
-        <button type="button" className="text-link hover:underline" onClick={() => showRule(newRule)}>
+        <button type="button" className="text-link hover:underline" onClick={() => showRule(line.rule)}>
           Allow in Routing
         </button>
       </span>
     );
-  } else if (noWork) {
-    description = NO_WORK_NOTE;
-  } else if (expensive) {
+  } else if (line?.kind === "expensive") {
     description = (
       <span className="flex items-center gap-1.5">
         <InfoCircle aria-hidden className="size-icon-xs shrink-0" />
         {EXPENSIVE_NOTE}
       </span>
     );
-  } else if (known && known.tier !== "unrated") {
-    description = [TIER_LABELS[known.tier], bestFor(known)].filter(Boolean).join(" · ");
-  } else {
-    description = model.description || null;
+  } else if (line) {
+    description = line.text;
   }
 
   return (
@@ -325,7 +363,7 @@ function ModelRow({
             <button
               key={rule.id}
               type="button"
-              title={`${ruleSentence(rule, groups, projects)}: open it in Routing`}
+              title={ruleTitle(rule)}
               className="bg-foreground/6 text-foreground/65 hover:text-foreground rounded-nav flex items-center gap-1 px-1.5 py-0.5 text-2xs"
               onClick={() => showRule(rule)}
             >
@@ -345,7 +383,7 @@ function ModelRow({
         label={`Use ${model.displayName}`}
         checked={available}
         disabled={toggle.busy}
-        onCheckedChange={(next) => toggle.run(() => setModelAvailable(ref, next))}
+        onCheckedChange={setAvailable}
       />
     </div>
   );

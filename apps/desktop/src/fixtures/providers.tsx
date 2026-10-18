@@ -3,6 +3,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { ProvidersHome } from "@/app/providers/ProvidersHome";
 import { revealSetting } from "@/app/settings/reveal";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
@@ -11,6 +12,7 @@ import { accounts, overviews, previewRoutes, projects, rankings, rules, usageVie
 import type { Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
+import { useUpdates } from "@/state/updates";
 
 /*
  * ?drive=1 reveals one account's email, leaves the page and comes back, follows the old Usage
@@ -37,10 +39,31 @@ useApp.setState((state) => ({
   providers: { ...state.providers, view: { providers: overviews, sessions: [], fixtures: [] } },
 }));
 
+/** What Location's Change picks, in turn. */
+const picks = ["/opt/elsewhere/claude", "/opt/homebrew/bin/claude"];
+
 /** The accounts the daemon answers with; a step adds this computer's login again. */
 let listed = accounts;
 
+// The agents page shows when each limit resets: 5-hour ones in 3h, the rest in 1d 23h.
+if (params.has("next")) {
+  const at = Date.now();
+  listed = accounts.map((view) => ({
+    ...view,
+    quota: view.quota && {
+      ...view.quota,
+      windows: view.quota.windows.map((window) => ({
+        ...window,
+        resetsAtMs: at + (window.windowMinutes === 300 ? 179.5 : 2850.5) * 60_000,
+      })),
+    },
+  }));
+  useApp.setState({ accounts: { accounts: listed, warnings: [] } });
+}
+
 mockIPC((command, payload) => {
+  // Location's Change picks a file that isn't an agent, then one that is.
+  if (command === "pick_file") return picks.shift() ?? null;
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
@@ -54,6 +77,11 @@ mockIPC((command, payload) => {
       return { method: req.method, usage: usageView(req.projectId) };
     case "previewRoutes":
       return { method: req.method, routes: previewRoutes(req.areas, req.author) };
+    case "checkAgentPath":
+      if (req.path.startsWith("/opt/elsewhere/")) {
+        throw { code: "invalid", message: `${req.path} isn't Claude Code: it didn't say its version` };
+      }
+      return { method: req.method, version: "2.1.4" };
     default:
       return { method: req.method };
   }
@@ -214,5 +242,120 @@ function Fixture() {
   );
 }
 
+/*
+ * ?next=1 is the agents page drawn to the user's design (#262), not shown in the app yet; with
+ * ?agent=claude it opens Claude's page. With ?drive=1 it reads the overview, opens Claude, picks a
+ * binary that isn't one, goes back, and writes what it saw to #providers-next-result
+ * (ProvidersHomeRender.test.ts reads it).
+ */
+function NextFixture() {
+  const [result, setResult] = useState("");
+  useEffect(() => {
+    openSettings("providers");
+    // A newer Claude Code is out.
+    useUpdates.setState({
+      view: {
+        items: [
+          {
+            target: "claude",
+            current: "2.1.0",
+            latest: "2.1.4",
+            action: { type: "run", command: "claude update" },
+            progress: { type: "available" },
+          },
+        ],
+      } as never,
+    });
+    const openAgent = () => document.querySelector<HTMLElement>(`[data-slot="agent-row"][data-setting="Claude"]`)?.click();
+    if (params.get("agent") === "claude") {
+      const timer = setTimeout(openAgent, 300);
+      return () => clearTimeout(timer);
+    }
+    if (!params.has("drive")) return;
+    const seen: Record<string, unknown> = {};
+    const steps: (() => void)[] = [
+      () => {
+        seen.title = text(document.querySelector('[data-slot="settings-page"] h1'));
+        seen.fallback = Boolean(document.querySelector('[data-setting="Switch to another account automatically"]'));
+        seen.agents = all('[data-slot="agent-row"]').map((row) => ({
+          name: row.dataset.setting,
+          state: text(row.querySelector('[data-slot="agent-state"]')),
+          meter: text(row.querySelector('[data-slot="account-usage"]')),
+        }));
+        seen.notSetUp = all('[data-slot="agent-not-set-up"]').length;
+        seen.addAgent = Boolean(button("Add another agent"));
+        // The row's switch doesn't open the page.
+        button("Use Codex")?.click();
+      },
+      () => {
+        seen.afterSwitch = {
+          page: Boolean(document.querySelector('[data-slot="agent-page"]')),
+          disabled: useApp.getState().settings.disabledProviders,
+        };
+        openAgent();
+      },
+      () => {
+        seen.header = text(document.querySelector('[data-slot="settings-page"] header'));
+        seen.cli = text(document.querySelector('[data-slot="agent-cli"]'));
+        seen.updateEnabled = button("Update")?.disabled === false;
+        seen.location = text(document.querySelector('[data-slot="agent-location"]'));
+        seen.accounts = all('[data-slot="account-row"]').map((row) => ({
+          title: text(row.querySelector('[data-slot="account-title"]')),
+          inUse: Boolean(row.querySelector('[data-slot="in-use"]')),
+          meters: all('[data-slot="account-usage"]', row).map(text),
+        }));
+        seen.models = all('[data-slot="provider-model"]').map(text);
+        button("Change", document.querySelector('[data-slot="agent-location"]') ?? document)?.click();
+      },
+      () => {
+        seen.refused = {
+          location: text(document.querySelector('[data-slot="agent-location"]')),
+          paths: useApp.getState().settings.agentPaths,
+        };
+        button("Change", document.querySelector('[data-slot="agent-location"]') ?? document)?.click();
+      },
+      () => {
+        seen.chosen = {
+          location: text(document.querySelector('[data-slot="agent-location"]')),
+          paths: useApp.getState().settings.agentPaths,
+        };
+        button("Providers", document.querySelector('[data-slot="settings-page"]') ?? document)?.click();
+      },
+      () => {
+        seen.back = Boolean(document.querySelector('[data-slot="agents-overview"]'));
+        setResult(JSON.stringify(seen));
+      },
+    ];
+    let stopped = false;
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    void (async () => {
+      await wait(400);
+      for (const step of steps) {
+        if (stopped) return;
+        step();
+        await wait(250);
+      }
+    })();
+    return () => {
+      stopped = true;
+    };
+  }, []);
+  return (
+    <TooltipProvider>
+      <div className="bg-background text-foreground flex h-screen">
+        <aside className="w-64 shrink-0">
+          <SettingsNav />
+        </aside>
+        <main className="flex h-full min-w-0 flex-1">
+          <div className="min-w-0 flex-1">
+            <ProvidersHome />
+          </div>
+        </main>
+      </div>
+      {result && <pre id="providers-next-result">{result}</pre>}
+    </TooltipProvider>
+  );
+}
+
 const root = document.getElementById("root");
-if (root) createRoot(root).render(<Fixture />);
+if (root) createRoot(root).render(params.has("next") ? <NextFixture /> : <Fixture />);

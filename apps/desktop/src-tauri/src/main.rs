@@ -161,6 +161,29 @@ async fn pick_folder(app: tauri::AppHandle, starting: Option<String>) -> Option<
     Some(folder.display().to_string())
 }
 
+/// Asks for one file with the system picker, titled `title` and opening in `starting` when that
+/// folder exists; `None` when the user cancels.
+#[tauri::command]
+async fn pick_file(
+    app: tauri::AppHandle,
+    title: String,
+    starting: Option<String>,
+) -> Option<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let mut dialog = app.dialog().file().set_title(title);
+    if let Some(window) = app.get_webview_window(shell::MAIN_WINDOW) {
+        dialog = dialog.set_parent(&window);
+    }
+    if let Some(starting) = starting.filter(|dir| std::path::Path::new(dir).is_dir()) {
+        dialog = dialog.set_directory(starting);
+    }
+    dialog.pick_file(move |file| {
+        let _ = tx.send(file);
+    });
+    let file = rx.await.ok().flatten()?.into_path().ok()?;
+    Some(file.display().to_string())
+}
+
 /// File › Open Folder…: asks for folders to add as projects; empty when the user cancels.
 #[tauri::command]
 async fn pick_folders(app: tauri::AppHandle) -> Vec<String> {
@@ -789,6 +812,7 @@ fn main() {
             smoke_finish,
             pick_folder,
             pick_folders,
+            pick_file,
             take_opened_folders,
             save_artifact,
             export_conventions,
