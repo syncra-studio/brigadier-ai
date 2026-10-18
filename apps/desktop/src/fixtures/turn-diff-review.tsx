@@ -10,6 +10,8 @@
  * - Done: "Edited 3 files", "· kept 2, undid 1", no buttons.
  * - Merged while two files waited: "Edited 3 files", "· kept 1, merged 2", no buttons, those
  *   rows "Merged".
+ * - A file put back as it was after the merge (#333), which the request's own diff leaves out:
+ *   "4 Files", "· 1 to review", its row with Undo and Keep; alone, "1 File", "· 1 to review".
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -27,6 +29,12 @@ const CHAT = "turn-diff-review";
 
 let review: Record<string, FileReview> = { "src/a.ts": "pending", "src/b.ts": "kept", "src/c.ts": "pending" };
 const asked: string[] = [];
+const FILES = [
+  { path: "src/a.ts", insertions: 3, deletions: 1, binary: false },
+  { path: "src/b.ts", insertions: 1, deletions: 1, binary: false },
+  { path: "src/c.ts", insertions: 2, deletions: 0, binary: false },
+];
+let files = FILES;
 
 function show() {
   const request = {
@@ -34,12 +42,9 @@ function show() {
     changes: {
       settled: true,
       stat: {
-        files: [
-          { path: "src/a.ts", insertions: 3, deletions: 1, binary: false },
-          { path: "src/b.ts", insertions: 1, deletions: 1, binary: false },
-          { path: "src/c.ts", insertions: 2, deletions: 0, binary: false },
-        ],
-        insertions: 6, deletions: 2,
+        files,
+        insertions: files.reduce((sum, file) => sum + file.insertions, 0),
+        deletions: files.reduce((sum, file) => sum + file.deletions, 0),
       },
     },
   } as unknown as UserRequest;
@@ -100,6 +105,17 @@ async function measure() {
   show();
   await until(() => rows()[0]?.dataset.review === "merged");
   out.merged = look();
+  review = { ...review, "src/d.ts": "pending" };
+  show();
+  await until(() => look().review === "· 1 to review");
+  [...document.querySelectorAll("button")].find((button) => words(button) === "Show 1 more file")?.click();
+  await until(() => rows().length === 4);
+  out.putBack = look();
+  files = [];
+  review = { "src/d.ts": "pending" };
+  show();
+  await until(() => look().title === "1 File");
+  out.putBackAlone = look();
   out.asked = asked;
   return out;
 }

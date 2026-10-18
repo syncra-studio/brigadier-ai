@@ -215,13 +215,19 @@ const ReviewRow: FC<{
 );
 
 /**
+ * Whether a request's review holds files: one it put back as it was after a merge took it waits
+ * from the merged version, though its own net diff shows no change (#333).
+ */
+const reviewsFiles = (review: Record<string, FileReview> | undefined) => Object.keys(review ?? {}).length > 0;
+
+/**
  * Whether the turn's requests changed code: a change of their own recorded, or a worker of theirs
  * landed. A Chat's never do. An answer that changed nothing has no Details (Q79).
  */
 export function useTurnChanged(requestIds: readonly string[]): boolean {
   return useBoard(
     (s) =>
-      requestIds.some((id) => (s.board?.requests[id]?.changes?.stat.files.length ?? 0) > 0) ||
+      requestIds.some((id) => (s.board?.requests[id]?.changes?.stat.files.length ?? 0) > 0 || reviewsFiles(s.board?.requests[id]?.review)) ||
       Object.values(s.board?.tasks ?? {}).some(
         (task) => task.requestId !== null && requestIds.includes(task.requestId) && task.landed !== null,
       ),
@@ -243,9 +249,11 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
   const conversationId = useViewConversation()?.id ?? null;
   // What each request recorded of its own changes.
   const recorded = useBoard(useShallow((s) => requestIds.map((id) => s.board?.requests[id]?.changes ?? null)));
+  // Where the review left each request's files.
+  const ownReviews = useBoard(useShallow((s) => requestIds.map((id) => s.board?.requests[id]?.review)));
   const hasRecord = (id: string) => {
     const changes = recorded[requestIds.indexOf(id)];
-    return !!changes && changes.stat.files.length > 0;
+    return !!changes && (changes.stat.files.length > 0 || reviewsFiles(ownReviews[requestIds.indexOf(id)]));
   };
   // Workers' landings, for the requests that recorded nothing (from before it was kept).
   const landed = useBoard(
@@ -262,7 +270,7 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
     useShallow((s) => requests.map((id) => s.board?.requests[id]?.undo?.reverted ?? false)),
   );
   // Where the review left each file, the turn's latest request that changed it deciding.
-  const reviews = useBoard(useShallow((s) => requests.map((id) => s.board?.requests[id]?.review)));
+  const reviews = requests.map((id) => ownReviews[requestIds.indexOf(id)]);
   const review: Record<string, FileReview> = Object.assign({}, ...reviews.map((each) => each ?? {}));
   const reviewing = Object.keys(review).length > 0;
   const reverted = reverts.length > 0 && reverts.every(Boolean);
@@ -299,15 +307,23 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
   const [first] = requests;
   if (!diff || !conversationId || first === undefined) return null;
 
-  const [only] = diff.files;
+  // A file the review has that the requests' net diff leaves out (put back as it was after a
+  // merge) still gets its row (#333).
+  const files: FileStat[] = [
+    ...diff.files,
+    ...Object.keys(review)
+      .filter((path) => !diff.files.some((file) => file.path === path))
+      .map((path) => ({ path, insertions: 0, deletions: 0, binary: false })),
+  ];
+  const [only] = files;
   const one =
-    diff.files.length === 1 && only
+    files.length === 1 && only
       ? only.path.split("/").pop() || only.path
       : null;
-  const title = one ? `Edited ${one}` : `Edited ${diff.files.length} files`;
-  const shown = all ? diff.files : diff.files.slice(0, FIRST_FILES);
-  const more = diff.files.length - FIRST_FILES;
-  const waiting = diff.files.filter((file) => review[file.path] === "pending").map((file) => file.path);
+  const title = one ? `Edited ${one}` : `Edited ${files.length} files`;
+  const shown = all ? files : files.slice(0, FIRST_FILES);
+  const more = files.length - FIRST_FILES;
+  const waiting = files.filter((file) => review[file.path] === "pending").map((file) => file.path);
   const tally = (state: FileReview) => Object.values(review).filter((each) => each === state).length;
   // Undo All and Keep All take this card's files that wait, one after another; one refused
   // (its toast says why) leaves the rest to go on.
@@ -358,7 +374,7 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
         <button
           type="button"
           aria-label="View changed files"
-          onClick={() => (!reviewing && one ? flip(only!.path) : openFileTab(conversationId, waiting[0] ?? diff.files[0]!.path))}
+          onClick={() => (!reviewing && one ? flip(only!.path) : openFileTab(conversationId, waiting[0] ?? files[0]!.path))}
           className="flex min-w-0 flex-1 items-center gap-3 text-start"
         >
           <span className="bg-foreground/5 text-foreground rounded-control flex size-control-lg shrink-0 items-center justify-center">
@@ -369,7 +385,7 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
               data-slot="turn-diff-title"
               className="text-foreground truncate text-sm font-medium"
             >
-              {reviewing && waiting.length > 0 ? `${diff.files.length} ${diff.files.length === 1 ? "File" : "Files"}` : title}
+              {reviewing && waiting.length > 0 ? `${files.length} ${files.length === 1 ? "File" : "Files"}` : title}
             </span>
             {reviewing ? (
               <span className="text-xs">

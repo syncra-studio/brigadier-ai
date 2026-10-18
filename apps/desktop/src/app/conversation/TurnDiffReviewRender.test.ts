@@ -7,7 +7,7 @@ type Look = { title: string | null; review: string | null; buttons: (string | nu
 
 test("an answer's card reviews its files: Undo All, Keep All, Review Changes, per-file Undo and Keep, then what was kept, undone and merged", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "turn-diff-review.html", "turn-diff-review-result", 90000)) as {
-    error?: string; waiting: Look; opened: string | null; keptOne: Look; done: Look; merged: Look; asked: string[];
+    error?: string; waiting: Look; opened: string | null; keptOne: Look; done: Look; merged: Look; putBack: Look; putBackAlone: Look; asked: string[];
   };
   assert.equal(seen.error, undefined);
   assert.deepEqual([seen.waiting.title, seen.waiting.review], ["3 Files", "· 2 to review"]);
@@ -23,4 +23,10 @@ test("an answer's card reviews its files: Undo All, Keep All, Review Changes, pe
   // A merge took the files that waited (#288): no Undo or Keep, the rows say Merged.
   assert.deepEqual([seen.merged.title, seen.merged.review, seen.merged.buttons], ["Edited 3 files", "· kept 1, merged 2", ["View changed files"]]);
   assert.deepEqual(seen.merged.rows, [["merged", "Merged"], ["kept", "Kept"], ["merged", "Merged"]]);
+  // A file put back as it was after the merge waits from the merged version, though the
+  // request's own diff leaves it out (#333): its row is there, with Undo and Keep.
+  assert.deepEqual([seen.putBack.title, seen.putBack.review], ["4 Files", "· 1 to review"]);
+  assert.deepEqual(seen.putBack.buttons, ["View changed files", "Undo All", "Keep All", "Review Changes", "Collapse files"]);
+  assert.deepEqual(seen.putBack.rows.at(-1), ["pending", "Undo Keep"]);
+  assert.deepEqual([seen.putBackAlone.title, seen.putBackAlone.review], ["1 File", "· 1 to review"]);
 });
