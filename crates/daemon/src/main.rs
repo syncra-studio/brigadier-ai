@@ -21,6 +21,7 @@
 
 mod awake;
 mod bridge;
+mod connect;
 mod dictation;
 mod hook;
 mod idle;

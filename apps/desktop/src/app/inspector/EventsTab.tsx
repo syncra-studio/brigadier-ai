@@ -72,6 +72,8 @@ function summary(event: DomainEvent): string {
       return event.updates.items.length === 0
         ? "up to date"
         : event.updates.items.map((item) => `${item.target} ${item.latest}`).join(", ");
+    case "agentConnectChanged":
+      return event.connect.agents.map((agent) => `${agent.provider} ${agent.progress.type}`).join(", ") || "none";
     case "projectUpdated":
       return event.project.name;
     case "conversationSetUp":

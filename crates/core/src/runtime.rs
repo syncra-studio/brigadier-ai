@@ -28,7 +28,7 @@ use brigadier_providers::policy::{self, ApprovalMode, Route};
 use brigadier_providers::record::{self, Recording};
 use brigadier_providers::{
     Access, ApprovalDecision, Decider, ModelCatalog, Origin, Provider, ProviderEvent, ProviderKind,
-    ProviderSession, SessionSpec, Started, ToolSet, fixtures,
+    ProviderSession, ProviderStatus, SessionSpec, Started, ToolSet, fixtures,
 };
 use brigadier_sandbox::Platform;
 use brigadier_store::{NewEvent, Retention, StreamPage};
@@ -520,6 +520,12 @@ impl Runtime {
     }
 
     /// What Brigadier last learned about a provider (login, models, quota).
+    /// The agent's status as its CLI says now: whether it is found, and signed in. Not recorded
+    /// ([`Runtime::refresh_providers`] checks and publishes).
+    pub async fn provider_status(&self, kind: ProviderKind) -> ProviderStatus {
+        self.provider(kind).status().await
+    }
+
     pub fn overview(&self, kind: ProviderKind) -> Option<ProviderOverview> {
         self.state().overviews.get(&kind).cloned()
     }

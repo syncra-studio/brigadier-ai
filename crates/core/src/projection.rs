@@ -184,6 +184,7 @@ impl Projection {
             | DomainEvent::AccountsChecked { .. }
             | DomainEvent::QuotaWillBeLost { .. }
             | DomainEvent::UpdatesChanged { .. }
+            | DomainEvent::AgentConnectChanged { .. }
             | DomainEvent::DraftPinned { .. }
             | DomainEvent::BrainJobUpdated { .. }
             | DomainEvent::MemoryUpdated { .. }

@@ -16,17 +16,18 @@ use brigadier_core::storage::{
 use brigadier_core::{
     AccountEntry, AccountsView, AttachmentRef, BrainJobKind, BrainOverview, BrowserCall,
     BrowserResult, CardId, Catalog, CheckoutFile, CommitOutcome, ComputerPermission,
-    ComputerUseStatus, ConflictFile, ConventionsExport, Conversation, ConversationActivity,
-    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat, FolderCheck,
-    FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message, MessagePage,
-    MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, PendingChanges, ProbeBurst,
-    Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
-    QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile,
-    ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, SearchQuery,
-    SearchUpdate, Settings, SettledTab, Setup, SetupRequest, SourceAction, SourceBranch,
-    SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy, TaskId, ThreadItem,
-    ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView, UsageActivity,
-    UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
+    ComputerUseStatus, ConflictFile, ConnectView, ConventionsExport, Conversation,
+    ConversationActivity, ConversationId, ConversationKind, ConversationStatus, ConversationView,
+    DiffStat, FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message,
+    MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, PendingChanges,
+    ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView,
+    PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
+    ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview,
+    SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest, SourceAction,
+    SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy, TaskId,
+    ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
+    UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
+    WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -1127,6 +1128,18 @@ pub enum Request {
     RunUpdate {
         target: UpdateTarget,
     },
+    /// Connect's progress with each agent; changes arrive as `agentConnectChanged`.
+    GetConnect,
+    /// Gets an agent working in the background: its own native installer when it is missing,
+    /// then its own sign-in in the browser, unless it is signed in already. Progress arrives
+    /// as `agentConnectChanged`; asked again after a failure, it retries.
+    ConnectAgent {
+        provider: ProviderKind,
+    },
+    /// Stops the agent's Connect (its installer or sign-in); its row leaves the view.
+    CancelConnect {
+        provider: ProviderKind,
+    },
     /// Settings → Accounts: each provider's own login and extra accounts, who is signed in
     /// to each (as its CLI says) and its quota. Changes arrive as `accountsChecked`.
     GetAccounts,
@@ -1791,6 +1804,11 @@ pub enum Response {
         updates: UpdatesView,
     },
     RunUpdate,
+    GetConnect {
+        connect: ConnectView,
+    },
+    ConnectAgent,
+    CancelConnect,
     GetAccounts {
         accounts: AccountsView,
     },

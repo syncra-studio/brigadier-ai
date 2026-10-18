@@ -703,6 +703,8 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "waitingResolved":
     // The rail's update button reads these (state/updates).
     case "updatesChanged":
+    // Connect's progress (state/connect).
+    case "agentConnectChanged":
     // Its desktop notification is the shell's; the Usage menu reads `accounts.warnings`.
     case "quotaWillBeLost":
       return slice;

@@ -1641,6 +1641,49 @@ pub struct UpdateItem {
     pub progress: UpdateProgress,
 }
 
+/// The step of Connect that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ConnectStep {
+    Install,
+    SignIn,
+}
+
+/// Where Connect is with an agent: its own installer runs when it is missing, then its own
+/// sign-in, unless it is signed in already.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ConnectProgress {
+    Installing,
+    /// The vendor's sign-in page is open in the browser; it is checked every few seconds.
+    SigningIn,
+    Connected,
+    /// `error` is one plain sentence for the user; Connect again retries.
+    Failed {
+        step: ConnectStep,
+        error: String,
+    },
+}
+
+/// One agent's Connect.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConnect {
+    pub provider: ProviderKind,
+    pub progress: ConnectProgress,
+}
+
+/// Every agent Connect ran for since launch (one cancelled is left out).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectView {
+    pub agents: Vec<AgentConnect>,
+}
+
 /// The newer versions found by the last check, and any update running or just finished.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2169,6 +2212,10 @@ pub enum DomainEvent {
     UpdatesChanged {
         updates: UpdatesView,
     },
+    /// Connect moved on for an agent: it started, installed, signed in, failed or was cancelled.
+    AgentConnectChanged {
+        connect: ConnectView,
+    },
     /// A project's name, repositories or remembered choices changed (full snapshot).
     ProjectUpdated {
         project: Project,
@@ -2555,6 +2602,7 @@ impl DomainEvent {
             Self::AccountsChecked { .. } => "accounts.checked",
             Self::QuotaWillBeLost { .. } => "quota.willBeLost",
             Self::UpdatesChanged { .. } => "updates.changed",
+            Self::AgentConnectChanged { .. } => "agent.connectChanged",
             Self::ProjectUpdated { .. } => "project.updated",
             Self::ConversationSetUp { .. } => "conversation.setUp",
             Self::ConversationLifecycleChanged { .. } => "conversation.lifecycle",
@@ -2634,6 +2682,8 @@ pub mod streams {
     pub const QUOTA_WARNINGS: &str = "quota-warnings";
     /// Newer versions of Brigadier and the agent CLIs.
     pub const UPDATES: &str = "updates";
+    /// Connect's progress with each agent.
+    pub const CONNECT: &str = "connect";
 
     pub fn raw_session(id: &super::RawSessionId) -> String {
         format!("raw:{id}")

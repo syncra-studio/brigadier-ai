@@ -87,6 +87,8 @@ pub struct Daemon {
     pub uninstall: Uninstall,
     /// Newer versions of Brigadier and the agent CLIs, and the update running.
     pub updates: Updates,
+    /// Connect's install and sign-in of each agent.
+    pub connects: crate::connect::Connects,
     /// The user's pages: local Markdown documents in the data folder.
     pub pages: Arc<Pages>,
     /// Web sites' icons for the links in answers.
@@ -131,6 +133,7 @@ impl Daemon {
             storage: Storage::default(),
             uninstall: Uninstall::default(),
             updates: Updates::default(),
+            connects: crate::connect::Connects::default(),
             pages,
             site_icons,
             next_connection: AtomicU64::new(1),
@@ -2425,6 +2428,17 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::RunUpdate { target } => {
             crate::updates::start(daemon, target).map_err(brigadier_core::Error::Invalid)?;
             Response::RunUpdate
+        }
+        Request::GetConnect => Response::GetConnect {
+            connect: daemon.connects.view(),
+        },
+        Request::ConnectAgent { provider } => {
+            crate::connect::start(daemon, provider).map_err(brigadier_core::Error::Invalid)?;
+            Response::ConnectAgent
+        }
+        Request::CancelConnect { provider } => {
+            heap(|| crate::connect::cancel(daemon, provider)).await;
+            Response::CancelConnect
         }
         Request::GetAccounts => Response::GetAccounts {
             accounts: daemon.runtime.accounts_view(),
