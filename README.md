@@ -8,6 +8,8 @@
 makes small changes itself, hands the rest to agents running in parallel in their own git
 worktrees, and the other vendor's model reviews every change in the background.
 
+![Brigadier: a task merged into main, with what changed, what was checked and a Revert button](docs/user/images/hero.png)
+
 - **Parallel agents, cross-vendor review.** Each task runs in its own worktree on the model
   best suited to it, and its commits land by fast-forward. Every change also gets a read-only
   review from the other vendor (Codex reviews Claude's work, Claude reviews Codex's) in the

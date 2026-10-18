@@ -33,7 +33,8 @@ an existing Brigadier. To read it first, download it and run `sh install.sh`.
 ## Updates
 
 Brigadier updates itself. When a newer release is out, it downloads it in the background and
-shows **Restart to update**; otherwise it installs the update the next time you quit.
+shows **Restart to update**; otherwise it installs the update the next time you quit with ⌘Q
+(or **Brigadier › Quit Brigadier**). Quitting from the Dock doesn't install it yet.
 
 ## Next
 
