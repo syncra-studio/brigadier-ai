@@ -3,6 +3,8 @@
  * (e.g. a virtualizer's row size). Re-read it whenever density changes.
  */
 export function tokenPx(name: `--${string}`): number {
+  // Rendered on the server (a test's static markup) there are no styles to read.
+  if (typeof document === "undefined") return 0;
   const root = document.documentElement;
   const value = getComputedStyle(root).getPropertyValue(name).trim();
   const amount = Number.parseFloat(value);
