@@ -911,8 +911,10 @@ impl SessionManager {
             })
             .await?
         };
-        let learned = self.learned_checks(caller, &packages).await;
-        Ok(full_checks(&tree, &packages, manager, &learned))
+        // Never what the Brain learned: a one-off command the thread checked one change with
+        // is no check of the project's, and would fail them for good once a revert removes
+        // what it looked for (#291).
+        Ok(full_checks(&tree, &packages, manager))
     }
 
     /// Runs one command of the full checks, from the cache when it already ran on the same
@@ -1059,6 +1061,11 @@ impl SessionManager {
         command: &str,
         inputs: &[String],
     ) -> std::result::Result<Key, String> {
+        // As git names it, so it is under its root however it was reached (the full checks'
+        // checkout through a symlinked temporary folder, #291).
+        let workdir = &workdir
+            .canonicalize()
+            .unwrap_or_else(|_| workdir.to_owned());
         let root = repo_root(workdir).ok_or("not in a git repository")?;
         let git = self.git.clone();
         let (files, tree) = {
@@ -2802,12 +2809,11 @@ const FULL_CHECK_RUNS: &[&str] = &["verify", "ci"];
 /// The project's full checks, as it documents them (SESSION-FIXES-PLAN.md §11): its own
 /// full-checks script, which knows its prerequisites, generated files and known exclusions;
 /// else a root `verify` or `ci` script; else every package's checks and the workspace-wide
-/// Cargo commands. Each is `(command, workdir)`, run from the repository's root.
+/// Cargo commands, none learned. Each is `(command, workdir)`, run from the repository's root.
 fn full_checks(
     root: &Path,
     packages: &[Package],
     manager: PackageManager,
-    learned: &BTreeMap<String, Vec<String>>,
 ) -> Vec<(String, String)> {
     for script in FULL_CHECK_SCRIPTS {
         let path = root.join(script);
@@ -2842,7 +2848,7 @@ fn full_checks(
     }) {
         return vec![(manager.run(run), String::new())];
     }
-    everything_group(packages, manager, learned).checks
+    everything_group(packages, manager, &BTreeMap::new()).checks
 }
 
 #[cfg(test)]
@@ -3579,7 +3585,7 @@ mod tests {
         ));
         std::fs::create_dir_all(root.join("tools")).unwrap();
         let full = |root: &Path| {
-            full_checks(root, &workspace(), PackageManager::Pnpm, &BTreeMap::new())
+            full_checks(root, &workspace(), PackageManager::Pnpm)
                 .into_iter()
                 .map(|(command, _)| command)
                 .collect::<Vec<_>>()

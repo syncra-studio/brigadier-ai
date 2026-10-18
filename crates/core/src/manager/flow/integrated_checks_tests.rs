@@ -1734,3 +1734,103 @@ test -f local/config.json || { echo "no local/config.json"; exit 1; }
     );
     flow.stop().await;
 }
+
+/// Whether a worker ran it and why its cache was left out, for each check record of a command
+/// containing `word`.
+async fn check_records(flow: &Flow, word: &str) -> Vec<(bool, Option<String>)> {
+    flow.events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            DomainEvent::CheckRan {
+                task_id,
+                command,
+                bypassed,
+                ..
+            } if command.contains(word) => Some((task_id.is_some(), bypassed)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// #291: a one-off command the thread checks its change with (a `grep`) is no check of the
+/// project's: the full checks of a later request never run it, so a revert that removes what
+/// it looked for can't fail them for good.
+#[tokio::test]
+async fn the_full_checks_never_run_a_command_the_thread_checked_one_change_with() {
+    let flow = Flow::start(
+        "integrated-own-checks-only",
+        Options::default(),
+        script(move |turn| async move {
+            if !turn.is_orchestrator() {
+                return Reply::text("[quiet]");
+            }
+            if turn.input.starts_with("Add one") {
+                thread_commit(&turn, "one.txt", "hello\n");
+                let check = turn
+                    .call("run_check", json!({"command": "grep -q hello one.txt"}))
+                    .await;
+                assert!(!check.is_error, "{}", check.text);
+                return Reply::text("Added one.");
+            }
+            if turn.input.starts_with("Add two") {
+                thread_commit(&turn, "two.txt", "two\n");
+                return Reply::text("Added two.");
+            }
+            Reply::text("[quiet]")
+        }),
+    )
+    .await;
+    let ended = |n: usize| {
+        move |board: &crate::board::Board| {
+            board
+                .integrated_checks
+                .values()
+                .filter(|check| check.state.is_final())
+                .count()
+                >= n
+        }
+    };
+    flow.say("Add one.").await;
+    flow.until("the first full checks to end", ended(1)).await;
+    flow.say("Add two.").await;
+    let board = flow.until("the second full checks to end", ended(2)).await;
+    for check in board.integrated_checks.values() {
+        if let IntegratedCheckState::Passed { commands } = &check.state {
+            assert!(
+                commands.iter().all(|command| !command.contains("grep")),
+                "{commands:?}"
+            );
+        }
+    }
+    assert_eq!(check_records(&flow, "grep").await, [(false, None)]);
+    flow.stop().await;
+}
+
+/// #291: the full checks' runs are kept like any other check's: their checkout's path is
+/// taken as git names it, so its workdir is never "outside its repository".
+#[tokio::test]
+async fn the_full_checks_results_are_kept() {
+    let flow = Flow::start(
+        "integrated-kept",
+        options(),
+        script(move |turn| async move {
+            if turn.is_orchestrator() && turn.input.starts_with("Build it") {
+                thread_commit(&turn, "one.txt", "one\n");
+                return Reply::text("Built one.");
+            }
+            Reply::text("[quiet]")
+        }),
+    )
+    .await;
+    flow.say("Build it.").await;
+    flow.until("the full checks to end", |board| {
+        board
+            .integrated_checks
+            .values()
+            .any(|check| check.state.is_final())
+    })
+    .await;
+    assert_eq!(check_records(&flow, "full-checks").await, [(false, None)]);
+    flow.stop().await;
+}
