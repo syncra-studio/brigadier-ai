@@ -25,7 +25,7 @@ import { cleanStorage, freeUpProjects, onCleanProgress, openUninstall, scanStora
 import { useApp } from "@/state/store";
 
 /** The Storage page's rows, for the page and for Settings search. */
-export const STORAGE_NEXT_ROWS = {
+export const STORAGE_ROWS = {
   computer: {
     label: "This computer",
     description: "What Brigadier keeps on this computer, and what of it can go",
@@ -152,7 +152,7 @@ function freeUpUnused(ids: string[]): void {
  * with a cleanup for just that project, or all of them with search, sort and the projects not
  * in use), Archived chats and Uninstall.
  */
-export function StorageNextPage() {
+export function StoragePage() {
   const { report, checkedAtMs, scanning, scanError, freeUp, cleanScan, unused } = useStorage();
   const mac = useApp((s) => s.info?.platform === "macos");
   const reveal = mac ? "Reveal in Finder" : "Show in folder";
@@ -171,7 +171,7 @@ export function StorageNextPage() {
     useStorage.setState({ freeUp: { phase: "review", scanId: report.scanId, ticked: startTicked(report, projectId) } });
     requestAnimationFrame(() =>
       document
-        .querySelector(`[data-setting="${STORAGE_NEXT_ROWS.storage.label}"]`)
+        .querySelector(`[data-setting="${STORAGE_ROWS.storage.label}"]`)
         ?.scrollIntoView({ block: "start", behavior: "smooth" }),
     );
   };
@@ -195,10 +195,10 @@ export function StorageNextPage() {
         </>
       }
     >
-      <StorageSection title={STORAGE_NEXT_ROWS.computer.label}>
+      <StorageSection title={STORAGE_ROWS.computer.label}>
         <UsageCard report={report} error={scanError} />
       </StorageSection>
-      <StorageSection title={STORAGE_NEXT_ROWS.storage.label}>
+      <StorageSection title={STORAGE_ROWS.storage.label}>
         <FreeUpCard
           report={freeUp.phase === "removing" || freeUp.phase === "done" ? cleanScan : report}
           scanned={report}
@@ -209,8 +209,8 @@ export function StorageNextPage() {
       </StorageSection>
       {report && report.projects.length > 0 && (
         <StorageSection
-          title={STORAGE_NEXT_ROWS.projects.label}
-          description={STORAGE_NEXT_ROWS.projects.description}
+          title={STORAGE_ROWS.projects.label}
+          description={STORAGE_ROWS.projects.description}
           aside="Largest first · shared items count once"
         >
           <ProjectsCard
@@ -225,18 +225,18 @@ export function StorageNextPage() {
           />
         </StorageSection>
       )}
-      <StorageSection title={STORAGE_NEXT_ROWS.archived.label}>
+      <StorageSection title={STORAGE_ROWS.archived.label}>
         <StorageCard>
           <div className="flex items-center gap-4 py-4">
-            <RowText title={STORAGE_NEXT_ROWS.archived.label} line={STORAGE_NEXT_ROWS.archived.description} />
+            <RowText title={STORAGE_ROWS.archived.label} line={STORAGE_ROWS.archived.description} />
             <Pill onClick={() => openSettings("archived")}>Manage</Pill>
           </div>
         </StorageCard>
       </StorageSection>
-      <StorageSection title="Uninstall" setting={STORAGE_NEXT_ROWS.uninstall.label}>
+      <StorageSection title="Uninstall" setting={STORAGE_ROWS.uninstall.label}>
         <StorageCard>
           <div className="flex items-center gap-4 py-4">
-            <RowText title={STORAGE_NEXT_ROWS.uninstall.label} line={STORAGE_NEXT_ROWS.uninstall.description} />
+            <RowText title={STORAGE_ROWS.uninstall.label} line={STORAGE_ROWS.uninstall.description} />
             <DangerPill onClick={() => openUninstall()}>Uninstall…</DangerPill>
           </div>
         </StorageCard>
@@ -272,7 +272,7 @@ function UsageCard({ report, error }: { report: StorageReport | null; error: str
         )}
       </div>
       {error && <span className="text-settings-danger text-settings-small">{error}</span>}
-      <UsageBar parts={parts} />
+      <UsageBar parts={parts} pending={!report} />
       <div className="flex justify-between gap-4">
         {parts.map((part) => (
           <div key={part.key} data-legend={part.key} className="flex flex-col gap-1.25">

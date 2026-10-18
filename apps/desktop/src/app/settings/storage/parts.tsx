@@ -199,10 +199,14 @@ export function Dot({ color }: { color: string }) {
 }
 
 /** The usage bar: each part's share of the total, 2 apart; a part too small to see still shows. */
-export function UsageBar({ parts }: { parts: readonly Part[] }) {
+export function UsageBar({ parts, pending = false }: { parts: readonly Part[]; pending?: boolean }) {
   const shown = parts.filter((part) => part.bytes > 0);
   return (
-    <div aria-hidden className="bg-settings-track flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full">
+    <div
+      aria-hidden
+      // Before the first scan the empty track holds the bar's room.
+      data-slot={pending ? "storage-bar-pending" : "storage-bar"}
+      className="bg-settings-track flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full">
       {shown.map((part) => (
         <span
           key={part.key}

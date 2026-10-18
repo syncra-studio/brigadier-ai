@@ -3,12 +3,12 @@ import { test } from "node:test";
 
 import { renderFixtureLive } from "@/fixtures/headless";
 
-// Settings › Storage drawn to the user's design (#280), not shown in the app yet: what Brigadier
+// Settings › Storage, drawn to the user's design (#280): what Brigadier
 // uses, Free up space reviewed, removed and done right in its card, a project opened and freed
 // up alone, all projects searched and paged, the projects not in use freed up after a confirm,
 // Manage and Uninstall.
 test("Storage reviews, frees up and shows each project, in the design's words", { timeout: 90000 }, async (t) => {
-  const dump = await renderFixtureLive(t, "storage-next.html?drive=1", "storage-next-result", 60000);
+  const dump = await renderFixtureLive(t, "storage.html?drive=1", "storage-result", 60000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
   assert.equal(seen.error, undefined);
   assert.equal(seen.title, "Storage");

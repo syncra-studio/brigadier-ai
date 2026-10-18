@@ -1,35 +1,39 @@
-/** Settings → Storage over a faked daemon: scans, the Review and Choose dialogs, and a clean. */
+/** Settings › Storage over a faked daemon. */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { revealSetting } from "@/app/settings/reveal";
-import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
+import { StoragePage } from "@/app/settings/storage/StoragePage";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { CleanItem, Request, StorageReport } from "@/ipc/generated";
+import type { CleanItem, ProjectUsage, Request, StorageReport } from "@/ipc/generated";
+import { emitCleanProgress, useStorageUi } from "@/state/storage";
 import { useApp } from "@/state/store";
 
 /*
- * ?drive=1 refreshes, reviews and frees up space, chooses items by hand, opens disk use per
- * project and Manage, and writes what it saw to #storage-result (StoragePageRender.test.ts
- * reads it). Without it, the page stays as it opens, for screenshots.
+ * ?state=rest|review|removing|done|opened|all stops in that state, for screenshots. ?drive=1
+ * goes through every state (the review ticked and unticked, removing with how far it got,
+ * done and what was removed, a project opened and freed up alone, all projects searched,
+ * sorted and paged, the projects not in use freed up, Manage and Uninstall) and writes what it
+ * saw to #storage-result (StoragePageRender.test.ts reads it).
  */
 const params = new URLSearchParams(location.search);
-document.documentElement.dataset.density = params.get("density") === "compact" ? "compact" : "normal";
-// Driven, nothing animates or blurs (see the archived chats fixture).
+document.documentElement.dataset.density = "normal";
 if (params.has("drive")) {
   const still = document.createElement("style");
   still.textContent =
     "*, *::before, *::after { animation: none !important; transition: none !important; backdrop-filter: none !important; }";
   document.head.append(still);
 }
-const GB = 1024 ** 3;
-const MB = 1024 ** 2;
+
+const KB = 1024;
+const MB = 1024 * KB;
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.now();
 
 function item(id: string, fields: Partial<CleanItem>): CleanItem {
   return {
     id,
-    category: "finishedWork",
+    category: "agentFiles",
     label: id,
     path: null,
     bytes: 0,
@@ -43,79 +47,169 @@ function item(id: string, fields: Partial<CleanItem>): CleanItem {
   };
 }
 
+function project(name: string, path: string, mb: number, daysAgo: number, fields: Partial<ProjectUsage> = {}): ProjectUsage {
+  const bytes = Math.round(mb * MB);
+  const blobs = Math.round(bytes * 0.0605);
+  return {
+    projectId: name,
+    name,
+    path,
+    repoFound: true,
+    lastUsedMs: NOW - daysAgo * DAY,
+    conversations: 12,
+    archived: 0,
+    worktreesBytes: 0,
+    brainBytes: bytes - blobs,
+    blobsBytes: blobs,
+    scratchBytes: 0,
+    ...fields,
+  };
+}
+
+// The design's numbers: 101 projects, 38 of them not used in three months.
+const named = [
+  project("brigadier", "/Users/me/code/brigadier", 30.1, 0, {
+    conversations: 142,
+    archived: 6,
+    brainBytes: Math.round(28.0 * MB),
+    blobsBytes: Math.round(2.1 * MB),
+  }),
+  project("website", "/Users/me/code/website", 12.4, 1),
+  project("infra-scripts", "/Users/me/code/infra-scripts", 6.4, 4),
+  project("notes", "/Users/me/Documents/notes", 3.5, 14),
+  project("design-tokens", "/Users/me/code/design-tokens", 2.8, 150),
+  project("mobile-app", "/Users/me/code/mobile-app", 2.3, 21),
+  project("old-landing", "/Users/me/code/old-landing", 1.9, 240),
+];
+const idle = Array.from({ length: 36 }, (_, i) =>
+  project(`archive-${String(i + 1).padStart(2, "0")}`, `/Users/me/code/archive-${i + 1}`, 5.1 / 36, 100 + i * 5),
+);
+const used = Array.from({ length: 58 }, (_, i) =>
+  project(`tool-${String(i + 1).padStart(2, "0")}`, `/Users/me/code/tool-${i + 1}`, 15.2 / 58, 2 + (i % 60)),
+);
+const projects = [...named, ...idle, ...used];
+
+const sessionFiles = [
+  item("inspector", { label: "Inspector session that's gone", reason: "What it ran in and its session files. Branches stay." }),
+  item("claude-1", {
+    label: "Claude Code session",
+    reason: "Its data folder is gone; it used Brigadier's tools",
+    path: "/private/tmp/brigadier-polish-preview",
+    bytes: 268 * KB,
+  }),
+  item("claude-2", {
+    label: "Claude Code session",
+    reason: "Its data folder is gone; it used Brigadier's tools",
+    path: "/private/tmp/brigadier-t3-preview/data",
+    bytes: Math.round(2.2 * MB),
+  }),
+  item("codex-1", {
+    label: "Their data folder is gone; Codex recorded Brigadier as the app that started them",
+    reason: "Its data folder is gone; Codex recorded Brigadier as the app that started them",
+    path: "/private/tmp/codex-preview-c2/data",
+    bytes: 340 * KB,
+  }),
+  // Nine more, two of them brigadier's own (1.2 MB of it can go).
+  ...Array.from({ length: 9 }, (_, i) =>
+    item(`claude-more-${i + 1}`, {
+      label: "Claude Code session",
+      reason: "Its data folder is gone; it used Brigadier's tools",
+      path: `/private/tmp/brigadier-preview-${i + 1}/data`,
+      bytes: i < 2 ? Math.round(0.6 * MB) : Math.round(((5.8 - 2.2 - 1.2) * MB - 268 * KB) / 7),
+      projectId: i < 2 ? "brigadier" : null,
+    }),
+  ),
+];
+
 const report: StorageReport = {
   scanId: "scan-1",
   dataDir: "/Users/me/Library/Application Support/Brigadier",
-  totalBytes: 31 * GB,
-  cleanableBytes: 0,
-  projects: [
-    { projectId: "web", name: "storefront-web", path: "/Users/me/code/storefront-web", repoFound: true, lastUsedMs: Date.now(), conversations: 4, archived: 0, worktreesBytes: 14 * GB, brainBytes: GB, blobsBytes: 2 * GB, scratchBytes: 200 * MB },
-    { projectId: "api", name: "billing-api", path: "/Users/me/code/billing-api", repoFound: false, lastUsedMs: Date.now(), conversations: 2, archived: 1, worktreesBytes: 4 * GB, brainBytes: 300 * MB, blobsBytes: 500 * MB, scratchBytes: 0 },
-  ],
+  totalBytes: Math.round(245.5 * MB),
+  cleanableBytes: Math.round(40 * MB),
+  projects,
   shared: [
-    { part: "database", bytes: 600 * MB },
-    { part: "models", bytes: 3 * GB },
-    { part: "logs", bytes: 900 * MB },
-    { part: "personalBrain", bytes: 200 * MB },
-    { part: "other", bytes: GB },
+    { part: "models", bytes: Math.round(124.7 * MB) },
+    { part: "logs", bytes: 444 * KB },
+    { part: "other", bytes: Math.round(40.7 * MB) },
   ],
   items: [
-    item("done", { label: "Work folder of “Fix login”", path: "/w/fix-login", bytes: 9 * GB, reason: "Its session ended and its branch is merged." }),
-    item("build", { category: "buildFiles", label: "Build files of “Checkout page”", bytes: 2 * GB, reason: "Rebuilt when the session runs again." }),
-    item("logs", { category: "oldLogs", label: "Logs older than 30 days", bytes: 400 * MB, reason: "Old logs." }),
-    item("dirty", {
-      label: "Work folder of “Draft”",
-      bytes: 2 * GB,
-      checked: false,
-      reason: "Has unsaved changes, so it isn't part of the sweep.",
-      badges: [{ type: "hasChanges" }],
+    item("tmp", {
+      category: "temporary",
+      label: "Temporary files",
+      reason: "Files Brigadier made while it worked.",
+      path: "/Users/me/Library/Application Support/Brigadier/tmp",
+      bytes: Math.round(33.9 * MB),
     }),
-    item("unmerged", {
-      label: "Branch brigadier/b in storefront-web",
-      checked: false,
-      selectable: false,
-      reason: "Has 3 commits not merged into main.",
-      badges: [{ type: "notMerged", ahead: 3 }],
+    ...sessionFiles,
+    item("worktrees", {
+      category: "finishedWork",
+      label: "Empty work folder of a project",
+      reason: "A project's folder of work folders with nothing left in it.",
+      path: "/Users/me/Library/Application Support/Brigadier/worktrees/website",
     }),
-    item("model", { category: "models", label: "Speech model (base)", bytes: 150 * MB, checked: false, toTrash: true }),
   ],
-  kept: [{ category: "finishedWork", label: "2 work folders of open sessions", bytes: 4 * GB, reason: "Their sessions are still open." }],
+  kept: [
+    { category: "finishedWork", label: "Work folders of open sessions", bytes: 24 * KB, reason: "Their sessions are still open." },
+    { category: "oldLogs", label: "Today's logs", bytes: 16 * KB, reason: "Brigadier writes to them now." },
+  ],
 };
 
 useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as typeof state.info }));
 
 const calls: string[] = [];
 let scans = 0;
-// Set, the next scan is answered only when `release` is called.
-let holdNextScan = false;
-// Set, scans find nothing: no projects, nothing to remove.
-let emptyScans = false;
-let release: (() => void) | null = null;
+let cleaned = false;
+let finishClean: (() => void) | null = null;
 mockIPC((command, payload) => {
   if (command === "uninstall_app") return { identifier: "app.brigadier.fixture" };
+  if (command === "reveal_path") {
+    calls.push(`reveal ${(payload as { path: string }).path}`);
+    return null;
+  }
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
     case "scanStorage": {
       scans++;
-      const scanned = emptyScans ? { ...report, projects: [], shared: [], items: [], kept: [] } : report;
-      const answer = { method: req.method, report: { ...scanned, scanId: `scan-${scans}` } };
-      if (!holdNextScan) return answer;
-      holdNextScan = false;
+      // After a clean, what it removed is gone.
+      const scanned = cleaned
+        ? { ...report, totalBytes: Math.round(205.8 * MB), items: report.items.filter((i) => i.id === "codex-1") }
+        : report;
+      return { method: req.method, report: { ...scanned, scanId: `scan-${scans}` } };
+    }
+    case "cleanStorage": {
+      calls.push(`clean ${req.items.length}`);
+      const answer = {
+        method: req.method,
+        report: {
+          removed: req.items.length,
+          reclaimedBytes: Math.round(39.7 * MB),
+          trashedBytes: 0,
+          codexThreadsDeleted: 0,
+          failures: [],
+        },
+      };
       return new Promise((resolve) => {
-        release = () => resolve(answer);
+        finishClean = () => {
+          cleaned = true;
+          resolve(answer);
+        };
       });
     }
-    case "cleanStorage":
-      calls.push(`clean ${req.scanId} ${req.items.join(",")}`);
+    case "freeUpProjects":
+      calls.push(`free up ${req.ids.length} projects`);
+      for (const freed of report.projects.filter((p) => req.ids.includes(p.projectId))) {
+        Object.assign(freed, { conversations: 0, archived: 0, brainBytes: 0, blobsBytes: 0 });
+      }
       return {
         method: req.method,
         report: {
-          removed: req.items.length - 1,
-          reclaimedBytes: 9 * GB,
-          trashedBytes: 0,
-          codexThreadsDeleted: 0,
-          failures: [{ id: "build", label: "Build files of “Checkout page”", error: "a process runs in it" }],
+          freed: req.ids.length,
+          conversationsDeleted: 456,
+          reclaimedBytes: Math.round(1.2 * MB),
+          trashedBytes: Math.round(8.6 * MB),
+          keptBranches: [],
+          failures: [],
         },
       };
     default:
@@ -129,168 +223,203 @@ const all = <T extends Element = HTMLElement>(selector: string, root: ParentNode
   ...root.querySelectorAll<T>(selector),
 ];
 const text = (element: Element | null | undefined) => element?.textContent?.trim() ?? "";
-const dialog = () => q('[role="dialog"]');
 const button = (name: string, root: ParentNode = document) =>
   all<HTMLButtonElement>("button", root).find(
     (element) => text(element) === name || element.getAttribute("aria-label") === name,
   );
-/** The Choose dialog's lines: each group's, then its items' (those of the groups opened). */
-const PICK_LINES = '[data-slot="storage-pick-group"], [data-slot="storage-pick"]';
-const pickLabel = (line: Element) =>
-  line.matches('[data-slot="storage-pick-group"]')
-    ? (line.querySelector('button[role="checkbox"]')?.getAttribute("aria-label") ?? "")
-    : text(line.querySelector("label > span > span"));
-const picks = () =>
-  all(PICK_LINES, dialog() ?? document).map((line) => ({
-    label: pickLabel(line),
-    state: line.querySelector('button[role="checkbox"]')?.getAttribute("data-state"),
-  }));
-const pickBox = (label: string) =>
-  all(PICK_LINES, dialog() ?? document)
-    .find((line) => pickLabel(line) === label)
-    ?.querySelector<HTMLButtonElement>('button[role="checkbox"]');
-const row = (label: string) => all('[data-slot="settings-row"]').find((element) => element.dataset.setting === label);
+const click = (name: string, root?: ParentNode) => {
+  const found = button(name, root);
+  if (!found) throw new Error(`no button “${name}”`);
+  found.click();
+};
+const card = () => q("[data-free-up]");
+const projectRows = () => all("[data-project]").map((row) => row.dataset.project);
+const setInput = (input: HTMLInputElement, value: string) => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+};
+/** The text of each cell of a row, by its leaf elements. */
+const leaves = (root: Element | null) =>
+  root
+    ? all("span, h2, p, input, button", root)
+        .filter((element) => element.children.length === 0 || element.tagName === "BUTTON")
+        .map((element) => (element instanceof HTMLInputElement ? element.placeholder : text(element)))
+        .filter(Boolean)
+    : [];
+
+type Step = [state: string | null, run: () => void];
 
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
-    if (!params.has("drive")) return;
+    const stop = params.get("state");
+    const drive = params.has("drive");
+    if (!stop && !drive) return;
     const seen: Record<string, unknown> = {};
-    const steps: (() => void)[] = [
-      () => {
-        seen.status = text(q('main [role="status"]'));
-        seen.legend = all("main ul li").map(text);
-        seen.freeRow = text(row("Free up space"));
-        seen.scansAtOpen = scans;
-        holdNextScan = true;
-        button("Refresh")?.click();
-      },
-      () => {
-        seen.scansAfterRefresh = scans;
-        // Review while that scan is out; it lands with the dialog open and gives the items other
-        // ids, so freeing up must name the scan the dialog shows.
-        button("Review")?.click();
-      },
-      () => release?.(),
-      () => {
-        const open = dialog();
-        seen.reviewWidth = Math.round(open?.getBoundingClientRect().width ?? 0);
-        seen.review = {
-          title: text(q("h2", open ?? document)),
-          groups: all('[data-slot="storage-group"] > button', open ?? document).map(text),
-          footer: text(q("p.text-xs", open ?? document)),
-        };
-        all<HTMLButtonElement>('[data-slot="storage-group"] > button', open ?? document)[0]?.click();
-      },
-      () => {
-        seen.firstGroup = all('[data-slot="storage-group"] li', dialog() ?? document).map(text);
-        button("Free up 11.4 GB", dialog() ?? document)?.click();
-      },
-      () => {
-        seen.result = text(dialog());
-        button("Done", dialog() ?? document)?.click();
-      },
-      () => {
-        seen.afterDone = { dialog: dialog() !== null, scans };
-        // A search result inside Advanced opens it.
-        revealSetting(STORAGE_ROWS.usage.label);
-      },
-      () => {
-        seen.revealed = q('[data-slot="settings-advanced"]')?.dataset.state;
-        button("Choose…")?.click();
-      },
-      () => {
-        const open = dialog();
-        seen.chooseTitle = text(q("h2", open ?? document));
-        // It opens with its groups closed: a line each.
-        seen.chooseGroups = all('[data-slot="storage-pick-group"]', open ?? document).map(text);
-        seen.chooseItemsAtOpen = all('[data-slot="storage-pick"]', open ?? document).length;
-        seen.chooseHeightAtOpen = Math.round(open?.getBoundingClientRect().height ?? 0);
-        for (const group of all<HTMLButtonElement>('[data-slot="storage-pick-group"] button[aria-expanded]', open ?? document)) {
-          group.click();
-        }
-      },
-      () => {
-        const open = dialog();
-        // All open, it stays its own height and its list scrolls instead.
-        const list = q('[data-slot="storage-choose-list"]', open ?? document);
-        seen.chooseHeight = Math.round(open?.getBoundingClientRect().height ?? 0);
-        seen.chooseScrolls = (list?.scrollHeight ?? 0) > (list?.clientHeight ?? 0);
-        seen.choose = picks();
-        seen.chooseNotes = all('[data-slot="storage-pick"] label > span.text-xs', open ?? document).map(text);
-        seen.chooseStatus = text(q('[role="status"]', open ?? document));
-        seen.reveals = all('[data-slot="storage-pick"] button[aria-label="Reveal in Finder"]', open ?? document).length;
-        // The partly picked group's box picks all of it: the folder with unsaved changes too.
-        pickBox("Finished sessions’ work folders")?.click();
-      },
-      () => {
-        const open = dialog();
-        seen.groupPicked = picks().slice(0, 3);
-        seen.chooseStatusAfter = text(q('[role="status"]', open ?? document));
-        const review = all<HTMLButtonElement>("button", open ?? document).find((b) => text(b).startsWith("Review"));
-        seen.removeButton = text(review);
-        review?.click();
-      },
-      () => {
-        const open = dialog();
-        seen.chosenReview = {
-          title: text(q("h2", open ?? document)),
-          groups: all('[data-slot="storage-group"] > button', open ?? document).map(text),
-          action: text(all("button", open ?? document).find((b) => text(b).startsWith("Free up"))),
-        };
-        button("Cancel", open ?? document)?.click();
-      },
-      () => {
-        seen.afterCancel = { dialog: dialog() !== null, calls: calls.length };
-        button("View")?.click();
-      },
-      () => {
-        const open = dialog();
-        seen.usageTitle = text(q("h2", open ?? document));
-        seen.usage = all('[data-slot="storage-project"]', open ?? document).map((project) => ({
-          name: text(project.firstElementChild),
-          parts: all("li", project).map(text),
-        }));
-        seen.shared = all('[data-slot="storage-shared"]', open ?? document).map(text);
-        seen.usageButtons = all("button", open ?? document).map((b) => b.getAttribute("aria-label") ?? text(b));
-        button("Done", open ?? document)?.click();
-      },
-      // Scans that find nothing: both dialogs say so.
-      () => {
-        emptyScans = true;
-        button("Refresh")?.click();
-      },
-      () => button("Choose…")?.click(),
-      () => {
-        const open = dialog();
-        seen.chooseEmpty = {
-          text: text(q('[data-slot="storage-empty"]', open ?? document)),
-          review: all<HTMLButtonElement>("button", open ?? document).find((b) => text(b).startsWith("Review"))?.disabled,
-        };
-        button("Cancel", open ?? document)?.click();
-      },
-      () => button("View")?.click(),
-      () => {
-        seen.usageEmpty = text(q('[data-slot="storage-empty"]', dialog() ?? document));
-        button("Done", dialog() ?? document)?.click();
-      },
-      () => {
-        button("Manage")?.click();
-      },
-      () => {
-        seen.selection = useApp.getState().selection;
-        seen.calls = calls;
-        setResult(JSON.stringify(seen));
-      },
+    const steps: Step[] = [
+      [
+        "rest",
+        () => {
+          seen.title = text(q("h1"));
+          seen.legend = all("[data-legend]").map(text);
+          seen.usage = text(q("[data-usage]"));
+          seen.rest = leaves(card());
+          seen.top = projectRows();
+          seen.more = leaves(q('[data-project="more"]'));
+          seen.shared = leaves(q('[data-project="shared"]'));
+          seen.sections = all("section h2").map(text);
+          click("Review");
+        },
+      ],
+      [null, () => click("Open Agent session files")],
+      [null, () => click("Their data folder is gone; Codex recorded Brigadier as the app that started them")],
+      [
+        "review",
+        () => {
+          seen.review = all("[data-group]").map((group) => leaves(group.firstElementChild));
+          seen.items = all("[data-item]").map((row) => ({
+            text: leaves(row).join(" | "),
+            ticked: q('[role="checkbox"]', row)?.getAttribute("aria-checked"),
+          }));
+          seen.footer = leaves(card()?.lastElementChild ?? null);
+          click("Show 9 more");
+        },
+      ],
+      [
+        null,
+        () => {
+          seen.afterMore = all("[data-item]").length;
+          click("Free up 39.7 MB");
+        },
+      ],
+      [null, () => emitCleanProgress({ scanId: "scan-1", done: 9, total: 14 })],
+      [
+        "removing",
+        () => {
+          seen.removing = leaves(card());
+          finishClean?.();
+        },
+      ],
+      [null, () => {}],
+      [
+        "done",
+        () => {
+          seen.done = leaves(card());
+          click("What was removed");
+        },
+      ],
+      [
+        null,
+        () => {
+          seen.removed = all("[data-removed] > div").length;
+          click("Refresh");
+          cleaned = false;
+        },
+      ],
+      [
+        null,
+        () => {
+          seen.afterRefresh = q("[data-free-up]")?.dataset.freeUp;
+          click("Refresh");
+        },
+      ],
+      [null, () => (q('[data-project="brigadier"] > button') as HTMLButtonElement).click()],
+      [
+        "opened",
+        () => {
+          const opened = q('[data-project="brigadier"]');
+          seen.opened = all("[data-part-row]", opened ?? document).map((row) => leaves(row));
+          seen.openedFooter = leaves(opened?.lastElementChild?.lastElementChild ?? null);
+          click("Free up 1.2 MB");
+        },
+      ],
+      [
+        null,
+        () => {
+          seen.projectReview = leaves(card()?.lastElementChild ?? null);
+          click("Cancel");
+        },
+      ],
+      [null, () => (q('[data-project="brigadier"] > button') as HTMLButtonElement).click()],
+      [null, () => click("Show all")],
+      [
+        "all",
+        () => {
+          const list = q("[data-projects='all']");
+          seen.allHead = leaves(list?.firstElementChild ?? null);
+          seen.unused = leaves(q("[data-unused]"));
+          seen.allRows = all("[data-project]", list ?? document)
+            .slice(0, 7)
+            .map((row) => leaves(row.firstElementChild));
+          seen.allCount = all("[data-project]", list ?? document).length;
+          seen.paging = leaves(list?.lastElementChild ?? null);
+          click("Show 20 more");
+        },
+      ],
+      [
+        null,
+        () => {
+          seen.afterPage = all("[data-projects='all'] [data-project]").length;
+          setInput(q<HTMLInputElement>("[data-projects='all'] input")!, "note");
+        },
+      ],
+      [
+        null,
+        () => {
+          seen.searched = projectRows();
+          setInput(q<HTMLInputElement>("[data-projects='all'] input")!, "");
+          click("Free up 9.8 MB", q("[data-unused]") ?? document);
+        },
+      ],
+      [
+        null,
+        () => {
+          seen.confirm = leaves(q("[data-unused]"));
+          click("Free up 9.8 MB", q("[data-unused]") ?? document);
+        },
+      ],
+      [null, () => {}],
+      [
+        null,
+        () => {
+          seen.unusedAfter = q("[data-unused]") ? leaves(q("[data-unused]")) : null;
+          click("Manage");
+        },
+      ],
+      [
+        null,
+        () => {
+          seen.selection = useApp.getState().selection;
+          click("Uninstall…");
+        },
+      ],
+      [
+        null,
+        () => {
+          seen.uninstall = useStorageUi.getState().uninstallOpen;
+          seen.calls = calls;
+          setResult(JSON.stringify(seen));
+        },
+      ],
     ];
     let stopped = false;
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     void (async () => {
-      await wait(300);
-      for (const step of steps) {
+      await wait(400);
+      for (const [state, run] of steps) {
         if (stopped) return;
-        step();
-        await wait(150);
+        if (!drive && state === stop) {
+          document.documentElement.dataset.state = stop ?? "";
+          return;
+        }
+        try {
+          run();
+        } catch (error) {
+          seen.error = `${state ?? "step"}: ${String(error)}`;
+          setResult(JSON.stringify(seen));
+          return;
+        }
+        await wait(200);
       }
     })();
     return () => {
@@ -299,7 +428,7 @@ function Fixture() {
   }, []);
   return (
     <TooltipProvider>
-      <div className="bg-background text-foreground flex h-screen">
+      <div className="bg-settings-bg text-foreground flex h-screen">
         <main className="flex h-full min-w-0 flex-1">
           <div className="min-w-0 flex-1">
             <StoragePage />
