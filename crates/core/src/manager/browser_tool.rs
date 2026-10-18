@@ -246,8 +246,7 @@ impl BrowserHub {
 /// Whether agents get the browser tools with the built-in browser `on`: they drive it on macOS
 /// for now (Windows: a GitHub issue; Linux has no built-in browser).
 pub(crate) fn agents_browse(on: bool) -> bool {
-    // Kept to development runs until it is wired.
-    cfg!(target_os = "macos") && std::env::var_os("BRIGADIER_BROWSER_TOOL").is_some() && on
+    cfg!(target_os = "macos") && on
 }
 
 /// The op a tool call asks of the app; a call that says too little or too much is refused.
@@ -790,6 +789,14 @@ mod tests {
                 text: "Hello".into(),
             },
         }
+    }
+
+    /// Agents get the browser tools wherever the built-in browser is on and they can drive it:
+    /// macOS, with no switch of their own.
+    #[test]
+    fn agents_browse_wherever_the_browser_is_on_on_macos() {
+        assert_eq!(agents_browse(true), cfg!(target_os = "macos"));
+        assert!(!agents_browse(false));
     }
 
     #[tokio::test]

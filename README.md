@@ -96,8 +96,8 @@ rough edges.
 
 - **macOS** is the main platform, and every feature here works on it.
 - **Windows and Linux** build and pass a launch check in CI on every push, but are not ready for
-  real use. The worker sandbox, computer use and browser data import are macOS-only for now,
-  and Linux has no built-in browser.
+  real use. The worker sandbox, computer use, agents in the browser and browser data import are
+  macOS-only for now, and Linux has no built-in browser.
 - **Agents:** Claude Code and Codex today. Next: the Cursor, opencode and Grok CLIs, and local
   models.
 
@@ -126,7 +126,9 @@ rough edges.
   same worktree. A conversation continues on the other vendor and goes back after the reset.
 - **Built-in browser** (macOS, Windows). Opens the pages agents and you work on, with history and
   downloads. On macOS it also has per-site camera and microphone choices, and can import cookies
-  and history from your other browsers.
+  and history from your other browsers. On macOS agents use it too: they read and work a page in a
+  background tab with your sign-ins, you take over by using the page (**Continue** hands it back),
+  and paying, signing in or sending in your name asks you first.
 - **Terminals, files, review and source.** Terminal tabs, a file tree, a review of everything a
   session changed, and git actions beside the thread.
 - **Dictation and read aloud.** Dictation runs a speech model on your computer, so the audio never

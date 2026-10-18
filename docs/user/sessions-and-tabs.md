@@ -40,6 +40,21 @@ pages, files, side chats. **+** adds one.
 Closing the chat tab doesn't stop the session. If it is still working or needs you, a short note
 says so; its row in the sidebar opens it again.
 
+## Agents in the browser
+
+On macOS the thread and its workers can use the built-in browser themselves: open a page, read
+it, click, type and take a screenshot. Their page is a normal browser tab of the session, with
+your sign-ins, and it opens in the background. Switch to it to watch.
+
+- **You take over** by using the page: a click, a key or a scroll pauses the agent. The tab says
+  so, and **Continue** hands it back.
+- **It asks you first** before it pays, signs in, fills a password, card or code field, or sends
+  anything in your name. Its card waits for **Go ahead** or **Don't**.
+- **Merging on its own** proves a change to a web page by opening the preview in such a tab,
+  using the change and attaching the screenshot to the merge.
+
+Windows doesn't have this yet, and Linux has no built-in browser.
+
 ## Chats
 
 A chat outside any project (**New chat** at the top of the sidebar) is a plain conversation with
