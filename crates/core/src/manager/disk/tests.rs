@@ -937,7 +937,8 @@ async fn freeing_up_a_project_keeps_the_project_its_files_and_branches() {
         .unwrap()
         .project_id
         .unwrap();
-    // Its Brain would go to the real Trash: this test leaves that to Remove project's tests.
+    // Its Brain would go to the real Trash: this test leaves that to Remove project's tests,
+    // and checks deleting its conversations doesn't open it again.
     let brain = flow.manager.project_brain_dir(&project);
     flow.manager.close_project_brain(&project).await;
     let _ = std::fs::remove_dir_all(&brain);
@@ -956,6 +957,8 @@ async fn freeing_up_a_project_keeps_the_project_its_files_and_branches() {
     assert!(!worktree.exists());
     assert!(flow.repo.join(".git").exists());
     assert!(branch_exists(&flow.repo, &branch));
+    assert!(!brain.exists(), "its Brain was opened again");
+    assert!(flow.manager.brain_dormant(&project));
     let (_, usage) = scan(&flow, context()).await;
     let used = usage
         .projects

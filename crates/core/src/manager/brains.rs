@@ -289,6 +289,10 @@ impl SessionManager {
         self.start_skeleton_queue();
         let projects = self.core.catalog().projects;
         for project in projects {
+            // A freed-up project's Brain is built again when the project is used.
+            if self.brain_dormant(&project.id) {
+                continue;
+            }
             if let Err(err) = self.project_brain(&project.id).await {
                 tracing::warn!(project = %project.id, error = %err, "could not open the project's brain");
             }
@@ -377,6 +381,37 @@ impl SessionManager {
         self.brains.root.join(&id.0)
     }
 
+    /// Marks a freed-up project's Brain: no launch opens it again, its first use does.
+    fn dormant_mark(&self, id: &ProjectId) -> PathBuf {
+        self.brains.root.join(format!("{}.dormant", id.0))
+    }
+
+    pub(crate) fn brain_dormant(&self, id: &ProjectId) -> bool {
+        self.dormant_mark(id).exists()
+    }
+
+    /// Leaves the project's Brain closed until the project is used again (see
+    /// [`Self::project_brain`]).
+    pub(crate) fn make_brain_dormant(&self, id: &ProjectId) -> Result<()> {
+        let mark = self.dormant_mark(id);
+        std::fs::create_dir_all(&self.brains.root)
+            .and_then(|()| std::fs::write(&mark, b""))
+            .map_err(|err| Error::Invalid(format!("writing {}: {err}", mark.display())))
+    }
+
+    /// The project is used, or gone: its Brain opens as usual again. Whether it was dormant.
+    pub(crate) fn wake_brain(&self, id: &ProjectId) -> bool {
+        let mark = self.dormant_mark(id);
+        match std::fs::remove_file(&mark) {
+            Ok(()) => true,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+            Err(err) => {
+                tracing::warn!(project = %id, error = %err, "could not wake the project's brain");
+                true
+            }
+        }
+    }
+
     /// Moves a removed project's Brain and index files (`brains/<project>/`) to the Trash, once
     /// the project is gone so nothing opens them again: rebuilding them costs time, so they
     /// can be put back. What they took, or why they stay (Storage offers them later).
@@ -402,6 +437,7 @@ impl SessionManager {
             return Ok(open.clone());
         }
         let project = self.core.project(id)?;
+        let woke = self.wake_brain(id);
         let dir = self.brains.root.join(&id.0);
         let root = project.repos.first().map(|repo| PathBuf::from(&repo.path));
         let embedder = self.brains.embedder.clone();
@@ -448,6 +484,10 @@ impl SessionManager {
                 .clone()
         };
         self.start_indexing(id, &opened, false);
+        // A launch opens no dormant Brain, so it may not have fetched the embedding model.
+        if woke {
+            self.ensure_embedder();
+        }
         Ok(opened)
     }
 
@@ -1982,6 +2022,10 @@ impl SessionManager {
         let Some(project) = project else {
             return;
         };
+        // A freed-up project's Brain goes to the Trash whole: there is nothing to open for it.
+        if self.brain_dormant(&project) && !self.brains.projects().contains_key(&project) {
+            return;
+        }
         let Ok(project) = self.project_brain(&project).await else {
             return;
         };

@@ -37,6 +37,9 @@ const CLONE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// Archive, restore and delete of a conversation wait for its cleanup under way (an Undo right
 /// after an archive), and that waits for work already started, two minutes at most.
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// Freeing up projects deletes each one's conversations in turn and waits for its Brain's scan
+/// under way (two minutes at most per project).
+const FREE_UP_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// How long to wait for a freshly launched daemon to accept connections.
 const LAUNCH_WAIT: Duration = Duration::from_secs(10);
 const CONNECT_POLL: Duration = Duration::from_millis(20);
@@ -144,6 +147,7 @@ impl Bridge {
         }
         let timeout = match &request {
             Request::CloneProject { .. } => CLONE_TIMEOUT,
+            Request::FreeUpProjects { .. } => FREE_UP_TIMEOUT,
             Request::Archive { .. } | Request::Restore { .. } | Request::Delete { .. } => {
                 LIFECYCLE_TIMEOUT
             }

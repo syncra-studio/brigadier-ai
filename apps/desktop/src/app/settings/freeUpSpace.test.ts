@@ -22,6 +22,7 @@ function item(id: string, fields: Partial<CleanItem>): CleanItem {
     selectable: true,
     toTrash: false,
     badges: [],
+    projectId: null,
     ...fields,
   };
 }
@@ -107,7 +108,7 @@ test("the button, the confirmation and the result say it plainly", () => {
       removed: 0,
       reclaimedBytes: 0,
       trashedBytes: 0,
-      failures: [{ label: "x", path: null, error: "something runs in it now" }],
+      failures: [{ id: "x", label: "x", path: null, error: "something runs in it now" }],
       codexThreadsDeleted: 0,
     }),
     { title: "Nothing could be removed.", lines: ["1 item stays, as below."] },
@@ -118,7 +119,7 @@ test("the button, the confirmation and the result say it plainly", () => {
   );
 });
 
-const stayed = (error: string) => failure({ label: "x", path: null, error });
+const stayed = (error: string) => failure({ id: "x", label: "x", path: null, error });
 
 test("an item that stayed says why in a plain sentence, with the detail under it", () => {
   assert.deepEqual(stayed("something runs in it now"), {
@@ -203,7 +204,7 @@ test("the disk use parts add up to the scan's total, the rest in Other", () => {
     ...report,
     totalBytes: 20 * GB,
     projects: [
-      { projectId: "p", name: "p", repoFound: true, worktreesBytes: 8 * GB, brainBytes: GB, blobsBytes: GB, scratchBytes: MB },
+      { projectId: "p", name: "p", path: "/p", repoFound: true, lastUsedMs: 0, conversations: 1, archived: 0, worktreesBytes: 8 * GB, brainBytes: GB, blobsBytes: GB, scratchBytes: MB },
     ],
     shared: [
       { part: "database", bytes: GB },

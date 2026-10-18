@@ -86,6 +86,7 @@ impl SessionManager {
         }
         self.close_project_brain(&id).await;
         self.core.forget_project(id.clone()).await?;
+        self.wake_brain(&id);
         tracing::info!(project = %id, "project removed");
 
         let (git, owned) = (self.git.clone(), self.runtime.ledger().branch_ownership());
@@ -152,6 +153,15 @@ impl SessionManager {
     /// any more go.
     pub async fn free_up_projects(&self, ids: Vec<ProjectId>) -> FreeUpProjectsReport {
         let mut report = FreeUpProjectsReport::default();
+        // A conversation's delete removes the stored files only it used, and a collection runs
+        // after each: what they all took is what the folder lost.
+        let blobs = self.data_dir.join("blobs");
+        let before = {
+            let blobs = blobs.clone();
+            blocking(move || Ok(removal::allocated_size(&blobs)))
+                .await
+                .unwrap_or_default()
+        };
         let mut seen = HashSet::new();
         for id in ids {
             if !seen.insert(id.clone()) {
@@ -166,12 +176,13 @@ impl SessionManager {
                 Err(err) => report.failures.push(format!("{name}: {err}")),
             }
         }
-        match self.core.store().gc_blobs().await {
-            Ok(stats) => report.reclaimed_bytes += stats.removed_bytes,
-            Err(err) => {
-                tracing::warn!(error = %err, "could not collect stored files after freeing up projects")
-            }
+        if let Err(err) = self.core.store().gc_blobs().await {
+            tracing::warn!(error = %err, "could not collect stored files after freeing up projects");
         }
+        let after = blocking(move || Ok(removal::allocated_size(&blobs)))
+            .await
+            .unwrap_or(before);
+        report.reclaimed_bytes = before.saturating_sub(after);
         report
     }
 
@@ -184,18 +195,32 @@ impl SessionManager {
         if let Some(why) = plan.preview.blocked {
             return Err(Error::Invalid(why));
         }
+        // Closed first and left closed: deleting its conversations doesn't open it again, and
+        // no launch does until the project is used.
+        self.make_brain_dormant(id)?;
+        self.close_project_brain(id).await;
         let listed: HashSet<&ConversationId> =
             plan.preview.conversations.iter().map(|c| &c.id).collect();
+        let mut deleting = Ok(());
         for conversation in &plan.conversations {
             // A side chat went with its parent.
             if self.core.conversation(conversation).is_err() {
                 continue;
             }
-            self.delete_conversation(conversation.clone(), false, false)
-                .await?;
+            if let Err(err) = self
+                .delete_conversation(conversation.clone(), false, false)
+                .await
+            {
+                deleting = Err(err);
+                break;
+            }
             if listed.contains(conversation) {
                 report.conversations_deleted += 1;
             }
+        }
+        if let Err(err) = deleting {
+            self.keep_freed_brain(id, &plan.conversations).await;
+            return Err(err);
         }
         let (git, owned) = (self.git.clone(), self.runtime.ledger().branch_ownership());
         let branches = plan.preview.branches;
@@ -204,15 +229,29 @@ impl SessionManager {
         self.record_kept(&kept).await;
         report.kept_branches.extend(kept);
         report.failures.extend(failures);
-        self.close_project_brain(id).await;
         match self.trash_project_brain(id).await {
             Ok(bytes) => report.trashed_bytes += bytes,
-            Err(err) => report
-                .failures
-                .push(format!("Its Brain stays ({err}); Storage offers it later.")),
+            Err(err) => {
+                report
+                    .failures
+                    .push(format!("Its Brain could not go to the Trash ({err})."));
+                self.keep_freed_brain(id, &plan.conversations).await;
+            }
         }
         tracing::info!(project = %id, "project freed up");
         Ok(())
+    }
+
+    /// A freed-up project's Brain stays after all: it opens as usual again, and lets go of the
+    /// transcripts of those of `conversations` that were deleted.
+    async fn keep_freed_brain(&self, id: &ProjectId, conversations: &[ConversationId]) {
+        self.wake_brain(id);
+        for conversation in conversations {
+            if self.core.conversation(conversation).is_err() {
+                self.forget_brain_conversation(conversation, Some(id.clone()))
+                    .await;
+            }
+        }
     }
 
     /// Records the Brigadier branches a deleted conversation left behind as kept, as they stand
