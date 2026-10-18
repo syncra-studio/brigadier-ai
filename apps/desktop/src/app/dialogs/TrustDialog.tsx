@@ -1,3 +1,5 @@
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
 import { DialogPill } from "@/app/dialogs/pills";
@@ -9,7 +11,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { Project } from "@/ipc/generated";
+import { shortPath } from "@/lib/format";
 import { useRevealed } from "@/lib/splash";
+import { cn } from "@/lib/utils";
 import { useOnboarding } from "@/state/onboarding";
 import { useApp } from "@/state/store";
 import { projectFolder, setFolderTrust, toAsk } from "@/state/trust";
@@ -58,20 +62,119 @@ export function splitFolder(path: string): { parent: string; name: string } {
   return { parent: trimmed.slice(0, cut), name: trimmed.slice(cut) };
 }
 
+/**
+ * The folder's path as the dialog shows it in a line `fits` says it fits in: whole when it
+ * fits; else the home folder becomes `~`, then the path is cut from the middle, never the ends.
+ * Its first folder and the folder's own name stay, the parts nearest the name kept longest.
+ */
+export function fitFolder(path: string, fits: (text: string) => boolean): { parent: string; name: string } {
+  const whole = splitFolder(path);
+  if (fits(whole.parent + whole.name)) return whole;
+  const { parent, name } = splitFolder(shortPath(path));
+  const parts = parent.split("/").filter(Boolean);
+  // "~/" or "/": what the path starts from.
+  const root = parent.startsWith("~") ? "~/" : "/";
+  if (root === "~/") parts.shift();
+  const shortened = [root + parts.join("/") + (parts.length > 0 ? "/" : "")];
+  for (let tail = parts.length - 2; tail >= 0; tail--) {
+    shortened.push([root + parts[0], "…", ...parts.slice(parts.length - tail)].join("/") + "/");
+  }
+  shortened.push(`${root}…/`);
+  const fitting = shortened.find((candidate) => fits(candidate + name));
+  return { parent: fitting ?? shortened[shortened.length - 1]!, name };
+}
+
+/** How long "Copied" stays in the path's tooltip. */
+const COPIED_MS = 1500;
+
+/**
+ * The folder's path: at rest dimmer with its name a step brighter, shortened to its line;
+ * hovered (or focused) a step brighter, with the whole path above "Click to copy".
+ */
+function FolderPath({ folder }: { folder: string }) {
+  const line = useRef<HTMLButtonElement>(null);
+  // The line's width and font, once laid out.
+  const [measured, setLine] = useState<{ width: number; font: string } | null>(null);
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  useLayoutEffect(() => {
+    const element = line.current;
+    if (!element) return;
+    const measure = () => setLine({ width: element.clientWidth, font: getComputedStyle(element).font });
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    measure();
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const shown = useMemo(() => {
+    const context = measured ? document.createElement("canvas").getContext("2d") : null;
+    if (!measured || !context) return splitFolder(folder);
+    context.font = measured.font;
+    return fitFolder(folder, (text) => context.measureText(text).width <= measured.width);
+  }, [folder, measured]);
+  const copy = () => {
+    void navigator.clipboard.writeText(folder).then(
+      () => setCopied(true),
+      (error: unknown) => console.error("copying the folder's path failed", error),
+    );
+  };
+  return (
+    <div className="relative">
+      <button
+        ref={line}
+        type="button"
+        data-slot="trust-path"
+        aria-label={`${folder}, click to copy`}
+        className="text-settings-meta flex w-full min-w-0 cursor-default text-left font-mono outline-none"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onClick={copy}
+      >
+        <span className={cn("shrink-0 whitespace-pre", open ? "text-settings-text-secondary" : "text-settings-text-tertiary")}>
+          {shown.parent}
+        </span>
+        <span className={cn("min-w-0 break-all", open ? "text-settings-text" : "text-settings-text-secondary")}>
+          {shown.name}
+        </span>
+      </button>
+      {open && (
+        <div
+          role="tooltip"
+          data-slot="trust-path-tooltip"
+          className="bg-settings-chosen border-settings-ring rounded-design-tooltip shadow-design-tooltip pointer-events-none absolute top-full -right-2 -left-2 z-10 mt-1.75 flex flex-col gap-1.5 border px-3 py-2.5"
+        >
+          {/* Lines break after a slash: each part with its slash is one piece, split only when wider than a line. */}
+          <span className="text-settings-text text-settings-meta leading-[1.5] font-mono wrap-anywhere">
+            {folder.split(/(?<=\/)/).map((part, index) => (
+              <span key={index} className="inline-block max-w-full">
+                {part}
+              </span>
+            ))}
+          </span>
+          <span className="text-settings-text-tertiary text-settings-badge">{copied ? "Copied" : "Click to copy"}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The question for one project's folder, and its two answers. */
 export function TrustForm({ project, folder }: { project: Project; folder: string }) {
   const action = useAction();
   const answer = (trusted: boolean) => action.run(() => setFolderTrust(project.id, folder, trusted));
-  const { parent, name } = splitFolder(folder);
   return (
     <div className="flex flex-col">
       <div className="flex flex-col gap-3 px-6 pt-6">
         <DialogHeader className="gap-1.5">
           <DialogTitle className="text-dialog-title text-settings-text font-medium">Trust this folder?</DialogTitle>
-          <p data-slot="trust-path" className="flex min-w-0 font-mono text-settings-meta">
-            <span className="text-settings-text-tertiary">{parent}</span>
-            <span className="text-settings-text-secondary">{name}</span>
-          </p>
+          <FolderPath folder={folder} />
         </DialogHeader>
         <DialogDescription className="text-settings-text-secondary text-settings-small leading-[1.5]">
           Agents can edit and run files here without asking, and the folder's own settings can run code.

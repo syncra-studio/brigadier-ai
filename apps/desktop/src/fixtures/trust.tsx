@@ -1,8 +1,9 @@
 /**
  * The folder trust question over a faked shell and daemon: four projects, `invoice-service` and
  * `ops-scripts` never asked about, `invoice-service` open in its new session. ?density=compact
- * for the compact sizes. ?drive=1 moves between a plain chat, an answered project and the two
- * unanswered ones, answers both and comes back, and writes what it saw to #trust-result
+ * for the compact sizes, ?long=1 for a path too long for its line. ?drive=1 moves between a
+ * plain chat, an answered project and the two unanswered ones, answers both and comes back,
+ * and writes what it saw to #trust-result
  * (TrustDialogRender.test.ts reads it). Without it the page stays as it opens, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -26,7 +27,11 @@ if (params.has("drive")) {
 
 const names = ["brigadier-ai", "landing-site", "invoice-service", "ops-scripts"];
 const unanswered = new Set(["invoice-service", "ops-scripts"]);
-const folderOf = (name: string) => `/Users/you/Development/${name}`;
+// ?long=1: invoice-service lives deep in iCloud Drive, too long for the dialog's line.
+const LONG =
+  "/Users/you/Library/Mobile Documents/com~apple~CloudDocs/Work/clients/acme-corporation/2026/q4-launch/repositories/invoice-service";
+const folderOf = (name: string) =>
+  params.has("long") && name === "invoice-service" ? LONG : `/Users/you/Development/${name}`;
 const projects: Project[] = names.map((name, index) => ({
   id: `p${index}`,
   name,
@@ -69,11 +74,12 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
 function dialog() {
   const card = document.querySelector<HTMLElement>("[data-testid=trust-dialog]");
   if (!card) return null;
-  const first = card.querySelector("button")!;
+  const pills = [...card.querySelectorAll("button:not([data-slot=trust-path])")];
+  const first = pills[0]!;
   return {
     title: card.querySelector("h2")?.textContent,
-    path: card.querySelector("h2 + p")?.textContent,
-    buttons: [...card.querySelectorAll("button")].map((button) => button.textContent),
+    path: card.querySelector("[data-slot=trust-path]")?.textContent,
+    buttons: pills.map((button) => button.textContent),
     focused: (document.activeElement as HTMLElement | null)?.dataset.testid ?? document.activeElement?.textContent,
     width: card.getBoundingClientRect().width,
     radius: parseFloat(getComputedStyle(card).borderRadius),
