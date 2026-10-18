@@ -16,8 +16,12 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 export PATH="$HOME/.cargo/bin:$PATH"
 # Three preview tests make a BRIGADIER_DATA_DIR in their temp folder, which a preview
-# accepts only under /tmp.
-export TMPDIR=/tmp
+# accepts only under /tmp. A session's own temp folder is there already and is the one its
+# sandbox lets it write (clang's temporary files among the rest), so it is kept.
+case "${TMPDIR:-}" in
+  /tmp/?* | /private/tmp/?*) ;;
+  *) export TMPDIR=/tmp ;;
+esac
 
 cross=false
 live=false

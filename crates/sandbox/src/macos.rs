@@ -626,6 +626,11 @@ const SEATBELT_BASE: &str = r#"(version 1)
 (allow user-preference-read)
 "#;
 
+/// `/bin/ps` is setuid root, and macOS refuses a sandboxed process every setuid exec whatever
+/// its profile allows (#287): ps alone runs outside the sandbox. It reads process information,
+/// as `sysctl-read` already allows, and writes nothing but its output.
+const SEATBELT_PS: &str = "(allow process-exec (literal \"/bin/ps\") (with no-sandbox))\n";
+
 const SEATBELT_NETWORK: &str = r#"(allow network-outbound)
 (allow network-inbound)
 (allow system-socket)
@@ -648,6 +653,7 @@ const SEATBELT_GUI: &str = r#"(allow iokit-open (iokit-user-client-class "IOSurf
 impl Seatbelt {
     fn profile(policy: &SandboxPolicy) -> String {
         let mut profile = String::from(SEATBELT_BASE);
+        profile.push_str(SEATBELT_PS);
         if !policy.writable_roots.is_empty() {
             profile.push_str("(allow file-write*");
             for index in 0..policy.writable_roots.len() {
@@ -765,6 +771,7 @@ impl Seatbelt {
     /// a path that doesn't exist yet (a ref's `.lock`).
     fn protection_profile(protection: &Protection) -> String {
         let mut profile = String::from("(version 1)\n(allow default)\n");
+        profile.push_str(SEATBELT_PS);
         if !protection.is_empty() {
             profile.push_str("(deny file-write*");
             for index in 0..protection.deny.len() {
@@ -998,6 +1005,67 @@ mod tests {
         let denied = read("run/ipc.token");
         assert!(!denied.status.success(), "{denied:?}");
         assert!(denied.stdout.is_empty());
+    }
+
+    /// A project's full checks (#287): `ps` (setuid, which no sandbox may exec) and a compile
+    /// whose temporary file goes in `TMPDIR`, a writable root, run in a session's sandbox.
+    #[test]
+    fn a_session_runs_ps_and_compiles_with_its_temp_folder() {
+        if nested_sandbox_refused("a_session_runs_ps_and_compiles_with_its_temp_folder") {
+            return;
+        }
+        let dir = Temp(std::env::temp_dir().join(format!("brig-ps-cc-{}", std::process::id())));
+        std::fs::create_dir_all(&*dir).unwrap();
+        // A `.S` file is preprocessed into a temporary file before it is assembled.
+        std::fs::write(dir.join("tiny.S"), "#define ONE 1\n").unwrap();
+        let script = "ps -o nice= -p $$ && ps -o pid= -p 1";
+        let compile = "cc -c tiny.S -o tiny.o && test -s tiny.o";
+        let has_cc = Command::new("/usr/bin/xcrun")
+            .args(["--find", "clang"])
+            .output()
+            .is_ok_and(|found| found.status.success());
+        let run = |spec: SpawnSpec, command: &str| {
+            Command::new(&spec.program)
+                .args(&spec.args)
+                .current_dir(&*dir)
+                .env("TMPDIR", &*dir)
+                .output()
+                .unwrap_or_else(|err| panic!("{command}: {err}"))
+        };
+        let shell = |command: &str| SpawnSpec {
+            program: PathBuf::from("/bin/sh"),
+            args: vec!["-c".into(), command.into()],
+            ..SpawnSpec::default()
+        };
+        let policy = SandboxPolicy {
+            writable_roots: vec![dir.to_path_buf()],
+            ..SandboxPolicy::default()
+        };
+        let protection = Protection {
+            deny: vec![dir.join("protected")],
+            ..Protection::default()
+        };
+        let mut commands = vec![script];
+        if has_cc {
+            commands.push(compile);
+        } else {
+            let _ = writeln!(std::io::stderr(), "no C compiler here: only ps is checked");
+        }
+        for command in commands {
+            let confined = run(Seatbelt.confine(shell(command), &policy).unwrap(), command);
+            assert!(confined.status.success(), "{command}: {confined:?}");
+            let protected = run(
+                Seatbelt.protect(shell(command), &protection).unwrap(),
+                command,
+            );
+            assert!(protected.status.success(), "{command}: {protected:?}");
+        }
+        // Other setuid programs stay refused.
+        let other = run(
+            Seatbelt.confine(shell("/usr/bin/atq"), &policy).unwrap(),
+            "atq",
+        );
+        assert!(!other.status.success(), "{other:?}");
     }
 
     #[test]
