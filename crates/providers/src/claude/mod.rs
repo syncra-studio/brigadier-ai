@@ -496,7 +496,10 @@ fn sub_agents(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) -> Sub
     let Some(allowed) = &spec.allowed_models else {
         return SubAgents::Any;
     };
+    // The project linked into `cwd` is read where it is: its links may not be there yet.
+    let linked = spec.project.as_deref().filter(|_| spec.tools.user_setup());
     if project_widens_models(cwd)
+        || linked.is_some_and(project_widens_models)
         || user_config.is_some_and(|dir| file_widens_models(&dir.join("settings.json")))
     {
         return SubAgents::Off;
@@ -1172,13 +1175,18 @@ impl Provider for Claude {
 
             // The project's own setup, where Claude looks for it: before its staging folders
             // are recorded, so the `.claude` folder holding the links is never taken for one.
-            if spec.tools.user_setup()
-                && spec.owned_cwd
-                && let Some(project) = &spec.project
-                && project.canonicalize().ok().as_ref() != Some(&cwd)
-                && let Err(err) = files::link_project(&cwd, project)
-            {
-                tracing::warn!(error = %err, "could not link the project's Claude setup");
+            // Without a project (its folder's trust taken back), an earlier start's links go.
+            if spec.tools.user_setup() && spec.owned_cwd {
+                let linked = match &spec.project {
+                    Some(project) if project.canonicalize().ok().as_ref() != Some(&cwd) => {
+                        files::link_project(&cwd, project)
+                    }
+                    Some(_) => Ok(()),
+                    None => files::unlink_project(&cwd),
+                };
+                if let Err(err) = linked {
+                    tracing::warn!(error = %err, "could not link the project's Claude setup");
+                }
             }
             // Recorded before the CLI can create them.
             if let Some(config) = self.history_dir() {
@@ -3559,6 +3567,31 @@ for line in sys.stdin:
             r#"{"availableModels": ["claude-fable-5-1"]}"#,
             &reviewer
         ));
+    }
+
+    /// A trusted project whose settings name models turns a worker's sub-agents off on its
+    /// first start too, before its setup is linked into the worker's folder.
+    #[test]
+    fn a_projects_settings_that_name_models_turn_a_workers_sub_agents_off_before_linking() {
+        let cwd = Temp::new();
+        let project = cwd.path().parent().unwrap().join("checkout");
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        std::fs::write(
+            project.join(".claude/settings.json"),
+            r#"{"availableModels": ["claude-fable-5-1"]}"#,
+        )
+        .unwrap();
+        let worker = SessionSpec {
+            project: Some(project.clone()),
+            ..spec(cwd.path(), &["claude-sonnet-5"])
+        };
+        assert!(!cwd.path().join(".claude").exists(), "nothing linked yet");
+        assert_eq!(sub_agents(&worker, cwd.path(), None), SubAgents::Off);
+        let unlinked = SessionSpec {
+            project: None,
+            ..worker
+        };
+        assert_ne!(sub_agents(&unlinked, cwd.path(), None), SubAgents::Off);
     }
 
     /// The user's `disableAllHooks` can't switch Brigadier's own hooks off in a session that

@@ -84,6 +84,7 @@ const UNLINKED: &[&str] = &[
 /// or the new one, never none. Unix only: elsewhere nothing is linked.
 #[cfg(unix)]
 pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
+    let _linking = LINKING.lock().unwrap_or_else(|e| e.into_inner());
     let dot_claude = cwd.join(".claude");
     let mut wanted: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mcp = project.join(".mcp.json");
@@ -105,6 +106,31 @@ pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
     {
         wanted.push((local, main.join(".claude/settings.local.json")));
     }
+    sync_links(cwd, &wanted)
+}
+
+/// Takes [`link_project`]'s links out of `cwd` for a session that may not load a project's
+/// setup (its folder's trust was taken back), so the links left from an earlier start don't
+/// load it anyway. Only in a folder of Brigadier's outside any repository: a checkout's own
+/// links are the user's.
+#[cfg(unix)]
+pub(super) fn unlink_project(cwd: &Path) -> io::Result<()> {
+    if cwd.ancestors().any(|dir| dir.join(".git").exists()) {
+        return Ok(());
+    }
+    let _linking = LINKING.lock().unwrap_or_else(|e| e.into_inner());
+    sync_links(cwd, &[])
+}
+
+/// One folder's links made or removed at a time: a session's workers share their folder and
+/// can start together.
+#[cfg(unix)]
+static LINKING: Mutex<()> = Mutex::new(());
+
+/// Makes `cwd`'s links to a project's setup exactly `wanted` (link, target).
+#[cfg(unix)]
+fn sync_links(cwd: &Path, wanted: &[(PathBuf, PathBuf)]) -> io::Result<()> {
+    let dot_claude = cwd.join(".claude");
     // Links of an earlier project that this one lacks.
     let stale = |dir: &Path, only: Option<&str>| -> io::Result<()> {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -127,22 +153,27 @@ pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
         std::fs::create_dir_all(&dot_claude)?;
     }
     for (link, target) in wanted {
-        match std::fs::symlink_metadata(&link) {
+        match std::fs::symlink_metadata(link) {
             Ok(meta) if !meta.file_type().is_symlink() => continue,
-            Ok(_) if std::fs::read_link(&link)? == target => continue,
+            Ok(_) if std::fs::read_link(link)? == *target => continue,
             _ => {}
         }
         let name = link.file_name().unwrap_or_default().to_string_lossy();
         let temp = link.with_file_name(format!(".{name}.{}.link", std::process::id()));
         let _ = std::fs::remove_file(&temp);
-        std::os::unix::fs::symlink(&target, &temp)?;
-        std::fs::rename(&temp, &link)?;
+        std::os::unix::fs::symlink(target, &temp)?;
+        std::fs::rename(&temp, link)?;
     }
     Ok(())
 }
 
 #[cfg(not(unix))]
 pub(super) fn link_project(_cwd: &Path, _project: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(super) fn unlink_project(_cwd: &Path) -> io::Result<()> {
     Ok(())
 }
 
@@ -842,6 +873,48 @@ mod link_tests {
             Some(main.join(".claude/settings.json"))
         );
         assert_eq!(target(".mcp.json"), Some(main.join(".mcp.json")));
+
+        // The folder's trust taken back: the links go, Claude's own file stays.
+        unlink_project(&cwd).unwrap();
+        assert_eq!(target(".mcp.json"), None);
+        assert_eq!(target(".claude/settings.json"), None);
+        assert_eq!(target(".claude/settings.local.json"), None);
+        assert!(cwd.join(".claude/.cc-writes").is_dir());
+        // A checkout's own links are the user's.
+        std::os::unix::fs::symlink(main.join(".mcp.json"), worktree.join(".mcp.json")).unwrap();
+        unlink_project(&worktree).unwrap();
+        assert!(worktree.join(".mcp.json").is_symlink());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Workers of a session start together in their shared folder: every one links the
+    /// project's setup in full.
+    #[test]
+    fn workers_starting_together_each_link_the_whole_setup() {
+        let root = std::env::temp_dir().join(format!("brigadier-link-{}", uuid::Uuid::new_v4()));
+        let (project, cwd) = (root.join("project"), root.join("workers"));
+        std::fs::create_dir_all(project.join(".claude/skills")).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(project.join(".mcp.json"), "{}").unwrap();
+        std::fs::write(project.join(".claude/settings.json"), "{}").unwrap();
+        for _ in 0..20 {
+            let starts: Vec<_> = (0..8)
+                .map(|_| {
+                    let (cwd, project) = (cwd.clone(), project.clone());
+                    std::thread::spawn(move || {
+                        unlink_project(&cwd)?;
+                        link_project(&cwd, &project)
+                    })
+                })
+                .collect();
+            for start in starts {
+                start.join().unwrap().unwrap();
+            }
+        }
+        link_project(&cwd, &project).unwrap();
+        for link in [".mcp.json", ".claude/settings.json", ".claude/skills"] {
+            assert!(cwd.join(link).is_symlink(), "{link}");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 
