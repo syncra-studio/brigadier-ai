@@ -702,8 +702,34 @@ impl SessionManager {
                 ..envelope.clone()
             }
         };
+        // A command of the running turn holds what is steered in now: the message waits in
+        // the inbox and goes into the turn once the command ended, `seen` only then.
+        if conv.steers_held().await {
+            self.core
+                .record_peer_state(message_id, &sides, PeerState::Delivered)
+                .await?;
+            if self
+                .queue_envelope(to, envelope, Some(request.clone()))
+                .await
+                .is_none()
+            {
+                return Ok(Delivery::NotNow);
+            }
+            conv.hold_peer_steer(super::conversation::HeldPeer {
+                envelope: steered,
+                request,
+                reply,
+                chain,
+                peer: record.peer.clone(),
+            })
+            .await;
+            // The command may have ended meanwhile.
+            self.steer_held(&conv).await;
+            self.settle_requests(to).await;
+            return Ok(Delivery::Queued);
+        }
         if self
-            .steer_peer(&conv, &steered, &request, reply, chain)
+            .steer_peer(&conv, &steered, &request, reply, chain, false)
             .await
         {
             self.core

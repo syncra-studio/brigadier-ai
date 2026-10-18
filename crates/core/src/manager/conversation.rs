@@ -196,6 +196,18 @@ impl Envelope {
     }
 }
 
+/// Another session's message held for the running turn until no command of it runs
+/// ([`ConvState::held_peers`]): what [`SessionManager::steer_peer`] steers in then.
+#[derive(Debug, Clone)]
+pub(super) struct HeldPeer {
+    pub envelope: Envelope,
+    pub request: String,
+    pub reply: bool,
+    pub chain: TurnChain,
+    /// The sending session, whose record says `seen` too.
+    pub peer: ConversationId,
+}
+
 /// The rules left out of the thread's instructions that this turn's messages call for
 /// (BUILD-PLAN C1): a worker's message.
 fn first_use_due(envelopes: &[(Envelope, Option<String>)]) -> Vec<prompts::FirstUse> {
@@ -389,6 +401,14 @@ struct ConvState {
     /// The thread's commands running now (shell, `run`, `run_check`, a Codex shell item), by
     /// item, oldest first: what a message sent into the turn waits behind.
     holding: Vec<(String, HeldBy)>,
+    /// Other sessions' messages for the running turn that came while a command of it ran:
+    /// they wait in the inbox and go into the turn once no command runs (`seen` only then),
+    /// so nothing is written to the CLI behind a running tool, where a Stop would leave it to
+    /// start a turn of its own. The turn's end leaves them to the next turn.
+    held_peers: Vec<HeldPeer>,
+    /// Brigadier's own notes for the running turn held the same way: steered in once no
+    /// command runs, else carried by the next turn.
+    held_notes: Vec<String>,
     /// The steered requests and queued follow-ups marked as waiting behind them, unmarked when
     /// the last ends.
     held_requests: Vec<String>,
@@ -796,6 +816,18 @@ impl ConvLive {
     /// continues a stopped request has shown it can go on (see `ConvState::reborn_unproven`).
     async fn made_progress(&self) {
         self.state.lock().await.reborn_unproven = None;
+    }
+
+    /// Whether something steered into the running turn now would wait behind a command of it
+    /// (and stays Brigadier's to hold: [`ConvState::held_peers`]).
+    pub(super) async fn steers_held(&self) -> bool {
+        let state = self.state.lock().await;
+        state.busy && !state.interrupted && !state.holding.is_empty()
+    }
+
+    /// Holds another session's message (already in the inbox) for the running turn.
+    pub(super) async fn hold_peer_steer(&self, held: HeldPeer) {
+        self.state.lock().await.held_peers.push(held);
     }
 
     /// Whether its CLI's own jobs still run past their turn (see `ConvState::has_cli_jobs`).
@@ -1662,6 +1694,50 @@ impl SessionManager {
         if let Some((requests, items)) = conv.holding_command(item, words, status).await {
             self.mark_held(conv, &requests, &items, None).await;
         }
+        if status != ItemStatus::InProgress {
+            self.steer_held(conv).await;
+        }
+    }
+
+    /// No command of the running turn runs any more: the messages held for it go in now.
+    pub(super) async fn steer_held(&self, conv: &Arc<ConvLive>) {
+        let (peers, notes) = {
+            let mut state = conv.state.lock().await;
+            if !state.holding.is_empty() {
+                return;
+            }
+            (
+                std::mem::take(&mut state.held_peers),
+                std::mem::take(&mut state.held_notes),
+            )
+        };
+        for held in peers {
+            let Some(id) = held.envelope.peer_message().map(str::to_owned) else {
+                continue;
+            };
+            // Not steered (the turn ended or was stopped meanwhile): the next turn takes it
+            // from the inbox, where it still is.
+            if self
+                .steer_peer(
+                    conv,
+                    &held.envelope,
+                    &held.request,
+                    held.reply,
+                    held.chain,
+                    true,
+                )
+                .await
+                && let Err(err) = self
+                    .core
+                    .record_peer_state(&id, &[&conv.id, &held.peer], crate::model::PeerState::Seen)
+                    .await
+            {
+                crate::logging::private_trace!(conv.private_logs, warn, "could not record a held message seen"; conversation = %conv.id, error = %err);
+            }
+        }
+        for note in notes {
+            self.tell_thread_now(conv, note).await;
+        }
     }
 
     /// The turn ended: no command of it holds a message any more.
@@ -1669,6 +1745,11 @@ impl SessionManager {
         let held = {
             let mut state = conv.state.lock().await;
             state.holding.clear();
+            // What waited for a command goes with the next turn: the messages from the inbox,
+            // the notes as notes.
+            state.held_peers.clear();
+            let notes = std::mem::take(&mut state.held_notes);
+            state.notes.extend(notes);
             state.take_held()
         };
         if let Some((requests, items)) = held {
@@ -1984,6 +2065,11 @@ impl SessionManager {
     /// compacting or being stopped), else as a note before its next turn.
     pub(super) async fn tell_thread_now(&self, conv: &Arc<ConvLive>, text: String) {
         let mut state = conv.state.lock().await;
+        // Behind a running command it waits for that command's end ([`ConvState::held_notes`]).
+        if state.busy && !state.interrupted && !state.holding.is_empty() {
+            state.held_notes.push(text);
+            return;
+        }
         let cli = state
             .cli
             .clone()
@@ -2020,12 +2106,30 @@ impl SessionManager {
         request: &str,
         reply: bool,
         chain: TurnChain,
+        from_inbox: bool,
     ) -> bool {
         let mut state = conv.state.lock().await;
         let Some(cli) = state.cli.clone() else {
             return false;
         };
-        if !state.busy || state.compacting || (reply && state.request.as_deref() != Some(request)) {
+        // Nothing goes into a turn the user stopped, nor behind a command it runs: the CLI
+        // would read it only once that ends, or start a turn of its own with it after a Stop.
+        if !state.busy
+            || state.compacting
+            || state.interrupted
+            || !state.holding.is_empty()
+            || (reply && state.request.as_deref() != Some(request))
+        {
+            return false;
+        }
+        // Held in the inbox meanwhile: steered only while it is still there (no turn took it).
+        let in_inbox = |state: &ConvState| {
+            state
+                .inbox
+                .iter()
+                .position(|(queued, _)| queued.label == envelope.label)
+        };
+        if from_inbox && in_inbox(&state).is_none() {
             return false;
         }
         if cli
@@ -2036,6 +2140,10 @@ impl SessionManager {
         {
             return false;
         }
+        let taken = match in_inbox(&state).filter(|_| from_inbox) {
+            Some(at) => vec![state.inbox.remove(at)],
+            None => Vec::new(),
+        };
         state.chain = Some(chain);
         state
             .in_turn_peers
@@ -2045,6 +2153,9 @@ impl SessionManager {
         } else {
             state.request.replace(request.to_owned())
         };
+        if !taken.is_empty() {
+            self.keep_taken(&conv.id, &taken).await;
+        }
         drop(state);
         self.log_injection(
             &conv.id,

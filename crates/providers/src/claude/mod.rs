@@ -5,7 +5,10 @@
 //! or handles OAuth tokens: the CLI keeps its own login. Everything else goes over stdio:
 //!
 //! - turns and steering are user messages (Claude folds a message sent mid-turn into the
-//!   running turn);
+//!   running turn at its next step: one written while a tool runs waits for the tool's end and
+//!   never cancels it, checked live on 2.1.302 with a running Bash; after an interrupt it
+//!   starts a turn of its own, so Brigadier holds other sessions' and its own messages while a
+//!   command runs, see `ConvState::held_peers`);
 //! - `initialize`, `get_usage` and `interrupt` are control requests;
 //! - permission prompts arrive as `can_use_tool` control requests (`--permission-prompt-tool
 //!   stdio`) and Brigadier answers them.
@@ -736,6 +739,11 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
         // cache expires (a server-side rollout, 2.1.296); a session's context changes only
         // where Brigadier or the user asks for it.
         "idleCompaction": false,
+        // Claude's own messages between sessions (`SendMessage` from the user's other Claude
+        // sessions) never reach a Brigadier session: its messages come through Brigadier,
+        // which records and delivers them at a tool boundary (2.1.302 takes accept, hold,
+        // refuse).
+        "crossSessionInbound": "refuse",
         "permissions": permissions,
         "sandbox": sandbox,
         // A repository's `AGENTS.md` files load next to its `CLAUDE.md` files (by default
@@ -3111,7 +3119,8 @@ for line in sys.stdin:
         }
     }
 
-    /// Every kind of session, compacting ones included, keeps its context while it sits idle.
+    /// Every kind of session, compacting ones included, keeps its context while it sits idle,
+    /// and takes no message from Claude's own messaging between sessions.
     #[test]
     fn no_session_compacts_while_idle() {
         let cwd = Temp::new();
@@ -3130,10 +3139,10 @@ for line in sys.stdin:
                 auto_compact: true,
                 ..spec(cwd, &[])
             };
-            assert_eq!(
-                settings(&session, cwd, &SubAgents::Any, false)["idleCompaction"],
-                json!(false)
-            );
+            let settings = settings(&session, cwd, &SubAgents::Any, false);
+            assert_eq!(settings["idleCompaction"], json!(false));
+            // Messages from the user's other Claude sessions never come in around Brigadier.
+            assert_eq!(settings["crossSessionInbound"], json!("refuse"));
         }
     }
 
