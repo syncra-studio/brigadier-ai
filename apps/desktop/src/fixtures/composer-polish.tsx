@@ -25,11 +25,17 @@ if (which === "never") {
   localStorage.setItem("brigadier.drafts", JSON.stringify({ [id]: { text: "half a thought", attachments: [], mentions: [], atMs: Date.now() } }));
 }
 
-const conversation = {
+let conversation = {
   id, kind: "chat", projectId: null, title: "A chat", pinnedAtMs: null, createdAtMs: start,
   updatedAtMs: start, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
   setup: { type: "chat", model: { provider: "claude", model: null, effort: null, fast: false } },
 } as unknown as Conversation;
+// The `plan` case's is a session in Plan mode.
+if (which === "plan") {
+  conversation = { ...conversation, kind: "session", title: "A session", setup: { type: "session", repo: "/fixture",
+    environment: { type: "localCheckout", branch: "fixture" }, permission: "askForApproval", planMode: true,
+    workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } } as unknown as Conversation;
+}
 const messages: Message[] = [
   { id: "u1", conversationId: id, seq: 1, role: "user", text: "Fix the failing test.", blob: null, createdAtMs: start,
     attachments: [], mentions: [], model: null, requestId: "r1", parentId: null },
@@ -65,6 +71,10 @@ mockIPC((command, payload) => {
     case "getDictation":
       // Dictation is on offer, its speech model not yet downloaded (starting it downloads first).
       return { method: req.method, dictation: { available: true, installed: false, downloading: false, modelBytes: 1000 } };
+    case "updateSetup":
+      sent.push(req);
+      conversation = { ...conversation, setup: req.setup };
+      return { method: req.method, conversation };
     case "getConversation":
       return {
         method: req.method,
@@ -258,12 +268,49 @@ async function escCase(seen: Record<string, unknown>) {
   seen.afterEsc = { dictate: dictate(), cancelled: sent.some((req) => req.method === "cancelDictationDownload") };
 }
 
+/** Whether the composer shows Plan mode on (its Plan chip). */
+const planOn = () =>
+  [...document.querySelectorAll("button[aria-pressed]")].some((button) => button.textContent?.trim() === "Plan");
+/** The setups the composer asked for, by whether each had Plan mode on. */
+const planSets = () =>
+  sent.flatMap((req) => (req.method === "updateSetup" && req.setup.type === "session" ? [req.setup.planMode] : []));
+
+/** Whether the page's caret, with nothing selected, is at the start of its text. */
+function caretAtStart() {
+  const selection = getSelection();
+  return selection?.isCollapsed === true && selection.anchorOffset === 0;
+}
+
+/**
+ * #299: in Plan mode, Backspace with the caret at the very start of the composer turns Plan mode
+ * off (as it would take away a chip there), keeping the text; anywhere else it deletes as usual.
+ */
+async function planCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  await until("the Plan chip", () => planOn());
+  await fixtureClick(field()!);
+  await fixtureInput({ type: "type", text: "abc" });
+  await until("the typed text", () => field()?.textContent === "abc");
+  await fixtureInput({ type: "key", key: "Backspace" });
+  await until("a letter deleted", () => field()?.textContent === "ab");
+  seen.midText = { text: field()?.textContent, plan: planOn(), sets: planSets() };
+  // The caret to the very start, a step at a time.
+  for (let step = 0; step < 4 && !caretAtStart(); step++) {
+    await fixtureInput({ type: "key", key: "ArrowLeft" });
+    await sleep(50);
+  }
+  await fixtureInput({ type: "key", key: "Backspace" });
+  await until("Plan mode off", () => !planOn(), 2000).catch(() => {});
+  seen.atStart = { text: field()?.textContent, plan: planOn(), sets: planSets() };
+}
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
   focus: focusCase,
   uploading: uploadingCase,
   paused: pausedCase,
   working: workingCase,
   esc: escCase,
+  plan: planCase,
 };
 
 async function drive() {

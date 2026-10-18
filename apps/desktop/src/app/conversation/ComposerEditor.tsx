@@ -23,6 +23,7 @@ import {
   type LexicalNode,
   KEY_ARROW_DOWN_COMMAND,
   KEY_ARROW_UP_COMMAND,
+  KEY_BACKSPACE_COMMAND,
   KEY_DOWN_COMMAND,
   KEY_ENTER_COMMAND,
   KEY_TAB_COMMAND,
@@ -59,6 +60,7 @@ import {
   splitAtMarkers,
 } from "@/app/conversation/inlineImages";
 import { mentionOf } from "@/app/conversation/Mentions";
+import { usePlanMode } from "@/app/conversation/PlusMenu";
 import { askPausedSend } from "@/app/conversation/PausedSend";
 import { chipContent, pastedText, pasteKind, structuredHtml } from "@/app/conversation/pasteContent";
 import { usePullQueued } from "@/app/conversation/QueueCard";
@@ -153,6 +155,7 @@ export default function ComposerEditor({
       <FocusGuard />
       <ComposerKeys formatter={formatter} deleted={deleted} deletedPastes={deletedPastes} />
       <SuggestionKeys />
+      <PlanBackspace />
       <InlineSync kind="image" deleted={deleted} />
       <InlineSync kind="paste" deleted={deletedPastes} />
     </ChipComposerInput>
@@ -191,6 +194,41 @@ function guardFocus(editor: LexicalEditor): () => void {
   return () => {
     editor.focus = focus;
   };
+}
+
+/** In Plan mode, Backspace at the field's very start turns Plan mode off, as it would a chip there. */
+function PlanBackspace() {
+  const [editor] = useLexicalComposerContext();
+  const plan = usePlanMode(useContext(ComposerTargetContext));
+  const current = useRef(plan);
+  useEffect(() => {
+    current.current = plan;
+  }, [plan]);
+  useEffect(
+    () =>
+      editor.registerCommand(
+        KEY_BACKSPACE_COMMAND,
+        (event) => {
+          if (!current.current.on || !$caretAtStart()) return false;
+          event.preventDefault();
+          current.current.set(false).catch((error: unknown) => console.error("plan mode off failed", error));
+          return true;
+        },
+        COMMAND_PRIORITY_NORMAL,
+      ),
+    [editor],
+  );
+  return null;
+}
+
+/** Whether the caret, with nothing selected, is before everything in the field. */
+function $caretAtStart(): boolean {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection) || !selection.isCollapsed() || selection.anchor.offset !== 0) return false;
+  for (let node: LexicalNode | null = selection.anchor.getNode(); node && node !== $getRoot(); node = node.getParent()) {
+    if (node.getPreviousSibling() !== null) return false;
+  }
+  return true;
 }
 
 /** Tab in the empty field takes the guess at the next message it shows, unsent. */

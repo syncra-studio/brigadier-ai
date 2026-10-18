@@ -49,3 +49,9 @@ test("Esc puts the cursor in the composer (keeps it there when it has it) and ca
   assert.equal(seen.dictating, "downloading");
   assert.deepEqual(seen.afterEsc, { dictate: "dictate", cancelled: true });
 });
+
+test("in Plan mode, Backspace at the very start of the composer turns Plan mode off and keeps the text; elsewhere it deletes (issue 299)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "plan");
+  assert.deepEqual(seen.midText, { text: "ab", plan: true, sets: [] });
+  assert.deepEqual(seen.atStart, { text: "ab", plan: false, sets: [false] });
+});
