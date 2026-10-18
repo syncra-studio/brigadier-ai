@@ -147,6 +147,33 @@ function unboldLeads(node: MdNode): void {
 
 const remarkPlainLeads = () => (tree: MdNode) => unboldLeads(tree);
 
+const cleanLinkEdge = (text: string) => text.replace(/^[\u200b-\u200f\u2060\ufeff]+|[\u200b-\u200f\u2060\ufeff]+$/g, "");
+
+/** Clean link boundaries before Markdown encodes their URLs; leave prose and code alone. */
+function cleanLinks(node: MdNode): void {
+  if (node.type === "link" || node.type === "definition") {
+    if (node.url) node.url = cleanLinkEdge(node.url);
+  }
+  if (node.type === "link" || node.type === "linkReference") {
+    const trim = (part: MdNode, start: boolean): boolean => {
+      if (part.type === "text" || part.type === "inlineCode") {
+        part.value = (part.value ?? "").replace(start ? /^[\u200b-\u200f\u2060\ufeff]+/ : /[\u200b-\u200f\u2060\ufeff]+$/, "");
+        return !!part.value;
+      }
+      if (!part.children) return true;
+      for (const edge of start ? part.children : part.children.toReversed()) {
+        if (trim(edge, start)) return true;
+      }
+      return false;
+    };
+    trim(node, true);
+    trim(node, false);
+  }
+  node.children?.forEach(cleanLinks);
+}
+
+const remarkCleanLinks = () => (tree: MdNode) => cleanLinks(tree);
+
 /**
  * The pace streaming text shows at: it trails what has arrived, steered so whatever waits
  * shows in about a second (never slower than a character a second), and the shown text
@@ -197,7 +224,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced 
 
   return (
     <MarkdownTextPrimitive
-      remarkPlugins={[remarkGfm, ...(breaks ? [remarkUserText] : []), ...(plainLeads ? [remarkPlainLeads] : [])]}
+      remarkPlugins={[remarkGfm, remarkCleanLinks, ...(breaks ? [remarkUserText] : []), ...(plainLeads ? [remarkPlainLeads] : [])]}
       rehypePlugins={rehypePlugins}
       // Only text that still streams is revealed as it arrives. Settled text shows whole at
       // once, also when it mounts again (the stored reply replacing the streamed one, a work
@@ -411,10 +438,8 @@ export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, c
         className,
       )}
     >
-      {/* The icon stays on its first word's line: a word joiner holds them together. */}
       {href && httpsOrigin(href) && <SiteIcon href={href} />}
-      {mail && <Mail data-slot="site-icon" data-mail aria-hidden className="me-0.75 inline-block size-icon-sm align-text-bottom select-none" />}
-      {href && (httpsOrigin(href) || mail) && <span className="select-none">{"\u2060"}</span>}
+      {mail && <Mail data-slot="site-icon" data-mail aria-hidden className="inline-block size-icon-sm align-text-bottom select-none" />}
       {children}
     </a>
   );
@@ -521,9 +546,9 @@ function ReportBody({ text }: { text: string }) {
 function SiteIcon({ href }: { href: string }) {
   const icon = useSiteIcon(href);
   return icon ? (
-    <img data-slot="site-icon" src={icon} alt="" referrerPolicy="no-referrer" className="me-0.75 inline-block size-icon-sm rounded-xs object-contain align-text-bottom select-none" />
+    <img data-slot="site-icon" src={icon} alt="" referrerPolicy="no-referrer" className="inline-block size-icon-sm rounded-xs object-contain align-text-bottom select-none" />
   ) : (
-    <Globe data-slot="site-icon" aria-hidden className="me-0.75 inline-block size-icon-sm align-text-bottom select-none" />
+    <Globe data-slot="site-icon" aria-hidden className="inline-block size-icon-sm align-text-bottom select-none" />
   );
 }
 

@@ -175,12 +175,12 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     after: ["icon", "icon", "globe", "none", "mail"],
     asked: ["https://nodejs.org", "https://none.example"],
   });
-  // Its address on hover, its icon kept with its first word, a dashed underline on hover; a
+  // Its address on hover, no word joiner inserted before its text, a dashed underline on hover; a
   // right-click opens it outside or copies it, and a file chip's opens it, shows it, copies its
   // path or saves a copy.
   assert.deepEqual(seen.linkExtras, {
     address: "https://nodejs.org/en/about",
-    joined: true,
+    joined: false,
     dashed: true,
     menu: ["Open in external browser", "Copy link"],
     mailMenu: ["Copy email address"],
