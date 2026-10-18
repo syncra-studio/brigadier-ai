@@ -45,7 +45,7 @@ mockIPC((command, args) => {
   if (req.method === "listFiles") return { method: req.method, files: ["README.md"], truncated: false };
   if (req.method === "getWorkspaceTree") return { method: req.method, tree: {
     files: req.target.type === "project" ? ["package.json", "src/app.ts"] : ["README.md"], truncated: false, ignored: [], ignoredTruncated: false } };
-  if (req.method === "getSourceState") return { method: req.method, state: { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes: [], merging: null } };
+  if (req.method === "getSourceState") return { method: req.method, state: { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes: [], merging: null, rebasing: null } };
   if (req.method === "listProjectFiles") return { method: req.method, files: ["src/app.ts", "package.json"], truncated: false };
   if (req.method === "getProjectSourceState") return { method: req.method, state: { branch: "trunk", remote: null, upstream: null, ahead: 0, staged: [],
     changes: [{ path: "src/app.ts", oldPath: null, status: "modified" },

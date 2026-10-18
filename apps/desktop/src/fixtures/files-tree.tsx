@@ -40,7 +40,7 @@ mockIPC((command, args) => {
   if (req.method === "getWorkspaceTree")
     return { method: req.method, tree: { files, truncated: false, ignored: [".env", "node_modules/"], ignoredTruncated: false } };
   if (req.method === "getSourceState")
-    return { method: req.method, state: { branch: "main", remote: null, upstream: null, ahead: 0, staged, changes, merging: null } };
+    return { method: req.method, state: { branch: "main", remote: null, upstream: null, ahead: 0, staged, changes, merging: null, rebasing: null } };
   if (req.method === "listWorkspaceFolder") {
     const answer = { method: req.method, folder: { entries: folder, truncated: false } };
     return hold ? hold.then(() => answer) : answer;

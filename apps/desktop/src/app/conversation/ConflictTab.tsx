@@ -35,7 +35,7 @@ import { toast } from "@/state/toasts";
 import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, type WorkspaceTarget } from "@/state/workspaceCache";
 
 /**
- * A conflicted file during a merge, in one of three views: its conflicts marked in place, each
+ * A conflicted file during a merge or rebase (a rebase names the commit it replays), in one of three views: its conflicts marked in place, each
  * with Accept Current Change, Accept Incoming Change, Accept Both Changes and Compare Changes;
  * both sides compared whole; or the merge editor, with the incoming and current versions above
  * and the result below, written and staged by Complete Merge. The current side is blue, the
@@ -100,6 +100,21 @@ async function resolve(target: WorkspaceTarget, path: string, expected: string |
   emitWorkspaceChanged(target);
   return state;
 }
+
+/** During a rebase, the commit it replays: "Rebasing 2 of 5: <subject>". */
+const RebaseStep: FC<{ file: ConflictFile }> = ({ file }) => {
+  const rebase = file.rebasing;
+  if (!rebase) return null;
+  const subject = rebase.message.split("\n")[0] ?? "";
+  return (
+    <div data-slot="conflict-rebase" className="border-border text-muted-foreground flex h-control-sm shrink-0 items-center border-b px-3.5 text-xs">
+      <span className="truncate">
+        Rebasing {rebase.step} of {rebase.total}
+        {subject && <span className="text-foreground">: {subject}</span>}
+      </span>
+    </div>
+  );
+};
 
 /* ---------- the code ---------- */
 
@@ -251,6 +266,7 @@ const ConflictView: FC<{
         <span className="text-muted-foreground flex-1 truncate px-1.5 text-sm">{path}</span>
         <Steps onStep={step} disabled={count === 0} />
       </div>
+      <RebaseStep file={file} />
       {file.text === null ? (
         <p className="text-muted-foreground p-4 text-sm">
           One side deleted this file. Stage it in the Source panel to keep it deleted, or discard it to keep your version.
@@ -385,6 +401,7 @@ const MergeEditor: FC<{
         <span className="text-muted-foreground flex-1 truncate px-1.5 text-sm">{tab.path}</span>
         <Steps onStep={step} disabled={count === 0} />
       </div>
+      <RebaseStep file={opened} />
       <div className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2">
         <Pane title="Incoming" detail={opened.incomingLabel} className="border-e border-b">
           <Code rows={side("incoming")} />

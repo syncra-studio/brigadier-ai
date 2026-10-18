@@ -58,7 +58,8 @@ import { toast } from "@/state/toasts";
  * conflict tab), stage or unstage, or discard. More Actions pulls, pushes, fetches, merges a
  * branch in or rebases onto one, makes, renames, deletes and publishes branches, stashes, and
  * shows Git Output (what it ran); a merge with conflicts is resolved file by file, then
- * committed with Continue, or aborted.
+ * committed with Continue, or aborted; a rebase's alike, commit by commit, Continue going on
+ * to the next commit's.
  *
  * Before a session starts it shows its project's folder instead. A session that will work in
  * that folder can stage and commit there already (there is no Review tab yet); one that will
@@ -263,7 +264,8 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
         emitWorkspaceChanged(cacheTarget);
         const conflicted = next.changes.filter((file) => file.status === "conflicted").map((file) => file.path);
         const merged = (action.type === "merge" || action.type === "pull") && next.merging;
-        if ((merged || action.type === "applyStash") && conflicted.length > 0) {
+        const rebased = (action.type === "rebase" || action.type === "continueRebase") && next.rebasing;
+        if ((merged || rebased || action.type === "applyStash") && conflicted.length > 0) {
           showConflicts(conflicted);
           return null;
         }
@@ -281,6 +283,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
   const push = () => void run({ type: "push" }, "Failed to push", (next) => `Pushed ${next.branch ?? "the branch"}`);
   const fetch = () => void run({ type: "fetch" }, "Failed to fetch", () => "Fetched");
   const abortMerge = () => void run({ type: "abortMerge" }, "Failed to abort the merge");
+  const abortRebase = () => void run({ type: "abortRebase" }, "Failed to abort the rebase");
   // Commit & Sync, after its commit: pull, then push unless the pull stopped.
   const sync = () => {
     void run({ type: "pull" }, "Failed to pull").then((next) => next && push());
@@ -288,6 +291,13 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
 
   const rebase = (onto: string) =>
     void run({ type: "rebase", branch: onto }, "Failed to rebase", (next) => `Rebased ${next.branch ?? "the branch"} onto ${onto}`);
+  // Continue during a rebase: the commit it stopped on, then on to the next commit's conflicts or its end.
+  const continueRebase = () => {
+    const onto = state?.rebasing?.onto ?? "";
+    void run({ type: "continueRebase" }, "Failed to continue the rebase", (next) =>
+      next.rebasing ? null : `Rebased ${next.branch ?? "the branch"} onto ${onto}`,
+    );
+  };
   const publish = () => void run({ type: "push" }, "Failed to publish the branch", (next) => `Published ${next.branch ?? "the branch"}`);
   const stash = (untracked: boolean) => void run({ type: "stash", untracked }, "Failed to stash", () => "Stashed the changes");
   const applyStash = (pop: boolean) => void run({ type: "applyStash", pop }, pop ? "Failed to pop the stash" : "Failed to apply the stash");
@@ -379,6 +389,8 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
   const changes = all.filter((file) => file.status !== "conflicted");
   const unstagedPaths = new Set(all.map((file) => file.path));
   const merging = state?.merging ?? null;
+  // A merge or rebase stopped on conflicts: the branch stays as it is till it ends.
+  const resolving = merging !== null || state?.rebasing != null;
   const openGroup = (scope: "staged" | "unstaged") => {
     if (conversationId) openReviewTab(conversationId, { type: "changes", staged: scope === "staged" });
   };
@@ -424,13 +436,19 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
                 <DropdownMenuSubTrigger>Commit</DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
                   <DropdownMenuItem onSelect={() => commitRef.current?.("commit")}>Commit</DropdownMenuItem>
-                  <DropdownMenuItem disabled={merging !== null} onSelect={() => commitRef.current?.("amend")}>
+                  <DropdownMenuItem disabled={resolving} onSelect={() => commitRef.current?.("amend")}>
                     Commit (Amend)
                   </DropdownMenuItem>
                   {merging && (
                     <>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onSelect={abortMerge}>Abort Merge</DropdownMenuItem>
+                    </>
+                  )}
+                  {state?.rebasing && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={abortRebase}>Abort Rebase</DropdownMenuItem>
                     </>
                   )}
                 </DropdownMenuSubContent>
@@ -460,8 +478,8 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>Branch</DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
-                  <DropdownMenuItem disabled={merging !== null} onSelect={() => pick("merge")}>Merge…</DropdownMenuItem>
-                  <DropdownMenuItem disabled={merging !== null || !state?.branch} onSelect={() => pick("rebase")}>
+                  <DropdownMenuItem disabled={resolving} onSelect={() => pick("merge")}>Merge…</DropdownMenuItem>
+                  <DropdownMenuItem disabled={resolving || !state?.branch} onSelect={() => pick("rebase")}>
                     Rebase Branch…
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
@@ -486,15 +504,15 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>Stash</DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
-                  <DropdownMenuItem disabled={merging !== null} onSelect={() => stash(false)}>Stash</DropdownMenuItem>
-                  <DropdownMenuItem disabled={merging !== null} onSelect={() => stash(true)}>
+                  <DropdownMenuItem disabled={resolving} onSelect={() => stash(false)}>Stash</DropdownMenuItem>
+                  <DropdownMenuItem disabled={resolving} onSelect={() => stash(true)}>
                     Stash (Include Untracked)
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem disabled={merging !== null} onSelect={() => applyStash(false)}>
+                  <DropdownMenuItem disabled={resolving} onSelect={() => applyStash(false)}>
                     Apply Latest Stash
                   </DropdownMenuItem>
-                  <DropdownMenuItem disabled={merging !== null} onSelect={() => applyStash(true)}>
+                  <DropdownMenuItem disabled={resolving} onSelect={() => applyStash(true)}>
                     Pop Latest Stash
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
@@ -547,13 +565,14 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
               onCommitting={setCommitting}
               onCommitted={load}
               onSync={sync}
+              onContinueRebase={continueRebase}
               onBranch={canCheckout ? () => pick("checkout") : null}
               locked={locked}
             />
           )}
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
             {error && !state && <p className="text-destructive p-2 text-sm">{error}</p>}
-            {state && staged.length === 0 && all.length === 0 && !merging && (
+            {state && staged.length === 0 && all.length === 0 && !resolving && (
               <p className="text-muted-foreground p-2 text-sm">No changes</p>
             )}
             {conflicted.length > 0 && (
@@ -632,7 +651,7 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
                 ))}
               </Group>
             )}
-            {state && (changes.length > 0 || staged.length > 0 || merging) && (
+            {state && (changes.length > 0 || staged.length > 0 || resolving) && (
               <Group
                 title="Changes"
                 count={changes.length}
@@ -967,7 +986,8 @@ type CommitHow = "commit" | "amend" | "push" | "sync";
 
 /**
  * The message box (blank: written for you; ✨ writes one now; during a merge, git's merge
- * message), the Commit button with its menu (Continue during a merge), and the branch.
+ * message; during a rebase, the message of the commit it stopped on, kept as it is), the Commit
+ * button with its menu (Continue during a merge or rebase), and the branch.
  */
 const CommitBox: FC<{
   target: SourceTarget;
@@ -980,11 +1000,13 @@ const CommitBox: FC<{
   onCommitted: () => void;
   /** Commit & Sync's pull and push, after the commit. */
   onSync: () => void;
+  /** Continue during a rebase. */
+  onContinueRebase: () => void;
   /** Opens Checkout to…; null where the branch can't change. */
   onBranch: (() => void) | null;
   /** Something is under way: the branch can't change meanwhile. */
   locked: boolean;
-}> = ({ target, state, staging, commitRef, onCommitting, onCommitted, onSync, onBranch, locked }) => {
+}> = ({ target, state, staging, commitRef, onCommitting, onCommitted, onSync, onContinueRebase, onBranch, locked }) => {
   const key = targetKey(target);
   const [message, setMessageState] = useState(() => unsent.get(key) ?? "");
   const setMessage = (next: string) => {
@@ -999,6 +1021,7 @@ const CommitBox: FC<{
   };
   const mac = useApp((s) => s.info?.platform === "macos");
   const merging = state?.merging ?? null;
+  const rebasing = state?.rebasing ?? null;
   // A merge starts with git's message in the box, unless the user had written one.
   const [prefilled, setPrefilled] = useState<string | null>(null);
   if (merging && merging.message !== prefilled) {
@@ -1010,12 +1033,18 @@ const CommitBox: FC<{
     if (message === prefilled) setMessage("");
   }
   const conflicted = state?.changes.some((file) => file.status === "conflicted") ?? false;
-  const nothing = !state || (merging ? conflicted : state.staged.length === 0);
+  const nothing = !state || (merging || rebasing ? conflicted : state.staged.length === 0);
   const blocked = (how: CommitHow) =>
-    (how === "amend" ? !state || merging !== null : nothing) || ((how === "push" || how === "sync") && !state?.remote);
+    (how === "amend" ? !state || merging !== null : nothing) ||
+    ((how === "push" || how === "sync") && !state?.remote) ||
+    (rebasing !== null && how !== "commit");
   const commit = (how: CommitHow) => {
     if (blocked(how) || busy || staging) {
-      if (merging && conflicted) toast(CONFLICTS_LEFT, { tone: "error" });
+      if ((merging || rebasing) && conflicted) toast(CONFLICTS_LEFT, { tone: "error" });
+      return;
+    }
+    if (rebasing) {
+      onContinueRebase();
       return;
     }
     setBusy(how);
@@ -1047,14 +1076,14 @@ const CommitBox: FC<{
       .finally(() => setBusy(null));
   };
   const writing = busy !== null && busy !== "write" && !message.trim() && !merging;
-  const label = merging ? "Continue" : "Commit";
+  const label = merging || rebasing ? "Continue" : "Commit";
   return (
     <div className="flex shrink-0 flex-col gap-2 px-2 pb-1">
       <div className="border-border rounded-control focus-within:border-ring flex items-start border">
         <textarea
           rows={1}
-          value={message}
-          disabled={busy !== null}
+          value={rebasing ? rebasing.message : message}
+          disabled={busy !== null || rebasing !== null}
           aria-label="Commit message"
           placeholder={`Message (${mac ? "⌘⏎" : "Ctrl+⏎"} to commit on "${state?.branch ?? "…"}")`}
           onChange={(event) => setMessage(event.target.value)}
@@ -1070,7 +1099,7 @@ const CommitBox: FC<{
           tooltip="Generate Commit Message"
           size="icon-xs"
           className="m-1"
-          disabled={busy !== null || merging !== null || !state || state.staged.length === 0}
+          disabled={busy !== null || merging !== null || rebasing !== null || !state || state.staged.length === 0}
           onClick={write}
         >
           {busy === "write" ? <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" /> : <Sparkles />}
@@ -1081,7 +1110,7 @@ const CommitBox: FC<{
           size="sm"
           className="flex-1 rounded-e-none"
           disabled={nothing || busy !== null || staging}
-          title={merging && conflicted ? "Resolve the merge conflicts first" : nothing ? "Stage changes to commit them" : undefined}
+          title={(merging || rebasing) && conflicted ? "Resolve the merge conflicts first" : nothing ? "Stage changes to commit them" : undefined}
           onClick={() => commit("commit")}
         >
           {busy === "commit" ? <Spinner className="size-icon-sm animate-spin motion-reduce:animate-none" /> : <Check />}
@@ -1120,7 +1149,10 @@ const CommitBox: FC<{
   );
 };
 
-/** The checked-out branch, "(merging)" during a merge, and its commits not pushed yet; a click opens Checkout to…. */
+/**
+ * The checked-out branch, "(merging)" during a merge, the branch being rebased with "(rebasing)"
+ * during a rebase, and its commits not pushed yet; a click opens Checkout to….
+ */
 const BranchItem: FC<{ state: SourceState | null; onClick: (() => void) | null; disabled: boolean }> = ({
   state,
   onClick,
@@ -1130,8 +1162,9 @@ const BranchItem: FC<{ state: SourceState | null; onClick: (() => void) | null; 
     <>
       <Branch className="size-icon-sm shrink-0" />
       <span className="text-foreground min-w-0 truncate">
-        {state?.branch ?? "…"}
+        {state?.branch ?? state?.rebasing?.branch ?? "…"}
         {state?.merging && " (merging)"}
+        {state?.rebasing && " (rebasing)"}
       </span>
       {state && state.ahead > 0 && (
         <span title={`${state.ahead} not pushed`} className="flex shrink-0 items-center text-xs tabular-nums">

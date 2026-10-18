@@ -29,6 +29,7 @@ let state: SourceState = {
   staged: [file("src/cart/tax.ts", "added")],
   changes: [file("notes.txt", "untracked"), file("README.md", "modified")],
   merging: null,
+  rebasing: null,
 };
 const ago = (minutes: number) => Date.now() - minutes * 60_000;
 const BRANCHES: SourceBranch[] = [
@@ -60,7 +61,7 @@ mockIPC((command, args) => {
     case "getConflictFile":
       return {
         method: req.method,
-        file: { text: "<<<<<<< HEAD\na\n=======\nb\n>>>>>>> main\n", current: "a\n", incoming: "b\n", merged: null, currentLabel: "HEAD", incomingLabel: "main" },
+        file: { text: "<<<<<<< HEAD\na\n=======\nb\n>>>>>>> main\n", current: "a\n", incoming: "b\n", merged: null, currentLabel: "HEAD", incomingLabel: "main", rebasing: null },
       };
     case "stageFiles":
       state = { ...state, staged: [...state.staged, file("src/cart/total.ts", "modified")], changes: [] };

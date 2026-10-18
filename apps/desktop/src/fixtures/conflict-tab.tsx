@@ -44,6 +44,7 @@ let file: ConflictFile = {
   merged: MERGED,
   currentLabel: "0288795 • brigadier/912a9469/session",
   incomingLabel: "11e363f • main",
+  rebasing: null,
 };
 const writes: Extract<SourceAction, { type: "resolve" }>[] = [];
 mockIPC((command, args) => {
@@ -54,7 +55,7 @@ mockIPC((command, args) => {
     writes.push(req.action);
     if (req.action.expected !== file.text) throw new Error("changed since it was opened");
     file = { ...file, text: req.action.text };
-    return { method: req.method, state: { branch: "b", remote: null, upstream: null, ahead: 0, staged: [], changes: [], merging: null } };
+    return { method: req.method, state: { branch: "b", remote: null, upstream: null, ahead: 0, staged: [], changes: [], merging: null, rebasing: null } };
   }
   return { method: req.method };
 });

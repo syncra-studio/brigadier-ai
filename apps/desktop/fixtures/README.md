@@ -238,3 +238,12 @@ Publish Branch), Stash › and Show Git Output. It creates a branch from the nam
 won't delete as not merged through the toast's Delete Anyway, drops a stash after asking, and opens
 Git Output (a failure in red, Copy). It writes what it saw as JSON into `#source-menu-result`;
 `SourceMenuRender.test.ts` checks it. This entry is absent from the production build.
+
+# Source panel rebase
+
+`/fixtures/source-rebase.html` is the Source panel beside a conflict tab during a rebase stopped on
+conflicts (#283): the branch reads "(rebasing)", the box holds the replayed commit's message, Commit
+reads Continue and the Commit menu offers Abort Rebase; the tab says "Rebasing 2 of 5: …". It
+resolves the conflict in the tab, stages it, continues to the next commit's conflicts and aborts,
+writing what it saw as JSON into `#source-rebase-result`; `SourceRebaseRender.test.ts` checks it.
+Add `?still` to stay at the first stop. This entry is absent from the production build.

@@ -15,7 +15,7 @@ import { useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";
 
 const project = "source-menu-project";
-let state: SourceState = { branch: "main", remote: "origin", upstream: null, ahead: 0, staged: [], changes: [], merging: null };
+let state: SourceState = { branch: "main", remote: "origin", upstream: null, ahead: 0, staged: [], changes: [], merging: null, rebasing: null };
 const ago = (minutes: number) => Date.now() - minutes * 60_000;
 const BRANCHES: SourceBranch[] = [
   { name: "main", remote: false, atMs: ago(1), author: "Stephen", subject: "Tax" },

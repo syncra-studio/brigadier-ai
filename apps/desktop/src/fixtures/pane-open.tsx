@@ -46,7 +46,7 @@ const answer = (req: Request): unknown => {
   }
   if (req.method === "listFiles") return { method: req.method, files, truncated: false };
   if (req.method === "getWorkspaceTree") return { method: req.method, tree: { files, truncated: false, ignored: [], ignoredTruncated: false } };
-  if (req.method === "getSourceState") return { method: req.method, state: { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes, merging: null } };
+  if (req.method === "getSourceState") return { method: req.method, state: { branch: "main", remote: null, upstream: null, ahead: 0, staged: [], changes, merging: null, rebasing: null } };
   return { method: req.method };
 };
 mockIPC((command, args) => {
