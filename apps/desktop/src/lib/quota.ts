@@ -76,13 +76,13 @@ export function usageTone(
 
 /**
  * A window's name with what it is limited to folded in: "Weekly · Fable" for Claude's
- * "Weekly (Fable)", "Weekly · gpt-6-luna" for a Codex bucket's window.
+ * "Weekly (Fable)", "Weekly · gpt-6-luna" for a Codex bucket's window. A provider-wide window
+ * (no model) is just its name, even when it sits in a named bucket like Codex's "codex".
  */
 export function windowTitle(window: QuotaWindow): string {
   const named = /^(.*) \((.+)\)$/.exec(window.label);
   if (named) return `${named[1]} · ${named[2]}`;
-  const scope = window.model ?? window.bucket;
-  return scope ? `${window.label} · ${scope}` : window.label;
+  return window.model ? `${window.label} · ${window.model}` : window.label;
 }
 
 /** Share of a window left, as a whole percent from 0 to 100. */

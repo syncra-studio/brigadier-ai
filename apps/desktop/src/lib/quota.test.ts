@@ -75,7 +75,8 @@ test("what is left shows amber at 20% or less and red at 10% or less", () => {
 
 test("a window's title folds in what it is limited to", () => {
   assert.equal(windowTitle({ ...window("w", 10, null), label: "Weekly (Fable)" }), "Weekly · Fable");
-  assert.equal(windowTitle({ ...window("w", 10, null), label: "Weekly", bucket: "gpt-6-luna" }), "Weekly · gpt-6-luna");
+  assert.equal(windowTitle({ ...window("w", 10, null), label: "Weekly", bucket: "gpt-6-luna", model: "gpt-6-luna" }), "Weekly · gpt-6-luna");
+  assert.equal(windowTitle({ ...window("w", 10, null), label: "Weekly", bucket: "codex" }), "Weekly");
   assert.equal(windowTitle({ ...window("w", 10, null), label: "5-hour" }), "5-hour");
 });
 
