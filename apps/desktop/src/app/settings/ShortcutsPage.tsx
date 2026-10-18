@@ -24,9 +24,8 @@ export function ShortcutsPage() {
   const mac = useApp((s) => s.info?.platform === "macos");
   const [search, setSearch] = useState<Search>({ type: "words", words: "" });
   const browser = useApp((s) => s.settings.browserEnabled);
-  const sendShortcut = useApp((s) => s.settings.sendShortcut);
   const followUp = useApp((s) => s.settings.followUp);
-  const all = shortcutsFor(mac, browser, { sendShortcut, followUp });
+  const all = shortcutsFor(mac, browser, { followUp });
   const shown =
     search.type === "press"
       ? searchShortcuts(all, { press: search.press }, mac)

@@ -211,7 +211,8 @@ test("⌘T opens a new tab, ⌘⏎ starts a task tab and the follow-up's other w
   assert.deepEqual(of(on, "new-tab")?.keys, ["⌘T"]);
   assert.deepEqual(of(on, "start-in-tab")?.keys, ["⌘⏎"]);
   assert.deepEqual(of(on, "follow-up-other")?.keys, ["⌥⏎"]);
-  const mod = shortcutsFor(true, true, { sendShortcut: "modEnter", followUp: "queue" });
-  assert.deepEqual(of(mod, "start-in-tab")?.keys, ["⇧⌘⏎"]);
-  assert.deepEqual(of(mod, "follow-up-other")?.keys, ["⌥⌘⏎"]);
+  // Steering by default, ⌥⏎ queues instead, on the same key.
+  const steering = shortcutsFor(true, true, { followUp: "steer" });
+  assert.equal(of(steering, "follow-up-other")?.name, "Queue");
+  assert.deepEqual(of(steering, "follow-up-other")?.keys, ["⌥⏎"]);
 });

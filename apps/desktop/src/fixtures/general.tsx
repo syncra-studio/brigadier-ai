@@ -96,8 +96,6 @@ const all = <T extends Element = HTMLElement>(selector: string, root: ParentNode
 const text = (element: Element | null | undefined) => element?.textContent?.trim() ?? "";
 const row = (setting: string) => document.querySelector<HTMLElement>(`[data-setting="${setting}"]`);
 const control = (label: string) => document.querySelector<HTMLElement>(`[aria-label="${label}"]`);
-const press = (element: Element | null | undefined) =>
-  element?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
 const button = (name: string) => all<HTMLButtonElement>("button").find((item) => text(item) === name);
 
 function Fixture() {
@@ -123,13 +121,6 @@ function Fixture() {
         }));
         seen.version = text(row("Version")?.querySelector("span.tabular-nums"));
         seen.loginBefore = control("Open at login")?.getAttribute("aria-checked");
-        press(control("Send shortcut"));
-      },
-      () => {
-        seen.sendMenu = all('[role="menuitemradio"]').map((item) =>
-          all(":scope > span > span", item).map(text).filter(Boolean),
-        );
-        all<HTMLElement>('[role="menuitemradio"]')[1]?.click();
       },
       () => {
         seen.followUpHelper = text(row("Follow-up behaviour")?.querySelector(".text-xs"));

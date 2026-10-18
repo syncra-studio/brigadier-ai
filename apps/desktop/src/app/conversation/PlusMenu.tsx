@@ -1,5 +1,5 @@
 import { ComposerPrimitive, useAui } from "@assistant-ui/react";
-import { Chat, Folder, Lightbulb, Paperclip, Plus } from "@openai/apps-sdk-ui/components/Icon";
+import { ArrowUpRight, Chat, Folder, Lightbulb, Paperclip, Plus } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useCallback, useContext, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -28,6 +28,7 @@ import type { Mention } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { select, updateSetup } from "@/state/actions";
+import { armBackgroundSend, useBackgroundArmed } from "@/state/backgroundSend";
 import { useApp } from "@/state/store";
 
 /** Other conversations the menu offers to mention, as the `@` menu shows them. */
@@ -266,6 +267,37 @@ export const PlanChip: FC = () => {
           </button>
         </TooltipTrigger>
         <TooltipContent side="bottom">Turn plan mode off</TooltipContent>
+      </Tooltip>
+    </>
+  );
+};
+
+/**
+ * The `/` command's chip, as the Plan chip: while it shows, the next send starts a new session in
+ * the background; a click takes it back.
+ */
+export const NewSessionChip: FC = () => {
+  const target = useContext(ComposerTargetContext);
+  const id = target?.conversation?.id ?? null;
+  const on = useBackgroundArmed(id);
+  if (!on || !id) return null;
+  return (
+    <>
+      <span aria-hidden className="bg-foreground/15 mx-1 h-icon-md w-px" />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-pressed
+            data-slot="new-session-chip"
+            className={cn(composerPill, "text-muted-foreground")}
+            onClick={() => armBackgroundSend(id, false)}
+          >
+            <ArrowUpRight />
+            New session
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Send to this session instead</TooltipContent>
       </Tooltip>
     </>
   );

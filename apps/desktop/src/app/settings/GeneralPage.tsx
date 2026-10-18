@@ -23,7 +23,7 @@ import {
   openNotificationSettings,
   setLoginItem,
 } from "@/ipc/client";
-import type { Density, FollowUp, NotifyFinished, SendShortcut } from "@/ipc/generated";
+import type { Density, FollowUp, NotifyFinished } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { setDensity } from "@/state/actions";
 import {
@@ -51,10 +51,6 @@ export const GENERAL_ROWS = {
   sidebarClosed: {
     label: "When the sidebar is closed",
     description: "Keep a strip of icons at the edge, or hide it completely",
-  },
-  sendShortcut: {
-    label: "Send shortcut",
-    description: "Which key sends a message",
   },
   followUp: {
     label: "Follow-up behaviour",
@@ -215,32 +211,13 @@ function NameRow() {
 
 function ComposerSection() {
   const mac = useApp((s) => s.info?.platform === "macos");
-  const sendShortcut = useApp((s) => s.settings.sendShortcut);
   const followUp = useApp((s) => s.settings.followUp);
-  const sendAction = useAction();
   const followUpAction = useAction();
-  const mod = mac ? "⌘" : "Ctrl+";
-  const shortcuts = [
-    { value: "enter", label: "Enter", hint: "Shift+Enter starts a new line" },
-    { value: "modEnter", label: `${mod}Enter`, hint: "Enter starts a new line" },
-  ] as const satisfies readonly { value: SendShortcut; label: string; hint: string }[];
   // The key that sends the other way for one message.
-  const other = sendShortcut === "enter" ? `${mod}Enter` : mac ? "⇧⌘Enter" : "Ctrl+Shift+Enter";
+  const other = mac ? "⌥Enter" : "Alt+Enter";
   return (
     <SettingsSection title="Composer">
       <SettingsCard>
-        <SettingsRow
-          label={GENERAL_ROWS.sendShortcut.label}
-          description={GENERAL_ROWS.sendShortcut.description}
-          error={sendAction.error}
-        >
-          <SettingsSelect
-            label={GENERAL_ROWS.sendShortcut.label}
-            value={sendShortcut}
-            options={shortcuts}
-            onChange={(value) => sendAction.run(() => setSetting("sendShortcut", value))}
-          />
-        </SettingsRow>
         <SettingsRow
           label={GENERAL_ROWS.followUp.label}
           description={`${GENERAL_ROWS.followUp.description}; ${other} does the other for one message`}

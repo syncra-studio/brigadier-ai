@@ -13,7 +13,6 @@ import type { OverrideRule } from "./OverrideRule";
 import type { PermissionLevel } from "./PermissionLevel";
 import type { ProviderKind } from "./ProviderKind";
 import type { Ranking } from "./Ranking";
-import type { SendShortcut } from "./SendShortcut";
 
 /**
  * User settings persisted by the core.
@@ -126,12 +125,8 @@ keepAwake: KeepAwake,
  */
 keepAwakeLidClosed: boolean, 
 /**
- * The key that sends a message (Settings › General › Composer).
- */
-sendShortcut: SendShortcut, 
-/**
- * What a message sent while an answer works does; the send shortcut's other key does
- * the opposite for one message.
+ * What a message sent while an answer works does; ⌥Enter does the opposite for one
+ * message.
  */
 followUp: FollowUp, 
 /**

@@ -6,7 +6,7 @@
  * first key, and shortcutCatalog.test.ts checks the two agree.
  */
 
-import type { FollowUp, SendShortcut } from "@/ipc/generated";
+import type { FollowUp } from "@/ipc/generated";
 
 export type ShortcutArea =
   | "General"
@@ -109,8 +109,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "show-pages", name: "Show pages", line: "List the pages, from a page in front", area: "Tabs and panes", keys: ["⌥⌘E"], menu: "show-pages" },
 
   // Composer
-  // Send, New line and the follow-up's other way as with the defaults; `shortcutsFor` gives
-  // them the keys chosen in Settings › General › Composer.
+  // The follow-up's other way as with the default follow-up; `shortcutsFor` names it for the
+  // one chosen in Settings › General › Composer.
   { id: "send", name: "Send", line: "Send the message", area: "Composer", keys: ["⏎"] },
   { id: "new-line", name: "New line", line: "Start a new line in the message", area: "Composer", keys: ["⇧⏎"] },
   {
@@ -191,34 +191,14 @@ export const BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
 ]);
 
 /** How the composer sends, as Settings › General › Composer sets it. */
-export type ComposerKeys = { sendShortcut: SendShortcut; followUp: FollowUp };
+export type ComposerKeys = { followUp: FollowUp };
 
-const DEFAULT_COMPOSER_KEYS: ComposerKeys = { sendShortcut: "enter", followUp: "queue" };
+const DEFAULT_COMPOSER_KEYS: ComposerKeys = { followUp: "queue" };
 
-/**
- * The composer's entries with the keys chosen for sending, starting a task in a new tab and the
- * follow-up's other way.
- */
-function withComposerKeys(shortcut: Shortcut, { sendShortcut, followUp }: ComposerKeys): Shortcut {
-  const mod = sendShortcut === "modEnter";
-  switch (shortcut.id) {
-    case "start-in-tab":
-      return { ...shortcut, keys: [mod ? "⇧⌘⏎" : "⌘⏎"] };
-    case "send":
-      return { ...shortcut, keys: [mod ? "⌘⏎" : "⏎"] };
-    case "new-line":
-      return { ...shortcut, keys: mod ? ["⏎", "⇧⏎"] : ["⇧⏎"] };
-    case "follow-up-other":
-      return {
-        ...shortcut,
-        ...(followUp === "queue"
-          ? { name: "Steer", line: "While an answer works, send the message into it now" }
-          : { name: "Queue", line: "While an answer works, send the message to wait its turn" }),
-        keys: [mod ? "⌥⌘⏎" : "⌥⏎"],
-      };
-    default:
-      return shortcut;
-  }
+/** The composer's entries with the follow-up's other way named for the follow-up chosen. */
+function withComposerKeys(shortcut: Shortcut, { followUp }: ComposerKeys): Shortcut {
+  if (shortcut.id !== "follow-up-other" || followUp === "queue") return shortcut;
+  return { ...shortcut, name: "Queue", line: "While an answer works, send the message to wait its turn" };
 }
 
 /**

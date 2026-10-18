@@ -203,7 +203,6 @@ export const useApp = create<AppState>()(() => ({
     userName: "",
     keepAwake: "agents",
     keepAwakeLidClosed: false,
-    sendShortcut: "enter",
     followUp: "queue",
     notifyFinished: "background",
     notifyNeedsYou: true,

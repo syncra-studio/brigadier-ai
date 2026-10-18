@@ -1,6 +1,7 @@
 import { useAui, useAuiState } from "@assistant-ui/react";
 import {
   Archive,
+  ArrowUpRight,
   Bolt,
   BranchAlt,
   ChatCompose,
@@ -39,7 +40,9 @@ import {
   setPinned,
   updateSetup,
 } from "@/state/actions";
+import { armBackgroundSend } from "@/state/backgroundSend";
 import { useBoard } from "@/state/board";
+import { isTaskTab } from "@/state/tabStates";
 
 /** What `/init` asks the orchestrator, as Codex's `/init` asks its agent. */
 const INIT_PROMPT =
@@ -64,7 +67,8 @@ export function useLatestAnswer(): string | null {
 /**
  * The `/` menu in the composer, with the commands that mean something in Brigadier: Archive,
  * Compact (Chats whose CLI compacts), Fork, Init (sessions), Model, New, Permissions (where the
- * composer has its pill), Pin, Rename and Status. A draft has only Model and Permissions.
+ * composer has its pill), Pin, Rename, Start as a new session (a project's sessions) and Status. A
+ * draft has only Model and Permissions.
  */
 export const SlashCommands: FC<{
   conversation: Conversation | null;
@@ -214,6 +218,20 @@ export const SlashCommands: FC<{
         description: setup.planMode ? "Turn plan mode off" : "Turn plan mode on",
         icon: <Lightbulb />,
         run: () => run(() => updateSetup(id, { ...setup, planMode: !setup.planMode })),
+      });
+    }
+    if (isTaskTab(conversation)) {
+      list.push({
+        id: "background",
+        label: "Start as a new session",
+        description: "Send the message as a new session in the background, and stay here",
+        icon: <ArrowUpRight />,
+        run: () => {
+          armBackgroundSend(id, true);
+          requestAnimationFrame(() =>
+            document.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus(),
+          );
+        },
       });
     }
     if (conversation.kind === "session") {

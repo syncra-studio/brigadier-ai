@@ -1,6 +1,7 @@
 import { ComposerPrimitive, useAui, useAuiState } from "@assistant-ui/react";
 import {
   ArrowUp,
+  ArrowUpRight,
   Mic,
   PlayTriangle,
   Stop,
@@ -10,6 +11,7 @@ import {
 import {
   type FC,
   lazy,
+  type MouseEvent,
   type ReactNode,
   Suspense,
   useContext,
@@ -54,7 +56,7 @@ import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { useImagesBlocked, useImagesUnsupportedToast } from "@/app/conversation/imageInput";
 import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import { StatusCard, StatusCardContext } from "@/app/conversation/StatusCard";
-import { PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } from "@/app/conversation/PlusMenu";
+import { NewSessionChip, PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } from "@/app/conversation/PlusMenu";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { SelectionPill } from "@/app/conversation/SelectionPill";
 import { ComposerRail, ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
@@ -79,6 +81,9 @@ import {
   useDictation,
 } from "@/state/dictation";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
+import { clearBackgroundSend, markBackgroundSend, useBackgroundArmed } from "@/state/backgroundSend";
+import { isTaskTab } from "@/state/tabStates";
+import { shortcutKeys } from "@/app/shortcutCatalog";
 import { useApp } from "@/state/store";
 import { folderTrust } from "@/state/trust";
 
@@ -237,6 +242,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
                   )
                 )}
                 <PlanChip />
+                <NewSessionChip />
               </div>
               <DictationNote owner={dictationOwner} />
               {conversation?.kind === "chat" && <ComposerContextRing />}
@@ -531,6 +537,9 @@ function useEscToStop(canCancel: boolean): boolean {
 
 type SendState = "starting" | "armed" | "stop" | "queue" | "resume" | "send";
 
+/** What ⌘⏎ and ⌘-click on Send do in a project's session. */
+const START_TIP = "Start as a new session";
+
 const SEND_TIPS: Record<SendState, string> = {
   starting: "Starting your task…",
   armed: "Press Esc again to stop",
@@ -540,12 +549,33 @@ const SEND_TIPS: Record<SendState, string> = {
   send: "Send message",
 };
 
+/** Whether ⌘ (Ctrl off macOS) is held down, while `on`. */
+function useModHeld(mac: boolean, on: boolean): boolean {
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    if (!on) return;
+    const update = (event: KeyboardEvent) => setHeld(mac ? event.metaKey : event.ctrlKey);
+    // Its key-up goes to another app once the window loses focus (⌘Tab).
+    const release = () => setHeld(false);
+    window.addEventListener("keydown", update);
+    window.addEventListener("keyup", update);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("keydown", update);
+      window.removeEventListener("keyup", update);
+      window.removeEventListener("blur", release);
+    };
+  }, [mac, on]);
+  return on && held;
+}
+
 /**
  * One send button, which changes with the state: ↑ to send (its tip "Queue" while the model
  * works: a Chat queues the message, a session's orchestrator sorts it; "Steer" when steering is
  * the default follow-up, Settings › General), ■ to stop, "Esc" once
  * armed, ▶ to resume a stopped request, and a grey spinner while the conversation's model
- * starts.
+ * starts. In a project's session ⌘-click starts the message as a new session in the
+ * background, as ⌘⏎ does; its arrow turns while ⌘ is held (or the New session chip is on).
  */
 function SendControls({
   running,
@@ -564,6 +594,11 @@ function SendControls({
   const armed = useEscToStop(canCancel);
   const dictationOwner = conversationId ?? NEW_CHAT_SCOPE;
   const steers = useApp((s) => s.settings.followUp === "steer");
+  const mac = useApp((s) => s.info?.platform === "macos");
+  // A project's session: ⌘⏎ and ⌘-click start a new session in the background.
+  const projectSession = target?.conversation && isTaskTab(target.conversation) ? target.conversation.id : null;
+  const modHeld = useModHeld(mac, projectSession !== null);
+  const chip = useBackgroundArmed(projectSession);
   // Images for a model that takes none hold the message until they go or the model changes.
   const imagesBlocked = useImagesBlocked();
   useImagesUnsupportedToast();
@@ -580,9 +615,19 @@ function SendControls({
             ? "resume"
             : "send";
   const sending = state === "send" || state === "queue";
+  const background = sending && projectSession !== null && !empty && (modHeld || chip);
+  const tip = state === "queue" && steers ? "Steer" : SEND_TIPS[state];
+  const tooltip =
+    sending && imagesBlocked
+      ? IMAGES_BLOCKED
+      : background
+        ? START_TIP
+        : sending && projectSession
+          ? `${state === "send" ? "Send" : tip} ${shortcutKeys("send", mac)} · ${START_TIP} ${shortcutKeys("start-in-tab", mac)}`
+          : tip;
   const button = (
     <TooltipIconButton
-      tooltip={sending && imagesBlocked ? IMAGES_BLOCKED : state === "queue" && steers ? "Steer" : SEND_TIPS[state]}
+      tooltip={tooltip}
       side="bottom"
       type="button"
       disabled={sending && imagesBlocked}
@@ -590,10 +635,20 @@ function SendControls({
       size="icon-md"
       data-state={state}
       className={cn("aui-composer-send rounded-capsule", state === "armed" && "w-auto px-2 text-xs")}
-      onClick={state === "resume" ? (onResume ?? undefined) : undefined}
+      onClick={
+        state === "resume"
+          ? (onResume ?? undefined)
+          : (event: MouseEvent<HTMLButtonElement>) => {
+              if (!projectSession) return;
+              // A ⌘-click whose send never came is not this send's.
+              clearBackgroundSend(projectSession);
+              // Before the Send primitive's own click sends: this send goes to a new session.
+              if (sending && !empty && (mac ? event.metaKey : event.ctrlKey)) markBackgroundSend(projectSession);
+            }
+      }
     >
       {/* Keyed by state, so each glyph eases in as the button changes. */}
-      <span key={state} className="animate-in fade-in zoom-in-75 flex items-center duration-200 motion-reduce:animate-none">
+      <span key={background ? "background" : state} className="animate-in fade-in zoom-in-75 flex items-center duration-200 motion-reduce:animate-none">
         {state === "starting" ? (
           <Spinner className="size-icon-sm animate-spin motion-reduce:animate-none" />
         ) : state === "armed" ? (
@@ -602,6 +657,8 @@ function SendControls({
           <Stop className="size-icon-sm" />
         ) : state === "resume" ? (
           <PlayTriangle />
+        ) : background ? (
+          <ArrowUpRight data-slot="send-new-session" />
         ) : (
           <ArrowUp />
         )}

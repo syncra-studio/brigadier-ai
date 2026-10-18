@@ -8,7 +8,6 @@ type Rendering = {
   sections: string[];
   rows: Row[];
   version: string;
-  sendMenu: string[][];
   followUpHelper: string;
   followUp: string[];
   loginBefore: string;
@@ -37,7 +36,6 @@ test("General: its sections and rows, and every new setting saved for real", { t
       "Your name",
       "Density",
       "When the sidebar is closed",
-      "Send shortcut",
       "Follow-up behaviour",
       "Show context window usage",
       "Notifications aren't on yet",
@@ -63,12 +61,8 @@ test("General: its sections and rows, and every new setting saved for real", { t
     ["Notify when a session finishes", "When something needs you"],
   );
   assert.equal(seen.version, "Brigadier 0.9.0");
-  assert.deepEqual(seen.sendMenu, [
-    ["Enter", "Shift+Enter starts a new line"],
-    ["⌘Enter", "Enter starts a new line"],
-  ]);
-  // With ⌘Enter sending, ⇧⌘Enter sends the other way.
-  assert.equal(seen.followUpHelper, "What a message sent while an agent works does; ⇧⌘Enter does the other for one message");
+  // Enter always sends (no Send shortcut row); ⌥Enter sends the other way.
+  assert.equal(seen.followUpHelper, "What a message sent while an agent works does; ⌥Enter does the other for one message");
   assert.deepEqual(seen.followUp, ["Steer"]);
   assert.equal(seen.loginOn, "true");
   assert.equal(seen.loginOff, "false");
@@ -76,7 +70,6 @@ test("General: its sections and rows, and every new setting saved for real", { t
   // Allowed, the status row goes and the rows light up.
   assert.deepEqual(seen.notificationsAfter, ["Notify when a session finishes", "When something needs you"]);
   assert.deepEqual(seen.calls, [
-    "sendShortcut modEnter",
     "followUp steer",
     "notifyNeedsYou false",
     "setLoginItem true",
@@ -87,7 +80,7 @@ test("General: its sections and rows, and every new setting saved for real", { t
 
 test("General: notifications off point to System Settings, and Open at login waits for approval", { timeout: 60000 }, async (t) => {
   const seen = await render(t, "notifications=off&login=needsApproval");
-  const notifications = seen.rows.slice(6, 9);
+  const notifications = seen.rows.slice(5, 8);
   assert.deepEqual(notifications, [
     { setting: "Notifications are off", helper: "Turn them on in System Settings to use the options below", dimmed: false },
     { setting: "Notify when a session finishes", helper: "A notification when a chat or session is done", dimmed: true },

@@ -149,7 +149,7 @@ export default function ComposerEditor({
       autoFocus={takesFocus}
       // Esc stops only on a second press (useEscToStop).
       cancelOnEscape={false}
-      // Enter is ComposerKeys': it sends with the key chosen in Settings.
+      // Enter is ComposerKeys': it sends, ⌥ and ⌘ the other ways.
       submitMode="none"
       aria-label="Message input"
     >
@@ -271,7 +271,6 @@ function ComposerKeys({
     [editor, owner],
   );
   const mac = useApp((s) => s.info?.platform === "macos");
-  const sendShortcut = useApp((s) => s.settings.sendShortcut);
   const followUp = useApp((s) => s.settings.followUp);
   // Read when Enter is pressed, so the keys aren't registered again as images come and go.
   const blocked = useImagesBlocked();
@@ -311,7 +310,7 @@ function ComposerKeys({
         KEY_ENTER_COMMAND,
         (event) => {
           if (!event || event.isComposing) return false;
-          const action = enterAction(event, mac, sendShortcut, taskTab !== null);
+          const action = enterAction(event, mac, taskTab !== null);
           if (!action) return false;
           event.preventDefault();
           // A ⌘⏎ whose send never came is not this send's.
@@ -402,7 +401,6 @@ function ComposerKeys({
     dictating,
     opening,
     mac,
-    sendShortcut,
     followUp,
     taskTab,
   ]);

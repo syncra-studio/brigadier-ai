@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { enterAction, sendLane } from "@/app/conversation/composerKeys";
 import { parseStroke, shortcutsFor } from "@/app/shortcutCatalog";
-import type { FollowUp, SendShortcut } from "@/ipc/generated";
+import type { FollowUp } from "@/ipc/generated";
 
 const enter = (mods: { ctrl?: boolean; alt?: boolean; shift?: boolean; cmd?: boolean } = {}) => ({
   ctrlKey: mods.ctrl ?? false,
@@ -13,40 +13,28 @@ const enter = (mods: { ctrl?: boolean; alt?: boolean; shift?: boolean; cmd?: boo
 });
 
 test("Enter sends, ⌘Enter and ⌥Enter send the other way and Shift+Enter is left to the editor", () => {
-  assert.equal(enterAction(enter(), true, "enter"), "send");
-  assert.equal(enterAction(enter({ cmd: true }), true, "enter"), "other");
-  assert.equal(enterAction(enter({ shift: true }), true, "enter"), null);
+  assert.equal(enterAction(enter(), true), "send");
+  assert.equal(enterAction(enter({ cmd: true }), true), "other");
+  assert.equal(enterAction(enter({ shift: true }), true), null);
   // Off macOS Ctrl is the modifier, and the Windows key isn't.
-  assert.equal(enterAction(enter({ ctrl: true }), false, "enter"), "other");
-  assert.equal(enterAction(enter({ cmd: true }), false, "enter"), null);
-  assert.equal(enterAction(enter({ ctrl: true }), true, "enter"), null);
-  assert.equal(enterAction(enter({ alt: true }), true, "enter"), "other");
-  assert.equal(enterAction(enter({ alt: true, cmd: true }), true, "enter"), null);
+  assert.equal(enterAction(enter({ ctrl: true }), false), "other");
+  assert.equal(enterAction(enter({ cmd: true }), false), null);
+  assert.equal(enterAction(enter({ ctrl: true }), true), null);
+  assert.equal(enterAction(enter({ alt: true }), true), "other");
+  assert.equal(enterAction(enter({ alt: true, cmd: true }), true), null);
+  // No other way to send: the ⌘Enter-sends scheme is gone.
+  assert.equal(enterAction(enter({ cmd: true, shift: true }), true), null);
 });
 
-test("with ⌘Enter chosen, Enter starts a new line and ⇧⌘Enter sends the other way", () => {
-  assert.equal(enterAction(enter(), true, "modEnter"), null);
-  assert.equal(enterAction(enter({ shift: true }), true, "modEnter"), null);
-  assert.equal(enterAction(enter({ cmd: true }), true, "modEnter"), "send");
-  assert.equal(enterAction(enter({ cmd: true, shift: true }), true, "modEnter"), "other");
-  assert.equal(enterAction(enter({ ctrl: true }), false, "modEnter"), "send");
-  assert.equal(enterAction(enter({ ctrl: true, shift: true }), false, "modEnter"), "other");
-});
-
-test("in a task tab ⌘Enter starts a background tab and ⌥Enter sends the other way", () => {
-  assert.equal(enterAction(enter(), true, "enter", true), "send");
-  assert.equal(enterAction(enter({ cmd: true }), true, "enter", true), "background");
-  assert.equal(enterAction(enter({ alt: true }), true, "enter", true), "other");
-  assert.equal(enterAction(enter({ shift: true }), true, "enter", true), null);
-  assert.equal(enterAction(enter({ alt: true, shift: true }), true, "enter", true), null);
-  assert.equal(enterAction(enter({ ctrl: true }), false, "enter", true), "background");
-  assert.equal(enterAction(enter({ alt: true }), false, "enter", true), "other");
-  // With ⌘Enter sending: ⇧⌘Enter is the background tab, ⌥⌘Enter the other way.
-  assert.equal(enterAction(enter({ cmd: true }), true, "modEnter", true), "send");
-  assert.equal(enterAction(enter({ cmd: true, shift: true }), true, "modEnter", true), "background");
-  assert.equal(enterAction(enter({ cmd: true, alt: true }), true, "modEnter", true), "other");
-  assert.equal(enterAction(enter({ alt: true }), true, "modEnter", true), null);
-  assert.equal(enterAction(enter({ ctrl: true, alt: true }), false, "modEnter", true), "other");
+test("in a project's session ⌘Enter starts a background session and ⌥Enter sends the other way", () => {
+  assert.equal(enterAction(enter(), true, true), "send");
+  assert.equal(enterAction(enter({ cmd: true }), true, true), "background");
+  assert.equal(enterAction(enter({ alt: true }), true, true), "other");
+  assert.equal(enterAction(enter({ shift: true }), true, true), null);
+  assert.equal(enterAction(enter({ alt: true, shift: true }), true, true), null);
+  assert.equal(enterAction(enter({ cmd: true, shift: true }), true, true), null);
+  assert.equal(enterAction(enter({ ctrl: true }), false, true), "background");
+  assert.equal(enterAction(enter({ alt: true }), false, true), "other");
 });
 
 test("a message sent while an answer works goes the default way unless the other key says", () => {
@@ -67,30 +55,28 @@ test("the shortcuts page shows the composer keys the composer acts on, on both p
     // Outside a project's session, Start as a new session's key is the other way.
     const actions = { send: "send", "follow-up-other": "other", "start-in-tab": projectSession ? "background" : "other" } as const;
     for (const mac of [true, false]) {
-      for (const sendShortcut of ["enter", "modEnter"] as SendShortcut[]) {
-        for (const followUp of ["queue", "steer"] as FollowUp[]) {
-          const shortcuts = shortcutsFor(mac, true, { sendShortcut, followUp });
-          const keysOf = (id: string) => shortcuts.find((s) => s.id === id)?.keys ?? [];
-          const pressOf = (chip: string) => {
-            const stroke = parseStroke(chip);
-            return enter({
-              shift: stroke.shift,
-              alt: stroke.alt,
-              ctrl: stroke.ctrl || (!mac && stroke.cmd),
-              cmd: mac && stroke.cmd,
-            });
-          };
-          const where = `${sendShortcut}, ${followUp}, ${mac ? "macOS" : "other"}, project session ${projectSession}`;
-          for (const [id, action] of Object.entries(actions)) {
-            const [chip = ""] = keysOf(id);
-            assert.equal(enterAction(pressOf(chip), mac, sendShortcut, projectSession), action, `${id}: ${where}`);
-          }
-          for (const chip of keysOf("new-line")) {
-            assert.equal(enterAction(pressOf(chip), mac, sendShortcut, projectSession), null, `new line ${chip}: ${where}`);
-          }
-          const other = shortcuts.find((s) => s.id === "follow-up-other");
-          assert.equal(other?.name, followUp === "queue" ? "Steer" : "Queue", where);
+      for (const followUp of ["queue", "steer"] as FollowUp[]) {
+        const shortcuts = shortcutsFor(mac, true, { followUp });
+        const keysOf = (id: string) => shortcuts.find((s) => s.id === id)?.keys ?? [];
+        const pressOf = (chip: string) => {
+          const stroke = parseStroke(chip);
+          return enter({
+            shift: stroke.shift,
+            alt: stroke.alt,
+            ctrl: stroke.ctrl || (!mac && stroke.cmd),
+            cmd: mac && stroke.cmd,
+          });
+        };
+        const where = `${followUp}, ${mac ? "macOS" : "other"}, project session ${projectSession}`;
+        for (const [id, action] of Object.entries(actions)) {
+          const [chip = ""] = keysOf(id);
+          assert.equal(enterAction(pressOf(chip), mac, projectSession), action, `${id}: ${where}`);
         }
+        for (const chip of keysOf("new-line")) {
+          assert.equal(enterAction(pressOf(chip), mac, projectSession), null, `new line ${chip}: ${where}`);
+        }
+        const other = shortcuts.find((s) => s.id === "follow-up-other");
+        assert.equal(other?.name, followUp === "queue" ? "Steer" : "Queue", where);
       }
     }
   }
