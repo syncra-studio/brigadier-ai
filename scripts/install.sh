@@ -1,6 +1,12 @@
 #!/bin/sh
-# Install the macOS alpha from its GitHub release. Safe to run through `curl | sh`.
+# Install Brigadier on macOS from its GitHub release. Safe to run through `curl | sh`.
+#
+# BRIGADIER_INSTALL_DIR installs somewhere other than /Applications (tests use a scratch folder).
+# BRIGADIER_RELEASE_URL reads the release files from elsewhere (tests serve them locally).
 set -eu
+
+version=0.1.0-alpha
+team=7JQSPMWT79
 
 fail() { printf 'install: %s\n' "$*" >&2; exit 1; }
 
@@ -12,72 +18,66 @@ cleanup() {
   find "$scratch" -depth -delete
 }
 
-install_alpha() {
-  [ "$(uname -s)" = Darwin ] || fail 'This alpha requires macOS.'
+install_brigadier() {
+  [ "$(uname -s)" = Darwin ] || fail 'Brigadier requires macOS.'
   major=$(sw_vers -productVersion | cut -d . -f 1)
   [ "$major" -ge 14 ] || fail 'macOS 14 or later is required.'
-  case "$(uname -m)" in
-    arm64) arch=aarch64 ;;
-    x86_64)
-      arch=x64
-      # A Terminal running through Rosetta reports x86_64 on Apple Silicon.
-      if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then arch=aarch64; fi
-      ;;
-    *) fail 'Unsupported processor architecture.' ;;
-  esac
-  release=https://github.com/syncra-studio/brigadier-ai/releases/download/v0.1.0-alpha
-  asset="Brigadier_0.1.0_${arch}.dmg"
-  scratch=$(mktemp -d /tmp/brigadier-alpha-install.XXXXXX)
+  release=${BRIGADIER_RELEASE_URL:-https://github.com/syncra-studio/brigadier-ai/releases/download/v$version}
+  apps=${BRIGADIER_INSTALL_DIR:-/Applications}
+  target="$apps/Brigadier.app"
+  # One build runs on Apple silicon and Intel.
+  asset="Brigadier-$version-universal.dmg"
+  scratch=$(mktemp -d /tmp/brigadier-install.XXXXXX)
   mounted=''
   trap cleanup 0
   trap 'exit 130' HUP INT TERM
 
-  printf 'Downloading %s and SHA256SUMS from v0.1.0-alpha…\n' "$asset"
+  printf 'Downloading Brigadier %s…\n' "$version"
   curl -fsSL --retry 3 "$release/SHA256SUMS" -o "$scratch/SHA256SUMS"
   checksum=$(awk -v asset="$asset" '$2 == asset { print $1 }' "$scratch/SHA256SUMS")
-  [ "${#checksum}" -eq 64 ] \
-    || fail "No valid checksum for $asset; this release may not include your architecture."
   printf '%s\n' "$checksum" | LC_ALL=C grep -Eq '^[0-9a-fA-F]{64}$' \
-    || fail "Invalid checksum for $asset."
-  curl -fsSL --retry 3 "$release/$asset" -o "$scratch/$asset"
-  (cd "$scratch" && printf '%s  %s\n' "$checksum" "$asset" | shasum -a 256 -c -) \
-    || fail 'SHA-256 verification failed; nothing was installed.'
+    || fail "No valid checksum for $asset."
+  curl -fSL --retry 3 --progress-bar "$release/$asset" -o "$scratch/$asset"
+  (cd "$scratch" && printf '%s  %s\n' "$checksum" "$asset" | shasum -a 256 -c - >/dev/null) \
+    || fail 'The download is damaged (checksum mismatch); nothing was installed.'
 
   mkdir "$scratch/mount"
   hdiutil attach "$scratch/$asset" -readonly -nobrowse -mountpoint "$scratch/mount" -quiet
   mounted="$scratch/mount"
   source="$mounted/Brigadier.app"
-  [ -d "$source" ] && [ ! -L "$source" ] || fail 'The DMG does not contain Brigadier.app.'
+  [ -d "$source" ] && [ ! -L "$source" ] || fail 'The download does not contain Brigadier.app.'
+  # Signed by Syncra's Developer ID and notarized by Apple, or not installed.
   codesign --verify --deep --strict "$source" || fail 'The app signature is invalid.'
+  codesign -dv "$source" 2>&1 | grep -qx "TeamIdentifier=$team" \
+    || fail 'The app is not signed by the Brigadier developer.'
+  spctl --assess --type execute "$source" 2>/dev/null \
+    || fail 'macOS does not accept this app (not notarized); nothing was installed.'
 
-  [ ! -L /Applications/Brigadier.app ] || fail '/Applications/Brigadier.app is a symlink; install manually.'
-  if [ -e /Applications/Brigadier.app ]; then
-    printf 'Quit Brigadier and let its active sessions finish before replacing it.\n'
-    printf 'Replace /Applications/Brigadier.app? [y/N] '
+  [ -d "$apps" ] || fail "$apps does not exist."
+  [ ! -L "$target" ] || fail "$target is a symlink; install by hand."
+  if [ -e "$target" ]; then
+    printf 'Quit Brigadier and let its running sessions finish before replacing it.\n'
+    printf 'Replace %s? [y/N] ' "$target"
     answer=''
-    if ! read -r answer </dev/tty; then fail 'A terminal is required to confirm replacement.'; fi
-    case "$answer" in y|Y|yes|YES) ;; *) printf 'Installation cancelled.\n'; return ;; esac
+    if ! read -r answer </dev/tty; then fail 'A terminal is needed to confirm the replacement.'; fi
+    case "$answer" in y|Y|yes|YES) ;; *) printf 'Nothing was installed.\n'; return ;; esac
   fi
-  if pgrep -f '^/Applications/Brigadier\.app/Contents/MacOS/(brigadier|brigadierd)( |$)' >/dev/null; then
-    fail 'Brigadier is still running. Quit it before installing.'
+  if pgrep -f "^$target/Contents/MacOS/(brigadier|brigadierd)( |$)" >/dev/null; then
+    fail 'Brigadier is still running. Quit it first.'
   fi
 
-  # Only elevate the copy/removal operations when /Applications needs it.
+  # Administrator permission only when the folder needs it.
   elevated=''
-  if [ ! -w /Applications ] || { [ -e /Applications/Brigadier.app ] && [ ! -w /Applications/Brigadier.app ]; }; then
-    printf 'Administrator permission is needed to install in /Applications.\n'
+  if [ ! -w "$apps" ] || { [ -e "$target" ] && [ ! -w "$target" ]; }; then
+    printf 'Administrator permission is needed to install in %s.\n' "$apps"
     sudo -v
     elevated=sudo
   fi
-  if [ -e /Applications/Brigadier.app ]; then
-    $elevated rm -rf /Applications/Brigadier.app
+  if [ -e "$target" ]; then
+    $elevated rm -rf "$target"
   fi
-  $elevated ditto "$source" /Applications/Brigadier.app
-  printf 'This alpha is ad-hoc signed, without an Apple Developer ID or notarization.\n'
-  printf 'Removing its download quarantine attribute lets this app open without Gatekeeper approval.\n'
-  printf 'The checksum checks the release download; it does not establish developer identity or safety.\n'
-  $elevated xattr -dr com.apple.quarantine /Applications/Brigadier.app
-  printf 'Installed. Open /Applications/Brigadier.app to begin.\n'
+  $elevated ditto "$source" "$target"
+  printf 'Installed %s. Open it to begin; it updates itself from now on.\n' "$target"
 }
 
-install_alpha
+install_brigadier

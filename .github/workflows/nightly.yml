@@ -7,7 +7,11 @@ name: Nightly
 # installed nightly builds update themselves from. Without the signing secrets (the signing step
 # below names them) it is built unsigned and nothing is published.
 #
-# A release tag (v*) runs the same builds, the macOS one universal, and publishes nothing.
+# A release tag (v*, e.g. v0.1.0-alpha) runs the same builds, the macOS one universal (Apple
+# silicon and Intel), and publishes that tag's GitHub release: the signed, notarized DMG, the
+# updater archive, its feed and SHA256SUMS. The release is marked latest, so installed release
+# builds read their feed at releases/latest; the nightly and its feed are left alone. Started by
+# hand on a tag (Run workflow › the tag) it does the same.
 #
 # A failed run opens one issue labelled `nightly`, or comments on the one already open; the next
 # good run closes it.
@@ -66,6 +70,7 @@ jobs:
     timeout-minutes: 120
     outputs:
       publish: ${{ steps.signing.outputs.publish }}
+      release: ${{ steps.signing.outputs.release }}
     env:
       UNIVERSAL: ${{ startsWith(github.ref, 'refs/tags/v') }}
     steps:
@@ -124,8 +129,7 @@ jobs:
           done
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "::notice::Built unsigned and not published; missing secrets: ${missing[*]}"
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
+            printf '%s\n' signed=false publish=false release=false >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # The Developer ID goes into a keychain of its own before the build, because
@@ -147,10 +151,20 @@ jobs:
           # The nightly's version sorts after every earlier nightly of the same release, and its
           # updater reads the feed the publish job writes. The archive's signature carries the
           # version, so the feed can't pair a newer version with an older build's archive.
+          # A release tag's version is the tag's, and its updater reads the latest release's feed.
           base="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           stamp="$(date -u +%Y%m%d%H%M)"
-          version="$base-nightly.$stamp"
-          feed="https://github.com/$GITHUB_REPOSITORY/releases/download/nightly/latest.json"
+          if [ "$UNIVERSAL" = true ]; then
+            version="${GITHUB_REF_NAME#v}"
+            case "$version" in
+              "$base" | "$base"-*) ;;
+              *) echo "::error::Tag $GITHUB_REF_NAME doesn't match the app's version $base"; exit 1 ;;
+            esac
+            feed="https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.json"
+          else
+            version="$base-nightly.$stamp"
+            feed="https://github.com/$GITHUB_REPOSITORY/releases/download/nightly/latest.json"
+          fi
           jq -n --arg version "$version" --arg bundleVersion "$stamp" --arg pubkey "$UPDATER_PUBKEY" \
             --arg feed "$feed" '{
               version: $version,
@@ -164,6 +178,7 @@ jobs:
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "release=$UNIVERSAL" >> "$GITHUB_OUTPUT"
 
       - name: Build the app bundle and DMG
         # The release profile as shipped. Empty variables must not be exported: the bundler
@@ -249,6 +264,44 @@ jobs:
             }' > "$out/latest.json"
           cat "$out/latest.json"
           ls -l "$out"
+
+      - name: Release files
+        if: steps.signing.outputs.release == 'true'
+        # One universal build serves both architectures: the feed names the same archive for each.
+        env:
+          VERSION: ${{ steps.signing.outputs.version }}
+        run: |
+          out="$RUNNER_TEMP/release"
+          dir=target/universal-apple-darwin/release/bundle
+          mkdir -p "$out"
+          archive="Brigadier-$VERSION-universal.app.tar.gz"
+          dmg="Brigadier-$VERSION-universal.dmg"
+          cp "$dir/macos/Brigadier.app.tar.gz" "$out/$archive"
+          cp "$dir"/dmg/*.dmg "$out/$dmg"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$archive"
+          jq -n --arg version "$VERSION" --arg tag "$GITHUB_REF_NAME" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --rawfile signature "$dir/macos/Brigadier.app.tar.gz.sig" \
+            --arg url "$url" '{
+              version: $version,
+              notes: ("Brigadier " + $tag),
+              pub_date: $date,
+              platforms: {
+                "darwin-aarch64": { signature: $signature, url: $url },
+                "darwin-x86_64": { signature: $signature, url: $url }
+              }
+            }' > "$out/latest.json"
+          (cd "$out" && shasum -a 256 "$dmg" "$archive" > SHA256SUMS)
+          cat "$out/latest.json" "$out/SHA256SUMS"
+          ls -l "$out"
+
+      - uses: actions/upload-artifact@v7
+        if: steps.signing.outputs.release == 'true'
+        with:
+          name: release-macOS
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
+          retention-days: 30
 
       - uses: actions/upload-artifact@v7
         if: steps.signing.outputs.publish == 'true'
@@ -388,6 +441,40 @@ jobs:
                 *.app.tar.gz) if [ "$name" != "$keep" ]; then gh release delete-asset nightly "$name" -R "$repo" -y; fi ;;
               esac
             done
+
+  release:
+    name: Publish the release
+    needs: macos
+    if: needs.macos.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-macOS
+          path: release
+      - name: Create the release and mark it latest
+        # Built as a draft with every file, then published at once, so the feed never names an
+        # archive that isn't there yet.
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" -R "$repo" > /dev/null 2>&1; then
+            echo "::error::$tag is already released; publish fixes as a new version"; exit 1
+          fi
+          notes="Brigadier ${tag#v} for macOS 14 or later, Apple silicon and Intel. Signed and notarized.
+
+          Install with \`brew install --cask syncra-studio/tap/brigadier\`, or open the DMG and drag Brigadier to Applications. Installed copies update themselves when a newer release is out.
+
+          How to install and start: https://github.com/$repo/blob/$tag/docs/user/install.md"
+          gh release create "$tag" -R "$repo" --verify-tag --draft --title "Brigadier ${tag#v}" \
+            --notes "$notes" release/*
+          gh release edit "$tag" -R "$repo" --draft=false --latest
 
   report:
     name: Failure issue
