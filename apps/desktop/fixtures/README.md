@@ -203,3 +203,11 @@ are one row with their count and time, which opens to each call with what it was
 another tool stay two rows. It writes what it saw as JSON into `#thread-repeats-result`;
 `ThreadRepeatsRender.test.ts` checks it. `stop=1` holds the page for a screenshot. This entry is absent
 from the production build.
+
+# Opening the permission menu
+
+`/fixtures/composer-permissions.html` is a session's composer. Typing `/` lists Permissions with the
+level in use and its icon; `/perm` and Enter open the permission menu above the pill and it stays open;
+`/model` and Enter open the model picker the same way; ↑ on the focused pill opens the permission menu
+too. It writes what it saw as JSON into `#composer-permissions-result`;
+`ComposerPermissionsRender.test.ts` checks it. This entry is absent from the production build.

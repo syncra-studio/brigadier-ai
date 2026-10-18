@@ -27,8 +27,9 @@ import {
 } from "@/components/assistant-ui/elements/composer-commands";
 import { DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { findModel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
-import type { Conversation } from "@/ipc/generated";
-import { useCanCompact } from "@/lib/setup";
+import { PERMISSION_ICONS } from "@/app/conversation/SetupPickers";
+import type { Conversation, PermissionLevel } from "@/ipc/generated";
+import { PERMISSION_LABELS, useCanCompact } from "@/lib/setup";
 import {
   archive,
   compact,
@@ -62,15 +63,17 @@ export function useLatestAnswer(): string | null {
 
 /**
  * The `/` menu in the composer, with the commands that mean something in Brigadier: Archive,
- * Compact (Chats whose CLI compacts), Fork, Init (sessions), Model, New, Pin, Rename and
- * Status. A draft has only Model.
+ * Compact (Chats whose CLI compacts), Fork, Init (sessions), Model, New, Permissions (where the
+ * composer has its pill), Pin, Rename and Status. A draft has only Model and Permissions.
  */
 export const SlashCommands: FC<{
   conversation: Conversation | null;
   /** The providers' models, for the Fast command of a model with a fast tier. */
   groups: readonly ModelGroup[];
   onOpenModel: () => void;
-}> = ({ conversation, groups, onOpenModel }) => {
+  /** The level the permission pill shows, and opening its menu; null where there is no pill. */
+  permission?: { level: PermissionLevel; onOpen: () => void } | null;
+}> = ({ conversation, groups, onOpenModel, permission = null }) => {
   const aui = useAui();
   const status = useContext(StatusCardContext);
   const compactable = useCanCompact(conversation?.setup);
@@ -89,7 +92,19 @@ export const SlashCommands: FC<{
       icon: <SettingsSlider />,
       run: onOpenModel,
     };
-    if (!conversation) return [model];
+    const permissions: ComposerCommand[] = permission
+      ? [(() => {
+          const Icon = PERMISSION_ICONS[permission.level];
+          return {
+            id: "permissions",
+            label: "Permissions",
+            description: `${PERMISSION_LABELS[permission.level]} · change how actions are approved`,
+            icon: <Icon />,
+            run: permission.onOpen,
+          };
+        })()]
+      : [];
+    if (!conversation) return [model, ...permissions];
     const id = conversation.id;
     const noun = conversation.kind === "chat" ? "chat" : "session";
     const pinned = conversation.pinnedAtMs !== null;
@@ -102,6 +117,7 @@ export const SlashCommands: FC<{
         run: () => run(() => archive(id)),
       },
       model,
+      ...permissions,
       {
         id: "new",
         label: `New ${noun}`,
@@ -226,7 +242,7 @@ export const SlashCommands: FC<{
       });
     }
     return list.toSorted((a, b) => a.label.localeCompare(b.label));
-  }, [conversation, groups, answer, compactable, share, onOpenModel, status, run, aui]);
+  }, [conversation, groups, answer, compactable, share, onOpenModel, permission, status, run, aui]);
 
   return (
     <>

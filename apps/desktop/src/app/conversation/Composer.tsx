@@ -27,6 +27,7 @@ import {
   PermissionPicker,
   ProjectSettingsButton,
   ProvidersButton,
+  useShownPermission,
 } from "@/app/conversation/SetupPickers";
 import { SuggestionContext, useSuggestion } from "@/app/conversation/suggestion";
 import type { ComposerInputProps } from "@/app/conversation/ComposerEditor";
@@ -100,6 +101,8 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
   const suggestion = useSuggestion(target?.conversation?.id ?? null);
   const attached = useAuiState((s) => s.composer.attachments.length > 0);
   const [modelOpen, setModelOpen] = useState(false);
+  const [permissionOpen, setPermissionOpen] = useState(false);
+  const sessionPermission = useShownPermission(target?.conversation ?? null);
   const statusCard = useContext(StatusCardContext);
   const pending = usePendingActions(target?.conversation ?? null);
   const plan = usePlanMode(target);
@@ -127,6 +130,9 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
     if (conversation) setAsideCards(conversation.id, ids);
   };
   const guess = !archived && !plan.on && !attached ? (suggestion?.text ?? null) : null;
+  // A session draft's pill: Ask for approval in a folder the user doesn't trust.
+  const draftUntrusted = !conversation && resolved.kind === "session" && resolved.repoPath !== null && folderTrust(resolved.project, resolved.repoPath) === false;
+  const permissionLevel = conversation ? sessionPermission : resolved.kind === "session" ? (draftUntrusted ? "askForApproval" : resolved.permission) : null;
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
@@ -146,7 +152,10 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
         <SlashCommands
           conversation={conversation}
           groups={resolved.groups}
-          onOpenModel={() => setModelOpen(true)}
+          // Each picker opens once the / menu has closed and the composer took the command out,
+          // or it would close as it opens.
+          onOpenModel={() => requestAnimationFrame(() => setModelOpen(true))}
+          permission={permissionLevel && { level: permissionLevel, onOpen: () => requestAnimationFrame(() => setPermissionOpen(true)) }}
         />
         {/* Hidden, not unmounted, while the slash or + menu is open over it. */}
         <ComposerRail className="transition-[opacity,visibility] group-has-[[data-slot=composer-commands]]/composer:invisible group-has-[[data-slot=composer-commands]]/composer:opacity-0 group-has-[[data-slot=plus-trigger][data-state=open]]/composer:invisible group-has-[[data-slot=plus-trigger][data-state=open]]/composer:opacity-0">
@@ -211,15 +220,14 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">
                 <PlusMenu />
                 {conversation ? (
-                  <ConversationPermissionPicker conversation={conversation} />
+                  <ConversationPermissionPicker conversation={conversation} open={permissionOpen} onOpenChange={setPermissionOpen} />
                 ) : (
                   resolved.kind === "session" && (
                     <PermissionPicker
                       value={resolved.permission}
-                      untrusted={
-                        resolved.repoPath !== null &&
-                        folderTrust(resolved.project, resolved.repoPath) === false
-                      }
+                      untrusted={draftUntrusted}
+                      open={permissionOpen}
+                      onOpenChange={setPermissionOpen}
                       onChange={(permission) =>
                         updateDraft(resolved.project?.id ?? null, { permission })
                       }

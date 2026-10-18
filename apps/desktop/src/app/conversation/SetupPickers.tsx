@@ -91,7 +91,7 @@ export function ProvidersButton() {
 
 // ----- permission ------------------------------------------------------------------------
 
-const PERMISSION_ICONS: Record<PermissionLevel, FC<{ className?: string }>> = {
+export const PERMISSION_ICONS: Record<PermissionLevel, FC<{ className?: string }>> = {
   askForApproval: HandRaised,
   approveForMe: ShieldTerminal,
   fullAccess: ShieldExclamation,
@@ -115,12 +115,22 @@ export function PermissionPicker({
   value: chosen,
   untrusted = false,
   onChange,
+  open: shown,
+  onOpenChange,
 }: {
   value: PermissionLevel;
   untrusted?: boolean;
   onChange: (level: PermissionLevel) => void;
+  /** Open from elsewhere too: the composer's `/` menu (#95). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [own, setOwn] = useState(false);
+  const open = shown ?? own;
+  const setOpen = (next: boolean) => {
+    setOwn(next);
+    onOpenChange?.(next);
+  };
   const [confirming, setConfirming] = useState(false);
   const value: PermissionLevel = untrusted ? "askForApproval" : chosen;
   const full = value === "fullAccess";
@@ -133,6 +143,12 @@ export function PermissionPicker({
             type="button"
             aria-label="Permission level"
             data-slot="permission-picker"
+            // The menu opens upward, so ↑ opens it too, as ↓, Enter and Space do (#95).
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowUp" || open) return;
+              event.preventDefault();
+              setOpen(true);
+            }}
             className={cn(
               composerPill,
               "text-muted-foreground max-w-xs",
@@ -455,6 +471,14 @@ function WaitingPill({ wait }: { wait: QuotaWait }) {
   );
 }
 
+/** The level a started session's permission pill shows (Ask for approval in a folder the user doesn't trust); null if it has none. */
+export function useShownPermission(conversation: Conversation | null): PermissionLevel | null {
+  const setup = conversation?.setup;
+  const untrusted = useUntrusted(conversation?.projectId ?? null, setup?.type === "session" ? setup.repo : null);
+  if (setup?.type !== "session") return null;
+  return untrusted ? "askForApproval" : setup.permission;
+}
+
 /** Whether the user doesn't trust the folder `repo` of the project `projectId`. */
 export function useUntrusted(projectId: string | null, repo: string | null): boolean {
   return useApp(
@@ -473,7 +497,11 @@ export async function setSessionPermission(
 }
 
 /** Permission level of a started session. */
-export function ConversationPermissionPicker({ conversation }: { conversation: Conversation }) {
+export function ConversationPermissionPicker({ conversation, open, onOpenChange }: {
+  conversation: Conversation;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
   const action = useAction();
   const setup = conversation.setup;
   const untrusted = useUntrusted(
@@ -487,6 +515,8 @@ export function ConversationPermissionPicker({ conversation }: { conversation: C
         value={setup.permission}
         untrusted={untrusted}
         onChange={(permission) => action.run(() => setSessionPermission(conversation, permission))}
+        {...(open !== undefined && { open })}
+        {...(onOpenChange && { onOpenChange })}
       />
       {action.error && (
         <span role="alert" className="text-destructive max-w-xs truncate text-xs" title={action.error}>
