@@ -262,16 +262,19 @@ function useThreadScroll(
   return { viewport, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter };
 }
 
-/** "Drop to attach", over the thread while files are dragged onto it. */
+/** "Drop to attach": a soft accent tint over the thread and a small pill, while files are dragged onto it. */
 const DropOverlay: FC = () => (
   <div
     aria-hidden
     data-slot="drop-overlay"
-    className="bg-background/80 pointer-events-none absolute inset-0 z-30 hidden p-3 backdrop-blur-sm group-data-[dragging=true]/drop:flex"
+    className="bg-link/8 animate-in fade-in-0 pointer-events-none absolute inset-0 z-30 hidden items-center justify-center duration-150 group-data-[dragging=true]/drop:flex"
   >
-    <div className="border-border rounded-dialog animate-in fade-in-0 flex flex-1 flex-col items-center justify-center gap-2 border-2 border-dashed duration-150">
-      <Paperclip className="text-muted-foreground size-icon-lg" />
-      <p className="text-lg">Drop to attach</p>
+    <div
+      data-slot="drop-pill"
+      className="bg-popover text-popover-foreground rounded-capsule flex items-center gap-1.5 px-3 py-1.5 text-sm shadow-sm"
+    >
+      <Paperclip className="text-muted-foreground size-icon-sm" />
+      Drop to attach
     </div>
   </div>
 );

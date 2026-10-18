@@ -55,3 +55,13 @@ test("in Plan mode, Backspace at the very start of the composer turns Plan mode 
   assert.deepEqual(seen.midText, { text: "ab", plan: true, sets: [] });
   assert.deepEqual(seen.atStart, { text: "ab", plan: false, sets: [false] });
 });
+
+test("a file dragged over the thread shows a soft accent tint and a small Drop to attach pill, no grey veil or dashed frame (issue 300)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "drop");
+  const overlay = seen.overlay as Record<string, unknown>;
+  assert.equal(overlay.dashed, false);
+  assert.equal(overlay.blurred, false);
+  assert.equal(overlay.tinted, true);
+  assert.equal(overlay.pill, "Drop to attach");
+  assert.equal(overlay.pillSmall, true);
+});

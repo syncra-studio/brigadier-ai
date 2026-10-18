@@ -304,6 +304,44 @@ async function planCase(seen: Record<string, unknown>) {
   seen.atStart = { text: field()?.textContent, plan: planOn(), sets: planSets() };
 }
 
+/** The drop overlay over the thread. */
+const overlay = () => document.querySelector<HTMLElement>("[data-slot=drop-overlay]");
+
+/** A CSS colour as 8-bit red, green, blue and alpha (drawn, so any colour syntax reads). */
+function rgba(color: string): [number, number, number, number] {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 1;
+  const context = canvas.getContext("2d")!;
+  context.fillStyle = color;
+  context.fillRect(0, 0, 1, 1);
+  const [red = 0, green = 0, blue = 0, alpha = 0] = context.getImageData(0, 0, 1, 1).data;
+  return [red, green, blue, alpha];
+}
+
+/**
+ * #300: a file dragged over the thread tints it softly in the accent colour, with a small
+ * "Drop to attach" pill; no grey veil, no dashed frame.
+ */
+async function dropCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  const files = new DataTransfer();
+  files.items.add(new File(["notes"], "notes.txt", { type: "text/plain" }));
+  field()!.dispatchEvent(new DragEvent("dragenter", { dataTransfer: files, bubbles: true, cancelable: true }));
+  await until("the overlay", () => overlay() !== null && getComputedStyle(overlay()!).display !== "none", 3000);
+  const all = [overlay()!, ...overlay()!.querySelectorAll<HTMLElement>("*")];
+  const pill = overlay()!.querySelector<HTMLElement>("[data-slot=drop-pill]");
+  const [red, , blue, alpha] = rgba(getComputedStyle(overlay()!).backgroundColor);
+  seen.overlay = {
+    dashed: all.some((element) => getComputedStyle(element).borderStyle.includes("dashed")),
+    blurred: all.some((element) => getComputedStyle(element).backdropFilter !== "none"),
+    // The accent's blue, faint: not a grey, and the thread still shows through.
+    tinted: blue - red > 20 && alpha > 0 && alpha < 64,
+    pill: pill?.textContent?.trim() ?? null,
+    pillSmall: pill ? pill.getBoundingClientRect().height <= 40 && pill.getBoundingClientRect().width <= 240 : false,
+  };
+  field()!.dispatchEvent(new DragEvent("dragleave", { dataTransfer: files, bubbles: true, cancelable: true }));
+}
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
   focus: focusCase,
   uploading: uploadingCase,
@@ -311,6 +349,7 @@ const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = 
   working: workingCase,
   esc: escCase,
   plan: planCase,
+  drop: dropCase,
 };
 
 async function drive() {
