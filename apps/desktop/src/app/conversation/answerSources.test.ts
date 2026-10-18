@@ -35,6 +35,29 @@ test("a sources list as a model writes it otherwise still splits", () => {
   assert.deepEqual(bracketed?.sources.map((source) => source.n), [1, 2]);
 });
 
+test("an address keeps its own parentheses; a bare one loses the sentence's punctuation", () => {
+  const split = splitSources(
+    [
+      "Answer [1].",
+      "",
+      "### Sources",
+      "1. [Python](https://en.wikipedia.org/wiki/Python_(programming_language))",
+      '2. [Lisp](https://en.wikipedia.org/wiki/Lisp_(programming_language) "Lisp")',
+      "3. [Angled](<https://example.com/a (b)>)",
+      "4. Bare (https://en.wikipedia.org/wiki/Rust_(programming_language)).",
+    ].join("\n"),
+  );
+  assert.deepEqual(
+    split?.sources.map((source) => source.url),
+    [
+      "https://en.wikipedia.org/wiki/Python_(programming_language)",
+      "https://en.wikipedia.org/wiki/Lisp_(programming_language)",
+      "https://example.com/a (b)",
+      "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+    ],
+  );
+});
+
 test("text with no sources list, or prose after the heading, is left whole", () => {
   assert.equal(splitSources("No sources here."), null);
   assert.equal(splitSources("Answer.\n\n### Sources\nI found none worth naming."), null);

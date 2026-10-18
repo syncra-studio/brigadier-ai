@@ -11,8 +11,20 @@ export type AnswerSource = { n: number; title: string; url: string };
 const HEADING = /^(?:#{2,4}[ \t]+)?(?:\*\*)?Sources:?(?:\*\*)?:?[ \t]*$/im;
 /** A list item: `1. …`, `- …`, `* …`, or `[1] …`. */
 const ITEM = /^[ \t]*(?:(\d+)[.)]|[-*+]|\[(\d+)\])[ \t]+(.+)$/;
-/** A Markdown link in an item, or a bare address. */
-const LINK = /\[([^\]]+)\]\((\S+?)(?:[ \t]+"[^"]*")?\)|(https?:\/\/\S+)/;
+/**
+ * A Markdown link in an item, or a bare address. A link's address keeps its balanced
+ * parentheses, as in `https://en.wikipedia.org/wiki/Python_(programming_language)`.
+ */
+const LINK = /\[([^\]]+)\]\(<([^>\n]+)>(?:[ \t]+"[^"]*")?\)|\[([^\]]+)\]\(((?:[^\s()]|\([^\s()]*\))+)(?:[ \t]+"[^"]*")?\)|(https?:\/\/\S+)/;
+
+/** A bare address without the sentence's punctuation after it: `.`/`,`/`;` and a `)` it doesn't open. */
+function trimBare(url: string): string {
+  let trimmed = url.replace(/[.,;:]+$/, "");
+  while (trimmed.endsWith(")") && trimmed.split(")").length > trimmed.split("(").length) {
+    trimmed = trimmed.slice(0, -1).replace(/[.,;:]+$/, "");
+  }
+  return trimmed;
+}
 
 /**
  * The answer split at its trailing sources list: the text above it and each source, numbered as
@@ -32,9 +44,9 @@ export function splitSources(text: string): { head: string; sources: AnswerSourc
     const words = item[3]!;
     const link = LINK.exec(words);
     if (!link) return null;
-    const url = link[2] ?? link[3]!;
-    const title = link[1] ?? (words.replace(link[0], "").replace(/[\s–—:-]+$/, "").trim() || url);
-    sources.push({ n: Number(item[1] ?? item[2] ?? sources.length + 1), title, url: url.replace(/[).,]+$/, "") });
+    const url = link[2] ?? link[4] ?? trimBare(link[5]!);
+    const title = link[1] ?? link[3] ?? (words.replace(link[0], "").replace(/[\s–—:-]+$/, "").trim() || url);
+    sources.push({ n: Number(item[1] ?? item[2] ?? sources.length + 1), title, url });
   }
   if (sources.length === 0) return null;
   return { head: text.slice(0, at).trimEnd(), sources };
