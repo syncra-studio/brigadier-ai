@@ -59,10 +59,12 @@ Step by step: [docs/user/first-task.md](docs/user/first-task.md).
 ## Sessions
 
 One session is one task: a chat with an agent, on its own branch and worktree. The sidebar lists
-each project's sessions with what each is doing (Working, Needs you, Ready, Merged). For a second
-task at the same time, start another session: **New session** on the project, or **⌘Enter** in
-the composer to start it in the background. The tab bar holds the open session's chat and its own
-terminals, browser pages and files. More: [docs/user/sessions-and-tabs.md](docs/user/sessions-and-tabs.md).
+each project's sessions with what each is doing and why (Working · watching CI, Needs you ·
+question, Ready · PR open, Merged); the ones that need you come first. For a second task at the
+same time, start another session: **New session** on the project, or **⌘Enter** in the composer
+to start it in the background. A session can also offer to start something outside its task as
+its own session. The tab bar holds the open session's chat and its own terminals, browser pages
+and files. More: [docs/user/sessions-and-tabs.md](docs/user/sessions-and-tabs.md).
 
 ## Auto-merge and Revert
 

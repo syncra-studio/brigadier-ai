@@ -26,8 +26,8 @@ A project is a git repository on your Mac. In the sidebar, press **+** next to *
 - **Clone from URL**: a repository to clone, into `~/code` unless you change where.
 - **New repository**: a new, empty repository, named as you like.
 
-The first time you open a project, Brigadier asks **Trust this folder?** Trust it to let agents
-work on their own; if you don't, every session there asks you before each step.
+The first time you open a project, Brigadier asks **Trust this folder?** **Trust folder** lets
+agents work on their own; with **Don't trust**, every session there asks you before each step.
 
 ## Start a task
 
@@ -39,9 +39,9 @@ work on their own; if you don't, every session there asks you before each step.
 
 The session starts on its own branch, in its own copy of the repository (a worktree), so your
 checkout is never touched. It reads the code, plans and makes the change; your project's checks
-and a review by the other agent run in the background. Its row in the sidebar says what it is doing:
+and a review by the other agent run in the background. Its row in the sidebar says what it is doing, and why:
 **Working**, **Needs you** when it has a question or an approval for you, and **Ready** when
-the work is done and waiting to merge.
+the work is done and waiting to merge (more in [Sessions and tabs](sessions-and-tabs.md)).
 
 With [auto-merge](auto-merge-and-revert.md) on (the default), it then merges the work itself and
 the row says **Merged**. A **Revert** button sits under the merge message if you change your mind.
