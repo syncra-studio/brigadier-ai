@@ -246,6 +246,21 @@ information; it has no effect on scoring or `pass`.
 - Wall-clock time is the number reported. Time without a usage-limit wait is reported beside it,
   and an arm that hit a limit is marked quota-affected.
 
+## Bench metrics (Q58, `bench_metrics.py`)
+
+WORKSPACES-PLAN Phase 4. Read-only over a data dir (`brigadier.db`, `routing.sqlite`) and the
+projects' repos; run with `python3 -I`:
+
+    python3 -I tools/ab/bench_metrics.py $DATA [--repo DIR] [--until MS] [--json OUT]
+
+It prints first-look merge rate (one population: requests with `request.ready` or named in a
+`merged` step's `requests`), user touches per merged change, escaped bugs (a revert, or a `fix` /
+`Fixes #` commit on a shared file, within 7 days on the base), wasted quota at each window reset
+(weekly and 5-hour apart) and tokens per merged change by model. The script's docstring holds the
+exact definitions. The Source panel's own git commands leave no record in the log, so touches
+count only what the log records. Records whose payload lacks its kind's `type` are skipped and
+counted (#190). Tests: `python3 -I tools/ab/checks/bench_metrics_test.py`.
+
 ## Tokens
 
 Per provider: uncached input, cache reads, cache writes and output, kept apart, plus raw and raw
