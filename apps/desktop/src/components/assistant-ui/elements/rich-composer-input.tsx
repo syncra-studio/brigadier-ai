@@ -17,7 +17,7 @@ import {
 } from "@lexical/code";
 import { HistoryExtension } from "@lexical/history";
 import { LinkExtension } from "@lexical/link";
-import { $isListItemNode, CheckListExtension, ListExtension } from "@lexical/list";
+import { $isListItemNode, $isListNode, CheckListExtension, ListExtension } from "@lexical/list";
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { LexicalExtensionComposer } from "@lexical/react/LexicalExtensionComposer";
@@ -71,6 +71,8 @@ import {
   COMPOSER_NODES,
   COMPOSER_TRANSFORMERS,
 } from "@/app/conversation/composerMarkdown";
+
+import "./rich-composer-input.css";
 
 /**
  * The rich composer field: assistant-ui's Lexical composer input made rich. Markdown typed in
@@ -296,11 +298,33 @@ function $closeFence(code: CodeNode) {
 }
 
 /**
+ * `- [ ] ` typed as one line makes a task item: `- ` has already made a bullet, and Markdown's
+ * own task rule only reads a line outside lists. The bullet list of just this item turns into a
+ * task list once the space after `[ ]` or `[x]` is typed.
+ */
+function $taskFromBullet(node: TextNode) {
+  const item = node.getParent();
+  const list = item?.getParent();
+  if (!$isListItemNode(item) || !$isListNode(list) || list.getListType() !== "bullet") return;
+  if (list.getChildrenSize() !== 1 || item.getFirstChild() !== node) return;
+  const marker = /^\[( |x)?\] /i.exec(node.getTextContent());
+  const selection = $getSelection();
+  if (!marker || !$isRangeSelection(selection) || !selection.isCollapsed()) return;
+  if (selection.anchor.getNode() !== node || selection.anchor.offset !== marker[0].length) return;
+  list.setListType("check");
+  item.setChecked(marker[1]?.toLowerCase() === "x");
+  if (node.getTextContentSize() === marker[0].length) {
+    item.select(0, 0);
+    node.remove();
+  } else node.spliceText(0, marker[0].length, "", true);
+}
+
+/**
  * The rich field's own keys. Shift+Enter starts a new line: a new paragraph, the next list item
  * (out of the list on an empty one), a new line in a code block, which an empty last line
- * leaves. A closing ``` line or ↓ on its last line leave a code block too. Tab and ⇧Tab indent
- * a list item, and put a tab in code. Keys that would format text do nothing: formatting is
- * typed as Markdown, and ⌘B stays the sidebar's.
+ * leaves. A closing ``` line or ↓ on its last line leave a code block too. `- [ ] ` makes a task
+ * item. Tab and ⇧Tab indent a list item, and put a tab in code. Keys that would format text do
+ * nothing: formatting is typed as Markdown, and ⌘B stays the sidebar's.
  */
 function RichKeysPlugin() {
   const [editor] = useLexicalComposerContext();
@@ -366,6 +390,7 @@ function RichKeysPlugin() {
             if ($isCodeNode(code)) $closeFence(code);
           }),
         ),
+        editor.registerNodeTransform(TextNode, $taskFromBullet),
       ),
     [editor],
   );

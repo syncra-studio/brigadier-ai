@@ -227,6 +227,15 @@ async function drive() {
     await key("Escape");
     await clear();
 
+    // A task list: its box ticks with a click, and goes as Markdown.
+    await type("- [ ] task");
+    await until("a task item", () => has("li.composer-check", "task"));
+    const box = field()!.querySelector("li.composer-check")!.getBoundingClientRect();
+    await fixtureInput({ type: "click", x: box.x + 6, y: box.y + box.height / 2 });
+    await until("the box ticked", () => has("li.composer-check-on", "task"));
+    await fixtureClick(field()!.querySelector("li.composer-check")!);
+    seen.task = await send();
+
     // What is typed is kept as a draft, as Markdown.
     await type("**kept** ");
     await until("the draft kept", () => (JSON.parse(localStorage.getItem("brigadier.drafts") ?? "{}") as Record<string, { text?: string }>)[id]?.text === "**kept** ");

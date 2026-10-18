@@ -1,0 +1,27 @@
+/* Task list boxes and rules in the rich composer field (the Pages editor's, smaller). */
+.composer-check { position: relative; padding-inline-start: 1.5rem; list-style: none; outline: none; }
+.composer-check::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  top: .1875rem;
+  width: .875rem;
+  height: .875rem;
+  border: 1px solid color-mix(in oklab, var(--foreground) 50%, transparent);
+  border-radius: .25rem;
+  cursor: pointer;
+}
+.composer-check-on::before { border-color: var(--foreground); background: var(--foreground); }
+.composer-check-on::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: .3125rem;
+  top: .3125rem;
+  width: .25rem;
+  height: .5rem;
+  border: solid var(--background);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.composer-hr { margin: .5rem 0; border: 0; border-top: 1px solid var(--border); }

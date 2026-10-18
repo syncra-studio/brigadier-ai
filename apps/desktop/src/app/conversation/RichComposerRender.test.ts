@@ -22,6 +22,7 @@ test("the rich composer: Markdown in a draft, a pulled queue message and a recal
   assert.equal(seen.downLeft, "```\nq\n```\nr");
   assert.deepEqual(seen.noBold, { bold: false, sent: "plainx" });
   assert.equal(seen.menus, true);
+  assert.equal(seen.task, "- [x] task");
   assert.equal(seen.draftKept, true);
   assert.deepEqual(seen.image, { sent: "[Image #1] look", inline: [1] });
   assert.deepEqual(seen.literal, { bold: false, sent: "\\*\\*x\\*\\* and snake_case" });
