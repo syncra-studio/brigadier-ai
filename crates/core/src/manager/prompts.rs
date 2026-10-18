@@ -129,7 +129,7 @@ How to work:
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
 - Ask query_brain before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. ask_user answers and outline go-aheads are kept for you. Never reopen a settled decision.
 - Ask the user only what only they can decide, only with ask_user (never a question in your text), then reply {quiet}. Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last run_check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
-- Pushing, pull requests, publishing and deploying are your call; asked for build + PR + preview + CI watch, do it all. After your own `git push`, call ci_status. Bugs the user wants as issues: file each before its fix ("Fixes #N"). Spending money, using credentials or the keychain, and destroying anything outside this session's own work need request_approval first.
+- Pushing, pull requests, publishing and deploying are your call; asked for build + PR + preview + CI watch, do it all. After your own `git push`, call ci_status. Bugs the user wants as issues: file each before its fix ("Fixes #N"). Spending money, handling credentials yourself (not git and gh on the user's sign-in), and destroying anything outside this session's own work need request_approval first.
 - Write to another session's thread only with message_session.
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
@@ -867,6 +867,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, when a request ends, a pull request of your session branch that was merged on GitHub (by you or the user) is recorded as the session's merge: the base is brought up to date and your branch moves onto it, so the next change starts from there. ci_status also reports the checks on the branch's pull request.",
         worker: "",
     },
+    Revision {
+        number: GIT_SIGN_IN_REVISION,
+        thread: "From now on, git and gh on the sign-in the user set up (a push, a pull request) need no approval, even when the keychain makes them run outside the sandbox. request_approval is for spending money, handling credentials yourself (a token, a password, the keychain directly) and destroying anything outside this session's own work.",
+        worker: "From now on, git and gh on the sign-in the user set up are fine. What goes under needs user is spending money, handling credentials yourself (a token, a password, the keychain directly) and deleting anything outside your own work.",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1237,6 +1242,9 @@ pub(crate) const REVIEW_CANDIDATE_REVISION: u32 = 100;
 /// and the session branch moves onto the new base; ci_status reads the PR's checks
 /// (WORKSPACES-PLAN.md phase 3).
 pub(crate) const PR_MERGE_REVISION: u32 = 101;
+/// git and gh on the user's own sign-in need no approval, though it lives in the keychain (Q61):
+/// approval is for handling credentials directly.
+pub(crate) const GIT_SIGN_IN_REVISION: u32 = 102;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1855,7 +1863,7 @@ pub(crate) fn worker_system(instructions: &str) -> String {
 Your first message is your task: what it is, where you work, what you may change and the rules for its kind. These rules hold for every task.
 
 Rules:
-- Push, publish, deploy or open pull requests when your task asks for it. Never spend money, use credentials or the keychain, or delete anything outside your own work: list such steps under needs user instead.
+- Push, publish, deploy or open pull requests when your task asks for it. git and gh on the sign-in the user set up are fine. Never spend money, handle credentials yourself (a token, a password, the keychain directly), or delete anything outside your own work: list such steps under needs user instead.
 - If you start subagents, never use a Fable model, and never raise reasoning effort above high.
 - Files meant for the thread or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Your scratch folder goes when the task ends: never link its path; name the output file (outputs/notes.md). Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
 - The thread reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, learned (what the next worker in this area should know that the code doesn't say plainly; each is kept in the project's Brain, with its evidence where you have it: [evidence: path:12-14 `the exact words there`] or [evidence: out-… `the words of that check's output`]), verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{VOICE}{WORKER_VOICE}{instructions}"#
@@ -3508,7 +3516,7 @@ mod environment_tests {
             // Git is the thread's call (Q61); the three approvals stay, whoever asks.
             assert!(!text.contains("only when the user asks for exactly that"));
             assert!(text.contains("Pushing, pull requests, publishing and deploying are your call; asked for build + PR + preview + CI watch, do it all."));
-            assert!(text.contains("Spending money, using credentials or the keychain, and destroying anything outside this session's own work need "));
+            assert!(text.contains("Spending money, handling credentials yourself (not git and gh on the user's sign-in), and destroying anything outside this session's own work need "));
             assert!(text.contains("[checks failed …]: fix what's the code's;"));
             assert!(WORKER_RULES.contains(
                 "one fix task (role fix, subject the task that broke it) with the failing lines"
@@ -3551,8 +3559,9 @@ mod environment_tests {
         // B1-B3). The rules for workers, follow-ups and other sessions come when they first
         // apply, and how to brief, preview and fix CI is in their tools (BUILD-PLAN C1).
         // Raised from 11,500 by the bytes Q61's lines need (git is the thread's call, the full
-        // checks its to judge): tokens are a tripwire, not a gate (Q58), so no trimming.
-        assert!(codex.len() < 11_600, "{}", codex.len());
+        // checks its to judge), then to 11,700 for git and gh on the user's sign-in needing no
+        // approval: tokens are a tripwire, not a gate (Q58), so no trimming.
+        assert!(codex.len() < 11_700, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -3628,11 +3637,17 @@ mod environment_tests {
         // A worker pushes or opens a pull request when its task asks; the approvals stay.
         let worker = worker_system("");
         assert!(!worker.contains("unless the task says the user asked"));
-        assert!(worker.contains("Push, publish, deploy or open pull requests when your task asks for it. Never spend money, use credentials or the keychain, or delete anything outside your own work"));
+        assert!(worker.contains("Push, publish, deploy or open pull requests when your task asks for it. git and gh on the sign-in the user set up are fine. Never spend money, handle credentials yourself (a token, a password, the keychain directly), or delete anything outside your own work"));
         let note = revision_note(GIT_FREE_REVISION - 1, true).unwrap();
         assert!(
             note.contains("push, publish, deploy or open pull requests when your task asks for it")
         );
+        // The user's own git and gh sign-in needs no approval, though it lives in the keychain
+        // (the phase 3 end to end's push asked for one); old sessions hear it in one note.
+        let note = revision_note(GIT_SIGN_IN_REVISION - 1, false).unwrap();
+        assert!(note.contains("git and gh on the sign-in the user set up (a push, a pull request) need no approval, even when the keychain makes them run outside the sandbox"));
+        let note = revision_note(GIT_SIGN_IN_REVISION - 1, true).unwrap();
+        assert!(note.contains("git and gh on the sign-in the user set up are fine"));
         // Earlier notes no longer forbid the thread the full suite.
         let all = revision_note(0, false).unwrap();
         assert!(!all.contains("never run them yourself"));

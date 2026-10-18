@@ -1008,7 +1008,13 @@ async fn a_threads_own_push_goes_through_with_no_approval_card() {
         "{role}"
     );
     assert!(
-        role.contains("uses or reads credentials, tokens or keys, spends money, or deletes or writes outside the project's folder"),
+        role.contains("reads, prints, copies or stores credentials, tokens or keys itself (a token, a password, the keychain directly, a key file), signs in, spends money, or deletes or writes outside the project's folder"),
+        "{role}"
+    );
+    // The push uses the user's own git sign-in, which lives in the keychain: that's no
+    // credential use of the agent's.
+    assert!(
+        role.contains("with the git and gh sign-in the user set up (it lives in the keychain; that is fine): allow them."),
         "{role}"
     );
     flow.stop().await;

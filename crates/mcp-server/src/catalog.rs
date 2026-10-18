@@ -198,9 +198,9 @@ is settled (done) or all that is left needs the user (needsUser). Brigadier then
 cleanly and writes its report; you write the user's morning answer.";
 
 const REQUEST_APPROVAL: &str = "Ask the user to approve what only they may decide: spending \
-money, using credentials or the keychain, or destroying something outside this session's own \
-work. Not for pushes, pull requests or deploys the user asked for (just do those) nor for work \
-inside the session. Returns at once; the decision arrives later as a message.";
+money, handling credentials yourself (a token, a password, the keychain directly), or destroying \
+something outside this session's own work. Not for pushes, pull requests or deploys (just do \
+those, on the git and gh sign-in the user set up) nor for work inside the session. Returns at once; the decision arrives later as a message.";
 
 const REVIEW_CODE: &str = "Start one review of your committed work by a model from the other \
 vendor, from where your work started to your last commit (uncommitted changes are committed for \
