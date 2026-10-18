@@ -40,6 +40,8 @@ const OLDER_MS = 150;
 const OLDER_PAGES = 50;
 /** A match in a page just loaded is gone to once it holds its place this many frames. */
 const STILL_FRAMES = 3;
+/** ...and at the latest this many frames after its page loaded. */
+const LAST_FRAME = 300;
 /** A match gone to clears the bar and the composer by this much. */
 const CLEAR_PX = 16;
 
@@ -477,23 +479,25 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         for (let frames = 0; frames < 600 && live() && state.current.history?.oldest === pages.oldest; frames++) await nextFrame();
         if (!going()) return;
       }
-      // Shown once the thread counts as many matches as before, its own now, and holding its
-      // place: the thread keeps the reader's while the pages above it settle.
+      // Shown once the thread counts as many matches as before, its own now (a long message's
+      // tail loads after its start), and holding its place: the thread keeps the reader's while
+      // the pages above it settle. A count the engine got wrong waits no longer than `LAST_FRAME`.
       let last: number | null = null;
       let still = 0;
-      for (let frames = 0; frames < 120 && going(); frames++) {
+      for (let frames = 0; frames <= LAST_FRAME && going(); frames++) {
         await nextFrame();
         const now = research.current();
+        if (now.before + now.ranges.length < all && frames < LAST_FRAME) continue;
         const loaded = anchor?.startContainer.isConnected
           ? now.ranges.filter((range) => range.compareBoundaryPoints(Range.START_TO_START, anchor) < 0)
           : now.ranges;
         // Counted further back than the thread shows: the oldest it shows, once the wait is up.
-        const range = loaded[loaded.length - 1 - back] ?? (frames === 119 ? loaded[0] : undefined);
+        const range = loaded[loaded.length - 1 - back] ?? (frames === LAST_FRAME ? loaded[0] : undefined);
         if (!range) continue;
         const top = range.getBoundingClientRect().top;
         still = top === last ? still + 1 : 0;
         last = top;
-        if (still < STILL_FRAMES && frames < 119) continue;
+        if (still < STILL_FRAMES && frames < LAST_FRAME) continue;
         const at = now.before + now.ranges.indexOf(range);
         loading.current = null;
         state.current.result = now;

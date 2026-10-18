@@ -2976,31 +2976,77 @@ fn fold_case(text: &str) -> String {
 }
 
 /// The words a message's Markdown shows, near enough for Find to count what the thread will
-/// show once it is loaded: fences, a line's heading, quote and list marks, and emphasis and code
-/// marks go; a link or an image keeps its words. Code inside fences stays as it is.
+/// show once it is loaded: fences, a line's heading, quote and list marks, and the marks around
+/// emphasis and code go; a link or an image keeps its words. Code stays as it is written.
 fn shown_text(text: &str) -> String {
-    static LINK: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"!?\[([^\]]*)\]\([^)]*\)").unwrap_or_else(|_| unreachable!()));
+    static FENCE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^ {0,3}(`{3,}|~{3,})").unwrap_or_else(|_| unreachable!()));
     static LINE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^\s*(?:#{1,6}\s+|(?:>\s?)+|[-*+]\s+|\d+[.)]\s+)")
             .unwrap_or_else(|_| unreachable!())
     });
-    static MARKS: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\*\*|__|~~|`|\*").unwrap_or_else(|_| unreachable!()));
-    let mut fenced = false;
+    static CODE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(`+)(.+?)(`+)").unwrap_or_else(|_| unreachable!()));
+    static LINK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"!?\[([^\]]*)\]\([^)]*\)").unwrap_or_else(|_| unreachable!()));
+    // A pair around words, never a lone `*` (`2 * 3`, `a*b`).
+    static EMPHASIS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\*\*(\S(?:.*?\S)?)\*\*|__(\S(?:.*?\S)?)__|~~(\S(?:.*?\S)?)~~|\*([^*\s](?:[^*]*?[^*\s])?)\*")
+            .unwrap_or_else(|_| unreachable!())
+    });
+    let prose = |part: &str| {
+        let linked = LINK.replace_all(part, "$1");
+        EMPHASIS
+            .replace_all(&linked, |caps: &regex::Captures| {
+                (1..=4)
+                    .find_map(|group| caps.get(group))
+                    .map_or("", |words| words.as_str())
+                    .to_owned()
+            })
+            .into_owned()
+    };
+    // The fence a code block opened with: its character and length.
+    let mut fence: Option<(char, usize)> = None;
     let mut lines = Vec::new();
     for line in text.lines() {
-        if line.trim_start().starts_with("```") {
-            fenced = !fenced;
+        let marks = FENCE.captures(line).and_then(|caps| caps.get(1));
+        if let Some((char, length)) = fence {
+            let closes = marks.is_some_and(|marks| {
+                marks.as_str().starts_with(char)
+                    && marks.as_str().len() >= length
+                    && line[marks.end()..].trim().is_empty()
+            });
+            if closes {
+                fence = None;
+            } else {
+                lines.push(line.to_owned());
+            }
             continue;
         }
-        if fenced {
-            lines.push(line.to_owned());
+        if let Some(marks) = marks {
+            let char = marks.as_str().chars().next().unwrap_or('`');
+            fence = Some((char, marks.as_str().len()));
             continue;
         }
         let line = LINE.replace(line, "");
-        let line = LINK.replace_all(&line, "$1");
-        lines.push(MARKS.replace_all(&line, "").into_owned());
+        // Inline code as written; the prose around it without its marks.
+        let mut shown = String::new();
+        let mut at = 0;
+        for caps in CODE.captures_iter(&line) {
+            let (Some(whole), Some(open), Some(close), Some(code)) =
+                (caps.get(0), caps.get(1), caps.get(3), caps.get(2))
+            else {
+                continue;
+            };
+            if open.len() != close.len() {
+                continue;
+            }
+            shown.push_str(&prose(&line[at..whole.start()]));
+            shown.push_str(code.as_str());
+            at = whole.end();
+        }
+        shown.push_str(&prose(&line[at..]));
+        lines.push(shown);
     }
     lines.join("\n")
 }
@@ -3261,6 +3307,35 @@ mod tests {
             1
         );
         assert_eq!(counted(search(&last.id, "ος", 250).await.unwrap()), 1);
+        // Code and lone marks as written, a fence closed only by its own kind.
+        let code =
+            say("Call `__init__` with a*b and 2 * 3.\n\n~~~~\n```\nx * y\n~~~~\nAfter **it**.")
+                .await
+                .unwrap();
+        let newest = answer("Newer still.").await.unwrap();
+        let in_code = |found: MessageMatches| {
+            found
+                .matches
+                .iter()
+                .filter(|each| each.id == code.id)
+                .map(|each| each.count)
+                .sum::<u32>()
+        };
+        for (query, count) in [
+            ("__init__", 1),
+            ("a*b", 1),
+            ("2 * 3", 1),
+            ("```", 1),
+            ("x * y", 1),
+            ("after it", 1),
+            ("~~~~", 0),
+        ] {
+            assert_eq!(
+                in_code(search(&newest.id, query, 250).await.unwrap()),
+                count,
+                "{query}"
+            );
+        }
     }
 
     /// Events of a feature Brigadier no longer has (computer use's action log and its
