@@ -218,9 +218,10 @@ pub struct SessionManager {
     /// The one-shot reviews running now, by id: their conversation, and what ends one when
     /// its conversation closes.
     running_reviews: Mutex<HashMap<String, (ConversationId, tokio_util::sync::CancellationToken)>>,
-    /// The reviews a `review_candidate` call waits on, by session and range: the call's reply
-    /// carries their outcome, so no message of it is delivered (#137).
-    review_replies: Mutex<HashSet<(ConversationId, String, String)>>,
+    /// The reviews a `review_candidate` or `run_check` call waits on, by session and range,
+    /// with how many calls wait: their replies carry the outcome, so no message of it is
+    /// delivered (#137, #193).
+    review_replies: Mutex<HashMap<(ConversationId, String, String), usize>>,
     /// A stand-in `gh` for tests.
     #[cfg(test)]
     pub(crate) gh_override: Mutex<Option<ci::Gh>>,

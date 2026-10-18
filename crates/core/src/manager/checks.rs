@@ -715,6 +715,7 @@ impl SessionManager {
         let cancel = caller.ended.clone();
         let (manager, words, conversation) = (self.arc(), command.clone(), id.clone());
         let tree = caller.tree.clone();
+        let hold = super::background_runs::review_hold(id);
         let work = async move {
             let under_way = manager
                 .thread_check_started(&conversation, tree.as_deref())
@@ -788,7 +789,10 @@ impl SessionManager {
                 reply = format!("{reply}\n{note}");
             }
             under_way.ended(passed);
-            if let Some(review) = manager.review_before_answer(&conversation).await {
+            if let Some(review) = manager
+                .review_before_answer(&conversation, hold.map(|until| (until, &caller.ended)))
+                .await
+            {
                 reply = format!("{reply}\n\n{review}");
             }
             Ok((status, reply))

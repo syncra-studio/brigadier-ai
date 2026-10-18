@@ -17,6 +17,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use brigadier_git::{Oid, WorktreeSpec};
 use brigadier_providers::{
     Access, AllowedModels, ApprovalDecision, Artifact, Origin, ProviderEvent, ProviderKind, Role,
@@ -354,11 +356,12 @@ struct ReplyWait<'a> {
 
 impl<'a> ReplyWait<'a> {
     fn new(manager: &'a SessionManager, key: (ConversationId, String, String)) -> Self {
-        manager
+        *manager
             .review_replies
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(key.clone());
+            .entry(key.clone())
+            .or_default() += 1;
         Self {
             manager,
             key,
@@ -371,26 +374,43 @@ impl<'a> ReplyWait<'a> {
         self.armed = false;
     }
 
-    /// Gives the claim back; whether it was still there: false when the review's end already
-    /// stood aside for this call.
-    fn release(mut self) -> bool {
-        self.armed = false;
+    /// Whether the review's end has yet to stand aside for the calls that wait on it.
+    fn standing(&self) -> bool {
         self.manager
             .review_replies
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .remove(&self.key)
+            .contains_key(&self.key)
+    }
+
+    /// Gives the claim back; whether it was still there: false when the review's end already
+    /// stood aside for this call. Another call's claim on the same review stays.
+    fn release(mut self) -> bool {
+        self.armed = false;
+        self.give_back()
+    }
+
+    fn give_back(&self) -> bool {
+        let mut replies = self
+            .manager
+            .review_replies
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let Some(waiting) = replies.get_mut(&self.key) else {
+            return false;
+        };
+        *waiting -= 1;
+        if *waiting == 0 {
+            replies.remove(&self.key);
+        }
+        true
     }
 }
 
 impl Drop for ReplyWait<'_> {
     fn drop(&mut self) {
         if self.armed {
-            self.manager
-                .review_replies
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&self.key);
+            self.give_back();
         }
     }
 }
@@ -1040,6 +1060,72 @@ impl SessionManager {
             short(&review.base),
             short(&review.tip)
         ))
+    }
+
+    /// `run_check`'s wait for `review`, a review of the thread's own change it waits on, until
+    /// `until` while the thread's turn runs and the call isn't `cancel`led (#193). Ended by
+    /// then: what its message would have said (none when nothing), which then stays
+    /// undelivered. None when it still runs, its message to come, or the call was cancelled,
+    /// its message delivered.
+    pub(crate) async fn review_in_reply(
+        &self,
+        id: &ConversationId,
+        review: &ReviewRun,
+        (until, cancel): (tokio::time::Instant, &CancellationToken),
+    ) -> Option<Option<String>> {
+        // Claimed under the lock its end is stored under, so it ends either before the claim
+        // (none taken) or after it, standing aside for this call.
+        let claim = {
+            let _held = self.reviews.lock().await;
+            let running = self.core.board(id).await.ok().is_some_and(|board| {
+                board
+                    .reviews
+                    .get(&review.id)
+                    .is_some_and(|now| now.state == ReviewState::Running)
+            });
+            (running && tokio::time::Instant::now() < until).then(|| {
+                ReplyWait::new(self, (id.clone(), review.base.clone(), review.tip.clone()))
+            })
+        }?;
+        loop {
+            if !claim.standing() {
+                claim.said();
+                break;
+            }
+            if tokio::time::Instant::now() >= until
+                || cancel.is_cancelled()
+                || !self.thread_turn_running(id).await
+            {
+                if claim.release() {
+                    return None;
+                }
+                // It ended just now, its end already standing aside: said here all the same.
+                break;
+            }
+            tokio::select! {
+                () = tokio::time::sleep(Duration::from_millis(100)) => {}
+                () = cancel.cancelled() => {}
+            }
+        }
+        let ended = self
+            .core
+            .board(id)
+            .await
+            .ok()?
+            .reviews
+            .get(&review.id)?
+            .clone();
+        if ended.state == ReviewState::Running {
+            return None;
+        }
+        let text = self.review_text(&ended).await;
+        if cancel.is_cancelled() {
+            // The call ends with no reply to carry it: the thread hears it as a message after
+            // all, its claim gone.
+            self.tell_review_now(&ended, text.as_deref(), None).await;
+            return None;
+        }
+        Some(self.orchestrator_word(&ended, text.as_deref()).await)
     }
 
     /// An ended review of the thread's candidate, as review_candidate's reply.
@@ -1916,68 +2002,10 @@ impl SessionManager {
         });
     }
 
-    async fn tell_review_now(&self, review: &ReviewRun, text: Option<&str>, filed: Option<String>) {
-        // A review_candidate call that waited on it said its outcome in its reply.
-        if review.notify == ReviewFor::Orchestrator
-            && self
-                .review_replies
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&(
-                    review.conversation_id.clone(),
-                    review.base.clone(),
-                    review.tip.clone(),
-                ))
-        {
-            return;
-        }
-        let review_text = text;
+    /// What the thread hears of `review`'s end when it isn't a worker's to hear (`text`, its
+    /// findings): none for a clean one it doesn't wait for, or one still running.
+    async fn orchestrator_word(&self, review: &ReviewRun, text: Option<&str>) -> Option<String> {
         let reviewer = review.reviewer.label();
-        if let ReviewFor::Worker { task_id } = &review.notify
-            && let Ok(task) = self.task_by_id(&review.conversation_id, task_id).await
-            && matches!(
-                task.state,
-                TaskState::Starting | TaskState::Running | TaskState::Blocked
-            )
-        {
-            let message = match (&review.state, text) {
-                (ReviewState::Findings { count }, Some(text)) => format!(
-                    "[review of your work · {reviewer} found {count}]\n{}\n[/review]\nFix each finding you agree with and commit; for one you don't, say why in your report. One that asks for something your task didn't, or contradicts it, is no bug: note it in your report, don't build it. There are no review rounds: once your fixes are committed, your evidence is in and the checks they touch pass, report at once; don't verify again.",
-                    clipped(text)
-                ),
-                (ReviewState::Failed { reason }, _) => format!(
-                    "[review of your work] The review could not run: {reason}. Review your diff yourself, carefully, and say so in your report."
-                ),
-                _ => format!(
-                    "[review of your work] {reviewer} found nothing. Once your checks pass and your evidence is in, report at once; don't verify again."
-                ),
-            };
-            if task.blocked_reason.as_deref() == Some(WAITING_FOR_REVIEW) {
-                self.set_task_blocked(&task.id, None).await;
-            }
-            let now = self
-                .task_by_id(&review.conversation_id, task_id)
-                .await
-                .unwrap_or(task);
-            let rounds = now.rework_rounds;
-            match self
-                .tell_worker(&review.conversation_id, &now, message, "Brigadier")
-                .await
-            {
-                Ok(_) => {
-                    // Waking a worker that waited for its own review is no rework round.
-                    let _ = self
-                        .update_task(&review.conversation_id, task_id, |t| {
-                            t.rework_rounds = t.rework_rounds.min(rounds);
-                        })
-                        .await;
-                    return;
-                }
-                Err(err) => {
-                    tracing::info!(review = %review.id, error = %err, "a review's worker took no message; the orchestrator hears it");
-                }
-            }
-        }
         let number = match &review.task_id {
             Some(task_id) => self
                 .task_by_id(&review.conversation_id, task_id)
@@ -2083,8 +2111,89 @@ impl SessionManager {
                 )
             }
             // Clean, or still running: nothing to say.
-            _ => return,
+            _ => return None,
         };
+        Some(text)
+    }
+
+    async fn tell_review_now(&self, review: &ReviewRun, text: Option<&str>, filed: Option<String>) {
+        // A review_candidate or run_check call that waited on it said its outcome in its reply.
+        if review.notify == ReviewFor::Orchestrator
+            && self
+                .review_replies
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&(
+                    review.conversation_id.clone(),
+                    review.base.clone(),
+                    review.tip.clone(),
+                ))
+                .is_some()
+        {
+            return;
+        }
+        let review_text = text;
+        let reviewer = review.reviewer.label();
+        if let ReviewFor::Worker { task_id } = &review.notify
+            && let Ok(task) = self.task_by_id(&review.conversation_id, task_id).await
+            && matches!(
+                task.state,
+                TaskState::Starting | TaskState::Running | TaskState::Blocked
+            )
+        {
+            let message = match (&review.state, text) {
+                (ReviewState::Findings { count }, Some(text)) => format!(
+                    "[review of your work · {reviewer} found {count}]\n{}\n[/review]\nFix each finding you agree with and commit; for one you don't, say why in your report. One that asks for something your task didn't, or contradicts it, is no bug: note it in your report, don't build it. There are no review rounds: once your fixes are committed, your evidence is in and the checks they touch pass, report at once; don't verify again.",
+                    clipped(text)
+                ),
+                (ReviewState::Failed { reason }, _) => format!(
+                    "[review of your work] The review could not run: {reason}. Review your diff yourself, carefully, and say so in your report."
+                ),
+                _ => format!(
+                    "[review of your work] {reviewer} found nothing. Once your checks pass and your evidence is in, report at once; don't verify again."
+                ),
+            };
+            if task.blocked_reason.as_deref() == Some(WAITING_FOR_REVIEW) {
+                self.set_task_blocked(&task.id, None).await;
+            }
+            let now = self
+                .task_by_id(&review.conversation_id, task_id)
+                .await
+                .unwrap_or(task);
+            let rounds = now.rework_rounds;
+            match self
+                .tell_worker(&review.conversation_id, &now, message, "Brigadier")
+                .await
+            {
+                Ok(_) => {
+                    // Waking a worker that waited for its own review is no rework round.
+                    let _ = self
+                        .update_task(&review.conversation_id, task_id, |t| {
+                            t.rework_rounds = t.rework_rounds.min(rounds);
+                        })
+                        .await;
+                    return;
+                }
+                Err(err) => {
+                    tracing::info!(review = %review.id, error = %err, "a review's worker took no message; the orchestrator hears it");
+                }
+            }
+        }
+        let of = match &review.task_id {
+            Some(task_id) => self
+                .task_by_id(&review.conversation_id, task_id)
+                .await
+                .ok()
+                .map_or_else(
+                    || "the session".to_owned(),
+                    |task| format!("task-{}", task.number),
+                ),
+            None => "the session".to_owned(),
+        };
+        let Some(text) = self.orchestrator_word(review, text).await else {
+            return;
+        };
+        let range = format!("{}..{}", short(&review.base), short(&review.tip));
         let request = match filed {
             Some(request) => Some(request),
             None => {

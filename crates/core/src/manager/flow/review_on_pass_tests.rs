@@ -169,3 +169,88 @@ async fn an_older_check_ending_late_leaves_the_newer_ones_state() {
     assert_eq!(flow.manager.thread_check_state(&id), None);
     flow.stop().await;
 }
+
+/// A reviewer that answers after `delay` with one finding.
+fn reviewer(delay: std::time::Duration) -> Script {
+    script(move |_| async move {
+        tokio::time::sleep(delay).await;
+        Reply::text("Full review comments:\n\n- [P2] a.rs has no header — a.rs:1\n  Add one.")
+    })
+}
+
+/// A review that ends within the call's foreground minute comes in the passing check's reply,
+/// and no message of it follows: the thread fixes or answers in the same turn, with no
+/// `[quiet]` turn to wait for it (#193).
+#[tokio::test]
+async fn a_review_that_ends_within_the_minute_comes_in_the_checks_reply() {
+    let seen: Log = Arc::default();
+    let flow = Flow::start(
+        "review-on-pass-held",
+        Options {
+            reviews: Some(reviewer(std::time::Duration::from_millis(100))),
+            ..Options::default()
+        },
+        thread(&["true"], seen.clone()),
+    )
+    .await;
+    flow.wait_for_reviews();
+    flow.say("Build it.").await;
+    let board = done(&flow).await;
+    let seen = seen.lock().unwrap().clone();
+    assert!(!seen[0].contains("[review running]"), "{}", seen[0]);
+    assert!(
+        seen[0].contains("[review of your commits · Codex found 1 in"),
+        "{}",
+        seen[0]
+    );
+    assert!(seen[0].contains("a.rs has no header"), "{}", seen[0]);
+    assert!(
+        seen[1..]
+            .iter()
+            .all(|input| !input.contains("[review of your commits")),
+        "{seen:#?}"
+    );
+    assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
+    flow.stop().await;
+}
+
+/// A review still running when the call's foreground minute is nearly up: the call answers
+/// then, before it would go to the background, with the line to wait, and the findings come
+/// as a message (#193).
+#[tokio::test]
+async fn a_review_that_outlasts_the_minute_comes_as_a_message() {
+    let seen: Log = Arc::default();
+    let flow = Flow::start(
+        "review-on-pass-long",
+        Options {
+            reviews: Some(reviewer(
+                crate::manager::background_runs::FOREGROUND + std::time::Duration::from_secs(1),
+            )),
+            ..Options::default()
+        },
+        thread(&["true"], seen.clone()),
+    )
+    .await;
+    flow.wait_for_reviews();
+    flow.background_commands();
+    flow.say("Build it.").await;
+    let board = done(&flow).await;
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen[0].contains("[review running]"), "{}", seen[0]);
+    assert!(
+        !seen[0].contains("goes on in the background"),
+        "{}",
+        seen[0]
+    );
+    assert!(
+        seen.iter()
+            .any(|input| input.contains("[review of your commits · Codex found 1 in")),
+        "{seen:#?}"
+    );
+    assert!(
+        board.background_runs.is_empty(),
+        "{:#?}",
+        board.background_runs
+    );
+    flow.stop().await;
+}

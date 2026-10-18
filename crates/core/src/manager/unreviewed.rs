@@ -829,8 +829,14 @@ impl SessionManager {
     /// Before the thread answers (`run_check`): its range is brought up to date, and reviewed
     /// when it crosses the line or is marked risky. While a review of its work for the running
     /// request runs, the line its reply ends with: wait for the findings. None with reviews
-    /// off, and for work under the line.
-    pub(crate) async fn review_before_answer(&self, id: &ConversationId) -> Option<String> {
+    /// off, and for work under the line. With `hold`, a running review is waited for until
+    /// then, unless the call is cancelled, and one that ends by then is said in the reply
+    /// instead (#193).
+    pub(crate) async fn review_before_answer(
+        &self,
+        id: &ConversationId,
+        hold: Option<(tokio::time::Instant, &tokio_util::sync::CancellationToken)>,
+    ) -> Option<String> {
         if !self.reviews_on() || self.recorded_workspace(id).is_none() {
             return None;
         }
@@ -855,6 +861,11 @@ impl SessionManager {
             })
         {
             return None;
+        }
+        if let Some(hold) = hold
+            && let Some(ended) = self.review_in_reply(id, review, hold).await
+        {
+            return ended;
         }
         Some(format!(
             "[review running] {} reviews your change for this request ({}..{}) in the background: it is over the review line, or you marked it risky. Don't give your final answer yet: end this turn with exactly {} and nothing else. Its findings come as a [review of your commits …] message (or word that it found nothing); fix the valid ones, then answer.",
