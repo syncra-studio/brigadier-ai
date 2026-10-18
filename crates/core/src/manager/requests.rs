@@ -240,7 +240,6 @@ impl SessionManager {
         };
         let activity = conv.request_activity().await;
         let reviews_on = self.reviews_on();
-        let mut reminded = false;
         for request in board.requests.values() {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
@@ -287,18 +286,10 @@ impl SessionManager {
                 // Brigadier wakes the thread for it later: its answer isn't written yet, so it
                 // isn't over between turns. A stop or a failure above wins.
                 RequestState::Working
-            } else if request.steered_into.is_none()
-                && self.remind_narrated(&conv, &board, id).await
-            {
-                // Its user saw only a narration line: the thread is asked for its answer, and
-                // the request works until it has given one (or failed to).
-                reminded = true;
-                RequestState::Working
             } else {
                 RequestState::Done
             };
             let over = !matches!(state, RequestState::Working | RequestState::Waiting);
-            let done = state == RequestState::Done;
             let jobs = jobs.filter(|running| *running > 0 && state == RequestState::Working);
             if let Err(err) = self
                 .core
@@ -322,7 +313,6 @@ impl SessionManager {
                     super::request_changes::Refresh::Settle,
                 )
                 .await;
-                self.release_narration(&conv, id, done).await;
             }
         }
         // What another session asked and is answered now gets its reply (sent apart: it settles
@@ -342,7 +332,7 @@ impl SessionManager {
             && activity.carried.is_empty()
             && !board.queue.paused
             && board.queue.items.first().is_some_and(|item| !item.deciding);
-        if (waiting && !self.answer_working(conversation_id).await) || reminded {
+        if waiting && !self.answer_working(conversation_id).await {
             self.kick(&conv);
         }
         // Requests all over: what the thread's commands left goes.
@@ -446,9 +436,8 @@ impl SessionManager {
                     .collect();
                 last.push_str(&format!(
                     "[still running for this request: {}. Their reports come as later messages. \
-                     Act on this message with tools if it needs it. Then, unless the user must \
-                     change plans, reply with exactly {} and nothing else: the user already \
-                     sees the workers' progress.]",
+                     Act on this message with tools if it needs it. Then, if you have nothing to \
+                     say, reply with exactly {}: the user already sees the workers' progress.]",
                     list.join(", "),
                     prompts::QUIET
                 ));

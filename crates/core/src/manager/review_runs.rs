@@ -1776,7 +1776,7 @@ impl SessionManager {
                 if review.task_id.is_none() && self.answer_waits_for(review).await =>
             {
                 format!(
-                    "[review of your commits · {reviewer} found nothing in {range}] The background review of your change found nothing. Give your answer now."
+                    "[review of your commits · {reviewer} found nothing in {range}] The background review of your change found nothing."
                 )
             }
             // Clean, or still running: nothing to say.

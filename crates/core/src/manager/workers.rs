@@ -2150,7 +2150,6 @@ impl SessionManager {
             )
             .await?;
         }
-        self.sent_back(&task).await;
         Ok(())
     }
 
@@ -4531,26 +4530,13 @@ impl SessionManager {
     /// A reported task goes back to work: its candidate and review are void, and its request
     /// works again until the new report is answered.
     async fn reopen_task(&self, conversation_id: &ConversationId, task: &Task) -> Result<()> {
-        let task = self
-            .update_task(conversation_id, &task.id, |task| {
-                task.state = TaskState::Running;
-                task.candidate = None;
-                task.rework_rounds += 1;
-            })
-            .await?;
-        self.sent_back(&task).await;
+        self.update_task(conversation_id, &task.id, |task| {
+            task.state = TaskState::Running;
+            task.candidate = None;
+            task.rework_rounds += 1;
+        })
+        .await?;
         Ok(())
-    }
-
-    /// Its request must not end without an answer the user sees. An overnight run's request
-    /// is answered by the run's report instead.
-    async fn sent_back(&self, task: &Task) {
-        if task.run.is_none()
-            && let Some(request) = &task.request_id
-            && let Ok(conv) = self.conv(&task.conversation_id)
-        {
-            conv.sent_back(request).await;
-        }
     }
 
     /// Stops a worker for good (`stop_worker`, or the user's stop button). Unfinished changes

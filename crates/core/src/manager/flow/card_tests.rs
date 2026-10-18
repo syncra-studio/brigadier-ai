@@ -4,12 +4,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use brigadier_providers::{ItemStatus, ProviderEvent, Role};
 use serde_json::{Value, json};
 
 use super::{Flow, Options, Reply, Script, Turn};
 use crate::board::Board;
-use crate::model::MessageRole;
 use crate::work::{AnswerInput, AnswerOrigin, Question, QuestionKind, RequestState};
 
 fn script<F, Fut>(f: F) -> Script
@@ -269,66 +267,6 @@ async fn a_question_asked_in_text_is_asked_again_on_a_card() {
     let latest = board.latest_request().unwrap();
     assert_eq!(latest.state, RequestState::Done, "{latest:#?}");
     assert!(open_card(&board, false).is_none());
-    flow.stop().await;
-}
-
-/// The thread's one short opening line reaches the user; a later line that only announces
-/// a lookup stays hidden, as before.
-#[tokio::test]
-async fn the_requests_opening_line_shows_and_later_narration_does_not() {
-    let flow = Flow::start(
-        "card-opening",
-        Options::default(),
-        script(|turn| async move {
-            let say = |text: &str| ProviderEvent::Message {
-                item_id: uuid::Uuid::new_v4().to_string(),
-                role: Role::Assistant,
-                text: text.into(),
-            };
-            let search = || ProviderEvent::ToolCall {
-                item_id: uuid::Uuid::new_v4().to_string(),
-                name: "mcp__brigadier__code_search".into(),
-                input: Some("{}".into()),
-                status: ItemStatus::InProgress,
-                output: None,
-                kept: None,
-            };
-            turn.emit(say(
-                "I'll check how the tabs work today, then ask you a few questions.",
-            ))
-            .await;
-            turn.emit(search()).await;
-            turn.emit(say("Let me check the tab bar next.")).await;
-            turn.emit(search()).await;
-            Reply::text("The tabs keep their order across restarts.")
-        }),
-    )
-    .await;
-    flow.say("How do the tabs work?").await;
-    flow.settled().await;
-    let shown: Vec<String> = flow
-        .core
-        .all_messages(&flow.conversation)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|message| message.role == MessageRole::Assistant)
-        .map(|message| message.text)
-        .collect();
-    assert!(
-        shown
-            .iter()
-            .any(|text| text.starts_with("I'll check how the tabs work")),
-        "{shown:#?}"
-    );
-    assert!(
-        !shown.iter().any(|text| text.contains("tab bar next")),
-        "{shown:#?}"
-    );
-    assert!(
-        shown.iter().any(|text| text.contains("keep their order")),
-        "{shown:#?}"
-    );
     flow.stop().await;
 }
 

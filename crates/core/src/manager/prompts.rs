@@ -15,7 +15,7 @@ use crate::work::{
 /// Logged on `orch:<id>` when a conversation's CLI files were removed: the next CLI session
 /// starts over from the transcript instead of resuming.
 pub(crate) const SESSION_RESET: &str = "brigadier: CLI session reset";
-/// The orchestrator's whole reply when it has nothing to tell the user while work runs.
+/// The orchestrator's whole reply when it has nothing to tell the user.
 /// Brigadier never shows it.
 pub(crate) const QUIET: &str = "[quiet]";
 
@@ -137,7 +137,7 @@ How to work:
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
 
 How to talk to the user:
-- A user message and everything it sets in motion is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. While any of it runs, reply exactly {quiet}, right after you delegate too. Never write text before or between tool calls ("Let me…"), except one short opening line before work that takes more than a moment, or a line when something changed their plans.
+- A user message and everything it sets in motion is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. The user sees each line you write as you write it, a short one before or between tool calls too: speak when it helps them, and reply exactly {quiet} when there's nothing to say.
 - {LEAD}
 - While work runs, write one line only for: a failure of what you started (what failed, its key error line, what you do about it); work the user didn't ask for, before it starts; and [status due]: what runs and what's left.
 - When the request is done (work, a question or an error explained alike), write one final answer: at most about five short lines of what changed and what to know, and, when a review ran, what it found and what you fixed. Then, if any, one line "To check: …" only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). Then a last heading `### Details`, shown folded, which always holds three labelled lines: `Checks:` each check you ran in this request with its result (or "none run"), `Review:` its state (none for a tiny edit, off, still running, or what it found and what you fixed) and `Not checked:` what nobody checked (or "nothing"). Say code compiles, works or runs only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text.
@@ -837,6 +837,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, a worker's report is taken as it is: a new file it doesn't name is marked \"new file not named\" (it stays out of the landing) and a [met] line without evidence is marked [unevidenced]; judge them. [status due] only says how long the user has seen nothing new; ci_status only says whether CI can be watched from here, and whether to ask or watch is yours to judge. propose_merge is gone. A second fix of work a fix already handles starts nothing and says where the first stands, and landing work under a verifier's check says it lands with the verifier; neither is an error.",
         worker: "From now on, submit_report takes your report as it is: a new file it doesn't name stays out of the landing, and a [met] line without evidence is marked [unevidenced] for the thread.",
     },
+    Revision {
+        number: THREAD_SPEAKS_REVISION,
+        thread: "From now on, the user sees each line you write as you write it, a short one before or between tool calls too: speak when it helps them, and reply [quiet] when there's nothing to say, while work runs too. Brigadier no longer asks you again for an answer when a request ends with nothing said. A [follow-up …] needs route_follow_up only when it is a request of its own; otherwise it joins this work by itself, and you may answer or act on it at once.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1148,6 +1153,10 @@ pub(crate) const PEER_FREE_REVISION: u32 = 94;
 /// marks, [status due] and ci_status state facts, propose_merge is gone, a second fix of the
 /// same work is told where the first stands.
 pub(crate) const FACTS_NOT_REFUSALS_REVISION: u32 = 95;
+/// The thread speaks when it judges it useful (#248, #54, #105): every line it writes reaches
+/// the user as it streams, [quiet] is for when there's nothing to say, nothing asks it again
+/// for an answer, and route_follow_up is optional.
+pub(crate) const THREAD_SPEAKS_REVISION: u32 = 96;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1156,7 +1165,7 @@ pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, fr
 - Land finished work with land_phase (no phase needed), each report at once. Never rerun a worker's checks after you land its work: its report covers its change. A worker's [checks failed …] goes to one fix task (role fix, subject the task that broke it) with the failing lines, unless you fix it yourself.
 - A lead that sends an outline waits: judge it and call approve_outline at once, with corrections (the brief wins).
 - Every landing gets one review by the other vendor. A worker never waits for its own review: land a report whose review still runs, and its findings come to you. Record a finding fixed (in task-N) only after checking the fix in the merged code, saying how in `checked`: a report or your notes are no check, and an unchecked fix shows as unverified (say so, never that the review is clean). What a task left unfixed, or a landed task's open findings, goes back in one fix task (role fix, subject that task), which resumes that worker's session; its landing gets only a re-check of the high ones, and what stays open goes to the user as a list.
-- The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread: don't announce what you delegated, repeat a task's spec, or restate reports.";
+- The user sees quiet worker lifecycle lines next to your replies and can open each worker's own thread: don't repeat a task's spec or restate reports.";
 
 /// How the thread treats another session's message, which every one carries: it may come
 /// into a running turn (BUILD-PLAN C1; when to write to one is message_session's).
@@ -2345,7 +2354,8 @@ fn scratch_note(scratch_gone: bool) -> &'static str {
     }
 }
 
-/// Asks the orchestrator to sort a follow-up the user sent while `request` works.
+/// Tells the orchestrator of a follow-up the user sent while `request` works: it may sort it
+/// with route_follow_up, or answer or act on it itself.
 pub(crate) fn follow_up(
     id: &str,
     request: &str,
@@ -2360,13 +2370,11 @@ pub(crate) fn follow_up(
         block.push_str(&format!("\n(attached: {})", names.join(", ")));
     }
     block.push_str(&format!(
-        "\n[/follow-up] Sort it silently now: call route_follow_up (follow_up \"{id}\") with joins \
-         true if it belongs to this work, false if it is a request of its own. The user sees \
-         where it goes, so write nothing about the choice, before or after the call, and don't \
-         answer it here: one that joins reaches you at once as the user's message, and your one \
-         final answer covers it too; one of its own reaches you once this work is done, so don't \
-         act on it before. If nothing else is needed now, reply with exactly {QUIET} and nothing \
-         else."
+        "\n[/follow-up] If it is a request of its own, call route_follow_up (follow_up \"{id}\") \
+         with joins false: it reaches you once this work is done. Otherwise it joins this work \
+         (at once with joins true, else shortly by itself) and reaches you as the user's \
+         message; you may also answer or act on it now. If you have nothing to say now, reply \
+         with exactly {QUIET}."
     ));
     block
 }
@@ -3262,7 +3270,10 @@ mod environment_tests {
                         tool("ask_user", provider)
                     )));
                     assert!(prompt.contains("When the user invites questions"));
-                    assert!(prompt.contains("one short opening line"));
+                    // The thread speaks when it judges it useful (#248).
+                    assert!(prompt.contains("a short one before or between tool calls too"));
+                    assert!(prompt.contains("reply exactly [quiet] when there's nothing to say"));
+                    assert!(!prompt.contains("Never write text before"));
                     assert!(!prompt.contains("in your reply, or with ask_user"));
                     // The old fixed pipeline is gone.
                     for step in [
@@ -4222,6 +4233,37 @@ mod environment_tests {
             revision_note(PEER_FREE_REVISION - 1, true),
             revision_note(PEER_FREE_REVISION, true)
         );
+    }
+
+    /// The thread speaks when it judges it useful (#248, #54, #105): [quiet] only when there's
+    /// nothing to say, no "don't announce it", and a follow-up needs route_follow_up only when
+    /// it is a request of its own. Open threads hear it once; workers hear nothing.
+    #[test]
+    fn the_thread_speaks_when_it_judges_it_useful() {
+        let note = revision_note(THREAD_SPEAKS_REVISION - 1, false).unwrap();
+        assert!(note.starts_with("[instructions] From now on, the user sees each line you write"));
+        assert!(note.contains("reply [quiet] when there's nothing to say"));
+        assert!(note.contains("no longer asks you again for an answer"));
+        assert!(note.contains("needs route_follow_up only when it is a request of its own"));
+        assert_eq!(
+            revision_note(THREAD_SPEAKS_REVISION - 1, true),
+            revision_note(THREAD_SPEAKS_REVISION, true)
+        );
+        assert!(!WORKER_RULES.contains("announce"));
+        let block = follow_up("q-1", "Build the export", "Also add CSV.", &[]);
+        for gone in [
+            "silently",
+            "write nothing",
+            "don't answer it here",
+            "don't act on it",
+        ] {
+            assert!(!block.contains(gone), "{gone}: {block}");
+        }
+        assert!(block.contains("If it is a request of its own, call route_follow_up"));
+        assert!(block.contains("you may also answer or act on it now"));
+        assert!(block.ends_with(&format!(
+            "If you have nothing to say now, reply with exactly {QUIET}."
+        )));
     }
 
     /// A thread told the revision before hears how to keep the user from guessing once; a

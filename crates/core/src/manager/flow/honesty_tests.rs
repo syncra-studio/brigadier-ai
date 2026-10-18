@@ -1,6 +1,7 @@
-//! A thread never leaves the user guessing: a request doesn't end on a line that only said
-//! what came next (the thread is asked for its answer once, then a plain closing line says
-//! none came), and a reply to another session carries only what answers its message.
+//! The thread speaks when it judges it useful: each line it writes reaches the user as it
+//! writes it, before or between tool calls too, and a request over with nothing more said
+//! simply ends (#248, #54, #105). A reply to another session carries only what answers its
+//! message.
 
 use std::sync::{Arc, Mutex};
 
@@ -23,53 +24,28 @@ where
 
 type Log = Arc<Mutex<Vec<String>>>;
 
-const NARRATION: &str = "Now the full suites, once, on the session branch.";
-const REMINDED: &str = "Nothing runs for this request any more, and the user has seen no answer";
-
-/// Says `text` in the turn, then starts a lookup: the line only announced it, so the
-/// narration filter hides it.
-async fn narrate(turn: &Turn, text: &str) {
-    turn.emit(ProviderEvent::Message {
+/// A reply of the thread's, whole.
+fn said(text: &str) -> ProviderEvent {
+    ProviderEvent::Message {
         item_id: uuid::Uuid::new_v4().to_string(),
         role: Role::Assistant,
         text: text.into(),
-    })
-    .await;
-    turn.emit(ProviderEvent::ToolCall {
+    }
+}
+
+/// The start of the thread's call of Brigadier's `tool`, as its CLI reports it.
+fn calls(tool: &str) -> ProviderEvent {
+    ProviderEvent::ToolCall {
         item_id: uuid::Uuid::new_v4().to_string(),
-        name: "mcp__brigadier__code_search".into(),
+        name: format!("mcp__brigadier__{tool}"),
         input: Some("{}".into()),
         status: ItemStatus::InProgress,
         output: None,
         kept: None,
-    })
-    .await;
+    }
 }
 
-/// The 33fbb16e shape: the user's turn starts a check that goes to the background and ends
-/// quiet; the turn its result starts says only what comes next and ends quiet. Answered by
-/// `answer` when reminded.
-fn narrating(inputs: Log, answer: &'static str) -> Script {
-    script(move |turn| {
-        let inputs = inputs.clone();
-        async move {
-            inputs.lock().unwrap().push(turn.input.clone());
-            if turn.input.contains(REMINDED) {
-                return Reply::text(answer);
-            }
-            if turn.input.contains("[run-1 finished") {
-                narrate(&turn, NARRATION).await;
-                return Reply::text(QUIET);
-            }
-            let reply = turn
-                .call("run_check", json!({ "command": "sleep 3; echo ok" }))
-                .await;
-            assert!(!reply.is_error, "{}", reply.text);
-            Reply::text(QUIET)
-        }
-    })
-}
-
+/// The assistant messages the user sees, oldest first, with their requests.
 async fn shown(flow: &Flow) -> Vec<(String, Option<String>)> {
     flow.core
         .all_messages(&flow.conversation)
@@ -81,130 +57,155 @@ async fn shown(flow: &Flow) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
-/// A request over with only a narration line said doesn't end on it: the thread is asked for
-/// its answer, which is the block's last word.
+/// #54: a one-line message written before delegate_task reaches the user, after an earlier
+/// line of the same turn too, and the worker starts and reports.
 #[tokio::test]
-async fn a_request_over_on_a_narration_line_gets_the_threads_answer() {
-    let inputs = Log::default();
+async fn a_line_before_delegating_reaches_the_user_and_the_worker_starts() {
+    const FIRST: &str = "The exporter lives in src/export.rs.";
+    const LINE: &str = "I'll hand the exporter to a worker.";
     let flow = Flow::start(
-        "narration-reminded",
+        "honesty-line-before-delegate",
         Options::default(),
-        narrating(inputs.clone(), "The suites passed; nothing is pending."),
+        script(|turn| async move {
+            if !turn.is_orchestrator() {
+                let reply = turn
+                    .call(
+                        "submit_report",
+                        json!({"summary": "Surveyed the exporter."}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Reported.");
+            }
+            if turn.input.contains("[report task-1") {
+                return Reply::text("The exporter writes CSV only.");
+            }
+            turn.emit(said(FIRST)).await;
+            turn.emit(calls("code_search")).await;
+            turn.emit(said(LINE)).await;
+            turn.emit(calls("delegate_task")).await;
+            let reply = turn
+                .call(
+                    "delegate_task",
+                    json!({"effort": "medium", "title": "Survey the exporter",
+                           "kind": "research", "spec": "Say what the exporter writes."}),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text(QUIET)
+        }),
     )
     .await;
-    flow.background_commands();
-    flow.say("Run the full checks.").await;
-    let board = flow
-        .until("the request to end", |board| {
-            !board.requests.is_empty()
-                && board
-                    .requests
-                    .values()
-                    .all(|request| request.state == RequestState::Done)
-        })
-        .await;
-    let request = board.requests.keys().next().unwrap().clone();
-    let inputs = inputs.lock().unwrap().clone();
-    let reminder = inputs
-        .iter()
-        .find(|input| input.contains(REMINDED))
-        .unwrap_or_else(|| panic!("never reminded: {inputs:#?}"));
-    assert!(reminder.contains(NARRATION), "{reminder}");
-    // The line said before the work shows; the answer is the block's last word.
-    let shown = shown(&flow).await;
+    flow.say("What does the exporter write?").await;
+    let board = flow.settled().await;
+    let request = board.latest_request().unwrap().id.clone();
+    assert_eq!(board.requests[&request].state, RequestState::Done);
     assert_eq!(
-        shown,
+        Flow::task(&board, 1).request_id.as_deref(),
+        Some(request.as_str())
+    );
+    assert_eq!(
+        shown(&flow).await,
         [
-            (NARRATION.to_owned(), Some(request.clone())),
-            (
-                "The suites passed; nothing is pending.".to_owned(),
-                Some(request)
-            )
+            (FIRST.to_owned(), Some(request.clone())),
+            (LINE.to_owned(), Some(request.clone())),
+            ("The exporter writes CSV only.".to_owned(), Some(request)),
         ],
     );
     flow.stop().await;
 }
 
-/// Reminded and still no answer: the request ends with a plain line saying so.
+/// #105: short commentary between two calls of one turn reaches the user, each line in turn.
 #[tokio::test]
-async fn a_request_still_unanswered_after_the_reminder_ends_on_a_plain_line() {
-    let inputs = Log::default();
+async fn commentary_between_two_calls_reaches_the_user() {
     let flow = Flow::start(
-        "narration-unanswered",
+        "honesty-commentary",
         Options::default(),
-        narrating(inputs.clone(), QUIET),
+        script(|turn| async move {
+            turn.emit(said("Let me check how the tabs work today."))
+                .await;
+            turn.emit(calls("code_search")).await;
+            turn.emit(said("Let me check the tab bar next.")).await;
+            turn.emit(calls("code_search")).await;
+            Reply::text("The tabs keep their order across restarts.")
+        }),
+    )
+    .await;
+    flow.say("How do the tabs work?").await;
+    let board = flow.settled().await;
+    let request = board.latest_request().unwrap().id.clone();
+    let lines: Vec<String> = shown(&flow)
+        .await
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "Let me check how the tabs work today.",
+            "Let me check the tab bar next.",
+            "The tabs keep their order across restarts.",
+        ],
+    );
+    assert_eq!(board.requests[&request].state, RequestState::Done);
+    flow.stop().await;
+}
+
+/// A request over with only a line said mid-work simply ends: nothing asks the thread again
+/// for an answer, and no closing line is added.
+#[tokio::test]
+async fn a_request_over_on_a_line_said_mid_work_simply_ends() {
+    const LINE: &str = "Now the full suites, once, on the session branch.";
+    let inputs = Log::default();
+    let log = inputs.clone();
+    let flow = Flow::start(
+        "honesty-line-ends",
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("[run-1 finished") {
+                    turn.emit(said(LINE)).await;
+                    turn.emit(calls("code_search")).await;
+                    return Reply::text(QUIET);
+                }
+                let reply = turn
+                    .call("run_check", json!({ "command": "sleep 3; echo ok" }))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text(QUIET)
+            }
+        }),
     )
     .await;
     flow.background_commands();
     flow.say("Run the full checks.").await;
-    let board = flow
-        .until("the request to end", |board| {
-            !board.requests.is_empty()
-                && board
-                    .requests
-                    .values()
-                    .all(|request| request.state == RequestState::Done)
-                && board
-                    .notices
-                    .iter()
-                    .any(|notice| notice.text.contains("without an answer"))
-        })
-        .await;
-    assert_eq!(
-        inputs
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|input| input.contains(REMINDED))
-            .count(),
-        1,
-        "reminded once"
-    );
-    assert_eq!(board.requests.len(), 1);
-    flow.stop().await;
-}
-
-/// An idle session that took another's message and ended on a narration line: the request
-/// works until the thread answered when reminded, and that answer is the reply, not the
-/// narration.
-#[tokio::test]
-async fn an_idle_receiver_ending_on_narration_replies_with_its_answer() {
-    let peers = Peers::new();
-    let flow = Flow::start("narration-peer", Options::default(), peers.script()).await;
-    let api = flow
-        .add_session("API work", None, ProviderKind::Claude)
-        .await;
-    let _sent = peers.sends(&flow.conversation, &api, "Which column holds names?");
-    peers.on(&api, |turn| async move {
-        if turn.input.contains(REMINDED) {
-            return Reply::text("It's `name`.");
-        }
-        narrate(&turn, "Let me look that up in the schema.").await;
-        Reply::text(QUIET)
-    });
-    flow.say("Ask the API session where names live.").await;
-    super::eventually("the reply to reach the sender", || {
-        peers
-            .inputs_of(&flow.conversation)
-            .iter()
-            .any(|input| is_reply(input))
+    flow.until("the request to end", |board| {
+        !board.requests.is_empty()
+            && board
+                .requests
+                .values()
+                .all(|request| request.state == RequestState::Done)
     })
     .await;
-    let reply = peers
-        .inputs_of(&flow.conversation)
-        .into_iter()
-        .find(|input| is_reply(input))
-        .unwrap();
-    assert!(reply.contains("It's `name`."), "{reply}");
-    assert!(!reply.contains("Let me look that up"), "{reply}");
-    let at_api = flow.settled_in(&api).await;
+    let board = flow.settled().await;
+    let request = board.latest_request().unwrap().id.clone();
+    assert_eq!(board.requests.len(), 1);
+    assert_eq!(shown(&flow).await, [(LINE.to_owned(), Some(request))]);
+    assert_eq!(
+        inputs.lock().unwrap().len(),
+        2,
+        "{:#?}",
+        inputs.lock().unwrap()
+    );
     assert!(
-        at_api
-            .requests
-            .values()
-            .all(|request| request.state == RequestState::Done),
+        !board
+            .notices
+            .iter()
+            .any(|notice| notice.text.contains("without an answer")),
         "{:?}",
-        at_api.requests
+        board.notices
     );
     flow.stop().await;
 }
@@ -471,58 +472,53 @@ async fn a_steer_behind_a_long_command_says_so_until_the_command_ends() {
     flow.stop().await;
 }
 
-/// The user steers a message into a turn that said what it was about to do and went on
-/// working: the turn now answers the steered message, so the first request isn't reminded of
-/// its line while that turn still runs, nor after it answered.
+/// route_follow_up is optional (#248): a follow-up the thread answers without sorting it,
+/// in a turn that ends before the judging wait is over, joins that turn's request rather
+/// than waiting in the queue as a request of its own.
 #[tokio::test]
-async fn a_steer_into_a_narrated_turn_brings_no_reminder() {
-    let gate = Arc::new(tokio::sync::Notify::new());
+async fn a_follow_up_left_unsorted_joins_the_request_its_turn_served() {
     let inputs: Log = Default::default();
-    let (release, log) = (gate.clone(), inputs.clone());
+    let log = inputs.clone();
     let flow = Flow::start(
-        "honesty-steer-narrated",
+        "honesty-unsorted",
         Options::default(),
         script(move |turn| {
-            let (gate, log) = (gate.clone(), log.clone());
+            let log = log.clone();
             async move {
                 log.lock().unwrap().push(turn.input.clone());
-                if turn.input.contains(REMINDED) {
-                    return Reply::text("Reminded.");
+                if log.lock().unwrap().len() > 1 {
+                    return Reply::text("[quiet]");
                 }
-                narrate(&turn, NARRATION).await;
-                gate.notified().await;
-                Reply::text("The suites passed, with banker's rounding.")
+                turn.emit(bash("cargo test --workspace", ItemStatus::InProgress))
+                    .await;
+                let steered = turn.steered().await.unwrap_or_default();
+                log.lock().unwrap().push(steered);
+                turn.emit(bash("cargo test --workspace", ItemStatus::Completed))
+                    .await;
+                Reply::text("The tests pass, and the formatting is clean too.")
             }
         }),
     )
     .await;
-    flow.say("Run the full checks.").await;
-    flow.until("the turn to go on working", |board| {
+    flow.say("Run the tests.").await;
+    flow.until("the command to run", |board| {
         board.orchestrator_steps.iter().any(|step| {
             matches!(&step.kind, crate::work::OrchestratorStepKind::Tool { status, .. } if *status == ItemStatus::InProgress)
         })
     })
     .await;
-    flow.manager
-        .send_message(
-            flow.conversation.clone(),
-            "Use banker's rounding.".into(),
-            Vec::new(),
-            Vec::new(),
-            true,
-            None,
-        )
-        .await
-        .unwrap();
-    flow.until("the message to be steered in", |board| {
+    flow.say("Also check the formatting.").await;
+    let board = flow.settled().await;
+    assert!(board.queue.items.is_empty(), "{:?}", board.queue.items);
+    assert_eq!(board.requests.len(), 2, "{:?}", board.requests);
+    assert!(
         board
             .requests
             .values()
-            .any(|request| request.steered_into.is_some())
-    })
-    .await;
-    release.notify_one();
-    let board = flow.settled().await;
+            .any(|request| request.steered_into.is_some()),
+        "the follow-up joined the first request: {:?}",
+        board.requests
+    );
     assert!(
         board
             .requests
@@ -532,9 +528,10 @@ async fn a_steer_into_a_narrated_turn_brings_no_reminder() {
         board.requests
     );
     let inputs = inputs.lock().unwrap().clone();
+    assert!(inputs[1].contains("[follow-up"), "{inputs:#?}");
     assert!(
-        inputs.iter().all(|input| !input.contains(REMINDED)),
-        "{inputs:#?}"
+        inputs[2].contains("Also check the formatting."),
+        "the joined message reaches the thread: {inputs:#?}"
     );
     flow.stop().await;
 }

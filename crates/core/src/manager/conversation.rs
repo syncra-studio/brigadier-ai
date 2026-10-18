@@ -9,9 +9,9 @@
 //!   a card) is a follow-up: it waits in the queue, marked deciding, while the orchestrator
 //!   judges it with `route_follow_up`. One that belongs to that answer joins it (steered in,
 //!   shown inside its block); one of its own waits until no answer works, then goes as its
-//!   own request. A follow-up the orchestrator didn't judge by the end of its turn waits too;
-//!   one still unjudged after [`DECIDING_WAIT`] (the thread is inside a long command) joins
-//!   the working answer. A message steered in while a command of the thread's runs says so
+//!   own request. Judging is optional: a follow-up the orchestrator didn't judge by the end
+//!   of its turn joins that turn's request, and one still unjudged after [`DECIDING_WAIT`]
+//!   (the thread is inside a long command) joins the working answer. A message steered in while a command of the thread's runs says so
 //!   (`held_by`) until that command ends and the thread can read it.
 //! - Worker results arrive as [`Envelope`]s in the inbox. Only final reports, blocking
 //!   questions, card outcomes and task failures ever enter the orchestrator's context;
@@ -397,26 +397,9 @@ struct ConvState {
     replying_for: HashMap<String, String>,
     /// Replies their CLI said are the turn's final answer, and when each started showing.
     answers: HashMap<String, i64>,
-    /// Per request: the last reply the narration filter kept out of the thread, which the
-    /// thread gets after all if the request ends with nothing else said (see
-    /// [`SessionManager::release_narration`]).
-    narration: HashMap<String, Narration>,
-    /// Requests the user saw a reply for.
-    spoke: HashSet<String>,
     /// Messages of other sessions the thread was reminded to answer on their own (see
     /// [`SessionManager::answer_owed`]): once each; whether the reminder is queued yet.
     peers_reminded: HashMap<String, bool>,
-    /// Per request: the last reply the user saw, and whether its turn went on working after
-    /// it (a line like "Now the full suites…" followed by a command): if nothing is said
-    /// after it, it is no answer.
-    last_said: HashMap<String, (String, bool)>,
-    /// Requests that were over with only a narration line said, whose thread was asked once
-    /// for its answer (see [`SessionManager::remind_narrated`]): a second end without one
-    /// closes them with a plain line, not the narration.
-    narrated: HashSet<String>,
-    /// Requests in which the orchestrator sent a worker back and the user has seen nothing
-    /// since: such a request must not end with nothing said.
-    sent_back: HashMap<String, Unanswered>,
     /// Reported write tasks the orchestrator was reminded to decide on (see
     /// [`SessionManager::remind_undecided`]): once each.
     reminded: HashSet<TaskId>,
@@ -500,24 +483,6 @@ impl ConvState {
             || !self.lingering.is_empty()
             || self.lingering_request.is_some()
     }
-}
-
-/// Whether request `of` was steered, directly or down a chain, into `root`.
-fn steered_from(board: &crate::board::Board, of: &str, root: &str) -> bool {
-    let mut at = of;
-    // A steer chain is short; the bound only guards against a cycle in stored data.
-    for _ in 0..board.requests.len() {
-        match board
-            .requests
-            .get(at)
-            .and_then(|request| request.steered_into.as_deref())
-        {
-            Some(into) if into == root => return true,
-            Some(into) => at = into,
-            None => return false,
-        }
-    }
-    false
 }
 
 /// Where the thread's one reminder to answer a message of another session stands.
@@ -612,22 +577,6 @@ impl Background {
 const BACKGROUND_TURN_GRACE: Duration = Duration::from_secs(60);
 #[cfg(test)]
 pub(super) const BACKGROUND_TURN_GRACE: Duration = Duration::from_millis(500);
-
-/// Where a request the orchestrator sent a worker back in stands, while the user has seen no
-/// reply since.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Unanswered {
-    Armed,
-    /// It ended with nothing said; checked again after [`UNANSWERED_GRACE`].
-    Checking,
-    /// The orchestrator was asked for its answer.
-    Reminded,
-}
-
-/// How long a request may look over with nothing said before the orchestrator is asked for its
-/// answer: a task's end and the envelope that tells of it are not one step (a landing removes
-/// a worktree in between).
-const UNANSWERED_GRACE: Duration = Duration::from_secs(10);
 
 /// Tests: landings to let through, then the pause's reached and release signals.
 #[cfg(test)]
@@ -840,18 +789,6 @@ impl ConvLive {
     /// continues a stopped request has shown it can go on (see `ConvState::reborn_unproven`).
     async fn made_progress(&self) {
         self.state.lock().await.reborn_unproven = None;
-    }
-
-    /// The running turn started a call or command: the last reply its request showed was said
-    /// mid-work (see `ConvState::last_said`).
-    async fn went_on_working(&self) {
-        self.made_progress().await;
-        let mut state = self.state.lock().await;
-        if let Some(request) = state.request.clone()
-            && let Some((_, followed)) = state.last_said.get_mut(&request)
-        {
-            *followed = true;
-        }
     }
 
     /// Whether its CLI's own jobs still run past their turn (see `ConvState::has_cli_jobs`).
@@ -1237,24 +1174,10 @@ impl ConvLive {
                 .any(|(_, of)| of.as_deref() == Some(request))
     }
 
-    /// The orchestrator sent a worker of `request` back to work: what the user saw of the
-    /// request so far is not its answer.
-    pub async fn sent_back(&self, request: &str) {
-        let mut state = self.state.lock().await;
-        state.spoke.remove(request);
-        state
-            .sent_back
-            .entry(request.to_owned())
-            .or_insert(Unanswered::Armed);
-    }
-
     /// An overnight run ended: what was owed to its requests (`run-<short id>-…`) is over.
-    /// Nothing the run left in the inbox or armed for them wakes the orchestrator later.
+    /// Nothing the run left in the inbox for them wakes the orchestrator later.
     pub async fn forget_run_requests(&self, prefix: &str) {
         let mut state = self.state.lock().await;
-        state
-            .sent_back
-            .retain(|request, _| !request.starts_with(prefix));
         state
             .inbox
             .retain(|(_, request)| !request.as_deref().is_some_and(|r| r.starts_with(prefix)));
@@ -1819,7 +1742,7 @@ impl SessionManager {
             self.core.settle_queued(id, &[item_id.to_owned()]).await?;
             return Ok(
                 "It waits in the queue and reaches you as its own request once this work is \
-                 done. Don't act on it now."
+                 done."
                     .into(),
             );
         }
@@ -1862,6 +1785,12 @@ impl SessionManager {
             state.joined_unjudged.push(item_id.to_owned());
             state.held_items.retain(|held| held != item_id);
         }
+        let working = self.working_request(&conv.id).await;
+        self.join_follow_up(conv, item_id, working).await;
+    }
+
+    /// Follow-up `item_id`, still deciding in the queue, joins request `working`.
+    async fn join_follow_up(&self, conv: &Arc<ConvLive>, item_id: &str, working: Option<String>) {
         let id = &conv.id;
         let deciding = self.core.board(id).await.is_ok_and(|board| {
             board
@@ -1873,7 +1802,6 @@ impl SessionManager {
         if !deciding {
             return;
         }
-        let working = self.working_request(id).await;
         let message = conv
             .user_write(async {
                 let item = self.core.take_queued(id, item_id).await?;
@@ -4143,8 +4071,6 @@ impl SessionManager {
         let mut deltas: Vec<ProviderEvent> = Vec::new();
         let mut deadline: Option<tokio::time::Instant> = None;
         let mut quiet = Quiet::new(conv.kind == ConversationKind::Session);
-        // A short orchestrator reply, held until what follows it shows whether it is narration.
-        let mut held: Option<ProviderEvent> = None;
         loop {
             let flush_at = async {
                 match deadline {
@@ -4203,34 +4129,8 @@ impl SessionManager {
                             self.session_events(EventSource::Conversation(&conv.id), &cli, event)
                         {
                             exited |= matches!(event, ProviderEvent::Exited { .. });
-                            match narration(&event) {
-                                // The held reply only announced the work this call does: the user
-                                // never sees it (the orchestrator log keeps it).
-                                Some(true) => {
-                                    if let Some(reply) = held.take() {
-                                        if self.opening_line(&conv, &reply).await {
-                                            crate::heap(|| self.on_conversation_event(&conv, &cli, reply)).await;
-                                        } else {
-                                            self.hide_narration(&conv, &cli, &reply).await;
-                                            self.log_provider(&conv.id, cli.provider, reply).await;
-                                        }
-                                    }
-                                }
-                                Some(false) => {
-                                    if let Some(reply) = held.take() {
-                                        crate::heap(|| self.on_conversation_event(&conv, &cli, reply)).await;
-                                    }
-                                }
-                                None => {}
-                            }
-                            if quiet.holds_whole(&event) {
-                                if let Some(reply) = held.replace(event) {
-                                    crate::heap(|| self.on_conversation_event(&conv, &cli, reply)).await;
-                                }
-                            } else {
-                                quiet.forget(&event);
-                                crate::heap(|| self.on_conversation_event(&conv, &cli, event)).await;
-                            }
+                            quiet.forget(&event);
+                            crate::heap(|| self.on_conversation_event(&conv, &cli, event)).await;
                         }
                         if exited {
                             break;
@@ -4253,9 +4153,6 @@ impl SessionManager {
         }
         self.store_deltas(&conv, quiet.pass(deltas)).await;
         self.record_held_looked(&conv).await;
-        if let Some(reply) = held.take() {
-            crate::heap(|| self.on_conversation_event(&conv, &cli, reply)).await;
-        }
         self.grants.revoke_owner(&cli.owner);
         conv.items().cli_ended();
         let (was_busy, closing, failed, jobs) = {
@@ -4466,288 +4363,6 @@ impl SessionManager {
         }
     }
 
-    /// Whether a reply that announces work is the request's one short opening line, which the
-    /// user sees: the first reply of the turn that carries their message, with nothing said or
-    /// hidden for the request before it.
-    async fn opening_line(&self, conv: &ConvLive, reply: &ProviderEvent) -> bool {
-        let ProviderEvent::Message { item_id, .. } = reply else {
-            return false;
-        };
-        let state = conv.state.lock().await;
-        let Some(request) = state.replying_for.get(item_id).or(state.request.as_ref()) else {
-            return false;
-        };
-        !state.in_turn.is_empty()
-            && !state.spoke.contains(request)
-            && !state.narration.contains_key(request)
-    }
-
-    /// Keeps a reply the narration filter hid, under its request, in case the request ends
-    /// with nothing else said.
-    async fn hide_narration(&self, conv: &ConvLive, cli: &Cli, reply: &ProviderEvent) {
-        let ProviderEvent::Message { item_id, text, .. } = reply else {
-            return;
-        };
-        let mut state = conv.state.lock().await;
-        let Some(request) = state
-            .replying_for
-            .get(item_id)
-            .cloned()
-            .or_else(|| state.request.clone())
-        else {
-            return;
-        };
-        if !state.spoke.contains(&request) {
-            state.narration.insert(
-                request,
-                Narration {
-                    item_id: item_id.clone(),
-                    text: text.clone(),
-                    model: cli.model.clone(),
-                },
-            );
-        }
-    }
-
-    /// A request is over: if the user saw no reply for it, the last one the narration filter
-    /// hid goes into the thread after all, so an answer is never left empty. Its bookkeeping
-    /// goes with it. A request done with nothing said at all after a worker was sent back
-    /// (the orchestrator waited for a report, then answered it with [`prompts::QUIET`]) asks
-    /// the orchestrator for its answer once, then says there was none.
-    pub(super) async fn release_narration(&self, conv: &Arc<ConvLive>, request: &str, done: bool) {
-        let (narration, unanswered) = {
-            let mut state = conv.state.lock().await;
-            let narration = state.narration.remove(request);
-            let spoke = state.spoke.remove(request);
-            let reminded = state.narrated.remove(request);
-            let mid_work = state
-                .last_said
-                .remove(request)
-                .is_some_and(|(_, followed)| followed);
-            if spoke || narration.is_some() || !done {
-                state.sent_back.remove(request);
-            }
-            // Asked for its answer once already and still none: a plain closing line, never
-            // the narration that only said what came next.
-            if reminded && done && (narration.is_some() || (spoke && mid_work)) {
-                drop(state);
-                self.notice(
-                    &conv.id,
-                    brigadier_providers::NoticeLevel::Warning,
-                    "The thread ended this request without an answer. Ask it again for one.",
-                )
-                .await;
-                return;
-            }
-            if spoke {
-                return;
-            }
-            let unanswered = match state.sent_back.get_mut(request) {
-                Some(stage @ Unanswered::Armed) => {
-                    *stage = Unanswered::Checking;
-                    Some(Unanswered::Checking)
-                }
-                Some(Unanswered::Reminded) => state.sent_back.remove(request),
-                _ => None,
-            };
-            (narration, unanswered)
-        };
-        match unanswered {
-            Some(Unanswered::Checking) => {
-                let (manager, conv, request) = (self.arc(), conv.clone(), request.to_owned());
-                self.spawn(async move {
-                    tokio::time::sleep(UNANSWERED_GRACE).await;
-                    manager.remind_unanswered(&conv, &request).await;
-                });
-            }
-            Some(_) => {
-                self.notice(
-                    &conv.id,
-                    brigadier_providers::NoticeLevel::Warning,
-                    "The thread ended this request without an answer. Ask it again for one.",
-                )
-                .await;
-            }
-            None => {}
-        }
-        let Some(narration) = narration else {
-            return;
-        };
-        if let Err(err) = self
-            .core
-            .append_assistant_message(
-                conv.id.clone(),
-                narration.item_id,
-                narration.text,
-                Some(narration.model),
-                Some(request.to_owned()),
-                None,
-            )
-            .await
-        {
-            crate::logging::private_trace!(conv.private_logs, warn, "could not store a reply"; conversation = %conv.id, error = %err);
-        }
-    }
-
-    /// A request about to end done whose user saw no answer, only a line said before more
-    /// work ("Now the full suites…") or hidden narration: rather than end on that line, the
-    /// thread is asked once for its answer, naming the messages the user steered into it.
-    /// Whether it was asked: the request then works until that turn ends.
-    pub(super) async fn remind_narrated(
-        &self,
-        conv: &Arc<ConvLive>,
-        board: &crate::board::Board,
-        request: &str,
-    ) -> bool {
-        if conv.kind != ConversationKind::Session
-            || super::requests::run_of_request(board, request).is_some()
-        {
-            return false;
-        }
-        let mut steered: Vec<&crate::work::UserRequest> = board
-            .requests
-            .values()
-            .filter(|of| of.steered_into.as_deref() == Some(request))
-            .collect();
-        steered.sort_by_key(|of| of.started_at_ms);
-        let steered: Vec<String> = steered
-            .iter()
-            .map(|of| format!("\u{201c}{}\u{201d}", of.preview))
-            .collect();
-        // The requests steered into its turn, however far down the chain: the turn answers
-        // the last of them from then on.
-        let family: Vec<&str> = board
-            .requests
-            .keys()
-            .map(String::as_str)
-            .filter(|of| *of != request && steered_from(board, of, request))
-            .collect();
-        let mut state = conv.state.lock().await;
-        if state.narrated.contains(request) {
-            return false;
-        }
-        // Its turn goes on (or will) under a request steered into it, or one of those was
-        // answered: it isn't over unanswered.
-        let carries = |of: &str| {
-            (state.busy && state.request.as_deref() == Some(of))
-                || state
-                    .inbox
-                    .iter()
-                    .any(|(_, carried)| carried.as_deref() == Some(of))
-                || state
-                    .pending
-                    .iter()
-                    .any(|message| message.request_id.as_deref() == Some(of))
-                || matches!(state.last_said.get(of), Some((_, false)))
-        };
-        if family.iter().any(|of| carries(of)) {
-            return false;
-        }
-        // The line the user saw last went on with work (or they saw none, only hidden
-        // narration).
-        let last = if state.spoke.contains(request) {
-            match state.last_said.get(request) {
-                Some((text, true)) => text.trim().to_owned(),
-                _ => return false,
-            }
-        } else {
-            match state.narration.get(request) {
-                Some(narration) => narration.text.trim().to_owned(),
-                None => return false,
-            }
-        };
-        let also = if steered.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " The user also wrote, while you worked: {}. Answer those too.",
-                steered.join(", ")
-            )
-        };
-        state.narrated.insert(request.to_owned());
-        state.inbox.push((
-            Envelope {
-                kind: InjectionKind::Reminder,
-                label: "no answer".into(),
-                task_id: None,
-                text: format!(
-                    "[Nothing runs for this request any more, and the user has seen no answer to \
-                     it: your last words were \"{last}\", which only said what you were about to \
-                     do. Answer them now, in a few lines: what you did, what came of it, and what \
-                     is still pending, if anything.{also} Don't reply {}.]",
-                    prompts::QUIET
-                ),
-            },
-            Some(request.to_owned()),
-        ));
-        true
-    }
-
-    /// A request still over with nothing said a while after it ended (see
-    /// [`Self::release_narration`]): the orchestrator is asked for its answer. One that works
-    /// again waits for its next end.
-    async fn remind_unanswered(&self, conv: &Arc<ConvLive>, request: &str) {
-        let board = self.core.board(&conv.id).await.ok();
-        // An overnight run's request is answered by the run's report.
-        if board
-            .as_ref()
-            .is_some_and(|board| super::requests::run_of_request(board, request).is_some())
-        {
-            conv.state.lock().await.sent_back.remove(request);
-            return;
-        }
-        let over = board.is_some_and(|board| {
-            board
-                .requests
-                .get(request)
-                .is_some_and(|of| of.state == RequestState::Done)
-        });
-        let archived = matches!(
-            self.core.conversation(&conv.id).map(|c| c.lifecycle),
-            Ok(Lifecycle::Archived)
-        );
-        {
-            let mut state = conv.state.lock().await;
-            if state.sent_back.get(request) != Some(&Unanswered::Checking) {
-                return;
-            }
-            if archived {
-                state.sent_back.remove(request);
-                return;
-            }
-            let carried = state
-                .inbox
-                .iter()
-                .any(|(_, of)| of.as_deref() == Some(request));
-            let running = state.busy && state.request.as_deref() == Some(request);
-            let stage = if !over || carried || running {
-                Unanswered::Armed
-            } else {
-                Unanswered::Reminded
-            };
-            state.sent_back.insert(request.to_owned(), stage);
-            if stage == Unanswered::Armed {
-                return;
-            }
-            state.inbox.push((
-                Envelope {
-                    kind: InjectionKind::Reminder,
-                    label: "no answer".into(),
-                    task_id: None,
-                    text: format!(
-                        "[Nothing runs for this request any more, and the user has seen no answer \
-                         to it. Answer them now: what the workers found or changed, and what is \
-                         left. Don't reply {}.]",
-                        prompts::QUIET
-                    ),
-                },
-                Some(request.to_owned()),
-            ));
-        }
-        // The turn it starts settles the request.
-        self.kick(conv);
-    }
-
     async fn on_conversation_event(
         &self,
         conv: &Arc<ConvLive>,
@@ -4833,12 +4448,6 @@ impl SessionManager {
                 };
                 if let Some(text) = shown {
                     if let Some(request) = &request {
-                        let mut state = conv.state.lock().await;
-                        state.spoke.insert(request.clone());
-                        state.narration.remove(request);
-                        state
-                            .last_said
-                            .insert(request.clone(), (text.to_owned(), false));
                         conv.status.lock().unwrap().shown(request, now_ms());
                     }
                     if let Err(err) = self
@@ -4980,7 +4589,7 @@ impl SessionManager {
             } => {
                 let name = crate::digest::bare_tool_name(name);
                 if *status == ItemStatus::InProgress {
-                    conv.went_on_working().await;
+                    conv.made_progress().await;
                 }
                 // The CLI has the wait's result: the replies handed to it are taken.
                 if name == "wait_for_replies" && *status == ItemStatus::Completed {
@@ -5050,7 +4659,7 @@ impl SessionManager {
             } => {
                 conv.running_command(item_id, *status).await;
                 if *status == ItemStatus::InProgress {
-                    conv.went_on_working().await;
+                    conv.made_progress().await;
                 }
                 self.command_holds(
                     conv,
@@ -5610,8 +5219,14 @@ impl SessionManager {
         // Replies the turn held for its waits and didn't take go by ordinary delivery.
         self.return_held_replies(conv).await;
         self.release_held(conv).await;
-        // Follow-ups the turn left undecided wait in the queue for their own turn.
-        if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
+        // Follow-ups the turn left unsorted join its request (route_follow_up is optional);
+        // after a stop, a failure, a limit or a rebirth they wait in the queue for their own
+        // turn.
+        if status == TurnStatus::Completed && limit_hit.is_none() && reborn.is_none() {
+            for item_id in &asked {
+                self.join_follow_up(conv, item_id, served.clone()).await;
+            }
+        } else if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
             crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);
         }
         if let Some(tokens) = reborn {
@@ -6936,7 +6551,7 @@ impl Quiet {
     }
 
     /// The deltas the user may see: a reply's text is released, whole, once it can no longer
-    /// be [`prompts::QUIET`] nor a short line of narration (see [`narration`]).
+    /// be [`prompts::QUIET`].
     fn pass(&mut self, deltas: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
         if !self.enabled {
             return deltas;
@@ -6959,7 +6574,7 @@ impl Quiet {
                     let (so_far, said) = self.held.entry(item_id.clone()).or_default();
                     so_far.push_str(&text);
                     *said = said.or(phase);
-                    if prompts::QUIET.starts_with(so_far.trim()) || so_far.len() < NARRATION_BYTES {
+                    if prompts::QUIET.starts_with(so_far.trim()) {
                         return None;
                     }
                     let (text, phase) = self.held.remove(&item_id).unwrap_or_default();
@@ -6975,29 +6590,6 @@ impl Quiet {
             .collect()
     }
 
-    /// Whether `event` is a complete reply none of which was shown yet that reads as narration
-    /// ([`announces`]): it is held until the next event says whether it was. A question is
-    /// never held.
-    fn holds_whole(&mut self, event: &ProviderEvent) -> bool {
-        let ProviderEvent::Message {
-            item_id,
-            role: ProviderRole::Assistant,
-            text,
-        } = event
-        else {
-            return false;
-        };
-        let whole = self.enabled
-            && !self.released.contains(item_id)
-            && text.len() < NARRATION_BYTES
-            && !text.contains('?')
-            && announces(text);
-        if whole {
-            self.forget(event);
-        }
-        whole
-    }
-
     /// Forgets a reply once it is complete.
     fn forget(&mut self, event: &ProviderEvent) {
         if let ProviderEvent::Message { item_id, .. } = event {
@@ -7009,179 +6601,6 @@ impl Quiet {
 
 /// What the thread is told when its reply asked the user something in text, with no card open.
 const ASK_ON_A_CARD: &str = "[Your reply asked the user a question in text. Ask it on a card instead, with ask_user (with options and the one you recommend); a merge needs no question: the user merges by asking in words. Then reply [quiet], and don't repeat the question in text.]";
-
-/// Replies shorter than this are held back until the turn shows whether they were narration.
-const NARRATION_BYTES: usize = 400;
-
-/// How narration starts: the orchestrator saying it looks something up or hands work out
-/// next. An opening needs one of [`LOOKUPS`] right after it ("I'll check …", "Let me ask a
-/// scout …"); a bare "I'll use SQLite." is a decision, not narration.
-const OPENINGS: &[&str] = &[
-    "let me ",
-    "let's ",
-    "i'll ",
-    "i will ",
-    "i'm going to ",
-    "i am going to ",
-];
-
-/// What narration announces.
-const LOOKUPS: &[&str] = &[
-    "check",
-    "look",
-    "ask",
-    "hand",
-    "delegate",
-    "search",
-    "read",
-    "pull up",
-    "dig",
-    "find out",
-    "see ",
-    "verify",
-    "confirm",
-    "query",
-    "get a scout",
-    "have a scout",
-    "send a scout",
-    "spin up",
-    "kick off",
-];
-
-/// Openings that are narration on their own ("Checking the report.", "On it.").
-const PROGRESS: &[&str] = &[
-    "checking ",
-    "looking ",
-    "asking ",
-    "handing ",
-    "delegating ",
-    "searching ",
-    "reading ",
-    "pulling up ",
-    "digging ",
-    "querying ",
-    "on it",
-    "one moment",
-];
-
-/// Lead-ins before an announcement ("Now let me …").
-const LEAD_INS: &[&str] = &["now ", "next, ", "first, ", "ok, ", "okay, ", "alright, "];
-
-/// Words that give a reply more than an announcement: a reason, a choice, a limit.
-const SUBSTANTIVE: &[&str] = &[
-    "because", "since ", "instead", "decid", "chose", "choos", "won't", "will not", "can't",
-    "cannot", "must", "should", "don't", "didn't", "not ",
-];
-
-/// How a sentence saying the Project Brain has no answer starts ("The Brain doesn't have
-/// that."): the lookup's outcome, which the hand-off after it shows anyway.
-const BRAIN_MISS: &[&str] = &[
-    "the brain ",
-    "the project brain ",
-    "nothing in the brain",
-    "nothing in the project brain",
-];
-
-/// Words that give a Brain-miss sentence more than the miss.
-const REASONING: &[&str] = &[
-    "because", "instead", "decid", "chose", "choos", "must", "should",
-];
-
-/// What a sentence opening with [`BRAIN_MISS`] must say for it to be a miss ("doesn't have
-/// that", "has nothing on it"); "The Brain says we use SQLite." states a fact.
-const MISSING: &[&str] = &[
-    "doesn't", "does not", "didn't", "did not", "has no", "had no", "nothing", "no ", "not ",
-    "isn't", "is not", "without",
-];
-
-/// What joins a second clause onto a sentence ("I'll check the Brain, then go with B."): an
-/// announcement or a miss is one clause, so a sentence with one of these may carry more and is
-/// shown.
-const JOINS: &[&str] = &[
-    ",", " then ", " and ", " but ", " so ", " or ", " also ", "—", "–", " - ", "(",
-];
-
-/// Whether a short reply only announces the next step ("Let me check the Brain.", "The Brain
-/// doesn't have that. I'll ask a scout."): at most two sentences of one clause each, one
-/// announcing a lookup or a hand-off, the other at most saying the Brain had no answer, with no
-/// reason, choice or limit in them. Anything else (a decision, its reason, a fact, a second
-/// clause, more sentences) is shown.
-fn announces(text: &str) -> bool {
-    let lower = text.trim().to_lowercase();
-    let sentences: Vec<&str> = lower
-        .split(['.', '!', ';', ':', '\n'])
-        .map(str::trim)
-        .filter(|sentence| !sentence.is_empty())
-        .collect();
-    let announcement = |sentence: &&str| {
-        let mut rest: &str = sentence;
-        for lead in LEAD_INS {
-            rest = rest.strip_prefix(lead).unwrap_or(rest);
-        }
-        let opens = PROGRESS.iter().any(|opening| rest.starts_with(opening))
-            || OPENINGS.iter().any(|opening| {
-                rest.strip_prefix(opening)
-                    .is_some_and(|after| LOOKUPS.iter().any(|verb| after.starts_with(verb)))
-            });
-        opens
-            && !SUBSTANTIVE.iter().any(|word| sentence.contains(word))
-            && !JOINS.iter().any(|join| sentence.contains(join))
-    };
-    let brain_miss = |sentence: &&str| {
-        BRAIN_MISS
-            .iter()
-            .any(|opening| sentence.starts_with(opening))
-            && (sentence.starts_with("nothing ")
-                || MISSING.iter().any(|word| sentence.contains(word)))
-            && !REASONING.iter().any(|word| sentence.contains(word))
-            && !JOINS.iter().any(|join| sentence.contains(join))
-    };
-    sentences.len() <= 2
-        && sentences.iter().any(announcement)
-        && sentences
-            .iter()
-            .all(|sentence| announcement(sentence) || brain_miss(sentence))
-}
-
-/// Tools whose call a short reply before it may only have announced ("I'll ask a scout.",
-/// "Let me read the report."): the user sees the call's result anyway.
-const ANNOUNCED_TOOLS: &[&str] = &[
-    "delegate_task",
-    "read_report",
-    "read_artifact",
-    "query_brain",
-    "search_transcript",
-    "list_tasks",
-    "code_search",
-    "code_refs",
-    "project_map",
-];
-
-/// A held reply, kept out of the thread for its request.
-struct Narration {
-    item_id: String,
-    text: String,
-    model: ModelChoice,
-}
-
-/// What `event`, following a held short reply in the same turn, makes of it: `Some(true)` when
-/// it is a call that only looks something up or hands work out ([`ANNOUNCED_TOOLS`]), which
-/// the reply announced; `Some(false)` when the reply stands: the turn ended, another reply
-/// followed, or the call acts on the user's behalf (accepting or rejecting work, a plan, a
-/// card, an answer to a worker), so the reply may carry a decision or its reason. `None` when
-/// it cannot tell yet.
-fn narration(event: &ProviderEvent) -> Option<bool> {
-    match event {
-        ProviderEvent::ToolCall { name, .. } => {
-            Some(ANNOUNCED_TOOLS.contains(&crate::digest::bare_tool_name(name)))
-        }
-        ProviderEvent::TurnCompleted { .. }
-        | ProviderEvent::Exited { .. }
-        | ProviderEvent::Message { .. }
-        | ProviderEvent::Error { .. } => Some(false),
-        _ => None,
-    }
-}
 
 /// An orchestrator reply as the user sees it: without a trailing [`prompts::QUIET`], and
 /// nothing when that was all of it.

@@ -2544,11 +2544,10 @@ async fn a_feedback_offer_from_a_redone_attempt_blocks_nothing() {
         .and_then(|step| step.request_id.clone())
         .expect("an offer under the request");
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    flow.core
-        .restart_request(&flow.conversation, &request)
+    flow.manager
+        .regenerate(flow.conversation.clone(), request)
         .await
         .unwrap();
-    flow.say("Still can't pin chats.").await;
     flow.settled().await;
     assert_eq!(*replies.lock().unwrap(), vec![false, false]);
     flow.stop().await;

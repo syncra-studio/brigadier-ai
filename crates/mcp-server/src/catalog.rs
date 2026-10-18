@@ -79,7 +79,8 @@ answer.";
 const ROUTE_FOLLOW_UP: &str = "Sort a [follow-up …] the user sent while you work on their \
 request. joins=true: it belongs to this work; it reaches you at once as the user's message, and \
 your final answer covers it too. joins=false: it is a request of its own; it waits in the user's \
-queue and reaches you once this work is done.";
+queue and reaches you once this work is done. Optional: one left unsorted joins this work \
+shortly.";
 
 const STOP_WORKER: &str = "Stop a running worker, e.g. when its task is no longer needed or \
 went wrong. Nothing of it lands. `reason` is required: one plain line on why, which the user \

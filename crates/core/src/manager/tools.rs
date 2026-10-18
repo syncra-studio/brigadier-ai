@@ -343,8 +343,7 @@ impl SessionManager {
                         "Created task-{} ({:?}), but no model it may use can take it now: {}. It \
                          starts on its own when one can (after a reset, or when the user changes \
                          their routing); its report arrives later as a message. The user sees \
-                         it waiting, so don't announce it: if nothing else is needed now, reply \
-                         with exactly {} and nothing else.",
+                         it waiting. If you have nothing to say now, reply with exactly {}.",
                         task.number,
                         task.kind,
                         wait.reason,
@@ -353,8 +352,8 @@ impl SessionManager {
                 }
                 Ok(format!(
                     "Started task-{} ({:?}) on {}: {}. Its report arrives later as a message; don't wait for it. \
-                     The user sees the worker live, so don't announce it: if nothing else is \
-                     needed now, reply with exactly {} and nothing else.",
+                     The user sees the worker live. If you have nothing to say now, reply with \
+                     exactly {}.",
                     task.number,
                     task.kind,
                     route_label(&task),
