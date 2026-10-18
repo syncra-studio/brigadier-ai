@@ -57,6 +57,7 @@ const STOP_GRACE: Duration = Duration::from_secs(2);
 /// The installer's last lines kept for the log.
 const TAIL_LINES: usize = 30;
 /// How often the sign-in is checked for the link it wants opened.
+#[cfg(unix)]
 const LINK_EVERY: Duration = Duration::from_millis(200);
 
 /// Every agent's Connect: how it goes, and how to stop the one running.
@@ -217,6 +218,7 @@ struct Ops {
     sign_in_timeout: Duration,
     poll: Duration,
     /// Opens the vendor's sign-in page in the browser.
+    #[cfg(unix)]
     open_link: Arc<dyn Fn(&str) + Send + Sync>,
 }
 
@@ -234,6 +236,7 @@ impl Ops {
             install_timeout: INSTALL_TIMEOUT,
             sign_in_timeout: SIGN_IN_TIMEOUT,
             poll: POLL_EVERY,
+            #[cfg(unix)]
             open_link: Arc::new(open_in_browser),
         }
     }
@@ -241,6 +244,7 @@ impl Ops {
 
 /// Opens `link` in the user's browser with their account's home, whatever `HOME` Brigadier
 /// itself runs with: a browser started with another home can't find its keychain.
+#[cfg(unix)]
 fn open_in_browser(link: &str) {
     let opener = if cfg!(target_os = "macos") {
         "/usr/bin/open"
@@ -253,7 +257,6 @@ fn open_in_browser(link: &str) {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    #[cfg(unix)]
     if let Ok(Some(user)) = nix::unistd::User::from_uid(nix::unistd::getuid()) {
         command.env("HOME", user.dir);
     }
