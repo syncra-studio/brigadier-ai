@@ -191,10 +191,7 @@ jobs:
           git config --global user.email ci@brigadier.invalid
           pnpm build
           pnpm --filter @brigadier/desktop stage-sidecar --debug
-          # On Linux an archive leaves the session's running full checks alive (issue #343), so this
-          # test of it is skipped there until that's fixed.
-          cargo nextest run --locked --profile ci --workspace --lib --bins --tests -- \
-            --skip manager::flow::integrated_checks_tests::a_run_cut_off_by_a_restart_runs_again_and_an_archive_ends_it
+          cargo nextest run --locked --profile ci --workspace --lib --bins --tests
       - name: Copy-on-write tests on a file system that shares blocks
         # The runner's ext4 can't make copy-on-write copies, so the tests of copying a checkout's
         # caches into a worktree skip in the step above (issue #110). Here they run with their
