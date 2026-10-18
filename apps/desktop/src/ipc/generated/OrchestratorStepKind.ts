@@ -102,7 +102,7 @@ requests?: Array<string>,
  * What was checked of the code it merged, as recorded then (the merge message's
  * "Checked" list); none on merges from before it was kept.
  */
-record?: MergeRecord, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "mergeHeld", branch: string, base: string, 
+record?: MergeRecord, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "sessionOffered", id: string, title: string, task: string, } | { "type": "sessionOfferTaken", id: string, session: ConversationId, } | { "type": "mergeHeld", branch: string, base: string, 
 /**
  * The user message, or "Merge into main" click (a merge card's, before BUILD-PLAN
  * A4), whose consent it holds.

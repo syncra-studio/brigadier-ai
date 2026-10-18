@@ -204,6 +204,7 @@ How to work:
 - Ask the user only what only they can decide, only with ask_user (never a question in your text), then reply {quiet}. Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last run_check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
 - Pushing, pull requests, publishing and deploying are your call; asked for build + PR + preview + CI watch, do it all. After your own `git push`, call ci_status. Bugs the user wants as issues: file each before its fix ("Fixes #N"). Spending money, handling credentials yourself (not git and gh on the user's sign-in), and destroying anything outside this session's own work need request_approval first.
 - Write to another session's thread only with message_session.
+- {OFFER_SESSION_RULE}
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
 - Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer ([notes.md](outputs/notes.md), which puts its Save… under your answer): Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
@@ -268,6 +269,15 @@ fn callable(text: &str, provider: ProviderKind) -> String {
 /// What the thread does with an event that arrives after its answer (bug 4): an update line
 /// only when the user must know, never a rewritten ending.
 pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a landing, a CI result) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), starting with the English word \"Update:\" whatever language you write in, never a new ending. Otherwise reply [quiet].";
+
+macro_rules! offer_session_rule {
+    () => {
+        "Work you find along the way that is outside this request (a separate bug, a follow-up the user didn't ask for): offer it with offer_session, which gives the user a Start as session button; never do it here or start it yourself."
+    };
+}
+
+/// The thread offers out-of-scope work as a session of its own (Q73's third way to start one).
+pub(crate) const OFFER_SESSION_RULE: &str = offer_session_rule!();
 
 macro_rules! revised_answer {
     () => {
@@ -1013,6 +1023,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         ),
         worker: "",
     },
+    Revision {
+        number: OFFER_SESSION_REVISION,
+        thread: concat!("From now on: ", offer_session_rule!()),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1449,6 +1464,8 @@ pub(crate) const BREAKDOWN_REVISION: u32 = 107;
 /// A worker's findings after the answer give a revised whole answer, an update line opens with
 /// the English "Update:", and no file or link is promised for later (Q81).
 pub(crate) const REVISED_ANSWER_REVISION: u32 = 108;
+/// Out-of-scope work is offered as a session with offer_session, a Start as session card (Q73).
+pub(crate) const OFFER_SESSION_REVISION: u32 = 109;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -3783,8 +3800,9 @@ mod environment_tests {
         // approval: tokens are a tripwire, not a gate (Q58), so no trimming. Then to 13,100 for
         // the restored voice, the research answer's layout and report, and the research fan-out
         // (Q79), to 13,300 for the breakdown without bold-labelled items (Q79), and to 13,700
-        // for a revised whole answer after a worker's findings, with no file promised (Q81).
-        assert!(codex.len() < 13_700, "{}", codex.len());
+        // for a revised whole answer after a worker's findings, with no file promised (Q81),
+        // then to 13,900 for offering out-of-scope work as a session (Q73).
+        assert!(codex.len() < 13_900, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -4364,8 +4382,38 @@ mod environment_tests {
         assert!(note.contains(REVISED_ANSWER));
         assert!(note.contains(NO_PROMISED_FILES));
         assert!(note.contains("starts with the English word \"Update:\""));
-        assert!(revision_note(REVISED_ANSWER_REVISION, false).is_none());
+        assert!(
+            !revision_note(REVISED_ANSWER_REVISION, false)
+                .unwrap()
+                .contains(REVISED_ANSWER)
+        );
         assert!(revision_note(BREAKDOWN_REVISION, true).is_none());
+    }
+
+    /// Q73: work found outside the request is offered as a session of its own, never done here
+    /// or started by the thread; a thread told revision 108 hears it once.
+    #[test]
+    fn out_of_scope_work_is_offered_as_a_session() {
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            let text = thread(
+                &session("askForApproval"),
+                None,
+                &[],
+                None,
+                None,
+                provider,
+                true,
+            );
+            assert!(
+                text.contains("Work you find along the way that is outside this request")
+                    && text.contains("never do it here or start it yourself"),
+                "{provider:?}"
+            );
+        }
+        let note = revision_note(REVISED_ANSWER_REVISION, false).unwrap();
+        assert!(note.contains(OFFER_SESSION_RULE), "{note}");
+        assert!(revision_note(OFFER_SESSION_REVISION, false).is_none());
+        assert!(revision_note(REVISED_ANSWER_REVISION, true).is_none());
     }
 
     fn session(permission: &str) -> Conversation {

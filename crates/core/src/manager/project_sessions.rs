@@ -45,6 +45,50 @@ impl SessionManager {
         }
     }
 
+    /// The user's Start as session on the offer `offer_id` in `from` (`offer_session`): its
+    /// task starts as a new session of the project, as ⌘⏎ starts one, and the offer is spent.
+    /// Once only.
+    pub async fn start_offered_session(
+        &self,
+        from: &ConversationId,
+        offer_id: &str,
+    ) -> Result<(Conversation, SendOutcome)> {
+        let conv = self.conv(from)?;
+        let _offer = conv.session_offer.lock().await;
+        let board = self.core.board(from).await?;
+        let Some((request, task)) =
+            board
+                .orchestrator_steps
+                .iter()
+                .find_map(|step| match &step.kind {
+                    OrchestratorStepKind::SessionOffered { id, task, .. } if id == offer_id => {
+                        Some((step.request_id.clone(), task.clone()))
+                    }
+                    _ => None,
+                })
+        else {
+            return Err(Error::NotFound(format!("session offer {offer_id}")));
+        };
+        if board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, OrchestratorStepKind::SessionOfferTaken { id, .. } if id == offer_id)
+        }) {
+            return Err(Error::Invalid("This session was already started.".into()));
+        }
+        let (session, outcome) = self
+            .start_session(from, None, task, Vec::new(), Vec::new())
+            .await?;
+        self.orchestrator_step_in(
+            from,
+            request,
+            OrchestratorStepKind::SessionOfferTaken {
+                id: offer_id.to_owned(),
+                session: session.id.clone(),
+            },
+        )
+        .await;
+        Ok((session, outcome))
+    }
+
     /// A new, empty session of `from`'s project, as [`Self::start_session`] makes it.
     pub(crate) async fn create_session_from(
         &self,

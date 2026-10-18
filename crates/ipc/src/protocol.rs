@@ -509,6 +509,12 @@ pub enum Request {
         attachments: Vec<AttachmentRef>,
         mentions: Vec<Mention>,
     },
+    /// "Start as session" on the thread's offer (`offer_session`): its task starts as a new
+    /// session of the project in the background, as ⌘⏎ starts one; once only.
+    StartOfferedSession {
+        conversation_id: ConversationId,
+        offer_id: String,
+    },
     /// "Fork chat from here": a new conversation with the thread up to the answer
     /// `message_id`; a session's fork works from the commit current then, in `place`.
     ForkConversation {
@@ -1517,6 +1523,10 @@ pub enum Response {
         conversation: Box<Conversation>,
     },
     StartSession {
+        conversation: Box<Conversation>,
+        outcome: SendOutcome,
+    },
+    StartOfferedSession {
         conversation: Box<Conversation>,
         outcome: SendOutcome,
     },

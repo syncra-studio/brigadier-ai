@@ -1161,6 +1161,20 @@ pub struct OfferFeedback {
     pub body: String,
 }
 
+/// `offer_session`: work the thread found along the way that is outside the request; the user
+/// sees it as a card with one "Start as session" button, which starts it as a session of its
+/// own (own branch and worktree). The thread never starts it itself.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OfferSession {
+    /// What the session is to do, as its first message: complete on its own ("Fix the date
+    /// parser in src/dates.rs: it drops the time zone").
+    pub task: String,
+    /// A short name for the card ("Fix the date parser"); the task's start when left out.
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
 /// `settle_step`: during an overnight run, the thread settles a step of the run's plan once it
 /// has judged the step's whole scope and every "done when" (its own edits too).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1270,6 +1284,7 @@ pub enum OrchestratorCall {
     WatchCi(CiPush),
     SuggestFullAccess(SuggestFullAccess),
     OfferFeedback(OfferFeedback),
+    OfferSession(OfferSession),
     ListTasks,
     SettleStep(SettleStep),
     EndRun(EndRun),
@@ -1328,6 +1343,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "watch_ci",
     "suggest_full_access",
     "offer_feedback",
+    "offer_session",
     "list_tasks",
     "settle_step",
     "end_run",
@@ -1387,6 +1403,7 @@ impl OrchestratorCall {
             Self::WatchCi(_) => "watch_ci",
             Self::SuggestFullAccess(_) => "suggest_full_access",
             Self::OfferFeedback(_) => "offer_feedback",
+            Self::OfferSession(_) => "offer_session",
             Self::ListTasks => "list_tasks",
             Self::SettleStep(_) => "settle_step",
             Self::EndRun(_) => "end_run",

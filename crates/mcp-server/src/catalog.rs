@@ -7,14 +7,14 @@ use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, AttachProof, BrowserClick,
     BrowserNavigate, BrowserOpen, BrowserTabRef, BrowserToolCall, BrowserType, ChatCall, CiPush,
     CodeRefs, CodeSearch, DelegateTask, EndRun, FinishSession, JobCall, LandPhase, ListSessions,
-    MessageSession, MessageWorker, NoteForUser, OfferFeedback, OrchestratorCall, PlanPhases,
-    PreviewLog, ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession,
-    RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, ReviewCandidate,
-    ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory,
-    SaveReport, SearchTranscript, SettleStep, SettleWait, StartPreview, StartVerifier, StopMerge,
-    StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport, SuggestFullAccess,
-    TabChatCall, TabTools, ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage,
-    WriteTabFile,
+    MessageSession, MessageWorker, NoteForUser, OfferFeedback, OfferSession, OrchestratorCall,
+    PlanPhases, PreviewLog, ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage,
+    ReadSession, RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RerunTask,
+    ReviewCandidate, ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools,
+    RunUnsandboxed, SaveMemory, SaveReport, SearchTranscript, SettleStep, SettleWait, StartPreview,
+    StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
+    SuggestFullAccess, TabChatCall, TabTools, ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall,
+    WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -354,6 +354,13 @@ they send to GitHub, edit first or dismiss. Nothing is sent without their click.
 naming the problem. body: what happened and what they expected, steps if known, a few plain \
 lines; no secrets, paths or project code. One offer per incident: refused while an earlier one \
 is unanswered or after they dismissed one.";
+
+const OFFER_SESSION: &str = "Work you found along the way that is outside this request (a \
+separate bug, a follow-up the user didn't ask for): offer it as a session of its own instead of \
+doing it here. The user sees a card with one Start as session button; a click starts it on its \
+own branch and worktree, in the background. Never start it yourself. task: what the session is \
+to do, complete on its own as its first message (files, the symptom, what done means). title: \
+a short name for the card. The same task once a request.";
 
 const RUN: &str = "Run a shell command and get its result: builds, tests, logs, long \
 listings. It runs with this session's access and sandbox, in `workdir` (the workspace, a folder \
@@ -758,6 +765,11 @@ fn orchestrator_tools() -> Vec<Tool> {
             OFFER_FEEDBACK,
             input_schema::<OfferFeedback>(),
         ),
+        tool(
+            "offer_session",
+            OFFER_SESSION,
+            input_schema::<OfferSession>(),
+        ),
         tool("list_tasks", LIST_TASKS, no_arguments()),
         tool("settle_step", SETTLE_STEP, input_schema::<SettleStep>()),
         tool("end_run", END_RUN, input_schema::<EndRun>()),
@@ -886,6 +898,10 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
     (
         "offer_feedback",
         "user annoyed, frustrated, complaint, bug report, feedback",
+    ),
+    (
+        "offer_session",
+        "out of scope, separate task, follow-up, new session, later",
     ),
 ];
 
@@ -1079,6 +1095,7 @@ pub fn parse_call(
                     OrchestratorCall::SuggestFullAccess(args(name, arguments)?)
                 }
                 "offer_feedback" => OrchestratorCall::OfferFeedback(args(name, arguments)?),
+                "offer_session" => OrchestratorCall::OfferSession(args(name, arguments)?),
                 "list_tasks" => OrchestratorCall::ListTasks,
                 "settle_step" => OrchestratorCall::SettleStep(args(name, arguments)?),
                 "end_run" => OrchestratorCall::EndRun(args(name, arguments)?),
@@ -1592,6 +1609,39 @@ mod tests {
             ));
             let wrong = serde_json::json!({ "kind": "rant", "title": "x", "body": "y" });
             assert!(parse_call(&thread, "offer_feedback", wrong.as_object().cloned()).is_err());
+        }
+    }
+
+    /// Every thread can offer out-of-scope work as a session, found behind the tool search by
+    /// what it is for.
+    #[test]
+    fn every_thread_can_offer_a_session() {
+        for run in [RunTools::None, RunTools::Run, RunTools::WithEscalation] {
+            let thread = Role::Orchestrator {
+                conversation_id: brigadier_core::model::ConversationId("c1".into()),
+                run,
+            };
+            let tool = tools_for(&thread)
+                .iter()
+                .find(|tool| tool.name == "offer_session")
+                .expect("offer_session");
+            let hint = tool
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.0.get("anthropic/searchHint"));
+            assert!(
+                hint.is_some_and(|hint| hint.as_str().unwrap().contains("out of scope")),
+                "{run:?}"
+            );
+            let arguments =
+                serde_json::json!({ "task": "Fix the date parser: it drops the time zone." });
+            assert!(matches!(
+                parse_call(&thread, "offer_session", arguments.as_object().cloned()),
+                Ok(ToolCall::Orchestrator(OrchestratorCall::OfferSession(args)))
+                    if args.task.starts_with("Fix the date parser") && args.title.is_none()
+            ));
+            let wrong = serde_json::json!({ "title": "x" });
+            assert!(parse_call(&thread, "offer_session", wrong.as_object().cloned()).is_err());
         }
     }
 

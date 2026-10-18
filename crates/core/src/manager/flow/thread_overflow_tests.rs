@@ -16,9 +16,9 @@ use crate::knowledge::RebirthTrigger;
 use crate::manager::fault::{FaultKey, InjectedError};
 use crate::manager::prompts::{
     ANSWER_DETAILS_REVISION, ANSWER_FILES_REVISION, ANSWER_FORMAT_REVISION, BREAKDOWN_REVISION,
-    COMMIT_FIRST_REVISION, LEAN_TOOLS_REVISION, OVERFLOW_REVISION, REVISED_ANSWER_REVISION,
-    SAVE_ONLY_REVISION, SHORT_START_REVISION, STORED_FIX_REVISION, THREAD_STEPS_REVISION,
-    revision_note,
+    COMMIT_FIRST_REVISION, LEAN_TOOLS_REVISION, OFFER_SESSION_REVISION, OVERFLOW_REVISION,
+    REVISED_ANSWER_REVISION, SAVE_ONLY_REVISION, SHORT_START_REVISION, STORED_FIX_REVISION,
+    THREAD_STEPS_REVISION, revision_note,
 };
 use crate::model::{DomainEvent, streams};
 use crate::work::{OrchestratorEntry, RequestState};
@@ -525,6 +525,12 @@ async fn a_session_from_before_the_breakdown_rule_is_told_once() {
 #[tokio::test]
 async fn a_session_from_before_the_revised_answer_rule_is_told_once() {
     told_once(REVISED_ANSWER_REVISION, "write the whole answer again").await;
+}
+
+/// Rule R for offering out-of-scope work as a session (Q73).
+#[tokio::test]
+async fn a_session_from_before_session_offers_is_told_once() {
+    told_once(OFFER_SESSION_REVISION, "offer it with offer_session").await;
 }
 
 /// Rule R for the commit on the first check expected to pass (the gate's bench, T4).

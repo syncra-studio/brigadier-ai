@@ -1348,6 +1348,18 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
                 outcome: send_outcome(outcome),
             }
         }
+        Request::StartOfferedSession {
+            conversation_id,
+            offer_id,
+        } => {
+            let (conversation, outcome) = sessions
+                .start_offered_session(&conversation_id, &offer_id)
+                .await?;
+            Response::StartOfferedSession {
+                conversation: Box::new(conversation),
+                outcome: send_outcome(outcome),
+            }
+        }
         Request::SettleMoved {
             conversation_id,
             item_id,
@@ -1420,6 +1432,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             ),
         },
         request @ (Request::StartSession { .. }
+        | Request::StartOfferedSession { .. }
         | Request::SettleMoved { .. }
         | Request::GetSettledTabs) => heap(|| open_session(sessions, request)).await?,
         Request::ForkConversation {

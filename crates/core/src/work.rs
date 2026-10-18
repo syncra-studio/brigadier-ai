@@ -2298,6 +2298,16 @@ pub enum OrchestratorStepKind {
     },
     /// The user's answer to the feedback offer `id`: opened on GitHub (`sent`) or dismissed.
     FeedbackAnswered { id: String, sent: bool },
+    /// Work outside the request the thread offered as a session of its own
+    /// (`offer_session`): a card with one "Start as session" button. Open until a
+    /// `SessionOfferTaken` with its `id`.
+    SessionOffered {
+        id: String,
+        title: String,
+        task: String,
+    },
+    /// The user started the offer `id` as the session `session`.
+    SessionOfferTaken { id: String, session: ConversationId },
     /// The user's merge, held until no worker writes (SESSION-FIXES-PLAN.md Q3): "Merging
     /// after N workers finish". Pending until a `Merged`, `MergeCancelled` or `MergeStopped`
     /// step with the same `asked_in`.

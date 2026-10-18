@@ -9,6 +9,7 @@ use std::sync::Arc;
 use super::thread_tests::commit_in_workspace;
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::model::{ConversationId, ConversationKind, Environment, Setup};
+use crate::work::OrchestratorStepKind;
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -1184,5 +1185,105 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
     flow.settled_in(&b).await;
     let board_text = answer(&flow, &b).await;
     assert!(board_text.contains("\"state\": \"merged\""), "{board_text}");
+    flow.stop().await;
+}
+
+/// Start as session (Q73): the thread offers work outside the request as a card, once; nothing
+/// starts by itself. The user's click starts it as a session of its own, on its own worktree,
+/// with the task as its first message, and the offer is spent.
+#[tokio::test]
+async fn an_offered_session_starts_only_on_the_users_click() {
+    let inner = writing(None);
+    let thread = script(move |turn| {
+        let inner = inner.clone();
+        async move {
+            if !turn.is_orchestrator() || !turn.input.contains("Fix the header.") {
+                return inner(turn).await;
+            }
+            let offered = turn
+                .call(
+                    "offer_session",
+                    serde_json::json!({ "task": "Write delta.", "title": "Write delta" }),
+                )
+                .await;
+            assert!(!offered.is_error, "{}", offered.text);
+            assert!(
+                offered.text.contains("Don't start it yourself"),
+                "{}",
+                offered.text
+            );
+            let again = turn
+                .call(
+                    "offer_session",
+                    serde_json::json!({ "task": "Write delta." }),
+                )
+                .await;
+            assert!(
+                again.is_error && again.text.contains("already offered"),
+                "{}",
+                again.text
+            );
+            Reply::text("The header is fixed.")
+        }
+    });
+    let flow = Flow::start("sessions-offer", Options::default(), thread).await;
+    let before = flow.core.catalog().conversations.len();
+    flow.say("Fix the header.").await;
+    let board = flow.settled().await;
+    let offers: Vec<_> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::SessionOffered { id, title, task } => {
+                Some((id.clone(), title.clone(), task.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let [(offer, title, task)] = offers.try_into().expect("one offer");
+    assert_eq!(
+        (title.as_str(), task.as_str()),
+        ("Write delta", "Write delta.")
+    );
+    assert_eq!(
+        flow.core.catalog().conversations.len(),
+        before,
+        "nothing starts by itself"
+    );
+
+    let (session, _) = flow
+        .manager
+        .start_offered_session(&flow.conversation, &offer)
+        .await
+        .unwrap();
+    assert_eq!(
+        session.title, "Write delta.",
+        "its task is its first message"
+    );
+    assert_eq!(
+        session.project_id,
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .project_id
+    );
+    flow.settled_in(&session.id).await;
+    let (Some(path), _, _) = worktree(&flow, &session.id) else {
+        panic!("the session's worktree");
+    };
+    assert!(path.join("delta.txt").exists());
+    assert_ne!(Some(path), worktree(&flow, &flow.conversation).0);
+    let board = flow.board().await;
+    assert!(board.orchestrator_steps.iter().any(|step| matches!(
+        &step.kind,
+        OrchestratorStepKind::SessionOfferTaken { id, session: started } if *id == offer && *started == session.id
+    )));
+    assert!(
+        flow.manager
+            .start_offered_session(&flow.conversation, &offer)
+            .await
+            .is_err(),
+        "once only"
+    );
     flow.stop().await;
 }
