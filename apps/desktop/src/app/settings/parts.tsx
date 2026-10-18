@@ -44,6 +44,7 @@ export function SettingsPage({
   description,
   actions,
   back,
+  large = false,
   wide = false,
   scrollable = true,
   children,
@@ -53,6 +54,8 @@ export function SettingsPage({
   actions?: ReactNode;
   /** A page inside another: its name over the title goes back to it. */
   back?: { label: string; onBack: () => void };
+  /** The redesigned pages' larger title and quieter description (Routing, Providers). */
+  large?: boolean;
   /** A wider column, for a data page (tables, charts, panes). */
   wide?: boolean;
   /** Disable page scrolling when the content owns its bounded scroll areas. */
@@ -89,13 +92,33 @@ export function SettingsPage({
             </button>
           )}
           <header className="flex shrink-0 items-start gap-4 py-3">
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <h1 className="text-page-title font-medium">{title}</h1>
-              {description && <p className="text-foreground/65 text-sm">{description}</p>}
+            <div className={cn("flex min-w-0 flex-1 flex-col", large ? "gap-2.5" : "gap-1")}>
+              <h1
+                className={cn(
+                  "font-medium",
+                  large ? "text-settings-title text-settings-text tracking-section" : "text-page-title",
+                )}
+              >
+                {title}
+              </h1>
+              {description && (
+                <p
+                  className={
+                    large ? "text-settings-body text-settings-text-secondary" : "text-foreground/65 text-sm"
+                  }
+                >
+                  {description}
+                </p>
+              )}
             </div>
             {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
           </header>
-          <div className={cn("flex flex-col", scrollable ? "gap-10 pt-5" : "min-h-0 flex-1")}>
+          <div
+            className={cn(
+              "flex flex-col",
+              scrollable ? (large ? "gap-10 pt-7" : "gap-10 pt-5") : "min-h-0 flex-1",
+            )}
+          >
             {children}
           </div>
         </div>

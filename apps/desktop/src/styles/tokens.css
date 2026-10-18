@@ -122,6 +122,8 @@
  *               plus rounded-{xs,sm,md,lg,xl,2xl}
  *   Type        text-{2xs,xs,sm,base,lg,xl,2xl} (UI roles, each with its line height), text-hero,
  *               text-page-title (a Settings page's title), text-label (a Settings row's label),
+ *               text-settings-{title,heading,body,small,meta,badge} (the redesigned Settings
+ *               pages' type) and their palette, {bg,text,border}-settings-*,
  *               text-nav-title (the sidebar panel's title),
  *               text-code (code blocks), text-code-inline (inline code, em-relative)
  *   Tracking    tracking-hero, tracking-section, tracking-eyebrow (small uppercase labels)
@@ -575,6 +577,52 @@
   --tracking-section: -0.01em;
   --tracking-tooltip: -0.01em;
   --tracking-eyebrow: 0.16em;
+
+  /* The redesigned Settings pages (Routing, Providers), drawn to the user's design file: its
+     palette and type, exact (none equals a neutral above). text-settings-title is their page
+     title; the rest is their rows' type, on the design's line heights. */
+  --color-settings-bg: #191919;
+  --color-settings-sidebar: #1d1d1d;
+  --color-settings-surface: #212121;
+  --color-settings-raised: #2a2a2a;
+  --color-settings-border: #2f2f2f;
+  --color-settings-divider: #292929;
+  --color-settings-text: #ececec;
+  --color-settings-text-secondary: #9b9b9b;
+  --color-settings-text-tertiary: #6e6e6e;
+  --color-settings-accent: #3b82f6;
+  --color-settings-link: #6aa2ff;
+  --color-settings-link-soft: #1e2a40;
+  --color-settings-success: #4ade80;
+  --color-settings-success-soft: #1f3324;
+  --color-settings-warning: #e5b567;
+  --color-settings-warning-soft: #2a2418;
+  --color-settings-warning-edge: #4a3d22;
+  --color-settings-warning-text: #e8cf9e;
+  --color-settings-danger: #e07a6b;
+  --color-settings-track: #333333;
+  --color-settings-bar: #9a9a9a;
+  /* A select (a pill with a chevron), the chosen pill of a choice, an inset note. */
+  --color-settings-control: #1e1e1e;
+  --color-settings-control-border: #363636;
+  --color-settings-chosen: #2e2e2e;
+  --color-settings-inset: #1c1c1c;
+  --color-settings-ring: #3a3a3a;
+  --color-settings-grip: #4a4a4a;
+  /* Text on the light (primary) button. */
+  --color-settings-on-light: #151515;
+  --text-settings-title: 1.875rem;
+  --text-settings-title--line-height: 2.25rem;
+  --text-settings-heading: 0.9375rem;
+  --text-settings-heading--line-height: 1.125rem;
+  --text-settings-body: 0.875rem;
+  --text-settings-body--line-height: 1.0625rem;
+  --text-settings-small: 0.8125rem;
+  --text-settings-small--line-height: 1rem;
+  --text-settings-meta: 0.75rem;
+  --text-settings-meta--line-height: 0.9375rem;
+  --text-settings-badge: 0.6875rem;
+  --text-settings-badge--line-height: 0.8125rem;
 }
 
 @theme inline {
@@ -927,6 +975,18 @@
   --text-hero--line-height: 1.875rem;
   --text-page-title: 1.5rem;
   --text-page-title--line-height: 1.875rem;
+  --text-settings-title: 1.625rem;
+  --text-settings-title--line-height: 2rem;
+  --text-settings-heading: 0.875rem;
+  --text-settings-heading--line-height: 1.0625rem;
+  --text-settings-body: 0.8125rem;
+  --text-settings-body--line-height: 1rem;
+  --text-settings-small: 0.75rem;
+  --text-settings-small--line-height: 0.9375rem;
+  --text-settings-meta: 0.6875rem;
+  --text-settings-meta--line-height: 0.875rem;
+  --text-settings-badge: 0.625rem;
+  --text-settings-badge--line-height: 0.75rem;
   --text-label: 0.75rem;
   --text-label--line-height: 1rem;
   --text-nav-title: 1rem;
