@@ -16,8 +16,9 @@ export type StatusTone = "busy" | "still" | "needsYou";
  * `sinceMs`: a long run's start, its elapsed time said after the words ("Running the full checks · 6m").
  * `waitsOn`: what of the user's the turn waits on: an answer's line carries a checklist glyph, an
  * approval's shimmers fainter.
+ * `run`: a long run the request works on until its result comes, said under its answer as well.
  */
-export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number; waitsOn?: "answer" | "approval" };
+export type StatusHead = { text: string; tone: StatusTone; sinceMs?: number; waitsOn?: "answer" | "approval"; run?: true };
 
 /**
  * What the end of a live turn says: one line. Each worker's own progress is in the Workers
@@ -68,15 +69,30 @@ function runningHead({ board, requestIds }: StatusInput): StatusHead | null {
     .filter((each) => each.state.type === "running" && each.requestId !== null && requestIds.includes(each.requestId))
     .toSorted((a, b) => a.startedAtMs - b.startedAtMs)[0];
   if (run) {
-    return { text: `Running ${commandWords(run.command)}`, tone: "busy", sinceMs: run.startedAtMs };
+    return { text: `Running ${commandWords(run.command)}`, tone: "busy", sinceMs: run.startedAtMs, run: true };
   }
   // Due ones haven't started (they wait for the work to settle), so they're never "Running":
   // the thread, told they're due, says they haven't run.
   const checks = Object.values(board.integratedChecks).filter((each) => each.requests.some((id) => requestIds.includes(id)));
   const running = checks.find((each) => each.state.type === "running");
-  if (running) return { text: "Running the full checks", tone: "busy", sinceMs: running.startedAtMs ?? running.dueAtMs };
-  if (checks.some((each) => each.state.type === "due")) return { text: "Waiting to run the full checks", tone: "still" };
+  if (running) return { text: "Running the full checks", tone: "busy", sinceMs: running.startedAtMs ?? running.dueAtMs, run: true };
+  if (checks.some((each) => each.state.type === "due")) return { text: "Waiting to run the full checks", tone: "still", run: true };
   return null;
+}
+
+/**
+ * The line under an answer whose request still waits: what waits on the user first, else the
+ * sessions whose replies it waits for (also while the answer streams), else a long run the
+ * request works on until its result comes (the full checks only due as well, #178), else what
+ * it waits on, or does once a late result reopened it.
+ */
+export function answeredHead(head: StatusHead | null, { waitingFor, waiting, reopened }:
+  { waitingFor: readonly string[]; waiting: boolean; reopened: boolean }): StatusHead | null {
+  if (head?.tone === "needsYou") return head;
+  if (waitingFor.length > 0) return { text: waitingWords(waitingFor), tone: "still" };
+  if (head?.run) return head;
+  // Reopened by a late result: it works again under its answer, so it says so (#107).
+  return waiting || reopened ? head : null;
 }
 
 /** What only the user can do for these requests, in a few words; `null` when nothing. */

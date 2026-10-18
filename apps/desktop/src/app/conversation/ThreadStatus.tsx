@@ -1,8 +1,7 @@
 import { Tasks } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useMemo } from "react";
 
-import { elapsedWords, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
-import { waitingWords } from "@/app/conversation/activity/peerWords";
+import { answeredHead, elapsedWords, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
 import type { BlockState } from "@/app/conversation/blocks";
 import { useNow } from "@/hooks/use-now";
@@ -73,18 +72,8 @@ export const ThreadStatus: FC<ThreadStatusProps> = (props) => {
   return head ? <StatusLine head={head} /> : null;
 };
 
-/**
- * The line under an answer whose request still waits: what waits on the user first, else the
- * sessions whose replies it waits for (also while the answer streams), else a long run the
- * request works on until its result comes, else what it waits on, or does once a late result
- * reopened it.
- */
+/** The line under an answer whose request still waits (see `answeredHead`). */
 export const AnsweredStatus: FC<ThreadStatusProps & { waiting: boolean; reopened: boolean }> = ({ waiting, reopened, ...props }) => {
-  const head = useThreadStatusHead(props);
-  const waitingFor = props.waitingFor ?? NONE;
-  if (head?.tone === "needsYou") return <StatusLine head={head} />;
-  if (waitingFor.length > 0) return <StatusLine head={{ text: waitingWords(waitingFor), tone: "still" }} />;
-  if (head?.sinceMs !== undefined) return <StatusLine head={head} />;
-  // Reopened by a late result: it works again under its answer, so it says so (#107).
-  return (waiting || reopened) && head ? <StatusLine head={head} /> : null;
+  const head = answeredHead(useThreadStatusHead(props), { waitingFor: props.waitingFor ?? NONE, waiting, reopened });
+  return head ? <StatusLine head={head} /> : null;
 };
