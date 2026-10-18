@@ -51,7 +51,7 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
   assert.deepEqual(seen.workersFolded, [], "the fold hides them");
 });
 
-test("closing a working session's tab stops nothing; it stays in the sidebar and its row opens it again", { timeout: 60000 }, async (t) => {
+test("closing a working session's tab stops nothing and says so in a note; it stays in the sidebar and its row opens it again", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html?close=1", "sessions-result", 20000)) as Record<string, unknown>;
   assert.deepEqual(seen.opened, { type: "conversation", id: "w5-a" });
   assert.equal(seen.statusBefore, "working:Working");
@@ -62,4 +62,7 @@ test("closing a working session's tab stops nothing; it stays in the sidebar and
   assert.deepEqual(seen.reopened, { type: "conversation", id: "w5-a" }, "its row opens it again");
   assert.equal(seen.chatTab, "Lone worker");
   assert.equal(seen.chatTabStatus, "Working", "the chat tab says where it stands");
+  assert.deepEqual(seen.notes, ["Still running. Reopen it from the sidebar."], "closing it leaves a small note");
+  assert.equal(seen.dialog, false, "no dialog");
+  assert.deepEqual(seen.idleNotes, [], "an idle session closes quietly");
 });

@@ -18,7 +18,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, ConversationActivity, EventEnvelope, Project, Request } from "@/ipc/generated";
 import { fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
+import { Toaster } from "@/components/ui/toast";
 import { useOpenWorker } from "@/state/openWorker";
+import { useToasts } from "@/state/toasts";
 import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
 
 const params = new URLSearchParams(location.search);
@@ -112,6 +114,8 @@ const workerRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot=
 const workersFold = () => document.querySelector<HTMLButtonElement>('[data-slot="session-workers"] > button[aria-expanded]');
 const rowStatus = (title: string) => rows().find((row) => row.title === title)?.status ?? null;
 
+/** The toasts on screen, by their text. */
+const toastTexts = () => [...document.querySelectorAll<HTMLElement>("[data-slot=toast]")].map((each) => each.textContent?.trim());
 const close = () => document.querySelector<HTMLButtonElement>('[data-slot="session-tabs"] button[aria-label="Close Lone worker tab"]');
 
 /** Opens the lone working session, closes its tab with ×, then opens it again from its row. */
@@ -128,6 +132,10 @@ async function closeAndReopen() {
   await wait(100);
   seen.afterClose = useApp.getState().selection;
   seen.requestsOnClose = [...requests];
+  // It says where it went, as a toast on screen, with no dialog.
+  await until(() => document.querySelector('[role="dialog"], [role="alertdialog"]') !== null || toastTexts().length > 0);
+  seen.notes = toastTexts();
+  seen.dialog = document.querySelector('[role="dialog"], [role="alertdialog"]') !== null;
   seen.statusAfter = rowStatus("Lone worker");
   seen.barAfter = document.querySelector('[data-slot="session-tabs"]') !== null;
   rowButton("Lone worker")!.click();
@@ -136,6 +144,14 @@ async function closeAndReopen() {
   const chatTab = document.querySelector('[data-slot="session-tabs"] [data-tab-id="chat"] [role="tab"]');
   seen.chatTab = chatTab?.querySelector(".session-tab-title")?.textContent?.trim();
   seen.chatTabStatus = chatTab?.querySelector('[data-slot="tab-status"]')?.textContent?.trim();
+  // An idle session's tab closes quietly: nothing still runs to reopen.
+  useToasts.setState({ toasts: [] });
+  rowButton("Old fix")!.click();
+  await until(() => document.querySelector('[data-slot="session-tabs"] button[aria-label="Close Old fix tab"]') !== null);
+  document.querySelector<HTMLButtonElement>('[data-slot="session-tabs"] button[aria-label="Close Old fix tab"]')!.click();
+  await until(() => useApp.getState().selection.type !== "conversation");
+  await wait(100);
+  seen.idleNotes = useToasts.getState().toasts.map((each) => each.text);
   return seen;
 }
 
@@ -197,6 +213,7 @@ function Fixture() {
           </div>
         </SidebarProvider>
       </div>
+      <Toaster className="top-2" />
       {result && <pre id="sessions-result">{result}</pre>}
     </TooltipProvider>
   );

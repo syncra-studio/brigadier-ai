@@ -168,6 +168,13 @@ export function useSessionStatus(id: string): SessionStatus | null {
   return status;
 }
 
+/** Whether the session `id` still has something going: it works, merges or needs the user. */
+export function stillGoing(id: string): boolean {
+  const activity = rowActivity(useActivity.getState().byConversation[id]);
+  const state = tabState(activity, !!useApp.getState().conversations[id]?.quotaWait, undefined);
+  return state === "working" || state === "merging" || state === "needsYou";
+}
+
 /** One session's state; re-renders only when it changes. */
 export function useTabState(id: string): TabState | null {
   return useTabStates([id])[0] ?? null;

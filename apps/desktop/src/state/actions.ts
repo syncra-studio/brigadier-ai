@@ -72,6 +72,7 @@ import { keepTabChats, prepareTabChatSend } from "@/state/tabChats";
 import { forgetDraft } from "@/state/drafts";
 import { reopenable, rememberSelection, savedSelection } from "@/state/lastSelection";
 import { forgetRightSidebarTabs, pruneRightSidebarTabs } from "@/state/rightSidebar";
+import { stillGoing } from "@/state/tabStates";
 import { dismissToast, toast, useToasts } from "@/state/toasts";
 
 /** Messages shown when a conversation opens; older ones load on demand. */
@@ -352,7 +353,12 @@ export function closeSession(id: string): void {
   if (shown.type !== "conversation" || shown.id !== id) return;
   const projectId = useApp.getState().conversations[id]?.projectId;
   select(projectId ? { type: "draft", kind: "session", projectId } : { type: "draft", kind: "chat" });
+  // Closing stops nothing: a session still going says where it went. An idle one closes quietly.
+  if (stillGoing(id)) toast(CLOSED_STILL_RUNNING, { tone: "neutral" });
 }
+
+/** The note a session's chat tab leaves when it closes while the session still runs. */
+export const CLOSED_STILL_RUNNING = "Still running. Reopen it from the sidebar.";
 
 /** How many older pages a jump reads at most before it shows what it has. */
 const REVEAL_PAGES = 50;
