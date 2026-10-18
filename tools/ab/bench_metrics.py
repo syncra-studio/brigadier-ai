@@ -34,6 +34,7 @@ DAY_MS = 86_400_000
 ESCAPE_MS = 7 * DAY_MS
 # A window's reset time moves by a little between samples of the same window.
 RESET_SLACK_MS = 10 * 60_000
+FIVE_HOURS_MS = 5 * 3_600_000
 FIX = re.compile(r"\bfix|Fixes #", re.IGNORECASE)
 
 # The kinds read, with the `type` each payload must carry.
@@ -284,26 +285,46 @@ def escaped_bugs(log, changes, repo_override):
     return {"merged": len(rows), "escaped": sum(r["escaped"] for r in rows), "changes": rows}
 
 
-def window_kind(window):
-    if window.startswith("seven_day") or window == "secondary":
+def window_kind(window, rows=()):
+    """A window's length: `five_hour` or `weekly` (or its own id when unknown). A model's own
+    Codex bucket is stored as `<bucket>.primary` / `<bucket>.secondary`. `quota_samples` keeps no
+    length, and Codex may report its weekly window as `primary`: a `primary` window whose reset
+    lies more than 5 hours past one of its samples (`rows` of (at, used, resets)) is the week."""
+    slot = window.rsplit(".", 1)[-1]
+    if slot.startswith("seven_day") or slot == "secondary":
         return "weekly"
-    if window in ("five_hour", "primary"):
+    if slot == "primary" and any(r is not None and r - at > FIVE_HOURS_MS + RESET_SLACK_MS
+                                 for at, _, r in rows):
+        return "weekly"
+    if slot in ("five_hour", "primary"):
         return "five_hour"
     return window
 
 
-WINDOW_MS = {"five_hour": 5 * 3_600_000, "weekly": 7 * DAY_MS}
+def model_scope(window):
+    """The `turn_usage.model` pattern a window counts: a model-scoped weekly window
+    (`seven_day_<family>`) its family, a Codex bucket's window its bucket (`_` in a LIKE
+    pattern matches the `-` the model slug has, as in `codex_spark` and `gpt-5.3-codex-spark`).
+    The bucket's own model slug is not recorded, so a bucket named unlike its model can't be
+    matched; its window is reported unresolved."""
+    if "." in window:
+        return window.rsplit(".", 1)[0]
+    return window[len("seven_day_"):] if window.startswith("seven_day_") else ""
+
+
+WINDOW_MS = {"five_hour": FIVE_HOURS_MS, "weekly": 7 * DAY_MS}
 
 
 def windows(routing, until):
     """Each account window the samples up to `until` saw, by its last sample: provider, account,
-    window, reset time, used percent, and whether it reset."""
+    window, its length (`kind`), reset time, used percent, and whether it reset."""
     samples = collections.defaultdict(list)
     for provider, account, window, used, resets, at in routing.execute(
             "SELECT provider, account, window, used_percent, resets_at_ms, at_ms FROM quota_samples "
             "WHERE at_ms <= ? ORDER BY at_ms", (until,)):
         samples[(provider, account, window)].append((at, used, resets))
     for (provider, account, window), rows in sorted(samples.items()):
+        start = 0
         for i, (at, used, resets) in enumerate(rows):
             # The window's last sample, whose reset time passed before the next sample (or the
             # end). A reset time that moves back is another login on the same account slot.
@@ -317,7 +338,10 @@ def windows(routing, until):
                 last = later[2] is None or abs(later[2] - resets) > RESET_SLACK_MS
                 reset = last and resets <= min(later[0], until)
             if last:
-                yield {"provider": provider, "account": account, "window": window, "resets_at_ms": resets,
+                # Its length from its own samples: the slot may have held the other length before.
+                kind = window_kind(window, rows[start:i + 1])
+                start = i + 1
+                yield {"provider": provider, "account": account, "window": window, "kind": kind, "resets_at_ms": resets,
                        "used_percent": used, "reset": reset}
 
 
@@ -327,7 +351,7 @@ def wasted_quota(routing, until):
         return {}
     for w in windows(routing, until):
         if w["reset"]:
-            out[window_kind(w["window"])].append({k: v for k, v in w.items() if k != "reset"}
+            out[w["kind"]].append({k: v for k, v in w.items() if k not in ("reset", "kind")}
                                                  | {"wasted_percent": round(100 - w["used_percent"], 2)})
     return {kind: {"resets": len(rows), "wasted_percent": [r["wasted_percent"] for r in rows],
                    "mean": round(sum(r["wasted_percent"] for r in rows) / len(rows), 2), "windows": rows}
@@ -338,7 +362,7 @@ def brain_per_window(routing, until):
     """Brain jobs' share of each account window (#135), from `turn_usage` as it is recorded all
     the time: the window's Brain tokens over all its tokens on that account, times its used
     percent at the last sample, is the Brain's estimated part of the window. A model-scoped
-    weekly window (`seven_day_<family>`) counts only that family's rows."""
+    window (`seven_day_<family>`, a Codex bucket's) counts only its model's rows."""
     if routing is None:
         return []
     columns = {row[1] for row in routing.execute("PRAGMA table_info(turn_usage)")}
@@ -347,16 +371,22 @@ def brain_per_window(routing, until):
     account = "account" if "account" in columns else "''"
     out = []
     for w in windows(routing, until):
-        length = WINDOW_MS.get(window_kind(w["window"]))
+        length = WINDOW_MS.get(w["kind"])
         if length is None or w["resets_at_ms"] is None:
             continue
-        family = w["window"][len("seven_day_"):] if w["window"].startswith("seven_day_") else ""
+        family = model_scope(w["window"])
         total, brain = routing.execute(
             "SELECT COALESCE(SUM(input + cached_input + cache_write + output), 0), "
             "COALESCE(SUM(CASE WHEN step = 'brain' THEN input + cached_input + cache_write + output END), 0) "
             f"FROM turn_usage WHERE provider = ? AND {account} = ? AND at_ms > ? AND at_ms <= ? AND model LIKE ?",
             (w["provider"], w["account"], w["resets_at_ms"] - length, min(w["resets_at_ms"], until),
              f"%{family}%")).fetchone()
+        if total == 0 and "." in w["window"]:
+            # `quota_samples` keeps no bucket's model slug: a bucket id found in no model of the
+            # window's rows is unresolved, not zero.
+            out.append(w | {"scope_unresolved": True, "tokens": None, "brain_tokens": None,
+                            "brain_share": None, "brain_percent": None})
+            continue
         share = brain / total if total else 0.0
         out.append({k: v for k, v in w.items()} | {
             "tokens": total, "brain_tokens": brain, "brain_share": round(share, 4),

@@ -257,7 +257,9 @@ It prints first-look merge rate (one population: requests with `request.ready` o
 `merged` step's `requests`), user touches per merged change, escaped bugs (a revert, or a `fix` /
 `Fixes #` commit on a shared file, within 7 days on the base), wasted quota at each window reset
 (weekly and 5-hour apart), the Brain jobs' part of each account window (#135: their share of the
-window's `turn_usage` tokens times its used percent) and tokens per merged change by model. The script's docstring holds the
+window's `turn_usage` tokens times its used percent; a Codex `primary` whose reset lies days past
+its sample is the week; a model's own Codex bucket whose id is in no model slug is `scope_unresolved`,
+since its slug is not recorded) and tokens per merged change by model. The script's docstring holds the
 exact definitions. The Source panel's own git commands leave no record in the log, so touches
 count only what the log records. Records whose payload lacks its kind's `type` are skipped and
 counted (#190). Tests: `python3 -I tools/ab/checks/bench_metrics_test.py`. Every reader of a

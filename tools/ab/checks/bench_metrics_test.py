@@ -130,6 +130,10 @@ def build_routing(path):
                    "'brain', ?)", [
         (T + 2 * HOUR, "claude", "opus", 1_494, ""),  # in the first 5-hour window: 1,494 of 3,000
         (T + 3 * HOUR, "claude", "opus", 9_000, "acct-y"),  # another account
+        # Codex's weekly window reported as `primary`, and a model's own bucket.
+        (T - DAY, "codex", "gpt-5", 500, "acct-w"),
+        (T + 3 * HOUR, "codex", "gpt-5.3-codex-spark", 200, "acct-w"),
+        (T + 4 * HOUR, "codex", "gpt-5", 300, "acct-w"),
     ])
     db.executemany("INSERT INTO turn_usage (at_ms, provider, model, conversation_id, task_id, input, cached_input, "
                    "cache_write, output) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
@@ -150,6 +154,14 @@ def build_routing(path):
         ("claude", "seven_day", 10, T + 3 * HOUR + 7 * DAY, T + 4 * HOUR, ""),
         ("codex", "secondary", 90, T + 5 * HOUR, T + 2 * HOUR, "acct-x"),  # reset with no later sample
         ("codex", "primary", 20, T + 8 * HOUR, T + 3 * HOUR, "acct-x"),
+        # A `primary` window whose reset is days past a sample is the week, not 5 hours.
+        ("codex", "primary", 70, T + 6 * HOUR, T - 2 * DAY, "acct-w"),
+        # Before it, the same slot held a 5-hour window: it stays 5 hours.
+        ("codex", "primary", 40, T - 3 * DAY + 4 * HOUR, T - 3 * DAY, "acct-w"),
+        # A model's own bucket: `<bucket>.primary`, 5 hours, its model's rows only.
+        ("codex", "codex_spark.primary", 50, T + 6 * HOUR, T + 2 * HOUR, "acct-w"),
+        # A bucket whose id is in no model slug: its model is not recorded, so it is unresolved.
+        ("codex", "other_bucket.primary", 70, T + 6 * HOUR, T + 2 * HOUR, "acct-w"),
         # Another login on the same slot: its reset time moves back before either passed.
         ("claude", "seven_day", 50, T + 20 * DAY, T + HOUR, "acct-y"),
         ("claude", "seven_day", 30, T + 2 * DAY, T + 2 * HOUR, "acct-y"),
@@ -207,8 +219,8 @@ class BenchMetrics(unittest.TestCase):
     def test_wasted_quota_at_reset(self):
         wasted = self.out["wasted_quota_at_reset"]
         self.assertEqual({k: (v["resets"], v["wasted_percent"]) for k, v in wasted.items()},
-                         {"five_hour": (1, [30.0]), "weekly": (2, [40.0, 10.0])})
-        self.assertEqual(wasted["weekly"]["mean"], 25.0)
+                         {"five_hour": (4, [30.0, 50.0, 30.0, 60.0]), "weekly": (3, [40.0, 30.0, 10.0])})
+        self.assertEqual(wasted["weekly"]["mean"], 26.67)
 
     def test_brain_quota_per_window(self):
         rows = {(w["provider"], w["account"], w["window"], w["resets_at_ms"]): w
@@ -221,6 +233,16 @@ class BenchMetrics(unittest.TestCase):
         self.assertEqual((weekly["tokens"], weekly["brain_tokens"], weekly["brain_percent"]), (5_506, 1_494, 16.28))
         # Codex's windows saw no Brain rows.
         self.assertEqual(rows[("codex", "acct-x", "secondary", T + 5 * HOUR)]["brain_tokens"], 0)
+        # Codex's weekly `primary` spans the week: all three of the account's rows.
+        week = rows[("codex", "acct-w", "primary", T + 6 * HOUR)]
+        self.assertEqual((week["kind"], week["tokens"], week["brain_percent"]), ("weekly", 1_000, 70.0))
+        # The bucket's window counts its own model's rows only.
+        spark = rows[("codex", "acct-w", "codex_spark.primary", T + 6 * HOUR)]
+        self.assertEqual((spark["kind"], spark["tokens"], spark["brain_percent"]), ("five_hour", 200, 50.0))
+        other = rows[("codex", "acct-w", "other_bucket.primary", T + 6 * HOUR)]
+        self.assertEqual((other["scope_unresolved"], other["tokens"], other["brain_percent"]), (True, None, None))
+        earlier = rows[("codex", "acct-w", "primary", T - 3 * DAY + 4 * HOUR)]
+        self.assertEqual((earlier["kind"], earlier["tokens"]), ("five_hour", 0))
 
     def test_tokens_per_merged_change(self):
         tokens = [(t["conversation"], t["by_model"], t["total"]) for t in self.out["tokens_per_merged_change"]]
