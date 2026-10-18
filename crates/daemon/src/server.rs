@@ -13,7 +13,7 @@ use brigadier_core::manager::workspace::WorkspaceWatch;
 use brigadier_core::manager::{ComputerNews, SessionManager};
 use brigadier_core::pages::{PageChange, PageError, Pages};
 use brigadier_core::runtime::{Runtime, StartRaw};
-use brigadier_core::storage::CleanProgress;
+use brigadier_core::storage::{CleanProgress, FreeUpProjectsReport};
 use brigadier_core::{
     Conversation, ConversationId, Core, Lifecycle, MAX_ATTACHMENT_BYTES, ProjectId, SearchUpdate,
     Setup, WorkspaceTarget, streams,
@@ -2189,22 +2189,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 report: heap(|| sessions.remove_project(id, delete_branches, keep_brain)).await?,
             }
         }
-        Request::FreeUpProjects { ids } => {
-            // Their conversations' terminals close with them, as a project removal's do.
-            let working = heap(|| sessions.free_up_blocked(&ids)).await;
-            for conversation in core.catalog().conversations {
-                if conversation
-                    .project_id
-                    .as_ref()
-                    .is_some_and(|project| ids.contains(project) && !working.contains(project))
-                {
-                    daemon.terminals.close_conversation(&conversation.id.0);
-                }
-            }
-            Response::FreeUpProjects {
-                report: heap(|| sessions.free_up_projects(ids)).await,
-            }
-        }
+        Request::FreeUpProjects { ids } => Response::FreeUpProjects {
+            report: heap(|| free_up_projects(daemon, ids)).await,
+        },
         Request::Delete { ids } => {
             let outcomes = heap(|| sessions.delete_all(&ids)).await;
             for (id, outcome) in ids.iter().zip(&outcomes) {
@@ -2618,6 +2605,22 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
 
 /// Runs a page request's file work (reads, flushed saves) off the async runtime. The
 /// connection waits for it, so one window's saves land in the order it sent them.
+/// Frees up projects not in use (Settings › Storage); their conversations' terminals close
+/// with them, as a project removal's do.
+async fn free_up_projects(daemon: &Daemon, ids: Vec<ProjectId>) -> FreeUpProjectsReport {
+    let working = daemon.sessions.free_up_blocked(&ids).await;
+    for conversation in daemon.core.catalog().conversations {
+        if conversation
+            .project_id
+            .as_ref()
+            .is_some_and(|project| ids.contains(project) && !working.contains(project))
+        {
+            daemon.terminals.close_conversation(&conversation.id.0);
+        }
+    }
+    daemon.sessions.free_up_projects(ids).await
+}
+
 async fn on_pages<T: Send + 'static>(
     daemon: &Arc<Daemon>,
     work: impl FnOnce(&Pages) -> Result<T, PageError> + Send + 'static,
