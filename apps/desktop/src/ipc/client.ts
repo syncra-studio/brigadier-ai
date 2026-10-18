@@ -310,6 +310,21 @@ export function browserSnapshot(id: string): Promise<void> {
   return invoke("browser_snapshot", { id });
 }
 
+/** Runs the browser tool's script on the Browser tab `id`'s page with `op` (macOS): what the page answered. */
+export function browserAgent(id: string, op: Record<string, unknown>): Promise<unknown> {
+  return invoke("browser_agent", { id, op });
+}
+
+/** Opens `url` in the Browser tab `id`'s page where it is, without moving or showing it (macOS). */
+export function browserAgentLoad(id: string, url: string): Promise<void> {
+  return invoke("browser_agent_load", { id, url });
+}
+
+/** A PNG of the Browser tab `id`'s page as it shows (macOS). */
+export function browserAgentCapture(id: string): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("browser_agent_capture", { id });
+}
+
 /** Gives the keyboard to the Browser tab `id`'s page, or with `null` back to the app's own. */
 export function browserFocus(id: string | null): Promise<void> {
   return invoke("browser_focus", { id });

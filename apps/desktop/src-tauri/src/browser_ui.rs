@@ -28,11 +28,12 @@ use objc2_app_kit::{
     NSSavePanel, NSUserInterfaceItemIdentification, NSView, NSWindowOrderingMode,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSArray, NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain,
-    NSHTTPCookieExpires, NSHTTPCookieName, NSHTTPCookiePath, NSHTTPCookiePropertyKey,
-    NSHTTPCookieSameSiteLax, NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteStrict,
-    NSHTTPCookieSecure, NSHTTPCookieValue, NSMutableDictionary, NSNumber, NSObjectNSKeyValueCoding,
-    NSObjectProtocol, NSPoint, NSSet, NSString, NSURL, NSUUID, ns_string,
+    MainThreadMarker, NSArray, NSData, NSDate, NSDictionary, NSError, NSHTTPCookie,
+    NSHTTPCookieDomain, NSHTTPCookieExpires, NSHTTPCookieName, NSHTTPCookiePath,
+    NSHTTPCookiePropertyKey, NSHTTPCookieSameSiteLax, NSHTTPCookieSameSitePolicy,
+    NSHTTPCookieSameSiteStrict, NSHTTPCookieSecure, NSHTTPCookieValue, NSMutableDictionary,
+    NSNumber, NSObjectNSKeyValueCoding, NSObjectProtocol, NSPoint, NSSet, NSString, NSURL, NSUUID,
+    ns_string,
 };
 use objc2_web_kit::{
     WKFindConfiguration, WKFindResult, WKFrameInfo, WKMediaCaptureType, WKNavigationAction,
@@ -848,25 +849,46 @@ pub fn print(webview: &wry::WebView) -> bool {
     true
 }
 
+/// `image` as PNG data.
+fn png_of(image: &NSImage) -> Option<Retained<NSData>> {
+    let rep = image
+        .TIFFRepresentation()
+        .and_then(|tiff| NSBitmapImageRep::imageRepWithData(&tiff))?;
+    // SAFETY: an empty properties dictionary, which the method accepts for every file type.
+    unsafe {
+        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+    }
+}
+
 /// `image` as PNG on the general pasteboard, in place of what was there.
 fn copy_png(image: &NSImage) -> bool {
-    let Some(rep) = image
-        .TIFFRepresentation()
-        .and_then(|tiff| NSBitmapImageRep::imageRepWithData(&tiff))
-    else {
-        return false;
-    };
-    // SAFETY: an empty properties dictionary, which the method accepts for every file type.
-    let png = unsafe {
-        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
-    };
-    let Some(png) = png else {
+    let Some(png) = png_of(image) else {
         return false;
     };
     let pasteboard = NSPasteboard::generalPasteboard();
     pasteboard.clearContents();
     // SAFETY: AppKit's exported pasteboard type, read only.
     pasteboard.setData_forType(Some(&png), unsafe { NSPasteboardTypePNG })
+}
+
+/// Takes a picture of the page as shown, for an agent: `done` gets its PNG, or nothing when
+/// WebKit made none.
+pub fn snapshot_png(webview: &wry::WebView, done: impl FnOnce(Option<Vec<u8>>) + 'static) {
+    let done = once(done);
+    let block = RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
+        // SAFETY: WebKit passes either nil or a valid image for the call's duration.
+        let png = unsafe { image.as_ref() }
+            .and_then(png_of)
+            .map(|data| data.to_vec());
+        done(png);
+    });
+    // SAFETY: a live web view, no configuration (the whole visible page) and a block WebKit
+    // copies, on the main thread.
+    unsafe {
+        webview
+            .webview()
+            .takeSnapshotWithConfiguration_completionHandler(None, &block);
+    }
 }
 
 /// Takes a picture of the page as shown and puts it on the clipboard as a PNG; `done` hears

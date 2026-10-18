@@ -8,6 +8,7 @@
 
 mod bridge;
 mod browser;
+mod browser_agent;
 #[cfg(any(target_os = "macos", test))]
 mod browser_grants;
 mod browser_import;
@@ -849,6 +850,9 @@ fn main() {
             browser::browser_zoom,
             browser::browser_find,
             browser::browser_read,
+            browser_agent::browser_agent,
+            browser_agent::browser_agent_load,
+            browser_agent::browser_agent_capture,
             browser::browser_print,
             browser::browser_snapshot,
             browser::browser_focus,

@@ -454,7 +454,7 @@ fn web_page(url: &str) -> bool {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-mod embedded {
+pub(crate) mod embedded {
     use std::cell::RefCell;
     use std::collections::{HashMap, VecDeque};
     use std::path::PathBuf;
@@ -902,6 +902,19 @@ mod embedded {
         })
     }
 
+    /// Loads `url` in the tab's page where it is, shown or not.
+    #[cfg(target_os = "macos")]
+    pub fn load(id: &str, url: &str) -> Result<(), IpcError> {
+        BROWSERS.with_borrow(|browsers| {
+            browsers
+                .get(id)
+                .ok_or_else(|| failed("the browser's page is gone"))?
+                .webview
+                .load_url(url)
+                .map_err(|err| failed(format!("could not open it: {err}")))
+        })
+    }
+
     pub fn place(id: &str, bounds: Option<BrowserBounds>) -> Result<(), IpcError> {
         with_webview(id, |webview| match bounds {
             Some(bounds) => webview
@@ -1210,7 +1223,7 @@ pub fn browser_configure(app: tauri::AppHandle, options: BrowserOptions) {
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(options);
 }
 
-fn web_page_only(url: &str) -> Result<(), IpcError> {
+pub(crate) fn web_page_only(url: &str) -> Result<(), IpcError> {
     if web_page(url) {
         Ok(())
     } else {
@@ -1285,7 +1298,7 @@ pub fn browser_go(id: String, action: String) -> Result<(), IpcError> {
 
 /// Runs `action` with the tab's page on the main thread, and waits for what it sends.
 #[cfg(target_os = "macos")]
-async fn on_page<T: Send + 'static>(
+pub(crate) async fn on_page<T: Send + 'static>(
     app: &tauri::AppHandle,
     id: String,
     action: impl FnOnce(&wry::WebView, tokio::sync::oneshot::Sender<T>) + Send + 'static,

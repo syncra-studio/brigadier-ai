@@ -46,6 +46,7 @@ export type { BranchChoice } from "./BranchChoice";
 export type { BranchInfo } from "./BranchInfo";
 export type { BridgeEvent } from "./BridgeEvent";
 export type { BriefingSection } from "./BriefingSection";
+export type { BrowserApproved } from "./BrowserApproved";
 export type { BrowserBounds } from "./BrowserBounds";
 export type { BrowserCall } from "./BrowserCall";
 export type { BrowserClear } from "./BrowserClear";

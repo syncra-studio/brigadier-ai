@@ -1,0 +1,25 @@
+<!doctype html><html lang="en"><head><meta charset="UTF-8" /><title>Test shop</title>
+<style>.gone{display:none}</style></head><body>
+<h1>Test shop</h1>
+<p>Welcome to the   test
+  shop. <img alt="A red mug" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="4" height="4"></p>
+<nav><a href="#docs">Docs</a> <a>No link</a></nav>
+<p id="count">Count: 0</p>
+<button id="add" type="button">Add one</button>
+<button class="gone" type="button">Hidden button</button>
+<button disabled type="button">Sold out</button>
+<label>Name <input id="name" name="name"></label>
+<select id="size" aria-label="Size"><option value="s">Small</option><option value="l">Large</option></select>
+<div id="note" contenteditable="true" aria-label="Note"></div>
+<section><h2>Chat</h2><input id="chat" aria-label="Message" placeholder="Say something"><ul id="sent"></ul></section>
+<form id="login"><h2>Sign in</h2>
+  <input id="email" type="email" autocomplete="username" aria-label="Email">
+  <input id="password" type="password" aria-label="Password">
+  <button type="submit">Sign in</button>
+</form>
+<form id="pay"><input id="card" autocomplete="cc-number" aria-label="Card number"><input id="code" autocomplete="one-time-code" aria-label="Code"><button type="submit">Pay $5</button></form>
+<div id="widget"><div><input id="pin" type="password" aria-label="PIN"></div><button id="unlock" type="button">Unlock</button></div>
+<label><input id="terms" type="checkbox"> I agree</label>
+<pre id="agent-browser-result"></pre>
+<script type="module" src="/src/fixtures/agentBrowserPage.ts"></script>
+</body></html>

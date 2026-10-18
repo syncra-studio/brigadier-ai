@@ -1,0 +1,227 @@
+import {
+  browserAgent,
+  browserAgentCapture,
+  browserAgentLoad,
+  browserGo,
+  request,
+} from "@/ipc/client";
+import type { BrowserBounds, BrowserCall, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult, BrowserSensitive } from "@/ipc/generated";
+import { openPage, useBrowsers } from "@/state/browsers";
+import { type BrowserTabState, closeTab, openAgentTab, sessionTabs } from "@/state/sessionTabs";
+import { useApp } from "@/state/store";
+
+/**
+ * The browser tool's calls (Q74), as the app runs them: an agent's call comes from the daemon,
+ * runs on a Browser tab of its session and is answered. `open` makes a normal Browser tab,
+ * behind the one in front, with the user's sign-ins; the rest work only on such a tab.
+ */
+
+/** What the app does on a tab's page; the shell's own commands in the app, a fake in tests. */
+export type PageHands = {
+  /** Makes the tab's page, showing `url`, without showing it over the tab. */
+  open: (tab: string, url: string, bounds: BrowserBounds) => Promise<void>;
+  load: (tab: string, url: string) => Promise<void>;
+  go: (tab: string, action: "back" | "forward" | "reload") => Promise<void>;
+  script: (tab: string, op: Record<string, unknown>) => Promise<unknown>;
+  capture: (tab: string) => Promise<ArrayBuffer>;
+};
+
+const shell: PageHands = {
+  open: (tab, url, bounds) => openPage(tab, url, bounds, true),
+  load: browserAgentLoad,
+  go: browserGo,
+  script: browserAgent,
+  capture: browserAgentCapture,
+};
+
+/** How long a page load may take before the agent hears the page as it is then. */
+const LOAD_WAIT_MS = 20_000;
+/** How long after a click or typing a page gets to start loading, if it will. */
+const SETTLE_MS = 400;
+/** The most of a page's text one read gives. */
+const READ_MOST = 20_000;
+
+/** Runs `call` and answers the daemon with what came of it. */
+export async function runBrowserCall(call: BrowserCall, hands: PageHands = shell): Promise<void> {
+  const result = await runCall(call, hands);
+  await request({ method: "browserAnswer", id: call.id, result }).catch((error: unknown) =>
+    console.error("answering a browser call failed", error),
+  );
+}
+
+const failed = (message: string): BrowserResult => ({ result: "failed", message });
+
+function messageOf(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error && "message" in error) return String(error.message);
+  return String(error);
+}
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** What `call` comes to on its tab. */
+export async function runCall(call: BrowserCall, hands: PageHands = shell): Promise<BrowserResult> {
+  if (!useApp.getState().settings.browserEnabled) return failed("The built-in browser is off.");
+  try {
+    return await perform(call, hands);
+  } catch (error) {
+    return failed(messageOf(error));
+  }
+}
+
+/** The tab an earlier `open` gave this session's agents, if it is still open. */
+function agentTab(conversationId: string, id: string): BrowserTabState | null {
+  const tab = sessionTabs(conversationId).tabs.find((each) => each.id === id);
+  return tab?.kind === "browser" && tab.driver ? tab : null;
+}
+
+/** Where a background tab's page lies: over the session's main area, which it would show in. */
+export function backgroundBounds(): BrowserBounds {
+  const area = typeof document === "undefined" ? null : document.querySelector('[data-slot="pane-workspace"]')?.getBoundingClientRect();
+  if (area && area.width > 200 && area.height > 200) return { x: area.left, y: area.top, width: area.width, height: area.height };
+  const width = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const height = typeof window === "undefined" ? 800 : window.innerHeight;
+  return { x: 0, y: 0, width, height };
+}
+
+async function perform(call: BrowserCall, hands: PageHands): Promise<BrowserResult> {
+  const { op, conversationId } = call;
+  if (op.op === "open") {
+    const tab = openAgentTab(conversationId, op.url, { label: call.label, taskId: call.taskId });
+    await hands.open(tab, op.url, backgroundBounds());
+    await loaded(tab);
+    return page(tab, hands);
+  }
+  const tab = agentTab(conversationId, op.tab);
+  if (!tab) return failed(`There is no tab ${op.tab} of yours in this session now: open one with browser_open.`);
+  // Its page goes with a restart: it loads again where it was.
+  if (!useBrowsers.getState().pages[tab.id]) {
+    await hands.open(tab.id, tab.url || "about:blank", backgroundBounds());
+    await loaded(tab.id);
+  }
+  return act(tab.id, op, conversationId, hands);
+}
+
+async function act(tab: string, op: Exclude<BrowserOp, { op: "open" }>, conversationId: string, hands: PageHands): Promise<BrowserResult> {
+  switch (op.op) {
+    case "navigate":
+      starting(tab);
+      await hands.load(tab, op.url);
+      await loaded(tab);
+      return page(tab, hands);
+    case "go":
+      await hands.go(tab, op.action);
+      await settled(tab);
+      return page(tab, hands);
+    case "read":
+      return page(tab, hands);
+    case "click":
+    case "type": {
+      const answer = await hands.script(tab, {
+        kind: op.op,
+        target: op.target,
+        ...(op.op === "type" ? { text: op.text, submit: op.submit } : {}),
+        declared: op.guard.declared,
+        approved: approvedHere(tab, op.guard),
+      });
+      const asked = askOf(answer);
+      if (asked) {
+        const shown = useBrowsers.getState().pages[tab];
+        return {
+          result: "needsApproval",
+          tab,
+          url: urlOf(answer) ?? shown?.url ?? "",
+          generation: shown?.generation ?? 0,
+          sensitive: asked.sensitive,
+          what: asked.what,
+        };
+      }
+      const error = errorOf(answer);
+      if (error) return failed(error);
+      await settled(tab);
+      return page(tab, hands);
+    }
+    case "screenshot": {
+      const png = await hands.capture(tab);
+      return { result: "shot", tab, url: useBrowsers.getState().pages[tab]?.url ?? "", png: base64(new Uint8Array(png)) };
+    }
+    case "close":
+      closeTab(conversationId, tab);
+      return { result: "closed", tab };
+  }
+}
+
+/** The address of the user's yes, while the tab is still on the page it was given on. */
+function approvedHere(tab: string, guard: BrowserGuard): string | null {
+  const generation = useBrowsers.getState().pages[tab]?.generation ?? 0;
+  return guard.approved && guard.approved.generation === generation ? guard.approved.url : null;
+}
+
+const SENSITIVE: readonly BrowserSensitive[] = ["pay", "send", "signIn", "credentials", "card", "oneTimeCode"];
+
+function askOf(answer: unknown): { sensitive: BrowserSensitive; what: string } | null {
+  if (typeof answer !== "object" || !answer || !("ask" in answer)) return null;
+  const ask = answer.ask as { sensitive?: unknown; what?: unknown };
+  const sensitive = SENSITIVE.find((each) => each === ask.sensitive);
+  return sensitive ? { sensitive, what: String(ask.what ?? "") } : null;
+}
+
+function errorOf(answer: unknown): string | null {
+  if (typeof answer !== "object" || !answer) return "The page didn't answer.";
+  return "error" in answer ? String(answer.error) : null;
+}
+
+function urlOf(answer: unknown): string | null {
+  return typeof answer === "object" && answer && "url" in answer ? String(answer.url) : null;
+}
+
+/** A load starts now (the shell says so too, a moment later). */
+function starting(tab: string): void {
+  useBrowsers.setState(({ pages }) => {
+    const shown = pages[tab];
+    return shown ? { pages: { ...pages, [tab]: { ...shown, loading: true } } } : { pages };
+  });
+}
+
+/** Waits for the tab's page to finish loading, `LOAD_WAIT_MS` at most. */
+async function loaded(tab: string): Promise<void> {
+  const deadline = Date.now() + LOAD_WAIT_MS;
+  while (Date.now() < deadline) {
+    const shown = useBrowsers.getState().pages[tab];
+    if (!shown) throw new Error("The tab closed.");
+    if (shown.ready && !shown.loading) return;
+    await wait(100);
+  }
+}
+
+/** After an action: a moment for a load to start, then the load, if one did. */
+async function settled(tab: string): Promise<void> {
+  await wait(SETTLE_MS);
+  await loaded(tab);
+}
+
+/** The tab's page, read for the agent. */
+async function page(tab: string, hands: PageHands): Promise<BrowserResult> {
+  const answer = await hands.script(tab, { kind: "read", max: READ_MOST });
+  const error = errorOf(answer);
+  if (error) return failed(error);
+  const read = answer as { url: string; title: string; text: string };
+  const shown = useBrowsers.getState().pages[tab];
+  const result: BrowserPageRead = {
+    url: read.url,
+    title: read.title,
+    generation: shown?.generation ?? 0,
+    loading: shown?.loading ?? false,
+    text: read.text,
+  };
+  return { result: "page", tab, page: result };
+}
+
+/** `bytes` as base64. */
+export function base64(bytes: Uint8Array): string {
+  let text = "";
+  for (let at = 0; at < bytes.length; at += 0x8000) {
+    text += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  }
+  return btoa(text);
+}

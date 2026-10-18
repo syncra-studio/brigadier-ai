@@ -60,8 +60,11 @@ export type BrowserTabState = {
   kind: "browser"; id: string; opener: string | null; url: string; title: string;
   /** Opened from something an agent gave (a link in its reply, a preview's address). */
   agent?: boolean;
+  /** An agent works this tab with the browser tool: who, as the user knows it. */
+  driver?: BrowserDriver;
   chat?: TabChatState;
 };
+export type BrowserDriver = { label: string; taskId: string | null };
 export type NewTabState = {
   kind: "newTab"; id: string; opener: string | null;
 };
@@ -227,6 +230,19 @@ export function openBrowserTab(conversationId: string, url: string, agent = fals
   return id;
 }
 
+/**
+ * A new Browser tab an agent works with the browser tool, showing `url`: last in the session's
+ * tabs, behind the one in front, which stays.
+ */
+export function openAgentTab(conversationId: string, url: string, driver: BrowserDriver): string {
+  const id = `browser:agent-${crypto.randomUUID()}`;
+  update(conversationId, (current) => {
+    const tab: BrowserTabState = { kind: "browser", id, opener: current.active, url, title: "", agent: true, driver };
+    return { tabs: [...current.tabs, tab], active: current.active };
+  });
+  return id;
+}
+
 /** The session that has tab `id`. */
 export function sessionWith(id: string): string | null {
   const sessions = useSessionTabs.getState().sessions;
@@ -243,10 +259,14 @@ export function openPopupTab(opener: string, id: string, url: string): boolean {
   update(conversationId, (current) => {
     const from = current.tabs.find((tab) => tab.id === opener);
     const agent = from?.kind === "browser" && from.agent === true;
-    const tab: BrowserTabState = { kind: "browser", id, opener, url: url || "about:blank", title: "", ...(agent ? { agent } : {}) };
+    // An agent's tab opens its popups behind, for the agent too.
+    const driver = from?.kind === "browser" ? from.driver : undefined;
+    const tab: BrowserTabState = {
+      kind: "browser", id, opener, url: url || "about:blank", title: "", ...(agent ? { agent } : {}), ...(driver ? { driver } : {}),
+    };
     const tabs = [...current.tabs];
     tabs.splice(tabs.findIndex((entry) => entry.id === opener) + 1, 0, tab);
-    return { tabs, active: id };
+    return { tabs, active: driver ? current.active : id };
   });
   return true;
 }

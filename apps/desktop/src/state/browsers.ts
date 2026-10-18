@@ -25,6 +25,8 @@ export type BrowserPage = {
   zoom?: number;
   /** The page's question for the camera or microphone, waiting for an answer (macOS). */
   asking?: BrowserAsking | null;
+  /** Counts the tab's page loads: an agent's refs and the user's yes hold within one. */
+  generation?: number;
 };
 
 export type BrowserAsking = { request: number; origin: string; camera: boolean; microphone: boolean };
@@ -85,6 +87,7 @@ export async function openPage(
         blocked: null,
         ready: made.has(id),
         ...(page?.zoom === undefined ? {} : { zoom: page.zoom }),
+        ...(page?.generation === undefined ? {} : { generation: page.generation }),
       },
     },
   }));
@@ -98,6 +101,7 @@ export async function openPage(
         const shown = useBrowsers.getState().pages[id];
         update(id, { url: event.url, loading: event.loading,
           ...(event.url !== shown?.url ? { favicon: null } : {}),
+          ...(event.loading ? { generation: (shown?.generation ?? 0) + 1 } : {}),
           // The shell drops a question from a site the page left.
           ...(shown?.asking && originOf(event.url) !== shown.asking.origin ? { asking: null } : {}) });
       }

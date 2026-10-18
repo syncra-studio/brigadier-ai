@@ -95,8 +95,16 @@ pub enum BrowserGo {
 pub struct BrowserGuard {
     /// What the agent said the action does.
     pub declared: Option<BrowserSensitive>,
-    /// The page, by its generation, on which the user said yes to this very action.
-    pub approved: Option<u64>,
+    /// The page on which the user said yes to this very action.
+    pub approved: Option<BrowserApproved>,
+}
+
+/// The page a yes was given on: it holds there only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserApproved {
+    pub generation: u64,
+    pub url: String,
 }
 
 /// Why an action asks the user first: the first three the agent declares, the rest the page's
