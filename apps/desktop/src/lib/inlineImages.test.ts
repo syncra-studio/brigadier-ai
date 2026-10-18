@@ -96,3 +96,18 @@ test("numbered queue edits keep one reference per chip number and use the edited
   const row = ref("row", false);
   assert.deepEqual(queuedImageRefs("[Image #1] [Image #1]", [original], [edited, row]), [row, edited]);
 });
+
+test("an image and a pasted text of the same number are two attachments, each kept by its own marker", () => {
+  const image = { ...ref("img"), inline: 1 };
+  const paste: AttachmentRef = { id: "txt", inline: 1, mime: "text/markdown", name: "Pasted text.md", bytes: 10, pasted: true };
+  assert.deepEqual(inlineRefs("[Image #1] and [Pasted text #1]", [image, paste]), [image, paste]);
+  assert.deepEqual(inlineRefs("[Pasted text #1] only", [image, paste]), [paste]);
+  assert.deepEqual(inlineRefs("[Image #1] only", [image, paste]), [image]);
+  // Sent edits, queue edits and drafts keep each by its marker too.
+  assert.deepEqual(reconcileImages("[Pasted text #1]", [image, paste]), [paste]);
+  assert.deepEqual(queuedImageRefs("[Image #1] [Pasted text #1]", [image, paste], []), [image, paste]);
+  assert.deepEqual(draftRefs("[Pasted text #1]", [], [image, paste]), [paste, image]);
+  // A pasted text keeps its number when old image tokens are numbered.
+  const old = { ...ref("old"), inline: 0 };
+  assert.deepEqual(normalizedImages("[image:old] [Pasted text #1]", [paste, old]).text, "[Image #1] [Pasted text #1]");
+});

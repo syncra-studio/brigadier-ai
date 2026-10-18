@@ -26,22 +26,25 @@ export { type AttachmentReader, AttachmentReaderContext, type AttachmentSource, 
 export { ImagePreview };
 import { cn } from "@/lib/utils";
 
-/** A paste this long becomes a "Pasted text" attachment instead of text. */
-export const PASTE_AS_ATTACHMENT_CHARS = 5000;
 /**
  * Pasted text up to this size goes to the model whole, as part of the message; longer text
  * goes as its start and end (INLINE_TEXT_MAX_BYTES in the core).
  */
 export const PASTE_INLINE_BYTES = 200_000;
-const PASTED_TEXT_NAME = "Pasted text.txt";
 
 /** The files the composer made from long pastes, as opposed to files the user attached. */
 const pastedFiles = new WeakSet<File>();
 
-/** A long paste as a file to attach; it is sent as text the user pasted. */
-export function pastedTextFile(text: string): File {
-  const file = new File([text], PASTED_TEXT_NAME, { type: "text/plain" });
+/**
+ * A paste as a file to attach; it is sent as text the user pasted. `markdown`: rich text
+ * pasted, as Markdown. With `n`, it is `[Pasted text #n]` in the text, where it was pasted.
+ */
+export function pastedTextFile(text: string, { markdown = false, n = null }: { markdown?: boolean; n?: number | null } = {}): File {
+  const file = markdown
+    ? new File([text], "Pasted text.md", { type: "text/markdown" })
+    : new File([text], "Pasted text.txt", { type: "text/plain" });
   pastedFiles.add(file);
+  if (n !== null) inlineFiles.set(file, n);
   return file;
 }
 
@@ -49,7 +52,10 @@ export function isPastedFile(file: File): boolean {
   return pastedFiles.has(file);
 }
 
-/** Images pasted into the text, by their `[Image #n]` number, as opposed to attached ones. */
+/**
+ * Images and texts pasted into the text, by their `[Image #n]` or `[Pasted text #n]` number, as
+ * opposed to attached ones.
+ */
 const inlineFiles = new WeakMap<File, number>();
 
 /** An image pasted into the text as `[Image #n]`, to attach as that image. */
@@ -58,7 +64,7 @@ export function inlineImageFile(file: File, n: number): File {
   return file;
 }
 
-/** The `[Image #n]` number of an image pasted into the text, if `file` is one. */
+/** The number of an image or a text pasted into the text, if `file` is one. */
 export function inlineNumberOf(file: File): number | null {
   return inlineFiles.get(file) ?? null;
 }

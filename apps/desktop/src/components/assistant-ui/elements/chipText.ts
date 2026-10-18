@@ -16,8 +16,14 @@ export type ChipMention = { label: string; type: string; id: string };
 /** The known mention whose `@label` starts at `at` in `text` (`at` is past the `@`), if any. */
 export type MentionMatcher = (text: string, at: number) => ChipMention | null;
 
-/** The `[Image #n]` starting at `at` in `text`, if one does: its number and length. */
-export type ImageMatcher = (text: string, at: number) => { n: number; length: number } | null;
+/**
+ * The `[Image #n]` (or `[Pasted text #n]`, kind `paste`) starting at `at` in `text`, if one
+ * does: its number and length.
+ */
+export type ImageMatcher = (
+  text: string,
+  at: number,
+) => { n: number; length: number; kind?: "image" | "paste" } | null;
 
 /**
  * Which text-made chips a composer has: `` `code` `` (the plain field's; the rich one has a
@@ -31,6 +37,7 @@ export const ALL_CHIPS: ChipKinds = { code: true, links: true };
 export const CODE = "code";
 export const URL_CHIP = "url";
 export const IMAGE_CHIP = "image";
+export const PASTE_CHIP = "paste";
 
 /** What a pasted image is called where it sits in the text. */
 export function inlineImageLabel(n: number): string {
@@ -40,6 +47,16 @@ export function inlineImageLabel(n: number): string {
 /** The chip for image `n` pasted into the text, which stands for `[Image #n]`. */
 export function imageChip(n: number): Unstable_TriggerItem {
   return { id: `${IMAGE_CHIP}:${n}`, type: IMAGE_CHIP, label: inlineImageLabel(n) };
+}
+
+/** What a text pasted as a chip is called where it sits in the text. */
+export function pastedTextLabel(n: number): string {
+  return `Pasted text #${n}`;
+}
+
+/** The chip for text `n` pasted into the text, which stands for `[Pasted text #n]`. */
+export function pasteChip(n: number): Unstable_TriggerItem {
+  return { id: `${PASTE_CHIP}:${n}`, type: PASTE_CHIP, label: pastedTextLabel(n) };
 }
 
 const CODE_TOKEN = /(?<!`)`([^`\n]+)`(?!`)/y;
@@ -74,7 +91,7 @@ export function tokenAt(
       return {
         start: at,
         end: at + marker.length,
-        segment: { kind: "mention", ...imageChip(marker.n) },
+        segment: { kind: "mention", ...(marker.kind === "paste" ? pasteChip(marker.n) : imageChip(marker.n)) },
       };
     }
   }
@@ -142,7 +159,7 @@ export function parseChips(
 
 /**
  * The composer's directive formatter: a chip's text is what it stands for (`@label`,
- * `` `code` ``, the link, `[Image #n]`), so the message itself stays text.
+ * `` `code` ``, the link, `[Image #n]`, `[Pasted text #n]`), so the message itself stays text.
  */
 export function chipFormatter(
   mention: MentionMatcher,
@@ -155,7 +172,7 @@ export function chipFormatter(
         ? `\`${item.label}\``
         : item.type === URL_CHIP
           ? item.label
-          : item.type === IMAGE_CHIP
+          : item.type === IMAGE_CHIP || item.type === PASTE_CHIP
             ? `[${item.label}]`
             : `@${item.label}`,
     parse: (text) => parseChips(text, mention, image, kinds),

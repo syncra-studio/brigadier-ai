@@ -313,6 +313,8 @@ fn edited_attachments(text: &str, attachments: &[AttachmentRef]) -> Vec<Attachme
         .iter()
         .filter(|attachment| {
             attachment.inline.is_none()
+                || crate::sessions::inline_paste(attachment)
+                    .is_some_and(|n| text.contains(&crate::sessions::paste_marker(n)))
                 || !crate::sessions::inline_image_tokens(text, std::slice::from_ref(attachment))
                     .is_empty()
         })
@@ -376,6 +378,39 @@ mod tests {
         assert_eq!(
             edited_attachments("removed [image:a-longer]", &attachments),
             vec![row]
+        );
+    }
+
+    #[test]
+    fn editing_keeps_a_pasted_text_chip_by_its_own_marker() {
+        let image = AttachmentRef {
+            id: "img".into(),
+            name: "image.png".into(),
+            mime: "image/png".into(),
+            bytes: 1,
+            pasted: false,
+            inline: Some(1),
+        };
+        let paste = AttachmentRef {
+            id: "txt".into(),
+            name: "Pasted text.md".into(),
+            mime: "text/markdown".into(),
+            bytes: 1,
+            pasted: true,
+            inline: Some(1),
+        };
+        let attachments = vec![image.clone(), paste.clone()];
+        assert_eq!(
+            edited_attachments("[Pasted text #1] only", &attachments),
+            vec![paste.clone()]
+        );
+        assert_eq!(
+            edited_attachments("[Image #1] only", &attachments),
+            vec![image.clone()]
+        );
+        assert_eq!(
+            edited_attachments("[Image #1] [Pasted text #1]", &attachments),
+            vec![image, paste]
         );
     }
 }

@@ -46,6 +46,9 @@ import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import {
   imageMarkerAt,
   imageMarkersIn,
+  inlineMarkerAt,
+  type InlineKind,
+  markersIn,
   nextImageNumber,
   pastedImageNumbers,
   pastesInline,
@@ -54,13 +57,13 @@ import {
   splitAtImages,
 } from "@/app/conversation/inlineImages";
 import { mentionOf } from "@/app/conversation/Mentions";
+import { chipContent, pastedText, pasteKind, structuredHtml } from "@/app/conversation/pasteContent";
 import { usePullQueued } from "@/app/conversation/QueueCard";
 import {
   type AttachmentReader,
   AttachmentReaderContext,
   type AttachmentSource,
   inlineImageFile,
-  PASTE_AS_ATTACHMENT_CHARS,
   pastedTextFile,
 } from "@/components/assistant-ui/elements/attachment-tile";
 import {
@@ -70,6 +73,7 @@ import {
   chipFormatter,
   imageChip,
   type MentionLook,
+  pasteChip,
 } from "@/components/assistant-ui/elements/composer-chips";
 import { composerInlineNumber } from "@/components/assistant-ui/elements/inline-image";
 import {
@@ -116,11 +120,12 @@ export default function ComposerEditor({
   const kinds = rich ? RICH_CHIPS : ALL_CHIPS;
   // One formatter per memory: a new one would rebuild every chip.
   const formatter = useMemo(
-    () => chipFormatter((text, at) => memory?.match(text, at) ?? null, imageMarkerAt, kinds),
+    () => chipFormatter((text, at) => memory?.match(text, at) ?? null, inlineMarkerAt, kinds),
     [memory, kinds],
   );
-  // Images whose chip was deleted, by number, for undo to bring back.
+  // Images and pasted texts whose chip was deleted, by number, for undo to bring back.
   const deleted = useMemo(() => new Map<number, File | CreateAttachment>(), []);
+  const deletedPastes = useMemo(() => new Map<number, File | CreateAttachment>(), []);
   const onMention = useCallback(
     (item: Unstable_TriggerItem) => {
       const mention = mentionOf(item);
@@ -145,9 +150,10 @@ export default function ComposerEditor({
       submitMode="none"
       aria-label="Message input"
     >
-      <ComposerKeys formatter={formatter} deleted={deleted} />
+      <ComposerKeys formatter={formatter} deleted={deleted} deletedPastes={deletedPastes} />
       <SuggestionKeys />
-      <InlineImageSync deleted={deleted} />
+      <InlineSync kind="image" deleted={deleted} />
+      <InlineSync kind="paste" deleted={deletedPastes} />
     </ChipComposerInput>
   );
 }
@@ -197,7 +203,8 @@ const mentionLook: MentionLook = ({ directiveType, directiveId, label }) => {
 /**
  * The composer's keys and paste: ↑ in an empty field edits the last queued message, else
  * walks back through the conversation's prompts (↓ forward); a long paste becomes a
- * "Pasted text" attachment; pasted images go in the text at the caret as `[Image #n]` chips,
+ * "Pasted text" chip (a card, into an empty field), as rich text copied from a page does;
+ * pasted images go in the text at the caret as `[Image #n]` chips,
  * and other pasted files attach directly; chips cut or copied and pasted again bring their
  * images along, at any length; ⌃⇧D starts dictating at the caret and stops (or
  * cancels) again. The `@` and `/` menus take their keys first.
@@ -205,9 +212,11 @@ const mentionLook: MentionLook = ({ directiveType, directiveId, label }) => {
 function ComposerKeys({
   formatter,
   deleted,
+  deletedPastes,
 }: {
   formatter: Unstable_DirectiveFormatter;
   deleted: DeletedImages;
+  deletedPastes: DeletedImages;
 }) {
   const [editor] = useLexicalComposerContext();
   const aui = useAui();
@@ -217,7 +226,7 @@ function ComposerKeys({
   const history = usePromptHistory(
     target?.mentions ?? null,
     target?.queue.attachments ?? null,
-    deleted,
+    useMemo(() => [deleted, deletedPastes], [deleted, deletedPastes]),
   );
   const adapter = target?.queue.attachments ?? null;
   const owner = target?.conversation?.id ?? NEW_CHAT_SCOPE;
@@ -342,21 +351,30 @@ function ComposerKeys({
           const files = [...event.clipboardData.files];
           const text = event.clipboardData.getData("text/plain");
           const composer = aui.composer();
+          const context = { editor, formatter, aui, reader, adapter, deleted, privateLogs };
           // Chips cut or copied with their images come back as chips, however long their text.
           const copied = copiedImagesOn(event.clipboardData, text);
-          if (files.length === 0 && (copied.size > 0 || text.length < PASTE_AS_ATTACHMENT_CHARS)) {
+          if (files.length === 0) {
+            // oxlint-disable-next-line no-underscore-dangle -- Lexical's only way to the editor's namespace
+            const paste = pastedText(event.clipboardData, editor._config.namespace);
+            if (copied.size === 0 && pasteKind(paste, structuredHtml) === "chip") {
+              event.preventDefault();
+              pasteChipText(chipContent(paste), { ...context, deletedPastes });
+              return true;
+            }
+            // The rest the field pastes itself (formatted, where it has formatting), but
+            // `[Image #n]` markers, whose images come along or which become words.
             if (imageMarkersIn(text).size === 0) return false;
             event.preventDefault();
-            pasteWithImages(text, copied, { editor, formatter, aui, reader, adapter, deleted, privateLogs });
+            pasteWithImages(text, copied, context);
             return true;
           }
           event.preventDefault();
           if (pastesInline({ files, uris: event.clipboardData.getData("text/uri-list") })) {
-            pasteImages(files, { editor, formatter, aui, reader, adapter, deleted, privateLogs });
+            pasteImages(files, context);
             return true;
           }
-          const attach = files.length > 0 ? files : [pastedTextFile(text)];
-          for (const file of attach) void composer.addAttachment(file);
+          for (const file of files) void composer.addAttachment(file);
           return true;
         },
         COMMAND_PRIORITY_NORMAL,
@@ -370,6 +388,7 @@ function ComposerKeys({
     privateLogs,
     formatter,
     deleted,
+    deletedPastes,
     pull,
     history,
     owner,
@@ -751,20 +770,23 @@ function $insertWithImageChips(text: string, formatter: Unstable_DirectiveFormat
   }
 }
 
-/**
- * Puts a chip for each pasted image `numbers` at the caret (or at the end, if the field never
- * had one), a space after them unless one follows already.
- */
+/** Puts a chip for each pasted image `numbers` at the caret, as `$insertChips` does. */
 function $insertImageChips(numbers: readonly number[], formatter: Unstable_DirectiveFormatter) {
+  $insertChips(numbers.map(imageChip), formatter);
+}
+
+/**
+ * Puts `items`' chips at the caret (or at the end, if the field never had one), a space after
+ * them unless one follows already.
+ */
+function $insertChips(items: readonly Unstable_TriggerItem[], formatter: Unstable_DirectiveFormatter) {
   let selection = $getSelection();
   if (!$isRangeSelection(selection)) {
     $getRoot().selectEnd();
     selection = $getSelection();
   }
   if (!$isRangeSelection(selection)) return;
-  const chips: LexicalNode[] = numbers.map((n) =>
-    $createDirectiveNodeWithFormatter(imageChip(n), formatter),
-  );
+  const chips: LexicalNode[] = items.map((item) => $createDirectiveNodeWithFormatter(item, formatter));
   selection.insertNodes(chips);
   const after = $getSelection();
   if (!$isRangeSelection(after)) return;
@@ -774,11 +796,41 @@ function $insertImageChips(numbers: readonly number[], formatter: Unstable_Direc
 }
 
 /**
- * Keeps pasted images and their chips together: deleting a chip removes its image, and
- * undoing that brings the image back. A chip whose image isn't known (a marker typed by
- * hand) stays a label.
+ * Pastes rich or long text as a chip at the caret, `[Pasted text #n]` numbered on from the
+ * composer's pasted texts, its content attached as that text. Into an empty composer it goes
+ * to the attachments row instead, as a card.
  */
-function InlineImageSync({ deleted }: { deleted: DeletedImages }) {
+function pasteChipText(
+  { content, markdown }: { content: string; markdown: boolean },
+  { editor, formatter, aui, reader, deletedPastes }: PasteContext & { deletedPastes: DeletedImages },
+) {
+  const composer = aui.composer();
+  const state = composer.getState();
+  if (state.text.trim() === "") {
+    void composer.addAttachment(pastedTextFile(content, { markdown }));
+    return;
+  }
+  const n = nextImageNumber([
+    ...markersIn("paste", state.text),
+    ...deletedPastes.keys(),
+    ...state.attachments.flatMap((attachment) => {
+      const taken = composerInlineNumber(attachment, reader, "paste");
+      return taken === null ? [] : [taken];
+    }),
+  ]);
+  // The chip goes in first: its text's attachment counts once its chip is in the text.
+  editor.update(() => $insertChips([pasteChip(n)], formatter), {
+    discrete: true,
+    onUpdate: () => void composer.addAttachment(pastedTextFile(content, { markdown, n })),
+  });
+}
+
+/**
+ * Keeps pasted images (or, of `kind` "paste", pasted texts) and their chips together: deleting
+ * a chip removes its image, and undoing that brings the image back. A chip whose image isn't
+ * known (a marker typed by hand) stays a label.
+ */
+function InlineSync({ kind, deleted }: { kind: InlineKind; deleted: DeletedImages }) {
   const aui = useAui();
   const reader = useContext(AttachmentReaderContext);
   const adapter = useContext(ComposerTargetContext)?.queue.attachments;
@@ -795,10 +847,10 @@ function InlineImageSync({ deleted }: { deleted: DeletedImages }) {
       deleted.clear();
     }
     before.current = text;
-    const markers = imageMarkersIn(text);
+    const markers = markersIn(kind, text);
     const present = new Set<number>();
     for (const attachment of attachments) {
-      const n = composerInlineNumber(attachment, reader);
+      const n = composerInlineNumber(attachment, reader, kind);
       if (n === null) continue;
       present.add(n);
       if (markers.has(n) || !seen.current.has(n)) continue;
@@ -815,6 +867,6 @@ function InlineImageSync({ deleted }: { deleted: DeletedImages }) {
       deleted.delete(n);
       void composer.addAttachment(again);
     }
-  }, [aui, reader, adapter, deleted, text, attachments]);
+  }, [aui, reader, adapter, kind, deleted, text, attachments]);
   return null;
 }

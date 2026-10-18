@@ -1,10 +1,10 @@
-import { normalizedImages } from "@/lib/inlineImages";
+import { inlineKind, normalizedImages } from "@/lib/inlineImages";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import { useCallback, useEffect, useRef } from "react";
 
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import type { MentionMemory } from "@/app/conversation/Mentions";
-import { imageMarkersIn } from "@/app/conversation/inlineImages";
+import { markersIn } from "@/app/conversation/inlineImages";
 import type { AttachmentRef, Mention } from "@/ipc/generated";
 import { type DraftMention, loadDraft, saveDraft } from "@/state/drafts";
 
@@ -58,7 +58,9 @@ export function useComposerDraft(
     composer.setText(draft.text);
     attachments.retain(draft.attachments);
     for (const ref of draft.attachments) {
-      if (ref.inline === null || imageMarkersIn(draft.text).has(ref.inline)) void composer.addAttachment(attachments.adopt(ref));
+      if (ref.inline === null || markersIn(inlineKind(ref), draft.text).has(ref.inline)) {
+        void composer.addAttachment(attachments.adopt(ref));
+      }
     }
   }, [aui, attachments, memory, scope]);
 
@@ -80,14 +82,14 @@ export function useComposerDraft(
 /**
  * ↑ in an empty composer walks back through the conversation's last prompts and ↓ forward
  * again; editing a recalled prompt stops the walk. A recalled prompt's mentions are
- * remembered again, so they chip and send as before, and the images pasted into it come back
- * with it (those of the prompt shown before go). Returns whether the key was taken.
+ * remembered again, so they chip and send as before, and the images and texts pasted into it
+ * come back with it (those of the prompt shown before go). Returns whether the key was taken.
  */
 export function usePromptHistory(
   memory: MentionMemory | null,
   attachments: BlobAttachmentAdapter | null,
-  /** The composer's deleted pasted images, which a recalled prompt's replace. */
-  deleted: Map<number, unknown>,
+  /** The composer's deleted pasted images and texts, which a recalled prompt's replace. */
+  deleted: readonly Map<number, unknown>[],
 ): (key: "ArrowUp" | "ArrowDown") => boolean {
   const aui = useAui();
   // How far back the composer shows, and the text it put there.
@@ -126,11 +128,10 @@ export function usePromptHistory(
           void composer.attachment({ id: attachment.id }).remove();
         }
       }
-      deleted.clear();
+      for (const map of deleted) map.clear();
       composer.setText(shown);
-      const markers = imageMarkersIn(shown);
       for (const ref of normalized.attachments) {
-        if (attachments && ref.inline !== null && markers.has(ref.inline)) {
+        if (attachments && ref.inline !== null && markersIn(inlineKind(ref), shown).has(ref.inline)) {
           void composer.addAttachment(attachments.adopt(ref));
         }
       }

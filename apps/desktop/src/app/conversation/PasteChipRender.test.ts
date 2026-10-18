@@ -1,0 +1,24 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { renderFixtureLive } from "@/fixtures/headless";
+
+test("text pasted as a chip: an image and a pasted text of the same number come back through a draft, ↑ and a pulled queue message; rich text pastes as a chip sent as Markdown, a bold phrase as formatting, long text as a chip or, into an empty field, a card; the chip opens the Pages editor and keeps an edit; a sent message shows it, opening read only", { timeout: 120000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "paste-chip.html", "paste-chip-result", 90000)) as Record<string, unknown>;
+  assert.equal(seen.error, undefined, String(seen.error));
+  const image = { pasted: false, inline: 1, mime: "image/png" };
+  const markdown = { pasted: true, inline: 1, mime: "text/markdown" };
+  assert.deepEqual(seen.draft, { text: "[Image #1] see [Pasted text #1]", kinds: [image, markdown] });
+  assert.deepEqual(seen.queued, { text: "queued Pasted text #1", image: false });
+  assert.deepEqual(seen.recalled, { text: "earlier [Image #1] [Pasted text #1]", kinds: [image, markdown] });
+  assert.deepEqual(seen.rich, { text: "see [Pasted text #1] ok", kinds: [markdown], content: "## Title\n\n- a\n- b" });
+  assert.deepEqual(seen.phrase, { bold: "bold", chip: false, sent: "a **bold** words" });
+  assert.deepEqual(seen.longChip, { text: "x [Pasted text #1]", kinds: [{ pasted: true, inline: 1, mime: "text/plain" }], whole: true });
+  assert.deepEqual(seen.card, { chip: false, typed: "" });
+  assert.deepEqual(seen.cardSent, [{ pasted: true, inline: null, mime: "text/plain" }]);
+  assert.deepEqual(seen.both, {
+    text: "[Image #1] [Pasted text #1]",
+    kinds: [{ ...image, mime: "image/png" }, markdown],
+    edited: "## Title\n\n- a\n- b more",
+  });
+  assert.deepEqual(seen.bubble, { done: false, text: "a" });
+});

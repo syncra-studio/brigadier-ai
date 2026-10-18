@@ -23,6 +23,42 @@ export function imageMarkerAt(text: string, at: number): { n: number; length: nu
   return match?.[1] ? { n: Number(match[1]), length: match[0].length } : null;
 }
 
+/**
+ * Text pasted into the composer's text as a chip (rich text from a page, or long text), which
+ * stands for `[Pasted text #n]` where it was pasted, as an image stands for `[Image #n]`. Images
+ * and pasted texts are numbered apart: an attachment's kind says which it is.
+ */
+export type InlineKind = "image" | "paste";
+
+/** What stands for pasted text `n` in the message's text. */
+export function pasteMarker(n: number): string {
+  return `[Pasted text #${n}]`;
+}
+
+const PASTE = /\[Pasted text #(\d+)\]/g;
+
+/** The pasted texts' numbers whose `[Pasted text #n]` is in `text`. */
+export function pasteMarkersIn(text: string): Set<number> {
+  return new Set([...text.matchAll(PASTE)].map((match) => Number(match[1])));
+}
+
+/** The numbers of `kind`'s markers in `text`. */
+export function markersIn(kind: InlineKind, text: string): Set<number> {
+  return kind === "image" ? imageMarkersIn(text) : pasteMarkersIn(text);
+}
+
+/** The `[Image #n]` or `[Pasted text #n]` starting at `at` in `text`, if one does. */
+export function inlineMarkerAt(
+  text: string,
+  at: number,
+): { kind: InlineKind; n: number; length: number } | null {
+  const image = imageMarkerAt(text, at);
+  if (image) return { kind: "image", ...image };
+  if (text[at] !== "[") return null;
+  const match = /^\[Pasted text #(\d+)\]/.exec(text.slice(at, at + 30));
+  return match?.[1] ? { kind: "paste", n: Number(match[1]), length: match[0].length } : null;
+}
+
 /** `text` in pieces around its `[Image #n]` markers: the text between them, and each `n`. */
 export function splitAtImages(text: string): (string | number)[] {
   return text

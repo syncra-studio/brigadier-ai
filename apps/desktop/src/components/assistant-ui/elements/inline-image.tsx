@@ -7,10 +7,12 @@ import {
   AttachmentReaderContext,
   type AttachmentSource,
   inlineNumberOf,
+  isPastedFile,
   TileRemove,
   useAttachmentUrl,
 } from "@/components/assistant-ui/elements/attachment-tile";
 import { ImageContextMenu, ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
+import type { InlineKind } from "@/app/conversation/inlineImages";
 import type { AttachmentRef } from "@/ipc/generated";
 import { inlineImageLabel } from "@/components/assistant-ui/elements/chipText";
 import { cn } from "@/lib/utils";
@@ -18,16 +20,28 @@ import { cn } from "@/lib/utils";
 export { inlineImageLabel };
 
 /**
- * The `[Image #n]` number of a composer attachment pasted into the text, or null for one in
- * the attachments row.
+ * The `[Image #n]` number of a composer attachment pasted into the text (with `kind` "paste",
+ * the `[Pasted text #n]` number of a text pasted there), or null for one in the attachments
+ * row or of the other kind.
  */
 export function composerInlineNumber(
   attachment: { id: string; file?: File | undefined },
   reader: AttachmentReader | null,
+  kind: InlineKind = "image",
 ): number | null {
-  return attachment.file
-    ? inlineNumberOf(attachment.file)
-    : (reader?.composerRef(attachment.id)?.inline ?? null);
+  if (attachment.file) {
+    return isPastedFile(attachment.file) === (kind === "paste") ? inlineNumberOf(attachment.file) : null;
+  }
+  const ref = reader?.composerRef(attachment.id);
+  return ref && ref.pasted === (kind === "paste") ? ref.inline : null;
+}
+
+/** Whether a composer attachment sits in the text (an image or a text pasted there). */
+export function inComposerText(
+  attachment: { id: string; file?: File | undefined },
+  reader: AttachmentReader | null,
+): boolean {
+  return composerInlineNumber(attachment, reader) !== null || composerInlineNumber(attachment, reader, "paste") !== null;
 }
 
 

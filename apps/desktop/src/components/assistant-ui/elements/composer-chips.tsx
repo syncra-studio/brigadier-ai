@@ -51,11 +51,13 @@ import {
   CODE,
   completedTokens,
   IMAGE_CHIP,
+  PASTE_CHIP,
   SPACE,
   URL_CHIP,
 } from "@/components/assistant-ui/elements/chipText";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { ComposerInlineImage } from "@/components/assistant-ui/elements/inline-image";
+import { ComposerPastedText } from "@/components/assistant-ui/elements/pasted-text";
 import { cn } from "@/lib/utils";
 
 export {
@@ -67,6 +69,7 @@ export {
   type ImageMatcher,
   type MentionMatcher,
   parseChips,
+  pasteChip,
 } from "@/components/assistant-ui/elements/chipText";
 
 /** The app's icon and name for a mention chip of `type` (a worker's glyph and name, a chat's title). */
@@ -81,13 +84,16 @@ function fileIcon(name: string): ReactNode {
 }
 
 /**
- * One chip, inline in the composer's text: a blue mention, mono code pill, link or a pasted
- * image's thumbnail.
+ * One chip, inline in the composer's text: a blue mention, mono code pill, link, a pasted
+ * image's thumbnail or a pasted text.
  */
 const ComposerChip: FC<DirectiveChipProps> = (chip) => {
   const look = useContext(MentionLookContext);
   if (chip.directiveType === IMAGE_CHIP) {
     return <ComposerImageChip n={Number(chip.directiveId.slice(IMAGE_CHIP.length + 1))} />;
+  }
+  if (chip.directiveType === PASTE_CHIP) {
+    return <ComposerImageChip n={Number(chip.directiveId.slice(PASTE_CHIP.length + 1))} paste />;
   }
   if (chip.directiveType === CODE) {
     return (
@@ -114,17 +120,17 @@ const ComposerChip: FC<DirectiveChipProps> = (chip) => {
 };
 
 /**
- * A pasted image's chip, whose × takes it out of the text as Backspace would: its image goes
- * with it, and undo brings both back.
+ * A pasted image's chip (or, with `paste`, a pasted text's), whose × takes it out of the text
+ * as Backspace would: its image goes with it, and undo brings both back.
  */
-function ComposerImageChip({ n }: { n: number }) {
+function ComposerImageChip({ n, paste = false }: { n: number; paste?: boolean }) {
   const [editor] = useLexicalComposerContext();
   const remove = (event: MouseEvent<HTMLButtonElement>) => {
     const chip = event.currentTarget;
     editor.update(() => $getNearestNodeFromDOMNode(chip)?.remove());
     editor.focus();
   };
-  return <ComposerInlineImage n={n} onRemove={remove} />;
+  return paste ? <ComposerPastedText n={n} onRemove={remove} /> : <ComposerInlineImage n={n} onRemove={remove} />;
 }
 
 /** Code and link chips, which Backspace turns back into text. */

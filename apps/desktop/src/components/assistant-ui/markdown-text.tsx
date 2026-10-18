@@ -19,6 +19,7 @@ import { Check, Copy, ExpandLg, Globe, Mail } from "@openai/apps-sdk-ui/componen
 import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
 import {
   InlineImageContext,
+  InlinePasteContext,
   LinkTimeContext,
   OpenFileContext,
   TaskMentionContext,
@@ -64,15 +65,16 @@ type MarkdownTextProps = Partial<TextMessagePartProps> & {
   /**
    * The user's own message: each line break is a break, as they typed it, and in its text (never
    * in code) a `@task-N` is a `brigadier-task:N` link and a pasted `[Image #n]` a
-   * `brigadier-image:n` link, which `TaskMentionContext` and `InlineImageContext` show.
+   * `brigadier-image:n` link (a `[Pasted text #n]` a `brigadier-paste:n` one), which
+   * `TaskMentionContext`, `InlineImageContext` and `InlinePasteContext` show.
    */
   breaks?: boolean | undefined;
 };
 
 type MdNode = { type: string; value?: string; url?: string; children?: MdNode[] };
 
-/** A worker's `@task-N`, or a pasted image's `[Image #n]`. */
-const USER_TOKEN = /(@task-\d+\b|\[Image #\d+\])/;
+/** A worker's `@task-N`, a pasted image's `[Image #n]`, or a pasted text's `[Pasted text #n]`. */
+const USER_TOKEN = /(@task-\d+\b|\[Image #\d+\]|\[Pasted text #\d+\])/;
 
 /** One piece of the user's text: a line break, a mention or an image as a link, else text. */
 function userPieces(value: string): MdNode[] {
@@ -81,7 +83,11 @@ function userPieces(value: string): MdNode[] {
     ...line.split(USER_TOKEN).flatMap((piece, at): MdNode[] => {
       if (!piece) return [];
       if (at % 2 === 0) return [{ type: "text", value: piece }];
-      const url = piece.startsWith("@") ? `brigadier-task:${piece.slice(6)}` : `brigadier-image:${piece.slice(8, -1)}`;
+      const url = piece.startsWith("@")
+        ? `brigadier-task:${piece.slice(6)}`
+        : piece.startsWith("[Pasted")
+          ? `brigadier-paste:${piece.slice(14, -1)}`
+          : `brigadier-image:${piece.slice(8, -1)}`;
       return [{ type: "link", url, children: [{ type: "text", value: piece }] }];
     }),
   ]);
@@ -340,9 +346,11 @@ function LinkMenu({ href }: { href: string }) {
 export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, children, ...props }) => {
   const task = useContext(TaskMentionContext);
   const image = useContext(InlineImageContext);
+  const paste = useContext(InlinePasteContext);
   // A worker the user's message @-mentions: its chip. An image pasted into it: its chip, there.
   if (href?.startsWith("brigadier-task:")) return <>{task?.(Number(href.slice("brigadier-task:".length))) ?? children}</>;
   if (href?.startsWith("brigadier-image:")) return <>{image?.(Number(href.slice("brigadier-image:".length))) ?? children}</>;
+  if (href?.startsWith("brigadier-paste:")) return <>{paste?.(Number(href.slice("brigadier-paste:".length))) ?? children}</>;
   if (href && !/^(https?:|mailto:|#)/i.test(href)) {
     return <FileChip href={href}>{children}</FileChip>;
   }

@@ -112,6 +112,21 @@ export function escapeText(text: string, startsBlock: boolean): string {
   return lead + escaped.replace(/[*_~`]/g, (char) => (escape.has(char) ? char : (KEPT[char] ?? char)));
 }
 
+/**
+ * Plain `text` as Markdown that reads back as that text, a paragraph per line: how pasted
+ * plain text opens in the Pages editor.
+ */
+export function literalMarkdown(text: string): string {
+  return text
+    .split("\n")
+    .map((line) =>
+      escapeText(line, true)
+        .replace(/[*_~`]/g, "\\$&")
+        .replace(/[\uf8f0-\uf8f3]/gu, (held) => KEPT_BACK.get(held) ?? held),
+    )
+    .join("\n\n");
+}
+
 /** Stands for the caret in the Markdown while its place there is measured. */
 export const CARET = "\uf8ff";
 

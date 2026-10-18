@@ -50,9 +50,11 @@ export function safeLink(url: string): boolean {
  * The page's body: Markdown in, Markdown out on every change. Remount it (a new `key`) to load
  * content that changed outside it.
  */
-export function PageEditor({ body, label, editorRef, onChange, onOpenLink }: {
+export function PageEditor({ body, label, editorRef, onChange, onOpenLink, editable = true }: {
   body: string;
   label: string;
+  /** False: read only (a sent message's pasted text). */
+  editable?: boolean;
   /** ⌘-click (Ctrl-click) on a link. */
   onOpenLink: (url: string) => void;
   editorRef: RefObject<LexicalEditor | null>;
@@ -63,6 +65,7 @@ export function PageEditor({ body, label, editorRef, onChange, onOpenLink }: {
   return (
     <LexicalComposer initialConfig={{
       namespace: "page",
+      editable,
       nodes: PAGE_NODES,
       theme: THEME,
       onError: (error) => console.error("The page editor failed", error),

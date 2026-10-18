@@ -6,7 +6,7 @@ import type {
   PendingAttachment,
 } from "@assistant-ui/react";
 
-import { draftRefs, inlineRefs } from "@/lib/inlineImages";
+import { draftRefs, inlineKey, inlineRefs } from "@/lib/inlineImages";
 import { inlineNumberOf, isPastedFile } from "@/components/assistant-ui/elements/attachment-tile";
 import type { AttachmentRef } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
@@ -27,10 +27,14 @@ function kindOf(mime: string): "image" | "document" | "file" {
  */
 export class BlobAttachmentAdapter implements AttachmentAdapter {
   accept = "*";
-  private readonly retained = new Map<number, AttachmentRef>();
+  /** The images and pasted texts the text has held, by kind and number (`image:1`, `paste:1`). */
+  private readonly retained = new Map<string, AttachmentRef>();
 
   retain(refs: Iterable<AttachmentRef>): void {
-    for (const ref of refs) if (ref.inline !== null) this.retained.set(ref.inline, ref);
+    for (const ref of refs) {
+      const key = inlineKey(ref);
+      if (key) this.retained.set(key, ref);
+    }
   }
 
   messageRefs(text: string, attachments: readonly { id: string }[]): AttachmentRef[] {

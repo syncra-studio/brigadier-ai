@@ -2823,6 +2823,46 @@ pub(crate) fn inline_image_tokens<'a>(
     tokens
 }
 
+/// The `[Pasted text #n]` number of text pasted into a message as a chip, if `attachment` is
+/// one: a pasted text (not a "Pasted text" card) numbered where it was pasted. Images and
+/// pasted texts are numbered apart.
+pub(crate) fn inline_paste(attachment: &AttachmentRef) -> Option<u32> {
+    attachment.inline.filter(|&n| attachment.pasted && n > 0)
+}
+
+/// What stands for pasted text `n` in a message's text.
+pub(crate) fn paste_marker(n: u32) -> String {
+    format!("[Pasted text #{n}]")
+}
+
+/// Puts pasted text `n` (`content`) where the user pasted it: its first `[Pasted text #n]` in
+/// `text`, marked as pasted there by the user; any later one says it is that text again.
+/// Without one (edited out), it goes at the end, as pasted with the message.
+pub(crate) fn place_inline_paste(text: &mut String, n: u32, content: &str) {
+    let marker = paste_marker(n);
+    if text.contains(&marker) {
+        *text = text
+            .replacen(
+                &marker,
+                &format!(
+                    "[Pasted text #{n}, pasted here by the user:]\n{content}\n[end of pasted text #{n}]"
+                ),
+                1,
+            )
+            .replace(
+                &marker,
+                &format!("[Pasted text #{n} again: the same text as above]"),
+            );
+    } else {
+        push_block(
+            text,
+            &format!(
+                "[Pasted text #{n}, pasted with this message by the user:]\n{content}\n[end of pasted text #{n}]"
+            ),
+        );
+    }
+}
+
 /// Plain text for titles, previews and quoted snippets; never changes the stored message.
 pub(crate) fn display_text(text: &str, attachments: &[AttachmentRef]) -> String {
     let mut shown = String::with_capacity(text.len());
@@ -2924,6 +2964,46 @@ fn prefix(text: &str, bytes: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pasted_text_goes_where_it_was_pasted_marked_as_the_users() {
+        let mut text = "Fix this:\n[Pasted text #1]\nand again [Pasted text #1]".to_owned();
+        place_inline_paste(&mut text, 1, "# Error\nline 2");
+        assert_eq!(
+            text,
+            "Fix this:\n[Pasted text #1, pasted here by the user:]\n# Error\nline 2\n[end of pasted text #1]\nand again [Pasted text #1 again: the same text as above]"
+        );
+        // Edited out of the text: it goes with the message, at the end.
+        let mut text = "Look".to_owned();
+        place_inline_paste(&mut text, 2, "x");
+        assert_eq!(
+            text,
+            "Look\n\n[Pasted text #2, pasted with this message by the user:]\nx\n[end of pasted text #2]"
+        );
+        let chip = AttachmentRef {
+            id: "t".into(),
+            name: "Pasted text.md".into(),
+            mime: "text/markdown".into(),
+            bytes: 1,
+            pasted: true,
+            inline: Some(2),
+        };
+        assert_eq!(inline_paste(&chip), Some(2));
+        assert_eq!(
+            inline_paste(&AttachmentRef {
+                inline: None,
+                ..chip.clone()
+            }),
+            None
+        );
+        assert_eq!(
+            inline_paste(&AttachmentRef {
+                pasted: false,
+                ..chip
+            }),
+            None
+        );
+    }
 
     /// A folder in the temp directory, removed when dropped however the test ends.
     struct Temp(PathBuf);

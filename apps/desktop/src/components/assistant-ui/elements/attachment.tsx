@@ -5,7 +5,7 @@ import {
   useAuiState,
 } from "@assistant-ui/react";
 import { ChevronRight, Warning } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, type ReactNode, useContext } from "react";
+import { type FC, type ReactNode, useContext, useState } from "react";
 
 import {
   AttachmentReaderContext,
@@ -14,13 +14,15 @@ import {
   ImageTile,
   isPastedFile,
   kindOf,
+  pastedTextFile,
   PasteShortened,
   pasteTooLong,
   readAttachmentText,
   TileRemove,
   useAttachmentText,
 } from "@/components/assistant-ui/elements/attachment-tile";
-import { composerInlineNumber } from "@/components/assistant-ui/elements/inline-image";
+import { inComposerText } from "@/components/assistant-ui/elements/inline-image";
+import { PastedTextDialog } from "@/components/assistant-ui/elements/pasted-text";
 import { Spinner } from "@/components/glyphs/spinner";
 
 /**
@@ -44,8 +46,9 @@ const ComposerAttachment: FC = () => {
     if (status.type === "incomplete" && status.reason === "error") return "error";
     return "ready";
   });
-  // An image pasted into the text shows there, as its chip; here only if it failed, to say why.
-  if (state !== "error" && composerInlineNumber({ id, file }, reader) !== null) return null;
+  // An image or a text pasted into the text shows there, as its chip; here only if it failed,
+  // to say why.
+  if (state !== "error" && inComposerText({ id, file }, reader)) return null;
   const source: AttachmentSource = { file, ref: file ? undefined : reader?.composerRef(id) };
   const pasted = file ? isPastedFile(file) : source.ref?.pasted === true;
   const remove = (
@@ -108,9 +111,9 @@ const ComposerAttachment: FC = () => {
 };
 
 /**
- * The "Pasted text" card: the paste's first line and "Show in text field ›", which
- * puts the text back into the composer and drops the attachment. A paste too long to go to
- * the model whole says so.
+ * The "Pasted text" card: the paste's first line, which opens it in the Pages editor (Done
+ * keeps the edits), and "Show in text field ›", which puts the text back into the composer
+ * and drops the attachment. A paste too long to go to the model whole says so.
  */
 const PastedText: FC<{ source: AttachmentSource; busy: boolean; remove: ReactNode }> = ({
   source,
@@ -121,6 +124,14 @@ const PastedText: FC<{ source: AttachmentSource; busy: boolean; remove: ReactNod
   const reader = useContext(AttachmentReaderContext);
   const text = useAttachmentText(source);
   const firstLine = text?.split("\n").find((line) => line.trim() !== "")?.trim();
+  const [open, setOpen] = useState(false);
+  const done = (markdown: string) => {
+    const composer = aui.composer();
+    void aui
+      .attachment()
+      .remove()
+      .then(() => composer.addAttachment(pastedTextFile(markdown, { markdown: true })));
+  };
   const tooLong = pasteTooLong(source.file?.size ?? source.ref?.bytes ?? 0);
   const show = async () => {
     const pasted = await readAttachmentText(source, reader);
@@ -133,7 +144,19 @@ const PastedText: FC<{ source: AttachmentSource; busy: boolean; remove: ReactNod
     <FileTile
       name="Pasted text"
       mime="text/plain"
-      title={firstLine ?? "Pasted text"}
+      title={
+        <>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setOpen(true)}
+            className="hover:text-foreground max-w-full truncate text-start"
+          >
+            {firstLine ?? "Pasted text"}
+          </button>
+          <PastedTextDialog source={source} title="Pasted text" open={open} onOpenChange={setOpen} onDone={done} />
+        </>
+      }
       detail={
         tooLong ? (
           <PasteShortened />

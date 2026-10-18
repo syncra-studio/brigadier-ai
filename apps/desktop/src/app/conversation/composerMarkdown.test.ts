@@ -6,7 +6,7 @@ import { createHeadlessEditor } from "@lexical/headless";
 import { $dfs } from "@lexical/utils";
 import { $createLineBreakNode, $createParagraphNode, $createTextNode, $getRoot, $isTextNode, type LexicalEditor } from "lexical";
 
-import { imageMarkerAt } from "@/app/conversation/inlineImages";
+import { inlineMarkerAt } from "@/app/conversation/inlineImages";
 import { chipFormatter } from "@/components/assistant-ui/elements/chipText";
 
 import { $exportComposer, $importComposer, CARET, COMPOSER_NODES } from "./composerMarkdown";
@@ -18,7 +18,7 @@ const known = [
 ];
 const formatter = chipFormatter(
   (text, at) => known.find((mention) => text.startsWith(mention.label, at)) ?? null,
-  imageMarkerAt,
+  inlineMarkerAt,
   { code: false, links: true },
 );
 
@@ -121,6 +121,10 @@ test("chips stay whole, Markdown in their names too, and stay text in code", () 
   bold.getEditorState().read(() => {
     assert.ok([...$dfs()].some(({ node }) => $isTextNode(node) && node.hasFormat("bold") && node.getTextContent() === "see "));
   });
+  // An image and a pasted text of the same number: two chips.
+  const pasted = "**See** [Image #1] and [Pasted text #1]";
+  assert.equal(roundTrip(pasted), pasted);
+  assert.deepEqual(chips(imported(pasted)), ["image:1", "paste:1"]);
   // In a heading and a list item too.
   assert.deepEqual(chips(imported("## About @task-9\n- see [Image #1]")), ["task:9", "image:1"]);
   // Code keeps them as their text.

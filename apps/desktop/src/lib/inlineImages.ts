@@ -12,12 +12,39 @@ export function imageTokens(text: string): { id: string; start: number; end: num
   }));
 }
 
-/** Only known, eligible inline refs count; repeated tokens share a single ref. */
+/**
+ * What an attachment in the text is: pasted text (`[Pasted text #n]`) or an image
+ * (`[Image #n]`). The two are numbered apart.
+ */
+export function inlineKind(ref: Pick<AttachmentRef, "pasted">): "image" | "paste" {
+  return ref.pasted ? "paste" : "image";
+}
+
+/** An attachment in the text by its kind and number, as `image:1` or `paste:1`. */
+export function inlineKey(ref: Pick<AttachmentRef, "pasted" | "inline">): string | null {
+  return ref.inline === null ? null : `${inlineKind(ref)}:${ref.inline}`;
+}
+
+/** The `kind:n` keys of the images and pasted texts whose markers are in `text`. */
+function markerKeys(text: string): Set<string> {
+  return new Set([
+    ...[...text.matchAll(/\[Image #(\d+)\]/g)].map((match) => `image:${match[1]}`),
+    ...[...text.matchAll(/\[Pasted text #(\d+)\]/g)].map((match) => `paste:${match[1]}`),
+  ]);
+}
+
+/**
+ * Only known, eligible inline refs count; repeated tokens share a single ref. An image and a
+ * pasted text of the same number are two refs.
+ */
 export function inlineRefs(text: string, refs: Iterable<AttachmentRef>): AttachmentRef[] {
   const all = [...refs];
-  const numbered = new Set([...text.matchAll(/\[Image #(\d+)\]/g)].map((match) => Number(match[1])));
-  const selected = [...new Map(all.filter((ref) => ref.inline !== null && numbered.has(ref.inline)).map((ref) => [ref.inline, ref])).values()];
-  const known = new Map(all.filter((ref) => ref.inline !== null && isInlineImage(ref.mime)).map((ref) => [ref.id, ref]));
+  const numbered = markerKeys(text);
+  const selected = [...new Map(all.flatMap((ref) => {
+    const key = inlineKey(ref);
+    return key && numbered.has(key) ? [[key, ref] as const] : [];
+  })).values()];
+  const known = new Map(all.filter((ref) => ref.inline !== null && !ref.pasted && isInlineImage(ref.mime)).map((ref) => [ref.id, ref]));
   return [...selected, ...[...new Set(imageTokens(text).map(({ id }) => id))].flatMap((id) => {
     const ref = known.get(id);
     return ref ? [{ ...ref, inline: 0, pasted: false }] : [];
@@ -30,7 +57,7 @@ export function imagePreview(text: string, refs: Iterable<AttachmentRef>): strin
   const known = new Set(inlineRefs(text, all).map((ref) => ref.id));
   let shown = text;
   for (const ref of inlineRefs(text, all)) {
-    if (ref.inline !== null && ref.inline > 0) shown = shown.replaceAll(`[Image #${ref.inline}]`, "[image]");
+    if (ref.inline !== null && ref.inline > 0 && !ref.pasted) shown = shown.replaceAll(`[Image #${ref.inline}]`, "[image]");
   }
   return shown.replace(/\[image:([^[\]]*)\]/g, (token, id: string) => known.has(id) ? "[image]" : token);
 }
@@ -74,7 +101,7 @@ export function queuedImageRefs(
 
 /** Upgrade main's stored ID tokens (including local drafts with boolean inline flags). */
 export function normalizedImages(text: string, refs: readonly AttachmentRef[]): { text: string; attachments: AttachmentRef[] } {
-  const taken = refs.flatMap((ref) => typeof ref.inline === "number" && ref.inline > 0 ? [ref.inline] : []);
+  const taken = refs.flatMap((ref) => typeof ref.inline === "number" && ref.inline > 0 && !ref.pasted ? [ref.inline] : []);
   let next = Math.max(0, ...taken) + 1;
   const numbers = new Map<string, number>();
   const attachments = refs.map((ref) => {

@@ -10,7 +10,8 @@ import {
   type MentionOption,
 } from "@/components/assistant-ui/elements/composer-mentions";
 import { MessageInlineImage } from "@/components/assistant-ui/elements/inline-image";
-import { InlineImageContext, TaskMentionContext } from "@/components/assistant-ui/file-links";
+import { InlineImageContext, InlinePasteContext, TaskMentionContext } from "@/components/assistant-ui/file-links";
+import { MessagePastedText } from "@/components/assistant-ui/elements/pasted-text";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
 import { normalizedImages } from "@/lib/inlineImages";
@@ -56,17 +57,22 @@ const taskChip = (number: number) => <TaskByNumber number={number} />;
 /**
  * The user's own words as they wrote them in Markdown (as the answer renders, without its
  * streaming fade), as one document: each line break kept, the workers they @-mentioned as chips
- * and the images they pasted as chips where they pasted them, never inside code.
+ * and the images and texts they pasted as chips where they pasted them, never inside code.
  */
 export const UserMarkdownText: FC<{ text: string; attachments: readonly AttachmentRef[] }> = ({ text, attachments }) => {
   const normalized = useMemo(() => normalizedImages(text, attachments), [text, attachments]);
   const imageChip = useCallback((n: number) => (
-    <MessageInlineImage image={normalized.attachments.find((ref) => ref.inline === n)} n={n} />
+    <MessageInlineImage image={normalized.attachments.find((ref) => ref.inline === n && !ref.pasted)} n={n} />
+  ), [normalized]);
+  const pasteChip = useCallback((n: number) => (
+    <MessagePastedText paste={normalized.attachments.find((ref) => ref.inline === n && ref.pasted)} n={n} />
   ), [normalized]);
   return (
     <TaskMentionContext.Provider value={taskChip}>
       <InlineImageContext.Provider value={imageChip}>
-        <MarkdownBlock text={normalized.text} breaks />
+        <InlinePasteContext.Provider value={pasteChip}>
+          <MarkdownBlock text={normalized.text} breaks />
+        </InlinePasteContext.Provider>
       </InlineImageContext.Provider>
     </TaskMentionContext.Provider>
   );

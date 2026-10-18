@@ -38,6 +38,12 @@ export const TaskMentionContext = createContext<((number: number) => ReactNode) 
  */
 export const InlineImageContext = createContext<((n: number) => ReactNode) | null>(null);
 
+/**
+ * How a text pasted as a chip shows in the user's own message (`brigadier-paste:n` links): its
+ * chip, where it was pasted. Without it the `[Pasted text #n]` stays as written.
+ */
+export const InlinePasteContext = createContext<((n: number) => ReactNode) | null>(null);
+
 /** The conversation whose messages hold the links, where a view shows one that isn't selected. */
 export const LinkConversationContext = createContext<string | null>(null);
 

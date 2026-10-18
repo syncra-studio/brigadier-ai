@@ -53,7 +53,7 @@ use crate::model::{
 };
 use crate::routing::{TokenMeter, WriteCause};
 use crate::runtime::{is_delta, merge_delta};
-use crate::sessions::{inline_image_tokens, push_block};
+use crate::sessions::{inline_image_tokens, inline_paste, place_inline_paste, push_block};
 use crate::tools::{Role, RunTools};
 use crate::work::{
     AttachmentRef, Compaction, CompactionState, ContextInjection, HeldBy, InjectionKind,
@@ -3782,13 +3782,25 @@ impl SessionManager {
                     self.attachment_file(conv, attachment).await,
                 );
             }
-            let text = name_inline_images(
+            let mut text = name_inline_images(
                 &user_text,
                 &message.attachments,
                 &copied,
                 conv.kind,
                 &mut files,
             );
+            // Text pasted as a chip goes where it was pasted, marked as the user's paste.
+            for attachment in &message.attachments {
+                if let Some(n) = inline_paste(attachment)
+                    && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
+                {
+                    place_inline_paste(
+                        &mut text,
+                        n,
+                        &pasted_inline(&pasted, attachment, conv.kind),
+                    );
+                }
+            }
             let mut inline = vec![InputPart::Text(text)];
             for attachment in plan.rows.iter().filter(|a| a.inline.is_none()) {
                 if attachment.pasted
@@ -4008,10 +4020,25 @@ impl SessionManager {
         }
     }
 
-    /// Everything the user wrote in a message: what they typed, then what they pasted.
+    /// Everything the user wrote in a message: what they typed, with the texts they pasted as
+    /// chips where they pasted them, then the texts they pasted as cards.
     pub(super) async fn full_words(&self, message: &Message) -> String {
         let mut words = self.full_text(message).await;
-        for pasted in self.core.pasted_texts(&message.attachments).await {
+        let (chips, cards): (Vec<_>, Vec<_>) = message
+            .attachments
+            .iter()
+            .filter(|attachment| attachment.pasted)
+            .cloned()
+            .partition(|attachment| inline_paste(attachment).is_some());
+        for chip in &chips {
+            if let (Some(n), Ok(pasted)) = (
+                inline_paste(chip),
+                self.core.read_blob_text(chip.id.clone()).await,
+            ) {
+                place_inline_paste(&mut words, n, &pasted);
+            }
+        }
+        for pasted in self.core.pasted_texts(&cards).await {
             push_block(&mut words, &pasted);
         }
         words
@@ -6966,7 +6993,8 @@ fn name_inline_images(
                 });
                 files.len()
             });
-        let Some(number) = attachment.inline else {
+        // Text pasted as a chip is numbered apart, and placed with its text.
+        let Some(number) = attachment.inline.filter(|_| !attachment.pasted) else {
             continue;
         };
         let n = if number > 0 {
@@ -7184,6 +7212,33 @@ mod tests {
                 "before [Image #1, pasted here: image 1 of the images sent with this message] again [Image #1 again: the same image as above, not another one]"
             );
         }
+    }
+
+    #[test]
+    fn a_pasted_text_chip_is_not_an_image_of_the_same_number() {
+        let mut image = image_ref("a", true, "image/png");
+        image.inline = Some(1);
+        let paste = AttachmentRef {
+            id: "t".into(),
+            name: "Pasted text.md".into(),
+            mime: "text/markdown".into(),
+            bytes: 3,
+            pasted: true,
+            inline: Some(1),
+        };
+        let attachments = vec![paste, image];
+        let mut files = Vec::new();
+        let text = name_inline_images(
+            "[Pasted text #1] and [Image #1]",
+            &attachments,
+            &image_files(&attachments[1..]),
+            ConversationKind::Chat,
+            &mut files,
+        );
+        assert_eq!(
+            text,
+            "[Pasted text #1] and [Image #1, pasted here: image 1 of the images sent with this message]"
+        );
     }
 
     #[test]

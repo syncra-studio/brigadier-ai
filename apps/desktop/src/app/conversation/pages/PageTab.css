@@ -1,6 +1,6 @@
 /* Hallmark · component scope · tone: quiet document · anchor hue: inherited neutral */
 /* Shared by the page and what it opens over the window (menus, toolbar, dialogs). */
-.page-tab, .page-menu, .page-selection-toolbar, .page-list-dialog {
+.page-tab, .page-menu, .page-selection-toolbar, .page-list-dialog, .page-paste-dialog {
   --page-column: 46rem;
   --page-font: .875rem;
   --page-line: 1.421875rem;
@@ -116,6 +116,8 @@
 
 /* Show pages. */
 .page-list-dialog { max-width: 30rem; }
+.page-paste-dialog { max-width: 46rem; max-height: 90%; grid-template-rows: auto minmax(0, 1fr) auto; }
+.page-paste-dialog .page-scroll { padding: .5rem .25rem 1rem var(--page-gutter); }
 .page-list { display: flex; flex-direction: column; max-height: 20rem; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
 .page-list-row { display: flex; align-items: center; gap: .5rem; width: 100%; height: 2.25rem; padding: 0 .5rem; border-radius: .625rem; text-align: start; }
 .page-list-row[aria-current="true"] { background: var(--toolbar-hover); }
