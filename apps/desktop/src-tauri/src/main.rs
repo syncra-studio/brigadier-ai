@@ -645,6 +645,16 @@ fn main() {
     if cfg!(debug_assertions) && context.config().identifier == RELEASE_IDENTIFIER {
         context.config_mut().identifier = DEBUG_IDENTIFIER.to_owned();
     }
+    // A session's app preview (#142): the user's work keeps the focus, at this launch and
+    // whenever it shows its window later, until the user comes to it.
+    let background = std::env::var_os(brigadier_sandbox::BACKGROUND_LAUNCH_ENV)
+        .is_some_and(|value| value == "1");
+    if background {
+        shell::launch_in_background();
+        for window in &mut context.config_mut().app.windows {
+            window.focus = false;
+        }
+    }
     // The first launch's intro shows the window itself, once the page is ready (intro.rs).
     let hold_for_intro = intro::should_hold(first_launch, smoke, intent.is_some());
     if intent.is_some() || hold_for_intro {
@@ -875,6 +885,7 @@ fn main() {
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
             overnight_notifications::leave_host();
+            shell::user_came_to_it();
             shell::show_main(app);
         }
         #[cfg(target_os = "macos")]

@@ -352,9 +352,12 @@ impl SessionManager {
         let kind = args
             .kind
             .unwrap_or_else(|| super::preview_ready::infer_kind(&command));
-        let env = args.env.unwrap_or_default();
-        #[cfg(target_os = "macos")]
-        let mut env = env;
+        let mut env = args.env.unwrap_or_default();
+        // An app runs in the background: the user's work keeps the focus (#142).
+        if kind == PreviewKind::App {
+            env.entry(brigadier_sandbox::BACKGROUND_LAUNCH_ENV.into())
+                .or_insert_with(|| "1".into());
+        }
         let installed = brigadier_sandbox::default_data_dir().ok();
         let protected = [Some(self.data_dir.clone()), installed]
             .into_iter()

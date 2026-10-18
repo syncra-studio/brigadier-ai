@@ -236,6 +236,10 @@ pub const APP_ID: &str = "ai.brigadier.app";
 /// Environment variable that overrides the data directory, used by the smoke check and dev runs.
 pub const DATA_DIR_ENV: &str = "BRIGADIER_DATA_DIR";
 
+/// Set for an app a session launches as a preview (#142): a Brigadier build started with it
+/// stays in the background, never taking focus, at launch or when launched again.
+pub const BACKGROUND_LAUNCH_ENV: &str = "BRIGADIER_BACKGROUND_LAUNCH";
+
 /// Builds the platform implementation for the current OS.
 pub fn native(options: PlatformOptions) -> Result<Arc<dyn Platform>> {
     let data_dir = match options.data_dir {

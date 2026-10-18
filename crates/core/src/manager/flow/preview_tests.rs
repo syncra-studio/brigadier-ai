@@ -1391,6 +1391,57 @@ async fn an_app_preview_has_no_url_and_waits_for_its_window() {
     flow.stop().await;
 }
 
+/// An app preview runs in the background (#142): its launch, and a relaunch of the same app,
+/// carry the marker that keeps a Brigadier build from taking the focus; a web preview's doesn't.
+#[tokio::test]
+async fn an_app_preview_and_its_relaunch_launch_in_the_background() {
+    let replies: Replies = Arc::default();
+    let flow = Flow::start(
+        "preview-background",
+        Options::default(),
+        thread(replies.clone()),
+    )
+    .await;
+    let env = brigadier_sandbox::BACKGROUND_LAUNCH_ENV;
+    let log = |preview: &str| {
+        let (flow, preview) = (&flow, preview.to_owned());
+        async move {
+            super::eventually_async("the preview's first line", || {
+                let preview = preview.clone();
+                async move {
+                    flow.manager
+                        .preview_log_tail(flow.conversation.clone(), preview, 10)
+                        .await
+                        .is_ok_and(|(text, _)| text.contains("bg="))
+                }
+            })
+            .await;
+            flow.manager
+                .preview_log_tail(flow.conversation.clone(), preview, 10)
+                .await
+                .unwrap()
+                .0
+        }
+    };
+    let app = format!("start-app echo \"bg=${env}\"; sleep 600");
+    flow.say(&app).await;
+    flow.settled().await;
+    assert!(log("preview-1").await.contains("bg=1"));
+    flow.manager
+        .stop_preview(flow.conversation.clone(), Some("preview-1".into()))
+        .await
+        .unwrap();
+    // Launched again: still in the background.
+    flow.say(&app).await;
+    flow.settled().await;
+    assert!(log("preview-2").await.contains("bg=1"));
+    flow.say(&format!("start echo \"bg=${env}.\"; sleep 600"))
+        .await;
+    flow.settled().await;
+    assert!(log("preview-3").await.contains("bg=."));
+    flow.stop().await;
+}
+
 // Row Stop, Stop all and the composer's Stop remove only user-stopped work.
 // Natural exits remain inspectable, even if Stop arrives after the process ended.
 #[tokio::test]

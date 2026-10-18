@@ -485,13 +485,29 @@ fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW)
 }
 
+/// A build a session launched as an app preview (#142): it never takes the focus itself, at
+/// launch, for its intro, a folder it is handed or a second launch, until the user comes to it.
+static BACKGROUND: AtomicBool = AtomicBool::new(false);
+
+/// This build was launched in the background.
+pub fn launch_in_background() {
+    BACKGROUND.store(true, Ordering::SeqCst);
+}
+
+/// The user came to the app (its Dock icon): from now on it comes forward as usual.
+pub fn user_came_to_it() {
+    BACKGROUND.store(false, Ordering::SeqCst);
+}
+
 pub fn show_main(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
     if let Some(window) = main_window(app) {
         let _ = window.unminimize();
         let _ = window.show();
-        let _ = window.set_focus();
+        if !BACKGROUND.load(Ordering::SeqCst) {
+            let _ = window.set_focus();
+        }
     }
     notify_visibility(app, true);
 }
