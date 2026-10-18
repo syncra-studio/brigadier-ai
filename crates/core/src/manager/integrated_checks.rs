@@ -908,6 +908,21 @@ impl SessionManager {
             &TaskId(format!("checks-{id}")),
         )
         .await?;
+        // The app runs here as in the session's worktree: the checkout's gitignored env files
+        // and what `.worktreeinclude` names are copied in, and stay as the tree moves.
+        let secret_files = self
+            .core
+            .conversation(id)
+            .ok()
+            .and_then(|conversation| conversation.project_id)
+            .and_then(|project| self.core.project(&project).ok())
+            .map(|project| project.prefs.secret_files)
+            .unwrap_or_default();
+        if let Err(err) =
+            super::secrets::copy_secrets(self, &owner, repo, &tree, &secret_files).await
+        {
+            tracing::warn!(conversation = %id, %err, "couldn't copy the checkout's env files into the check checkout");
+        }
         Ok(tree)
     }
 

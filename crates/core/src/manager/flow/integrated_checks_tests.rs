@@ -1687,3 +1687,50 @@ async fn computer_use_off_routes_nothing_to_a_live_look() {
         "{brief}"
     );
 }
+
+/// Phase B: the check checkout runs the app as the session's worktree does: it gets the user's
+/// checkout's gitignored `.env` and what `.worktreeinclude` names.
+#[tokio::test]
+async fn the_check_checkout_gets_the_checkouts_env_files() {
+    const NEEDS_ENV: &str = r#"#!/bin/sh
+grep -qx 'APP_KEY=k-1' .env || { echo "no .env"; exit 1; }
+test -f local/config.json || { echo "no local/config.json"; exit 1; }
+"#;
+    let flow = Flow::start(
+        "integrated-env",
+        Options {
+            files: vec![
+                ("tools/full-checks.sh", NEEDS_ENV),
+                (".gitignore", ".env\nlocal/\n"),
+                (".worktreeinclude", "local/config.json\n"),
+            ],
+            ..Options::default()
+        },
+        script(move |turn| async move {
+            if turn.is_orchestrator() && turn.input.starts_with("Build it") {
+                thread_commit(&turn, "one.txt", "one\n");
+                return Reply::text("Built one.");
+            }
+            Reply::text("[quiet]")
+        }),
+    )
+    .await;
+    std::fs::write(flow.repo.join(".env"), "APP_KEY=k-1\n").unwrap();
+    std::fs::create_dir_all(flow.repo.join("local")).unwrap();
+    std::fs::write(flow.repo.join("local/config.json"), "{}\n").unwrap();
+    flow.say("Build it.").await;
+    let board = flow
+        .until("the full checks to end", |board| {
+            board
+                .integrated_checks
+                .values()
+                .any(|check| check.state.is_final())
+        })
+        .await;
+    let checks: Vec<_> = board.integrated_checks.values().collect();
+    assert!(
+        matches!(checks[0].state, IntegratedCheckState::Passed { .. }),
+        "{checks:#?}"
+    );
+    flow.stop().await;
+}
