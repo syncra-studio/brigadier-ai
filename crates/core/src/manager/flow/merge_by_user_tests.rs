@@ -1170,7 +1170,13 @@ async fn close_workspace_waits_for_a_running_scout() {
             .any(|task| task.number == 1 && task.state.is_final())
     })
     .await;
-    flow.settled().await;
+    // The close asks for the thread to be idle too: its turn on the scout's report may still
+    // run after the board shows the request settled (#276).
+    flow.idle().await;
+    flow.until("the thread's run to end", |board| {
+        board.run == crate::work::RunState::Idle
+    })
+    .await;
     flow.manager
         .close_workspace(&flow.conversation)
         .await
