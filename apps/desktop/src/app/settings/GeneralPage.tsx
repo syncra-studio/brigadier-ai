@@ -56,6 +56,10 @@ export const GENERAL_ROWS = {
     label: "Follow-up behaviour",
     description: "What a message sent while an agent works does",
   },
+  plainText: {
+    label: "Plain text composer",
+    description: "Keep code, Markdown and links as literal text",
+  },
   contextUsage: {
     label: "Show context window usage",
     description: "A ring by the model picker shows how full the model's context is",
@@ -230,6 +234,7 @@ function ComposerSection() {
             onChange={(value) => followUpAction.run(() => setSetting("followUp", value))}
           />
         </SettingsRow>
+        <SwitchSetting setting="plainTextComposer" row={GENERAL_ROWS.plainText} />
         <SwitchSetting setting="showContextUsage" row={GENERAL_ROWS.contextUsage} />
       </SettingsCard>
     </SettingsSection>

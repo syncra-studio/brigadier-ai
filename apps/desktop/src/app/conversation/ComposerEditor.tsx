@@ -70,7 +70,6 @@ import {
   pastedTextFile,
 } from "@/components/assistant-ui/elements/attachment-tile";
 import {
-  ALL_CHIPS,
   type ChipKinds,
   ChipComposerInput,
   chipFormatter,
@@ -98,12 +97,15 @@ export type ComposerInputProps = {
 
 /** The rich field's chips: code is a mark there, not a chip. */
 const RICH_CHIPS: ChipKinds = { code: false, links: true };
+/** The plain field's: code and links stay literal text; mentions, images and pastes are chips. */
+const PLAIN_CHIPS: ChipKinds = { code: false, links: false };
 
 /**
  * The text field (assistant-ui's Lexical input): grows with its text up to a quarter of the
  * window, then scrolls, the top line fading under the edge once scrolled. Mentions, links and
  * pasted images show as chips. The rich field shows Markdown as formatting and keeps its text
- * as Markdown; the plain one keeps it as typed, inline code a chip too.
+ * as Markdown; the plain one (Settings › General › Composer) keeps it as typed, code, Markdown
+ * and links literal.
  */
 export default function ComposerEditor({
   placeholder,
@@ -120,7 +122,7 @@ export default function ComposerEditor({
   const targets = target?.targets;
   useEffect(() => memory?.setWorkers(targets ?? []), [memory, targets]);
   const rich = useRichComposer();
-  const kinds = rich ? RICH_CHIPS : ALL_CHIPS;
+  const kinds = rich ? RICH_CHIPS : PLAIN_CHIPS;
   // One formatter per memory: a new one would rebuild every chip.
   const formatter = useMemo(
     () => chipFormatter((text, at) => memory?.match(text, at) ?? null, inlineMarkerAt, kinds),

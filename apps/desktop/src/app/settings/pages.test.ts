@@ -69,7 +69,7 @@ test("search finds every merged setting on Configuration, and no Recent activity
     }
     assert.deepEqual(found("Recent activity"), []);
     // What the composer shows and how it sends are General's.
-    for (const query of ["Show context window usage", "Follow-up behaviour"]) {
+    for (const query of ["Show context window usage", "Follow-up behaviour", "Plain text composer"]) {
       assert.ok(
         found(query).some((result) => result.page.id === "general" && result.row?.label === query),
         `"${query}" finds its row on General`,

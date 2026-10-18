@@ -153,7 +153,7 @@ test("text selected in an answer gets a pill: Add to chat quotes it into the com
   // 8px above the selection, centred on it.
   assert.ok(seen.placed && Math.abs(seen.placed.bottomGap - 8) <= 1 && Math.abs(seen.placed.centre) <= 1, JSON.stringify(seen.placed));
   assert.deepEqual(seen.buttons, ["Add to chat", "Ask in side chat"]);
-  assert.match(seen.composer ?? "", /> Rounding now uses half-up everywhere\./);
+  assert.equal(seen.composer, "Rounding now uses half-up everywhere.");
   assert.equal(seen.focusedOwn, true);
   assert.equal(seen.marked, 1);
   assert.deepEqual(seen.afterAdd, { pill: false, collapsed: true });

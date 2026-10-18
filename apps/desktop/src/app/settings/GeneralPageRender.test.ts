@@ -37,6 +37,7 @@ test("General: its sections and rows, and every new setting saved for real", { t
       "Density",
       "When the sidebar is closed",
       "Follow-up behaviour",
+      "Plain text composer",
       "Show context window usage",
       "Notifications aren't on yet",
       "Notify when a session finishes",
@@ -71,6 +72,7 @@ test("General: its sections and rows, and every new setting saved for real", { t
   assert.deepEqual(seen.notificationsAfter, ["Notify when a session finishes", "When something needs you"]);
   assert.deepEqual(seen.calls, [
     "followUp steer",
+    "plainTextComposer true",
     "notifyNeedsYou false",
     "setLoginItem true",
     "setLoginItem false",
@@ -80,7 +82,7 @@ test("General: its sections and rows, and every new setting saved for real", { t
 
 test("General: notifications off point to System Settings, and Open at login waits for approval", { timeout: 60000 }, async (t) => {
   const seen = await render(t, "notifications=off&login=needsApproval");
-  const notifications = seen.rows.slice(5, 8);
+  const notifications = seen.rows.slice(6, 9);
   assert.deepEqual(notifications, [
     { setting: "Notifications are off", helper: "Turn them on in System Settings to use the options below", dimmed: false },
     { setting: "Notify when a session finishes", helper: "A notification when a chat or session is done", dimmed: true },

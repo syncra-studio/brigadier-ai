@@ -194,6 +194,7 @@ export const useApp = create<AppState>()(() => ({
     defaultChatModel: null,
     hibernateAfterMinutes: 30,
     showContextUsage: true,
+    plainTextComposer: false,
     showFullAccessNotice: true,
     enrichBrain: true,
     shortReplies: true,

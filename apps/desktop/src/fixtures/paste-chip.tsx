@@ -18,7 +18,8 @@ import { select } from "@/state/actions";
 import { setRichComposer } from "@/state/composerMode";
 import { useApp } from "@/state/store";
 
-setRichComposer(true);
+// The rich field, or with `?plain` the plain one (Settings › General › Composer).
+setRichComposer(!new URLSearchParams(location.search).has("plain"));
 
 const id = "paste-chat";
 const start = Date.now() - 600_000;
@@ -110,7 +111,7 @@ async function until(what: string, check: () => boolean, ms = 10_000) {
     await sleep(16);
   }
 }
-const field = () => document.querySelector<HTMLElement>("[data-rich-composer] [contenteditable=true]");
+const field = () => document.querySelector<HTMLElement>("[data-slot=composer-input] [contenteditable=true]");
 const typed = () => field()?.textContent ?? "";
 const key = (name: string, modifiers?: ("Alt" | "Control" | "Meta" | "Shift")[]) =>
   fixtureInput({ type: "key", key: name, ...(modifiers ? { modifiers } : {}) });

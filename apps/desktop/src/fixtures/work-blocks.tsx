@@ -636,7 +636,8 @@ async function driveSelect(): Promise<object> {
   await settle();
   const focusedOwn = document.activeElement?.matches("[data-slot=composer-input] .aui-lexical-input") === true && !decoy.contains(document.activeElement);
   decoy.remove();
-  const composer = text(one("[contenteditable=true][aria-label='Message input']"));
+  // The rich field shows the quote as a quote block.
+  const composer = text(one("[contenteditable=true][aria-label='Message input'] blockquote"));
   const marked = CSS.highlights.get("thread-annotation")?.size ?? 0;
   const afterAdd = { pill: !!pill(), collapsed: document.getSelection()?.isCollapsed ?? null };
   // Selected again: Ask in side chat.

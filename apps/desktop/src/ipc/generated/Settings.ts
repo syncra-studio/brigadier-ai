@@ -41,6 +41,11 @@ hibernateAfterMinutes: number,
  */
 showContextUsage: boolean, 
 /**
+ * The composer keeps code, Markdown and links as literal text instead of showing them
+ * formatted as they are typed (Settings › General › Composer).
+ */
+plainTextComposer: boolean, 
+/**
  * A notice above the composer while a conversation is in Full access.
  */
 showFullAccessNotice: boolean, 

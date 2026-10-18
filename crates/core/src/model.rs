@@ -864,6 +864,9 @@ pub struct Settings {
     pub hibernate_after_minutes: u32,
     /// The composer shows how full the model's context is (a ring by the model picker).
     pub show_context_usage: bool,
+    /// The composer keeps code, Markdown and links as literal text instead of showing them
+    /// formatted as they are typed (Settings › General › Composer).
+    pub plain_text_composer: bool,
     /// A notice above the composer while a conversation is in Full access.
     pub show_full_access_notice: bool,
     /// Spend quota left over before a usage window resets on deepening the Project Brains.
@@ -1117,6 +1120,7 @@ impl Default for Settings {
             default_chat_model: None,
             hibernate_after_minutes: 30,
             show_context_usage: true,
+            plain_text_composer: false,
             show_full_access_notice: true,
             enrich_brain: true,
             short_replies: true,
@@ -2799,6 +2803,13 @@ mod tests {
                 .unwrap()
                 .contains("sendShortcut")
         );
+    }
+
+    #[test]
+    fn the_composer_is_rich_by_default_and_for_settings_saved_before_the_switch() {
+        assert!(!Settings::default().plain_text_composer);
+        let settings: Settings = serde_json::from_str(r#"{"followUp":"steer"}"#).unwrap();
+        assert!(!settings.plain_text_composer);
     }
 
     #[test]

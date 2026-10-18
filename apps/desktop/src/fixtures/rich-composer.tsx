@@ -127,6 +127,12 @@ async function send(): Promise<string> {
   return sends.at(-1)!.text;
 }
 
+/** The Plain text composer switch, as Settings › General sets it. */
+const plainOn = (on: boolean) =>
+  useApp.setState((state) => ({ settings: { ...state.settings, plainTextComposer: on } }));
+/** The field in either mode. */
+const anyField = () => document.querySelector<HTMLElement>("[data-slot=composer-input] [contenteditable=true]");
+
 const imageChip = () => document.querySelector("[aria-label='Preview Image #1']");
 
 async function drive() {
@@ -267,6 +273,26 @@ async function drive() {
     field()!.dispatchEvent(new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true }));
     await until("the paste", () => typed() === "**x** and snake_case");
     seen.literal = { bold: has(".font-semibold"), sent: await send() };
+
+    // The Plain text composer switch turns the open draft into its Markdown as text, and back.
+    setRichComposer(null);
+    await type("**b** and `c` see [l](https://x.y) ");
+    await until("formatting", () => has(".font-semibold", "b") && has("a", "l"));
+    plainOn(true);
+    await until("the plain field", () => field() === null && anyField() !== null);
+    await until("the draft as text", () => anyField()!.textContent === "**b** and `c` see [l](https://x.y) ");
+    seen.plain = {
+      text: anyField()!.textContent,
+      // Code and links stay literal text there, as Markdown does.
+      chips: anyField()!.querySelectorAll("[data-slot=composer-chip]").length,
+      bold: anyField()!.querySelector(".font-semibold") !== null,
+    };
+    plainOn(false);
+    await until("the rich field again", () => field() !== null);
+    await until("formatting again", () => has(".font-semibold", "b") && has(".font-mono", "c") && has("a", "l"));
+    // Switched in Settings, the field takes the keyboard again with a click.
+    await fixtureClick(field()!);
+    seen.richAgain = await send();
   } catch (error) {
     seen.error = String(error);
   }

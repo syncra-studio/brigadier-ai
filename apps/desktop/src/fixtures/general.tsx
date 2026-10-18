@@ -126,6 +126,7 @@ function Fixture() {
         seen.followUpHelper = text(row("Follow-up behaviour")?.querySelector(".text-xs"));
         all<HTMLElement>('[role="radio"]', row("Follow-up behaviour") ?? document).find((item) => text(item) === "Steer")?.click();
       },
+      () => (control("Plain text composer") as HTMLButtonElement | null)?.click(),
       () => (control("When something needs you") as HTMLButtonElement | null)?.click(),
       () => (control("Open at login") as HTMLButtonElement | null)?.click(),
       () => {
