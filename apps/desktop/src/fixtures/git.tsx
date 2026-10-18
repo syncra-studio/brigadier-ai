@@ -6,7 +6,6 @@ import { createRoot } from "react-dom/client";
 import { GitPage } from "@/app/settings/GitPage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ModelInfo, ProviderKind, ProviderOverview, Request, Settings } from "@/ipc/generated";
-import { setAutoMergeOn } from "@/lib/autoMerge";
 import { useApp } from "@/state/store";
 
 /*
@@ -17,8 +16,6 @@ import { useApp } from "@/state/store";
  * page with a picked model and custom commit instructions, for screenshots.
  */
 const params = new URLSearchParams(location.search);
-// Auto-merge is built in for the fixture; ?autoMerge=0 shows the page without it.
-setAutoMergeOn(params.get("autoMerge") !== "0");
 document.documentElement.dataset.density = params.get("density") === "compact" ? "compact" : "normal";
 if (params.has("drive")) {
   const still = document.createElement("style");

@@ -30,7 +30,6 @@ import {
   status,
   type Autosave,
 } from "@/lib/autosave";
-import { autoMergeOn } from "@/lib/autoMerge";
 import { branchPrefixProblem } from "@/lib/refname";
 import { builtInDefault, useAvailableModelGroups, useModelGroups, withChoice } from "@/lib/setup";
 import { cn } from "@/lib/utils";
@@ -84,11 +83,6 @@ export const GIT_ROWS = {
   },
 } as const;
 
-/** The rows Settings search finds: the merge switch only while auto-merge is built in. */
-export function gitRows() {
-  return Object.values(GIT_ROWS).filter((row) => row !== GIT_ROWS.autoMerge || autoMergeOn());
-}
-
 const AUTOMATIC_HINT =
   "A fast, light model Brigadier picks for each message. When an agent is out of quota, another one writes.";
 
@@ -117,11 +111,7 @@ export function GitPage() {
   return (
     <SettingsPage
       title="Git"
-      description={
-        autoMergeOn()
-          ? "How Brigadier and its agents write commit messages and pull requests, merge the work, and name new branches."
-          : "How Brigadier and its agents write commit messages and pull requests, and name new branches."
-      }
+      description="How Brigadier and its agents write commit messages and pull requests, merge the work, and name new branches."
     >
       <SettingsSection title="Writing">
         <SettingsCard>
@@ -160,13 +150,11 @@ export function GitPage() {
         </SettingsCard>
       </SettingsSection>
 
-      {autoMergeOn() && (
-        <SettingsSection title="Merging">
-          <SettingsCard>
-            <SwitchSetting setting="autoMerge" row={GIT_ROWS.autoMerge} />
-          </SettingsCard>
-        </SettingsSection>
-      )}
+      <SettingsSection title="Merging">
+        <SettingsCard>
+          <SwitchSetting setting="autoMerge" row={GIT_ROWS.autoMerge} />
+        </SettingsCard>
+      </SettingsSection>
 
       <SettingsSection title="Branches">
         <SettingsCard>

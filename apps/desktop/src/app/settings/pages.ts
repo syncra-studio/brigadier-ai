@@ -21,7 +21,7 @@ import { BROWSER_ROWS, BrowserPage } from "@/app/settings/BrowserPage";
 import { COMPUTER_USE_ROWS, ComputerUsePage, computerUseAvailable } from "@/app/settings/ComputerUsePage";
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
-import { GitPage, gitRows } from "@/app/settings/GitPage";
+import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/StoragePage";
 import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
@@ -150,7 +150,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     icon: Branch,
     group: "Agents",
     component: GitPage,
-    rows: gitRows(),
+    rows: Object.values(GIT_ROWS),
   },
   {
     id: "computerUse",

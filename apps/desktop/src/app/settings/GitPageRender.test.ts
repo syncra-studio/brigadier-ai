@@ -60,13 +60,3 @@ test("git settings: writer model, styles, instructions that save themselves, bra
   // Typed on while a save was on its way, then left: the newer edit is saved after it.
   assert.equal(seen.prDuringSave, "Title under 70 characters. Body in bullets. No emoji.");
 });
-
-// Until auto-merge is built in (BRIGADIER_AUTO_MERGE=1), the page has no merge switch.
-test("git settings: no merge switch while auto-merge isn't built in", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "git.html?drive=1&autoMerge=0", "git-result", 20000)) as Record<
-    string,
-    unknown
-  >;
-  assert.deepEqual(seen.sections, ["Writing", "Branches"]);
-  assert.ok(!(seen.rows as string[]).includes("Merge on its own when the work is ready"));
-});

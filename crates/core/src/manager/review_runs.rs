@@ -2362,12 +2362,9 @@ impl SessionManager {
         Ok(reply)
     }
 
-    /// Whether the tab merges its work on its own (Settings › Git, Q62). Until auto-merge is
-    /// finished it is built in only with `BRIGADIER_AUTO_MERGE=1` (WORKSPACES-PLAN.md phase 3);
-    /// tests always have it.
+    /// Whether the tab merges its work on its own (Settings › Git, Q62).
     pub(crate) fn auto_merge_on(&self) -> bool {
-        (cfg!(test) || option_env!("BRIGADIER_AUTO_MERGE") == Some("1"))
-            && self.core.settings().auto_merge
+        self.core.settings().auto_merge
     }
 
     /// [`Self::auto_merge_on`] for session `id`: never while an overnight run goes in it, whose

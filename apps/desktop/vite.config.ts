@@ -25,10 +25,6 @@ export default defineConfig({
     },
   },
   envPrefix: ["VITE_", "TAURI_ENV_"],
-  // Auto-merge stays off until finished (src/lib/autoMerge.ts); only this one variable is read.
-  define: {
-    BRIGADIER_AUTO_MERGE_FLAG: JSON.stringify(process.env.BRIGADIER_AUTO_MERGE ?? ""),
-  },
   build: {
     // WKWebView on macOS 14+ is Safari 17; WebView2 is evergreen Chromium; WebKitGTK tracks Safari.
     target: platform === "windows" ? "chrome120" : "safari17",
