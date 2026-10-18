@@ -31,8 +31,8 @@ use crate::model::{
     ConversationId, Environment, GitStyle, ModelChoice, ProjectId, Settings, Setup,
 };
 use crate::work::{
-    CommitOutcome, GitState, SourceChange, SourceFile, SourceMerge, SourceScope, SourceState,
-    SourceStatus,
+    CommitOutcome, GitState, SourceChange, SourceFile, SourceMerge, SourceRebase, SourceScope,
+    SourceState, SourceStatus,
 };
 use crate::{Error, Result};
 
@@ -317,6 +317,12 @@ impl SessionManager {
         let dir = path.clone();
         let done = blocking(move || {
             let repo = git.open(&dir).map_err(git_error)?;
+            // A rebase has HEAD detached: its commits are made by Continue.
+            if repo.rebased_branch().map_err(git_error)?.is_some() {
+                return Err(Error::Invalid(
+                    "continue or abort the rebase in progress first".into(),
+                ));
+            }
             let branch = repo
                 .state()
                 .map_err(git_error)?
@@ -776,7 +782,23 @@ pub(super) fn source_state_of(repo: &Repo) -> Result<SourceState> {
             incoming: merge.incoming,
             message: merge.message,
         }),
+        rebasing: source_rebase(repo)?,
     })
+}
+
+/// The checkout's rebase in progress, for the Source panel.
+pub(super) fn source_rebase(repo: &Repo) -> Result<Option<SourceRebase>> {
+    Ok(repo
+        .rebasing()
+        .map_err(git_error)?
+        .map(|rebase| SourceRebase {
+            branch: rebase.branch,
+            onto: rebase.onto,
+            step: rebase.step,
+            total: rebase.total,
+            commit: rebase.commit,
+            message: rebase.message,
+        }))
 }
 
 /// The writer's reply as a commit message: no code fences or surrounding quotes, and no

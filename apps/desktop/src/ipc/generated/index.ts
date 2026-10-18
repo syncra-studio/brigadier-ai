@@ -421,6 +421,7 @@ export type { SourceChange } from "./SourceChange";
 export type { SourceFile } from "./SourceFile";
 export type { SourceGitRun } from "./SourceGitRun";
 export type { SourceMerge } from "./SourceMerge";
+export type { SourceRebase } from "./SourceRebase";
 export type { SourceScope } from "./SourceScope";
 export type { SourceSnapshot } from "./SourceSnapshot";
 export type { SourceState } from "./SourceState";

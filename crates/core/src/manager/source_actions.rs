@@ -1,6 +1,6 @@
-//! The Source panel's own git, past staging and committing: merging a branch in and resolving
-//! its conflicts file by file, aborting it, switching, rebasing, creating, renaming and
-//! deleting branches, stashing, pulling, pushing and fetching, and writing a commit message
+//! The Source panel's own git, past staging and committing: merging a branch in or rebasing
+//! onto one and resolving its conflicts file by file (a rebase's commit by commit), aborting
+//! it, switching, creating, renaming and deleting branches, stashing, pulling, pushing and fetching, and writing a commit message
 //! into the box. Each is the user's own act on the checkout the panel shows (a session's, or
 //! its project's folder before it starts); git's refusals come back as errors in its own
 //! words. The git commands they run that could change something are kept per checkout for the
@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use brigadier_git::{Git, GitRun, Oid, Repo};
 
-use super::git_actions::source_state_of;
+use super::git_actions::{source_rebase, source_state_of};
 use super::{SessionManager, blocking, git_error};
 use crate::Result;
 use crate::model::{ConversationId, Environment, Setup};
@@ -111,8 +111,8 @@ impl SessionManager {
         .await
     }
 
-    /// One of the Source panel's git actions, then the checkout as it is after it. A merge or
-    /// pull that stops on conflicts isn't an error: the state shows the merge in progress.
+    /// One of the Source panel's git actions, then the checkout as it is after it. A merge,
+    /// pull or rebase that stops on conflicts isn't an error: the state shows it in progress.
     pub async fn source_action(
         &self,
         target: &WorkspaceTarget,
@@ -198,11 +198,18 @@ impl SessionManager {
                 // user's rebase for damage and puts the old tip back.
                 SourceAction::Rebase { branch } => match current().map_err(git_error)? {
                     Some(own) => super::refcheck::engine_rewrite(&repo, &records, &own, || {
-                        repo.rebase_onto(&own, branch)
+                        repo.rebase_onto(&own, branch).map(drop)
                     }),
                     None => Err(brigadier_git::Error::Invalid(
                         "the checkout is not on a branch".into(),
                     )),
+                },
+                // Its last step moves the branch, recorded as the rebase's start is.
+                SourceAction::ContinueRebase => match repo.rebased_branch().map_err(git_error)? {
+                    Some(own) => super::refcheck::engine_rewrite(&repo, &records, &own, || {
+                        repo.continue_rebase().map(drop)
+                    }),
+                    None => repo.continue_rebase().map(drop),
                 },
                 _ => act(&repo, action, merged.as_ref()),
             };
@@ -357,23 +364,38 @@ impl SessionManager {
                     .map(|out| out.trim().to_owned())
                     .unwrap_or_default()
             };
-            let branch = repo.state().map_err(git_error)?.current_branch;
-            let incoming = repo
-                .merging()
-                .map_err(git_error)?
-                .map(|merge| merge.incoming);
             let label = |commit: String, name: Option<String>| match name {
                 Some(name) if !commit.is_empty() => format!("{commit} • {name}"),
                 Some(name) => name,
                 None => commit,
+            };
+            let rebasing = source_rebase(&repo)?;
+            // A rebase replays the branch's commits onto what it is rebased onto.
+            let (current_label, incoming_label) = match &rebasing {
+                Some(rebase) => (
+                    label(short("HEAD"), Some(rebase.onto.clone())),
+                    label(rebase.commit.clone(), rebase.branch.clone()),
+                ),
+                None => {
+                    let branch = repo.state().map_err(git_error)?.current_branch;
+                    let incoming = repo
+                        .merging()
+                        .map_err(git_error)?
+                        .map(|merge| merge.incoming);
+                    (
+                        label(short("HEAD"), branch),
+                        label(short("MERGE_HEAD"), incoming),
+                    )
+                }
             };
             Ok(ConflictFile {
                 text: file.text,
                 current: file.current,
                 incoming: file.incoming,
                 merged: file.merged,
-                current_label: label(short("HEAD"), branch),
-                incoming_label: label(short("MERGE_HEAD"), incoming),
+                current_label,
+                incoming_label,
+                rebasing,
             })
         })
         .await
@@ -434,8 +456,9 @@ fn act(repo: &Repo, action: SourceAction, merged: Option<&MergedPr>) -> brigadie
         SourceAction::Pull => repo.pull().map(drop),
         SourceAction::Push => MergedPr::push(merged, repo, &branch()?),
         SourceAction::Fetch => repo.fetch(),
-        // Rebased above, under the ref lock.
-        SourceAction::Rebase { .. } => Ok(()),
+        // Rebased and continued above, under the ref lock.
+        SourceAction::Rebase { .. } | SourceAction::ContinueRebase => Ok(()),
+        SourceAction::AbortRebase => repo.abort_rebase(),
         SourceAction::CreateBranch { name, from } => repo.create_and_switch(&name, from.as_deref()),
         // Renamed above, with the branch it saw checked out.
         SourceAction::RenameBranch { .. } => Ok(()),

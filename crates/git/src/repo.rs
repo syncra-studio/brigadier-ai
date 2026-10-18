@@ -1134,6 +1134,16 @@ impl Repo {
     /// What keeps the checkout busy other than a merge in progress, which the user's own
     /// staging and commit go on through.
     pub(crate) fn busy_besides_merge(&self) -> Result<Option<String>> {
+        self.busy_except(&[])
+    }
+
+    /// What keeps the checkout busy other than a merge or rebase in progress, whose conflicts
+    /// the user stages, unstages and discards.
+    pub(crate) fn busy_besides_conflicts(&self) -> Result<Option<String>> {
+        self.busy_except(&["rebase-merge", "rebase-apply"])
+    }
+
+    fn busy_except(&self, allowed: &[&str]) -> Result<Option<String>> {
         let dir = parse::path_line(&self.cmd(&["rev-parse", "--absolute-git-dir"], true)?)?;
         for name in [
             "index.lock",
@@ -1146,8 +1156,11 @@ impl Repo {
             "BISECT_START",
             "sequencer",
         ] {
-            if dir.join(name).try_exists()? {
-                return Ok(Some(name.to_owned()));
+            if !allowed.contains(&name) && dir.join(name).try_exists()? {
+                return Ok(Some(match name {
+                    "rebase-merge" | "rebase-apply" => "a rebase in progress".to_owned(),
+                    _ => name.to_owned(),
+                }));
             }
         }
         Ok(None)
@@ -1179,6 +1192,28 @@ impl Repo {
         lock
     }
 
+    /// The checkout rebasing local branch `branch`, if any.
+    pub fn rebasing_checkout(&self, branch: &str) -> Result<Option<PathBuf>> {
+        self.rebasing_in(&self.worktrees()?, branch)
+    }
+
+    /// [`Self::rebasing_checkout`] among `worktrees`: only a detached one can be rebasing.
+    fn rebasing_in(&self, worktrees: &[WorktreeInfo], branch: &str) -> Result<Option<PathBuf>> {
+        for worktree in worktrees {
+            if worktree.branch.is_some() || worktree.prunable || !worktree.path.is_dir() {
+                continue;
+            }
+            let checkout = Repo {
+                root: worktree.path.clone(),
+                ..self.clone()
+            };
+            if checkout.rebased_branch().ok().flatten().as_deref() == Some(branch) {
+                return Ok(Some(worktree.path.clone()));
+            }
+        }
+        Ok(None)
+    }
+
     /// Land only a fast-forward of the expected tip, serializing landings per common git dir.
     /// Checked-out branches use merge --ff-only --no-autostash --no-overwrite-ignore after
     /// collision/busy checks. Unchecked-out branches use compare-and-swap update-ref.
@@ -1199,8 +1234,16 @@ impl Repo {
         if !self.ancestor(&request.expected_tip, &request.commit)? {
             return Ok(LandOutcome::Blocked(LandBlock::NotFastForward));
         }
-        let holding = self
-            .worktrees()?
+        let worktrees = self.worktrees()?;
+        // A checkout rebasing the branch has HEAD detached until the rebase finishes, which
+        // would then overwrite whatever landed meanwhile.
+        if let Some(worktree) = self.rebasing_in(&worktrees, &request.branch)? {
+            return Ok(LandOutcome::Blocked(LandBlock::CheckoutBusy {
+                worktree,
+                what: format!("a rebase of {} in progress", request.branch),
+            }));
+        }
+        let holding = worktrees
             .into_iter()
             .find(|w| w.branch.as_deref() == Some(&request.branch));
         if let Some(holding) = holding {
@@ -1573,6 +1616,11 @@ impl Repo {
     pub fn commit_with(&self, message: &str, include_unstaged: bool, amend: bool) -> Result<Oid> {
         let lock = self.landing_lock();
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if self.rebased_branch()?.is_some() {
+            return Err(Error::Invalid(
+                "continue or abort the rebase in progress first".into(),
+            ));
+        }
         if let Some(what) = self.busy_besides_merge()? {
             return Err(Error::Invalid(format!("the checkout is busy ({what})")));
         }

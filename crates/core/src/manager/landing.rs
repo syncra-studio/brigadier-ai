@@ -1548,6 +1548,16 @@ impl SessionManager {
         // landings since; other work since is a fact the result states (#243).
         let prepared = blocking(move || {
             let repo = git.open(&repo_path).map_err(git_error)?;
+            // A rebase the user is resolving in the Source panel: the branch is half rebased.
+            if repo
+                .rebasing_checkout(&branch_name)
+                .map_err(git_error)?
+                .is_some()
+            {
+                return Err(Error::Invalid(format!(
+                    "[not merged] The user is rebasing `{branch_name}` in the Source panel and hasn't finished. Nothing was merged, and the user's consent still holds; call finish_session again once the rebase is continued to its end or aborted."
+                )));
+            }
             let tip = repo
                 .branch_tip(&branch_name)
                 .map_err(git_error)?

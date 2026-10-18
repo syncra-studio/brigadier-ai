@@ -2923,6 +2923,25 @@ pub struct SourceState {
     /// The merge in progress, if any.
     #[serde(default)]
     pub merging: Option<SourceMerge>,
+    /// The rebase in progress, if any; `branch` is absent meanwhile (HEAD is detached).
+    #[serde(default)]
+    pub rebasing: Option<SourceRebase>,
+}
+
+/// A rebase in progress in a checkout, stopped on a commit it replays, for the Source panel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRebase {
+    /// The branch being rebased; absent for a detached HEAD's.
+    pub branch: Option<String>,
+    /// What it is rebased onto: a branch's name, else its commit's short id.
+    pub onto: String,
+    /// The commit it stopped on, counted from 1, of `total`.
+    pub step: u32,
+    pub total: u32,
+    /// The commit it stopped on: its short id and message (empty when git didn't say).
+    pub commit: String,
+    pub message: String,
 }
 
 /// A merge in progress in a checkout, for the Source panel.
@@ -2962,9 +2981,13 @@ pub struct ConflictFile {
     /// Both versions merged again with every conflict marked `<<<<<<< Current`,
     /// `||||||| Base`, `=======`, `>>>>>>> Incoming`; absent when a side deleted the file.
     pub merged: Option<String>,
-    /// The two sides: the checkout's commit and branch, the incoming commit and name.
+    /// The two sides: the checkout's commit and branch, the incoming commit and name. In a
+    /// rebase, what it is rebased onto and the branch's commit being replayed.
     pub current_label: String,
     pub incoming_label: String,
+    /// The rebase in progress, if any, naming the commit being replayed.
+    #[serde(default)]
+    pub rebasing: Option<SourceRebase>,
 }
 
 /// One of the Source panel's git actions on a checkout.
@@ -2989,10 +3012,15 @@ pub enum SourceAction {
     Push,
     Fetch,
     /// Rebases the checked-out branch onto a branch (local, or remote as `origin/main`); one
-    /// that stops on conflicts is undone.
+    /// that stops on conflicts stays in progress for them to be resolved.
     Rebase {
         branch: String,
     },
+    /// Continues the rebase in progress once its conflicts are resolved and staged; it stops
+    /// again on the next commit's.
+    ContinueRebase,
+    /// Aborts the rebase in progress.
+    AbortRebase,
     /// Creates a branch and switches to it, from what is checked out or from `from`.
     CreateBranch {
         name: String,

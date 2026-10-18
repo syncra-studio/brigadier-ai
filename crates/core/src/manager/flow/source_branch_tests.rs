@@ -1,7 +1,8 @@
 //! The Source panel's branch and stash menu (#257): Create Branch (From), Rename, Delete,
 //! Rebase and Stash on a project's folder; a session never switches or renames its branch,
 //! Brigadier's branches are never deleted, a rebase of a session's branch survives the ref
-//! check, and Git Output lists what the panel ran, failures too.
+//! check (one that stops on conflicts is resolved commit by commit, #283), and Git Output
+//! lists what the panel ran, failures too.
 
 use super::{Flow, Options, Reply, git};
 use crate::manager::refcheck::Caller;
@@ -235,6 +236,138 @@ async fn a_sessions_branch_stays_its_own_and_its_rebase_is_kept() {
     assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), rebased);
     assert_eq!(
         git(&checkout, &["rev-parse", "HEAD~1"]),
+        git(repo, &["rev-parse", "main"])
+    );
+    flow.stop().await;
+}
+
+/// Issue #283: a session's rebase that stops on conflicts stays in progress, the panel's state
+/// and conflict tab naming the commit it replays; Continue goes on to the next commit's
+/// conflicts and finishes, kept by the ref check; Abort puts the branch back.
+#[tokio::test]
+async fn a_sessions_rebase_that_conflicts_is_resolved_commit_by_commit() {
+    let flow = Flow::start(
+        "source-rebase-conflicts",
+        Options::default(),
+        std::sync::Arc::new(|_turn| Box::pin(async { Reply::text("Done.") })),
+    )
+    .await;
+    flow.say("Hi.").await;
+    flow.settled().await;
+    let manager = &flow.manager;
+    let conversation = flow.core.conversation(&flow.conversation).unwrap();
+    let (checkout, branch) = match conversation.setup {
+        Some(Setup::Session {
+            environment:
+                Environment::NewWorktree {
+                    path: Some(path),
+                    branch,
+                    ..
+                },
+            ..
+        }) => (std::path::PathBuf::from(path), branch),
+        other => panic!("a session with a worktree, not {other:?}"),
+    };
+    let session = WorkspaceTarget::Conversation {
+        conversation_id: flow.conversation.clone(),
+    };
+    let act = |action: SourceAction| manager.source_action(&session, action);
+    // Two commits on the session's branch, each adding a file main adds its own way.
+    for (file, subject) in [("a.txt", "Work a"), ("b.txt", "Work b")] {
+        std::fs::write(checkout.join(file), "work\n").unwrap();
+        git(&checkout, &["add", file]);
+        git(&checkout, &["commit", "-qm", subject]);
+    }
+    manager.record_session_refs(&flow.conversation, &checkout);
+    manager
+        .ref_check(&checkout, Caller::Task(TaskId("other".into())))
+        .await;
+    let repo = &flow.repo;
+    for file in ["a.txt", "b.txt"] {
+        std::fs::write(repo.join(file), "main\n").unwrap();
+    }
+    git(repo, &["add", "a.txt", "b.txt"]);
+    git(repo, &["commit", "-qm", "Main moved"]);
+    let tip = git(&checkout, &["rev-parse", &branch]);
+    let rebase = || {
+        act(SourceAction::Rebase {
+            branch: "main".into(),
+        })
+    };
+    let dir = checkout.as_path();
+    let resolve = |file: &'static str| async move {
+        let text = std::fs::read_to_string(dir.join(file)).unwrap();
+        act(SourceAction::Resolve {
+            path: file.into(),
+            expected: Some(text),
+            text: "main\nwork\n".into(),
+            stage: true,
+        })
+        .await
+        .unwrap()
+    };
+
+    let state = rebase().await.unwrap();
+    let rebasing = state.rebasing.clone().expect("a rebase in progress");
+    assert_eq!(rebasing.branch.as_deref(), Some(branch.as_str()));
+    assert_eq!(rebasing.onto, "main");
+    assert_eq!((rebasing.step, rebasing.total), (1, 2));
+    assert_eq!(rebasing.message, "Work a");
+    assert_eq!(state.branch, None, "HEAD is detached meanwhile");
+    assert!(state.changes.iter().any(|file| file.path == "a.txt"));
+    assert_eq!(
+        git(&checkout, &["rev-parse", &branch]),
+        tip,
+        "not moved yet"
+    );
+    let file = manager
+        .conflict_file(&session, "a.txt".into())
+        .await
+        .unwrap();
+    assert_eq!(file.rebasing, Some(rebasing.clone()));
+    assert!(
+        file.current_label.ends_with("• main"),
+        "{}",
+        file.current_label
+    );
+    assert_eq!(
+        file.incoming_label,
+        format!("{} • {branch}", rebasing.commit)
+    );
+    let refused = act(SourceAction::ContinueRebase).await.unwrap_err();
+    assert!(refused.to_string().contains("resolve the rebase conflicts"));
+    // Nothing else runs into the half-done rebase: a commit says to finish it first.
+    let refused = manager
+        .commit_changes(&flow.conversation, Some("x".into()), false, false, false)
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("continue or abort the rebase"));
+
+    // Resolved, Continue stops on the next commit's conflicts; Abort puts the branch back.
+    resolve("a.txt").await;
+    let state = act(SourceAction::ContinueRebase).await.unwrap();
+    let rebasing = state.rebasing.expect("stopped again");
+    assert_eq!((rebasing.step, rebasing.message.as_str()), (2, "Work b"));
+    let state = act(SourceAction::AbortRebase).await.unwrap();
+    assert_eq!(state.rebasing, None);
+    assert_eq!(state.branch.as_deref(), Some(branch.as_str()));
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), tip);
+
+    // Each stop resolved, the last Continue finishes; the ref check keeps the rebase.
+    rebase().await.unwrap();
+    resolve("a.txt").await;
+    act(SourceAction::ContinueRebase).await.unwrap();
+    resolve("b.txt").await;
+    let state = act(SourceAction::ContinueRebase).await.unwrap();
+    assert_eq!(state.rebasing, None);
+    assert_eq!(state.branch.as_deref(), Some(branch.as_str()));
+    let rebased = git(&checkout, &["rev-parse", "HEAD"]);
+    manager
+        .ref_check(&checkout, Caller::Task(TaskId("other".into())))
+        .await;
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), rebased);
+    assert_eq!(
+        git(&checkout, &["rev-parse", "HEAD~2"]),
         git(repo, &["rev-parse", "main"])
     );
     flow.stop().await;

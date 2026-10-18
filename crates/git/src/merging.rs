@@ -1,6 +1,7 @@
 //! The Source panel's own git: merging a branch into the checkout's, resolving its conflicts
-//! file by file, aborting it; switching, rebasing, creating and renaming branches; stashing;
-//! pulling and fetching. Each change takes the landing lock, as a commit does (a rebase runs
+//! file by file, aborting it; rebasing onto a branch, continuing it past each commit's
+//! conflicts, aborting it; switching, creating and renaming branches; stashing; pulling and
+//! fetching. Each change takes the landing lock, as a commit does (a rebase runs
 //! under its caller's), and leaves git's own refusals (local changes in the way, a branch with
 //! no upstream) to the caller as errors.
 
@@ -33,6 +34,23 @@ pub struct MergeState {
     /// What is being merged in: a branch's short name, else its commit's short id.
     pub incoming: String,
     /// The message git prepared for the merge commit, without its comment lines.
+    pub message: String,
+}
+
+/// A rebase in progress in a checkout, stopped on a commit it replays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RebaseState {
+    /// The branch being rebased, its short name; absent for a detached HEAD's.
+    pub branch: Option<String>,
+    /// What it is rebased onto: a branch's short name, else its commit's short id.
+    pub onto: String,
+    /// The commit it stopped on, counted from 1.
+    pub step: u32,
+    /// How many commits it replays.
+    pub total: u32,
+    /// The commit it stopped on, its short id (empty when git didn't say).
+    pub commit: String,
+    /// That commit's message.
     pub message: String,
 }
 
@@ -107,6 +125,20 @@ impl Repo {
             Err(e) => return Err(e.into()),
         };
         let oid = parse::line(head.split(|&b| b == b'\n').next().unwrap_or_default())?;
+        let incoming = self.name_of(&oid)?;
+        let message = fs::read(dir.join("MERGE_MSG")).unwrap_or_default();
+        let message = String::from_utf8_lossy(&message)
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_owned();
+        Ok(Some(MergeState { incoming, message }))
+    }
+
+    /// A branch pointing at commit `oid` (a local one first), else its short id.
+    fn name_of(&self, oid: &str) -> Result<String> {
         let names = self.cmd(
             &[
                 "for-each-ref",
@@ -117,19 +149,80 @@ impl Repo {
             ],
             true,
         )?;
-        let incoming = String::from_utf8_lossy(&names)
+        Ok(String::from_utf8_lossy(&names)
             .lines()
             .find(|name| !name.ends_with("/HEAD"))
-            .map_or_else(|| oid.chars().take(7).collect(), str::to_owned);
-        let message = fs::read(dir.join("MERGE_MSG")).unwrap_or_default();
-        let message = String::from_utf8_lossy(&message)
-            .lines()
-            .filter(|line| !line.starts_with('#'))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .trim()
-            .to_owned();
-        Ok(Some(MergeState { incoming, message }))
+            .map_or_else(|| oid.chars().take(7).collect(), str::to_owned))
+    }
+
+    /// The folder of the rebase in progress, if any, as git keeps it: `rebase-merge`, or
+    /// `rebase-apply` for one `git am` style.
+    fn rebase_dir(&self) -> Result<Option<std::path::PathBuf>> {
+        let dir = self.git_dir()?;
+        for name in ["rebase-merge", "rebase-apply"] {
+            let at = dir.join(name);
+            if at.join("head-name").try_exists()? {
+                return Ok(Some(at));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The branch a rebase in progress here rebases, if any (`None` too for a detached
+    /// HEAD's); only its own file is read, for a look over every checkout.
+    pub fn rebased_branch(&self) -> Result<Option<String>> {
+        let Some(dir) = self.rebase_dir()? else {
+            return Ok(None);
+        };
+        let head = fs::read_to_string(dir.join("head-name"))?;
+        Ok(head.trim().strip_prefix("refs/heads/").map(str::to_owned))
+    }
+
+    /// The rebase in progress, if any.
+    pub fn rebasing(&self) -> Result<Option<RebaseState>> {
+        let Some(dir) = self.rebase_dir()? else {
+            return Ok(None);
+        };
+        let read = |name: &str| {
+            fs::read_to_string(dir.join(name))
+                .map(|text| text.trim().to_owned())
+                .unwrap_or_default()
+        };
+        let number = |names: [&str; 2]| {
+            names
+                .iter()
+                .find_map(|name| read(name).parse().ok())
+                .unwrap_or(0)
+        };
+        let branch = read("head-name")
+            .strip_prefix("refs/heads/")
+            .map(str::to_owned);
+        let onto = read("onto");
+        let onto = if onto.is_empty() {
+            String::new()
+        } else {
+            self.name_of(&onto)?
+        };
+        // The commit it stopped on: REBASE_HEAD, which a stop on conflicts writes.
+        let out = self.run(
+            &["rev-parse", "--verify", "--quiet", "REBASE_HEAD^{commit}"],
+            true,
+        )?;
+        let (commit, message) = if out.status.success() {
+            let oid = parse::line(&out.stdout)?;
+            let message = self.read_only(&["log", "-1", "--format=%B", &oid])?;
+            (oid.chars().take(7).collect(), message.trim().to_owned())
+        } else {
+            (String::new(), String::new())
+        };
+        Ok(Some(RebaseState {
+            branch,
+            onto,
+            step: number(["msgnum", "next"]),
+            total: number(["end", "last"]),
+            commit,
+            message,
+        }))
     }
 
     /// Merges `branch` (a local or remote branch's short name) into the checked-out one, as
@@ -222,12 +315,13 @@ impl Repo {
     }
 
     /// Rebases the checked-out branch onto `branch` (a local or remote branch's short name), as
-    /// `git rebase` does. One that stops on conflicts is undone and says so: the panel resolves
-    /// a merge's conflicts, not a rebase's, and a rebase left half done keeps the checkout busy.
-    /// Only while `current` is still the branch checked out. Takes no lock: the caller holds
-    /// the ref lock ([`Self::with_ref_lock`]), so the branch's new tip is recorded before any
-    /// ref check reads it.
-    pub fn rebase_onto(&self, current: &str, branch: &str) -> Result<()> {
+    /// `git rebase` does. Returns whether it stopped on conflicts: the rebase stays in progress
+    /// then, for [`Self::continue_rebase`] once they are resolved, or [`Self::abort_rebase`].
+    /// One that stops for another reason (a commit it couldn't sign) is undone, with git's own
+    /// words. Only while `current` is still the branch checked out. Takes no lock: the caller
+    /// holds the ref lock ([`Self::with_ref_lock`]), so the branch's new tip is recorded before
+    /// any ref check reads it.
+    pub fn rebase_onto(&self, current: &str, branch: &str) -> Result<bool> {
         self.refuse_busy()?;
         if self.state()?.current_branch.as_deref() != Some(current) {
             return Err(Error::Invalid(format!(
@@ -242,24 +336,66 @@ impl Repo {
             "--no-update-refs",
             name.as_str(),
         ];
-        let out = self.run(&args, false)?;
+        let out = self.rebase_run(&args)?;
+        self.rebase_stopped(&args, &out, true)
+    }
+
+    /// Continues the rebase in progress once its conflicts are resolved and staged, committing
+    /// the commit it stopped on with its own message. Returns whether it stopped on the next
+    /// commit's conflicts; when it finishes the branch is moved. Takes no lock, as
+    /// [`Self::rebase_onto`].
+    pub fn continue_rebase(&self) -> Result<bool> {
+        if self.rebasing()?.is_none() {
+            return Err(Error::Invalid("there is no rebase to continue".into()));
+        }
+        if !self.cmd(&["ls-files", "--unmerged"], true)?.is_empty() {
+            return Err(Error::Invalid(
+                "resolve the rebase conflicts and stage those files first".into(),
+            ));
+        }
+        let args = ["rebase", "--continue"];
+        let out = self.rebase_run(&args)?;
+        self.rebase_stopped(&args, &out, false)
+    }
+
+    /// Aborts the rebase in progress: the branch and files go back to how they were before it.
+    pub fn abort_rebase(&self) -> Result<()> {
+        let lock = self.landing_lock();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if self.rebasing()?.is_none() {
+            return Err(Error::Invalid("there is no rebase to abort".into()));
+        }
+        self.cmd(&["rebase", "--abort"], false)?;
+        Ok(())
+    }
+
+    /// A rebase command, the commit message it asks for taken as git wrote it.
+    fn rebase_run(&self, args: &[&str]) -> Result<std::process::Output> {
+        let editor = [("GIT_EDITOR".into(), "true".into())];
+        self.git.run(Some(&self.root), args, false, &editor, None)
+    }
+
+    /// After a rebase or its continue: false when it finished, true when it stopped on
+    /// conflicts, and its error otherwise; `undo`: a rebase that stopped for another reason is
+    /// aborted first.
+    fn rebase_stopped(
+        &self,
+        args: &[&str],
+        out: &std::process::Output,
+        undo: bool,
+    ) -> Result<bool> {
         if out.status.success() {
-            return Ok(());
+            return Ok(false);
         }
-        let dir = self.git_dir()?;
-        if dir.join("rebase-merge").exists() || dir.join("rebase-apply").exists() {
-            let conflicted = !self.cmd(&["ls-files", "--unmerged"], true)?.is_empty();
-            self.cmd(&["rebase", "--abort"], false)?;
-            // Stopped for another reason (a commit it couldn't sign): git's own words.
-            if !conflicted {
-                return Err(failure(&args, &out));
+        if self.rebasing()?.is_some() {
+            if !self.cmd(&["ls-files", "--unmerged"], true)?.is_empty() {
+                return Ok(true);
             }
-            return Err(Error::Invalid(format!(
-                "rebasing onto {branch} stopped on conflicts, so it was undone. Merge {branch} \
-                 instead to resolve them here"
-            )));
+            if undo {
+                self.cmd(&["rebase", "--abort"], false)?;
+            }
         }
-        Err(failure(&args, &out))
+        Err(failure(args, out))
     }
 
     /// Creates branch `name` and switches to it, from what is checked out or from `from` (a
@@ -555,23 +691,9 @@ mod tests {
     }
 
     #[test]
-    fn a_rebase_replays_the_branch_and_one_that_conflicts_is_undone() {
+    fn a_rebase_replays_the_branch_and_a_clean_one_finishes_at_once() {
         let (_dir, repo, root) = conflicting("rebase");
         let main = repo.branch_tip("main").unwrap().unwrap();
-        // feature changed `b` its own way: the rebase stops, and is undone.
-        repo.cmd(&["checkout", "-q", "feature"], false).unwrap();
-        let feature = repo.branch_tip("feature").unwrap().unwrap();
-        let err = repo.rebase_onto("feature", "main").unwrap_err().to_string();
-        assert!(
-            err.contains("stopped on conflicts, so it was undone"),
-            "{err}"
-        );
-        assert_eq!(repo.branch_tip("feature").unwrap(), Some(feature));
-        assert_eq!(repo.busy().unwrap(), None);
-        assert_eq!(
-            fs::read_to_string(root.join("f.txt")).unwrap(),
-            "a\nfeature\nc\n"
-        );
         // A branch of its own from main's parent rebases cleanly onto main.
         repo.cmd(&["checkout", "-q", "-b", "side", "main~1"], false)
             .unwrap();
@@ -581,9 +703,148 @@ mod tests {
             repo.rebase_onto("feature", "main").is_err(),
             "not checked out"
         );
-        repo.rebase_onto("side", "main").unwrap();
+        assert!(!repo.rebase_onto("side", "main").unwrap());
+        assert_eq!(repo.rebasing().unwrap(), None);
         let parent = repo.read_only(&["rev-parse", "side~1"]).unwrap();
         assert_eq!(parent.trim(), main.0);
+    }
+
+    /// Issue #283: a rebase that stops on conflicts stays in progress, naming the commit it
+    /// replays; Continue moves on to the next commit's conflicts, then finishes; Abort puts
+    /// the branch back.
+    #[test]
+    fn a_conflicting_rebase_stays_in_progress_until_it_is_continued_or_aborted() {
+        let (_dir, repo, root) = conflicting("rebase-conflicts");
+        // feature's second commit changes `c`, as main's next does.
+        repo.cmd(&["checkout", "-q", "feature"], false).unwrap();
+        fs::write(root.join("f.txt"), "a\nfeature\nfeature c\n").unwrap();
+        repo.commit_changes("Feature c", true).unwrap();
+        repo.cmd(&["checkout", "-q", "main"], false).unwrap();
+        fs::write(root.join("f.txt"), "a\nmain\nmain c\n").unwrap();
+        repo.commit_changes("Main c", true).unwrap();
+        repo.cmd(&["checkout", "-q", "feature"], false).unwrap();
+        let feature = repo.branch_tip("feature").unwrap().unwrap();
+
+        assert!(repo.rebase_onto("feature", "main").unwrap(), "stopped");
+        let state = repo.rebasing().unwrap().expect("a rebase in progress");
+        assert_eq!(state.branch.as_deref(), Some("feature"));
+        assert_eq!(state.onto, "main");
+        assert_eq!((state.step, state.total), (1, 2));
+        assert_eq!(state.message, "Feature");
+        assert_eq!(state.commit.len(), 7);
+        assert_eq!(repo.rebased_branch().unwrap().as_deref(), Some("feature"));
+        // The branch hasn't moved, and nothing else runs into the rebase.
+        assert_eq!(repo.branch_tip("feature").unwrap(), Some(feature.clone()));
+        assert!(repo.busy().unwrap().is_some());
+        assert!(repo.merge_branch("main").is_err());
+        let err = repo.continue_rebase().unwrap_err().to_string();
+        assert!(err.contains("resolve the rebase conflicts"), "{err}");
+        // The conflicted file's sides: main's as current, the replayed commit as incoming.
+        let file = repo.conflict_file("f.txt").unwrap();
+        assert_eq!(file.current.as_deref(), Some("a\nmain\nmain c\n"));
+        assert_eq!(file.incoming.as_deref(), Some("a\nfeature\nc\n"));
+        let committed =
+            |message: &str| repo.commit_changes(message, false).unwrap_err().to_string();
+        assert!(committed("x").contains("continue or abort the rebase"));
+
+        // Resolved and staged, Continue stops on the second commit's conflicts.
+        let text = repo.conflict_file("f.txt").unwrap().text;
+        repo.resolve_conflict("f.txt", text.as_deref(), "a\nboth\nmain c\n", true)
+            .unwrap();
+        assert!(repo.continue_rebase().unwrap(), "stopped again");
+        let state = repo.rebasing().unwrap().expect("still rebasing");
+        assert_eq!((state.step, state.total), (2, 2));
+        assert_eq!(state.message, "Feature c");
+
+        // Abort puts the branch and its files back.
+        repo.abort_rebase().unwrap();
+        assert_eq!(repo.rebasing().unwrap(), None);
+        assert_eq!(repo.busy().unwrap(), None);
+        assert_eq!(repo.branch_tip("feature").unwrap(), Some(feature));
+        assert_eq!(
+            repo.state().unwrap().current_branch.as_deref(),
+            Some("feature")
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("f.txt")).unwrap(),
+            "a\nfeature\nfeature c\n"
+        );
+        assert!(repo.abort_rebase().is_err());
+
+        // Again, each stop resolved: the last Continue finishes, the branch on main's tip.
+        assert!(repo.rebase_onto("feature", "main").unwrap());
+        for resolved in ["a\nboth\nmain c\n", "a\nboth\nboth c\n"] {
+            let text = repo.conflict_file("f.txt").unwrap().text;
+            repo.resolve_conflict("f.txt", text.as_deref(), resolved, true)
+                .unwrap();
+            let stopped = repo.continue_rebase().unwrap();
+            assert_eq!(stopped, resolved.contains("main c"));
+        }
+        assert_eq!(repo.rebasing().unwrap(), None);
+        assert_eq!(
+            repo.state().unwrap().current_branch.as_deref(),
+            Some("feature")
+        );
+        let log = repo
+            .read_only(&["log", "--format=%s", "main..feature"])
+            .unwrap();
+        assert_eq!(log.lines().collect::<Vec<_>>(), ["Feature c", "Feature"]);
+        assert_eq!(
+            fs::read_to_string(root.join("f.txt")).unwrap(),
+            "a\nboth\nboth c\n"
+        );
+    }
+
+    /// Issue #283: no landing moves a branch the user is rebasing in a checkout of it (HEAD
+    /// is detached there till the rebase finishes, which would overwrite it); the landing says
+    /// why and goes through once the rebase is aborted.
+    #[test]
+    fn a_landing_waits_for_a_rebase_of_its_branch_in_another_checkout() {
+        let (dir, repo, _root) = conflicting("rebase-landing");
+        let linked = dir.join("linked");
+        repo.cmd(
+            &["worktree", "add", "-q", linked.to_str().unwrap(), "feature"],
+            false,
+        )
+        .unwrap();
+        let checkout = repo.git.open(&linked).unwrap();
+        assert!(checkout.rebase_onto("feature", "main").unwrap());
+        assert_eq!(
+            repo.rebasing_checkout("feature").unwrap(),
+            Some(fs::canonicalize(&linked).unwrap())
+        );
+        assert_eq!(repo.rebasing_checkout("main").unwrap(), None);
+        let tip = repo.branch_tip("feature").unwrap().unwrap();
+        let next = crate::Oid(
+            repo.read_only(&[
+                "commit-tree",
+                "feature^{tree}",
+                "-p",
+                "feature",
+                "-m",
+                "Next",
+            ])
+            .unwrap()
+            .trim()
+            .to_owned(),
+        );
+        let request = crate::LandRequest {
+            branch: "feature".into(),
+            expected_tip: tip.clone(),
+            commit: next.clone(),
+        };
+        match repo.land(&request).unwrap() {
+            crate::LandOutcome::Blocked(crate::LandBlock::CheckoutBusy { what, .. }) => {
+                assert_eq!(what, "a rebase of feature in progress");
+            }
+            other => panic!("expected a busy checkout, got {other:?}"),
+        }
+        assert_eq!(repo.branch_tip("feature").unwrap(), Some(tip));
+        checkout.abort_rebase().unwrap();
+        assert!(matches!(
+            repo.land(&request).unwrap(),
+            crate::LandOutcome::Landed { new_tip } if new_tip == next
+        ));
     }
 
     #[test]
