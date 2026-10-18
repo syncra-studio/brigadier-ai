@@ -72,7 +72,7 @@ const twMerge = extendTailwindMerge({
         "notice-close",
         "notice-close-icon",
       ],
-      container: ["thread", "setup", "onboarding", "onboarding-agents", "onboarding-detail", "summary", "summary-stack", "settings", "settings-wide", "question", "trust", "add-project"],
+      container: ["thread", "setup", "onboarding", "onboarding-agents", "onboarding-detail", "summary", "summary-stack", "settings", "settings-wide", "question", "trust", "add-project", "feedback"],
       radius: [
         "document",
         "control",

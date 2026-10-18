@@ -3,7 +3,8 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-// The sidebar's foot opens Send feedback; a bug written there opens GitHub's bug form, filled in.
+// The sidebar's foot opens Send feedback; a bug written there opens GitHub's bug form, filled in,
+// and the dialog closes.
 test("send feedback opens a filled-in GitHub issue", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "feedback.html?drive=1", "feedback-result", 10000)) as Record<
     string,
@@ -11,7 +12,8 @@ test("send feedback opens a filled-in GitHub issue", { timeout: 60000 }, async (
   >;
   assert.equal(seen.opened, true);
   assert.equal(seen.title, "Send feedback");
-  assert.equal(seen.description, "It opens as a new issue on GitHub, filled in. You can edit it there before you post.");
+  assert.equal(seen.description, "Opens a GitHub issue with your note filled in.");
+  assert.equal(seen.footer, "You’ll review it before it’s posted");
   assert.deepEqual(seen.kinds, [
     ["Something’s wrong", "on"],
     ["An idea", "off"],
@@ -19,10 +21,10 @@ test("send feedback opens a filled-in GitHub issue", { timeout: 60000 }, async (
   assert.equal(seen.placeholder, "What happened, and what did you expect?");
   assert.equal(seen.focused, true);
   // The details go with it, as the user sees them; a CLI without a known version is left out.
-  assert.equal(seen.details, "Adds Brigadier 0.1.0, macOS 27.0 Tahoe (aarch64), Claude Code 2.1.4");
+  assert.deepEqual(seen.included, ["Brigadier 0.1.0", "macOS 27.0 Tahoe (aarch64)", "Claude Code 2.1.4"]);
   assert.equal(seen.sendDisabled, true);
-  // A rounded card, as the folder trust question.
-  assert.deepEqual(seen.card, { width: 448, radius: 20 });
+  // The design's card: 600 wide, corners of 14.
+  assert.deepEqual(seen.card, { width: 600, radius: 14 });
   assert.equal(seen.ideaPlaceholder, "What are you trying to do, and what gets in the way?");
   assert.equal(seen.sendEnabled, true);
   const urls = seen.opened_urls as string[];
@@ -37,8 +39,7 @@ test("send feedback opens a filled-in GitHub issue", { timeout: 60000 }, async (
     version: "0.1.0",
     environment: "macOS 27.0 Tahoe (aarch64), Claude Code 2.1.4",
   });
-  // It stays open, saying where to finish it.
-  assert.equal(seen.sent, "Opened on GitHub: finish it there and post it.");
-  assert.equal(seen.stillOpen, true);
+  // It closes: the rest happens on GitHub.
+  assert.equal(seen.stillOpen, false);
   assert.deepEqual(seen.draft, { kind: "An idea", text: "Let me pin a chat" });
 });

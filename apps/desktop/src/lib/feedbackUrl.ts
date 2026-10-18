@@ -21,9 +21,14 @@ export function feedbackTitle(text: string): string {
   return line.length <= MAX_TITLE ? line : `${line.slice(0, MAX_TITLE - 1).trimEnd()}…`;
 }
 
-/** The details, as the dialog shows them and the issue carries them ("Brigadier 0.1.0, macOS 27.0 (arm64)"). */
-export function detailsLine({ version, system, agents }: FeedbackDetails): string {
-  return [version ? `Brigadier ${version}` : null, system, ...agents].filter(Boolean).join(", ");
+/** The details one by one, as the dialog's chips show them ("Brigadier 0.1.0", "macOS 27.0 (arm64)"). */
+export function detailsItems({ version, system, agents }: FeedbackDetails): string[] {
+  return [version ? `Brigadier ${version}` : null, system, ...agents].filter((item): item is string => Boolean(item));
+}
+
+/** The details on one line ("Brigadier 0.1.0, macOS 27.0 (arm64)"). */
+export function detailsLine(details: FeedbackDetails): string {
+  return detailsItems(details).join(", ");
 }
 
 /**

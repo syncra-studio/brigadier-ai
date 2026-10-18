@@ -1,8 +1,8 @@
 /**
  * Send feedback over a faked app: the sidebar's foot and the dialog. ?drive=1 opens it from the
- * foot's icon, writes a bug, looks at the idea form, sends the bug, opens a draft and writes
+ * foot's icon, writes a bug, looks at the idea form, sends it (which closes it), opens a draft and writes
  * what it saw (and the link opened) to #feedback-result (FeedbackRender.test.ts reads it).
- * Without it, the dialog stays open for screenshots.
+ * Without it, the dialog stays open, filled in, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -13,7 +13,7 @@ import { SidebarFoot } from "@/app/SidebarFoot";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ProviderOverview } from "@/ipc/generated";
-import { closeFeedback, openFeedback, useFeedbackUi } from "@/state/feedback";
+import { openFeedback, useFeedbackUi } from "@/state/feedback";
 import { useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
@@ -51,10 +51,20 @@ useApp.setState((state) => ({
   info: { ...state.info, version: "0.1.0", platform: "macos" } as typeof state.info,
   providers: {
     ...state.providers,
-    view: { providers: [provider("claude", "2.1.4"), provider("codex", null)], sessions: [], fixtures: [] },
+    view: {
+      providers: [provider("claude", "2.1.4"), provider("codex", params.has("drive") ? null : "0.163.0")],
+      sessions: [],
+      fixtures: [],
+    },
   },
 }));
-if (!params.has("drive")) openFeedback();
+// Undriven, it opens with the design's note, for a screenshot beside it.
+if (!params.has("drive")) {
+  openFeedback({
+    kind: "bug",
+    text: "The usage popover doesn't update after a session finishes. I expected the 5-hour bar to move right away, but it only changed after I reopened it.",
+  });
+}
 
 const text = (element: Element | null | undefined) => element?.textContent?.trim() ?? "";
 const dialog = () => document.querySelector<HTMLElement>('[data-slot="feedback"]');
@@ -83,11 +93,12 @@ function Fixture() {
       seen.opened = open !== null;
       seen.title = text(open?.querySelector("h2"));
       seen.description = text(open?.querySelector("p"));
+      seen.footer = text(open?.lastElementChild?.querySelector("span"));
       seen.kinds = [...(open?.querySelectorAll('[role="radio"]') ?? [])].map((item) => [text(item), item.getAttribute("data-state")]);
       seen.placeholder = area?.placeholder;
       seen.focused = document.activeElement === area;
-      seen.details = text(open?.querySelector("p.text-xs"));
-      seen.sendDisabled = button("Open on GitHub", open ?? document)?.disabled;
+      seen.included = [...(open?.querySelectorAll('[aria-label="Also included"] li') ?? [])].map(text);
+      seen.sendDisabled = button("Continue on GitHub", open ?? document)?.disabled;
       const style = open ? getComputedStyle(open) : null;
       seen.card = { width: Math.round(open?.getBoundingClientRect().width ?? 0), radius: Number.parseFloat(style?.borderTopLeftRadius ?? "0") };
       button("An idea", open ?? document)?.click();
@@ -98,14 +109,12 @@ function Fixture() {
       const typed = dialog()?.querySelector("textarea");
       if (typed) type(typed, "The tab keeps spinning\nafter I stop the session.");
       await wait(100);
-      seen.sendEnabled = button("Open on GitHub", dialog() ?? document)?.disabled === false;
-      button("Open on GitHub", dialog() ?? document)?.click();
+      seen.sendEnabled = button("Continue on GitHub", dialog() ?? document)?.disabled === false;
+      button("Continue on GitHub", dialog() ?? document)?.click();
       await wait(300);
       seen.opened_urls = opened;
-      seen.sent = text(dialog()?.querySelector('[role="status"]'));
       seen.stillOpen = useFeedbackUi.getState().open;
       // A draft from elsewhere opens filled in, its kind chosen.
-      closeFeedback();
       await wait(200);
       openFeedback({ kind: "idea", text: "Let me pin a chat" });
       await wait(300);

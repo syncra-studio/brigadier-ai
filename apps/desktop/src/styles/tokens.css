@@ -461,6 +461,8 @@
   --container-lg: 32rem;
   /* A question asked in a centred card, like the folder trust question. */
   --container-question: 25rem;
+  /* Send feedback's card, from the user's design. */
+  --container-feedback: 37.5rem;
   --container-setup: min(68rem, calc(100vw - 2rem));
   --container-onboarding: 45rem;
   --container-onboarding-agents: 39rem;
@@ -675,6 +677,8 @@
   --radius-design-row: 0.625rem;
   --radius-design-mark: 0.5625rem;
   --radius-design-badge: 0.375rem;
+  /* Send feedback's chips (the user's design). */
+  --color-feedback-chip: #262626;
 }
 
 @theme inline {
