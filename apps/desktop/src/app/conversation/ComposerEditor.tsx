@@ -233,7 +233,7 @@ function ComposerKeys({
   );
   const adapter = target?.queue.attachments ?? null;
   const owner = target?.conversation?.id ?? NEW_CHAT_SCOPE;
-  // A task tab of a workspace: ⌘⏎ starts a new one in the background.
+  // A project's session: ⌘⏎ starts a new one in the background.
   const taskTab = target?.conversation && isTaskTab(target.conversation) ? target.conversation.id : null;
   const privateLogs = Boolean(target?.conversation?.tabChat);
   const dictation = useDictation(owner);

@@ -1285,38 +1285,28 @@ fn lifecycle_outcomes(
         .collect()
 }
 
-/// A new task tab in a workspace, empty or started on a message, the notice of a message sent
-/// on to a tab, and "Run here" on one offered as a tab (in its own boxed future: the dispatch
-/// stays under its size).
-async fn open_tab(sessions: &SessionManager, request: Request) -> Result<Response, IpcError> {
+/// A new session started on a message, the notice of a message sent on to another session, and
+/// "Run here" on one offered as a new session (in its own boxed future: the dispatch stays
+/// under its size).
+async fn open_session(sessions: &SessionManager, request: Request) -> Result<Response, IpcError> {
     Ok(match request {
-        Request::CreateTab {
-            workspace_id,
-            setup,
-        } => Response::CreateTab {
-            conversation: Box::new(
-                sessions
-                    .create_tab(&workspace_id, setup.map(|setup| *setup))
-                    .await?,
-            ),
-        },
-        Request::StartTab {
-            workspace_id,
+        Request::StartSession {
+            from,
             setup,
             text,
             attachments,
             mentions,
         } => {
             let (conversation, outcome) = sessions
-                .start_tab(
-                    &workspace_id,
+                .start_session(
+                    &from,
                     setup.map(|setup| *setup),
                     text,
                     attachments,
                     mentions,
                 )
                 .await?;
-            Response::StartTab {
+            Response::StartSession {
                 conversation: Box::new(conversation),
                 outcome: send_outcome(outcome),
             }
@@ -1398,11 +1388,10 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 heap(|| sessions.create_conversation(kind, project_id, title, setup)).await?,
             ),
         },
-        request @ (Request::CreateTab { .. }
-        | Request::StartTab { .. }
+        request @ (Request::StartSession { .. }
         | Request::SettleMoved { .. }
         | Request::RunQueuedHere { .. }
-        | Request::GetSettledTabs) => heap(|| open_tab(sessions, request)).await?,
+        | Request::GetSettledTabs) => heap(|| open_session(sessions, request)).await?,
         Request::ForkConversation {
             conversation_id,
             message_id,

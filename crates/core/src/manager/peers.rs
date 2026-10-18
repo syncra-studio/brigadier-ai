@@ -119,9 +119,9 @@ impl SessionManager {
         &self,
         caller: &ConversationId,
         query: Option<&str>,
-        workspace: bool,
+        project: bool,
     ) -> Result<String> {
-        if workspace {
+        if project {
             return self.list_siblings(caller).await;
         }
         let query = query

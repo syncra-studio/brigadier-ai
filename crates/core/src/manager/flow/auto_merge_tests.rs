@@ -327,14 +327,13 @@ async fn a_pull_request_the_user_merged_while_the_tab_was_idle_is_recorded_befor
         &["branch", "--set-upstream-to=origin/main", "main"],
     );
     *flow.manager.gh_override.lock().unwrap() = Some(stub_gh(&root.join("gh")));
-    // A sibling tab in the same workspace.
-    let workspace = flow
-        .core
-        .conversation(&flow.conversation)
+    // A sibling session in the same project.
+    let sibling = flow
+        .manager
+        .create_session_from(&flow.conversation, None)
+        .await
         .unwrap()
-        .workspace_id
-        .unwrap();
-    let sibling = flow.manager.create_tab(&workspace, None).await.unwrap().id;
+        .id;
 
     flow.say("Ship the notes.").await;
     let board = flow.settled().await;

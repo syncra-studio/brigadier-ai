@@ -8,7 +8,7 @@ for (const reduced of [false, true]) {
     const seen = JSON.parse(await renderFixtureLive(t, "new-tab.html?drive=1", "new-tab-result", 60000, reduced)) as Record<string, unknown>;
     if (process.env.NEW_TAB_SEEN) console.log(JSON.stringify(seen, null, 2));
     assert.deepEqual(seen.sections, ["Tools", "Suggested"]);
-    assert.equal(seen.session, false, "New session only in a workspace");
+    assert.equal(seen.session, false, "a session's New tab has no New session");
     assert.deepEqual(seen.tools, ["Terminal⌃`", "New page", "Side chat⌥⌘S", "More tools…"]);
     assert.equal(seen.searchFields, 0, "search belongs to the browser toolbar");
     assert.deepEqual(seen.suggested, [{ title: "Latest site", url: "https://one.test/latest" }, { title: "Second site", url: "https://two.test/" }]);
@@ -59,12 +59,4 @@ test("recent pages show on the New tab and reopen after every page tab was close
   const reopened = seen.reopened as { kind: string; pageId: string; title: string };
   assert.equal(reopened.kind, "page"); assert.equal(reopened.pageId, "a".repeat(32)); assert.equal(reopened.title, "Release notes");
   assert.equal(seen.tabCount, 1, "the page took the New tab's place");
-});
-test("in a workspace New session comes first, above Tools, and opens a session tab of the workspace in the New tab's place", { timeout: 90000 }, async (t) => {
-  const seen = JSON.parse(await renderFixtureLive(t, "new-tab.html?drive=1&empty=1&workspace=1", "new-tab-result")) as Record<string, unknown>;
-  assert.equal(seen.first, true); assert.equal(seen.aboveTools, true);
-  assert.equal(seen.label, "New session");
-  assert.deepEqual(seen.created, { method: "createTab", workspaceId: "ws-fixture", setup: null });
-  assert.deepEqual(seen.selection, { type: "conversation", id: "made-1" });
-  assert.equal(seen.newTabLeft, 0, "the New tab made way for it");
 });

@@ -63,9 +63,9 @@ test("a message sent while an answer works goes the default way unless the other
 });
 
 test("the shortcuts page shows the composer keys the composer acts on, on both platforms", () => {
-  for (const workspaces of [false, true]) {
-    // Outside a task tab, Start in a new tab's key is the other way.
-    const actions = { send: "send", "follow-up-other": "other", "start-in-tab": workspaces ? "background" : "other" } as const;
+  for (const projectSession of [false, true]) {
+    // Outside a project's session, Start as a new session's key is the other way.
+    const actions = { send: "send", "follow-up-other": "other", "start-in-tab": projectSession ? "background" : "other" } as const;
     for (const mac of [true, false]) {
       for (const sendShortcut of ["enter", "modEnter"] as SendShortcut[]) {
         for (const followUp of ["queue", "steer"] as FollowUp[]) {
@@ -80,13 +80,13 @@ test("the shortcuts page shows the composer keys the composer acts on, on both p
               cmd: mac && stroke.cmd,
             });
           };
-          const where = `${sendShortcut}, ${followUp}, ${mac ? "macOS" : "other"}, task tab ${workspaces}`;
+          const where = `${sendShortcut}, ${followUp}, ${mac ? "macOS" : "other"}, project session ${projectSession}`;
           for (const [id, action] of Object.entries(actions)) {
             const [chip = ""] = keysOf(id);
-            assert.equal(enterAction(pressOf(chip), mac, sendShortcut, workspaces), action, `${id}: ${where}`);
+            assert.equal(enterAction(pressOf(chip), mac, sendShortcut, projectSession), action, `${id}: ${where}`);
           }
           for (const chip of keysOf("new-line")) {
-            assert.equal(enterAction(pressOf(chip), mac, sendShortcut, workspaces), null, `new line ${chip}: ${where}`);
+            assert.equal(enterAction(pressOf(chip), mac, sendShortcut, projectSession), null, `new line ${chip}: ${where}`);
           }
           const other = shortcuts.find((s) => s.id === "follow-up-other");
           assert.equal(other?.name, followUp === "queue" ? "Steer" : "Queue", where);

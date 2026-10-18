@@ -37,6 +37,7 @@ import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
 import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
 import { setSetting } from "@/state/settings";
+import { isTaskTab } from "@/state/tabStates";
 import {
   boardFromView,
   type Board,
@@ -106,7 +107,7 @@ function reopenLastSelection(): void {
 
 export async function loadCatalog(): Promise<void> {
   const { catalog } = await request({ method: "getCatalog" });
-  replaceCatalog(catalog.projects, catalog.conversations, catalog.settings, catalog.workspaces);
+  replaceCatalog(catalog.projects, catalog.conversations, catalog.settings);
   reopenLastSelection();
   pruneRightSidebarTabs(catalog.conversations.map((conversation) => conversation.id));
   pruneSideChats(catalog.conversations);
@@ -836,15 +837,14 @@ export async function openQueuedInSideChat(conversationId: string, item: QueuedM
 }
 
 /**
- * "Open as a new tab" on a message the thread offered as one: it leaves the queue first, then
- * starts in a new background tab of the same workspace on the tab's own model, permission and
- * plan mode;
- * the user stays where they are. If that fails, it goes back in its slot and the error is
- * thrown; one the queue already sent goes nowhere (`false`).
+ * "Open as a new session" on a message the thread offered as one: it leaves the queue first,
+ * then starts a new background session of the same project on the session's own model,
+ * permission and plan mode; the user stays where they are. If that fails, it goes back in its
+ * slot and the error is thrown; one the queue already sent goes nowhere (`false`).
  */
-export async function openQueuedAsTab(conversationId: string, item: QueuedMessage): Promise<boolean> {
+export async function openQueuedAsSession(conversationId: string, item: QueuedMessage): Promise<boolean> {
   const source = useApp.getState().conversations[conversationId];
-  if (!source?.workspaceId) return false;
+  if (!source || !isTaskTab(source)) return false;
   const index = Math.max(0, boardOf(conversationId)?.queue.items.findIndex((entry) => entry.id === item.id) ?? 0);
   try {
     await deleteQueued(conversationId, item.id);
@@ -853,7 +853,7 @@ export async function openQueuedAsTab(conversationId: string, item: QueuedMessag
     return false;
   }
   try {
-    await startTabFrom(source, item);
+    await startSessionFrom(source, item);
     return true;
   } catch (error) {
     await restoreQueued(conversationId, item, index);
@@ -861,33 +861,32 @@ export async function openQueuedAsTab(conversationId: string, item: QueuedMessag
   }
 }
 
-/** A new tab's setup: `source` tab's model, permission and plan mode, on a worktree of its workspace's base. */
-function tabSetupFrom(source: Conversation): SetupRequest | null {
+/** A new session's setup: `source`'s model, permission and plan mode (it starts from `source`'s base). */
+function sessionSetupFrom(source: Conversation): SetupRequest | null {
   return source.setup?.type === "session"
     ? {
       type: "session",
       repo: source.setup.repo,
-      // A tab always starts from its workspace's base.
+      // The daemon starts it from the branch `source` started from.
       environment: { type: "newWorktree", base: "", branch: null },
       permission: source.setup.permission,
       orchestrator: source.setup.orchestrator,
-      // Plan mode on in the tab it came from holds the new tab to a plan too.
+      // Plan mode on in the session it came from holds the new one to a plan too.
       planMode: source.setup.planMode,
     }
     : null;
 }
 
 /**
- * Starts `outgoing` as a new task in a background tab of `source`'s workspace (⌘⏎, "Open as a
- * new tab"); the user stays where they are. Its task mentions stay behind: they name `source`'s
- * workers.
+ * Starts `outgoing` as a new background session of `source`'s project (⌘⏎, "Open as a new
+ * session", "Start as session"), on its own worktree; the user stays where they are. Its task
+ * mentions stay behind: they name `source`'s workers.
  */
-export async function startTabFrom(source: Conversation, outgoing: Outgoing): Promise<Conversation> {
-  if (!source.workspaceId) throw new Error("This conversation has no workspace.");
+export async function startSessionFrom(source: Conversation, outgoing: Outgoing): Promise<Conversation> {
   const { conversation } = await request({
-    method: "startTab",
-    workspaceId: source.workspaceId,
-    setup: tabSetupFrom(source),
+    method: "startSession",
+    from: source.id,
+    setup: sessionSetupFrom(source),
     text: outgoing.text,
     attachments: outgoing.attachments,
     mentions: outgoing.mentions.filter((mention) => mention.type !== "task"),
@@ -896,19 +895,7 @@ export async function startTabFrom(source: Conversation, outgoing: Outgoing): Pr
   return conversation;
 }
 
-/** Opens an empty task tab in `source`'s workspace (New session on the New tab), on a worktree of its own. */
-export async function openNewTaskTab(source: Conversation): Promise<void> {
-  if (!source.workspaceId) return;
-  const { conversation } = await request({
-    method: "createTab",
-    workspaceId: source.workspaceId,
-    setup: tabSetupFrom(source),
-  });
-  storeConversation(conversation);
-  openConversation(conversation.id);
-}
-
-/** The notice of a message the thread sent on to another tab: Undo takes it back here, else it goes. */
+/** The notice of a message the thread sent on to another session: Undo takes it back here, else it goes. */
 export async function settleMoved(conversationId: string, itemId: string, undo: boolean): Promise<void> {
   await request({ method: "settleMoved", conversationId, itemId, undo });
 }
@@ -917,7 +904,7 @@ export async function steerQueued(conversationId: string, itemId: string): Promi
   await request({ method: "steerQueued", conversationId, itemId });
 }
 
-/** "Run here" on a message the thread offered as a new tab: it waits like any other and is sent once nothing works. */
+/** "Run here" on a message the thread offered as a new session: it waits like any other and is sent once nothing works. */
 export async function runQueuedHere(conversationId: string, itemId: string): Promise<void> {
   const { queue } = await request({ method: "runQueuedHere", conversationId, itemId });
   showQueue(conversationId, queue);

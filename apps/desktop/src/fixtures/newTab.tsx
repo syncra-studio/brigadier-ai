@@ -23,8 +23,7 @@ let history: BrowserVisit[] = params.has("empty") ? [] : [
   { id: 2, url: "https://two.test/", title: "Second site", atMs: 2, agent: true },
   { id: 1, url: "https://one.test/old", title: "Old site", atMs: 1, agent: false },
 ];
-const conversation: Conversation = { id: ID, kind: "session", projectId: "fixture-project", title: "New tab tools", pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
-  ...(params.has("workspace") ? { workspaceId: "ws-fixture" } : {}) };
+const conversation: Conversation = { id: ID, kind: "session", projectId: "fixture-project", title: "New tab tools", pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null };
 const requests: Request[] = [];
 useApp.setState((s) => ({
   conversations: { [ID]: conversation }, selection: { type: "conversation", id: ID },
@@ -42,9 +41,6 @@ mockIPC((command, payload) => {
   const request = (payload as { request?: { method?: string } } | undefined)?.request;
   if (command === "ipc_request" && request?.method === "pageList") return { method: "pageList", pages };
   if (command === "ipc_request") requests.push(request as Request);
-  if (command === "ipc_request" && request?.method === "createTab") {
-    return { method: "createTab", conversation: { ...conversation, id: "made-1", title: "New tab", createdAtMs: 1 } };
-  }
   return null;
 });
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -65,24 +61,6 @@ function Fixture() {
   const tabId = useSessionTabs((s) => s.sessions[ID]?.tabs[0]?.id ?? "");
   useEffect(() => {
     if (!params.has("drive")) return;
-    if (params.has("workspace")) {
-      void (async () => {
-        await until(() => one('[data-slot="new-tab-session"]') !== null);
-        const seen: Record<string, unknown> = {};
-        const column = one('[data-slot="new-tab-column"]')!;
-        const session = one('[data-slot="new-tab-session"]')!;
-        seen.first = column.firstElementChild === session;
-        seen.label = session.textContent?.trim();
-        seen.aboveTools = session.getBoundingClientRect().bottom <= one('[aria-label="Tools"]')!.getBoundingClientRect().top;
-        session.querySelector("button")!.click();
-        await until(() => sessionTabs(ID).tabs.length === 0);
-        seen.created = requests.find((request) => request.method === "createTab");
-        seen.selection = useApp.getState().selection;
-        seen.newTabLeft = sessionTabs(ID).tabs.length;
-        setResult(JSON.stringify(seen));
-      })();
-      return;
-    }
     if (params.has("pages")) {
       void (async () => {
         await until(() => one('[aria-label="Recents"]') !== null);
@@ -109,7 +87,7 @@ function Fixture() {
       const grid = one('[data-slot="new-tab-tools"]')!;
       const card = grid.firstElementChild!;
       seen.sections = [...column.querySelectorAll("h2")].map((e) => e.textContent);
-      seen.session = one('[data-slot="new-tab-session"]') !== null;
+      seen.session = column.textContent?.includes("New session") ?? false;
       seen.tools = [...grid.children].map((e) => e.querySelector("button")?.textContent?.trim());
       seen.searchFields = column.querySelectorAll("input").length;
       seen.historyCalls = calls.slice();

@@ -329,7 +329,7 @@ struct ConvState {
     /// Notes about messages between sessions, by message id, which the next turn carries,
     /// starting none of its own: a reply that came after its request was over (stopped, or
     /// its overnight run ended), and the user's answer to a send that waited for their OK.
-    /// Also the workspace board's facts ([`ConvLive::hold_fact`]).
+    /// Also the project board's facts ([`ConvLive::hold_fact`]).
     peer_notes: Vec<(String, String)>,
     /// A turn cut short by a limit, from its end until its messages are back in `pending` (on
     /// another account, a stand-in, or waiting for quota) or it has failed. No turn starts
@@ -1155,7 +1155,7 @@ impl ConvLive {
     }
 
     /// Keeps a fact for the next turn, whatever starts it (a user message, a report, a peer),
-    /// starting none of its own: the workspace board's news.
+    /// starting none of its own: the project board's news.
     pub(super) async fn hold_fact(&self, fact: String) {
         let key = format!("fact:{}", uuid::Uuid::now_v7());
         self.state.lock().await.peer_notes.push((key, fact));
@@ -1756,7 +1756,7 @@ impl SessionManager {
 
     /// `route_follow_up`: the orchestrator's judgment of a queued follow-up. One that joins
     /// the working answer is sent into it now; one of its own waits in the queue, offering a
-    /// new tab when the thread says so; one for another tab of the workspace goes there.
+    /// new session when the thread says so; one for another session of the project goes there.
     pub(crate) async fn route_follow_up(
         &self,
         id: &ConversationId,
@@ -1766,14 +1766,16 @@ impl SessionManager {
         let item_id = args.follow_up.as_str();
         let Some(route) = args.chosen() else {
             return Err(Error::Invalid(
-                "route_follow_up needs a `route`: \"join\", \"wait\", \"new_tab\" or \"tab\"."
+                "route_follow_up needs a `route`: \"join\", \"wait\", \"new_session\" or \
+                 \"session\"."
                     .into(),
             ));
         };
-        // The tab it names, before anything changes: one that isn't there leaves it unsorted.
-        let tab = match route {
-            FollowUpRoute::Tab => match self.sibling_named(id, args.tab.as_deref())? {
-                Ok(tab) => Some(tab),
+        // The session it names, before anything changes: one that isn't there leaves it
+        // unsorted.
+        let sibling = match route {
+            FollowUpRoute::Session => match self.sibling_named(id, args.session.as_deref())? {
+                Ok(sibling) => Some(sibling),
                 Err(fact) => return Ok(fact),
             },
             _ => None,
@@ -1815,18 +1817,18 @@ impl SessionManager {
                         .into(),
                 )
             }
-            FollowUpRoute::NewTab => {
+            FollowUpRoute::NewSession => {
                 self.core.offer_queued_as_tab(id, item_id).await?;
                 Ok(
-                    "It waits in the queue offering the user \"Open as a new tab\" or \"Run \
-                     here\" until they pick: a new tab of this workspace starts with it, or it \
-                     reaches you as its own request once this work is done."
+                    "It waits in the queue offering the user \"Open as a new session\" or \
+                     \"Run here\" until they pick: a new session of this project starts with \
+                     it, or it reaches you as its own request once this work is done."
                         .into(),
                 )
             }
-            FollowUpRoute::Tab => match tab {
-                Some(tab) => self.move_follow_up(id, item_id, &tab).await,
-                None => unreachable!("a tab route has its tab"),
+            FollowUpRoute::Session => match sibling {
+                Some(sibling) => self.move_follow_up(id, item_id, &sibling).await,
+                None => unreachable!("a session route has its session"),
             },
             FollowUpRoute::Join => {
                 let working = self.working_request(id).await;

@@ -75,17 +75,10 @@ id_type!(
 );
 
 id_type!(
-    /// Identifies a workspace: a group of a project's session tabs.
+    /// Identifies a workspace of the retired workspace layer: only old logs' `Workspace*`
+    /// events carry it.
     WorkspaceId
 );
-
-impl WorkspaceId {
-    /// The workspace of one tab the projection gives a session recorded before workspaces
-    /// existed (no `workspace_id`). The first change to it records it under this id.
-    pub fn implicit(session: &ConversationId) -> Self {
-        Self(format!("ws-{session}"))
-    }
-}
 
 impl OvernightRunId {
     /// The last 8 characters: the run's part of its branch and folder names.
@@ -94,7 +87,7 @@ impl OvernightRunId {
     }
 }
 
-/// A project: one or more repos. Owns its workspaces and their sessions.
+/// A project: one or more repos. Owns its sessions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -513,23 +506,19 @@ pub struct Conversation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub finished_at_ms: Option<i64>,
-    /// A session tab's workspace. Absent when recorded before workspaces existed; the
-    /// projection then gives it its own implicit one ([`WorkspaceId::implicit`]).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub workspace_id: Option<WorkspaceId>,
 }
 
 impl Conversation {
-    /// Whether it is a session tab, the kind that belongs to a workspace: a session that isn't
-    /// a side chat or a tab's own chat.
+    /// Whether it is a session the sidebar lists under its project, a sibling of the project's
+    /// other sessions: a session that isn't a side chat or a tab's own chat.
     pub fn is_tab(&self) -> bool {
         self.kind == ConversationKind::Session && self.side_of.is_none() && self.tab_chat.is_none()
     }
 }
 
-/// A group of a project's session tabs, each its own session on its own worktree. A new chat
-/// in a project starts one.
+/// A workspace of the retired workspace layer (a group of a project's sessions). Old logs'
+/// `Workspace*` events still carry it; the projection ignores them, and each of its sessions
+/// is a plain session of its project.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Workspace {
@@ -1184,9 +1173,6 @@ impl Default for Settings {
 #[serde(rename_all = "camelCase")]
 pub struct Catalog {
     pub projects: Vec<Project>,
-    /// Every project's workspaces, the implicit ones of older sessions included.
-    #[serde(default)]
-    pub workspaces: Vec<Workspace>,
     pub conversations: Vec<Conversation>,
     pub settings: Settings,
 }
@@ -2071,6 +2057,9 @@ pub enum DomainEvent {
         id: ConversationId,
         title: String,
     },
+    /// Legacy, from the retired workspace layer: still read from old logs, never recorded, and
+    /// ignored (each of its sessions is a plain session of its project). So are the three
+    /// after it.
     WorkspaceCreated {
         workspace: Workspace,
     },

@@ -1773,16 +1773,16 @@ pub struct QueuedMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub held_by: Option<HeldBy>,
-    /// The thread judged it could run apart (`route_follow_up` route "new_tab"): it waits for
-    /// the user's pick, "Open as a new tab" or "Run here", and is never sent until then.
+    /// The thread judged it could run apart (`route_follow_up` route "new_session"): it waits for
+    /// the user's pick, "Open as a new session" or "Run here", and is never sent until then.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub offer_tab: bool,
 }
 
-/// A queued message the thread sent on to another tab of its workspace (`route_follow_up`
-/// route "tab"): the one-line notice this tab keeps, with Undo, until the user undoes or
-/// dismisses it.
+/// A queued message the thread sent on to another session of its project (`route_follow_up`
+/// route "session"): the one-line notice this session keeps, with Undo, until the user undoes
+/// or dismisses it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MovedMessage {
@@ -1894,7 +1894,7 @@ pub enum SessionPhase {
     WatchingCi,
 }
 
-/// Where a task tab stands, as its tab and its workspace's sidebar row show it; the first
+/// Where a session stands, as its chat tab and its sidebar row show it; the first
 /// that holds wins ([`crate::board::Board::tab_state`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

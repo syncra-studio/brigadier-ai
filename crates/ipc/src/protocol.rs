@@ -25,7 +25,7 @@ use brigadier_core::{
     ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup,
     SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState,
     StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget,
-    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceId,
+    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
     WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
@@ -494,16 +494,11 @@ pub enum Request {
         title: Option<String>,
         setup: Option<SetupRequest>,
     },
-    /// A new task tab in a workspace: a session of its own on a new worktree from the
-    /// workspace's base. `setup` is the composer's (its model, permission and plan mode);
-    /// absent, the project's remembered model.
-    CreateTab {
-        workspace_id: WorkspaceId,
-        setup: Option<Box<SetupRequest>>,
-    },
-    /// A new task tab in a workspace that starts on `text` in the background (⌘⏎).
-    StartTab {
-        workspace_id: WorkspaceId,
+    /// A new session of `from`'s project that starts on `text` in the background (⌘⏎, "Open
+    /// as a new session", "Start as session"): on a new worktree from the branch `from` started
+    /// from. `setup` is the composer's (its model, permission and plan mode); absent, `from`'s.
+    StartSession {
+        from: ConversationId,
         setup: Option<Box<SetupRequest>>,
         text: String,
         attachments: Vec<AttachmentRef>,
@@ -1495,10 +1490,7 @@ pub enum Response {
     CreateConversation {
         conversation: Box<Conversation>,
     },
-    CreateTab {
-        conversation: Box<Conversation>,
-    },
-    StartTab {
+    StartSession {
         conversation: Box<Conversation>,
         outcome: SendOutcome,
     },

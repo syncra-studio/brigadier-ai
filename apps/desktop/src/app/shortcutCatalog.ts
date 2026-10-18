@@ -122,8 +122,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   },
   {
     id: "start-in-tab",
-    name: "Start in a new tab",
-    line: "Send the message as a new task in a background tab of the workspace, and stay here",
+    name: "Start as a new session",
+    line: "Send the message as a new session in the background, and stay here",
     area: "Composer",
     keys: ["⌘⏎"],
   },

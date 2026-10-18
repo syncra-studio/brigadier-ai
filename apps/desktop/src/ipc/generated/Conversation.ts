@@ -8,7 +8,6 @@ import type { ProjectId } from "./ProjectId";
 import type { QuotaWait } from "./QuotaWait";
 import type { Setup } from "./Setup";
 import type { TabChat } from "./TabChat";
-import type { WorkspaceId } from "./WorkspaceId";
 
 /**
  * A session (inside a project) or a chat (outside any project), as listed in the sidebar.
@@ -64,9 +63,4 @@ peerAtMs?: number,
  * When a request of it last finished (its sidebar row's unread dot when that came while
  * it wasn't open); folded from those events, never stored as such.
  */
-finishedAtMs?: number, 
-/**
- * A session tab's workspace. Absent when recorded before workspaces existed; the
- * projection then gives it its own implicit one ([`WorkspaceId::implicit`]).
- */
-workspaceId?: WorkspaceId, };
+finishedAtMs?: number, };

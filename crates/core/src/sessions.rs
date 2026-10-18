@@ -14,8 +14,7 @@ use crate::model::{
     Catalog, ContextUsage, Conversation, ConversationId, ConversationKind, ConversationView,
     DomainEvent, EnvironmentKind, ForkOrigin, Lifecycle, Message, MessagePage, MessageRole,
     ModelChoice, OrchestratorLogEntry, OrchestratorPage, Project, ProjectId, ProjectPatch,
-    ProjectRepo, RawEntry, Settings, Setup, ThreadItem, WorkerPage, Workspace, WorkspaceId,
-    streams,
+    ProjectRepo, RawEntry, Settings, Setup, ThreadItem, WorkerPage, streams,
 };
 use crate::projection::Projection;
 
@@ -47,9 +46,6 @@ pub struct Origin {
     pub side_of: Option<ConversationId>,
     /// A tab's own chat: the tab it belongs to (`side_of` is its session).
     pub tab_chat: Option<crate::model::TabChat>,
-    /// A session tab's workspace, recorded with it when it isn't yet (a new one, or an older
-    /// session's implicit one).
-    pub workspace: Option<Workspace>,
 }
 /// Diagnostic probes kept on disk; older ones are trimmed as new ones arrive.
 const PROBES_KEPT: u32 = 10_000;
@@ -289,13 +285,6 @@ impl Core {
             .ok_or_else(|| Error::NotFound(format!("project {id}")))
     }
 
-    /// A workspace, the implicit one of a session recorded before workspaces existed included.
-    pub fn workspace(&self, id: &WorkspaceId) -> Result<Workspace> {
-        self.projection()
-            .workspace(id)
-            .ok_or_else(|| Error::NotFound(format!("workspace {id}")))
-    }
-
     pub fn settings(&self) -> Settings {
         self.projection().settings.clone()
     }
@@ -343,26 +332,6 @@ impl Core {
         };
         let now = now_ms();
         let mut events = Vec::new();
-        if let Some(workspace) = &origin.workspace {
-            if kind != ConversationKind::Session
-                || project_id.as_ref() != Some(&workspace.project_id)
-            {
-                return Err(Error::Invalid(
-                    "a workspace's tab is a session of its project".into(),
-                ));
-            }
-            if !self.projection().is_recorded(&workspace.id) {
-                let mut workspace = workspace.clone();
-                // A tab made with a title names a new workspace at once.
-                if workspace.title.is_empty() && title != NEW_SESSION_TITLE {
-                    workspace.title.clone_from(&title);
-                }
-                events.push((
-                    streams::CATALOG.into(),
-                    DomainEvent::WorkspaceCreated { workspace },
-                ));
-            }
-        }
         if let (Some(Setup::Session { repo, .. }), Some(project_id)) = (&setup, &project_id) {
             let mut project = self.project(project_id)?;
             if !project.repos.iter().any(|known| known.path == *repo) {
@@ -396,15 +365,9 @@ impl Core {
             deleting: false,
             peer_at_ms: None,
             finished_at_ms: None,
-            workspace_id: origin.workspace.map(|workspace| workspace.id),
         };
-        // After its workspace, before anything else of it.
-        let at = events
-            .iter()
-            .take_while(|(_, event)| matches!(event, DomainEvent::WorkspaceCreated { .. }))
-            .count();
         events.insert(
-            at,
+            0,
             (
                 streams::CATALOG.into(),
                 DomainEvent::ConversationCreated {
@@ -632,33 +595,17 @@ impl Core {
         id: ConversationId,
         title: String,
     ) -> Result<Conversation> {
-        let conversation = self.conversation(&id)?;
+        self.conversation(&id)?;
         let title = clean_name(&title, "title")?;
-        let mut events = vec![(
+        let events = vec![(
             streams::CATALOG.into(),
             DomainEvent::ConversationRenamed {
                 id: id.clone(),
                 title: title.clone(),
             },
         )];
-        events.extend(self.workspace_titled(&conversation, &title));
         self.record(events).await?;
         self.conversation(&id)
-    }
-
-    /// A tab's first title names its workspace too, when the workspace has none yet: it keeps
-    /// that name whatever later happens to the tab.
-    fn workspace_titled(&self, tab: &Conversation, title: &str) -> Option<(String, DomainEvent)> {
-        let id = tab.workspace_id.as_ref()?;
-        self.projection().untitled(id).then(|| {
-            (
-                streams::CATALOG.into(),
-                DomainEvent::WorkspaceRenamed {
-                    id: id.clone(),
-                    title: title.to_owned(),
-                },
-            )
-        })
     }
 
     pub async fn set_pinned(&self, id: ConversationId, pinned: bool) -> Result<Conversation> {
@@ -817,7 +764,6 @@ impl Core {
             } else {
                 title_from(&words)
             };
-            events.extend(self.workspace_titled(&conversation, &title));
             events.push((
                 streams::CATALOG.into(),
                 DomainEvent::ConversationRenamed {

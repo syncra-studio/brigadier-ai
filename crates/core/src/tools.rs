@@ -264,10 +264,10 @@ pub struct RouteFollowUp {
     /// Where it goes. Optional only for the older form, which gave `joins` instead.
     #[serde(default)]
     pub route: Option<FollowUpRoute>,
-    /// For route "tab": the other tab's session id, from the [follow-up …] block or
-    /// list_sessions with workspace true.
-    #[serde(default)]
-    pub tab: Option<String>,
+    /// For route "session": the other session's id, from the [follow-up …] block or
+    /// list_sessions with project true. `tab` is its older name (rule R).
+    #[serde(default, alias = "tab")]
+    pub session: Option<String>,
     /// The older form, from before routes (rule R: a session's cached schema still sends it):
     /// true is "join", false is "wait".
     #[serde(default)]
@@ -284,10 +284,13 @@ pub enum FollowUpRoute {
     /// A request of its own: it waits in the queue until this work is done.
     Wait,
     /// A request of its own that could run apart: it waits, and offers the user "Open as a
-    /// new tab?".
-    NewTab,
-    /// It belongs to another tab of this workspace (`tab`): it goes there.
-    Tab,
+    /// new session". `new_tab` is its older name (rule R).
+    #[serde(alias = "new_tab")]
+    NewSession,
+    /// It belongs to another session of this project (`session`): it goes there. `tab` is
+    /// its older name (rule R).
+    #[serde(alias = "tab")]
+    Session,
 }
 
 impl RouteFollowUp {
@@ -990,10 +993,11 @@ pub struct ListSessions {
     /// Keeps only the sessions whose title or project name contains it, ignoring case.
     #[serde(default)]
     pub query: Option<String>,
-    /// Only the other tabs of this session's workspace, each with its state, branch, base and
-    /// the files its work changed since it left its base.
-    #[serde(default)]
-    pub workspace: bool,
+    /// Only the other sessions of this session's project, each with its state, repository,
+    /// branch, base and the files its work changed since it left its base. `workspace` is its
+    /// older name (rule R).
+    #[serde(default, alias = "workspace")]
+    pub project: bool,
 }
 
 /// `message_session`: send another session a message. Returns at once; a reply comes later as

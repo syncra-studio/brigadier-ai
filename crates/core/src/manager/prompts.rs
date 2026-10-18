@@ -877,6 +877,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, a scout or research task whose report marks a \"done when\" [not met] runs again once by itself, one tier up, as a new task: its report says which model ran it, which takes over and why. Use the rerun's report, ignore it or stop it, as you judge. rerun_task does the same when you judge that a scout's or researcher's answer lacks support. A citation marked [unevidenced] is no reason to rerun. Nothing reruns twice, and implement, review and merge tasks never rerun.",
         worker: "",
     },
+    Revision {
+        number: SESSIONS_REVISION,
+        thread: "From now on, there are no workspaces or task tabs: each session of a project is one task on its own branch and worktree, and the project's other sessions are your siblings. route_follow_up's routes are \"new_session\" (it waits offering the user \"Open as a new session\"; you never start sessions yourself) and \"session\" with `session`, another session's id (they replace \"new_tab\" and \"tab\"). list_sessions with project true lists the project's other sessions as data: title, state, repository, branch, base and changed files (it replaces workspace true). [project] lines tell you when a session in your repository first changes files you changed and when one merges. They are plain facts: whether to warn, rebase, message or ignore is yours to judge.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1253,6 +1258,9 @@ pub(crate) const GIT_SIGN_IN_REVISION: u32 = 102;
 /// A cheap scout or research task whose check fails, or whose answer the thread judges
 /// unsupported (rerun_task), runs again once, one tier up (WORKSPACES-PLAN.md phase 6).
 pub(crate) const RERUN_REVISION: u32 = 103;
+/// Sessions instead of workspaces (Q73): the board, its facts and the follow-up routes are the
+/// project's sessions; the routes and list_sessions' filter are named for sessions.
+pub(crate) const SESSIONS_REVISION: u32 = 104;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -2493,8 +2501,8 @@ fn scratch_note(scratch_gone: bool) -> &'static str {
     }
 }
 
-/// Another tab of the session's workspace, as a [follow-up …] block lists it: its id, title
-/// and state.
+/// Another session of the session's project, as a [follow-up …] block lists it: its id,
+/// title and state.
 pub(crate) struct TabLine {
     pub id: String,
     pub title: String,
@@ -2502,8 +2510,8 @@ pub(crate) struct TabLine {
 }
 
 /// Tells the orchestrator of a follow-up the user sent while `request` works: it may sort it
-/// with route_follow_up, or answer or act on it itself. `tabs` are the workspace's other tabs,
-/// where the message may belong instead.
+/// with route_follow_up, or answer or act on it itself. `tabs` are the project's other
+/// sessions, where the message may belong instead.
 pub(crate) fn follow_up(
     id: &str,
     request: &str,
@@ -2519,7 +2527,7 @@ pub(crate) fn follow_up(
         block.push_str(&format!("\n(attached: {})", names.join(", ")));
     }
     if !tabs.is_empty() {
-        block.push_str("\nThe other tabs of this workspace:");
+        block.push_str("\nThe other sessions of this project:");
         for tab in tabs {
             block.push_str(&format!(
                 "\n- \"{}\" (session {}): {}",
@@ -2530,12 +2538,13 @@ pub(crate) fn follow_up(
     let to_tab = if tabs.is_empty() {
         ""
     } else {
-        " If it belongs to one of the other tabs, route \"tab\" with that tab's id sends it there."
+        " If it belongs to one of the other sessions, route \"session\" with that session's id \
+         sends it there."
     };
     block.push_str(&format!(
         "\n[/follow-up] If it is a request of its own, call route_follow_up (follow_up \"{id}\") \
-         with route \"wait\": it reaches you once this work is done, or \"new_tab\": it waits \
-         offering the user \"Open as a new tab?\".{to_tab} Otherwise it joins this work (at \
+         with route \"wait\": it reaches you once this work is done, or \"new_session\": it \
+         waits offering the user \"Open as a new session\".{to_tab} Otherwise it joins this work (at \
          once with route \"join\", else shortly by itself) and reaches you as the user's \
          message; you may also answer or act on it now. If you have nothing to say now, reply \
          with exactly {QUIET}."
@@ -4588,29 +4597,34 @@ mod environment_tests {
         }
     }
 
-    /// Workspaces: open threads hear the routes and the board once (workers nothing); a
-    /// follow-up block lists the workspace's other tabs with their states and names route
-    /// "tab" only when there is one.
+    /// Sessions instead of workspaces: open threads hear the routes and the board under their
+    /// new names once (workers nothing); a follow-up block lists the project's other sessions
+    /// with their states and names route "session" only when there is one.
     #[test]
-    fn the_workspace_routes_reach_an_open_thread_and_the_follow_up_lists_the_tabs() {
+    fn the_session_routes_reach_an_open_thread_and_the_follow_up_lists_the_sessions() {
         let added = REVISIONS
             .iter()
-            .find(|revision| revision.number == WORKSPACE_ROUTES_REVISION)
+            .find(|revision| revision.number == SESSIONS_REVISION)
             .unwrap();
         assert!(added.worker.is_empty());
-        let note = revision_note(WORKSPACE_ROUTES_REVISION - 1, false).unwrap();
+        let note = revision_note(SESSIONS_REVISION - 1, false).unwrap();
         for words in [
-            "route instead of joins",
-            "\"new_tab\"",
-            "you never open tabs yourself",
-            "list_sessions with workspace true",
+            "no workspaces or task tabs",
+            "\"new_session\"",
+            "you never start sessions yourself",
+            "list_sessions with project true",
+            "[project] lines",
             "yours to judge",
         ] {
             assert!(note.contains(words), "{words}: {note}");
         }
         let alone = follow_up("q-1", "Build the export", "Also add CSV.", &[], &[]);
-        assert!(alone.contains("route \"wait\"") && alone.contains("\"new_tab\""));
-        assert!(!alone.contains("route \"tab\"") && !alone.contains("other tabs"));
+        assert!(alone.contains("route \"wait\"") && alone.contains("\"new_session\""));
+        assert!(!alone.contains("route \"session\"") && !alone.contains("other sessions"));
+        assert!(
+            !alone.contains("tab") && !alone.contains("workspace"),
+            "{alone}"
+        );
         let tabs = [TabLine {
             id: "s-2".into(),
             title: "Redesigning the login".into(),
@@ -4618,11 +4632,15 @@ mod environment_tests {
         }];
         let block = follow_up("q-1", "Build the export", "Also add CSV.", &[], &tabs);
         assert!(
-            block.contains("The other tabs of this workspace:\n- \"Redesigning the login\" (session s-2): working"),
+            block.contains("The other sessions of this project:\n- \"Redesigning the login\" (session s-2): working"),
             "{block}"
         );
         assert!(
-            block.contains("route \"tab\" with that tab's id"),
+            block.contains("route \"session\" with that session's id"),
+            "{block}"
+        );
+        assert!(
+            !block.contains("tab") && !block.contains("workspace"),
             "{block}"
         );
     }

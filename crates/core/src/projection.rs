@@ -1,8 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::model::{
-    Catalog, Conversation, ConversationId, DomainEvent, Environment, Lifecycle, Project, ProjectId,
-    Settings, Setup, Workspace, WorkspaceId,
+    Catalog, Conversation, ConversationId, DomainEvent, Project, ProjectId, Settings,
 };
 
 /// In-memory view of the catalog, folded from catalog and settings events.
@@ -10,9 +9,6 @@ use crate::model::{
 pub(crate) struct Projection {
     pub(crate) projects: HashMap<ProjectId, Project>,
     pub(crate) conversations: HashMap<ConversationId, Conversation>,
-    /// Recorded workspaces. Older sessions' implicit ones are made on reading
-    /// ([`Projection::workspace`]).
-    workspaces: HashMap<WorkspaceId, Workspace>,
     /// Conversations that were deleted: nothing more is recorded on their streams.
     pub(crate) deleted: HashSet<ConversationId>,
     pub(crate) settings: Settings,
@@ -28,9 +24,6 @@ pub(crate) struct Projection {
     setup_seqs: HashMap<String, i64>,
     lifecycle_seqs: HashMap<String, i64>,
     project_seqs: HashMap<String, i64>,
-    workspace_title_seqs: HashMap<String, i64>,
-    workspace_pinned_seqs: HashMap<String, i64>,
-    workspace_lifecycle_seqs: HashMap<String, i64>,
     settings_seq: i64,
 }
 
@@ -79,8 +72,6 @@ impl Projection {
             }
             DomainEvent::ProjectRemoved { id } => {
                 self.projects.remove(id);
-                self.workspaces
-                    .retain(|_, workspace| workspace.project_id != *id);
             }
             DomainEvent::EngineSwitching { conversations, .. } => {
                 self.engine_switch = Some(conversations.clone());
@@ -90,45 +81,15 @@ impl Projection {
                 self.engine_switch = None;
             }
             DomainEvent::ConversationCreated { conversation } => {
-                let mut conversation = (**conversation).clone();
-                if conversation.is_tab() && conversation.workspace_id.is_none() {
-                    conversation.workspace_id = Some(WorkspaceId::implicit(&conversation.id));
-                }
                 self.conversations
-                    .insert(conversation.id.clone(), conversation);
+                    .insert(conversation.id.clone(), (**conversation).clone());
             }
-            DomainEvent::WorkspaceCreated { workspace } => {
-                self.workspaces
-                    .insert(workspace.id.clone(), workspace.clone());
-            }
-            DomainEvent::WorkspaceRenamed { id, title } => {
-                if let Some(workspace) = self.workspaces.get_mut(id) {
-                    if latest(&mut self.workspace_title_seqs, &id.0, seq) {
-                        workspace.title.clone_from(title);
-                    }
-                    workspace.updated_at_ms = workspace.updated_at_ms.max(at_ms);
-                }
-            }
-            DomainEvent::WorkspacePinned { id, pinned_at_ms } => {
-                if let Some(workspace) = self.workspaces.get_mut(id)
-                    && latest(&mut self.workspace_pinned_seqs, &id.0, seq)
-                {
-                    workspace.pinned_at_ms = *pinned_at_ms;
-                    workspace.updated_at_ms = workspace.updated_at_ms.max(at_ms);
-                }
-            }
-            DomainEvent::WorkspaceArchived { id, archived } => {
-                if let Some(workspace) = self.workspaces.get_mut(id)
-                    && latest(&mut self.workspace_lifecycle_seqs, &id.0, seq)
-                {
-                    workspace.lifecycle = if *archived {
-                        Lifecycle::Archived
-                    } else {
-                        Lifecycle::Active
-                    };
-                    workspace.updated_at_ms = workspace.updated_at_ms.max(at_ms);
-                }
-            }
+            // The retired workspace layer: each of its sessions is a plain session of its
+            // project, so an old log's workspace events change nothing.
+            DomainEvent::WorkspaceCreated { .. }
+            | DomainEvent::WorkspaceRenamed { .. }
+            | DomainEvent::WorkspacePinned { .. }
+            | DomainEvent::WorkspaceArchived { .. } => {}
             DomainEvent::ConversationRenamed { id, title } => {
                 if let Some(conversation) = self.conversations.get_mut(id) {
                     if latest(&mut self.title_seqs, &id.0, seq) {
@@ -259,65 +220,7 @@ impl Projection {
         }
     }
 
-    /// A workspace: a recorded one, or the implicit one of a session recorded before
-    /// workspaces existed, made from that session (its title, pin, archive state, repository
-    /// and base).
-    pub(crate) fn workspace(&self, id: &WorkspaceId) -> Option<Workspace> {
-        self.workspaces()
-            .into_iter()
-            .find(|workspace| workspace.id == *id)
-    }
-
-    /// Whether the workspace `id` was recorded without a title, and has none yet.
-    pub(crate) fn untitled(&self, id: &WorkspaceId) -> bool {
-        self.workspaces
-            .get(id)
-            .is_some_and(|workspace| workspace.title.is_empty())
-    }
-
-    /// Whether the workspace `id` was recorded (not only an older session's implicit one).
-    pub(crate) fn is_recorded(&self, id: &WorkspaceId) -> bool {
-        self.workspaces.contains_key(id)
-    }
-
-    /// Every workspace, recorded or implicit, with the most recent activity of its tabs. One
-    /// recorded without a title has its oldest tab's (a new chat's, titled from its first
-    /// message).
-    pub(crate) fn workspaces(&self) -> Vec<Workspace> {
-        let mut workspaces = self.workspaces.clone();
-        // The oldest tab of each, for a title.
-        let mut oldest: HashMap<&WorkspaceId, &Conversation> = HashMap::new();
-        for conversation in self.conversations.values() {
-            let Some(id) = &conversation.workspace_id else {
-                continue;
-            };
-            let first = oldest.entry(id).or_insert(conversation);
-            if (conversation.created_at_ms, &conversation.id) < (first.created_at_ms, &first.id) {
-                *first = conversation;
-            }
-            if !workspaces.contains_key(id)
-                && *id == WorkspaceId::implicit(&conversation.id)
-                && let Some(workspace) = implicit_workspace(conversation)
-            {
-                workspaces.insert(id.clone(), workspace);
-            }
-            if let Some(workspace) = workspaces.get_mut(id) {
-                workspace.updated_at_ms = workspace.updated_at_ms.max(conversation.updated_at_ms);
-            }
-        }
-        for (id, tab) in oldest {
-            if let Some(workspace) = workspaces.get_mut(id)
-                && workspace.title.is_empty()
-            {
-                workspace.title.clone_from(&tab.title);
-            }
-        }
-        let mut workspaces: Vec<Workspace> = workspaces.into_values().collect();
-        workspaces.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms).then(b.id.cmp(&a.id)));
-        workspaces
-    }
-
-    /// Projects newest first; workspaces and conversations by most recent activity.
+    /// Projects newest first; conversations by most recent activity.
     pub(crate) fn catalog(&self) -> Catalog {
         let mut projects: Vec<Project> = self.projects.values().cloned().collect();
         projects.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms).then(a.id.cmp(&b.id)));
@@ -325,42 +228,10 @@ impl Projection {
         conversations.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms).then(b.id.cmp(&a.id)));
         Catalog {
             projects,
-            workspaces: self.workspaces(),
             conversations,
             settings: self.settings.clone(),
         }
     }
-}
-
-/// The workspace of one tab a session recorded before workspaces existed belongs to.
-fn implicit_workspace(session: &Conversation) -> Option<Workspace> {
-    let project_id = session.project_id.clone()?;
-    let (repos, base) = match &session.setup {
-        Some(Setup::Session {
-            repo, environment, ..
-        }) => (
-            vec![repo.clone()],
-            match environment {
-                Environment::LocalCheckout { branch } => branch.clone(),
-                Environment::NewWorktree { base, .. } => base.clone(),
-            },
-        ),
-        _ => (Vec::new(), String::new()),
-    };
-    Some(Workspace {
-        id: WorkspaceId::implicit(&session.id),
-        project_id,
-        title: session.title.clone(),
-        repos,
-        base,
-        created_at_ms: session.created_at_ms,
-        updated_at_ms: session.updated_at_ms,
-        pinned_at_ms: session.pinned_at_ms,
-        lifecycle: match session.lifecycle {
-            Lifecycle::Archived => Lifecycle::Archived,
-            Lifecycle::Active | Lifecycle::Hibernated => Lifecycle::Active,
-        },
-    })
 }
 
 /// Records `seq` as the field's newest writer; false if a newer event already set it.
@@ -378,7 +249,9 @@ mod tests {
     use brigadier_providers::ProviderKind;
 
     use super::*;
-    use crate::model::{ConversationKind, ModelChoice, PermissionLevel};
+    use crate::model::{
+        ConversationKind, Environment, Lifecycle, ModelChoice, PermissionLevel, Setup, WorkspaceId,
+    };
 
     fn project() -> Project {
         Project {
@@ -424,7 +297,6 @@ mod tests {
             deleting: false,
             peer_at_ms: None,
             finished_at_ms: None,
-            workspace_id: None,
         }
     }
 
@@ -453,243 +325,72 @@ mod tests {
     }
 
     #[test]
-    fn an_old_log_gives_each_session_a_workspace_of_one_tab() {
-        let mut side = session("side", worktree("main"));
-        side.side_of = Some(ConversationId("a".into()));
-        let mut chat = session("chat", worktree("main"));
-        chat.kind = ConversationKind::Chat;
-        chat.project_id = None;
-        chat.setup = None;
+    fn an_old_workspace_of_several_sessions_reads_as_plain_sessions_of_its_project() {
+        // As phase 2 recorded it: a workspace, then its sessions carrying its id.
+        let tab = |id: &str| {
+            let mut value = serde_json::to_value(created(session(id, worktree("main")))).unwrap();
+            value["conversation"]["workspaceId"] = "w1".into();
+            serde_json::from_value::<DomainEvent>(value).unwrap()
+        };
+        let workspace: DomainEvent = serde_json::from_value(serde_json::json!({
+            "type": "workspaceCreated",
+            "workspace": {
+                "id": "w1", "projectId": "p", "title": "Redesigning X", "repos": ["/repo"],
+                "base": "main", "createdAtMs": 5, "updatedAtMs": 5, "pinnedAtMs": null,
+                "lifecycle": "active"
+            }
+        }))
+        .unwrap();
         let projection = fold(&[
             DomainEvent::ProjectCreated { project: project() },
-            created(session("a", worktree("develop"))),
-            created(session(
-                "b",
-                Environment::LocalCheckout {
-                    branch: "feature".into(),
-                },
-            )),
-            created(side),
-            created(chat),
-            DomainEvent::ConversationPinned {
-                id: ConversationId("a".into()),
-                pinned_at_ms: Some(50),
-            },
-            DomainEvent::ConversationLifecycleChanged {
-                id: ConversationId("b".into()),
-                lifecycle: Lifecycle::Archived,
-            },
-        ]);
-        let catalog = projection.catalog();
-        assert_eq!(catalog.workspaces.len(), 2, "{:?}", catalog.workspaces);
-
-        let a = projection.workspace(&WorkspaceId("ws-a".into())).unwrap();
-        assert_eq!(a.title, "title a");
-        assert_eq!(a.project_id, ProjectId("p".into()));
-        assert_eq!(a.repos, vec!["/repo".to_owned()]);
-        assert_eq!(a.base, "develop");
-        assert_eq!(a.pinned_at_ms, Some(50));
-        assert_eq!(a.lifecycle, Lifecycle::Active);
-
-        let b = projection.workspace(&WorkspaceId("ws-b".into())).unwrap();
-        assert_eq!(b.base, "feature", "a local checkout's base is its branch");
-        assert_eq!(b.lifecycle, Lifecycle::Archived);
-
-        let tab = |id: &str| {
-            catalog
-                .conversations
-                .iter()
-                .find(|conversation| conversation.id.0 == id)
-                .unwrap()
-                .workspace_id
-                .clone()
-        };
-        assert_eq!(tab("a"), Some(WorkspaceId("ws-a".into())));
-        assert_eq!(tab("side"), None, "a side chat is no tab");
-        assert_eq!(tab("chat"), None, "a chat is no tab");
-    }
-
-    #[test]
-    fn an_implicit_workspace_follows_its_session_until_it_is_recorded() {
-        let id = WorkspaceId("ws-a".into());
-        let mut projection = fold(&[
-            DomainEvent::ProjectCreated { project: project() },
-            created(session("a", worktree("main"))),
-            DomainEvent::ConversationRenamed {
-                id: ConversationId("a".into()),
-                title: "Redesigning X".into(),
-            },
-        ]);
-        assert_eq!(projection.workspace(&id).unwrap().title, "Redesigning X");
-
-        let recorded = projection.workspace(&id).unwrap();
-        projection.apply(
-            &DomainEvent::WorkspaceCreated {
-                workspace: recorded,
-            },
-            10,
-            200,
-        );
-        projection.apply(
-            &DomainEvent::WorkspaceRenamed {
-                id: id.clone(),
-                title: "Workspace".into(),
-            },
-            11,
-            201,
-        );
-        projection.apply(
-            &DomainEvent::ConversationRenamed {
-                id: ConversationId("a".into()),
-                title: "Tab".into(),
-            },
-            12,
-            202,
-        );
-        let workspaces = projection.workspaces();
-        assert_eq!(workspaces.len(), 1);
-        assert_eq!(workspaces[0].title, "Workspace", "the recorded one wins");
-        assert_eq!(
-            workspaces[0].updated_at_ms, 202,
-            "its tabs' activity counts"
-        );
-    }
-
-    #[test]
-    fn a_new_log_round_trips() {
-        let id = WorkspaceId("w1".into());
-        let mut one = session("a", worktree("main"));
-        one.workspace_id = Some(id.clone());
-        let mut two = session("b", worktree("main"));
-        two.workspace_id = Some(id.clone());
-        let events = vec![
-            DomainEvent::ProjectCreated { project: project() },
-            DomainEvent::WorkspaceCreated {
-                workspace: Workspace {
-                    id: id.clone(),
-                    project_id: ProjectId("p".into()),
-                    title: "Redesigning X".into(),
-                    repos: vec!["/repo".into()],
-                    base: "main".into(),
-                    created_at_ms: 5,
-                    updated_at_ms: 5,
-                    pinned_at_ms: None,
-                    lifecycle: Lifecycle::Active,
-                },
-            },
-            created(one),
-            created(two),
+            workspace,
+            tab("a"),
+            tab("b"),
+            tab("c"),
+            created(session("older", worktree("develop"))),
             DomainEvent::WorkspacePinned {
-                id: id.clone(),
+                id: WorkspaceId("w1".into()),
                 pinned_at_ms: Some(7),
             },
             DomainEvent::WorkspaceRenamed {
-                id: id.clone(),
+                id: WorkspaceId("w1".into()),
                 title: "Redesigning Y".into(),
             },
             DomainEvent::WorkspaceArchived {
-                id: id.clone(),
+                id: WorkspaceId("w1".into()),
                 archived: true,
             },
-        ];
-        let decoded: Vec<DomainEvent> = events
+        ]);
+        let catalog = projection.catalog();
+        let mut ids: Vec<&str> = catalog
+            .conversations
             .iter()
-            .map(|event| serde_json::from_str(&serde_json::to_string(event).unwrap()).unwrap())
+            .map(|conversation| conversation.id.0.as_str())
             .collect();
-        assert_eq!(decoded, events);
-
-        let catalog = fold(&decoded).catalog();
-        assert_eq!(catalog, fold(&events).catalog());
-        assert_eq!(catalog.workspaces.len(), 1, "two tabs, one workspace");
-        let workspace = &catalog.workspaces[0];
-        assert_eq!(workspace.title, "Redesigning Y");
-        assert_eq!(workspace.pinned_at_ms, Some(7));
-        assert_eq!(workspace.lifecycle, Lifecycle::Archived);
-        assert!(
-            catalog
-                .conversations
-                .iter()
-                .all(|conversation| conversation.workspace_id == Some(id.clone()))
-        );
-    }
-
-    #[test]
-    fn an_older_workspace_rename_does_not_win() {
-        let id = WorkspaceId("ws-a".into());
-        let mut projection = fold(&[
-            DomainEvent::ProjectCreated { project: project() },
-            created(session("a", worktree("main"))),
-        ]);
-        let recorded = projection.workspace(&id).unwrap();
-        projection.apply(
-            &DomainEvent::WorkspaceCreated {
-                workspace: recorded,
-            },
-            3,
-            103,
-        );
-        for (seq, title) in [(5, "newer"), (4, "older")] {
-            projection.apply(
-                &DomainEvent::WorkspaceRenamed {
-                    id: id.clone(),
-                    title: title.into(),
-                },
-                seq,
-                100 + seq,
+        ids.sort_unstable();
+        assert_eq!(ids, ["a", "b", "c", "older"], "nothing is lost");
+        for conversation in &catalog.conversations {
+            assert_eq!(conversation.project_id, Some(ProjectId("p".into())));
+            assert_eq!(conversation.title, format!("title {}", conversation.id));
+            assert_eq!(
+                conversation.pinned_at_ms, None,
+                "the workspace's pin was its own"
             );
+            assert_eq!(
+                conversation.lifecycle,
+                Lifecycle::Active,
+                "archiving the workspace never archived its sessions"
+            );
+            assert!(conversation.is_tab());
         }
-        assert_eq!(projection.workspace(&id).unwrap().title, "newer");
-    }
-
-    #[test]
-    fn a_lookup_counts_tab_activity_and_a_removed_project_takes_its_workspaces() {
-        let id = WorkspaceId("w1".into());
-        let mut tab = session("a", worktree("main"));
-        tab.workspace_id = Some(id.clone());
-        let mut projection = fold(&[
-            DomainEvent::ProjectCreated { project: project() },
-            DomainEvent::WorkspaceCreated {
-                workspace: Workspace {
-                    id: id.clone(),
-                    project_id: ProjectId("p".into()),
-                    title: "w".into(),
-                    repos: Vec::new(),
-                    base: "main".into(),
-                    created_at_ms: 5,
-                    updated_at_ms: 5,
-                    pinned_at_ms: None,
-                    lifecycle: Lifecycle::Active,
-                },
-            },
-            created(tab),
-        ]);
-        projection.apply(
-            &DomainEvent::WorkspacePinned {
-                id: id.clone(),
-                pinned_at_ms: Some(1),
-            },
-            4,
-            300,
+        let json = serde_json::to_value(&catalog).unwrap();
+        assert!(json.get("workspaces").is_none());
+        assert!(
+            json["conversations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|conversation| conversation.get("workspaceId").is_none())
         );
-        assert_eq!(projection.workspace(&id).unwrap().updated_at_ms, 300);
-        projection.touch(&ConversationId("a".into()), 400);
-        assert_eq!(projection.workspace(&id).unwrap().updated_at_ms, 400);
-
-        projection.apply(
-            &DomainEvent::ConversationDeleted {
-                id: ConversationId("a".into()),
-            },
-            5,
-            401,
-        );
-        projection.apply(
-            &DomainEvent::ProjectRemoved {
-                id: ProjectId("p".into()),
-            },
-            6,
-            402,
-        );
-        assert!(projection.workspace(&id).is_none());
-        assert!(projection.workspaces().is_empty());
     }
 }

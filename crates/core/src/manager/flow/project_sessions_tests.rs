@@ -1,13 +1,14 @@
-//! Workspaces (WORKSPACES-PLAN.md phase 2): a new chat in a project starts a workspace, more
-//! task tabs join it, and each tab is a session of its own on its own worktree, so tabs of one
-//! workspace work at once without sharing a file.
+//! A project's sessions (Q73): each one task on its own worktree. A session starts another in
+//! the background from its own base; sessions of one project work at once without sharing a
+//! file, see each other on the board, hear of overlaps in the same repository and of a
+//! sibling's merge, and a queued message may go to the sibling it belongs to.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::thread_tests::commit_in_workspace;
 use super::{Flow, Options, Reply, Script, Turn, git};
-use crate::model::{ConversationId, ConversationKind, Environment, Setup, WorkspaceId};
+use crate::model::{ConversationId, ConversationKind, Environment, Setup};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -49,12 +50,13 @@ fn writing(meet: Option<Arc<tokio::sync::Barrier>>) -> Script {
     })
 }
 
-fn workspace_of(flow: &Flow, id: &ConversationId) -> WorkspaceId {
-    flow.core
-        .conversation(id)
+/// A new, empty session started from `from`, as ⌘⏎ makes one (without its message).
+async fn sibling_of(flow: &Flow, from: &ConversationId) -> ConversationId {
+    flow.manager
+        .create_session_from(from, None)
+        .await
         .unwrap()
-        .workspace_id
-        .expect("a tab has a workspace")
+        .id
 }
 
 fn worktree(flow: &Flow, id: &ConversationId) -> (Option<PathBuf>, String, String) {
@@ -70,35 +72,26 @@ fn worktree(flow: &Flow, id: &ConversationId) -> (Option<PathBuf>, String, Strin
     }
 }
 
-/// A new chat in a project starts a workspace titled after it; a second tab joins it on a new
-/// worktree from the same base; the two tabs work at once, each in its own folder on its own
-/// branch, and neither sees the other's file.
+/// A session starts another of its project on a new worktree from its own base; the two
+/// work at once, each in its own folder on its own branch, and neither sees the other's file.
+/// No workspace is made.
 #[tokio::test]
-async fn two_tabs_of_one_workspace_work_at_once_on_their_own_worktrees() {
+async fn two_sessions_of_one_project_work_at_once_on_their_own_worktrees() {
     let meet = Arc::new(tokio::sync::Barrier::new(2));
-    let flow = Flow::start(
-        "workspaces-two-tabs",
-        Options::default(),
-        writing(Some(meet)),
-    )
-    .await;
+    let flow = Flow::start("sessions-two", Options::default(), writing(Some(meet))).await;
     let first = flow.conversation.clone();
-    let workspace = workspace_of(&flow, &first);
-    let catalog = flow.core.catalog();
-    assert_eq!(catalog.workspaces.len(), 1);
-    assert_eq!(catalog.workspaces[0].id, workspace);
-    assert_eq!(catalog.workspaces[0].title, "Flow", "the first tab's title");
-    assert_eq!(catalog.workspaces[0].base, "main");
-    assert_eq!(
-        catalog.workspaces[0].repos,
-        vec![flow.repo.display().to_string()]
-    );
-
-    let second = flow.manager.create_tab(&workspace, None).await.unwrap();
-    assert_eq!(second.workspace_id.as_ref(), Some(&workspace));
+    let second = flow
+        .manager
+        .create_session_from(&first, None)
+        .await
+        .unwrap();
     assert_eq!(second.kind, ConversationKind::Session);
+    assert_eq!(
+        second.project_id,
+        flow.core.conversation(&first).unwrap().project_id
+    );
     let (_, base, branch) = worktree(&flow, &second.id);
-    assert_eq!(base, "main", "from the workspace's base");
+    assert_eq!(base, "main", "from the first session's base");
     assert_ne!(branch, worktree(&flow, &first).2, "a branch of its own");
 
     let (one, two) = tokio::join!(
@@ -110,10 +103,10 @@ async fn two_tabs_of_one_workspace_work_at_once_on_their_own_worktrees() {
     flow.settled_in(&second.id).await;
 
     let (Some(alpha), _, alpha_branch) = worktree(&flow, &first) else {
-        panic!("the first tab's worktree");
+        panic!("the first session's worktree");
     };
     let (Some(beta), _, beta_branch) = worktree(&flow, &second.id) else {
-        panic!("the second tab's worktree");
+        panic!("the second session's worktree");
     };
     assert_ne!(alpha, beta, "two folders");
     assert!(alpha.join("alpha.txt").exists() && !alpha.join("beta.txt").exists());
@@ -121,21 +114,20 @@ async fn two_tabs_of_one_workspace_work_at_once_on_their_own_worktrees() {
     let files = |branch: &str| git(&flow.repo, &["ls-tree", "-r", "--name-only", branch]);
     assert!(!files(&alpha_branch).contains("beta.txt"));
     assert!(!files(&beta_branch).contains("alpha.txt"));
-
-    let catalog = flow.core.catalog();
-    assert_eq!(catalog.workspaces.len(), 1, "still one workspace");
+    let catalog = serde_json::to_value(flow.core.catalog()).unwrap();
+    assert!(catalog.get("workspaces").is_none(), "{catalog}");
     flow.stop().await;
 }
 
-/// ⌘⏎ starts a task in a new tab of the workspace: it runs there, on its own worktree.
+/// ⌘⏎: a new session starts on the message in the background, on its own worktree, titled by
+/// it; one started from a session on a local checkout starts from that checkout's branch.
 #[tokio::test]
-async fn a_background_tab_starts_on_its_message() {
-    let flow = Flow::start("workspaces-start-tab", Options::default(), writing(None)).await;
-    let workspace = workspace_of(&flow, &flow.conversation);
-    let (tab, _) = flow
+async fn a_background_session_starts_on_its_message() {
+    let flow = Flow::start("sessions-start", Options::default(), writing(None)).await;
+    let (session, _) = flow
         .manager
-        .start_tab(
-            &workspace,
+        .start_session(
+            &flow.conversation,
             None,
             "Write gamma.".into(),
             Vec::new(),
@@ -143,121 +135,83 @@ async fn a_background_tab_starts_on_its_message() {
         )
         .await
         .unwrap();
-    assert_eq!(tab.title, "Write gamma.", "titled by its message");
-    flow.settled_in(&tab.id).await;
-    let (Some(path), _, _) = worktree(&flow, &tab.id) else {
-        panic!("the tab's worktree");
+    assert_eq!(session.title, "Write gamma.", "titled by its message");
+    flow.settled_in(&session.id).await;
+    let (Some(path), _, _) = worktree(&flow, &session.id) else {
+        panic!("the session's worktree");
     };
     assert!(path.join("gamma.txt").exists());
     assert_ne!(Some(path), worktree(&flow, &flow.conversation).0);
-    flow.stop().await;
-}
 
-/// A session from before workspaces is a workspace of one tab; a new tab in it records that
-/// workspace under its implicit id, and both tabs list in it.
-#[tokio::test]
-async fn a_tab_joins_an_older_sessions_implicit_workspace() {
-    let flow = Flow::start("workspaces-implicit", Options::default(), writing(None)).await;
-    let setup = flow.core.conversation(&flow.conversation).unwrap().setup;
-    let project = flow
-        .core
-        .conversation(&flow.conversation)
-        .unwrap()
-        .project_id;
-    let older = flow
-        .core
-        .create_conversation(
-            ConversationId::generate(),
-            ConversationKind::Session,
-            project,
-            Some("Older".into()),
-            setup,
-            crate::sessions::Origin::default(),
-        )
-        .await
-        .unwrap();
-    let implicit = WorkspaceId::implicit(&older.id);
-    assert_eq!(workspace_of(&flow, &older.id), implicit);
-
-    let tab = flow.manager.create_tab(&implicit, None).await.unwrap();
-    assert_eq!(tab.workspace_id.as_ref(), Some(&implicit));
-    let catalog = flow.core.catalog();
-    let workspace = catalog
-        .workspaces
-        .iter()
-        .find(|workspace| workspace.id == implicit)
-        .unwrap();
-    assert_eq!(workspace.title, "Older");
-    let tabs = catalog
-        .conversations
-        .iter()
-        .filter(|conversation| conversation.workspace_id.as_ref() == Some(&implicit))
-        .count();
-    assert_eq!(tabs, 2);
-    flow.stop().await;
-}
-
-/// A new chat's first message titles its workspace, and the workspace keeps that name when
-/// the tab it came from is deleted.
-#[tokio::test]
-async fn a_workspace_keeps_its_first_tabs_title() {
-    let flow = Flow::start("workspaces-title", Options::default(), writing(None)).await;
+    // From a session on a local checkout: a worktree from its branch.
     let first = flow.core.conversation(&flow.conversation).unwrap();
-    let chat = flow
+    let Some(Setup::Session {
+        repo,
+        permission,
+        orchestrator,
+        ..
+    }) = first.setup.clone()
+    else {
+        unreachable!()
+    };
+    git(&flow.repo, &["branch", "feature"]);
+    let local = flow
         .manager
         .create_conversation(
             ConversationKind::Session,
             first.project_id.clone(),
-            None,
+            Some("Local".into()),
             Some(crate::model::SetupRequest::Session {
-                repo: flow.repo.display().to_string(),
-                environment: crate::model::EnvironmentRequest::NewWorktree {
-                    base: "main".into(),
-                    branch: None,
+                repo,
+                environment: crate::model::EnvironmentRequest::LocalCheckout {
+                    branch: "feature".into(),
+                    create_from: None,
                 },
-                permission: crate::model::PermissionLevel::ApproveForMe,
-                orchestrator: match first.setup {
-                    Some(Setup::Session { orchestrator, .. }) => orchestrator,
-                    _ => unreachable!(),
-                },
+                permission,
+                orchestrator,
                 plan_mode: false,
             }),
         )
         .await
         .unwrap();
-    let workspace = workspace_of(&flow, &chat.id);
-    flow.say_to(&chat.id, "Redesigning the login page").await;
-    let title = flow.core.workspace(&workspace).unwrap().title;
-    assert_eq!(title, flow.core.conversation(&chat.id).unwrap().title);
-    assert_ne!(title, "New session");
-
-    let tab = flow.manager.create_tab(&workspace, None).await.unwrap();
-    flow.settled_in(&chat.id).await;
-    flow.manager.delete(chat.id.clone()).await.unwrap();
-    assert_eq!(flow.core.workspace(&workspace).unwrap().title, title);
-    assert_eq!(
-        flow.core.conversation(&tab.id).unwrap().workspace_id,
-        Some(workspace)
-    );
+    let from_local = sibling_of(&flow, &local.id).await;
+    assert_eq!(worktree(&flow, &from_local).1, "feature");
     flow.stop().await;
 }
 
-/// A background tab whose message can't go leaves no empty tab behind.
+/// A background session whose message can't go leaves no empty session behind; a chat starts
+/// none.
 #[tokio::test]
-async fn a_background_tab_whose_message_fails_goes() {
-    let flow = Flow::start("workspaces-start-fails", Options::default(), writing(None)).await;
-    let workspace = workspace_of(&flow, &flow.conversation);
+async fn a_background_session_whose_message_fails_goes() {
+    let flow = Flow::start("sessions-start-fails", Options::default(), writing(None)).await;
     let before = flow.core.catalog().conversations.len();
     assert!(
         flow.manager
-            .start_tab(&workspace, None, "  ".into(), Vec::new(), Vec::new())
+            .start_session(
+                &flow.conversation,
+                None,
+                "  ".into(),
+                Vec::new(),
+                Vec::new()
+            )
             .await
             .is_err()
     );
-    super::eventually("the empty tab gone", || {
+    super::eventually("the empty session gone", || {
         flow.core.catalog().conversations.len() == before
     })
     .await;
+    let chat = flow
+        .manager
+        .create_conversation(ConversationKind::Chat, None, None, None)
+        .await
+        .unwrap();
+    assert!(
+        flow.manager
+            .start_session(&chat.id, None, "Write x.".into(), Vec::new(), Vec::new())
+            .await
+            .is_err()
+    );
     flow.stop().await;
 }
 
@@ -291,7 +245,7 @@ fn sharing(inputs: Inputs) -> Script {
             }
             if said(&turn, "List tabs.") {
                 let reply = turn
-                    .call("list_sessions", serde_json::json!({ "workspace": true }))
+                    .call("list_sessions", serde_json::json!({ "project": true }))
                     .await;
                 return Reply::text(reply.text);
             }
@@ -322,6 +276,15 @@ fn sharing(inputs: Inputs) -> Script {
                 git(folder, &["commit", "-q", "-m", "Unshare"]);
                 return Reply::text("Unshared.");
             }
+            if said(&turn, "Edit main.") {
+                let folder = &turn.add_dirs[0];
+                std::fs::create_dir_all(folder.join("src")).unwrap();
+                let text = format!("fn main() {{}} // {}\n", crate::now_ms());
+                std::fs::write(folder.join("src/main.rs"), text).unwrap();
+                git(folder, &["add", "src/main.rs"]);
+                git(folder, &["commit", "-q", "-m", "Edit main"]);
+                return Reply::text("Edited.");
+            }
             if said(&turn, "Share.") {
                 let text = format!("{} {}\n", turn.add_dirs[0].display(), crate::now_ms());
                 commit_in_workspace(&turn, "shared.txt", &text, "Share");
@@ -349,14 +312,13 @@ fn heard(inputs: &Inputs, folder: &std::path::Path, what: &str) -> usize {
 async fn the_board_lists_siblings_and_tells_an_overlap_and_a_merge_once() {
     let inputs: Inputs = Arc::default();
     let flow = Flow::start(
-        "workspaces-board",
+        "sessions-board",
         Options::default(),
         sharing(inputs.clone()),
     )
     .await;
     let a = flow.conversation.clone();
-    let workspace = workspace_of(&flow, &a);
-    let b = flow.manager.create_tab(&workspace, None).await.unwrap().id;
+    let b = sibling_of(&flow, &a).await;
 
     flow.say_to(&a, "Share.").await;
     flow.settled_in(&a).await;
@@ -394,25 +356,27 @@ async fn the_board_lists_siblings_and_tells_an_overlap_and_a_merge_once() {
         answer.contains("beta.txt") && !answer.contains("alpha.txt"),
         "{answer}"
     );
-    // Reading the board changed no workspace (beyond the message's own activity).
-    let settled = |workspaces: Vec<crate::model::Workspace>| {
-        workspaces
+    assert!(
+        answer.contains(&format!("\"repository\": \"{}\"", flow.repo.display())),
+        "{answer}"
+    );
+    // Reading the board changed no session (beyond the message's own activity).
+    let settled = |mut conversations: Vec<crate::model::Conversation>| {
+        conversations.sort_by(|a, b| a.id.cmp(&b.id));
+        conversations
             .into_iter()
-            .map(|workspace| crate::model::Workspace {
+            .map(|conversation| crate::model::Conversation {
                 updated_at_ms: 0,
-                ..workspace
+                finished_at_ms: None,
+                ..conversation
             })
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        settled(flow.core.catalog().workspaces),
-        settled(catalog.workspaces)
+        settled(flow.core.catalog().conversations),
+        settled(catalog.conversations)
     );
-    assert_eq!(
-        heard(&inputs, &folder_a, "[workspace]"),
-        0,
-        "no overlap yet"
-    );
+    assert_eq!(heard(&inputs, &folder_a, "[project]"), 0, "no overlap yet");
 
     // Both change shared.txt: each hears it once, at its next turn.
     flow.say_to(&b, "Share.").await;
@@ -484,6 +448,141 @@ async fn the_board_lists_siblings_and_tells_an_overlap_and_a_merge_once() {
     flow.stop().await;
 }
 
+/// A project of two repositories: the same path changed in each is two files, so only the
+/// sessions in the same repository hear of the overlap, and only they hear of each other's
+/// merge; the board and the facts name each session's repository.
+#[tokio::test]
+async fn sessions_in_two_repositories_of_a_project_overlap_only_within_one() {
+    let inputs: Inputs = Arc::default();
+    let flow = Flow::start(
+        "sessions-two-repos",
+        Options::default(),
+        sharing(inputs.clone()),
+    )
+    .await;
+    let other = flow.dir.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let other = other.canonicalize().unwrap();
+    git(&other, &["init", "-q", "-b", "main"]);
+    std::fs::write(other.join("README.md"), "# Other\n").unwrap();
+    git(&other, &["add", "-A"]);
+    git(&other, &["commit", "-q", "-m", "Start"]);
+    let first = flow.core.conversation(&flow.conversation).unwrap();
+    let project = first.project_id.clone().unwrap();
+    flow.core
+        .update_project(
+            project.clone(),
+            crate::model::ProjectPatch {
+                name: None,
+                repos: Some(vec![
+                    flow.repo.display().to_string(),
+                    other.display().to_string(),
+                ]),
+                prefs: None,
+            },
+        )
+        .await
+        .unwrap();
+    let Some(Setup::Session {
+        permission,
+        orchestrator,
+        ..
+    }) = first.setup.clone()
+    else {
+        unreachable!()
+    };
+    let a = flow.conversation.clone();
+    let b = flow
+        .manager
+        .create_session_from(
+            &a,
+            Some(crate::model::SetupRequest::Session {
+                repo: other.display().to_string(),
+                environment: crate::model::EnvironmentRequest::NewWorktree {
+                    base: "main".into(),
+                    branch: None,
+                },
+                permission,
+                orchestrator,
+                plan_mode: false,
+            }),
+        )
+        .await
+        .unwrap()
+        .id;
+    let c = sibling_of(&flow, &a).await;
+    let repo_of = |id: &ConversationId| match flow.core.conversation(id).unwrap().setup {
+        Some(Setup::Session { repo, .. }) => repo,
+        _ => unreachable!(),
+    };
+    assert_eq!(repo_of(&b), other.display().to_string());
+    assert_eq!(repo_of(&c), flow.repo.display().to_string());
+
+    for id in [&a, &b, &c] {
+        flow.say_to(id, "Edit main.").await;
+        flow.settled_in(id).await;
+    }
+    for id in [&a, &b, &c] {
+        flow.say_to(id, "Write next.").await;
+        flow.settled_in(id).await;
+    }
+    let folder = |id: &ConversationId| worktree(&flow, id).0.unwrap();
+    let fact = "also changed `src/main.rs`";
+    assert_eq!(heard(&inputs, &folder(&a), fact), 1);
+    assert_eq!(heard(&inputs, &folder(&c), fact), 1);
+    assert_eq!(
+        heard(&inputs, &folder(&b), fact),
+        0,
+        "another repository's file"
+    );
+    assert_eq!(
+        heard(&inputs, &folder(&a), &format!("(session {c}, repository `")),
+        1,
+        "the fact names the repository"
+    );
+
+    // The board names each one's repository.
+    flow.say_to(&b, "List tabs.").await;
+    flow.settled_in(&b).await;
+    let answer = flow
+        .core
+        .conversation_view(b.clone(), 20)
+        .await
+        .unwrap()
+        .messages
+        .messages
+        .last()
+        .unwrap()
+        .text
+        .clone();
+    assert!(
+        answer.contains(&format!("\"repository\": \"{}\"", flow.repo.display())),
+        "{answer}"
+    );
+
+    // C merges: A hears it, B (another repository) doesn't.
+    flow.manager
+        .merge_session(&c, super::click())
+        .await
+        .unwrap();
+    flow.until_in(&c, "c's merge", |board| {
+        board
+            .orchestrator_steps
+            .iter()
+            .any(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. }))
+    })
+    .await;
+    flow.settled_in(&c).await;
+    for id in [&a, &b] {
+        flow.say_to(id, "Write after.").await;
+        flow.settled_in(id).await;
+    }
+    let merged = "merged into `main` at";
+    assert_eq!(heard(&inputs, &folder(&a), merged), 1);
+    assert_eq!(heard(&inputs, &folder(&b), merged), 0);
+    flow.stop().await;
+}
+
 /// How the next follow-up is routed (its `follow_up` id is filled in), what route_follow_up
 /// answered, and the gate the routing turn waits at after it routed.
 #[derive(Default)]
@@ -523,6 +622,14 @@ fn routing(inputs: Inputs, routing: Arc<Routing>) -> Script {
                 let reply = turn.call("finish_session", serde_json::json!({})).await;
                 assert!(!reply.is_error, "{}", reply.text);
                 return Reply::text("Merged.");
+            }
+            // As a thread's cached schema from before sessions still calls it.
+            if said(&turn, "List the tabs the old way.") {
+                let reply = turn
+                    .call("list_sessions", serde_json::json!({ "workspace": true }))
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text(reply.text);
             }
             if !said(&turn, "Run the tests.") {
                 return write(turn).await;
@@ -601,22 +708,22 @@ fn last_queue(flow: &Flow, id: &ConversationId) -> crate::work::MessageQueue {
 }
 
 /// Queued routes: the thread's choice is carried out as it says. join steers it in; wait
-/// keeps it queued; new_tab keeps it queued with the offer and opens nothing; tab sends it to
-/// the sibling as the user's message, with a notice here that Undo takes back; tab to a
-/// sibling that merged goes through with that fact; a tab that isn't there leaves it unsorted.
+/// keeps it queued; new_session keeps it queued with the offer and starts nothing; session
+/// sends it to the sibling as the user's message, with a notice here that Undo takes back;
+/// session to a sibling that merged goes through with that fact; a session that isn't there
+/// leaves it unsorted.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_follow_up_joins_waits_offers_a_tab_or_goes_to_a_sibling() {
+async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
     let inputs: Inputs = Arc::default();
     let routes = Arc::new(Routing::default());
     let flow = Flow::start(
-        "workspaces-routes",
+        "sessions-routes",
         Options::default(),
         routing(inputs.clone(), routes.clone()),
     )
     .await;
     let a = flow.conversation.clone();
-    let workspace = workspace_of(&flow, &a);
-    let b = flow.manager.create_tab(&workspace, None).await.unwrap().id;
+    let b = sibling_of(&flow, &a).await;
     flow.say_to(&a, "Write alpha.").await;
     flow.settled_in(&a).await;
     flow.say_to(&b, "Write beta.").await;
@@ -656,18 +763,18 @@ async fn a_follow_up_joins_waits_offers_a_tab_or_goes_to_a_sibling() {
     assert!(!queue.items[0].deciding && !queue.items[0].offer_tab);
     routes.release(&flow, &a).await;
 
-    // new_tab: the offer, and no tab opened.
+    // new_session: the offer, and no session started.
     let tabs = flow.core.catalog().conversations.len();
     let offered = routes
         .route(
             &flow,
             &a,
             "Draft the release notes.",
-            serde_json::json!({ "route": "new_tab" }),
+            serde_json::json!({ "route": "new_session" }),
         )
         .await;
     assert!(
-        offered.contains("\"Open as a new tab\" or \"Run here\""),
+        offered.contains("\"Open as a new session\" or \"Run here\""),
         "{offered}"
     );
     let queue = last_queue(&flow, &a);
@@ -676,7 +783,7 @@ async fn a_follow_up_joins_waits_offers_a_tab_or_goes_to_a_sibling() {
     assert_eq!(
         flow.core.catalog().conversations.len(),
         tabs,
-        "no tab opened"
+        "no session started"
     );
     // The turn ends and the offer stays until the user picks; "Run here" sends it here.
     routes.gate.notify_one();
@@ -703,36 +810,36 @@ async fn a_follow_up_joins_waits_offers_a_tab_or_goes_to_a_sibling() {
         "ran here"
     );
 
-    // A tab that isn't there: a fact, and the follow-up stays the thread's to sort.
+    // A session that isn't there: a fact, and the follow-up stays the thread's to sort.
     let nowhere = routes
         .route(
             &flow,
             &a,
             "Also lint it.",
-            serde_json::json!({ "route": "tab", "tab": "nope" }),
+            serde_json::json!({ "route": "session", "session": "nope" }),
         )
         .await;
     assert!(
-        nowhere.contains("No other tab of this workspace is session nope"),
+        nowhere.contains("No other session of this project is session nope"),
         "{nowhere}"
     );
-    assert!(nowhere.contains(&b.0), "lists the tabs: {nowhere}");
+    assert!(nowhere.contains(&b.0), "lists the sessions: {nowhere}");
     // Still unsorted: deciding, or already joined by itself after the judging wait.
     let queue = last_queue(&flow, &a);
     assert!(queue.moved.is_empty() && queue.items.iter().all(|item| item.deciding));
     routes.release(&flow, &a).await;
 
-    // tab: it goes to B as the user's message; A keeps a notice.
+    // session: it goes to B as the user's message; A keeps a notice.
     let message = "Rename the beta file.";
     let moved = routes
         .route(
             &flow,
             &a,
             message,
-            serde_json::json!({ "route": "tab", "tab": b.0 }),
+            serde_json::json!({ "route": "session", "session": b.0 }),
         )
         .await;
-    assert!(moved.contains("It went to tab"), "{moved}");
+    assert!(moved.contains("It went to session"), "{moved}");
     assert!(moved.contains("notice with Undo"), "{moved}");
     assert!(!moved.contains("already merged"), "{moved}");
     let queue = last_queue(&flow, &a);
@@ -782,10 +889,10 @@ async fn a_follow_up_joins_waits_offers_a_tab_or_goes_to_a_sibling() {
             &flow,
             &a,
             "Also tidy the beta file.",
-            serde_json::json!({ "route": "tab", "tab": b.0 }),
+            serde_json::json!({ "route": "session", "session": b.0 }),
         )
         .await;
-    assert!(late.contains("It went to tab"), "{late}");
+    assert!(late.contains("It went to session"), "{late}");
     assert!(
         late.contains("has already merged into `main` at "),
         "{late}"
@@ -804,7 +911,7 @@ async fn an_open_thread_resumes_with_the_routes_note_and_joins_still_routes() {
     let inputs: Inputs = Arc::default();
     let routes = Arc::new(Routing::default());
     let mut flow = Flow::start(
-        "workspaces-routes-revision",
+        "sessions-routes-revision",
         Options::default(),
         routing(inputs.clone(), routes.clone()),
     )
@@ -870,6 +977,113 @@ async fn an_open_thread_resumes_with_the_routes_note_and_joins_still_routes() {
     flow.stop().await;
 }
 
+/// Rule R for sessions instead of workspaces: a thread told the revision before resumes its
+/// session at its next turn and hears the note once; its cached calls by the older names
+/// (route "new_tab", route "tab" with `tab`, list_sessions with workspace true) still work.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_open_thread_resumes_with_the_sessions_note_and_the_older_names_still_work() {
+    use crate::manager::prompts::{SESSIONS_REVISION, revision_note};
+    let inputs: Inputs = Arc::default();
+    let routes = Arc::new(Routing::default());
+    let mut flow = Flow::start(
+        "sessions-revision",
+        Options::default(),
+        routing(inputs.clone(), routes.clone()),
+    )
+    .await;
+    let a = flow.conversation.clone();
+    let b = sibling_of(&flow, &a).await;
+    flow.say_to(&a, "Write alpha.").await;
+    flow.settled_in(&a).await;
+    flow.say_to(&b, "Write beta.").await;
+    flow.settled_in(&b).await;
+    flow.core
+        .record(vec![(
+            crate::model::streams::orchestrator(&a),
+            crate::model::DomainEvent::OrchestratorLogged {
+                conversation_id: a.clone(),
+                entry: crate::work::OrchestratorEntry::Injection {
+                    injection: crate::work::ContextInjection {
+                        kind: crate::work::InjectionKind::Instructions,
+                        bytes: 100,
+                        tokens_estimate: 25,
+                        label: "instructions revision".into(),
+                        task_id: None,
+                        told: Some(crate::work::Told {
+                            revision: Some(SESSIONS_REVISION - 1),
+                            ..crate::work::Told::default()
+                        }),
+                    },
+                },
+            },
+        )])
+        .await
+        .unwrap();
+    flow.restart().await;
+
+    let offered = routes
+        .route(
+            &flow,
+            &a,
+            "Draft the release notes.",
+            serde_json::json!({ "route": "new_tab" }),
+        )
+        .await;
+    assert!(offered.contains("\"Open as a new session\""), "{offered}");
+    assert!(last_queue(&flow, &a).items[0].offer_tab);
+    routes.gate.notify_one();
+    flow.settled_in(&a).await;
+    let item = last_queue(&flow, &a).items[0].id.clone();
+    flow.core.take_queued(&a, &item).await.unwrap();
+    let specs = flow.thread_specs();
+    assert!(
+        matches!(
+            specs.last().unwrap().1.origin,
+            brigadier_providers::model::Origin::Resume { .. }
+        ),
+        "{specs:#?}"
+    );
+
+    let moved = routes
+        .route(
+            &flow,
+            &a,
+            "Rename the beta file.",
+            serde_json::json!({ "route": "tab", "tab": b.0 }),
+        )
+        .await;
+    assert!(moved.contains("It went to session"), "{moved}");
+    routes.release(&flow, &a).await;
+
+    flow.say_to(&a, "List the tabs the old way.").await;
+    flow.settled_in(&a).await;
+    let listed = flow
+        .core
+        .conversation_view(a.clone(), 20)
+        .await
+        .unwrap()
+        .messages
+        .messages
+        .last()
+        .unwrap()
+        .text
+        .clone();
+    assert!(
+        listed.starts_with("The other sessions of this project") && listed.contains(&b.0),
+        "{listed}"
+    );
+
+    let note = revision_note(SESSIONS_REVISION - 1, false).unwrap();
+    let told = inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, input)| input.contains(&note))
+        .count();
+    assert_eq!(told, 1, "told once");
+    flow.stop().await;
+}
+
 /// A request that settles with the tab's branch ahead of base records one RequestReady with
 /// the head; the tab reads ready, then merged after its merge (whose request records none),
 /// and the board names those states.
@@ -877,14 +1091,13 @@ async fn an_open_thread_resumes_with_the_routes_note_and_joins_still_routes() {
 async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
     let inputs: Inputs = Arc::default();
     let flow = Flow::start(
-        "workspaces-ready",
+        "sessions-ready",
         Options::default(),
         sharing(inputs.clone()),
     )
     .await;
     let a = flow.conversation.clone();
-    let workspace = workspace_of(&flow, &a);
-    let b = flow.manager.create_tab(&workspace, None).await.unwrap().id;
+    let b = sibling_of(&flow, &a).await;
     let state = |id: &ConversationId| {
         let tab = flow.core.conversation(id).unwrap();
         let manager = flow.manager.clone();

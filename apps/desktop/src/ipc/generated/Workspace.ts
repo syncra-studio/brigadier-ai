@@ -4,8 +4,9 @@ import type { ProjectId } from "./ProjectId";
 import type { WorkspaceId } from "./WorkspaceId";
 
 /**
- * A group of a project's session tabs, each its own session on its own worktree. A new chat
- * in a project starts one.
+ * A workspace of the retired workspace layer (a group of a project's sessions). Old logs'
+ * `Workspace*` events still carry it; the projection ignores them, and each of its sessions
+ * is a plain session of its project.
  */
 export type Workspace = { id: WorkspaceId, projectId: ProjectId, title: string, 
 /**

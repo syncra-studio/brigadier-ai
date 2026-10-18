@@ -17,10 +17,10 @@ const settled: unknown[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
-  if (req.method === "settleMoved" || req.method === "runQueuedHere" || req.method === "deleteQueued" || req.method === "startTab") settled.push(req.method === "startTab" ? { method: req.method, workspaceId: req.workspaceId, text: req.text } : req);
+  if (req.method === "settleMoved" || req.method === "runQueuedHere" || req.method === "deleteQueued" || req.method === "startSession") settled.push(req.method === "startSession" ? { method: req.method, from: req.from, text: req.text } : req);
   if (req.method === "runQueuedHere") return { method: req.method, queue: { items: [{ ...item, deciding: false }], paused: false } };
   if (req.method === "deleteQueued") return { method: req.method, queue: { items: [], paused: false } };
-  if (req.method === "startTab") return { method: req.method, conversation: { ...useApp.getState().conversations[id], id: "new-tab" }, outcome: { type: "sent", message } };
+  if (req.method === "startSession") return { method: req.method, conversation: { ...useApp.getState().conversations[id], id: "new-session" }, outcome: { type: "sent", message } };
   if (req.method === "sendMessage") return new Promise((resolve) => { respond = (outcome) => resolve({ method: req.method, outcome }); });
   if (req.method === "getRunDiff") return { method: req.method, diff: null };
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
@@ -47,7 +47,7 @@ function view() {
   };
 }
 /** The offer's choices on the queued rows. */
-const choices = () => [...document.querySelectorAll('[data-slot="message-queue-item"] button')].map((node) => node.textContent).filter((label) => label === "Open as a new tab" || label === "Run here");
+const choices = () => [...document.querySelectorAll('[data-slot="message-queue-item"] button')].map((node) => node.textContent).filter((label) => label === "Open as a new session" || label === "Run here");
 const click = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('[data-slot="message-queue-item"] button')].find((node) => node.textContent === label)?.click();
 async function drive() {
   await pause();
@@ -73,7 +73,7 @@ async function drive() {
   apply([queued([])]);
   await pause();
   const removed = view();
-  // The thread offers it as a new tab: its row waits with two choices until the user picks.
+  // The thread offers it as a new session: its row waits with two choices until the user picks.
   apply([queued([{ ...item, deciding: false, offerTab: true }])]);
   await pause();
   const offered = choices();
@@ -81,14 +81,14 @@ async function drive() {
   click("Run here");
   await pause();
   const ranHere = { choices: choices(), rail: view().rail };
-  // "Open as a new tab": it leaves the queue and starts in a new tab of the workspace.
-  useApp.setState((state) => ({ conversations: { ...state.conversations, [id]: { ...state.conversations[id]!, workspaceId: "ws-1" } } }));
+  // "Open as a new session": it leaves the queue and starts as a new session of the project.
+  useApp.setState((state) => ({ conversations: { ...state.conversations, [id]: { ...state.conversations[id]!, projectId: "project-1" } } }));
   apply([queued([{ ...item, deciding: false, offerTab: true }])]);
   await pause();
-  click("Open as a new tab");
+  click("Open as a new session");
   await pause();
   const opened = { choices: choices(), rail: view().rail };
-  // The thread sent it on to another tab: a notice with Undo, which asks the daemon to take it back.
+  // The thread sent it on to another session: a notice with Undo, which asks the daemon to take it back.
   const sentOn: MovedMessage = { id: "moved", text: "Rename the login file.", attachments: [], mentions: [], to: "other-tab", toTitle: "Login page", movedAtMs: Date.now(), sent: { type: "sent", messageId: "m-1" } };
   apply([queued([], [sentOn])]);
   await pause();

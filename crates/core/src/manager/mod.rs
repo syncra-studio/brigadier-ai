@@ -73,6 +73,7 @@ mod phases;
 mod preview;
 mod preview_ready;
 mod project_removal;
+mod project_sessions;
 mod prompts;
 mod protection;
 mod pull_request;
@@ -116,7 +117,6 @@ mod worker_handoff;
 mod worker_resume;
 mod workers;
 pub mod workspace;
-mod workspaces;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -241,9 +241,9 @@ pub struct SessionManager {
     /// Requests the last restart cut off before they answered: a message they owe a reply
     /// to hears that, so its sender can ask again.
     cut_off: Mutex<HashSet<String>>,
-    /// The files each pair of a workspace's tabs were told they both changed (by tab ids,
-    /// in order), so an overlap is told once.
-    workspace_overlaps:
+    /// The files each pair of a project's sessions were told they both changed (by session
+    /// ids, in order), so an overlap is told once.
+    session_overlaps:
         Mutex<HashMap<(ConversationId, ConversationId), std::collections::BTreeSet<String>>>,
     /// Tasks the user stopped (a worker's Stop, Stop all, or the stop of a turn), from the
     /// moment the stop starts: the thread may no longer message, steer or approve them.
@@ -406,7 +406,7 @@ impl SessionManager {
             reruns_starting: tokio::sync::Mutex::new(()),
             peer_sends: tokio::sync::Mutex::new(()),
             cut_off: Mutex::new(HashSet::new()),
-            workspace_overlaps: Mutex::new(HashMap::new()),
+            session_overlaps: Mutex::new(HashMap::new()),
             user_stops: Mutex::new(HashSet::new()),
             waiters: Waiters::default(),
             admitting: AtomicBool::new(true),
@@ -729,25 +729,8 @@ impl SessionManager {
         let id = ConversationId::generate();
         let (prefix, _) = self.branch_prefix_of(project_id.as_ref());
         let setup = setup.map(|request| Setup::from_request(request, &id, &prefix));
-        // A new chat in a project starts a workspace, this its first tab.
-        let workspace = match (kind, &project_id, &setup) {
-            (ConversationKind::Session, Some(project), Some(setup)) => {
-                workspaces::new_workspace(project, setup)
-            }
-            _ => None,
-        };
         self.core
-            .create_conversation(
-                id,
-                kind,
-                project_id,
-                title,
-                setup,
-                Origin {
-                    workspace,
-                    ..Origin::default()
-                },
-            )
+            .create_conversation(id, kind, project_id, title, setup, Origin::default())
             .await
     }
 

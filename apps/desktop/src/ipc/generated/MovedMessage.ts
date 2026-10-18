@@ -5,9 +5,9 @@ import type { Mention } from "./Mention";
 import type { MovedAs } from "./MovedAs";
 
 /**
- * A queued message the thread sent on to another tab of its workspace (`route_follow_up`
- * route "tab"): the one-line notice this tab keeps, with Undo, until the user undoes or
- * dismisses it.
+ * A queued message the thread sent on to another session of its project (`route_follow_up`
+ * route "session"): the one-line notice this session keeps, with Undo, until the user undoes
+ * or dismisses it.
  */
 export type MovedMessage = { 
 /**

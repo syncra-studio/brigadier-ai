@@ -7,10 +7,10 @@ type EnterPress = Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey" | "altK
 /**
  * What Enter does in the composer with the send shortcut chosen (Settings › General ›
  * Composer): send the message, send it the follow-up's other way (steer instead of queue, or
- * the reverse), start it in a new background tab, or nothing of ours (the editor starts a new
- * line). ⌘ is Ctrl off macOS. ⌥⏎ is the other way, and in a workspace's task tab (`tabs`) ⌘⏎
- * starts a background tab; with Send on ⌘⏎ they are ⌥⌘⏎ and ⇧⌘⏎. Outside a task tab ⌘⏎ (⇧⌘⏎)
- * is the other way too.
+ * the reverse), start it as a new background session, or nothing of ours (the editor starts a
+ * new line). ⌘ is Ctrl off macOS. ⌥⏎ is the other way, and in a project's session (`tabs`) ⌘⏎
+ * starts a background session; with Send on ⌘⏎ they are ⌥⌘⏎ and ⇧⌘⏎. Outside a project's
+ * session ⌘⏎ (⇧⌘⏎) is the other way too.
  */
 export function enterAction(
   event: EnterPress,

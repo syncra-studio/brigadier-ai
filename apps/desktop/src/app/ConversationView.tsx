@@ -109,7 +109,7 @@ import {
   resume,
   send,
   type SendLane,
-  startTabFrom,
+  startSessionFrom,
   steerQueued,
   switchBranch,
 } from "@/state/actions";
@@ -120,6 +120,7 @@ import { useBoard } from "@/state/board";
 import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
 import { CHAT_TAB, openFileTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
+import { isTaskTab } from "@/state/tabStates";
 import { placeOf } from "@/state/terminalPlaces";
 import {
   emptyThread,
@@ -647,7 +648,7 @@ export function ConversationView({
     (message: AppendMessage, lane: SendLane | "followUp") => {
       const text = textOf(message);
       const refs = attachments.messageRefs(text, message.attachments ?? []);
-      // ⌘⏎ asked for a new background tab.
+      // ⌘⏎ asked for a new background session.
       const background = takeBackgroundSend(conversationId);
       // A queued message pulled out to edit goes back to its slot, unless steered in now.
       const slot = pulled.take(conversationId);
@@ -656,8 +657,8 @@ export function ConversationView({
       const known = [...mentions.known(), ...(slot?.mentions ?? [])];
       const outgoing = { text, attachments: refs, mentions: [...mentionsIn(text, targets, known), ...pageMentions(slot?.mentions)] };
       const source = conversationId ? useApp.getState().conversations[conversationId] : undefined;
-      if (background && source?.workspaceId) {
-        void startTabFrom(source, outgoing).catch(fail);
+      if (background && source && isTaskTab(source)) {
+        void startSessionFrom(source, outgoing).catch(fail);
         return;
       }
       const into = sendLane(lane, { pulled: !!slot, followUp: useApp.getState().settings.followUp });

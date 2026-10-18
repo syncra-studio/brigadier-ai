@@ -2,7 +2,6 @@ import { useEffect } from "react";
 
 import { archive, archiveAll, lastArchiveShown, undoLastArchive } from "@/state/actions";
 import { askDelete, clearPicked, useDeleteAsk, usePicked } from "@/state/picking";
-import { rowTabs } from "@/state/tabStates";
 import { useApp } from "@/state/store";
 
 /** Whether keys typed at `target` edit text there (where ⌘⌫ and ⌘Z belong to the text). */
@@ -71,7 +70,7 @@ export function useLifecycleShortcuts(): void {
         // Not behind a dialog or menu, where what it would archive can't be seen.
         if (open) return;
         if (picked.list === "sidebar" && picked.ids.length > 0) {
-          const ids = rowTabs(state.conversations, picked.ids);
+          const ids = picked.ids;
           clearPicked();
           void archiveAll(ids);
           return;
@@ -87,7 +86,7 @@ export function useLifecycleShortcuts(): void {
       if (event.key === "Backspace" || event.key === "Delete") {
         if (picked.ids.length === 0 || useDeleteAsk.getState().ids) return;
         event.preventDefault();
-        askDelete(picked.list === "sidebar" ? rowTabs(state.conversations, picked.ids) : picked.ids);
+        askDelete(picked.ids);
         return;
       }
       if (event.code === "KeyZ" && undoLastArchive()) event.preventDefault();

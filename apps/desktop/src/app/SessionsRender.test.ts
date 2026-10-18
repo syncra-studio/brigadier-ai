@@ -3,10 +3,10 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-// The real sidebar in Chromium over a faked daemon, workspaces on: one row per workspace with
-// the strongest state of its tabs and their count, and a click opening the tab had open last.
-test("sidebar: a project's workspaces are rows with the strongest state of their tabs", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "workspaces.html", "workspaces-result", 20000)) as {
+// The real sidebar in Chromium over a faked daemon: a project lists its sessions, one row each
+// with its own title and state, and a click opens that session.
+test("sidebar: a project's sessions are rows of their own, the sessions of an old workspace too", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "sessions.html", "sessions-result", 20000)) as {
     rows: { title: string; status: string | null; active: boolean }[];
     opened: unknown;
     activeAfter: string[];
@@ -14,19 +14,19 @@ test("sidebar: a project's workspaces are rows with the strongest state of their
   assert.deepEqual(
     seen.rows.map(({ title, status }) => [title, status]),
     [
-      ["Redesigning the header", "working:2 working"],
-      ["Fix the login", "ready:Ready"],
-      ["Tidy the docs", "merged:Merged"],
-      ["Waiting on a limit", "needsYou:Needs you"],
+      ["Footer", "running:"],
+      ["Header", "running:"],
+      ["Fix the login", null],
+      ["Tidy the docs", null],
       ["Lone worker", "running:"],
     ],
   );
-  assert.deepEqual(seen.opened, { type: "conversation", id: "w1-b" }, "the row opens the tab had open last");
-  assert.deepEqual(seen.activeAfter, ["Redesigning the header"]);
+  assert.deepEqual(seen.opened, { type: "conversation", id: "w1-a" }, "the row opens its own session");
+  assert.deepEqual(seen.activeAfter, ["Header"]);
 });
 
 test("closing a working session's tab stops nothing; it stays in the sidebar and its row opens it again", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "workspaces.html?close=1", "workspaces-result", 20000)) as Record<string, unknown>;
+  const seen = JSON.parse(await renderFixturePage(t, "sessions.html?close=1", "sessions-result", 20000)) as Record<string, unknown>;
   assert.deepEqual(seen.opened, { type: "conversation", id: "w5-a" });
   assert.equal(seen.statusBefore, "running:");
   assert.deepEqual(seen.afterClose, { type: "draft", kind: "session", projectId: "p-1" }, "the project's new-session page shows in its place");

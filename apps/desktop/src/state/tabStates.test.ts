@@ -2,14 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { Conversation, EventEnvelope } from "@/ipc/generated";
-import {
-  applySettledTabEvents,
-  rowTabs,
-  stateWords,
-  strongestState,
-  tabState,
-  useSettledTabs,
-} from "@/state/tabStates";
+import { applySettledTabEvents, isTaskTab, tabState, useSettledTabs } from "@/state/tabStates";
 
 const quiet = { running: false, awaiting: null, phase: null } as const;
 
@@ -20,15 +13,6 @@ test("a tab's state: needs you, then working, then ready or merged, else none", 
   assert.equal(tabState(quiet, false, "ready"), "ready");
   assert.equal(tabState(quiet, false, "merged"), "merged");
   assert.equal(tabState(quiet, false, undefined), null, "an untouched tab has none");
-});
-
-test("a workspace row takes its tabs' strongest state and counts the tabs sharing it", () => {
-  assert.equal(strongestState([null, null]), null);
-  assert.deepEqual(strongestState(["merged", "ready", null]), { state: "ready", count: 1 });
-  assert.deepEqual(strongestState(["working", "needsYou", "needsYou"]), { state: "needsYou", count: 2 });
-  assert.equal(stateWords({ state: "working", count: 2 }), "2 working");
-  assert.equal(stateWords({ state: "needsYou", count: 2 }), "2 need you");
-  assert.equal(stateWords({ state: "ready", count: 1 }), "Ready");
 });
 
 test("a request that settles ready marks its tab ready, and a merge of its work merged", () => {
@@ -50,16 +34,15 @@ test("a request that settles ready marks its tab ready, and a merge of its work 
   assert.equal(useSettledTabs.getState().byTab, before, "nothing new, nothing written");
 });
 
-const tab = (id: string, workspaceId: string, extra: Partial<Conversation> = {}): Conversation => ({
-  id, kind: "session", projectId: "p", title: id, pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null,
-  lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null, workspaceId, ...extra,
+const session = (extra: Partial<Conversation> = {}): Conversation => ({
+  id: "s", kind: "session", projectId: "p", title: "s", pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null,
+  lifecycle: "active", forkedFrom: null, sideOf: null, fallback: null, quotaWait: null, ...extra,
 });
 
-test("picked sidebar rows stand for their workspace's tabs, except pinned ones", () => {
-  const conversations = Object.fromEntries([
-    tab("a", "w1"), tab("b", "w1"), tab("pinned", "w1", { pinnedAtMs: 1 }), tab("gone", "w1", { lifecycle: "archived" }),
-    tab("c", "w2"),
-  ].map((each) => [each.id, each]));
-  assert.deepEqual(rowTabs(conversations, ["a", "c"]).toSorted(), ["a", "b", "c"]);
-  assert.deepEqual(rowTabs(conversations, ["pinned"]), ["pinned"], "a pinned tab's row is its own");
+test("a project's open session is a task of its own; a chat, a side chat, an archived one aren't", () => {
+  assert.equal(isTaskTab(session()), true);
+  assert.equal(isTaskTab(session({ projectId: null })), false);
+  assert.equal(isTaskTab(session({ kind: "chat" })), false);
+  assert.equal(isTaskTab(session({ sideOf: "other" })), false);
+  assert.equal(isTaskTab(session({ lifecycle: "archived" })), false);
 });
