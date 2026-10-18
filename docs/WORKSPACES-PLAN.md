@@ -421,6 +421,8 @@ trimming (no prompt or tool-list cuts).
   - **The tier behind each `brain` and `upkeep` row.** A row above standard tier is flagged.
 
 ### Two A/Bs (ship the winner; no knob)
+**Deferred (user, 10-18):** both A/Bs, and the V3 decision below, come back after the MVP launch with real usage.
+
 1. **Pace sentence in worker prompts.**
    - Arm A: today's worker prompt. Arm B: one added sentence, "Go one step at a time and check each step before the
      next; getting it right matters more than speed."
@@ -458,16 +460,18 @@ trimming (no prompt or tool-list cuts).
    - Done when: a fixture report matches its expected text, and the counter has a unit test.
 4. **#135 + #190.**
    - Done when: brain usage per window shows in the report, and the bench readers pass their guard test.
-5. **A/B 1, then A/B 2.**
+5. **A/B 1, then A/B 2.** Deferred until after the MVP launch (user, 10-18).
    - Done when: each result is written to `docs/evidence/` and the winner has shipped (a prompt revision or a routing
      change).
-6. **The V3 decision.**
+6. **The V3 decision.** Deferred with the A/Bs (user, 10-18); #34 #44 #45 #46 stay open.
    - Done when: the rule is applied and the four issues are done or closed.
 
 ### Checks
 The meter unit tests, the `tools/ab/checks` script tests, and the catalog counter test. Benches never gate the ship.
 
 ## Phase 5 · SSH host (Q69)
+
+**Skipped for the MVP (user, Q70).** It comes later, with a mobile app and remote control.
 
 **Take, don't rebuild:** the user's own `ssh` (their `~/.ssh/config`, agent and keys) and the CLIs installed and
 signed in on the host. No SSH client of our own, no key handling, no file sync, no remote daemon.
