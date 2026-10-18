@@ -136,6 +136,14 @@ records each `setComposerShown` and writes JSON into `#composer-suggestion-resul
 `ComposerSuggestionRender.test.ts` checks it. IPC stays mocked. This entry is absent from the
 production build.
 
+# Composer polish
+
+`/fixtures/composer-polish.html?case=<case>` opens a Chat in the app's own conversation view and
+drives one of the composer's small behaviours with the real keys (`focus`: Find in the chat keeps
+the keyboard when the composer would focus itself). It records what the composer sends and writes
+JSON into `#composer-polish-result`; `ComposerPolishRender.test.ts` checks it. IPC stays mocked.
+This entry is absent from the production build.
+
 # Session menu
 
 `/fixtures/session-menu.html` renders the session tab's ⋯ "Chat actions" for a worktree session,

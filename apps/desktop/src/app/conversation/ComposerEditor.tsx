@@ -31,7 +31,7 @@ import {
   PASTE_TAG,
   SKIP_DOM_SELECTION_TAG,
 } from "lexical";
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import { WorkerGlyph, useWorkerName } from "@/app/conversation/WorkerChip";
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
@@ -112,12 +112,6 @@ export default function ComposerEditor({
   autoFocus,
 }: ComposerInputProps) {
   const target = useContext(ComposerTargetContext);
-  // The editor loads after the plain field stood in for it: it takes the keyboard only from that
-  // field or from nothing, not from what the user went to meanwhile (Find in the chat, a dialog).
-  const [takesFocus] = useState(() => {
-    const focused = document.activeElement;
-    return autoFocus && (!focused || focused === document.body || focused.matches('textarea[aria-label="Message input"]'));
-  });
   const memory = target?.mentions ?? null;
   const targets = target?.targets;
   useEffect(() => memory?.setWorkers(targets ?? []), [memory, targets]);
@@ -148,19 +142,54 @@ export default function ComposerEditor({
       mentionLook={mentionLook}
       onMention={onMention}
       placeholder={placeholder}
-      autoFocus={takesFocus}
+      autoFocus={autoFocus}
       // Esc stops only on a second press (useEscToStop).
       cancelOnEscape={false}
       // Enter is ComposerKeys': it sends, ⌥ and ⌘ the other ways.
       submitMode="none"
       aria-label="Message input"
     >
+      <FocusGuard />
       <ComposerKeys formatter={formatter} deleted={deleted} deletedPastes={deletedPastes} />
       <SuggestionKeys />
       <InlineSync kind="image" deleted={deleted} />
       <InlineSync kind="paste" deleted={deletedPastes} />
     </ChipComposerInput>
   );
+}
+
+/** Where the user types elsewhere: a text field, or anything in a dialog. */
+const ELSEWHERE =
+  "input:not([type=checkbox],[type=radio],[type=button],[type=submit],[type=reset],[type=range],[type=color],[type=file],[type=image]), textarea, select, [contenteditable=true], [contenteditable=''], [role=dialog] *";
+
+/**
+ * The field focuses itself when it loads and when a run starts, but never takes the keyboard
+ * from what the user went to (Find in the chat, a dialog): that is decided as it focuses, which
+ * can come well after its first render. The plain field that stood in while it loaded doesn't
+ * count. (Lexical's `focus` is wrapped, so assistant-ui's own focusing asks too; in a layout
+ * effect, so before the input's own focusing effect runs.)
+ */
+function FocusGuard() {
+  const [editor] = useLexicalComposerContext();
+  useLayoutEffect(() => guardFocus(editor), [editor]);
+  return null;
+}
+
+/** Has `editor` focus only while the user isn't typing elsewhere; returns the undoing. */
+function guardFocus(editor: LexicalEditor): () => void {
+  const focus = editor.focus;
+  editor.focus = (...args) => {
+    const active = document.activeElement;
+    const elsewhere =
+      active instanceof HTMLElement &&
+      !editor.getRootElement()?.contains(active) &&
+      !active.matches('textarea[aria-label="Message input"]') &&
+      active.matches(ELSEWHERE);
+    if (!elsewhere) focus.apply(editor, args);
+  };
+  return () => {
+    editor.focus = focus;
+  };
 }
 
 /** Tab in the empty field takes the guess at the next message it shows, unsent. */
