@@ -67,12 +67,29 @@ function Fixture() {
   const [foldProbe, setFoldProbe] = useState(true);
   const { panel, agents, workspace } = useSidePanel(kind === "draft" ? null : id, kind !== "chat", false, "project");
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
-  const [seen] = useState<Record<string, unknown>>({});
   useEffect(() => {
     if (new URLSearchParams(location.search).has("manual")) return;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const at = (ms: number, action: () => void) => timers.push(setTimeout(action, ms));
+    const seen: Record<string, unknown> = {};
+    let live = true;
+    // Each step waits for what the one before it should have done, so a slow machine only runs
+    // slower (#85). A wait that runs out ends the run, naming what it waited for.
+    const until = (check: () => unknown, what: string, timeoutMs = 5000) => new Promise<void>((resolve, reject) => {
+      const start = performance.now();
+      const poll = () => {
+        if (!live) return;
+        if (check()) resolve();
+        else if (performance.now() - start > timeoutMs) reject(new Error(`timed out waiting for ${what}`));
+        else setTimeout(poll, 20);
+      };
+      poll();
+    });
+    // Once the click's update is in, before any frame of a slide it starts.
+    const task = () => new Promise<void>((resolve) => setTimeout(resolve));
     const click = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)?.click();
+    const key = (code: string, keys: { metaKey?: boolean; altKey?: boolean; shiftKey?: boolean; ctrlKey?: boolean }) =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { code, ...keys, bubbles: true, cancelable: true }));
+    const escape = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    const focused = () => document.activeElement?.getAttribute("aria-label");
     const controls = () => [...document.querySelectorAll('header[data-slot="test-toolbar"] button[aria-label]')].map((button) => button.getAttribute("aria-label"));
     const right = () => document.querySelector('[data-slot="right-sidebar"]')?.getAttribute("data-state");
     const pane = () => document.querySelector('[data-slot="workspace-pane"][data-state="expanded"] [data-pane]')?.getAttribute("data-pane") ?? null;
@@ -88,86 +105,14 @@ function Fixture() {
       probe.remove();
       return { transitionProperty, transitionDuration, sidebarEase: transitionTimingFunction === sidebarEase, reducedMotion: reveal.className.includes("motion-reduce:transition-none") };
     };
+    // A column's width slide is over.
+    const slid = (column: string) => !(document.querySelector(`[data-slot="${column}"] > div`)?.getAnimations() ?? []).some((animation) => animation.playState === "running");
     // Width slides started on the docked pane's column, and whether it holds its contents.
     const dockSlides = () => document.querySelector('[data-slot="workspace-pane"] > div')?.getAnimations() ?? null;
     const dockContents = () => !!document.querySelector('[data-slot="workspace-pane"] [data-pane] > *');
-    at(1000, () => {
-      seen.sessionControls = controls(); seen.initialRight = right();
-      seen.dockClosedSlide = slide("workspace-pane"); click("Right sidebar");
-      setTimeout(() => { seen.dockOpeningSlides = dockSlides()?.length; });
-    });
-    at(1300, () => {
-      seen.files = pane(); seen.dockOpenSlide = slide("workspace-pane");
-      // A column at the window's right edge below the titlebar, its views' icons in a row at its top.
-      const dock = document.querySelector('[data-slot="workspace-pane"]')!.getBoundingClientRect();
-      const bar = document.querySelector('header[data-slot="test-toolbar"]')!.getBoundingClientRect();
-      const views = document.querySelector('[data-slot="workspace-pane"] [role="tablist"]')!.getBoundingClientRect();
-      seen.atEdge = dock.top === bar.bottom && views.top === dock.top && Math.abs(dock.right - window.innerWidth) < 1 && Math.abs(dock.bottom - window.innerHeight) < 1;
-      seen.views = [...document.querySelectorAll('[data-slot="workspace-pane"] [role="tab"]')].map((tab) => tab.getAttribute("aria-label"));
-      click("Right sidebar");
-      // Through the closing slide the contents stay; once it is over they go.
-      setTimeout(() => { seen.closingContents = dockContents(); });
-      setTimeout(() => { seen.closedContents = dockContents(); }, 450);
-    });
-    at(1800, () => {
-      seen.closedFiles = pane();
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyG", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
-    });
-    at(2100, () => {
-      seen.source = pane();
-      const before = dockSlides() ?? [];
-      click("Files");
-      setTimeout(() => { seen.switchSlides = dockSlides()?.filter((animation) => !before.includes(animation)).length; });
-    });
-    at(2200, () => {
-      seen.switchedFiles = pane(); seen.filesRight = right();
-      Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false });
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyP", metaKey: true, bubbles: true, cancelable: true }));
-    });
-    at(2500, () => {
-      seen.searchFocused = document.activeElement?.getAttribute("aria-label");
-      seen.keyboardReturns = keyboardReturns; Reflect.deleteProperty(document, "hasFocus");
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB", metaKey: true, altKey: true, bubbles: true, cancelable: true }));
-      seen.removedKeyRight = right(); seen.menuKey = MENU_KEYS["right-sidebar"] ?? null;
-    });
-    at(2650, () => {
-      seen.keyClosed = pane();
-      // ⌘P shows the closed sidebar on Files with its search focused.
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyP", metaKey: true, bubbles: true, cancelable: true }));
-    });
     // The right panel stays in the page while closed, and the room it takes is its full width
     // from the moment it opens rather than the sliding width, frame by frame.
     const shown = () => document.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]')?.style.getPropertyValue("--right-sidebar-shown");
-    at(2800, () => {
-      seen.reopened = pane();
-      seen.findFileFocused = document.activeElement?.getAttribute("aria-label"); seen.closedSlide = slide("right-sidebar"); click("Thread worker");
-    });
-    at(3100, () => {
-      seen.workerRight = right(); seen.workerTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane");
-      // This 800px window can't hold the thread beside both columns: the Workers panel, opened
-      // last, stays and the right sidebar closes. It still sits between the content and the sidebar.
-      seen.workersNarrow = pane();
-      seen.workersInside = document.querySelector('[data-slot="right-sidebar"]')!.getBoundingClientRect().right <= document.querySelector('[data-slot="workspace-pane"]')!.getBoundingClientRect().left + 1;
-      seen.openShown = shown(); seen.openSlide = slide("right-sidebar");
-      seen.openWidth = `${document.querySelector('[data-slot="right-sidebar"] > div > div')!.getBoundingClientRect().width}px`;
-      click("Close right panel"); setTimeout(() => { seen.closingShown = shown(); });
-    });
-    at(3400, () => {
-      seen.closedRight = right(); seen.closedShown = shown(); click("Composer worker");
-      // Once the click's update is in, before any frame of the slide.
-      setTimeout(() => { seen.openingShown = shown(); });
-    });
-    at(3700, () => {
-      seen.composerRight = right();
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB", metaKey: true, altKey: true, bubbles: true, cancelable: true }));
-    });
-    at(3850, () => {
-      // Opened last, the right sidebar stays and the Workers panel closes.
-      seen.sidebarWins = [pane(), right()];
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyB", metaKey: true, altKey: true, bubbles: true, cancelable: true }));
-      click("Context worker");
-    });
-    at(4000, () => { seen.contextWorkerRight = right(); click("Close right panel"); });
     // The preview's Activities row; opened, its command line opens the previews.
     const chip = () => document.querySelector<HTMLButtonElement>('[data-slot="summary-card"] [data-activity] > button');
     const showPreviews = () => {
@@ -180,26 +125,118 @@ function Fixture() {
       revealNewPreviews(events);
       applyBoardEvents(events);
     };
-    at(4320, () => {
+    const floating = () => useSummary.getState().floating;
+    // Closed, its closing over (a card opened next is a new one) and the focus given back: the
+    // card's focus scope gives it back a task after it goes.
+    const closed = async (what: string) => {
+      await until(() => !floating() && !document.querySelector('[data-slot="summary-card"]'), what);
+      await task();
+    };
+    const previewsOpen = () => !!document.querySelector('[role="dialog"][aria-label="Previews"][data-state="open"]');
+    const buttons = (scope: string) => [...document.querySelectorAll(`${scope} button`)].map((button) => button.textContent?.trim());
+    const sourceCount = () => document.querySelector('[data-slot="workspace-pane"] [data-slot="source-count"]')?.textContent ?? null;
+    const contextPressed = () => document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed");
+    void (async () => {
+      await until(() => controls().length === 3 && document.querySelector('[data-slot="workspace-pane"] > div'), "the toolbar");
+      seen.sessionControls = controls(); seen.initialRight = right();
+      seen.dockClosedSlide = slide("workspace-pane"); click("Right sidebar");
+      await task();
+      seen.dockOpeningSlides = dockSlides()?.length;
+
+      await until(() => pane() === "files" && slid("workspace-pane"), "Files to open");
+      seen.files = pane(); seen.dockOpenSlide = slide("workspace-pane");
+      // A column at the window's right edge below the titlebar, its views' icons in a row at its top.
+      const dock = document.querySelector('[data-slot="workspace-pane"]')!.getBoundingClientRect();
+      const bar = document.querySelector('header[data-slot="test-toolbar"]')!.getBoundingClientRect();
+      const views = document.querySelector('[data-slot="workspace-pane"] [role="tablist"]')!.getBoundingClientRect();
+      seen.atEdge = dock.top === bar.bottom && views.top === dock.top && Math.abs(dock.right - window.innerWidth) < 1 && Math.abs(dock.bottom - window.innerHeight) < 1;
+      seen.views = [...document.querySelectorAll('[data-slot="workspace-pane"] [role="tab"]')].map((tab) => tab.getAttribute("aria-label"));
+      click("Right sidebar");
+      // Through the closing slide the contents stay; once it is over they go.
+      await task();
+      seen.closingContents = dockContents();
+      seen.closedFiles = pane();
+      await until(() => slid("workspace-pane") && !dockContents(), "the closed Files to drop its contents");
+      seen.closedContents = dockContents();
+      key("KeyG", { ctrlKey: true, shiftKey: true });
+
+      await until(() => pane() === "source" && slid("workspace-pane"), "⌃⇧G to show Source");
+      seen.source = pane();
+      const before = dockSlides() ?? [];
+      click("Files");
+      await task();
+      seen.switchSlides = dockSlides()?.filter((animation) => !before.includes(animation)).length;
+
+      await until(() => pane() === "files", "Files to show again");
+      seen.switchedFiles = pane(); seen.filesRight = right();
+      Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false });
+      key("KeyP", { metaKey: true });
+
+      await until(() => focused() === "Search files", "⌘P to focus Files' search");
+      seen.searchFocused = focused();
+      seen.keyboardReturns = keyboardReturns; Reflect.deleteProperty(document, "hasFocus");
+      key("KeyB", { metaKey: true, altKey: true });
+      seen.removedKeyRight = right(); seen.menuKey = MENU_KEYS["right-sidebar"] ?? null;
+
+      await until(() => pane() === null, "⌥⌘B to hide the right sidebar");
+      seen.keyClosed = pane();
+      // ⌘P shows the closed sidebar on Files with its search focused.
+      key("KeyP", { metaKey: true });
+
+      await until(() => pane() === "files" && focused() === "Search files", "⌘P to show Files again");
+      seen.reopened = pane();
+      seen.findFileFocused = focused(); seen.closedSlide = slide("right-sidebar"); click("Thread worker");
+
+      await until(() => right() === "expanded" && pane() === null && slid("right-sidebar"), "the Workers panel to open");
+      seen.workerRight = right(); seen.workerTab = document.querySelector('[data-slot="right-sidebar"] [data-pane]')?.getAttribute("data-pane");
+      // This 800px window can't hold the thread beside both columns: the Workers panel, opened
+      // last, stays and the right sidebar closes. It still sits between the content and the sidebar.
+      seen.workersNarrow = pane();
+      seen.workersInside = document.querySelector('[data-slot="right-sidebar"]')!.getBoundingClientRect().right <= document.querySelector('[data-slot="workspace-pane"]')!.getBoundingClientRect().left + 1;
+      seen.openShown = shown(); seen.openSlide = slide("right-sidebar");
+      seen.openWidth = `${document.querySelector('[data-slot="right-sidebar"] > div > div')!.getBoundingClientRect().width}px`;
+      click("Close right panel");
+      await task();
+      seen.closingShown = shown();
+
+      await until(() => right() === "collapsed" && slid("right-sidebar"), "the Workers panel to close");
+      seen.closedRight = right(); seen.closedShown = shown(); click("Composer worker");
+      await task();
+      seen.openingShown = shown();
+
+      await until(() => right() === "expanded", "the Workers panel to open from the composer");
+      seen.composerRight = right();
+      key("KeyB", { metaKey: true, altKey: true });
+
+      await until(() => pane() === "files" && right() === "collapsed", "⌥⌘B to show the right sidebar");
+      // Opened last, the right sidebar stays and the Workers panel closes.
+      seen.sidebarWins = [pane(), right()];
+      key("KeyB", { metaKey: true, altKey: true });
+      click("Context worker");
+
+      await until(() => pane() === null && right() === "expanded", "the Workers panel to open from the context");
+      seen.contextWorkerRight = right(); click("Close right panel");
+
+      await until(() => right() === "collapsed", "the Workers panel to close again");
       // Seed the shared preference even when the floating card is currently unmounted.
       document.querySelector<HTMLButtonElement>('[data-fold-probe] > header button[aria-expanded="true"]')!.click();
       setFoldProbe(false);
       document.querySelector<HTMLButtonElement>('[data-activities] > header button[aria-expanded="true"]')?.click();
-    });
-    at(4350, () => {
+
+      await until(() => !document.querySelector("[data-fold-probe]"), "the fold probe to go");
       useSummary.setState({ floating: false });
       useApp.setState({ pinnedSummary: false });
       document.querySelector<HTMLTextAreaElement>('[aria-label="Fixture composer"]')?.focus();
       const board = useBoard.getState().board!;
       useBoard.setState({ board: { ...board, loaded: false, previews: {} } });
       arrival("loading");
-      seen.loadingClosed = !useSummary.getState().floating && !useApp.getState().pinnedSummary;
+      seen.loadingClosed = !floating() && !useApp.getState().pinnedSummary;
       useBoard.setState({ board });
-      seen.loadedClosed = !useSummary.getState().floating;
+      seen.loadedClosed = !floating();
       arrival("preview");
-      seen.updateClosed = !useSummary.getState().floating && !useApp.getState().pinnedSummary;
+      seen.updateClosed = !floating() && !useApp.getState().pinnedSummary;
       arrival("background", "other");
-      seen.backgroundClosed = !useSummary.getState().floating && !useApp.getState().pinnedSummary;
+      seen.backgroundClosed = !floating() && !useApp.getState().pinnedSummary;
       const layout = useSummary.getState().layout;
       useSummary.setState({ layout: "beside" });
       localStorage.setItem("brigadier.pinnedSummary", "false");
@@ -209,97 +246,126 @@ function Fixture() {
       useApp.setState({ pinnedSummary: false, selection: { type: "conversation", id: "other" } });
       arrival("offscreen-preview");
       useApp.setState({ selection: { type: "conversation", id } });
-      seen.returnClosed = !useApp.getState().pinnedSummary && !useSummary.getState().floating;
+      seen.returnClosed = !useApp.getState().pinnedSummary && !floating();
       useSummary.setState({ layout });
       for (const tab of ["file:README.md", "browser:fixture"]) {
         useSessionTabs.setState({ sessions: { [id]: { tabs: [], active: tab } } });
         arrival(tab);
-        seen[tab.startsWith("file") ? "fileTabClosed" : "browserTabClosed"] = !useSummary.getState().floating;
+        seen[tab.startsWith("file") ? "fileTabClosed" : "browserTabClosed"] = !floating();
       }
       // Back on the chat, a preview that arrived over another tab doesn't open the card late.
       useSessionTabs.setState({ sessions: { [id]: { tabs: [], active: CHAT_TAB } } });
-      seen.chatReturnClosed = !useSummary.getState().floating;
+      seen.chatReturnClosed = !floating();
       arrival("new-preview");
-    });
-    at(4500, () => {
+
+      await until(() => floating() && document.querySelector("[data-activities]"), "a new preview to open the card");
       setFoldProbe(true);
       seen.activitiesUnfolded = !!document.querySelector('[data-activities]:not([data-folded])');
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    });
-    at(4750, () => {
+      escape();
+
+      await closed("Escape to close the card");
+      await until(() => document.querySelector("[data-fold-probe]"), "the fold probe to come back");
       seen.activitiesFoldKept = !!document.querySelector('[data-fold-probe][data-folded]');
-      seen.autoEscapeClosed = !useSummary.getState().floating;
-      seen.autoEscapeFocus = document.activeElement?.getAttribute("aria-label");
+      seen.autoEscapeClosed = !floating();
+      seen.autoEscapeFocus = focused();
       arrival("focus-preview");
-    });
-    at(4950, () => {
-      chip()?.focus();
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    });
-    at(5200, () => {
-      seen.enteredEscapeFocus = document.activeElement?.getAttribute("aria-label");
+
+      await until(() => floating() && chip(), "a preview to open the card again");
+      chip()!.focus();
+      escape();
+
+      await closed("Escape to close the entered card");
+      seen.enteredEscapeFocus = focused();
       click("Context");
-    });
-    at(5450, () => {
-      seen.manualOpenFocus = document.activeElement?.getAttribute("aria-label");
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    });
-    at(5700, () => {
-      seen.manualEscapeFocus = document.activeElement?.getAttribute("aria-label");
+
+      // Opened by hand the card takes the keyboard, its Escape heard from then on.
+      await until(() => floating() && chip() && document.activeElement?.closest("[data-radix-popper-content-wrapper]"), "Context to open the card");
+      seen.manualOpenFocus = focused();
+      escape();
+
+      await closed("Escape to close the opened card");
+      seen.manualEscapeFocus = focused();
       document.querySelector<HTMLTextAreaElement>('[aria-label="Fixture composer"]')?.focus();
       arrival("nested-preview");
-    });
-    at(6500, () => { seen.autoOpened = useSummary.getState().floating && !!chip(); seen.composerKeptFocus = document.activeElement?.getAttribute("aria-label") === "Fixture composer"; showPreviews(); });
-    at(6600, () => {
-      seen.nestedOpened = !!document.querySelector('[role="dialog"][aria-label="Previews"][data-state="open"]') && !!chip();
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    });
-    at(6700, () => { seen.previewSection = chip()?.closest("[data-activities]")?.querySelector("header")?.textContent === "Activities"; seen.nestedDismissed = !document.querySelector('[role="dialog"][aria-label="Previews"][data-state="open"]') && !!chip(); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } }); });
-    at(6850, () => { seen.previewCleared = !chip() && !document.querySelector("[data-activities]"); useBoard.setState({ board: { ...useBoard.getState().board!, previews } }); });
-    at(7000, () => { seen.previewReturned = !!chip(); setKind("draft"); });
-    const buttons = (scope: string) => [...document.querySelectorAll(`${scope} button`)].map((button) => button.textContent?.trim());
-    at(7200, () => { seen.draftControls = controls(); seen.draftRight = right();
+
+      await until(() => floating() && chip(), "a preview to open the card under the composer");
+      seen.autoOpened = floating() && !!chip(); seen.composerKeptFocus = focused() === "Fixture composer"; showPreviews();
+
+      await until(previewsOpen, "the previews to open");
+      seen.nestedOpened = previewsOpen() && !!chip();
+      escape();
+
+      await until(() => !previewsOpen(), "Escape to close the previews");
+      seen.previewSection = chip()?.closest("[data-activities]")?.querySelector("header")?.textContent === "Activities"; seen.nestedDismissed = !previewsOpen() && !!chip(); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } });
+
+      await until(() => !chip(), "the previews to clear");
+      seen.previewCleared = !chip() && !document.querySelector("[data-activities]"); useBoard.setState({ board: { ...useBoard.getState().board!, previews } });
+
+      await until(chip, "the previews to return");
+      seen.previewReturned = !!chip(); setKind("draft");
+
+      await until(() => !document.querySelector('[data-slot="right-sidebar"]'), "the draft");
+      seen.draftControls = controls(); seen.draftRight = right();
       // ⇧⌘E shows Files, whether the sidebar is open or not.
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyE", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
-    });
-    at(7600, () => {
-      seen.draftSourceCount = document.querySelector('[data-slot="workspace-pane"] [data-slot="source-count"]')?.textContent ?? null;
+      key("KeyE", { metaKey: true, shiftKey: true });
+
+      await until(() => pane() === "files" && sourceCount() !== null
+        && document.querySelector('[data-slot="workspace-pane"] button[title="package.json"]'), "⇧⌘E to show the draft's Files");
+      seen.draftSourceCount = sourceCount();
       seen.draftFiles = pane(); seen.draftTree = document.querySelector('[data-slot="workspace-pane"] [role="tree"]')?.textContent;
-      document.querySelector<HTMLButtonElement>('[data-slot="workspace-pane"] button[title="package.json"]')?.click();
-    });
-    at(7900, () => { seen.draftComposer = runtime.thread.composer.getState().text; seen.draftMention = [...mentions.known()]; click("Source"); });
-    at(8200, () => {
+      document.querySelector<HTMLButtonElement>('[data-slot="workspace-pane"] button[title="package.json"]')!.click();
+
+      await until(() => runtime.thread.composer.getState().text, "the file's mention in the composer");
+      seen.draftComposer = runtime.thread.composer.getState().text; seen.draftMention = [...mentions.known()]; click("Source");
+
+      await until(() => pane() === "source" && document.querySelector('[data-slot="own-copy-note"]'), "the draft's Source");
       seen.draftSource = buttons('[data-slot="source-panel"]'); seen.draftCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       seen.draftNote = !!document.querySelector('[data-slot="own-copy-note"]');
       click("Right sidebar");
-    });
-    at(8400, () => { seen.closedSource = pane(); click("Right sidebar"); });
-    at(8900, () => {
+
+      await until(() => pane() === null, "the right sidebar to close on Source");
+      seen.closedSource = pane(); click("Right sidebar");
+
+      await until(() => pane() === "source" && document.querySelector('[data-slot="own-copy-note"]'), "Source to reopen");
+      projectChanged = true;
+      emitWorkspaceChanged({ type: "project", projectId: "project" });
       seen.worktreeSource = buttons('[data-slot="source-panel"]'); seen.worktreeCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent;
       // ⇧⌘F shows Search with its field taking the keyboard; a draft making its own copy has no Replace.
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+      key("KeyF", { metaKey: true, shiftKey: true });
       useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
-    });
-    at(8850, () => {
-      projectChanged = true;
-      emitWorkspaceChanged({ type: "project", projectId: "project" });
-    });
-    at(9000, () => {
+
+      await until(() => pane() === "search" && focused() === "Search" && sourceCount() === "2", "⇧⌘F to show Search, and Source's count to refresh");
       seen.draftSearch = pane();
-      seen.sourceCountInSearch = document.querySelector('[data-slot="workspace-pane"] [data-slot="source-count"]')?.textContent;
+      seen.sourceCountInSearch = sourceCount();
       seen.selectedTabs = [...document.querySelectorAll('[data-slot="workspace-pane"] [role="tab"]')].map((tab) => [tab.getAttribute("aria-label"), tab.getAttribute("aria-selected"), getComputedStyle(tab).backgroundColor]);
-      seen.searchKeyFocus = document.activeElement?.getAttribute("aria-label");
+      seen.searchKeyFocus = focused();
       seen.draftSearchReplace = !!document.querySelector('[data-slot="workspace-pane"] input[aria-label="Replace"]');
       setKind("chat");
+
+      await until(() => controls().length === 2, "the chat's toolbar");
+      if (contextPressed() !== "true") click("Context");
+
+      await until(() => contextPressed() === "true" && document.querySelector('[data-slot="summary-card"]'), "the chat's Context card");
+      seen.chatControls = controls(); seen.chatText = document.querySelector('[data-slot="summary-card"]')?.textContent; seen.chatPane = pane(); seen.savedPane = JSON.parse(localStorage.getItem("brigadier.workspacePane")!); click("Context");
+
+      await until(() => contextPressed() !== "true", "Context to close");
+      seen.contextClosed = contextPressed(); click("Context");
+
+      await until(() => contextPressed() === "true", "Context to open");
+      seen.contextOpened = contextPressed() ?? "false"; const loaded = useBoard.getState().board!; useBoard.setState({ board: { ...loaded, context: { usedTokens: 1200, windowTokens: 10000 } } });
+
+      await until(() => /tokens used/.test(document.querySelector('[data-slot="summary-card"]')?.textContent ?? ""), "the context's usage");
+      seen.chatUsage = document.querySelector('[data-slot="summary-card"]')?.textContent;
+    })().catch((error: unknown) => {
+      seen.error = String(error);
+    }).finally(() => {
+      if (live) setResult(JSON.stringify(seen));
     });
-    at(9100, () => { if (document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed") !== "true") click("Context"); });
-    at(9300, () => { seen.chatControls = controls(); seen.chatText = document.querySelector('[data-slot="summary-card"]')?.textContent; seen.chatPane = pane(); seen.savedPane = JSON.parse(localStorage.getItem("brigadier.workspacePane")!); click("Context"); });
-    at(9700, () => { seen.contextClosed = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed"); click("Context"); });
-    at(10100, () => { seen.contextOpened = document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed") ?? "false"; const board = useBoard.getState().board!; useBoard.setState({ board: { ...board, context: { usedTokens: 1200, windowTokens: 10000 } } }); });
-    at(10500, () => { seen.chatUsage = document.querySelector('[data-slot="summary-card"]')?.textContent; setResult(JSON.stringify(seen)); });
-    return () => timers.forEach(clearTimeout);
-  }, [seen, runtime]);
+    return () => {
+      live = false;
+    };
+  }, [runtime]);
   return <AssistantRuntimeProvider runtime={runtime}><ComposerTargetContext.Provider value={target}>
     <WorkspacePaneContext.Provider value={workspace}><RightSidebarContext.Provider value={panel}>
       <SummaryFloat>

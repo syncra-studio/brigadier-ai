@@ -4,6 +4,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 test("toolbar order, right sidebar, its keys, Files search, draft project folder and worker-only right panel routes", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "toolbar.html?live=1", "toolbar-result", 30000)) as Record<string, unknown>;
+  assert.equal(seen.error, undefined);
   assert.deepEqual(seen.sessionControls, ["Context", "Terminal", "Right sidebar"]);
   assert.deepEqual(seen.draftControls, ["Context", "Terminal", "Right sidebar"]);
   assert.deepEqual(seen.views, ["Files", "Search", "Source"]);
