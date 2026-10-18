@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, Search, X } from "@openai/apps-sdk-ui/components/Icon";
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { ThreadHistoryContext } from "@/components/assistant-ui/message-rail";
 import type { ThreadOverlayProps } from "@/components/assistant-ui/thread";
@@ -15,8 +15,10 @@ import { useApp } from "@/state/store";
  * one, ⇧Enter, ⇧⌘G and ‹ the one before, Esc closes.
  *
  * What it searches is what is mounted: turns folded behind "N earlier messages" are unfolded for
- * it, but a closed work group or fold holds no rows until opened, and pages still in the database
- * are not loaded for it. Diffs draw in their own shadow tree and are not searched either.
+ * it, and a turn's closed work keeps its rows, hidden, while the bar has a text (`useFindSearching`):
+ * going to a match there opens the work, typing never does. A closed work group inside the work
+ * holds no rows until opened, and pages still in the database are not loaded for it. Diffs draw in
+ * their own shadow tree and are not searched either.
  */
 
 /** Counting stops here: "250+ results". */
@@ -49,6 +51,25 @@ const SKIP = [
 
 /** Text in different ones of these never runs together into one match. */
 const BLOCK = "p, li, pre, h1, h2, h3, h4, h5, h6, td, th, tr, blockquote, dt, dd, div, button, summary, label";
+
+/** The find bars open with a text: while there is one, a turn's closed work keeps its rows, hidden, for them. */
+const searching = new Set<object>();
+const searchingHeard = new Set<() => void>();
+
+function subscribeSearching(heard: () => void): () => void {
+  searchingHeard.add(heard);
+  return () => searchingHeard.delete(heard);
+}
+
+/** Whether a find bar searches now: a closed work fold mounts its rows, hidden, so they are found. */
+export function useFindSearching(): boolean {
+  return useSyncExternalStore(subscribeSearching, () => searching.size > 0);
+}
+
+/** The closed work fold holding `range`, if one does. */
+function closedFold(range: Range): Element | null {
+  return range.startContainer.parentElement?.closest('[data-slot="request-fold"][data-fold="closed"]') ?? null;
+}
 
 /** "2 / 7 results", "1 / 1 result", "3 / 250+ results", "0 results". */
 export function findLabel(active: number, count: number, more: boolean): string {
@@ -282,12 +303,27 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     [viewport],
   );
 
-  /** Brings `range` into view, centred between the bar and the composer, unless it shows already. */
+  /**
+   * Brings `range` into view, centred between the bar and the composer, unless it shows already.
+   * In a turn's closed work it opens the work first when `opens` (a step, never typing), else stays.
+   */
   const reveal = useCallback(
-    async (range: Range) => {
+    async (range: Range, opens: boolean) => {
       if (!viewport) return;
       const seq = ++reveals.current;
       const live = () => seq === reveals.current && viewport.isConnected && range.startContainer.isConnected;
+      const fold = closedFold(range);
+      if (fold) {
+        const header = fold.closest('[data-slot="request-body"]')?.querySelector<HTMLButtonElement>('button[data-slot="request-work-header"][aria-expanded="false"]');
+        if (!opens || !header) return;
+        // As the user's own click: the turn's work stays open after the bar closes.
+        header.click();
+        const opened = () => fold.getAttribute("data-fold") === "open" && !fold.hasAttribute("data-moving");
+        for (let frames = 0; frames < 60 && live() && fold.isConnected && !opened(); frames++) await nextFrame();
+        // Its last resize is the thread's to keep its place by first, or that undoes the scroll.
+        await nextFrame();
+        if (!live()) return;
+      }
       const more = clippedBy(range);
       if (more) {
         const bubble = more.closest(".aui-user-message-content");
@@ -331,10 +367,10 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   );
 
   const goTo = useCallback(
-    (index: number, ranges: readonly Range[]) => {
+    (index: number, ranges: readonly Range[], opens: boolean) => {
       setActive(index);
       const range = ranges[index];
-      if (range) void reveal(range);
+      if (range) void reveal(range, opens);
     },
     [reveal],
   );
@@ -352,7 +388,10 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         folds.unfold();
         return;
       }
-      goTo((at + by + count) % count, found.ranges);
+      // The match typing went to is in a turn's closed work: this step opens it there first.
+      const current = found.ranges[at];
+      if (current && closedFold(current)) goTo(at, found.ranges, true);
+      else goTo((at + by + count) % count, found.ranges, true);
     },
     [goTo],
   );
@@ -375,13 +414,13 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         const earlier = back.startContainer.isConnected
           ? ranges.findLastIndex((range) => range.compareBoundaryPoints(Range.START_TO_START, back) < 0)
           : -1;
-        goTo(earlier >= 0 ? earlier : ranges.length - 1, ranges);
+        goTo(earlier >= 0 ? earlier : ranges.length - 1, ranges, true);
         return;
       }
       if (fresh || at < 0) {
         const line = viewport ? viewport.getBoundingClientRect().top : 0;
         const first = ranges.findIndex((range) => range.getBoundingClientRect().bottom > line);
-        goTo(first >= 0 ? first : 0, ranges);
+        goTo(first >= 0 ? first : 0, ranges, false);
         return;
       }
       // The thread changed under the bar: the match gone to stays, where it still is.
@@ -513,6 +552,19 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
       if (timer) clearTimeout(timer);
     };
   }, [open, viewport]);
+
+  // A text in the bar: the turns' closed work mounts its rows, hidden, and is searched again then.
+  const hasText = open && query !== "";
+  useEffect(() => {
+    if (!hasText) return;
+    const me = {};
+    searching.add(me);
+    for (const heard of searchingHeard) heard();
+    return () => {
+      searching.delete(me);
+      for (const heard of searchingHeard) heard();
+    };
+  }, [hasText]);
 
   useLayoutEffect(() => {
     if (open && viewport) paint(viewport, result.ranges, result.ranges[active] ?? null);

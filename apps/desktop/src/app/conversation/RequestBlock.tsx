@@ -20,6 +20,7 @@ import { type ComponentProps, type ComponentType, createContext, type FC, Fragme
 import { useShallow } from "zustand/react/shallow";
 
 import { ThinkingLine } from "@/app/conversation/ThinkingLine";
+import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { WorkFold } from "@/app/conversation/WorkFold";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
@@ -710,6 +711,8 @@ const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
 export const RequestBlock: FC = () => {
   const meta = useAuiState((s) => s.message.metadata.custom["block"]) as BlockMeta | undefined;
   const fold = useFold(meta?.requestId ?? null);
+  // While Find searches, closed work keeps its rows, hidden, to be found.
+  const searched = useFindSearching();
   const body = useRef<HTMLDivElement>(null);
   // The calls of its own the user denied, and the header's ask to show them.
   const deniedCount = useBoard((s) => {
@@ -864,7 +867,7 @@ export const RequestBlock: FC = () => {
           ) : (
             <Fragment key={`work:${index}`}>
             {(!done || part.items.some((item) => !stays(item))) && (
-            <WorkFold open={!done || open}>
+            <WorkFold open={!done || open} searched={searched}>
               <div
                 data-slot="request-work"
                 className={cn("gap-activity flex min-w-0 flex-col", (header || index > 0) && "pt-activity")}

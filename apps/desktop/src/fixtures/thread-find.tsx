@@ -6,6 +6,7 @@
  * - "solitary" once, "needle" in seven answers, "tick" seven times in every loaded answer (280);
  * - "zephyr" only in a folded turn, "quokka" only in a turn never loaded;
  * - "marmalade" at the end of a long message of the user's, clipped behind "Show more".
+ * With `?drive=folds`, turns 51 and 53 did work, folded away: "wombat" only in turn 51's.
  *
  * `?drive=1` runs the checks the find test reads and writes them to `<pre id="thread-find-result">`;
  * `window.threadFind` holds the steps for a browser probe.
@@ -21,7 +22,7 @@ import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { Conversation, ConversationView as View, EventEnvelope, Message, Request, UserRequest } from "@/ipc/generated";
+import type { Conversation, ConversationView as View, EventEnvelope, Message, OrchestratorStep, Request, UserRequest } from "@/ipc/generated";
 import { revealApp } from "@/lib/splash";
 import { select } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
@@ -31,6 +32,9 @@ const LOAD_MS = 200;
 const SHORT = new URLSearchParams(location.search).get("drive") === "short";
 /** `?drive=late-editor`: startup isn't over, so the composer's editor waits to load (whenRevealed). */
 const LATE_EDITOR = new URLSearchParams(location.search).get("drive") === "late-editor";
+/** `?drive=folds`: two turns did work, folded away when they ended. */
+const FOLDS = new URLSearchParams(location.search).get("drive") === "folds";
+const WORK_TURNS = new Map([[50, ["Grep", "wombat"]], [52, ["Read", "/repo/src/badger.ts"]]] as const);
 if (LATE_EDITOR) document.documentElement.dataset["splash"] = "";
 const TURNS = SHORT ? 1 : 60;
 /** Turns the first load brings. */
@@ -80,13 +84,34 @@ function messages(): Message[] {
 
 const stored = messages();
 
+/** The work of `WORK_TURNS`: one tool call each, before the answer. */
+function work(): { requests: UserRequest[]; steps: OrchestratorStep[] } {
+  if (!FOLDS) return { requests: [], steps: [] };
+  const requests: UserRequest[] = [];
+  const steps: OrchestratorStep[] = [];
+  for (const [turn, [name, detail]] of WORK_TURNS) {
+    const id = `long-r${turn}`;
+    const at = start + turn * 60_000;
+    requests.push({
+      id, conversationId: "long", preview: `Question ${turn + 1}`, state: { type: "done" }, startedAtMs: at, endedAtMs: at + 30_000,
+      steeredInto: null, steeredAfter: null, undo: null, worked: [{ fromMs: at, toMs: at + 30_000 }], quotaWait: false,
+    } as unknown as UserRequest);
+    steps.push({
+      requestId: id, atMs: at + 5000, position: turn * 2 + 1,
+      kind: { type: "tool", itemId: `call-${turn}`, name, detail, status: "completed", throughPosition: turn * 2 + 1, endedAtMs: at + 7000 },
+    } as unknown as OrchestratorStep);
+  }
+  return { requests, steps };
+}
+
 function view(): View {
   const first = Math.max(0, stored.length - FIRST_TURNS * 2);
+  const { requests, steps } = work();
   return {
     conversation,
     context: null,
     messages: { messages: stored.slice(first), hasMore: first > 0 },
-    tasks: [], approvals: [], questions: [], plans: [], requests: [], workerSteps: [], orchestratorSteps: [],
+    tasks: [], approvals: [], questions: [], plans: [], requests, workerSteps: [], orchestratorSteps: steps,
     machineSteps: [], thinking: [], compactions: [], decisions: [], waiting: [],
     queue: { items: [], paused: false },
     run: "idle", runRequest: null, head: stored.at(-1)?.id ?? null, ratings: {}, streaming: null,
@@ -306,6 +331,18 @@ function toggle(): string | null {
   return bubble?.querySelector(":scope > button[aria-expanded]")?.getAttribute("aria-expanded") ?? null;
 }
 
+/** The turn holding answer `turn + 1`. */
+const blockOf = (turn: number) => [...document.querySelectorAll('[data-role="assistant"]')].find((each) => each.textContent?.includes(`Answer ${turn + 1}.`));
+
+/** Turn `turn`'s work fold: "open", "closed" (kept for Find to search), or null while it holds nothing. */
+const foldOf = (turn: number) => blockOf(turn)?.querySelector('[data-slot="request-fold"]')?.getAttribute("data-fold") ?? null;
+
+/** Whether turn `turn`'s header says its work is open. */
+const headerOf = (turn: number) => blockOf(turn)?.querySelector('button[data-slot="request-work-header"]')?.getAttribute("aria-expanded") ?? null;
+
+/** The answers the thread shows: not those folded into a turn's closed work, kept hidden for Find. */
+const shownAnswers = () => [...document.querySelectorAll('[data-slot="aui_assistant-message-content"]')].filter((each) => !each.closest('[data-fold="closed"]'));
+
 /** The `::highlight()` rules on the page: none until marks are shown (they slow every style pass). */
 function highlightRules(): string[] {
   return [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]).flatMap((rule) => /::highlight\(([\w-]+)\)/.exec(rule.cssText)?.[1] ?? []);
@@ -430,7 +467,7 @@ const steps = {
   },
   /** A match at the top of a box that scrolls on its own, scrolled to its end: the box scrolls to it, then the thread. */
   async inner() {
-    const answers = [...document.querySelectorAll('[data-slot="aui_assistant-message-content"]')];
+    const answers = shownAnswers();
     const box = document.createElement("div");
     box.className = "max-h-shell-output overflow-y-auto";
     const lines = document.createElement("pre");
@@ -450,7 +487,7 @@ const steps = {
   },
   /** A match in a button's text, which WebKit never marks: the button gets a ring, gone when another match is gone to. */
   async inButton() {
-    const answers = [...document.querySelectorAll('[data-slot="aui_assistant-message-content"]')];
+    const answers = shownAnswers();
     const pangolin = document.createElement("button");
     pangolin.textContent = "Ran the pangolin check";
     answers.at(-2)?.append(pangolin);
@@ -465,7 +502,7 @@ const steps = {
   },
   /** A report's Details opened and closed while the bar is open: what it holds is counted only while it shows. */
   async details() {
-    const answers = [...document.querySelectorAll('[data-slot="aui_assistant-message-content"]')];
+    const answers = shownAnswers();
     const details = document.createElement("details");
     details.innerHTML = "<summary>Details</summary><p>The okapi check passed.</p>";
     answers.at(-2)?.append(details);
@@ -593,6 +630,33 @@ async function drive(): Promise<void> {
       result["manualExpanded"] = bubble.querySelector(":scope > button")?.getAttribute("aria-expanded");
       root.unmount();
       host.remove();
+    } else if (FOLDS) {
+      // A word only in a closed work fold: counted, its fold left closed while typing; Enter opens it and goes there.
+      select({ type: "conversation", id: "long" });
+      await settle(LOAD_MS + 400);
+      result["before"] = { wombat: headerOf(50), badger: headerOf(52), mounted: foldOf(50) };
+      press(document.body, "KeyF", { meta: true });
+      await until(() => bar() !== null);
+      const typed = await find("wombat");
+      const kept = blockOf(50)?.querySelector('[data-slot="request-fold"]');
+      result["typed"] = { label: typed.label, size: typed.size, wombat: headerOf(50), badger: headerOf(52), kept: foldOf(50), height: kept?.getBoundingClientRect().height ?? null };
+      press(field()!, "Enter");
+      await until(() => headerOf(50) === "true");
+      await settle(100);
+      result["entered"] = { label: label(), active: activeMatch()?.toString() ?? null, place: activePlace(), wombat: headerOf(50), badger: headerOf(52) };
+      // Closed: the fold gone to stays open, the other closed and holding nothing.
+      press(field()!, "Escape");
+      await until(() => bar() === null);
+      await settle(100);
+      result["closed"] = { wombat: headerOf(50), badger: headerOf(52), badgerFold: foldOf(52) };
+      // Closed by hand: it animates down from its full height, then holds nothing.
+      const fold = blockOf(50)!.querySelector('[data-slot="request-fold"]')!;
+      const full = fold.getBoundingClientRect().height;
+      blockOf(50)!.querySelector<HTMLButtonElement>('button[data-slot="request-work-header"]')!.click();
+      await frame();
+      const midway = fold.getBoundingClientRect().height;
+      await settle(100);
+      result["shut"] = { full: full > 0, midway: midway > 0, after: foldOf(50) };
     } else if (LATE_EDITOR) {
       // ⌘F while the plain field stands in for the editor; the editor then loads and mounts.
       select({ type: "conversation", id: "long" });

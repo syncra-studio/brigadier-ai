@@ -150,3 +150,40 @@ test("Find keeps the keyboard when the composer's editor loads after it opened",
   assert.equal(seen.error, undefined);
   assert.deepEqual(seen, { standIn: true, focusedBefore: true, editorLoaded: true, focusedAfter: true });
 });
+
+type Folds = {
+  error?: string;
+  before: { wombat: string | null; badger: string | null; mounted: string | null };
+  typed: { label: string | null; size: number; wombat: string | null; badger: string | null; kept: string | null; height: number | null };
+  entered: { label: string | null; active: string | null; place: Place; wombat: string | null; badger: string | null };
+  closed: { wombat: string | null; badger: string | null; badgerFold: string | null };
+  shut: { full: boolean; midway: boolean; after: string | null };
+};
+let folds: Promise<Folds> | null = null;
+/** One run of the folds drive, read by both tests below. */
+const foldsRun = (t: Parameters<typeof renderFixtureLive>[0]) =>
+  (folds ??= renderFixtureLive(t, "thread-find.html?drive=folds", "thread-find-result", 150000).then((text) => JSON.parse(text) as Folds));
+
+test("Find counts a match only in a closed work fold, and Enter opens the fold and goes to it", { timeout: 180000 }, async (t) => {
+  const seen = await foldsRun(t);
+  assert.equal(seen.error, undefined);
+  // Folded when its turn ended, its rows not mounted.
+  assert.deepEqual(seen.before, { wombat: "false", badger: "false", mounted: null });
+  // Typed: counted, and the fold left closed, its rows kept for Find with no height.
+  assert.deepEqual(seen.typed, { label: "1 / 1 result", size: 1, wombat: "false", badger: "false", kept: "closed", height: 0 });
+  // Enter: its fold opens, and the match is marked and centred in view.
+  assert.equal(seen.entered.label, "1 / 1 result");
+  assert.equal(seen.entered.wombat, "true");
+  assert.equal(seen.entered.active, "wombat");
+  shownCentred(seen.entered.place, "wombat");
+});
+
+test("Find leaves the other work folds closed, and closing it keeps the one it opened", { timeout: 180000 }, async (t) => {
+  const seen = await foldsRun(t);
+  assert.equal(seen.error, undefined);
+  assert.equal(seen.entered.badger, "false");
+  // Closed: the fold gone to stays open as the user's own choice; the other holds no rows again.
+  assert.deepEqual(seen.closed, { wombat: "true", badger: "false", badgerFold: null });
+  // Closed by hand afterwards, it animates down from its full height, never jumps, then holds nothing.
+  assert.deepEqual(seen.shut, { full: true, midway: true, after: null });
+});
