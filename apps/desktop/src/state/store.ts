@@ -516,7 +516,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
             (entry.mentions?.length ?? 0) === item.mentions.length &&
             (entry.mentions ?? []).every((mention, index) => {
               const queued = item.mentions[index];
-              if (mention.type === "file") return queued?.type === "file" && mention.path === queued.path;
+              if (mention.type === "file" || mention.type === "folder") return queued?.type === mention.type && mention.path === queued.path;
               if (mention.type === "task") return queued?.type === "task" && mention.id === queued.id;
               return queued?.type === "chat" && mention.id === queued.id && mention.title === queued.title;
             }) &&

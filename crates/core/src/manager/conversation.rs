@@ -3956,6 +3956,9 @@ impl SessionManager {
                     Mention::File { path } => {
                         append_input_text(&mut inline, &format!("\n[mentions the file {path}]"));
                     }
+                    Mention::Folder { path } => {
+                        append_input_text(&mut inline, &format!("\n[mentions the folder {path}]"));
+                    }
                     Mention::Chat { id, title } => {
                         append_input_text(&mut inline, &self.mentioned_chat(id, title).await);
                     }

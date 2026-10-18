@@ -2,7 +2,6 @@ import {
   ComposerPrimitive,
   unstable_useTriggerPopoverScopeContext,
   type Unstable_TriggerItem,
-  type Unstable_TriggerMatcher,
 } from "@assistant-ui/react";
 import {
   type ComponentProps,
@@ -13,7 +12,8 @@ import {
   useRef,
 } from "react";
 
-import { fuzzyMatch, MatchedText } from "@/components/assistant-ui/elements/fuzzy-match";
+import { MatchedText } from "@/components/assistant-ui/elements/fuzzy-match";
+import { fuzzyMatch, slashTrigger } from "@/components/assistant-ui/elements/menuMatch";
 import { floatingMenu } from "@/components/assistant-ui/elements/surfaces";
 import { cn } from "@/lib/utils";
 
@@ -32,14 +32,6 @@ export type ComposerCommand = {
 type TriggerAdapter = NonNullable<
   ComponentProps<typeof ComposerPrimitive.Unstable_TriggerPopover>["adapter"]
 >;
-
-/** `/` opens the menu only as the message's first character. */
-const atStart: Unstable_TriggerMatcher = (text, char, cursor) => {
-  if (!text.startsWith(char)) return null;
-  const query = text.slice(char.length, cursor);
-  if (cursor < char.length || /\s/u.test(query)) return null;
-  return { query, offset: 0, endOffset: cursor };
-};
 
 /**
  * assistant-ui's trigger adapter over the commands, as one filtered list: no drill-down
@@ -81,7 +73,7 @@ export const ComposerCommands: FC<{ commands: readonly ComposerCommand[] }> = ({
   const adapter = useMemo(() => commandAdapter(commands), [commands]);
   const byId = useMemo(() => new Map(commands.map((command) => [command.id, command])), [commands]);
   return (
-    <ComposerPrimitive.Unstable_TriggerPopover char="/" matcher={atStart} adapter={adapter}>
+    <ComposerPrimitive.Unstable_TriggerPopover char="/" matcher={slashTrigger} adapter={adapter}>
       <ComposerPrimitive.Unstable_TriggerPopover.Action
         removeOnExecute
         onExecute={(item) => byId.get(item.id)?.run()}

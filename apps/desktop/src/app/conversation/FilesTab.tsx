@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, Search } from "@openai/apps-sdk-ui/component
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { type ChangeMarks, changeMarks, LETTERS } from "@/app/conversation/sourceStatus";
-import { fuzzyMatch } from "@/components/assistant-ui/elements/fuzzy-match";
+import { fuzzyMatch } from "@/components/assistant-ui/elements/menuMatch";
 import { FileIcon } from "@/components/glyphs/fileIcons";
 import type { SourceState, SourceStatus, WorkspaceFolder } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

@@ -144,9 +144,11 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
         />
       )}
       <div data-slot="composer" className="group/composer relative w-full">
-        {conversation && (
-          <Mentions conversation={conversation} targets={targets} />
-        )}
+        <Mentions
+          conversation={conversation}
+          targets={targets}
+          projectId={!conversation && resolved.kind === "session" ? (resolved.project?.id ?? null) : null}
+        />
         {/* Out of the way while a decision waits above the composer (see FullAccessNotice). */}
         {conversation && !archived && !current && !slot && <FullAccessNotice conversation={conversation} />}
         <SlashCommands

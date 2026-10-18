@@ -9,7 +9,7 @@ import {
 import { $createDirectiveNodeWithFormatter, $isDirectiveNode } from "@assistant-ui/react-lexical";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { $dfs, mergeRegister } from "@lexical/utils";
-import { Chat } from "@openai/apps-sdk-ui/components/Icon";
+import { Chat, Folder } from "@openai/apps-sdk-ui/components/Icon";
 import {
   $getRoot,
   $getSelection,
@@ -193,13 +193,14 @@ function MentionedWorker({ taskId, label }: { taskId: string; label: string }) {
   return useWorkerName(taskId) ?? label;
 }
 
-/** A worker's glyph or a conversation's icon on its mention chip; files keep their type's. */
+/** A worker's glyph, a folder's or a conversation's icon on its mention chip; files keep their type's. */
 const mentionLook: MentionLook = ({ directiveType, directiveId, label }) => {
   const id = directiveId.slice(directiveId.indexOf(":") + 1);
   if (directiveType === "task") {
     return { icon: <WorkerGlyph taskId={id} />, name: <MentionedWorker taskId={id} label={label} /> };
   }
   if (directiveType === "chat") return { icon: <Chat />, name: label };
+  if (directiveType === "folder") return { icon: <Folder />, name: label.slice(label.lastIndexOf("/") + 1) };
   return null;
 };
 

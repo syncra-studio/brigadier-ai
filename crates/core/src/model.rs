@@ -562,6 +562,8 @@ pub enum Mention {
     Task { id: TaskId },
     /// A file of the session's checkout, relative to its root.
     File { path: String },
+    /// A folder of the session's checkout, relative to its root.
+    Folder { path: String },
     /// Another conversation: its recent messages go along as context.
     Chat { id: ConversationId, title: String },
     /// The page the message was sent from: while it is the user's latest message, the thread
@@ -577,6 +579,7 @@ impl<'de> Deserialize<'de> for Mention {
         enum Tagged {
             Task { id: TaskId },
             File { path: String },
+            Folder { path: String },
             Chat { id: ConversationId, title: String },
             Page { id: String, title: String },
         }
@@ -589,6 +592,7 @@ impl<'de> Deserialize<'de> for Mention {
         Ok(match Stored::deserialize(deserializer)? {
             Stored::Tagged(Tagged::Task { id }) | Stored::Task(id) => Mention::Task { id },
             Stored::Tagged(Tagged::File { path }) => Mention::File { path },
+            Stored::Tagged(Tagged::Folder { path }) => Mention::Folder { path },
             Stored::Tagged(Tagged::Chat { id, title }) => Mention::Chat { id, title },
             Stored::Tagged(Tagged::Page { id, title }) => Mention::Page { id, title },
         })
@@ -2692,6 +2696,16 @@ pub mod streams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_mention_is_stored_and_read_back_as_a_folder() {
+        let folder = Mention::Folder {
+            path: "src/lib".into(),
+        };
+        let json = serde_json::to_string(&folder).unwrap();
+        assert_eq!(json, r#"{"type":"folder","path":"src/lib"}"#);
+        assert_eq!(serde_json::from_str::<Mention>(&json).unwrap(), folder);
+    }
 
     #[test]
     fn a_folder_counts_as_trusted_only_once_trusted_unless_it_left_the_project() {

@@ -1,13 +1,13 @@
 import { useAuiState, type TextMessagePartProps, type Unstable_TriggerItem } from "@assistant-ui/react";
-import { Chat, File } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, useCallback, useEffect, useMemo, useState } from "react";
+import { Chat, File, Folder } from "@openai/apps-sdk-ui/components/Icon";
+import { type FC, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { WorkerChip, WorkerGlyph } from "@/app/conversation/WorkerChip";
 import type { ChipMention } from "@/components/assistant-ui/elements/composer-chips";
 import {
   ComposerMentions,
-  type MentionOption,
+  type MentionGroup,
 } from "@/components/assistant-ui/elements/composer-mentions";
 import { MessageInlineImage } from "@/components/assistant-ui/elements/inline-image";
 import { InlineImageContext, InlinePasteContext, TaskMentionContext } from "@/components/assistant-ui/file-links";
@@ -15,17 +15,12 @@ import { MessagePastedText } from "@/components/assistant-ui/elements/pasted-tex
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
 import { normalizedImages } from "@/lib/inlineImages";
-import { listFiles } from "@/state/actions";
+import { foldersOf, mentionSections, type MentionRow, type MentionTarget } from "@/app/conversation/mentionSearch";
+import { listFiles, listProjectFiles } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
-/** A worker the composer can @-mention, `title` its name as the user reads it. */
-export type MentionTarget = { id: string; number: number; title: string; state: string };
-
-/** Files matching a query that the menu lists; only a handful show at once. */
-const FILE_ROWS = 8;
-/** Other conversations the menu lists. */
-const CHAT_ROWS = 5;
+export type { MentionTarget };
 
 const TASK = /@task-(\d+)\b/g;
 
@@ -37,6 +32,7 @@ function label(mention: Mention, targets: readonly MentionTarget[]): string | nu
       return target ? `task-${target.number}` : null;
     }
     case "file":
+    case "folder":
       return mention.path;
     case "chat":
       return mention.title;
@@ -126,7 +122,7 @@ export function mentionsIn(
   for (const mention of known) {
     if (mention.type === "task") continue;
     const name = label(mention, targets);
-    const key = `${mention.type}:${mention.type === "file" ? mention.path : mention.id}`;
+    const key = `${mention.type}:${"path" in mention ? mention.path : mention.id}`;
     if (name && !seen.has(key) && hasMention(text, name)) {
       seen.add(key);
       mentions.push(mention);
@@ -160,7 +156,7 @@ export class MentionMemory {
   /** Remembers the files and conversations a message, queued item or draft mentions. */
   recall(mentions: readonly Mention[]): void {
     for (const mention of mentions) {
-      if (mention.type === "file") this.record(mention, mention.path);
+      if (mention.type === "file" || mention.type === "folder") this.record(mention, mention.path);
       else if (mention.type === "chat") this.record(mention, mention.title);
     }
   }
@@ -192,7 +188,7 @@ export class MentionMemory {
 
 /** A mention's menu item: its id is unique across kinds, its label goes in the text. */
 function itemOf(mention: Mention, name: string): Unstable_TriggerItem {
-  const id = mention.type === "file" ? `file:${mention.path}` : `${mention.type}:${mention.id}`;
+  const id = "path" in mention ? `${mention.type}:${mention.path}` : `${mention.type}:${mention.id}`;
   return { id, type: mention.type, label: name };
 }
 
@@ -202,6 +198,8 @@ export function mentionOf(item: { id: string; type: string; label: string }): Me
   switch (item.type) {
     case "file":
       return { type: "file", path: rest };
+    case "folder":
+      return { type: "folder", path: rest };
     case "chat":
       return { type: "chat", id: rest, title: item.label };
     case "task":
@@ -211,21 +209,21 @@ export function mentionOf(item: { id: string; type: string; label: string }): Me
   }
 }
 
-/** How well a file's path matches: its name starting with the query first. */
-function fileRank(path: string, query: string): number {
-  const lower = path.toLowerCase();
-  const name = lower.slice(lower.lastIndexOf("/") + 1);
-  if (name.startsWith(query)) return 0;
-  if (name.includes(query)) return 1;
-  return lower.includes(query) ? 2 : 3;
-}
+/** What a project's listing is keyed by in `useCheckoutFiles`, a session's being its id. */
+const PROJECT = "project:";
 
-/** A session checkout's files, refreshed on worker landings and explicit refresh requests. */
+/**
+ * A session checkout's files (or, for a session not started yet, its project folder's),
+ * refreshed on worker landings and explicit refresh requests.
+ */
 export function useCheckoutFiles(
   conversation: Conversation | null,
   refresh = 0,
+  projectId: string | null = null,
 ): { files: string[]; truncated: boolean } | null {
-  const id = conversation?.kind === "session" ? conversation.id : null;
+  const id = conversation
+    ? conversation.kind === "session" ? conversation.id : null
+    : projectId && `${PROJECT}${projectId}`;
   const landed = useBoard((s) =>
     s.board?.conversationId === id && s.board
       ? Object.values(s.board.tasks).filter((task) => task.landed !== null).length
@@ -239,7 +237,7 @@ export function useCheckoutFiles(
   useEffect(() => {
     if (!id) return;
     let live = true;
-    listFiles(id)
+    (id.startsWith(PROJECT) ? listProjectFiles(id.slice(PROJECT.length)) : listFiles(id))
       .then((list) => {
         if (!live) return;
         setFetched((previous) =>
@@ -268,73 +266,59 @@ export function useCheckoutFiles(
   return fetched && fetched.id === id ? fetched : null;
 }
 
+/** A menu row's icon: a worker's glyph, else its kind's. */
+function iconOf(mention: Mention): ReactNode {
+  switch (mention.type) {
+    case "task":
+      return <WorkerGlyph taskId={mention.id} />;
+    case "folder":
+      return <Folder />;
+    case "chat":
+      return <Chat />;
+    default:
+      return <File />;
+  }
+}
+
 /**
- * The `@` menu with what Brigadier can mention: a session's workers (as `@task-N`) and its
- * checkout's files, and other chats and sessions, whose latest messages go along.
+ * The `@` menu with what Brigadier can mention: a session's workers (as `@task-N`), its
+ * checkout's files and folders, and other chats and sessions, whose latest messages go along.
+ * On a new chat, `projectId` names the project a session will start in, for its files.
  */
 export const Mentions: FC<{
-  conversation: Conversation;
+  conversation: Conversation | null;
   targets: readonly MentionTarget[];
-}> = ({ conversation, targets }) => {
+  projectId?: string | null;
+}> = ({ conversation, targets, projectId = null }) => {
   const [refresh, setRefresh] = useState(0);
   const onOpen = useCallback(() => setRefresh((value) => value + 1), []);
-  const files = useCheckoutFiles(conversation, refresh);
+  const files = useCheckoutFiles(conversation, refresh, projectId);
+  const folders = useMemo(() => foldersOf(files?.files ?? []), [files]);
   const chats = useApp(
     useShallow((s) =>
       Object.values(s.conversations)
         .filter(
           (other) =>
-            other.id !== conversation.id && other.lifecycle !== "archived" && !other.sideOf,
+            other.id !== conversation?.id && other.lifecycle !== "archived" && !other.sideOf,
         )
         .toSorted((a, b) => b.updatedAtMs - a.updatedAtMs),
     ),
   );
   const search = useCallback(
-    (query: string): MentionOption[] => {
-      const lower = query.toLowerCase();
-      const options: MentionOption[] = [];
-      const add = (mention: Mention, name: string, option: Omit<MentionOption, "item">) => {
-        options.push({ item: itemOf(mention, name), ...option });
-      };
-      for (const target of targets) {
-        const name = `task-${target.number}`;
-        if (!name.includes(lower) && !target.title.toLowerCase().includes(lower)) continue;
-        // By its title, as everywhere the user reads it; `task-N` is what it leaves in the text.
-        add({ type: "task", id: target.id }, name, {
-          icon: <WorkerGlyph taskId={target.id} />,
-          name: target.title,
-          trailing: target.state,
-        });
-      }
-      if (lower && files) {
-        const matches = files.files
-          .map((path) => ({ path, rank: fileRank(path, lower) }))
-          .filter((entry) => entry.rank < 3)
-          .toSorted((a, b) => a.rank - b.rank || a.path.length - b.path.length)
-          .slice(0, FILE_ROWS);
-        for (const { path } of matches) {
-          const slash = path.lastIndexOf("/");
-          add({ type: "file", path }, path, {
-            icon: <File />,
-            name: path.slice(slash + 1),
-            detail: slash > 0 ? path.slice(0, slash) : undefined,
-          });
-        }
-      }
-      const shown = chats.filter((chat) => chat.title.toLowerCase().includes(lower));
-      for (const chat of shown.slice(0, CHAT_ROWS)) {
-        add({ type: "chat", id: chat.id, title: chat.title }, chat.title, { icon: <Chat /> });
-      }
-      return options;
+    (query: string): MentionGroup[] => {
+      const option = (row: MentionRow) => ({
+        item: itemOf(row.mention, row.label),
+        icon: iconOf(row.mention),
+        name: row.name,
+        detail: row.detail,
+        trailing: row.trailing,
+      });
+      return mentionSections(query, { workers: targets, files: files?.files ?? [], folders, chats }).map(
+        (section) => ({ title: section.title, options: section.rows.map(option), note: section.note }),
+      );
     },
-    [targets, files, chats],
+    [targets, files, folders, chats],
   );
 
-  const hint = useMemo(
-    () => (query: string) =>
-      !query && files && files.files.length > 0 ? "Type to search for files" : null,
-    [files],
-  );
-
-  return <ComposerMentions search={search} hint={hint} onOpen={onOpen} />;
+  return <ComposerMentions search={search} onOpen={onOpen} />;
 };

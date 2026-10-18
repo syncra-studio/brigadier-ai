@@ -1,28 +1,7 @@
 import { unstable_useTriggerPopoverScopeContextOptional } from "@assistant-ui/react";
 import type { FC } from "react";
 
-/**
- * Where `query` matches `text`, as the `/` and `@` menus match: at its start, anywhere
- * in it, or letter by letter in order. The positions of the matched letters, and how good the
- * match is (0 = start, 1 = anywhere, 2 = letter by letter); null when it doesn't match.
- */
-export function fuzzyMatch(text: string, query: string): { rank: 0 | 1 | 2; at: number[] } | null {
-  const lower = text.toLowerCase();
-  const want = query.toLowerCase();
-  const run = (from: number) => Array.from(want, (_, index) => from + index);
-  if (lower.startsWith(want)) return { rank: 0, at: run(0) };
-  const inside = lower.indexOf(want);
-  if (inside >= 0) return { rank: 1, at: run(inside) };
-  const at: number[] = [];
-  let from = 0;
-  for (const letter of want) {
-    const found = lower.indexOf(letter, from);
-    if (found < 0) return null;
-    at.push(found);
-    from = found + 1;
-  }
-  return { rank: 2, at };
-}
+import { fuzzyMatch } from "@/components/assistant-ui/elements/menuMatch";
 
 /**
  * A menu row's name with what the typed query matched in full white and the rest dimmed.

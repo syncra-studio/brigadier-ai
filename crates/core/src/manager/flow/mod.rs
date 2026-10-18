@@ -2007,6 +2007,8 @@ mod local_commit_tests;
 #[cfg(test)]
 mod memory_claims_tests;
 #[cfg(test)]
+mod mention_tests;
+#[cfg(test)]
 mod merge_by_user_tests;
 #[cfg(test)]
 mod mockup_tests;
