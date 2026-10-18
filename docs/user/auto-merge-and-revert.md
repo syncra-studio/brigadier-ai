@@ -21,6 +21,10 @@ Under the merge message there is a **Revert** button. It asks the agent to undo 
 it went in: a revert commit on the base branch, pushed if the merge was pushed. The button then
 reads **Revert asked**, and the agent reports when it's done.
 
+When the work went in as a pull request, its row in the summary at the top right of the chat has
+buttons for what applies: **Fix CI**, **Address comments**, **Resolve conflicts**, **Merge now**,
+or **Revert** once it's merged. Each one sends that request as your message.
+
 You can also just ask in the chat, in your own words.
 
 ## Turning it off
