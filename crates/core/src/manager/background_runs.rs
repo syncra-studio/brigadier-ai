@@ -53,7 +53,7 @@ static REVIEW_WAITS: std::sync::LazyLock<std::sync::Mutex<HashSet<ConversationId
     std::sync::LazyLock::new(Default::default);
 
 /// Session `id`'s `run_check` calls wait for their review as in the app ([`review_hold`]).
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) fn wait_for_reviews(id: &ConversationId) {
     REVIEW_WAITS.lock().unwrap().insert(id.clone());
 }

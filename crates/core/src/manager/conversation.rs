@@ -1262,7 +1262,7 @@ impl ConvLive {
     }
 
     /// Whether no turn runs and nothing waits for one.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) async fn idle(&self) -> bool {
         let state = self.state.lock().await;
         !state.busy && state.inbox.is_empty() && state.pending.is_empty()
