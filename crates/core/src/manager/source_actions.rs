@@ -10,14 +10,15 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use brigadier_git::{Git, GitRun, Repo};
+use brigadier_git::{Git, GitRun, Oid, Repo};
 
 use super::git_actions::source_state_of;
 use super::{SessionManager, blocking, git_error};
 use crate::Result;
-use crate::model::{Environment, Setup};
+use crate::model::{ConversationId, Environment, Setup};
 use crate::work::{
-    ConflictFile, KeptWork, SourceAction, SourceBranch, SourceGitRun, SourceState, WorkspaceTarget,
+    ConflictFile, KeptWork, OrchestratorStepKind, SourceAction, SourceBranch, SourceGitRun,
+    SourceState, WorkspaceTarget,
 };
 
 /// How many commands a checkout's Git Output keeps, the newest.
@@ -30,7 +31,53 @@ pub(crate) struct SourceOutput(Mutex<HashMap<PathBuf, VecDeque<SourceGitRun>>>);
 /// Where one act's git commands go before they join the checkout's Git Output.
 pub(super) type RunLog = Arc<Mutex<Vec<GitRun>>>;
 
+/// A session branch's pull request GitHub merged, the latest: its branch, the head it merged
+/// and the commit the merge made on the base.
+pub(super) struct MergedPr {
+    branch: String,
+    head: Oid,
+    merge_commit: Oid,
+}
+
+impl MergedPr {
+    /// A push of `branch`: over the commits GitHub kept on the pull request's branch when
+    /// this is its merge (#294), a plain one otherwise.
+    pub(super) fn push(
+        merged: Option<&Self>,
+        repo: &Repo,
+        branch: &str,
+    ) -> brigadier_git::Result<()> {
+        match merged.filter(|merged| merged.branch == branch) {
+            Some(merged) => repo.push_after_merge(branch, &merged.head, &merged.merge_commit),
+            None => repo.push(branch),
+        }
+    }
+}
+
 impl SessionManager {
+    /// [`MergedPr`] of `id`'s session, when GitHub merged one of its pull requests.
+    pub(super) async fn merged_pr(&self, id: &ConversationId) -> Option<MergedPr> {
+        let board = self.core.board(id).await.ok()?;
+        board
+            .orchestrator_steps
+            .iter()
+            .rev()
+            .find_map(|step| match &step.kind {
+                OrchestratorStepKind::Merged {
+                    branch,
+                    head: Some(head),
+                    merge_commit: Some(merge_commit),
+                    pr: Some(_),
+                    ..
+                } => Some(MergedPr {
+                    branch: branch.clone(),
+                    head: Oid(head.clone()),
+                    merge_commit: Oid(merge_commit.clone()),
+                }),
+                _ => None,
+            })
+    }
+
     /// The checkout a Source panel acts on: a session's own (it must exist), or a project's
     /// folder before its session starts.
     fn source_dir(&self, target: &WorkspaceTarget) -> Result<PathBuf> {
@@ -93,6 +140,12 @@ impl SessionManager {
             WorkspaceTarget::Project { .. } => None,
         };
         let path = self.source_dir(target)?;
+        let merged = match (target, &action) {
+            (WorkspaceTarget::Conversation { conversation_id }, SourceAction::Push) => {
+                self.merged_pr(conversation_id).await
+            }
+            _ => None,
+        };
         // Brigadier's branches stay: the sessions' and their tasks'.
         let guarded = matches!(
             action,
@@ -151,7 +204,7 @@ impl SessionManager {
                         "the checkout is not on a branch".into(),
                     )),
                 },
-                _ => act(&repo, action),
+                _ => act(&repo, action, merged.as_ref()),
             };
             acted.map_err(|err| match err {
                 // What git said, as the user would read it in a terminal.
@@ -368,7 +421,7 @@ fn in_repo(git: &Git, repo: &Repo, branches: Vec<(PathBuf, String)>) -> HashSet<
         .collect()
 }
 
-fn act(repo: &Repo, action: SourceAction) -> brigadier_git::Result<()> {
+fn act(repo: &Repo, action: SourceAction, merged: Option<&MergedPr>) -> brigadier_git::Result<()> {
     let branch = || {
         repo.state()?
             .current_branch
@@ -379,7 +432,7 @@ fn act(repo: &Repo, action: SourceAction) -> brigadier_git::Result<()> {
         SourceAction::AbortMerge => repo.abort_merge(),
         SourceAction::Checkout { branch } => repo.switch_branch(&branch),
         SourceAction::Pull => repo.pull().map(drop),
-        SourceAction::Push => repo.push(&branch()?),
+        SourceAction::Push => MergedPr::push(merged, repo, &branch()?),
         SourceAction::Fetch => repo.fetch(),
         // Rebased above, under the ref lock.
         SourceAction::Rebase { .. } => Ok(()),

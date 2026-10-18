@@ -6,7 +6,7 @@
 use super::{Flow, Options, Reply, git};
 use crate::manager::refcheck::Caller;
 use crate::model::{Environment, Setup, TaskId};
-use crate::work::{SourceAction, WorkspaceTarget};
+use crate::work::{OrchestratorStepKind, SourceAction, WorkspaceTarget};
 
 #[tokio::test]
 async fn the_source_panel_makes_renames_deletes_rebases_and_stashes() {
@@ -237,5 +237,127 @@ async fn a_sessions_branch_stays_its_own_and_its_rebase_is_kept() {
         git(&checkout, &["rev-parse", "HEAD~1"]),
         git(repo, &["rev-parse", "main"])
     );
+    flow.stop().await;
+}
+
+/// A pull request squash-merged on GitHub with its branch kept (#294): the session's branch
+/// starts from the merge, so a Push of new work is no fast-forward of the kept copy. Push
+/// replaces it only while it is still exactly the merged head; never with no merge recorded,
+/// nor over anything pushed to it since.
+#[tokio::test]
+async fn push_replaces_the_kept_branch_of_a_squash_merged_pull_request_and_nothing_else() {
+    let flow = Flow::start(
+        "source-push-squashed",
+        Options::default(),
+        std::sync::Arc::new(|_turn| Box::pin(async { Reply::text("Done.") })),
+    )
+    .await;
+    flow.say("Hi.").await;
+    flow.settled().await;
+    let manager = &flow.manager;
+    let repo = &flow.repo;
+    let (checkout, branch) = match flow.core.conversation(&flow.conversation).unwrap().setup {
+        Some(Setup::Session {
+            environment:
+                Environment::NewWorktree {
+                    path: Some(path),
+                    branch,
+                    ..
+                },
+            ..
+        }) => (std::path::PathBuf::from(path), branch),
+        other => panic!("a session with a worktree, not {other:?}"),
+    };
+    let session = WorkspaceTarget::Conversation {
+        conversation_id: flow.conversation.clone(),
+    };
+    let remote = repo.parent().unwrap().join("origin.git");
+    git(
+        repo.parent().unwrap(),
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    );
+    git(repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    git(repo, &["push", "-q", "-u", "origin", "main"]);
+
+    // The session's work goes up as a pull request, which GitHub squash-merges into main.
+    std::fs::write(checkout.join("work.txt"), "work\n").unwrap();
+    git(&checkout, &["add", "work.txt"]);
+    git(&checkout, &["commit", "-qm", "Work"]);
+    git(&checkout, &["push", "-q", "-u", "origin", &branch]);
+    let head = git(&checkout, &["rev-parse", "HEAD"]);
+    git(repo, &["merge", "-q", "--squash", &branch]);
+    git(repo, &["commit", "-qm", "Work (#7)"]);
+    git(repo, &["push", "-q", "origin", "main"]);
+    let squashed = git(repo, &["rev-parse", "HEAD"]);
+    // The session's branch moves onto the merge, and new work follows.
+    git(&checkout, &["reset", "-q", "--hard", &squashed]);
+    std::fs::write(checkout.join("more.txt"), "more\n").unwrap();
+    git(&checkout, &["add", "more.txt"]);
+    git(&checkout, &["commit", "-qm", "More"]);
+    manager.record_session_refs(&flow.conversation, &checkout);
+    let more = git(&checkout, &["rev-parse", "HEAD"]);
+    let on_github = || git(&remote, &["rev-parse", &format!("refs/heads/{branch}")]);
+
+    // No merge recorded: the plain push's refusal stands.
+    let push = || manager.source_action(&session, SourceAction::Push);
+    assert!(push().await.is_err());
+    assert_eq!(on_github(), head);
+
+    manager
+        .orchestrator_step_in(
+            &flow.conversation,
+            None,
+            OrchestratorStepKind::Merged {
+                branch: branch.clone(),
+                base: "main".into(),
+                commits: 1,
+                asked_in: None,
+                upstream: None,
+                head: Some(head.clone()),
+                merge_commit: Some(squashed.clone()),
+                pr: Some(7),
+                auto: false,
+                requests: Vec::new(),
+                record: None,
+            },
+        )
+        .await;
+    // Someone pushed to the kept branch since: that isn't replaced.
+    let theirs = git(
+        repo,
+        &[
+            "commit-tree",
+            &format!("{head}^{{tree}}"),
+            "-p",
+            &head,
+            "-m",
+            "Theirs",
+        ],
+    );
+    git(
+        repo,
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{theirs}:refs/heads/{branch}"),
+        ],
+    );
+    assert!(push().await.is_err());
+    assert_eq!(on_github(), theirs);
+
+    // Still the merged head: Push replaces it with the new work.
+    git(
+        repo,
+        &[
+            "push",
+            "-q",
+            "-f",
+            "origin",
+            &format!("{head}:refs/heads/{branch}"),
+        ],
+    );
+    push().await.unwrap();
+    assert_eq!(on_github(), more);
     flow.stop().await;
 }

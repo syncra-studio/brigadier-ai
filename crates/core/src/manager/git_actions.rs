@@ -24,6 +24,7 @@ use brigadier_router::{
 
 use super::landing::diff_stat_of;
 use super::routing::{Ask, Trial};
+use super::source_actions::MergedPr;
 use super::{SessionManager, blocking, git_error};
 use crate::accounts::AccountRef;
 use crate::model::{
@@ -224,8 +225,17 @@ impl SessionManager {
         let _fence = self.enter(id)?;
         let (path, _) = self.checkout(id)?;
         let project = self.core.conversation(id)?.project_id;
-        self.commit_at(path, project, message, include_unstaged, push, amend)
-            .await
+        let merged = if push { self.merged_pr(id).await } else { None };
+        self.commit_at(
+            path,
+            project,
+            merged,
+            message,
+            include_unstaged,
+            push,
+            amend,
+        )
+        .await
     }
 
     /// The user's commit in a project's folder, from the Source pane of a session not started
@@ -243,6 +253,7 @@ impl SessionManager {
         self.commit_at(
             path,
             Some(project.clone()),
+            None,
             message,
             include_unstaged,
             push,
@@ -251,10 +262,13 @@ impl SessionManager {
         .await
     }
 
+    /// `merged`: the session's pull request GitHub merged, whose kept branch a push replaces.
+    #[allow(clippy::too_many_arguments)]
     async fn commit_at(
         &self,
         path: PathBuf,
         project: Option<ProjectId>,
+        merged: Option<MergedPr>,
         message: Option<String>,
         include_unstaged: bool,
         push: bool,
@@ -312,7 +326,7 @@ impl SessionManager {
                 .commit_with(&text, include_unstaged, amend)
                 .map_err(git_error)?;
             if push {
-                repo.push(&branch).map_err(git_error)?;
+                MergedPr::push(merged.as_ref(), &repo, &branch).map_err(git_error)?;
             }
             Ok(CommitOutcome {
                 commit: commit.0,
@@ -332,6 +346,7 @@ impl SessionManager {
         self.admit()?;
         let _fence = self.enter(id)?;
         let (path, _) = self.checkout(id)?;
+        let merged = self.merged_pr(id).await;
         let git = self.git.clone();
         blocking(move || {
             let repo = git.open(&path).map_err(git_error)?;
@@ -340,7 +355,7 @@ impl SessionManager {
                 .map_err(git_error)?
                 .current_branch
                 .ok_or_else(|| Error::Invalid("the checkout is not on a branch".into()))?;
-            repo.push(&branch).map_err(git_error)?;
+            MergedPr::push(merged.as_ref(), &repo, &branch).map_err(git_error)?;
             Ok(branch)
         })
         .await

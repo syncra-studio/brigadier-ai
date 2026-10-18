@@ -1679,15 +1679,45 @@ impl Repo {
     /// Pushes `branch` to its upstream, or to `origin` as its new upstream. Never forces, and
     /// git asks nothing on a terminal.
     pub fn push(&self, branch: &str) -> Result<()> {
+        self.push_leased(branch, None)
+    }
+
+    /// [`Self::push`]; when that is refused and local `branch` starts from `merge_commit`, the
+    /// commit a pull request's squash or rebase merge made from its head `merged`, a push
+    /// that replaces the remote branch only while it is still exactly `merged` (#294): the
+    /// commits GitHub kept on a merged pull request's branch, nothing anyone pushed since.
+    /// The plain push's refusal stands otherwise.
+    pub fn push_after_merge(&self, branch: &str, merged: &Oid, merge_commit: &Oid) -> Result<()> {
+        let Err(refused) = self.push(branch) else {
+            return Ok(());
+        };
+        let from_merge = self
+            .branch_commit(branch)
+            .and_then(|tip| self.ancestor(merge_commit, &tip));
+        if !matches!(from_merge, Ok(true)) {
+            return Err(refused);
+        }
+        self.push_leased(branch, Some(merged)).map_err(|_| refused)
+    }
+
+    fn push_leased(&self, branch: &str, lease: Option<&Oid>) -> Result<()> {
         let state = self.remote_state(branch)?;
         let remote = state
             .remote
             .ok_or_else(|| Error::Invalid("the repository has no remote to push to".into()))?;
         let refspec = format!("refs/heads/{branch}");
+        let lease = match lease {
+            Some(oid) => {
+                valid_oid(oid)?;
+                Some(format!("--force-with-lease={refspec}:{}", oid.0))
+            }
+            None => None,
+        };
         let mut args = vec!["push", "--porcelain"];
         if state.upstream.is_none() {
             args.push("--set-upstream");
         }
+        args.extend(lease.as_deref());
         args.extend([remote.as_str(), refspec.as_str()]);
         let env: Environment = vec![("GIT_TERMINAL_PROMPT".into(), "0".into())];
         self.git
