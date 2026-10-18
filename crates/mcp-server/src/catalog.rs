@@ -266,7 +266,10 @@ landed and names what still runs; when the user asked to merge once the work is 
 when done\"), pass when \"workers_finish\": it holds the merge ([merge held]) and tells you \
 [merge due] once the workers land: call it again then, without asking. Its result also states \
 what the user wrote since and work that landed after their consent. The session keeps its \
-worktree and branch after the merge. Returns when merged, saying where its full checks and reviews stand.";
+worktree and branch after the merge. Returns when merged, saying where its full checks and reviews stand. \
+While merging on its own is on, call it once the work is shipped as your instructions say: a change \
+the user can see, however small, first gets its proof (the change used in the running app or page, \
+its picture attached with attach_proof); a grep or a test isn't that proof.";
 
 const STOP_MERGE: &str = "Stop the held merge when the user's words since their consent take it \
 back or put it off (\"wait\", \"don't merge yet\", a new condition on it). A question about the \
@@ -1431,6 +1434,23 @@ mod tests {
         assert!(description.contains("don't wait for its plan review"));
         assert!(description.contains("Implement this plan?"));
         assert!(names.contains(&"start_verifier".to_owned()));
+    }
+
+    /// Q68: a thread merging on its own read the bar in its instructions, meant to prove a page
+    /// change, and merged unseen; finish_session, read as it merges, says it too (guidance only).
+    #[test]
+    fn finish_session_reminds_that_a_visible_change_gets_its_proof_first() {
+        let tools = orchestrator_tools();
+        let finish = tools
+            .iter()
+            .find(|tool| tool.name == "finish_session")
+            .unwrap();
+        let description = finish.description.as_deref().unwrap();
+        assert!(description.contains("While merging on its own is on"));
+        assert!(
+            description.contains("a change the user can see, however small, first gets its proof")
+        );
+        assert!(description.contains("a grep or a test isn't that proof"));
     }
 
     #[test]
