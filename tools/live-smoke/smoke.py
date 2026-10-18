@@ -382,9 +382,21 @@ class Smoke:
             self.expected[self.convs["C1"]].setdefault(root, []).append(t1)
         check(sc, "the follow-up isn't left Deciding (30 s at most)", deciding_max <= 30,
               f"Deciding for {deciding_max:.0f} s" + (" (still at the end)" if deciding_since else ""))
-        steer_req = next((r for r in v["requests"] if r["id"] == steer_id), None)
-        check(sc, "the steer goes into the running request", steer_req and steer_req.get("steeredInto") == root,
-              f"steeredInto={steer_req.get('steeredInto') if steer_req else 'no request'}")
+        reqs = {r["id"]: r for r in v["requests"]}
+
+        def joined(rid):
+            # A message sent while the session works joins the running turn at once: a later one is
+            # steered into the one before it, so the chain leads back to the running request.
+            chain, seen = [], set()
+            while rid in reqs and reqs[rid].get("steeredInto") and rid not in seen:
+                seen.add(rid)
+                rid = reqs[rid]["steeredInto"]
+                chain.append(rid)
+            return chain
+        check(sc, "the follow-up joins the running request", root in joined(follow_id),
+              f"steeredInto chain {joined(follow_id) or 'none'}")
+        check(sc, "the steer goes into the running request", root in joined(steer_id),
+              f"steeredInto chain {joined(steer_id) or 'none'}")
         check(sc, "while the command runs, the steer says it is read when the command ends", deferred,
               "no heldBy on the steered request or its queue item",
               info=f"heldBy {deferred['heldBy']}" if deferred else "")
