@@ -6,6 +6,7 @@
 
 pub mod accounts;
 mod board;
+pub mod browser;
 pub mod computer;
 pub mod digest;
 pub mod knowledge;
@@ -24,6 +25,7 @@ pub mod storage;
 pub mod tools;
 pub mod work;
 
+pub use browser::*;
 pub use computer::*;
 pub use knowledge::*;
 pub use model::*;

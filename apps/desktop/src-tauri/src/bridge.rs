@@ -441,6 +441,7 @@ impl Bridge {
                     "An agent wants to use apps on this Mac. Finish setup in the window Brigadier opened.",
                 );
             }
+            ServerFrame::BrowserCall { call } => self.emit(BridgeEvent::BrowserCall { call }),
             ServerFrame::Closing => return Some("daemon is shutting down".into()),
             ServerFrame::Welcome { .. } => return Some("unexpected second welcome".into()),
         }

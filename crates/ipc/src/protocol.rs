@@ -14,19 +14,19 @@ use brigadier_core::storage::{
     UnlandedBranch,
 };
 use brigadier_core::{
-    AccountEntry, AccountsView, AttachmentRef, BrainJobKind, BrainOverview, CardId, Catalog,
-    CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus, ConflictFile,
-    ConventionsExport, Conversation, ConversationActivity, ConversationId, ConversationKind,
-    ConversationStatus, ConversationView, DiffStat, FolderCheck, FolderListing, FolderTrustReport,
-    ForkPlace, GitState, Mention, Message, MessagePage, MessageQueue, OrchestratorPage,
-    OvernightRun, OvernightRunId, PendingChanges, ProbeBurst, Project, ProjectCandidate, ProjectId,
-    ProjectPatch, ProposedPlan, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals,
-    RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome,
-    ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup,
-    SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState,
-    StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget,
-    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
-    WorkspaceTarget, WorkspaceTree,
+    AccountEntry, AccountsView, AttachmentRef, BrainJobKind, BrainOverview, BrowserCall,
+    BrowserResult, CardId, Catalog, CheckoutFile, CommitOutcome, ComputerPermission,
+    ComputerUseStatus, ConflictFile, ConventionsExport, Conversation, ConversationActivity,
+    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat, FolderCheck,
+    FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message, MessagePage,
+    MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, PendingChanges, ProbeBurst,
+    Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
+    QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile,
+    ReplaceOutcome, RepoInfo, RestoreOutcome, ReviewDiff, ReviewScope, RoutePreview, SearchQuery,
+    SearchUpdate, Settings, SettledTab, Setup, SetupRequest, SourceAction, SourceBranch,
+    SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy, TaskId, ThreadItem,
+    ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView, UsageActivity,
+    UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -919,6 +919,11 @@ pub enum Request {
         notification_id: String,
         error: String,
     },
+    /// The app ran an agent's browser call (`browserCall`): what came of it.
+    BrowserAnswer {
+        id: String,
+        result: BrowserResult,
+    },
     /// The app successfully submitted a run's notification to the OS.
     AckOvernightNotification {
         conversation_id: ConversationId,
@@ -1675,6 +1680,7 @@ pub enum Response {
     PendingOvernightNotifications {
         notifications: Vec<PendingRunNotification>,
     },
+    BrowserAnswer,
     AckOvernightNotification,
     FailOvernightNotification,
     StopTask,
@@ -2044,6 +2050,11 @@ pub enum ServerFrame {
     /// An agent needs computer use and its setup isn't finished: the app opens the setup
     /// window. Live only.
     ComputerUseSetupNeeded,
+    /// An agent's call of a Browser tab in its session, for the app to run and answer with
+    /// `browserAnswer`. Sent to every subscribed connection. Live only.
+    BrowserCall {
+        call: BrowserCall,
+    },
     /// How a clean under way goes (Settings › Storage). Sent to every subscribed connection.
     /// Live only.
     StorageClean {
@@ -2304,5 +2315,42 @@ mod preview_tests {
         let wire = serde_json::json!({"method": "stopBackgroundRun", "conversationId": "c", "runId": "run-1"});
         let request: Request = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(serde_json::to_value(request).unwrap(), wire);
+    }
+}
+
+#[cfg(test)]
+mod browser_tests {
+    use super::*;
+
+    #[test]
+    fn a_browser_call_and_its_answer_keep_their_wire_shape() {
+        let frame = ServerFrame::BrowserCall {
+            call: BrowserCall {
+                id: "browser-call-1".into(),
+                conversation_id: ConversationId("c".into()),
+                task_id: None,
+                label: "Check the form".into(),
+                op: brigadier_core::BrowserOp::Click {
+                    tab: "browser:agent-1".into(),
+                    target: "e3".into(),
+                    guard: brigadier_core::BrowserGuard {
+                        declared: Some(brigadier_core::BrowserSensitive::Send),
+                        approved: None,
+                    },
+                },
+            },
+        };
+        let wire = serde_json::to_value(&frame).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({"type": "browserCall", "call": {
+                "id": "browser-call-1", "conversationId": "c", "taskId": null, "label": "Check the form",
+                "op": {"op": "click", "tab": "browser:agent-1", "target": "e3",
+                       "guard": {"declared": "send", "approved": null}}}})
+        );
+        let answer = serde_json::json!({"method": "browserAnswer", "id": "browser-call-1",
+            "result": {"result": "paused", "tab": "browser:agent-1"}});
+        let request: Request = serde_json::from_value(answer.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), answer);
     }
 }

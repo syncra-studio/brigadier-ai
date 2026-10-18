@@ -23,6 +23,7 @@ mod brain_jobs;
 mod brains;
 mod branch_names;
 mod branches;
+mod browser_tool;
 mod cards;
 mod checks;
 mod ci;
@@ -269,6 +270,8 @@ pub struct SessionManager {
     computer_use: computer_use::ComputerUse,
     /// The helper as Settings, the menu bar and the watchdog tend it ([`computer_host`]).
     computer_host: computer_host::ComputerHost,
+    /// Agents' browser calls on their way to the app ([`browser_tool`]).
+    browser: browser_tool::BrowserHub,
     /// Where "Open in terminal" runs a worker's session (the daemon's terminals).
     terminal_host: std::sync::OnceLock<Arc<dyn takeover::TerminalHost>>,
     /// The user's pages, which a thread may read and change from the page's own composer.
@@ -424,6 +427,7 @@ impl SessionManager {
             closing: closing::Closing::default(),
             computer_use: computer_use::ComputerUse::default(),
             computer_host: computer_host::ComputerHost::default(),
+            browser: browser_tool::BrowserHub::default(),
             terminal_host: std::sync::OnceLock::new(),
             pages: std::sync::OnceLock::new(),
             tab_chats: side_chat::TabChats::default(),
