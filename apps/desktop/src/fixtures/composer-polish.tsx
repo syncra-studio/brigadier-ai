@@ -195,10 +195,43 @@ async function pausedCase(seen: Record<string, unknown>) {
   seen.sentNow = sends().slice(1);
 }
 
+/** The composer's placeholder, as the editor shows it. */
+const placeholder = () => field()?.getAttribute("aria-placeholder") ?? null;
+
+/**
+ * #297: while a task runs, the empty composer's placeholder says for how long ("Working for 2m
+ * 5s"), from a second in, ticking; typed text hides it, and the request's end takes it away.
+ */
+async function workingCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  seen.idle = placeholder();
+  // A request that has worked for a while.
+  useBoard.setState(({ board }) =>
+    board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, state: { type: "working" }, startedAtMs: Date.now() - 125_000, endedAtMs: null } } } } : {},
+  );
+  await until("the working placeholder", () => placeholder()?.startsWith("Working for") ?? false, 3000).catch(() => {});
+  const first = placeholder();
+  seen.working = first;
+  await until("the next tick", () => placeholder() !== first, 3000).catch(() => {});
+  seen.ticked = placeholder();
+  setState({ type: "done" });
+  await until("the placeholder back", () => placeholder() === seen.idle, 3000).catch(() => {});
+  seen.done = placeholder();
+  // One that just started: the usual words for its first second.
+  useBoard.setState(({ board }) =>
+    board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, state: { type: "working" }, startedAtMs: Date.now(), endedAtMs: null } } } } : {},
+  );
+  await sleep(100);
+  seen.justStarted = placeholder();
+  await until("a second in", () => placeholder()?.startsWith("Working for") ?? false, 3000).catch(() => {});
+  seen.secondIn = placeholder();
+}
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
   focus: focusCase,
   uploading: uploadingCase,
   paused: pausedCase,
+  working: workingCase,
 };
 
 async function drive() {

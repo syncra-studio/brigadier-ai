@@ -71,9 +71,10 @@ import type { Conversation } from "@/ipc/generated";
 import type { ComposerProps } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { whenRevealed } from "@/lib/splash";
+import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { setSetting } from "@/state/settings";
-import { useBoard } from "@/state/board";
+import { useBoard, workingRequest } from "@/state/board";
 import {
   cancelDictation,
   type DictationPhase,
@@ -117,6 +118,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
   // The conversation whose approvals the user stepped past with "Reply…", until none waits.
   const [replyingIn, setReplyingIn] = useState<string | null>(null);
   const shell = useRef<HTMLDivElement>(null);
+  const working = useWorkingFor(target?.conversation?.id ?? null);
   const anyApproval = pending.some((entry) => entry.type === "approval");
   // Once none waits, the next approval takes the composer's place again.
   if (replyingIn !== null && !anyApproval) setReplyingIn(null);
@@ -218,7 +220,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
                       ? PLAN_PLACEHOLDER
                       : guess
                         ? ""
-                        : placeholder
+                        : (working ?? placeholder)
                 }
                 autoFocus={autoFocus}
                 guess={guess}
@@ -275,6 +277,36 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
 };
+
+/**
+ * "Working for 2m 5s" while the conversation's request works, from its first second on, ticking
+ * each second; null otherwise.
+ */
+function useWorkingFor(conversationId: string | null): string | null {
+  const startedAtMs = useBoard((s) => {
+    const board = s.board;
+    if (!conversationId || board?.conversationId !== conversationId) return null;
+    const id = workingRequest(board);
+    return id ? (board.requests[id]?.startedAtMs ?? null) : null;
+  });
+  // The time, read as a request starts working (or the composer opens on one), then on each whole
+  // second of its work; none shows until it was read for this request.
+  const [clock, setClock] = useState<{ from: number | null; now: number }>(() => ({ from: startedAtMs, now: Date.now() }));
+  useEffect(() => {
+    if (startedAtMs === null) return;
+    let timer = 0;
+    const tick = () => {
+      const now = Date.now();
+      setClock({ from: startedAtMs, now });
+      timer = window.setTimeout(tick, 1000 - ((now - startedAtMs) % 1000));
+    };
+    timer = window.setTimeout(tick, 0);
+    return () => window.clearTimeout(timer);
+  }, [startedAtMs]);
+  const now = clock.now;
+  if (startedAtMs === null || clock.from !== startedAtMs || now - startedAtMs < 1000) return null;
+  return `Working for ${formatDuration(now - startedAtMs)}`;
+}
 
 /** Keeps the composer's draft for its conversation (or the new chat). */
 function ComposerDraft({

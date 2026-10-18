@@ -30,3 +30,14 @@ test("sending while the queue is paused asks Send message?: Send now sends it ah
   assert.deepEqual(seen.keptPaused, [{ text: "first", queueIndex: 1 }]);
   assert.deepEqual(seen.sentNow, [{ text: "second", queueIndex: null }]);
 });
+
+test("while a task runs the empty composer says Working for {time}, from a second in and ticking, and the usual placeholder once it ends (issue 297)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "working");
+  assert.equal(seen.idle, "Do anything");
+  assert.match(String(seen.working), /^Working for 2m [5-9]s$/);
+  assert.match(String(seen.ticked), /^Working for 2m \d+s$/);
+  assert.notEqual(seen.ticked, seen.working);
+  assert.equal(seen.done, "Do anything");
+  assert.equal(seen.justStarted, "Do anything");
+  assert.equal(seen.secondIn, "Working for 1s");
+});
