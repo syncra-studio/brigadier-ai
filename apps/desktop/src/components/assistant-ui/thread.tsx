@@ -39,6 +39,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { useFileDrops } from "@/app/conversation/fileDrops";
 import { LinkTimeContext } from "@/components/assistant-ui/file-links";
 import { MessageRail } from "@/components/assistant-ui/message-rail";
 import { ThreadScroller } from "@/components/assistant-ui/thread-scroll";
@@ -262,12 +263,18 @@ function useThreadScroll(
   return { viewport, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter };
 }
 
-/** "Drop to attach": a soft accent tint over the thread and a small pill, while files are dragged onto it. */
-const DropOverlay: FC = () => (
+/**
+ * "Drop to attach": a soft accent tint over the thread and a small pill, while files are dragged
+ * onto it (`native`: by the window's own drag, which the dropzone doesn't see).
+ */
+const DropOverlay: FC<{ native: boolean }> = ({ native }) => (
   <div
     aria-hidden
     data-slot="drop-overlay"
-    className="bg-link/8 animate-in fade-in-0 pointer-events-none absolute inset-0 z-30 hidden items-center justify-center duration-150 group-data-[dragging=true]/drop:flex"
+    className={cn(
+      "bg-link/8 animate-in fade-in-0 pointer-events-none absolute inset-0 z-30 hidden items-center justify-center duration-150 group-data-[dragging=true]/drop:flex",
+      native && "flex",
+    )}
   >
     <div
       data-slot="drop-pill"
@@ -298,6 +305,8 @@ const ThreadRoot: FC<{
     scroller,
     scrollKey,
   );
+  const [zone, setZone] = useState<HTMLDivElement | null>(null);
+  const drops = useFileDrops(zone);
 
   // The pad under the content: the floating footer's height and the gap above it, backed by the
   // background under the footer and fading out above it, so text fades as it scrolls under.
@@ -314,7 +323,11 @@ const ThreadRoot: FC<{
   return (
     <ThreadScrollContext.Provider value={scroller}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background @container flex h-full flex-col">
-        <ComposerPrimitive.AttachmentDropzone className="group/drop relative flex min-h-0 flex-1 flex-col">
+        <ComposerPrimitive.AttachmentDropzone
+          ref={setZone}
+          className="group/drop relative flex min-h-0 flex-1 flex-col"
+          {...drops.handlers}
+        >
           {/* What shows stays put while content changes around it, and the view follows new
               content only from the bottom (see `thread-scroll.ts`). Focusable, so the keys
               scroll it once clicked. */}
@@ -387,7 +400,7 @@ const ThreadRoot: FC<{
               </div>
             </div>
           </div>
-          <DropOverlay />
+          {!drops.shift && <DropOverlay native={drops.native} />}
         </ComposerPrimitive.AttachmentDropzone>
       </ThreadPrimitive.Root>
     </ThreadScrollContext.Provider>

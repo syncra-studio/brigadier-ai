@@ -4,10 +4,12 @@
  * whose one request is over; IPC is mocked and records what the composer sends. It drives the
  * real keys (`fixtureInput`) and writes what it saw as JSON into `<pre id="composer-polish-result">`.
  */
-import { mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
+import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
+import { FolderDropZone } from "@/app/FolderDropZone";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, ConversationView as View, Message, Request, UserRequest } from "@/ipc/generated";
@@ -57,12 +59,25 @@ const queue = which === "paused"
 const sent: Request[] = [];
 /** Stores the file being attached, once the case lets it (`null`: none waits). */
 let finishUpload: (() => void) | null = null;
+/** The files attached, by name and type. */
+const attached: string[] = [];
+/** The window's own drags and drops (macOS), for the `shift` case: Shift held, and the last drop. */
+let shiftHeld = false;
+let dropped: { shift: boolean; entries: { path: string; folder: boolean }[] } | null = null;
+mockWindows("main");
 mockIPC((command, payload) => {
+  if (command === "drag_shift") return shiftHeld;
+  if (command === "last_drop") return dropped;
+  if (command === "read_dropped") return new TextEncoder().encode("notes").buffer;
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
+    case "checkFolder":
+      sent.push(req);
+      return { method: req.method, check: { kind: "invalid", reason: "Not a folder" } };
     case "addAttachment": {
       const { name, mime } = req;
+      attached.push(`${name} ${mime}`);
       const attachment = { id: `blob-${name}`, name, mime, bytes: 4, pasted: false, inline: null };
       return new Promise((resolve) => {
         finishUpload = () => resolve({ method: req.method, attachment });
@@ -90,7 +105,7 @@ mockIPC((command, payload) => {
       sent.push(req);
       return { method: req.method };
   }
-});
+}, { shouldMockEvents: true });
 useApp.setState({ conversations: { [id]: conversation }, connection: { status: "connected", daemon: null, reason: null } });
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -192,6 +207,8 @@ async function pausedCase(seen: Record<string, unknown>) {
   await fixtureInput({ type: "key", key: "Escape" });
   await until("the dialog closed", () => dialog() === null, 3000).catch(() => {});
   seen.escaped = { sent: sends().length, kept: field()?.textContent };
+  // The keyboard back in the field before the next Enter.
+  await until("the field focused again", () => focused() === "Message input", 3000);
   await fixtureInput({ type: "key", key: "Enter" });
   await until("the dialog again", () => dialogSettled() && dialogButton("Keep paused") !== null, 3000);
   await fixtureClick(dialogButton("Keep paused")!);
@@ -342,6 +359,75 @@ async function dropCase(seen: Record<string, unknown>) {
   field()!.dispatchEvent(new DragEvent("dragleave", { dataTransfer: files, bubbles: true, cancelable: true }));
 }
 
+/** The folder veil, while something is dragged over the window off the thread. */
+const folderVeil = () => document.body.textContent?.includes("Drop folders to add them as projects") ?? false;
+/** Whether "Drop to attach" shows. */
+const overlayShown = () => overlay() !== null && getComputedStyle(overlay()!).display !== "none";
+/** The middle of an element, where a drag is. */
+const middle = (element: Element) => {
+  const rect = element.getBoundingClientRect();
+  return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+};
+
+/**
+ * #301: Shift held while dropping files on the thread types their paths at the composer's caret
+ * instead of attaching them, and no overlay shows: by the page's drop (Linux, Windows) and by the
+ * window's own (macOS), where a plain drop attaches and one off the thread adds folders.
+ */
+async function shiftCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  await fixtureClick(field()!);
+  await fixtureInput({ type: "type", text: "see" });
+  await until("the typed text", () => field()?.textContent === "see");
+  // The page's drop, its file URL given (WebKitGTK).
+  const files = new DataTransfer();
+  files.items.add(new File(["notes"], "notes v2.txt", { type: "text/plain" }));
+  files.setData("text/uri-list", "file:///Users/me/notes%20v2.txt");
+  const drag = (type: string, shiftKey: boolean) =>
+    field()!.dispatchEvent(new DragEvent(type, { dataTransfer: files, bubbles: true, cancelable: true, shiftKey }));
+  drag("dragenter", true);
+  drag("dragover", true);
+  await sleep(100);
+  seen.pageOverlay = overlayShown();
+  drag("drop", true);
+  await until("the path typed", () => field()?.textContent === "see /Users/me/notes v2.txt", 2000).catch(() => {});
+  seen.pageText = field()?.textContent;
+  // The window's own drag, with Shift held.
+  shiftHeld = true;
+  const at = middle(field()!);
+  await emit("tauri://drag-enter", { paths: ["/Users/me/a.txt"], position: at });
+  await emit("tauri://drag-over", { position: at });
+  await sleep(150);
+  seen.nativeShift = { overlay: overlayShown(), veil: folderVeil() };
+  dropped = { shift: true, entries: [{ path: "/Users/me/a.txt", folder: false }] };
+  await emit("tauri://drag-drop", { paths: ["/Users/me/a.txt"], position: at });
+  await until("the native path typed", () => field()?.textContent?.endsWith(" /Users/me/a.txt") ?? false, 2000).catch(() => {});
+  seen.nativeText = field()?.textContent;
+  // Without Shift: the overlay, then the file attached.
+  shiftHeld = false;
+  await emit("tauri://drag-enter", { paths: ["/Users/me/a.png"], position: at });
+  await emit("tauri://drag-over", { position: at });
+  await until("the overlay", overlayShown, 2000).catch(() => {});
+  seen.nativePlain = { overlay: overlayShown(), veil: folderVeil() };
+  dropped = { shift: false, entries: [{ path: "/Users/me/a.png", folder: false }] };
+  await emit("tauri://drag-drop", { paths: ["/Users/me/a.png"], position: at });
+  await until("the file attached", () => attached.length > 0, 2000).catch(() => {});
+  seen.attached = [...attached];
+  seen.afterDrop = overlayShown();
+  // Off the thread: the folder veil, and the drop goes to the folders.
+  const off = document.createElement("div");
+  off.style.cssText = "position:fixed;left:0;top:0;width:40px;height:40px;z-index:100";
+  document.body.append(off);
+  const there = middle(off);
+  await emit("tauri://drag-enter", { paths: ["/Users/me/repo"], position: there });
+  await until("the folder veil", folderVeil, 2000).catch(() => {});
+  seen.offThread = { overlay: overlayShown(), veil: folderVeil() };
+  dropped = { shift: false, entries: [{ path: "/Users/me/repo", folder: true }] };
+  await emit("tauri://drag-drop", { paths: ["/Users/me/repo"], position: there });
+  await until("the folder checked", () => sent.some((req) => req.method === "checkFolder"), 2000).catch(() => {});
+  seen.folders = sent.flatMap((req) => (req.method === "checkFolder" ? [req.path] : []));
+}
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
   focus: focusCase,
   uploading: uploadingCase,
@@ -350,6 +436,7 @@ const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = 
   esc: escCase,
   plan: planCase,
   drop: dropCase,
+  shift: shiftCase,
 };
 
 async function drive() {
@@ -376,6 +463,7 @@ createRoot(document.getElementById("root")!).render(
       <main className="relative flex min-h-0 w-full flex-1 flex-col">
         <ConversationView key={id} selection={{ type: "conversation", id }} />
       </main>
+      <FolderDropZone />
     </SidebarProvider>
   </TooltipProvider>,
 );

@@ -65,3 +65,16 @@ test("a file dragged over the thread shows a soft accent tint and a small Drop t
   assert.equal(overlay.pill, "Drop to attach");
   assert.equal(overlay.pillSmall, true);
 });
+
+test("Shift while dropping files on the thread types their paths at the caret, no overlay, nothing attached; the window's own drops: plain attaches, off the thread adds folders (issue 301)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "shift");
+  assert.equal(seen.pageOverlay, false);
+  assert.equal(seen.pageText, "see /Users/me/notes v2.txt");
+  assert.deepEqual(seen.nativeShift, { overlay: false, veil: false });
+  assert.equal(seen.nativeText, "see /Users/me/notes v2.txt /Users/me/a.txt");
+  assert.deepEqual(seen.nativePlain, { overlay: true, veil: false });
+  assert.deepEqual(seen.attached, ["a.png image/png"]);
+  assert.equal(seen.afterDrop, false);
+  assert.deepEqual(seen.offThread, { overlay: false, veil: true });
+  assert.deepEqual(seen.folders, ["/Users/me/repo"]);
+});

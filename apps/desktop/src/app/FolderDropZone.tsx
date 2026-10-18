@@ -2,11 +2,13 @@ import { FolderPlus } from "@openai/apps-sdk-ui/components/Icon";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect, useState } from "react";
 
+import { type DropTarget, dragShift, dropTargetAt, lastDrop } from "@/app/nativeDrop";
 import { openFolders } from "@/state/addProject";
 
 /**
  * Folders dropped anywhere on the window become projects (see `openFolders`). While
- * something is dragged over the window, a veil says so.
+ * something is dragged over the window, a veil says so. A drop that lands on a drop target
+ * (the thread) is that target's instead (see `registerDropTarget`).
  */
 export function FolderDropZone() {
   const [over, setOver] = useState(false);
@@ -14,20 +16,59 @@ export function FolderDropZone() {
   useEffect(() => {
     let live = true;
     let unlisten: (() => void) | null = null;
+    let paths: string[] = [];
+    let hovered: DropTarget | null = null;
+    let asking = false;
+    // The drag's position is the window's, in points: the page's pixels.
+    const hover = (x: number, y: number) => {
+      const target = paths.length > 0 ? dropTargetAt(x, y) : null;
+      if (target !== hovered) hovered?.hover(null);
+      hovered = target;
+      setOver(paths.length > 0 && target === null);
+      if (!target || asking) return;
+      asking = true;
+      dragShift()
+        .then((shift) => {
+          if (hovered === target) target.hover(shift);
+        })
+        .catch((error: unknown) => console.error("drag shift unavailable", error))
+        .finally(() => {
+          asking = false;
+        });
+    };
+    const drop = async (dropped: string[], x: number, y: number) => {
+      hovered?.hover(null);
+      hovered = null;
+      paths = [];
+      setOver(false);
+      const target = dropTargetAt(x, y);
+      if (!target) {
+        if (dropped.length > 0) await openFolders(dropped);
+        return;
+      }
+      const last = await lastDrop();
+      target.drop(last?.entries ?? dropped.map((path) => ({ path, folder: false })), last?.shift ?? false);
+    };
     getCurrentWebview()
       .onDragDropEvent(({ payload }) => {
         switch (payload.type) {
           case "enter":
-            setOver(payload.paths.length > 0);
+            paths = payload.paths;
+            hover(payload.position.x, payload.position.y);
             break;
           case "leave":
+            hovered?.hover(null);
+            hovered = null;
+            paths = [];
             setOver(false);
             break;
           case "drop":
-            setOver(false);
-            if (payload.paths.length > 0) void openFolders(payload.paths);
+            void drop(payload.paths, payload.position.x, payload.position.y).catch((error: unknown) =>
+              console.error("drop failed", error),
+            );
             break;
           case "over":
+            hover(payload.position.x, payload.position.y);
             break;
         }
       })

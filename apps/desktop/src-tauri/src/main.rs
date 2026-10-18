@@ -17,6 +17,7 @@ mod computer_menu;
 mod computer_setup;
 mod documents;
 mod downloads;
+mod drops;
 mod intro;
 // WebKit's narrow unsafe boundary (the workspace denies it): see its header and the README.
 #[cfg(target_os = "macos")]
@@ -781,7 +782,9 @@ fn main() {
             }
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event
+            if let WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                drops::record(paths);
+            } else if let WindowEvent::CloseRequested { api, .. } = event
                 && window.label() == shell::MAIN_WINDOW
                 && !shell::is_quitting()
             {
@@ -801,6 +804,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             documents::save_document,
             downloads::save_copy,
+            drops::drag_shift,
+            drops::last_drop,
+            drops::read_dropped,
             documents::forget_document,
             app_info,
             uninstall_app,

@@ -69,6 +69,16 @@ export function registerInserter(owner: string, insert: Insert): () => void {
   };
 }
 
+/**
+ * Puts `text` at the caret of the composer `owner` (spaced from the word before it), as
+ * dictated text lands; false when that composer has no editor.
+ */
+export function insertAtCaret(owner: string, text: string): boolean {
+  const insert = inserters.get(owner);
+  if (insert) void insert(text);
+  return insert !== undefined;
+}
+
 /** The composer or card the dictation under way is for, if any. */
 export function dictationOwner(): string | null {
   return snapshot.owner;
