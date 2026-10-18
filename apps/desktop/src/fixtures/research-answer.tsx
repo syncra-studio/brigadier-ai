@@ -3,7 +3,8 @@
  * answer in the app's own conversation view (Q79). The answer has numbered markers, one trailing
  * `### Sources` list, a link to its full report (a page `save_report` made) and the `### Details`
  * a thread writes. `kind=session` shows it in a session (else a Chat); `changed=1` has the request
- * change code.
+ * change code. `bold=1` writes its breakdown in bold-led lines, as models still sometimes do
+ * (#319), with one bold run mid-sentence; `sources=0` drops its Sources and Details.
  *
  * `drive=1` reads what shows, opens the sources and the report, and writes what it saw to
  * `<pre id="research-answer-result">` (ResearchAnswerRender.test.ts reads it). Without it the
@@ -23,6 +24,8 @@ import { useApp } from "@/state/store";
 const query = new URLSearchParams(location.search);
 const session = query.get("kind") === "session";
 const changed = query.get("changed") === "1";
+const bold = query.get("bold") === "1";
+const sourced = query.get("sources") !== "0";
 const ID = "research-answer";
 const PAGE = "5".repeat(32);
 const begun = Date.now() - 600_000;
@@ -30,18 +33,32 @@ const begun = Date.now() - 600_000;
 const ANSWER = [
   "Start with Meshy's free plan: it exports print-ready STL and is what most guides recommend [1]. For exact, measured parts use Zoo instead [2, 3].",
   "",
-  "- Figurines and gifts: Meshy, or Rodin for the finest detail [3].",
-  "- Functional parts: Zoo writes editable CAD [2].",
+  ...(bold
+    ? [
+        "- **Figurines and gifts:** Meshy, or Rodin for the finest detail [3].",
+        "- **Zoo** writes editable CAD for functional parts [2].",
+        "",
+        "**Print monitoring**",
+        "Obico watches the camera and **stops a failed print** on its own.",
+      ]
+    : [
+        "- Figurines and gifts: Meshy, or Rodin for the finest detail [3].",
+        "- Functional parts: Zoo writes editable CAD [2].",
+      ]),
   "",
   `The full comparison is in [Full report](brigadier-page:${PAGE}).`,
-  "",
-  "### Sources",
-  "1. [Meshy pricing](https://meshy.ai/pricing)",
-  "2. [Zoo Text-to-CAD](https://zoo.dev/text-to-cad)",
-  "3. [Rodin Gen-2.5](https://hyper3d.ai/)",
-  "",
-  "### Details",
-  "Checks: none run. Review: none. Not checked: nothing.",
+  ...(sourced
+    ? [
+        "",
+        "### Sources",
+        "1. [Meshy pricing](https://meshy.ai/pricing)",
+        "2. [Zoo Text-to-CAD](https://zoo.dev/text-to-cad)",
+        "3. [Rodin Gen-2.5](https://hyper3d.ai/)",
+        "",
+        "### Details",
+        "Checks: none run. Review: none. Not checked: nothing.",
+      ]
+    : []),
 ].join("\n");
 
 const conversation = {
@@ -138,7 +155,7 @@ async function until(found: () => boolean, ms = 10_000): Promise<void> {
 }
 
 async function drive(): Promise<object> {
-  await until(() => all("[data-slot=citation]").length > 0);
+  await until(() => all(sourced ? "[data-slot=citation]" : "[data-answer] li").length > 0);
   await wait(200);
   const answer = all("[data-answer]")[0];
   const sources = all<HTMLDetailsElement>("[data-slot=answer-sources]");
@@ -151,6 +168,8 @@ async function drive(): Promise<object> {
     linksShown: all<HTMLAnchorElement>("[data-answer] a[href^=http]").filter((link) => link.checkVisibility() && link.dataset.slot !== "citation").length,
     details: all<HTMLDetailsElement>("[data-slot=report-details]").map((fold) => text(fold.querySelector("summary"))),
     report: all("[data-slot=report-link]").map((link) => text(link)),
+    bold: all("[data-answer] strong").map((run) => text(run)),
+    items: all("[data-answer] li").filter((item) => !item.closest("[data-slot=answer-source-list]")).map((item) => text(item)),
   };
   sources[0]?.querySelector("summary")?.click();
   await wait(300);

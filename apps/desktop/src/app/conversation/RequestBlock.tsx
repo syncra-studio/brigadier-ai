@@ -381,13 +381,13 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
   const sourced = splitSources(head);
   const details = keepDetails ? report?.details : undefined;
   if (!sourced && !details) {
-    return report ? <MarkdownBlock text={report.head} /> : <MessageText {...props} />;
+    return report ? <MarkdownBlock text={report.head} plainLeads /> : <MessageText {...props} />;
   }
   const cite = (n: number) => sourced?.sources.find((source) => source.n === n) ?? null;
   return (
     <div className="flex flex-col gap-3">
       <CitationContext.Provider value={cite}>
-        <MarkdownBlock text={sourced ? linkMarkers(sourced.head, sourced.sources) : head} />
+        <MarkdownBlock text={sourced ? linkMarkers(sourced.head, sourced.sources) : head} plainLeads />
       </CitationContext.Provider>
       {sourced && (
         <details data-slot="answer-sources" className="group/sources">

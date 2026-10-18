@@ -11,6 +11,8 @@ type Seen = {
   details: (string | null)[];
   report: (string | null)[];
   listed: (string | null)[];
+  bold: (string | null)[];
+  items: (string | null)[];
   opened: { tab: { pageId: string | null; active: boolean } | null; dialog: string | null; read: string[] };
 };
 
@@ -55,3 +57,17 @@ test("a session answer whose request changed code keeps its folded Details besid
   assert.deepEqual(seen.sources, [{ summary: "Sources · 3", open: false }]);
   assert.deepEqual(seen.details, ["Details"]);
 });
+
+// #319: bold that opens a line or list item shows plain, whatever the model wrote; bold inside a
+// sentence stays, and the words stay as written.
+for (const [kind, query] of [
+  ["a Chat's research answer", "kind=chat&bold=1"],
+  ["a session's answer without sources", "kind=session&bold=1&sources=0"],
+] as const) {
+  test(`${kind}: no line or item opens in bold, and mid-sentence bold stays`, { timeout: 90000 }, async (t) => {
+    const seen = await see(t, query);
+    assert.deepEqual(seen.bold, ["stops a failed print"]);
+    assert.match(seen.items[0] ?? "", /^Figurines and gifts: Meshy, or Rodin/);
+    assert.match(seen.items[1] ?? "", /^Zoo writes editable CAD/);
+  });
+}

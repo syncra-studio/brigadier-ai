@@ -588,20 +588,24 @@ const MessageTime: FC<{ children: ReactNode }> = ({ children }) => {
 export const MessageText: FC<TextMessagePartProps> = (props) => (
   <MessageTime>
     <Suspense fallback={<ReplyLoading />}>
-      <MarkdownText {...props} />
+      <MarkdownText {...props} plainLeads />
     </Suspense>
   </MessageTime>
 );
 
-/** Markdown outside a thread message, such as a worker's replies in its panel. */
-export const MarkdownBlock: FC<{ text: string; streaming?: boolean; breaks?: boolean }> = ({
+/**
+ * Markdown outside a thread message, such as a worker's replies in its panel. `plainLeads`: an
+ * answer, whose line-opening bold shows plain (see `MarkdownText`).
+ */
+export const MarkdownBlock: FC<{ text: string; streaming?: boolean; breaks?: boolean; plainLeads?: boolean }> = ({
   text,
   streaming = false,
   breaks = false,
+  plainLeads = false,
 }) => (
   <TextMessagePartProvider text={text} isRunning={streaming}>
     <Suspense fallback={<p className="whitespace-pre-wrap">{text}</p>}>
-      <MarkdownText streaming={streaming} breaks={breaks} />
+      <MarkdownText streaming={streaming} breaks={breaks} plainLeads={plainLeads} />
     </Suspense>
   </TextMessagePartProvider>
 );
@@ -610,7 +614,7 @@ export const MarkdownBlock: FC<{ text: string; streaming?: boolean; breaks?: boo
 export const StreamingMessageText: FC<TextMessagePartProps> = (props) => (
   <MessageTime>
     <Suspense fallback={<ReplyLoading />}>
-      <MarkdownText {...props} streaming />
+      <MarkdownText {...props} streaming plainLeads />
     </Suspense>
   </MessageTime>
 );
@@ -619,7 +623,7 @@ export const StreamingMessageText: FC<TextMessagePartProps> = (props) => (
 export const CommentaryMessageText: FC<TextMessagePartProps> = (props) => (
   <MessageTime>
     <Suspense fallback={<ReplyLoading />}>
-      <MarkdownText {...props} streaming paced={false} />
+      <MarkdownText {...props} streaming paced={false} plainLeads />
     </Suspense>
   </MessageTime>
 );

@@ -71,6 +71,12 @@ type MarkdownTextProps = Partial<TextMessagePartProps> & {
    * `TaskMentionContext`, `InlineImageContext` and `InlinePasteContext` show.
    */
   breaks?: boolean | undefined;
+  /**
+   * An answer: bold that opens a line or list item shows plain (the stored text keeps it), so a
+   * breakdown never reads as bold-labelled items whatever the model wrote (Q79, #319). Bold
+   * inside a sentence stays.
+   */
+  plainLeads?: boolean | undefined;
 };
 
 type MdNode = { type: string; value?: string; url?: string; children?: MdNode[] };
@@ -117,6 +123,30 @@ function splitUserText(node: MdNode): void {
 
 const remarkUserText = () => (tree: MdNode) => splitUserText(tree);
 
+/** Unwraps each bold run that opens a line of a paragraph (a list item's too); see `plainLeads`. */
+function unboldLeads(node: MdNode): void {
+  if (node.type === "paragraph" && node.children) {
+    const children: MdNode[] = [];
+    let lineStart = true;
+    for (const child of node.children) {
+      if (lineStart && child.type === "strong") {
+        children.push(...(child.children ?? []));
+        lineStart = false;
+        continue;
+      }
+      children.push(child);
+      if (child.type === "break") lineStart = true;
+      else if (child.type === "text") lineStart = /\n\s*$/.test(child.value ?? "") || (lineStart && !(child.value ?? "").trim());
+      else lineStart = false;
+    }
+    node.children = children;
+    return;
+  }
+  node.children?.forEach(unboldLeads);
+}
+
+const remarkPlainLeads = () => (tree: MdNode) => unboldLeads(tree);
+
 /**
  * The pace streaming text shows at: it trails what has arrived, steered so whatever waits
  * shows in about a second (never slower than a character a second), and the shown text
@@ -153,7 +183,7 @@ const useShallowStable = <T extends Record<string, unknown> | undefined>(
   return stable;
 };
 
-const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced = true, breaks = false }) => {
+const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced = true, breaks = false, plainLeads = false }) => {
   const stableComponents = useShallowStable(components);
   const markdownComponents = useMemo(() => {
     if (!stableComponents) return defaultComponents;
@@ -167,7 +197,7 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components, streaming, paced 
 
   return (
     <MarkdownTextPrimitive
-      remarkPlugins={breaks ? [remarkGfm, remarkUserText] : [remarkGfm]}
+      remarkPlugins={[remarkGfm, ...(breaks ? [remarkUserText] : []), ...(plainLeads ? [remarkPlainLeads] : [])]}
       rehypePlugins={rehypePlugins}
       // Only text that still streams is revealed as it arrives. Settled text shows whole at
       // once, also when it mounts again (the stored reply replacing the streamed one, a work
