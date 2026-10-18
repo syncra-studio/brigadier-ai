@@ -162,9 +162,12 @@ worktree. We add only grouping, shortcuts, a read-only board and states. No work
   - `join` and `wait`: as today.
   - `new_tab`: the queued item shows "Open as a new tab?" with one button. A click starts it in a background tab of
     the same workspace. The tab only offers; it never opens tabs itself (Q65).
-  - `tab`: the message belongs to a sibling. The thread forwards it when sure. The item moves to that tab, and a
-    one-line notice with Undo stays in this tab. When unsure, the thread asks with `ask_user`.
-  - If the sibling has already merged, `tab` is refused with that fact, so the thread offers `new_tab` or keeps it.
+  - `tab`: the message belongs to a sibling. The item moves to that tab, and a one-line notice with Undo stays in
+    this tab. Whether to forward, ask the user first, or keep it is the thread's call.
+  - If the sibling has already merged, `tab` is not refused: the result carries the fact ("tab ‹B› has already
+    merged into main at ‹sha›") and the thread decides what to do next.
+  - **The thread judges, Brigadier plumbs (user, 10-18).** Brigadier only lists the tabs and what they are doing,
+    executes the chosen route and shows the notice. No refusals, thresholds or rules for the thread here.
 - **Rollout (rule R, `docs/research/long-sessions/BUILD-PLAN.md:1147`).** Open sessions keep their cached tool
   schema, so `RouteFollowUp` (`tools.rs:257`, `deny_unknown_fields` today) takes either `route` or the legacy
   `joins: bool` (true = `join`, false = `wait`). The new schema reaches a session at its next resume or rebirth,
@@ -183,8 +186,9 @@ worktree. We add only grouping, shortcuts, a read-only board and states. No work
      - "Tab ‹B› also changed `a.rs`, `b.rs`" when the changed-file sets first overlap;
      - "Tab ‹B› merged into main at ‹sha›" when a sibling merges.
 
-     The engine only computes the set overlap and the merge event. The thread judges whether to rebase, warn or
-     message (Q66; the engine plumbs).
+     The engine only computes the set overlap and the merge event, and words them as plain facts, never advice.
+     The thread judges whether to warn, rebase, message or ignore (Q66; user 10-18: the LLM judges, Brigadier
+     only provides the tabs and what they are doing).
 - **Nothing on the board can be written.** Messaging a sibling stays `message_session`.
 
 ### States (tab bar and sidebar)
@@ -239,7 +243,7 @@ worktree. We add only grouping, shortcuts, a read-only board and states. No work
 5. **Queued-message routes.** `route` on `route_follow_up` (legacy `joins` still accepted) and the "Open as a new
    tab?" offer. Forwarding with Undo. One revision note.
    - Done when: `workspace_tests` cover join, wait, new_tab (the offer, no auto-open), tab (forward + Undo), and tab
-     to a merged sibling refused. A rule-R flow test makes a session at the previous revision, resumes it after the
+     to a merged sibling routed with the merged fact attached. A rule-R flow test makes a session at the previous revision, resumes it after the
      change, and checks the note arrives once and a legacy `joins` call still routes. The render test covers the
      offer.
 6. **States (#253) and the Ready record.** The state function in `board.rs`, shared by tab bar and sidebar. When a
@@ -629,8 +633,9 @@ Everyone rebases on origin/main right before each landing.
   own shortcuts.
 - **⌘⏎ is the background tab; the follow-up's other way moves to ⌥⏎ (⇧⌘⏎ / ⌥⌘⏎ when Send is ⌘⏎).** The goal names
   ⌘⏎.
-- **A forwarded queued message leaves a one-line notice with Undo; when unsure, the thread asks; forwarding to a
-  merged sibling is refused.** This is Q66's pending detail, as recommended.
+- **A forwarded queued message leaves a one-line notice with Undo; forwarding, asking or keeping is the thread's
+  call; forwarding to a merged sibling goes through with the merged fact attached.** Q66's pending detail, as the
+  user corrected it on 10-18: the LLM judges, Brigadier provides the facts.
 - **The board is served by `list_sessions` `workspace: true` plus pushed overlap and merged facts, not by a block in
   every turn.** It costs nothing until something changes.
 - **State priority: Needs you > Working > Ready > Merged.** What needs the user shows first.
