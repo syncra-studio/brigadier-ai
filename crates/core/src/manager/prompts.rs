@@ -206,7 +206,7 @@ How to work:
 - Write to another session's thread only with message_session.
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
-- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer ([notes.md](outputs/notes.md), which puts its Save… under your answer): Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp.
+- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer ([notes.md](outputs/notes.md), which puts its Save… under your answer): Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
 
 How to talk to the user:
@@ -215,7 +215,7 @@ How to talk to the user:
 - While work runs, write one line only for: a failure of what you started (what failed, its key error line, what you do about it); work the user didn't ask for, before it starts; and [status due]: what runs and what's left.
 - When the request is done (work, a question or an error explained alike), write one final answer: at most about five short lines of what changed and what to know, and, when a review ran, what it found and what you fixed. Then, if any, one line "To check: …" only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). {details} Say code compiles, works or runs only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text.
 - Fix a known defect in a deliverable yourself, with no card (write a fixed copy; store a worker's with store_output and link it as outputs/<name>, else link its full path), or send it back, before you answer.
-- {LATE_EVENT} Never repeat a closing, and say a merge is ready at most once.
+- {LATE_EVENT} {REVISED_ANSWER} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that request: answer about it briefly.{voice}
 - {AUTHORITY}{code_rules}{preferences}"#,
         today = today(),
@@ -267,7 +267,26 @@ fn callable(text: &str, provider: ProviderKind) -> String {
 
 /// What the thread does with an event that arrives after its answer (bug 4): an update line
 /// only when the user must know, never a rewritten ending.
-pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a landing, a report's addendum, a CI result) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), never a new ending. Otherwise reply [quiet].";
+pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a landing, a CI result) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), starting with the English word \"Update:\" whatever language you write in, never a new ending. Otherwise reply [quiet].";
+
+macro_rules! revised_answer {
+    () => {
+        "A worker's report or addendum that changes an answer you already wrote: write the whole answer again, revised and complete on its own, never a list of corrections or an update line."
+    };
+}
+
+/// What a worker's findings that come after the answer do to it: a revised whole answer, never
+/// an update line (Q81: a research worker's report came as one translated "Update" line).
+pub(crate) const REVISED_ANSWER: &str = revised_answer!();
+
+macro_rules! no_promised_files {
+    () => {
+        "Never promise a file or a link for later: a worker's findings go in your answer itself (a research report saved with save_report), not only a link to the worker's file or a path. A file the user asked for is still linked, so its Save… shows under your answer."
+    };
+}
+
+/// The thread never says a file or link comes later (Q81).
+pub(crate) const NO_PROMISED_FILES: &str = no_promised_files!();
 
 /// Where the thread sends a live look at an app (SESSION-FIXES-PLAN.md "Computer use"): to the
 /// workers, which have the computer tools, so screenshots stay out of its own context.
@@ -984,6 +1003,16 @@ pub(crate) const REVISIONS: &[Revision] = &[
         ),
         worker: "",
     },
+    Revision {
+        number: REVISED_ANSWER_REVISION,
+        thread: concat!(
+            "From now on: ",
+            revised_answer!(),
+            " A late update line (a review, a landing, a CI result) starts with the English word \"Update:\" whatever language you write in. ",
+            no_promised_files!()
+        ),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1402,6 +1431,9 @@ pub(crate) const MESSAGES_JOIN_REVISION: u32 = 105;
 pub(crate) const ANSWER_FORMAT_REVISION: u32 = 106;
 /// A research answer's breakdown in sentences, never bold-labelled items (Q79).
 pub(crate) const BREAKDOWN_REVISION: u32 = 107;
+/// A worker's findings after the answer give a revised whole answer, an update line opens with
+/// the English "Update:", and no file or link is promised for later (Q81).
+pub(crate) const REVISED_ANSWER_REVISION: u32 = 108;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -2644,8 +2676,7 @@ pub(crate) fn late_findings_envelope(task: &Task, shown: &str, scratch_gone: boo
     format!(
         "[report task-{} · addendum] The worker wrote this after its report, which left it out; \
          it is kept with the report:\n{shown}\n[/report]{} If it changes nothing you told the \
-         user or the work still to do, reply exactly {QUIET}. If your answer is already written: \
-         {LATE_EVENT}",
+         user or the work still to do, reply exactly {QUIET}. {REVISED_ANSWER}",
         task.number,
         scratch_note(scratch_gone)
     )
@@ -2705,6 +2736,14 @@ mod tests {
         assert!(LATE_EVENT.contains("never a new ending"));
         // A CI result after the answer is one too, and its envelope says so (no second ending).
         assert!(LATE_EVENT.contains("a CI result"));
+        // Q81: a worker's addendum is no late event, and an update line keys on its English
+        // word in any language (the app's isUpdate reads it).
+        assert!(!LATE_EVENT.contains("addendum"));
+        assert!(
+            LATE_EVENT.contains(
+                "starting with the English word \"Update:\" whatever language you write in"
+            )
+        );
         assert!(crate::manager::ci::AFTER_THE_ANSWER.contains("one `Update:` line"));
         assert!(
             revision_note(CI_LATE_REVISION - 1, false).is_some_and(|note| note
@@ -2725,7 +2764,9 @@ mod tests {
             "{envelope}"
         );
         assert!(
-            envelope.contains(LATE_EVENT) && !envelope.contains("write the ending again"),
+            envelope.contains(REVISED_ANSWER)
+                && !envelope.contains(LATE_EVENT)
+                && !envelope.contains("write the ending again"),
             "{envelope}"
         );
     }
@@ -3723,8 +3764,9 @@ mod environment_tests {
         // checks its to judge), then to 11,700 for git and gh on the user's sign-in needing no
         // approval: tokens are a tripwire, not a gate (Q58), so no trimming. Then to 13,100 for
         // the restored voice, the research answer's layout and report, and the research fan-out
-        // (Q79), and to 13,300 for the breakdown without bold-labelled items (Q79).
-        assert!(codex.len() < 13_300, "{}", codex.len());
+        // (Q79), to 13,300 for the breakdown without bold-labelled items (Q79), and to 13,700
+        // for a revised whole answer after a worker's findings, with no file promised (Q81).
+        assert!(codex.len() < 13_700, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -4238,6 +4280,52 @@ mod environment_tests {
         assert!(!mentions(&worker_system("")));
         assert!(browser_section(true).is_empty());
         assert!(mentions(&browser_section(false)));
+    }
+
+    /// Q81: a research worker's report came after the thread's answer as one translated
+    /// "Update" line, and the thread promised the worker's file for later. Its findings revise
+    /// the whole answer, and no file or link is promised.
+    #[test]
+    fn a_workers_findings_after_the_answer_give_a_revised_whole_answer() {
+        assert!(
+            REVISED_ANSWER
+                .contains("write the whole answer again, revised and complete on its own")
+        );
+        assert!(REVISED_ANSWER.contains("never a list of corrections or an update line"));
+        assert!(NO_PROMISED_FILES.starts_with("Never promise a file or a link for later"));
+        assert!(NO_PROMISED_FILES.contains("not only a link to the worker's file or a path"));
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            let text = thread(
+                &session("askForApproval"),
+                None,
+                &[],
+                None,
+                None,
+                provider,
+                true,
+            );
+            assert!(
+                text.contains(&format!("{LATE_EVENT} {REVISED_ANSWER}")),
+                "{provider:?}"
+            );
+            // Its save_report is named as the provider calls it.
+            assert!(
+                text.contains("Never promise a file or a link for later: a worker's findings go in your answer itself")
+                    && text.contains("not only a link to the worker's file or a path"),
+                "{provider:?}"
+            );
+            // A deliverable's link and its Save… stay.
+            assert!(
+                text.contains("[notes.md](outputs/notes.md)"),
+                "{provider:?}"
+            );
+        }
+        let note = revision_note(BREAKDOWN_REVISION, false).unwrap();
+        assert!(note.contains(REVISED_ANSWER));
+        assert!(note.contains(NO_PROMISED_FILES));
+        assert!(note.contains("starts with the English word \"Update:\""));
+        assert!(revision_note(REVISED_ANSWER_REVISION, false).is_none());
+        assert!(revision_note(BREAKDOWN_REVISION, true).is_none());
     }
 
     fn session(permission: &str) -> Conversation {
@@ -4839,12 +4927,15 @@ mod environment_tests {
     /// breakdown, so a thread told the answer format hears the breakdown rule once.
     #[test]
     fn open_threads_hear_once_that_a_breakdown_has_no_bold_labelled_items() {
-        assert_eq!(revision(), BREAKDOWN_REVISION);
         let note = revision_note(ANSWER_FORMAT_REVISION, false).unwrap();
         assert!(note.contains("a research answer's breakdown follows this:"));
         assert!(note.contains(RESEARCH_RULES[2]));
         assert!(!note.contains("### Sources"));
-        assert!(revision_note(BREAKDOWN_REVISION, false).is_none());
+        assert!(
+            !revision_note(BREAKDOWN_REVISION, false)
+                .unwrap()
+                .contains(RESEARCH_RULES[2])
+        );
         assert!(revision_note(ANSWER_FORMAT_REVISION, true).is_none());
     }
 
