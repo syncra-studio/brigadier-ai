@@ -17,7 +17,8 @@ You can run this again from **Settings › General › Run setup again**.
 
 ## Add a project
 
-A project is a git repository on your Mac. In the sidebar, press **+** next to **Projects**:
+A project is a git repository on your Mac. In the sidebar, press **+** next to **Projects**, then
+type or pick its folder:
 
 - **Folder on this computer**: a repository you have, or a plain folder (Brigadier can start git
   in it, or create the folder).
@@ -28,14 +29,15 @@ work on their own; if you don't, every session there asks you before each step.
 
 ## Start a task
 
-1. Press **New chat** on the project in the sidebar.
+1. Press **New session** (the **+** on the project's row in the sidebar). Right after you add a
+   project, its new session is already open.
 2. Say what you want in plain words, the way you would tell a colleague: "Add a dark mode toggle
    to the settings page".
 3. Press Enter.
 
 The session starts on its own branch, in its own copy of the repository (a worktree), so your
-checkout is never touched. It reads the code, plans, makes the change, runs your project's
-checks, and has the other agent review it. Its row in the sidebar says what it is doing:
+checkout is never touched. It reads the code, plans and makes the change; your project's checks
+and a review by the other agent run in the background. Its row in the sidebar says what it is doing:
 **Working**, **Needs you** when it has a question or an approval for you, and **Ready** when
 the work is done and waiting to merge.
 

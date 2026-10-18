@@ -4,11 +4,16 @@ When a session's work is done, Brigadier merges it for you. That is on by defaul
 
 ## What happens
 
-1. The agent checks its work: your project's checks, and a review by the other agent.
-2. If the project is on GitHub and `gh` is signed in, it pushes the branch, opens a pull request
-   and merges it. Otherwise it merges the branch into its base on your Mac.
+1. When the agent judges the work ready, it merges it, without asking. If the project is on GitHub
+   and `gh` is signed in, it pushes the branch, opens a pull request, watches its CI and reviews,
+   fixes what they find, and merges it. Otherwise it merges the branch into its base on your Mac.
+2. Your project's full checks and the other agent's review run in the background. They inform the
+   merge but don't hold it: the merge message says what was verified and what was still running
+   or left out.
 3. A line in the chat says what happened: "Merged *branch* into *base*", or "… on this Mac, not
    pushed to *remote*" when nothing was pushed.
+
+![A merged session: the merge message, its Revert button and the files it changed](images/merged.png)
 
 ## Revert
 

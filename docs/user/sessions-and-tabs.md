@@ -4,14 +4,13 @@
 the repository, so sessions never step on each other or on your checkout.
 
 The sidebar lists your projects, and under each project its sessions. Each row says what the
-session is doing: **Working**, **Needs you**, **Ready** or **Merged**. Rows that need you move to
-the top of their project.
+session is doing: **Working**, **Needs you**, **Ready**, **Merging** or **Merged**.
 
 ## Run several tasks at once
 
 Each parallel task is a new session.
 
-- **New chat** on the project starts one and opens it.
+- **New session** (the **+** on the project's row) starts one and opens it.
 - **⌘Enter** in the composer starts your message as a new session in the background and keeps you
   where you are.
 

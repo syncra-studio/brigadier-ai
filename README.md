@@ -49,10 +49,10 @@ better: each reviews the other's work. To build from source (or for Windows and 
    install them or sign them in for you.
 2. Pick a project: one it suggests from your recent Claude Code and Codex work, or any git
    repository (**+** next to **Projects**). It can also clone one, or start git in a folder.
-3. Press **New chat** on the project and say what you want in plain words.
-4. The session works on its own branch, in its own worktree: it plans, changes the code, runs your
-   checks and has the other vendor review it. Then it merges the work, and a **Revert** button sits
-   under the merge message.
+3. Press **New session** on the project and say what you want in plain words.
+4. The session works on its own branch, in its own worktree: it plans and changes the code, while
+   your checks and the other vendor's review run in the background. Then it merges the work, and a
+   **Revert** button sits under the merge message.
 
 Step by step: [docs/user/first-task.md](docs/user/first-task.md).
 
@@ -60,14 +60,15 @@ Step by step: [docs/user/first-task.md](docs/user/first-task.md).
 
 One session is one task: a chat with an agent, on its own branch and worktree. The sidebar lists
 each project's sessions with what each is doing (Working, Needs you, Ready, Merged). For a second
-task at the same time, start another session: **New chat** on the project, or **⌘Enter** in the
-composer to start it in the background. The tab bar holds the open session's chat and its own
+task at the same time, start another session: **New session** on the project, or **⌘Enter** in
+the composer to start it in the background. The tab bar holds the open session's chat and its own
 terminals, browser pages and files. More: [docs/user/sessions-and-tabs.md](docs/user/sessions-and-tabs.md).
 
 ## Auto-merge and Revert
 
 Finished work merges on its own: through a pull request when the project is on GitHub and `gh` is
-signed in, otherwise into the base branch on your Mac. Each merge message has a **Revert** button.
+signed in, otherwise into the base branch on your Mac. Checks and review inform the merge without
+holding it; the merge message says what was verified. Each merge message has a **Revert** button.
 Turn it off in Settings › Git. More: [docs/user/auto-merge-and-revert.md](docs/user/auto-merge-and-revert.md).
 
 ## Accounts
@@ -101,8 +102,8 @@ rough edges.
 ## What's in it
 
 - **Sessions.** One thread per task, on its own branch and worktree. It reads and runs things,
-  makes small changes itself, starts workers for the rest, and merges the result when it's
-  checked and reviewed (with a Revert button).
+  makes small changes itself, starts workers for the rest, and merges the result (with a Revert
+  button).
 - **Overnight runs.** Type `/overnight` with a plan and when it should be ready. The session works
   through the plan phase by phase until it's done or the deadline comes, then leaves a morning
   report and a notification.
@@ -175,8 +176,9 @@ A worker reports when it's done. Its commits then **land**:
   thread fixes them or says why not. Settings › Configuration › "Review the work" turns reviews
   off (they're on by default).
 
-When the session's work is done, checked and reviewed, the thread merges it into its base: through
-a pull request when the project is on GitHub and `gh` is signed in, otherwise on your Mac. The
+When the session's work is ready, the thread merges it into its base: through a pull request when
+the project is on GitHub and `gh` is signed in, otherwise on your Mac. The full checks and the
+reviews inform the merge without holding it, and the merge message says where they stood. The
 merge message has a Revert button that asks the thread to undo it the way it went in. With
 Settings › Git › "Merge on its own when the work is ready" off, the thread tells you the work is
 ready and merges when you ask.
