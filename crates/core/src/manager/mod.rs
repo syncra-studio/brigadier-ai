@@ -220,8 +220,8 @@ pub struct SessionManager {
     running_reviews: Mutex<HashMap<String, (ConversationId, tokio_util::sync::CancellationToken)>>,
     /// The reviews a `review_candidate` or `run_check` call waits on, by session and range,
     /// with how many calls wait: their replies carry the outcome, so no message of it is
-    /// delivered (#137, #193).
-    review_replies: Mutex<HashMap<(ConversationId, String, String), usize>>,
+    /// delivered (#137, #193), unless all of them were cancelled (#332).
+    review_replies: Mutex<review_runs::ReplyClaims>,
     /// When each ready session's pull request was last looked up at a connect
     /// (`refresh_pull_request_soon`).
     pr_looked_up: Mutex<HashMap<ConversationId, std::time::Instant>>,

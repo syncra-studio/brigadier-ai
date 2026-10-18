@@ -1170,3 +1170,78 @@ async fn review_candidate_says_when_no_reviewer_can_take_it_or_reviews_are_off()
     assert!(replies[1].contains("Reviews are off"), "{}", replies[1]);
     flow.stop().await;
 }
+
+/// A review_candidate call cancelled just as its review ends (its CLI's bridge closes, a
+/// handoff), after the review's message stood aside for the call: the thread still hears the
+/// findings, as a message (#332).
+#[tokio::test]
+async fn a_review_candidate_call_cancelled_as_its_review_ends_still_tells_the_findings() {
+    let manager: Arc<std::sync::OnceLock<Arc<crate::manager::SessionManager>>> = Arc::default();
+    let log: Arc<Mutex<Candidate>> = Arc::default();
+    let (seen, waits) = (log.clone(), manager.clone());
+    let flow = Flow::start(
+        "review-candidate-cancelled",
+        Options {
+            reviews: Some(script(|_| async {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                Reply::text("- [P2] a.txt never says it is fixed — a.txt:1\n  Say so.")
+            })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let (seen, waits) = (seen.clone(), waits.clone());
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("");
+                }
+                seen.lock().unwrap().inputs.push(turn.input.clone());
+                if !turn.input.starts_with("Build the feature") {
+                    return Reply::text("[quiet]");
+                }
+                commit(&turn, "a.txt", &lines("a", 10), "Ten lines");
+                let claims = || {
+                    waits
+                        .get()
+                        .unwrap()
+                        .review_replies
+                        .lock()
+                        .unwrap()
+                        .waiting()
+                };
+                // The call claims the review's outcome; its end then takes the claim, its
+                // message skipped for the call's reply. The call is cancelled at once.
+                let stood_aside = async {
+                    while claims() == 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                    }
+                    while claims() > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                    }
+                };
+                tokio::select! {
+                    biased;
+                    () = stood_aside => Reply::text("[quiet]"),
+                    reply = turn.call("review_candidate", json!({})) => {
+                        seen.lock().unwrap().replies.push(reply.text);
+                        Reply::text("Reviewed.")
+                    }
+                }
+            }
+        }),
+    )
+    .await;
+    assert!(manager.set(flow.manager.clone()).is_ok());
+    flow.say("Build the feature.").await;
+    let heard = |log: &Candidate| {
+        log.inputs
+            .iter()
+            .chain(&log.replies)
+            .any(|text| text.contains("a.txt never says it is fixed"))
+    };
+    flow.until("the thread to hear the findings", |_| {
+        heard(&log.lock().unwrap())
+    })
+    .await;
+    flow.settled().await;
+    flow.stop().await;
+}

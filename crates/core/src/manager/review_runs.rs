@@ -13,7 +13,7 @@
 //! run through the adapter, read-only, with only the tools that read a change. Their tokens go
 //! to the routing store under the task `review:<id>`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -345,73 +345,155 @@ fn record_line(items: &[Finding]) -> String {
 }
 
 /// One line per finding, with its id, for the thread to record each by.
-/// A review_candidate call's claim on a review's outcome ([`SessionManager::review_replies`]):
-/// dropped while still armed (the call ends without saying it, or is cancelled), the review's
-/// message is delivered as usual again.
-struct ReplyWait<'a> {
-    manager: &'a SessionManager,
-    key: (ConversationId, String, String),
-    armed: bool,
+/// A session and a reviewed range, as the calls that wait on its review claim it.
+type ReplyKey = (ConversationId, String, String);
+
+/// The claims of the calls that wait on a review's outcome ([`SessionManager::review_replies`]).
+#[derive(Default)]
+pub(super) struct ReplyClaims {
+    /// By session and range: how many calls wait, and whether one said the outcome.
+    waiting: HashMap<ReplyKey, (usize, bool)>,
+    /// Ranges whose review ended while calls waited, its message skipped for them, and none
+    /// said it yet: how many of them have yet to finish. The last one cancelled tells it
+    /// (#332).
+    stood_aside: HashMap<ReplyKey, usize>,
 }
 
-impl<'a> ReplyWait<'a> {
-    fn new(manager: &'a SessionManager, key: (ConversationId, String, String)) -> Self {
-        *manager
-            .review_replies
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .entry(key.clone())
-            .or_default() += 1;
-        Self {
-            manager,
-            key,
-            armed: true,
-        }
+impl ReplyClaims {
+    /// How many ranges calls wait on now.
+    #[cfg(test)]
+    pub(super) fn waiting(&self) -> usize {
+        self.waiting.len()
     }
 
-    /// The reply says the outcome: its message stays undelivered.
-    fn said(mut self) {
-        self.armed = false;
-    }
-
-    /// Whether the review's end has yet to stand aside for the calls that wait on it.
-    fn standing(&self) -> bool {
-        self.manager
-            .review_replies
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .contains_key(&self.key)
-    }
-
-    /// Gives the claim back; whether it was still there: false when the review's end already
-    /// stood aside for this call. Another call's claim on the same review stays.
-    fn release(mut self) -> bool {
-        self.armed = false;
-        self.give_back()
-    }
-
-    fn give_back(&self) -> bool {
-        let mut replies = self
-            .manager
-            .review_replies
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let Some(waiting) = replies.get_mut(&self.key) else {
+    /// One call's claim on `key` given back; whether it was still there.
+    fn give_back(&mut self, key: &ReplyKey) -> bool {
+        let Some((waiting, said)) = self.waiting.get_mut(key) else {
             return false;
         };
         *waiting -= 1;
-        if *waiting == 0 {
-            replies.remove(&self.key);
+        if *waiting == 0 && !*said {
+            self.waiting.remove(key);
+        }
+        true
+    }
+
+    /// The review of `key` ended: whether calls waited on it, its message then skipped.
+    fn stand_aside(&mut self, key: &ReplyKey) -> bool {
+        let Some((waiting, said)) = self.waiting.remove(key) else {
+            return false;
+        };
+        if !said && waiting > 0 {
+            self.stood_aside.insert(key.clone(), waiting);
         }
         true
     }
 }
 
+/// A review_candidate call's claim on a review's outcome ([`SessionManager::review_replies`]):
+/// dropped while still armed (the call ends without saying it, or is cancelled), the review's
+/// message is delivered as usual again; one whose end already stood aside for the call is
+/// told now, by the last such call, unless another said it (#332).
+struct ReplyWait<'a> {
+    manager: &'a SessionManager,
+    key: ReplyKey,
+    armed: bool,
+    /// The review it waits on, once its call waits for it.
+    review: Option<String>,
+}
+
+impl<'a> ReplyWait<'a> {
+    fn new(manager: &'a SessionManager, key: ReplyKey) -> Self {
+        manager
+            .reply_claims()
+            .waiting
+            .entry(key.clone())
+            .or_default()
+            .0 += 1;
+        Self {
+            manager,
+            key,
+            armed: true,
+            review: None,
+        }
+    }
+
+    /// Waits on `review`: a call cancelled after its end stood aside has it told as a message.
+    fn on(mut self, review: &str) -> Self {
+        self.review = Some(review.to_owned());
+        self
+    }
+
+    /// The reply says the outcome: its message stays undelivered.
+    fn said(mut self) {
+        self.armed = false;
+        let mut claims = self.manager.reply_claims();
+        match claims.waiting.get_mut(&self.key) {
+            Some((_, said)) => *said = true,
+            None => {
+                claims.stood_aside.remove(&self.key);
+            }
+        }
+    }
+
+    /// Whether the review's end has yet to stand aside for the calls that wait on it.
+    fn standing(&self) -> bool {
+        self.manager.reply_claims().waiting.contains_key(&self.key)
+    }
+
+    /// Gives the claim back; whether it was still there: false when the review's end already
+    /// stood aside for this call, whose reply then says it. Another call's claim on the same
+    /// review stays.
+    fn release(mut self) -> bool {
+        self.armed = false;
+        let mut claims = self.manager.reply_claims();
+        if claims.give_back(&self.key) {
+            return true;
+        }
+        claims.stood_aside.remove(&self.key);
+        false
+    }
+}
+
 impl Drop for ReplyWait<'_> {
     fn drop(&mut self) {
-        if self.armed {
-            self.give_back();
+        if !self.armed {
+            return;
         }
+        let tell = {
+            let mut claims = self.manager.reply_claims();
+            if claims.give_back(&self.key) {
+                false
+            } else if self.review.is_none() {
+                // Not waiting on it yet: the call's reply says the review it started.
+                claims.stood_aside.remove(&self.key);
+                false
+            } else if let Some(left) = claims.stood_aside.get_mut(&self.key) {
+                *left -= 1;
+                *left == 0 && claims.stood_aside.remove(&self.key).is_some()
+            } else {
+                false
+            }
+        };
+        // Cancelled just as the review ended, its message skipped for this call: the thread
+        // hears it as a message after all (#332), as run_check's does (#193).
+        if tell
+            && let Some(review) = self.review.take()
+            && let Some(manager) = self.manager.me.upgrade()
+        {
+            let conversation = self.key.0.clone();
+            self.manager.spawn(async move {
+                manager.tell_unsaid_review(&conversation, &review).await;
+            });
+        }
+    }
+}
+
+impl SessionManager {
+    fn reply_claims(&self) -> std::sync::MutexGuard<'_, ReplyClaims> {
+        self.review_replies
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
     }
 }
 
@@ -1019,11 +1101,11 @@ impl SessionManager {
     ) -> Result<String> {
         // Ended before this call: its message, if any, went out already.
         let claim = match (claim, review.state == ReviewState::Running) {
-            (Some(claim), true) => Some(claim),
-            (None, true) => Some(ReplyWait::new(
-                self,
-                (id.clone(), review.base.clone(), review.tip.clone()),
-            )),
+            (Some(claim), true) => Some(claim.on(&review.id)),
+            (None, true) => Some(
+                ReplyWait::new(self, (id.clone(), review.base.clone(), review.tip.clone()))
+                    .on(&review.id),
+            ),
             (_, false) => None,
         };
         let wait = Duration::from_secs(wait_seconds.unwrap_or(600).min(1700));
@@ -1126,6 +1208,23 @@ impl SessionManager {
             return None;
         }
         Some(self.orchestrator_word(&ended, text.as_deref()).await)
+    }
+
+    /// Review `review`'s end stood aside for a review_candidate call that was cancelled before
+    /// it said it: the thread hears it as a message after all (#332).
+    async fn tell_unsaid_review(&self, id: &ConversationId, review: &str) {
+        let Some(ended) = self
+            .core
+            .board(id)
+            .await
+            .ok()
+            .and_then(|board| board.reviews.get(review).cloned())
+            .filter(|ended| ended.state != ReviewState::Running)
+        else {
+            return;
+        };
+        let text = self.review_text(&ended).await;
+        self.tell_review_now(&ended, text.as_deref(), None).await;
     }
 
     /// An ended review of the thread's candidate, as review_candidate's reply.
@@ -2119,16 +2218,11 @@ impl SessionManager {
     async fn tell_review_now(&self, review: &ReviewRun, text: Option<&str>, filed: Option<String>) {
         // A review_candidate or run_check call that waited on it said its outcome in its reply.
         if review.notify == ReviewFor::Orchestrator
-            && self
-                .review_replies
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&(
-                    review.conversation_id.clone(),
-                    review.base.clone(),
-                    review.tip.clone(),
-                ))
-                .is_some()
+            && self.reply_claims().stand_aside(&(
+                review.conversation_id.clone(),
+                review.base.clone(),
+                review.tip.clone(),
+            ))
         {
             return;
         }
