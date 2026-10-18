@@ -218,3 +218,165 @@ async fn a_chat_answers_its_workers_question() {
     );
     flow.stop().await;
 }
+
+/// Q78: before researching, the thread asks the one thing the answer depends on, on one card,
+/// then researches with the answer: in a Chat (`chat`) or a session's thread alike.
+async fn one_clarifying_card_then_research(chat: bool) {
+    let specs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = specs.clone();
+    let flow = Flow::start(
+        if chat {
+            "chat-thread-clarify"
+        } else {
+            "session-clarify"
+        },
+        Options::default(),
+        script(move |turn| {
+            let seen = seen.clone();
+            async move {
+                let thread = turn.chat().is_some() || turn.is_orchestrator();
+                if !thread {
+                    seen.lock().unwrap().push(turn.input.clone());
+                    turn.call("submit_report", json!({"summary": "Two shops in Chisinau stock it."}))
+                        .await;
+                    return Reply::text("Reported.");
+                }
+                if turn.input.contains("[report task-1") {
+                    return Reply::text("Buy it at the shop on Stefan cel Mare street.");
+                }
+                if turn.input.contains("[answer]") {
+                    assert!(turn.input.contains("Chisinau"), "{}", turn.input);
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "low", "title": "Shops in Chisinau", "kind": "research",
+                                   "spec": "Find shops in Chisinau that stock PETG."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                let asked = turn
+                    .call(
+                        "ask_user",
+                        json!({"questions": [{
+                            "question": "Which city do you live in?",
+                            "options": [{"label": "Chisinau"}, {"label": "Bucharest"}],
+                            "recommended": 0
+                        }]}),
+                    )
+                    .await;
+                assert!(!asked.is_error, "{}", asked.text);
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    let id = if chat {
+        new_chat(&flow).await
+    } else {
+        flow.conversation.clone()
+    };
+    flow.say_to(&id, "Where can I buy PETG filament?").await;
+    let board = flow
+        .until_in(&id, "the card", |board| {
+            board.questions.values().any(|question| question.is_open())
+        })
+        .await;
+    assert!(board.tasks.is_empty(), "no research before the answer");
+    let card = board.questions.values().next().unwrap().clone();
+    flow.manager
+        .answer_question(id.clone(), card.id.clone(), vec!["Chisinau".into()], None)
+        .await
+        .unwrap();
+    let board = answered(&flow, &id).await;
+    assert_eq!(board.questions.len(), 1);
+    assert_eq!(board.requests.len(), 1, "{:#?}", board.requests);
+    assert_eq!(board.tasks.len(), 1);
+    assert!(specs.lock().unwrap()[0].contains("Chisinau"));
+    assert_eq!(
+        shown(&flow, &id).await,
+        vec!["Buy it at the shop on Stefan cel Mare street.".to_owned()]
+    );
+    let rule = "at most one card before researching, holding only what changes the answer";
+    let prompts: Vec<String> = flow
+        .specs()
+        .into_iter()
+        .filter_map(|(_, spec)| spec.append_system_prompt)
+        .collect();
+    let told = if chat {
+        prompts
+            .iter()
+            .any(|prompt| prompt.contains(rule) && prompt.contains("This Chat"))
+    } else {
+        prompts.iter().any(|prompt| {
+            prompt.contains(rule) && prompt.contains(crate::manager::prompts::THREAD_OPENING)
+        })
+    };
+    assert!(told, "{prompts:#?}");
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_chat_asks_one_clarifying_card_then_researches() {
+    one_clarifying_card_then_research(true).await;
+}
+
+#[tokio::test]
+async fn a_session_asks_one_clarifying_card_then_researches() {
+    one_clarifying_card_then_research(false).await;
+}
+
+/// A file a Chat hands over is made by a worker in its outputs folder (a Chat writes none
+/// itself): the answer links it as `outputs/<name>`, which opens the stored copy, and the
+/// answer's Save lists it (answerFiles, the app's).
+#[tokio::test]
+async fn a_chats_file_comes_from_a_worker_and_opens_from_the_answer() {
+    let flow = Flow::start(
+        "chat-thread-file",
+        Options::default(),
+        script(|turn| async move {
+            if turn.chat().is_none() {
+                std::fs::create_dir_all(turn.cwd.join("outputs")).unwrap();
+                std::fs::write(turn.cwd.join("outputs/list.csv"), "shop,price\nA,10\n").unwrap();
+                turn.call(
+                    "submit_report",
+                    json!({"summary": "The list is in outputs/list.csv."}),
+                )
+                .await;
+                return Reply::text("Reported.");
+            }
+            if turn.input.contains("[report task-1") {
+                return Reply::text("Here is the list: [list.csv](outputs/list.csv).");
+            }
+            turn.call(
+                "delegate_task",
+                json!({"effort": "low", "title": "Price list", "kind": "research",
+                       "spec": "Write a CSV of PETG prices."}),
+            )
+            .await;
+            Reply::text("[quiet]")
+        }),
+    )
+    .await;
+    let chat = new_chat(&flow).await;
+    flow.say_to(&chat, "Make me a price list file.").await;
+    let board = answered(&flow, &chat).await;
+    let task = board.tasks.values().next().unwrap();
+    assert!(
+        task.outputs
+            .iter()
+            .any(|output| output.file_name.as_deref() == Some("list.csv")
+                || output.title.ends_with("list.csv")),
+        "{:#?}",
+        task.outputs
+    );
+    let stored = flow
+        .manager
+        .stored_output(&chat, "outputs/list.csv", None)
+        .await
+        .unwrap()
+        .expect("the answer's link opens the stored copy");
+    assert_eq!(stored.task_id, task.id);
+    flow.stop().await;
+}

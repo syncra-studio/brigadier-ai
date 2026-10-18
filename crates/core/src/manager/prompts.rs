@@ -84,6 +84,31 @@ macro_rules! research_fan_out {
     };
 }
 
+/// Asking before researching, only what changes the answer (Q78).
+macro_rules! clarify_rule {
+    () => {
+        "Before you research a question whose answer depends on something only the user knows (their budget, where they live, what they already own), ask that first on one ask_user card: at most one card before researching, holding only what changes the answer, never what their messages or memories already say. Otherwise start at once."
+    };
+}
+
+/// What a Chat can do as a thread without a project (Q76), in its instructions and in the note
+/// that tells a Chat from before.
+macro_rules! chat_thread {
+    () => {
+        concat!(
+            "This Chat is a thread without a project: it has no repository and changes no code, but it runs workers and asks on cards.
+- ",
+            clarify_rule!(),
+            "
+- ",
+            research_fan_out!(),
+            " Start a worker with delegate_task: kind research (it searches the web, compares and writes files) or operate (it uses an app on this computer or a website, with target and end_state). A Chat has no repository, so no other kind. Then reply exactly [quiet]: each report comes later as a message ([report task-N …]), a worker's question as [question from task-N], which you answer with answer_worker. Write your answer from the reports.
+- You write no files yourself. A file the user wants (a list, a table, a document, an image) is made by a research worker in its outputs folder: link it in your answer by its name, [list.csv](outputs/list.csv), which puts its Save under your answer. Never give the user a folder or file path, nor link a file you haven't seen in a report.
+- With the browser tools listed, read or use a few pages yourself; a long browsing job goes to an operate worker."
+        )
+    };
+}
+
 /// Logged on `orch:<id>` when a conversation's CLI files were removed: the next CLI session
 /// starts over from the transcript instead of resuming.
 pub(crate) const SESSION_RESET: &str = "brigadier: CLI session reset";
@@ -192,7 +217,7 @@ You are this session's one long-lived thread: you read, search, run commands and
 How to work:
 - Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. {workers}{computer}
 - Answer code questions yourself from the Brain, code_search, code_refs and a few precise reads, quoting the file:line each point rests on (src/cart.ts:42); explain an error from the code that raises it. Never start a worker for what reading answers.
-- {fan_out}
+- {fan_out} {clarify}
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) with run_check, not your shell, before your final answer. {CHECK_PREFIXES} Never background a command yourself (`&`, nohup): one still going after a minute goes to the background by itself. Run dev servers and apps with start_preview.
 - {own_commits}
@@ -224,6 +249,7 @@ How to talk to the user:
         voice = VOICE,
         details = details_rule!(),
         fan_out = research_fan_out!(),
+        clarify = clarify_rule!(),
         workers = workers_rule(start_workers).replace("{quiet}", QUIET),
         code_rules = WORKER_CODE_RULES,
         preferences = preference_lines(preferences),
@@ -1034,6 +1060,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         ),
         worker: "",
     },
+    Revision {
+        number: CLARIFY_REVISION,
+        thread: concat!("From now on: ", clarify_rule!()),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1061,13 +1092,17 @@ pub(crate) fn revision_note(told: u32, worker: bool) -> Option<String> {
 
 /// A Chat's contract: its instructions didn't change with the thread's. Version 2 gives Chats and
 /// tab chats the thread's voice and the research answer's format (Q79); 3 its breakdown in
-/// sentences; 4 no bold at the start of any of its lines, colon or not.
-const CHAT_CONTRACT: u32 = 4;
+/// sentences; 4 no bold at the start of any of its lines, colon or not; 5 a Chat is a thread
+/// without a project (Q76: workers, cards, one clarifying card).
+const CHAT_CONTRACT: u32 = 5;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
 /// The first Chat contract with the breakdown rule as it is now; a Chat told the voice before
 /// hears [`CHAT_BREAKDOWN_NOTE`].
 const CHAT_BREAKDOWN_CONTRACT: u32 = 4;
+/// The first Chat contract with a thread's abilities; a Chat told an older one hears
+/// [`CHAT_THREAD_NOTE`] (a tab chat has none of them).
+const CHAT_THREAD_CONTRACT: u32 = 5;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1083,6 +1118,9 @@ const AUTHORITY: &str = "A note at the start of a message replaces what these in
 /// The same for a Chat.
 const CHAT_AUTHORITY: &str = "Brigadier tells you in a note at the start of a message when today's date ([today]) or what you know about the user ([settings]) changed after these instructions were written. Such a note replaces what these instructions say about it, from then on.";
 
+/// What a Chat can do as a thread (Q76).
+const CHAT_THREAD: &str = chat_thread!();
+
 /// How a Chat writes, and lays out a research answer with its report (Q79).
 const CHAT_VOICE: &str = concat!(voice_core!(), research_format!(), research_report!());
 /// The same for a tab chat, which has no `save_report`.
@@ -1093,6 +1131,9 @@ const CHAT_BREAKDOWN_NOTE: &str = concat!(
     "[instructions] From now on, a research answer's breakdown follows this:",
     research_breakdown!()
 );
+
+/// Tells a Chat from before it became a thread what it can do now (Q76).
+const CHAT_THREAD_NOTE: &str = concat!("[instructions] From now on: ", chat_thread!());
 
 /// Tells a Chat or tab chat told an older contract how it writes now (Q79).
 fn chat_voice_note(reports: bool) -> String {
@@ -1105,6 +1146,7 @@ fn chat_voice_note(reports: bool) -> String {
 const CONTRACT_LABEL: &str = "notes replace instructions";
 const CHAT_VOICE_LABEL: &str = "voice and answer format";
 const CHAT_BREAKDOWN_LABEL: &str = "research breakdown";
+const CHAT_THREAD_LABEL: &str = "chat as a thread";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
@@ -1260,7 +1302,7 @@ pub(crate) struct Current {
     /// The thread's CLI, which names Brigadier's tools in those rules.
     pub provider: ProviderKind,
     /// Whether it has `save_report` (a thread or a Chat; a tab chat hasn't): what its notes say
-    /// about a research answer's report.
+    /// about a research answer's report, and whether a Chat has a thread's tools.
     pub reports: bool,
 }
 
@@ -1476,6 +1518,8 @@ pub(crate) const OFFER_SESSION_REVISION: u32 = 109;
 /// (#319: it copied its research workers' bold labels). Research workers' briefs say the same of
 /// their notes; a brief is each worker's first message, so no worker note is needed.
 pub(crate) const BOLD_LEAD_REVISION: u32 = 110;
+/// One clarifying card before research, only for what changes the answer (Q78).
+pub(crate) const CLARIFY_REVISION: u32 = 111;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1654,6 +1698,17 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             label: CHAT_BREAKDOWN_LABEL,
             told: Told {
                 contract: Some(CHAT_BREAKDOWN_CONTRACT),
+                ..Told::default()
+            },
+        });
+    }
+    // After the voice's, so its contract is the one the log keeps.
+    if now.chat && now.reports && told.contract.unwrap_or(0) < CHAT_THREAD_CONTRACT {
+        notes.push(Note {
+            text: CHAT_THREAD_NOTE.to_owned(),
+            label: CHAT_THREAD_LABEL,
+            told: Told {
+                contract: Some(CHAT_THREAD_CONTRACT),
                 ..Told::default()
             },
         });
@@ -2421,7 +2476,7 @@ pub(crate) fn tab_chat(target: &crate::model::TabTarget, checkout: &str) -> Stri
 
 pub(crate) fn chat(memories: &[String]) -> String {
     let mut text = format!(
-        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You are in a plain chat: there is no repository and you cannot edit code. You may search the web when current information helps; say where facts came from.\nWhen the user tells you something about themselves that will matter in later conversations (a preference, their role, what they work on), keep it with the save_memory tool, one short sentence, without announcing it: the user sees what you saved and can remove it.\n{CHAT_AUTHORITY}{CHAT_VOICE}",
+        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{CHAT_THREAD}\nWhen the user tells you something about themselves that will matter in later conversations (a preference, their role, what they work on), keep it with the save_memory tool, one short sentence, without announcing it: the user sees what you saved and can remove it.\n{CHAT_AUTHORITY}{CHAT_VOICE}",
         today()
     );
     if !memories.is_empty() {
@@ -3827,8 +3882,9 @@ mod environment_tests {
         // (Q79), to 13,300 for the breakdown without bold-labelled items (Q79), and to 13,700
         // for a revised whole answer after a worker's findings, with no file promised (Q81),
         // then to 13,900 for offering out-of-scope work as a session (Q73), and to 14,100 for no
-        // bold-led breakdown line, even where what the thread read has one (#319).
-        assert!(codex.len() < 14_100, "{}", codex.len());
+        // bold-led breakdown line, even where what the thread read has one (#319), and to 14,500
+        // for one clarifying card before research (Q78).
+        assert!(codex.len() < 14_500, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -4669,7 +4725,12 @@ mod environment_tests {
         // It can't know the memories it started with: they go once. The voice comes with them.
         assert_eq!(
             labels(&sent),
-            vec![CONTRACT_LABEL, CHAT_VOICE_LABEL, PREFERENCES_LABEL]
+            vec![
+                CONTRACT_LABEL,
+                CHAT_VOICE_LABEL,
+                CHAT_THREAD_LABEL,
+                PREFERENCES_LABEL
+            ]
         );
         assert_eq!(sent[0].text, format!("[instructions] {CHAT_AUTHORITY}"));
         let mut told = told;
@@ -5050,7 +5111,6 @@ mod environment_tests {
     /// format hears the tightened rule once, whether or not it heard revision 107's.
     #[test]
     fn open_threads_hear_once_that_no_breakdown_line_starts_with_bold() {
-        assert_eq!(revision(), BOLD_LEAD_REVISION);
         for told in [ANSWER_FORMAT_REVISION, BREAKDOWN_REVISION] {
             let note = revision_note(told, false).unwrap();
             assert!(note.contains("a research answer's breakdown follows this:"));
@@ -5059,7 +5119,10 @@ mod environment_tests {
             assert!(!note.contains("### Sources"));
             assert!(revision_note(told, true).is_none());
         }
-        assert!(revision_note(BOLD_LEAD_REVISION, false).is_none());
+        assert!(
+            !revision_note(BOLD_LEAD_REVISION, false)
+                .is_some_and(|note| note.contains("breakdown"))
+        );
     }
 
     /// Q79: a Chat or tab chat told the contract before hears the voice once, the report only
@@ -5074,7 +5137,12 @@ mod environment_tests {
             assert!(notes(&told, &now).is_empty());
             told.contract = Some(1);
             let sent = notes(&told, &now);
-            assert_eq!(labels(&sent), vec![CHAT_VOICE_LABEL]);
+            // A Chat hears that it is a thread too (Q76); a tab chat isn't one.
+            let thread = |labels: Vec<&'static str>| match reports {
+                true => [labels, vec![CHAT_THREAD_LABEL]].concat(),
+                false => labels,
+            };
+            assert_eq!(labels(&sent), thread(vec![CHAT_VOICE_LABEL]));
             for words in RESTORED_VOICE.iter().chain(RESEARCH_RULES) {
                 assert!(sent[0].text.contains(words), "{words}");
             }
@@ -5086,15 +5154,77 @@ mod environment_tests {
             for contract in [CHAT_VOICE_CONTRACT, 3] {
                 told.contract = Some(contract);
                 let sent = notes(&told, &now);
-                assert_eq!(labels(&sent), vec![CHAT_BREAKDOWN_LABEL]);
+                assert_eq!(labels(&sent), thread(vec![CHAT_BREAKDOWN_LABEL]));
                 assert!(sent[0].text.contains(RESEARCH_RULES[2]));
                 assert!(!sent[0].text.contains("### Sources"));
                 took(&mut told, &sent);
-                assert_eq!(told.contract, Some(CHAT_CONTRACT));
+                let newest = if reports {
+                    CHAT_CONTRACT
+                } else {
+                    CHAT_BREAKDOWN_CONTRACT
+                };
+                assert_eq!(told.contract, Some(newest));
                 assert!(notes(&told, &now).is_empty());
             }
         }
     }
+
+    /// Q76: a Chat told contract 4 hears once that it is a thread without a project (workers of
+    /// two kinds, cards, files through a worker, one clarifying card); a tab chat hears nothing,
+    /// and a new Chat's instructions say it all.
+    #[test]
+    fn a_chat_from_before_hears_once_that_it_is_a_thread() {
+        let now = Current::chat(Vec::new());
+        let mut told = now.told();
+        assert_eq!(told.contract, Some(CHAT_CONTRACT));
+        told.contract = Some(CHAT_THREAD_CONTRACT - 1);
+        let sent = notes(&told, &now);
+        assert_eq!(labels(&sent), vec![CHAT_THREAD_LABEL]);
+        for words in CHAT_THREAD_RULES {
+            assert!(sent[0].text.contains(words), "{words}");
+            assert!(chat(&[]).contains(words), "{words}");
+        }
+        took(&mut told, &sent);
+        assert!(notes(&told, &now).is_empty());
+        let tab = Current::tab_chat();
+        let mut told = tab.told();
+        told.contract = Some(CHAT_THREAD_CONTRACT - 1);
+        assert!(notes(&told, &tab).is_empty());
+        assert!(!chat(&[]).contains("plain chat"));
+    }
+
+    /// Q78: a thread asks at most one clarifying card before research, only for what changes
+    /// the answer; open threads hear it once, workers nothing.
+    #[test]
+    fn open_threads_hear_once_to_ask_one_clarifying_card_before_research() {
+        assert_eq!(revision(), CLARIFY_REVISION);
+        let note = revision_note(CLARIFY_REVISION - 1, false).unwrap();
+        assert!(note.contains(CHAT_THREAD_RULES[0]), "{note}");
+        assert!(revision_note(CLARIFY_REVISION - 1, true).is_none());
+        let rule = thread(
+            &session("approveForMe"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Claude,
+            true,
+        );
+        assert!(rule.contains(CHAT_THREAD_RULES[0]));
+    }
+
+    /// The words of a Chat's thread rules the tests look for.
+    const CHAT_THREAD_RULES: &[&str] = &[
+        "at most one card before researching, holding only what changes the answer",
+        "kind research",
+        "or operate",
+        "A Chat has no repository, so no other kind.",
+        "Then reply exactly [quiet]",
+        "answer with answer_worker",
+        "You write no files yourself.",
+        "[list.csv](outputs/list.csv)",
+        "Never give the user a folder or file path",
+    ];
 
     /// A message sent while the thread works reaches it at once: open threads hear so once,
     /// with what to do about one that is a task of its own or another session's; workers

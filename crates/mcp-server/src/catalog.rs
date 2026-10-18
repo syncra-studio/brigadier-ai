@@ -5,16 +5,16 @@ use std::sync::{Arc, OnceLock};
 
 use brigadier_core::tools::{
     AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, AttachProof, BrowserClick,
-    BrowserNavigate, BrowserOpen, BrowserTabRef, BrowserToolCall, BrowserType, ChatCall, CiPush,
-    CodeRefs, CodeSearch, DelegateTask, EndRun, FinishSession, JobCall, LandPhase, ListSessions,
-    MessageSession, MessageWorker, NoteForUser, OfferFeedback, OfferSession, OrchestratorCall,
-    PlanPhases, PreviewLog, ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage,
-    ReadSession, RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RerunTask,
-    ReviewCandidate, ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools,
-    RunUnsandboxed, SaveMemory, SaveReport, SearchTranscript, SettleStep, SettleWait, StartPreview,
-    StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
-    SuggestFullAccess, TabChatCall, TabTools, ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall,
-    WritePage, WriteTabFile,
+    BrowserNavigate, BrowserOpen, BrowserTabRef, BrowserToolCall, BrowserType, CHAT_THREAD_TOOLS,
+    ChatCall, CiPush, CodeRefs, CodeSearch, DelegateTask, EndRun, FinishSession, JobCall,
+    LandPhase, ListSessions, MessageSession, MessageWorker, NoteForUser, OfferFeedback,
+    OfferSession, OrchestratorCall, PlanPhases, PreviewLog, ProposeOvernight, ProposePlan,
+    QueryBrain, ReadArtifact, ReadPage, ReadSession, RecordFindings, RecordNodes, Remember,
+    ReportRef, RequestApproval, RerunTask, ReviewCandidate, ReviewPlan, Role, RouteFollowUp,
+    RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory, SaveReport, SearchTranscript,
+    SettleStep, SettleWait, StartPreview, StartVerifier, StopMerge, StopPreview, StopWorker,
+    StoreOutput, SubmitOutline, SubmitReport, SuggestFullAccess, TabChatCall, TabTools,
+    ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -578,11 +578,12 @@ pub fn browser_tools() -> &'static [Tool] {
 }
 
 /// Whether `role` gets the browser tools while the browser may be used: the thread (and its
-/// note fork, which lists what the thread does) and its workers.
+/// note fork, which lists what the thread does), a Chat (a thread without a project, Q76) and
+/// their workers.
 pub fn has_browser_tools(role: &Role) -> bool {
     matches!(
         role,
-        Role::Orchestrator { .. } | Role::NoteFork { .. } | Role::Worker { .. }
+        Role::Orchestrator { .. } | Role::NoteFork { .. } | Role::Worker { .. } | Role::Chat { .. }
     )
 }
 
@@ -860,11 +861,24 @@ fn job_tools() -> Vec<Tool> {
     ]
 }
 
+/// A Chat's: the thread's tools for workers and cards ([`CHAT_THREAD_TOOLS`]), its memories and
+/// its reports.
 fn chat_tools() -> Vec<Tool> {
-    vec![
-        tool("save_memory", SAVE_MEMORY, input_schema::<SaveMemory>()),
-        tool("save_report", SAVE_REPORT, input_schema::<SaveReport>()),
-    ]
+    let mut tools: Vec<Tool> = orchestrator_tools()
+        .into_iter()
+        .filter(|tool| CHAT_THREAD_TOOLS.contains(&tool.name.as_ref()))
+        .collect();
+    tools.push(tool(
+        "save_memory",
+        SAVE_MEMORY,
+        input_schema::<SaveMemory>(),
+    ));
+    tools.push(tool(
+        "save_report",
+        SAVE_REPORT,
+        input_schema::<SaveReport>(),
+    ));
+    tools
 }
 
 /// The thread's everyday tools, in the model's list from the start (Q40, BUILD-PLAN C2): a
@@ -1159,13 +1173,22 @@ pub fn parse_call(
             };
             Ok(ToolCall::Job(call))
         }
-        Role::Chat { .. } => match name {
+        Role::Chat { conversation_id } => match name {
             "save_memory" => Ok(ToolCall::Chat(ChatCall::SaveMemory(args::<SaveMemory>(
                 name, arguments,
             )?))),
             "save_report" => Ok(ToolCall::Chat(ChatCall::SaveReport(args::<SaveReport>(
                 name, arguments,
             )?))),
+            // The thread's own tools, read as the thread's are.
+            _ if CHAT_THREAD_TOOLS.contains(&name) => parse_call(
+                &Role::Orchestrator {
+                    conversation_id: conversation_id.clone(),
+                    run: RunTools::None,
+                },
+                name,
+                arguments.as_object().cloned(),
+            ),
             _ => Err(unknown()),
         },
         Role::TabChat { tools, .. } => {
@@ -1692,7 +1715,7 @@ mod tests {
     }
 
     #[test]
-    fn the_thread_and_its_workers_make_browser_calls_and_no_one_else() {
+    fn threads_chats_and_their_workers_make_browser_calls_and_no_one_else() {
         let thread = Role::Orchestrator {
             conversation_id: brigadier_core::model::ConversationId("c1".into()),
             run: RunTools::None,
@@ -1725,11 +1748,48 @@ mod tests {
                 ..
             })))
         ));
-        assert!(!has_browser_tools(&chat));
+        // A Chat is a thread without a project (Q76).
+        assert!(has_browser_tools(&chat));
         assert!(matches!(
             parse_call(&chat, "browser_open", open.as_object().cloned()),
-            Err(ParseError::UnknownTool(_))
+            Ok(ToolCall::Browser(BrowserToolCall::Open(_)))
         ));
+    }
+
+    /// A Chat lists the thread's worker and card tools besides its own, and nothing of git,
+    /// checks, landing or other sessions (Q76); it calls them as the thread does.
+    #[test]
+    fn a_chat_has_the_threads_worker_and_card_tools() {
+        let chat = Role::Chat {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+        };
+        let names: Vec<_> = tools_for(&chat)
+            .iter()
+            .map(|tool| tool.name.as_ref())
+            .collect();
+        for name in CHAT_THREAD_TOOLS
+            .iter()
+            .chain(&["save_memory", "save_report"])
+        {
+            assert!(names.contains(name), "{name}");
+        }
+        assert_eq!(names.len(), CHAT_THREAD_TOOLS.len() + 2, "{names:?}");
+        let ask = serde_json::json!({ "questions": [{ "question": "Which city?" }] });
+        assert!(matches!(
+            parse_call(&chat, "ask_user", ask.as_object().cloned()),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::AskUser(_)))
+        ));
+        let report = serde_json::json!({ "title": "Nozzles", "markdown": "# Nozzles" });
+        assert!(matches!(
+            parse_call(&chat, "save_report", report.as_object().cloned()),
+            Ok(ToolCall::Chat(ChatCall::SaveReport(_)))
+        ));
+        for name in ["land_phase", "run_check", "message_session", "remember"] {
+            assert!(matches!(
+                parse_call(&chat, name, Some(JsonObject::new())),
+                Err(ParseError::UnknownTool(_))
+            ));
+        }
     }
 
     #[test]
