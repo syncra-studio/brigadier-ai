@@ -16,4 +16,9 @@ deciding: boolean,
  * The thread's command it waits behind while being judged: the thread reads it once
  * that command ends.
  */
-heldBy?: HeldBy, };
+heldBy?: HeldBy, 
+/**
+ * The thread judged it could run apart: it offers the user "Open as a new tab?" while it
+ * waits (`route_follow_up` route "new_tab").
+ */
+offerTab?: boolean, };

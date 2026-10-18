@@ -21,8 +21,9 @@ use crate::projection::Projection;
 
 mod peer_records;
 use crate::work::{
-    AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, OrchestratorEntry,
-    QueuedMessage, RequestState, RequestUndo, Task, TaskId, UserRequest, WorkSpan,
+    AttachmentRef, ConversationActivity, HeldBy, Mention, MessageQueue, MovedMessage,
+    OrchestratorEntry, QueuedMessage, RequestState, RequestUndo, Task, TaskId, UserRequest,
+    WorkSpan,
 };
 use crate::{Error, Result, now_ms};
 pub(crate) use peer_records::PeerSend;
@@ -1979,6 +1980,7 @@ impl Core {
             edited_at_ms: None,
             deciding,
             held_by: None,
+            offer_tab: false,
         };
         let queued = item.clone();
         self.change_queue(id, move |queue| {
@@ -2086,6 +2088,49 @@ impl Core {
         })
         .await?;
         Ok(judged)
+    }
+
+    /// Ends the judging of queued message `item_id` with the thread's offer to open it as a
+    /// new tab: it waits like any other, showing the offer. False if it is no longer queued.
+    pub async fn offer_queued_as_tab(&self, id: &ConversationId, item_id: &str) -> Result<bool> {
+        let mut found = false;
+        self.change_queue(id, |queue| {
+            if let Some(item) = queue.items.iter_mut().find(|item| item.id == item_id) {
+                item.deciding = false;
+                item.offer_tab = true;
+                found = true;
+            }
+            Ok(())
+        })
+        .await?;
+        Ok(found)
+    }
+
+    /// Keeps the notice of a queued message the thread sent on to another tab.
+    pub async fn keep_moved(&self, id: &ConversationId, moved: MovedMessage) -> Result<()> {
+        self.change_queue(id, |queue| {
+            queue.moved.retain(|kept| kept.id != moved.id);
+            queue.moved.push(moved);
+            Ok(())
+        })
+        .await
+        .map(|_| ())
+    }
+
+    /// Takes the notice of moved message `item_id` away (undone or dismissed).
+    pub async fn take_moved(&self, id: &ConversationId, item_id: &str) -> Result<MovedMessage> {
+        let mut taken = None;
+        self.change_queue(id, |queue| {
+            let index = queue
+                .moved
+                .iter()
+                .position(|moved| moved.id == item_id)
+                .ok_or_else(|| Error::NotFound(format!("moved message {item_id}")))?;
+            taken = Some(queue.moved.remove(index));
+            Ok(())
+        })
+        .await?;
+        taken.ok_or_else(|| Error::NotFound(format!("moved message {item_id}")))
     }
 
     /// Takes the next message to send, unless the queue is paused or empty.

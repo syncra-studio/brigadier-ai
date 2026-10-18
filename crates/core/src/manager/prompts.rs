@@ -847,6 +847,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, settle_step no longer refuses an overnight phase settled done for missing evidence or full checks that haven't passed at the run's tip: it settles, its result lists what has no evidence, and the morning report marks the phase \"settled without evidence for: …\". Close a gap with a check at the tip when you can.",
         worker: "",
     },
+    Revision {
+        number: WORKSPACE_ROUTES_REVISION,
+        thread: "From now on, route_follow_up takes route instead of joins: \"join\", \"wait\", \"new_tab\" (it waits offering the user \"Open as a new tab?\"; you never open tabs yourself) or \"tab\" with another tab's session id (it goes there as the user's message, and this tab shows the user a notice with Undo). A [follow-up …] block lists this workspace's other tabs and their states. list_sessions with workspace true lists those tabs as data: title, state, branch, base and changed files; [workspace] lines tell you when a tab's changed files first overlap yours and when one merges. They are plain facts: whether to warn, rebase, message or ignore is yours to judge.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1165,6 +1170,9 @@ pub(crate) const THREAD_SPEAKS_REVISION: u32 = 96;
 /// An overnight phase settled done without evidence or passing full checks at the tip settles
 /// anyway (#251): the result and the morning report say what it has no evidence for.
 pub(crate) const SETTLE_GAPS_REVISION: u32 = 97;
+/// Workspaces (WORKSPACES-PLAN.md phase 2): route_follow_up routes a follow-up to join, wait,
+/// offer a new tab, or go to another tab; the board and its facts are named.
+pub(crate) const WORKSPACE_ROUTES_REVISION: u32 = 98;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -2362,13 +2370,23 @@ fn scratch_note(scratch_gone: bool) -> &'static str {
     }
 }
 
+/// Another tab of the session's workspace, as a [follow-up …] block lists it: its id, title
+/// and state.
+pub(crate) struct TabLine {
+    pub id: String,
+    pub title: String,
+    pub state: String,
+}
+
 /// Tells the orchestrator of a follow-up the user sent while `request` works: it may sort it
-/// with route_follow_up, or answer or act on it itself.
+/// with route_follow_up, or answer or act on it itself. `tabs` are the workspace's other tabs,
+/// where the message may belong instead.
 pub(crate) fn follow_up(
     id: &str,
     request: &str,
     text: &str,
     attachments: &[crate::work::AttachmentRef],
+    tabs: &[TabLine],
 ) -> String {
     let mut block = format!(
         "[follow-up {id}] The user sent this while you work on their request \"{request}\":\n{text}"
@@ -2377,10 +2395,25 @@ pub(crate) fn follow_up(
         let names: Vec<&str> = attachments.iter().map(|a| a.name.as_str()).collect();
         block.push_str(&format!("\n(attached: {})", names.join(", ")));
     }
+    if !tabs.is_empty() {
+        block.push_str("\nThe other tabs of this workspace:");
+        for tab in tabs {
+            block.push_str(&format!(
+                "\n- \"{}\" (session {}): {}",
+                tab.title, tab.id, tab.state
+            ));
+        }
+    }
+    let to_tab = if tabs.is_empty() {
+        ""
+    } else {
+        " If it belongs to one of the other tabs, route \"tab\" with that tab's id sends it there."
+    };
     block.push_str(&format!(
         "\n[/follow-up] If it is a request of its own, call route_follow_up (follow_up \"{id}\") \
-         with joins false: it reaches you once this work is done. Otherwise it joins this work \
-         (at once with joins true, else shortly by itself) and reaches you as the user's \
+         with route \"wait\": it reaches you once this work is done, or \"new_tab\": it waits \
+         offering the user \"Open as a new tab?\".{to_tab} Otherwise it joins this work (at \
+         once with route \"join\", else shortly by itself) and reaches you as the user's \
          message; you may also answer or act on it now. If you have nothing to say now, reply \
          with exactly {QUIET}."
     ));
@@ -4270,7 +4303,7 @@ mod environment_tests {
             revision_note(THREAD_SPEAKS_REVISION, true)
         );
         assert!(!WORKER_RULES.contains("announce"));
-        let block = follow_up("q-1", "Build the export", "Also add CSV.", &[]);
+        let block = follow_up("q-1", "Build the export", "Also add CSV.", &[], &[]);
         for gone in [
             "silently",
             "write nothing",
@@ -4284,6 +4317,45 @@ mod environment_tests {
         assert!(block.ends_with(&format!(
             "If you have nothing to say now, reply with exactly {QUIET}."
         )));
+    }
+
+    /// Workspaces: open threads hear the routes and the board once (workers nothing); a
+    /// follow-up block lists the workspace's other tabs with their states and names route
+    /// "tab" only when there is one.
+    #[test]
+    fn the_workspace_routes_reach_an_open_thread_and_the_follow_up_lists_the_tabs() {
+        let added = REVISIONS
+            .iter()
+            .find(|revision| revision.number == WORKSPACE_ROUTES_REVISION)
+            .unwrap();
+        assert!(added.worker.is_empty());
+        let note = revision_note(WORKSPACE_ROUTES_REVISION - 1, false).unwrap();
+        for words in [
+            "route instead of joins",
+            "\"new_tab\"",
+            "you never open tabs yourself",
+            "list_sessions with workspace true",
+            "yours to judge",
+        ] {
+            assert!(note.contains(words), "{words}: {note}");
+        }
+        let alone = follow_up("q-1", "Build the export", "Also add CSV.", &[], &[]);
+        assert!(alone.contains("route \"wait\"") && alone.contains("\"new_tab\""));
+        assert!(!alone.contains("route \"tab\"") && !alone.contains("other tabs"));
+        let tabs = [TabLine {
+            id: "s-2".into(),
+            title: "Redesigning the login".into(),
+            state: "working".into(),
+        }];
+        let block = follow_up("q-1", "Build the export", "Also add CSV.", &[], &tabs);
+        assert!(
+            block.contains("The other tabs of this workspace:\n- \"Redesigning the login\" (session s-2): working"),
+            "{block}"
+        );
+        assert!(
+            block.contains("route \"tab\" with that tab's id"),
+            "{block}"
+        );
     }
 
     /// A thread told the revision before hears how to keep the user from guessing once; a

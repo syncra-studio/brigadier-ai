@@ -1763,6 +1763,44 @@ pub struct QueuedMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub held_by: Option<HeldBy>,
+    /// The thread judged it could run apart: it offers the user "Open as a new tab?" while it
+    /// waits (`route_follow_up` route "new_tab").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub offer_tab: bool,
+}
+
+/// A queued message the thread sent on to another tab of its workspace (`route_follow_up`
+/// route "tab"): the one-line notice this tab keeps, with Undo, until the user undoes or
+/// dismisses it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MovedMessage {
+    /// The queued message's id here.
+    pub id: String,
+    pub text: String,
+    pub attachments: Vec<AttachmentRef>,
+    pub mentions: Vec<Mention>,
+    /// The tab it went to, and its title then.
+    pub to: ConversationId,
+    pub to_title: String,
+    pub moved_at_ms: i64,
+    /// Where it stands there: sent into its thread, or waiting in its queue.
+    pub sent: MovedAs,
+}
+
+/// How a moved message arrived in the other tab.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum MovedAs {
+    /// Sent as the user's message.
+    Sent { message_id: String },
+    /// Queued there (that tab was working).
+    Queued { item_id: String },
 }
 
 /// The thread's command that a message sent into its running turn waits behind: the thread
@@ -1782,6 +1820,10 @@ pub struct MessageQueue {
     pub items: Vec<QueuedMessage>,
     /// The user interrupted the turn; nothing is sent until they resume.
     pub paused: bool,
+    /// What the thread sent on to another tab: notices with Undo, never sent from here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<MovedMessage>>", optional)]
+    pub moved: Vec<MovedMessage>,
 }
 
 // ----- the conversation's live state --------------------------------------------------------

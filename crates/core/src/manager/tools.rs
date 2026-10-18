@@ -413,7 +413,7 @@ impl SessionManager {
                 Ok(reply)
             }
             OrchestratorCall::RouteFollowUp(args) => {
-                crate::heap(|| self.route_follow_up(id, &args.follow_up, args.joins)).await
+                crate::heap(|| self.route_follow_up(id, &args)).await
             }
             OrchestratorCall::StopWorker(args) => {
                 let reason = super::brains::one_line(&args.reason, STOP_REASON_MAX);

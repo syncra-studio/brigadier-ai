@@ -222,6 +222,8 @@ export type { ModelFallback } from "./ModelFallback";
 export type { ModelInfo } from "./ModelInfo";
 export type { ModelRef } from "./ModelRef";
 export type { ModelStatus } from "./ModelStatus";
+export type { MovedAs } from "./MovedAs";
+export type { MovedMessage } from "./MovedMessage";
 export type { Node } from "./Node";
 export type { NodeFilter } from "./NodeFilter";
 export type { NodeKind } from "./NodeKind";

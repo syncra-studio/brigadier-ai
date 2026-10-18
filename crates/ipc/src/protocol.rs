@@ -565,6 +565,13 @@ pub enum Request {
     ResumeQueue {
         conversation_id: ConversationId,
     },
+    /// The notice of a queued message the thread sent on to another tab: Undo (`undo`) takes
+    /// it back and sends it here again; otherwise the notice goes.
+    SettleMoved {
+        conversation_id: ConversationId,
+        item_id: String,
+        undo: bool,
+    },
     /// Stops the running turn; the queue pauses.
     Interrupt {
         conversation_id: ConversationId,
@@ -1509,6 +1516,7 @@ pub enum Response {
     ResumeQueue {
         queue: MessageQueue,
     },
+    SettleMoved,
     Interrupt,
     Resume,
     StopPreview,

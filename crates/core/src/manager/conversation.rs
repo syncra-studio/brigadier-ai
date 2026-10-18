@@ -1684,7 +1684,15 @@ impl SessionManager {
             .filter(|attachment| !attachment.pasted)
             .cloned()
             .collect();
-        let text = prompts::follow_up(&item.id, &preview, &words, &files);
+        let mut tabs = Vec::new();
+        for tab in self.siblings(&conv.id).unwrap_or_default() {
+            tabs.push(prompts::TabLine {
+                state: self.peer_state(&tab).await.to_owned(),
+                id: tab.id.0,
+                title: tab.title,
+            });
+        }
+        let text = prompts::follow_up(&item.id, &preview, &words, &files, &tabs);
         let mut state = conv.state.lock().await;
         let steered = match (&state.cli, state.busy) {
             (Some(cli), true) => cli
@@ -1728,13 +1736,29 @@ impl SessionManager {
     }
 
     /// `route_follow_up`: the orchestrator's judgment of a queued follow-up. One that joins
-    /// the working answer is sent into it now; one of its own waits in the queue.
+    /// the working answer is sent into it now; one of its own waits in the queue, offering a
+    /// new tab when the thread says so; one for another tab of the workspace goes there.
     pub(crate) async fn route_follow_up(
         &self,
         id: &ConversationId,
-        item_id: &str,
-        joins: bool,
+        args: &crate::tools::RouteFollowUp,
     ) -> Result<String> {
+        use crate::tools::FollowUpRoute;
+        let item_id = args.follow_up.as_str();
+        let Some(route) = args.chosen() else {
+            return Err(Error::Invalid(
+                "route_follow_up needs a `route`: \"join\", \"wait\", \"new_tab\" or \"tab\"."
+                    .into(),
+            ));
+        };
+        // The tab it names, before anything changes: one that isn't there leaves it unsorted.
+        let tab = match route {
+            FollowUpRoute::Tab => match self.sibling_named(id, args.tab.as_deref())? {
+                Ok(tab) => Some(tab),
+                Err(fact) => return Ok(fact),
+            },
+            _ => None,
+        };
         let conv = self.conv(id)?;
         {
             let mut state = conv.state.lock().await;
@@ -1763,27 +1787,45 @@ impl SessionManager {
                 "The user already sent, changed or removed that follow-up; nothing to do.".into(),
             );
         }
-        if !joins {
-            self.core.settle_queued(id, &[item_id.to_owned()]).await?;
-            return Ok(
-                "It waits in the queue and reaches you as its own request once this work is \
-                 done."
-                    .into(),
-            );
+        match route {
+            FollowUpRoute::Wait => {
+                self.core.settle_queued(id, &[item_id.to_owned()]).await?;
+                Ok(
+                    "It waits in the queue and reaches you as its own request once this work is \
+                     done."
+                        .into(),
+                )
+            }
+            FollowUpRoute::NewTab => {
+                self.core.offer_queued_as_tab(id, item_id).await?;
+                Ok(
+                    "It waits in the queue offering the user \"Open as a new tab?\": a click \
+                     starts it in a new tab of this workspace; otherwise it reaches you as its \
+                     own request once this work is done."
+                        .into(),
+                )
+            }
+            FollowUpRoute::Tab => match tab {
+                Some(tab) => self.move_follow_up(id, item_id, &tab).await,
+                None => unreachable!("a tab route has its tab"),
+            },
+            FollowUpRoute::Join => {
+                let working = self.working_request(id).await;
+                let message = conv
+                    .user_write(async {
+                        let item = self.core.take_queued(id, item_id).await?;
+                        self.core.append_queued(id.clone(), item).await
+                    })
+                    .await?;
+                self.join_working(&conv, message, working).await;
+                Ok(
+                    "It joins this work and reaches you now as the user's message. Act on it (a \
+                     running worker gets it with message_worker) and answer it in the final \
+                     answer with the rest."
+                        .into(),
+                )
+            }
         }
-        let working = self.working_request(id).await;
-        let message = conv
-            .user_write(async {
-                let item = self.core.take_queued(id, item_id).await?;
-                self.core.append_queued(id.clone(), item).await
-            })
-            .await?;
-        self.join_working(&conv, message, working).await;
-        Ok(
-            "It joins this work and reaches you now as the user's message. Act on it (a running \
-             worker gets it with message_worker) and answer it in the final answer with the rest."
-                .into(),
-        )
     }
 
     /// Gives the thread [`DECIDING_WAIT`] to judge follow-up `item_id`; one still unjudged

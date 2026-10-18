@@ -823,6 +823,55 @@ export async function openQueuedInSideChat(conversationId: string, item: QueuedM
   }
 }
 
+/**
+ * "Open as a new tab" on a message the thread offered as one: it leaves the queue first, then
+ * starts in a new background tab of the same workspace on the tab's own model and permission;
+ * the user stays where they are. If that fails, it goes back in its slot and the error is
+ * thrown; one the queue already sent goes nowhere (`false`).
+ */
+export async function openQueuedAsTab(conversationId: string, item: QueuedMessage): Promise<boolean> {
+  const source = useApp.getState().conversations[conversationId];
+  if (!source?.workspaceId) return false;
+  const index = Math.max(0, boardOf(conversationId)?.queue.items.findIndex((entry) => entry.id === item.id) ?? 0);
+  try {
+    await deleteQueued(conversationId, item.id);
+  } catch {
+    await loadConversation(conversationId).catch(() => {});
+    return false;
+  }
+  const setup = source.setup?.type === "session"
+    ? {
+      type: "session" as const,
+      repo: source.setup.repo,
+      // A tab always starts from its workspace's base.
+      environment: { type: "newWorktree" as const, base: "", branch: null },
+      permission: source.setup.permission,
+      orchestrator: source.setup.orchestrator,
+      planMode: false,
+    }
+    : null;
+  try {
+    const { conversation } = await request({
+      method: "startTab",
+      workspaceId: source.workspaceId,
+      setup,
+      text: item.text,
+      attachments: item.attachments,
+      mentions: item.mentions.filter((mention) => mention.type !== "task"),
+    });
+    storeConversation(conversation);
+    return true;
+  } catch (error) {
+    await restoreQueued(conversationId, item, index);
+    throw error;
+  }
+}
+
+/** The notice of a message the thread sent on to another tab: Undo takes it back here, else it goes. */
+export async function settleMoved(conversationId: string, itemId: string, undo: boolean): Promise<void> {
+  await request({ method: "settleMoved", conversationId, itemId, undo });
+}
+
 export async function steerQueued(conversationId: string, itemId: string): Promise<void> {
   await request({ method: "steerQueued", conversationId, itemId });
 }

@@ -9,6 +9,7 @@ import {
   Play,
   Stack,
   Trash,
+  X,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { useCallback, useContext } from "react";
 
@@ -32,15 +33,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
-import type { AttachmentRef, QueuedMessage } from "@/ipc/generated";
+import type { AttachmentRef, MovedMessage, QueuedMessage } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { deleteQueued, openQueuedInSideChat, resumeQueue } from "@/state/actions";
+import { deleteQueued, openQueuedAsTab, openQueuedInSideChat, resumeQueue, settleMoved } from "@/state/actions";
 import { HeldNote } from "@/app/conversation/HeldNote";
 import { useBoard } from "@/state/board";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
 const NO_ITEMS: QueuedMessage[] = [];
+const NO_MOVED: MovedMessage[] = [];
 
 function useQueueItems(conversationId: string | null): QueuedMessage[] {
   return useBoard((s) =>
@@ -92,7 +94,9 @@ function attachmentLabel(attachments: readonly AttachmentRef[]): string | null {
 
 /**
  * The queue card on the composer rail: what waits for the running turn, one row each (glyph,
- * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover. Its ⋯ edits
+ * text, ↳ Steer, delete, ⋯), dragged by the grip that replaces the glyph on hover. A message
+ * the thread judged could run apart offers "Open as a new tab"; one it sent on to another tab
+ * leaves a one-line notice with Undo. Its ⋯ edits
  * the message, opens it in a new Side chat tab instead (in a session), or turns queueing off,
  * so follow-ups steer into the turn.
  * Steering, moving and deleting go through assistant-ui's queue (the view's adapter talks to
@@ -102,6 +106,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
   const aui = useAui();
   const queue = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.queue : null));
   const items = queue?.items ?? NO_ITEMS;
+  const moved = queue?.moved ?? NO_MOVED;
   // Behind the row now `to - 1` (the front for 0), in assistant-ui's terms.
   const moveTo = (id: string, to: number) => {
     const rest = items.filter((item) => item.id !== id);
@@ -121,7 +126,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
   // A session's own view has Side chat tabs; a side chat has none of its own.
   const view = useContext(ViewContext);
   const sideChats = !view.embedded && view.conversation?.kind === "session" && !view.conversation.sideOf;
-  if (items.length === 0) return null;
+  if (items.length === 0 && moved.length === 0) return null;
 
   return (
     <ComposerRailItem label="Message queue">
@@ -174,13 +179,23 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
               </span>
               {item.deciding && item.heldBy ? (
                 <HeldNote held={item.heldBy} className="shrink-0 truncate" />
-              ) : item.deciding && (
+              ) : item.deciding ? (
                 <span
                   title="Brigadier is checking whether this belongs to the answer in progress"
                   className="text-muted-foreground shimmer shrink-0 text-xs motion-reduce:animate-none"
                 >
                   Deciding
                 </span>
+              ) : item.offerTab && (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  title="It can run apart from the work in progress"
+                  disabled={action.busy}
+                  onClick={() => action.run(() => openQueuedAsTab(conversationId, item))}
+                >
+                  Open as a new tab
+                </Button>
               )}
               <TooltipIconButton
                 tooltip="Submit without interrupting the model"
@@ -234,6 +249,33 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
             </MessageQueueItem>
           );
         })}
+        {moved.map((notice) => (
+          <li
+            key={notice.id}
+            data-slot="message-queue-moved"
+            className="text-muted-foreground min-h-row flex items-center gap-2 ps-3 pe-1 text-sm"
+          >
+            <span className="min-w-0 flex-1 truncate" title={notice.text}>
+              Sent to “{notice.toTitle}”: {notice.text}
+            </span>
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={action.busy}
+              onClick={() => action.run(() => settleMoved(conversationId, notice.id, true))}
+            >
+              Undo
+            </Button>
+            <TooltipIconButton
+              tooltip="Dismiss"
+              side="top"
+              className="text-muted-foreground"
+              onClick={() => action.run(() => settleMoved(conversationId, notice.id, false))}
+            >
+              <X />
+            </TooltipIconButton>
+          </li>
+        ))}
       </MessageQueue>
       {action.error && (
         <p role="alert" className="text-destructive px-3 pb-1 text-xs">

@@ -1283,8 +1283,8 @@ fn lifecycle_outcomes(
         .collect()
 }
 
-/// A new task tab in a workspace, empty or started on a message (in its own boxed future:
-/// the dispatch stays under its size).
+/// A new task tab in a workspace, empty or started on a message, and the notice of a message
+/// sent on to a tab (in its own boxed future: the dispatch stays under its size).
 async fn open_tab(sessions: &SessionManager, request: Request) -> Result<Response, IpcError> {
     Ok(match request {
         Request::CreateTab {
@@ -1317,6 +1317,16 @@ async fn open_tab(sessions: &SessionManager, request: Request) -> Result<Respons
                 conversation: Box::new(conversation),
                 outcome: send_outcome(outcome),
             }
+        }
+        Request::SettleMoved {
+            conversation_id,
+            item_id,
+            undo,
+        } => {
+            sessions
+                .settle_moved(&conversation_id, &item_id, undo)
+                .await?;
+            Response::SettleMoved
         }
         _ => unreachable!("only tab requests come here"),
     })
@@ -1376,9 +1386,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 heap(|| sessions.create_conversation(kind, project_id, title, setup)).await?,
             ),
         },
-        request @ (Request::CreateTab { .. } | Request::StartTab { .. }) => {
-            heap(|| open_tab(sessions, request)).await?
-        }
+        request @ (Request::CreateTab { .. }
+        | Request::StartTab { .. }
+        | Request::SettleMoved { .. }) => heap(|| open_tab(sessions, request)).await?,
         Request::ForkConversation {
             conversation_id,
             message_id,

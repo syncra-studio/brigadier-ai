@@ -9,6 +9,7 @@ use crate::model::{
 };
 use crate::sessions::Origin;
 use crate::work::AttachmentRef;
+use crate::work::{MovedAs, MovedMessage, OrchestratorStepKind};
 use crate::{Error, Result};
 
 use super::SessionManager;
@@ -328,5 +329,243 @@ impl SessionManager {
                 .await;
             }
         }
+    }
+}
+
+impl SessionManager {
+    /// The sibling tab of `id` that route "tab" names, or the fact why there is none (the
+    /// follow-up stays unsorted).
+    pub(super) fn sibling_named(
+        &self,
+        id: &ConversationId,
+        tab: Option<&str>,
+    ) -> Result<std::result::Result<Conversation, String>> {
+        let siblings = self.siblings(id)?;
+        let Some(tab) = tab else {
+            return Err(Error::Invalid(
+                "route \"tab\" needs `tab`: the other tab's session id.".into(),
+            ));
+        };
+        if let Some(sibling) = siblings.iter().find(|sibling| sibling.id.0 == tab) {
+            return Ok(Ok(sibling.clone()));
+        }
+        let listed: Vec<String> = siblings
+            .iter()
+            .map(|sibling| format!("\"{}\" (session {})", sibling.title, sibling.id))
+            .collect();
+        Ok(Err(if listed.is_empty() {
+            "This workspace has no other tab; the follow-up is still yours to sort.".into()
+        } else {
+            format!(
+                "No other tab of this workspace is session {tab}; they are {}. The follow-up \
+                 is still yours to sort.",
+                listed.join(", ")
+            )
+        }))
+    }
+
+    /// Route "tab": queued follow-up `item_id` of `id` goes to sibling `tab` as the user's
+    /// message (queued there if it works), and this tab keeps a notice with Undo. A sibling
+    /// that already merged is told as a fact, not refused.
+    pub(super) async fn move_follow_up(
+        &self,
+        id: &ConversationId,
+        item_id: &str,
+        tab: &Conversation,
+    ) -> Result<String> {
+        let me = self.core.conversation(id)?;
+        let index = self
+            .core
+            .board(id)
+            .await?
+            .queue
+            .items
+            .iter()
+            .position(|item| item.id == item_id)
+            .unwrap_or(0);
+        let item = self.core.take_queued(id, item_id).await?;
+        // This tab's workers mean nothing there.
+        let mentions: Vec<Mention> = item
+            .mentions
+            .iter()
+            .filter(|mention| !matches!(mention, Mention::Task { .. }))
+            .cloned()
+            .collect();
+        if let Ok(conv) = self.conv(&tab.id) {
+            conv.hold_fact(format!(
+                "[workspace] The user wrote \"{}\" in tab \"{}\" (session {}), whose thread \
+                 sent it on to you as theirs.",
+                super::brains::one_line(&item.text, 120),
+                me.title,
+                me.id
+            ))
+            .await;
+        }
+        let sent = match crate::heap(|| {
+            self.send_message(
+                tab.id.clone(),
+                item.text.clone(),
+                item.attachments.clone(),
+                mentions,
+                false,
+                None,
+            )
+        })
+        .await
+        {
+            Ok(SendOutcome::Sent(message)) => MovedAs::Sent {
+                message_id: message.id,
+            },
+            Ok(SendOutcome::Queued(queued)) => MovedAs::Queued { item_id: queued.id },
+            Err(err) => {
+                self.core
+                    .enqueue(
+                        id,
+                        item.text,
+                        item.attachments,
+                        item.mentions,
+                        Some(index as u32),
+                        false,
+                    )
+                    .await?;
+                return Ok(format!(
+                    "It couldn't go to tab \"{}\" ({err}); it waits in this tab's queue as its \
+                     own request.",
+                    tab.title
+                ));
+            }
+        };
+        let queued = matches!(sent, MovedAs::Queued { .. });
+        self.core
+            .keep_moved(
+                id,
+                MovedMessage {
+                    id: item.id,
+                    text: item.text,
+                    attachments: item.attachments,
+                    mentions: item.mentions,
+                    to: tab.id.clone(),
+                    to_title: tab.title.clone(),
+                    moved_at_ms: crate::now_ms(),
+                    sent,
+                },
+            )
+            .await?;
+        Ok(format!(
+            "It went to tab \"{}\" (session {}) as the user's message{}; this tab shows the \
+             user a notice with Undo.{}",
+            tab.title,
+            tab.id,
+            if queued {
+                ", waiting in its queue while it works"
+            } else {
+                ""
+            },
+            self.merged_fact(tab).await
+        ))
+    }
+
+    /// " Tab ‹B› has already merged into `main` at ‹sha›." when it has, else nothing.
+    async fn merged_fact(&self, tab: &Conversation) -> String {
+        let Ok(board) = self.core.board(&tab.id).await else {
+            return String::new();
+        };
+        let Some(base) = board
+            .orchestrator_steps
+            .iter()
+            .rev()
+            .find_map(|step| match &step.kind {
+                OrchestratorStepKind::Merged { base, .. } => Some(base.clone()),
+                _ => None,
+            })
+        else {
+            return String::new();
+        };
+        let at = match self.tab_tip(tab, &base).await {
+            Some((tip, 0)) => format!(" at {}", &tip[..tip.len().min(12)]),
+            Some((_, since)) => format!("; its branch has {since} commit(s) since"),
+            None => String::new(),
+        };
+        format!(
+            " Tab \"{}\" has already merged into `{base}`{at}.",
+            tab.title
+        )
+    }
+
+    /// `tab`'s branch tip, and how many of its commits `base` lacks.
+    async fn tab_tip(&self, tab: &Conversation, base: &str) -> Option<(String, u32)> {
+        let Some(Setup::Session {
+            repo,
+            environment: crate::model::Environment::NewWorktree { branch, .. },
+            ..
+        }) = tab.setup.clone()
+        else {
+            return None;
+        };
+        let (git, base) = (self.git.clone(), base.to_owned());
+        super::blocking(move || {
+            let repo = git
+                .open(std::path::Path::new(&repo))
+                .map_err(super::git_error)?;
+            let (Some(base_tip), Some(tip)) = (
+                repo.branch_tip(&base).map_err(super::git_error)?,
+                repo.branch_tip(&branch).map_err(super::git_error)?,
+            ) else {
+                return Ok(None);
+            };
+            let since = repo
+                .count_commits(&base_tip, &tip)
+                .map_err(super::git_error)?;
+            Ok(Some((tip.0, since)))
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// The user's Undo (`undo`) or dismissal of moved message `item_id`'s notice. Undo sends
+    /// it here again, as if just written, then takes it back from the other tab's queue if it
+    /// still waits there (else that tab hears the user took it back). A resend that fails
+    /// changes nothing, so the notice stays for another try.
+    pub async fn settle_moved(&self, id: &ConversationId, item_id: &str, undo: bool) -> Result<()> {
+        if !undo {
+            return self.core.take_moved(id, item_id).await.map(|_| ());
+        }
+        let moved = self
+            .core
+            .board(id)
+            .await?
+            .queue
+            .moved
+            .into_iter()
+            .find(|moved| moved.id == item_id)
+            .ok_or_else(|| Error::NotFound(format!("moved message {item_id}")))?;
+        crate::heap(|| {
+            self.send_message(
+                id.clone(),
+                moved.text.clone(),
+                moved.attachments.clone(),
+                moved.mentions.clone(),
+                false,
+                None,
+            )
+        })
+        .await?;
+        let took_back = match &moved.sent {
+            MovedAs::Queued { item_id } => self.core.take_queued(&moved.to, item_id).await.is_ok(),
+            MovedAs::Sent { .. } => false,
+        };
+        if !took_back && let Ok(conv) = self.conv(&moved.to) {
+            let me = self.core.conversation(id)?;
+            conv.hold_fact(format!(
+                "[workspace] The user took their message \"{}\" back to tab \"{}\" (session \
+                 {}): it is that tab's now.",
+                super::brains::one_line(&moved.text, 120),
+                me.title,
+                me.id
+            ))
+            .await;
+        }
+        self.core.take_moved(id, item_id).await.map(|_| ())
     }
 }

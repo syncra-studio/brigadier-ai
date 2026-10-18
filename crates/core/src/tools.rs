@@ -261,9 +261,46 @@ pub struct AnswerWorker {
 pub struct RouteFollowUp {
     /// The follow-up's id, from its [follow-up …] block.
     pub follow_up: String,
-    /// True if it belongs to the work in progress (it joins it now); false if it is a request
-    /// of its own (it waits until this work is done).
-    pub joins: bool,
+    /// Where it goes. Optional only for the older form, which gave `joins` instead.
+    #[serde(default)]
+    pub route: Option<FollowUpRoute>,
+    /// For route "tab": the other tab's session id, from the [follow-up …] block or
+    /// list_sessions with workspace true.
+    #[serde(default)]
+    pub tab: Option<String>,
+    /// The older form, from before routes (rule R: a session's cached schema still sends it):
+    /// true is "join", false is "wait".
+    #[serde(default)]
+    #[schemars(skip)]
+    pub joins: Option<bool>,
+}
+
+/// Where a follow-up goes (`route_follow_up`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FollowUpRoute {
+    /// It belongs to this work: it joins it now.
+    Join,
+    /// A request of its own: it waits in the queue until this work is done.
+    Wait,
+    /// A request of its own that could run apart: it waits, and offers the user "Open as a
+    /// new tab?".
+    NewTab,
+    /// It belongs to another tab of this workspace (`tab`): it goes there.
+    Tab,
+}
+
+impl RouteFollowUp {
+    /// The route asked for, the older `joins` read as join or wait.
+    pub fn chosen(&self) -> Option<FollowUpRoute> {
+        self.route.or(self.joins.map(|joins| {
+            if joins {
+                FollowUpRoute::Join
+            } else {
+                FollowUpRoute::Wait
+            }
+        }))
+    }
 }
 
 /// A task reference only (`start_verifier`).
