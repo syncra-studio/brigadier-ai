@@ -1345,6 +1345,7 @@ impl SessionManager {
             takeover: None,
             trial_slot: waits && trial_slot,
             rerun: extra.rerun,
+            fusion: extra.fusion,
             created_at_ms: now,
             updated_at_ms: now,
         };
@@ -4066,6 +4067,11 @@ impl SessionManager {
             _ => None,
         };
         let settled = live.settle.lock().await;
+        // A fused pair's reports are weighed one at a time (Q77).
+        let _fusing = match task.fusion {
+            Some(_) => Some(self.fusing.lock().await),
+            None => None,
+        };
         // Stopped while its report was being stored: the stop stands.
         let task = self.task_by_id(conversation_id, task_id).await?;
         if task.state.is_final() {
@@ -4094,21 +4100,55 @@ impl SessionManager {
                 text.push('\n');
                 text.push_str(&super::reruns::rerun_note(&shown, rerun));
             }
-            if task.kind == TaskKind::Research {
-                text.push('\n');
-                text.push_str(prompts::RESEARCH_REPORT_NOTE);
-            }
-            let envelope = Envelope {
-                kind: InjectionKind::Report,
-                label: format!("report task-{}", task.number),
-                task_id: Some(task.id.clone()),
-                text,
+            // A fused answer waits for its partner's, and both go together (Q77).
+            let fused = match &task.fusion {
+                Some(_) => Some(self.fused_report(&shown, &text).await),
+                None => None,
             };
-            let request = self.request_for(conversation_id, Some(task_id)).await;
-            self.queue_envelope(conversation_id, envelope, request)
-                .await
+            let (text, partner) = match fused {
+                None => (Some(text), None),
+                Some(super::fusion::FusedReport::Hold) => (None, None),
+                Some(super::fusion::FusedReport::Both { text, partner }) => {
+                    (Some(text), Some(partner))
+                }
+                Some(super::fusion::FusedReport::Alone { text }) => (Some(text), None),
+            };
+            match text {
+                Some(mut text) => {
+                    if task.kind == TaskKind::Research {
+                        text.push('\n');
+                        text.push_str(prompts::RESEARCH_REPORT_NOTE);
+                    }
+                    if let Some(partner) = &partner {
+                        self.update_task(conversation_id, partner, |partner| {
+                            if let Some(fusion) = &mut partner.fusion {
+                                fusion.delivered = true;
+                            }
+                        })
+                        .await?;
+                    }
+                    let envelope = Envelope {
+                        kind: InjectionKind::Report,
+                        label: format!("report task-{}", task.number),
+                        task_id: Some(task.id.clone()),
+                        text,
+                    };
+                    let request = self.request_for(conversation_id, Some(task_id)).await;
+                    self.queue_envelope(conversation_id, envelope, request)
+                        .await
+                }
+                None => None,
+            }
         };
-        let task = self.update_task(conversation_id, task_id, reported).await?;
+        let delivered = queued.is_some();
+        let task = self
+            .update_task(conversation_id, task_id, |task| {
+                reported(task);
+                if delivered && let Some(fusion) = &mut task.fusion {
+                    fusion.delivered = true;
+                }
+            })
+            .await?;
         drop(settled);
         live.state.lock().await.nudged = true;
         // What only the user can do is listed for them ("Waiting on you"); a later report
@@ -5499,6 +5539,8 @@ pub(crate) struct TaskExtra {
     pub fresh_commit: Option<String>,
     /// It reruns a cheaper model's task one tier up (see `reruns`).
     pub rerun: Option<brigadier_router::Rerun>,
+    /// Its part in a fused pair (see `fusion`).
+    pub fusion: Option<crate::work::Fusion>,
 }
 
 pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
@@ -5927,6 +5969,10 @@ fn worker_step(task: &Task, was: Option<TaskState>, reported: bool) -> Option<Do
 }
 
 pub(crate) fn route_label(task: &Task) -> String {
+    // A fused answer is known by its letter alone (Q77).
+    if let Some(label) = super::fusion::fused_label(task) {
+        return label;
+    }
     let choice = &task.route.choice;
     let mut label = match &choice.model {
         Some(model) => format!("{} {model}", choice.provider.label()),

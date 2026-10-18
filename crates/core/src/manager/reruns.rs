@@ -223,6 +223,8 @@ impl SessionManager {
     pub(crate) fn reruns_by_itself(task: &Task) -> bool {
         brigadier_router::reruns(category(task.kind))
             && task.rerun.is_none()
+            // A fused answer is judged against its partner's, not rerun on another model.
+            && task.fusion.is_none()
             && task.pin.as_ref().is_none_or(|pin| pin.model.is_none())
     }
 

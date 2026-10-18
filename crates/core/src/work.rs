@@ -940,8 +940,27 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub rerun: Option<brigadier_router::Rerun>,
+    /// One answer of a fused pair (Q77): the same research by the other vendor's worker too,
+    /// both reports going to the thread together and blind, as answers A and B.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub fusion: Option<Fusion>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+/// A task's part in a fused pair (Q77).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Fusion {
+    /// The other vendor's task on the same brief.
+    pub partner: TaskId,
+    /// How the thread knows its answer: "A" or "B", never by vendor or model.
+    pub label: String,
+    /// Its report reached the thread (with its partner's, or alone once the partner ended
+    /// without one).
+    #[serde(default)]
+    pub delivered: bool,
 }
 
 /// A worker's use of the project's Brain, shown on its row and in the Inspector

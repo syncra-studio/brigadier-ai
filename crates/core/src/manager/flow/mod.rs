@@ -2033,6 +2033,8 @@ mod ending_tests;
 mod engine_tests;
 #[cfg(test)]
 mod evidence_tests;
+#[cfg(test)]
+mod fusion_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
 mod fault_tests;

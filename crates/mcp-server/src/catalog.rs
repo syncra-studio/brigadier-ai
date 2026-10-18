@@ -996,6 +996,10 @@ const DELEGATE_TASK_FIELDS: &[(&str, &str)] = &[
         "True when it takes the whole request: Brigadier adds the user's message verbatim.",
     ),
     (
+        "fuse",
+        "research only: true when a wrong answer would cost the user; both vendors research the same brief, back as answers A and B.",
+    ),
+    (
         "areas",
         "Optional parts it touches (\"frontend\", \"backend\", \"infra\", \"docs\", \"tests\") when the spec's paths don't say; routing goes by them.",
     ),

@@ -207,6 +207,32 @@ impl SessionManager {
                         )));
                     }
                 };
+                // The request it takes whole, bound by its identity: the task belongs to it.
+                let (spec, request) = match args.include_request {
+                    true => {
+                        let request = crate::heap(|| self.request_for(id, None))
+                            .await
+                            .ok_or_else(|| {
+                                Error::Invalid(
+                                    "include_request: no request is running; write it into the spec"
+                                        .into(),
+                                )
+                            })?;
+                        let verbatim = crate::heap(|| self.request_verbatim(id, &request)).await?;
+                        (format!("{}{verbatim}", args.spec), Some(request))
+                    }
+                    false => (args.spec.clone(), None),
+                };
+                // A research question costly to get wrong goes to both vendors, when both can
+                // take it (Q77).
+                if args.fuse
+                    && let Some(reply) = crate::heap(|| {
+                        self.delegate_fused(id, &args, &spec, effort.clone(), request.clone())
+                    })
+                    .await?
+                {
+                    return Ok(reply);
+                }
                 // A fix of landed work resumes the worker that did it, on its model; one fix
                 // at a time resumes a session (SESSION-FIXES-PLAN.md Q6.1).
                 let held = subject.as_ref().filter(|subject| {
@@ -279,22 +305,6 @@ impl SessionManager {
                         provider: s.route.choice.provider,
                         model: s.route.choice.model.clone(),
                     });
-                // The request it takes whole, bound by its identity: the task belongs to it.
-                let (spec, request) = match args.include_request {
-                    true => {
-                        let request = crate::heap(|| self.request_for(id, None))
-                            .await
-                            .ok_or_else(|| {
-                                Error::Invalid(
-                                    "include_request: no request is running; write it into the spec"
-                                        .into(),
-                                )
-                            })?;
-                        let verbatim = crate::heap(|| self.request_verbatim(id, &request)).await?;
-                        (format!("{}{verbatim}", args.spec), Some(request))
-                    }
-                    false => (args.spec, None),
-                };
                 let task = crate::heap(|| {
                     self.create_task_as(
                         id,

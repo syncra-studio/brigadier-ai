@@ -84,6 +84,13 @@ macro_rules! research_fan_out {
     };
 }
 
+/// A research question costly to get wrong goes to both vendors, judged blind by the thread (Q77).
+macro_rules! fusion_rule {
+    () => {
+        "When a wrong answer would cost the user (money, a purchase, a choice hard to undo, a fact they will act on), delegate that research with fuse: true and the whole question in one brief, not split: two workers research it independently and their reports come back together as answers A and B. Judge them yourself: first name where they disagree (facts, numbers, the pick) and check what decides it, then write one answer as usual, with one line `Confidence: high, medium or low, and why` and one line `Disagreement: …` (`Disagreement: none` when they agree) right under its opening lines. Never guess or say which model gave which answer. When only one worker started or one answer came back, answer as usual, with neither line and no word about it."
+    };
+}
+
 /// Asking before researching, only what changes the answer (Q78).
 macro_rules! clarify_rule {
     () => {
@@ -102,7 +109,11 @@ macro_rules! chat_thread {
             "
 - ",
             research_fan_out!(),
-            " Start a worker with delegate_task: kind research (it searches the web, compares and writes files) or operate (it uses an app on this computer or a website, with target and end_state). A Chat has no repository, so no other kind. Then reply exactly [quiet]: each report comes later as a message ([report task-N …]), a worker's question as [question from task-N], which you answer with answer_worker. Write your answer from the reports.
+            "
+- ",
+            fusion_rule!(),
+            "
+- Start a worker with delegate_task: kind research (it searches the web, compares and writes files) or operate (it uses an app on this computer or a website, with target and end_state). A Chat has no repository, so no other kind. Then reply exactly [quiet]: each report comes later as a message ([report task-N …]), a worker's question as [question from task-N], which you answer with answer_worker. Write your answer from the reports.
 - You write no files yourself. A file the user wants (a list, a table, a document, an image) is made by a research worker in its outputs folder: link it in your answer by its name, [list.csv](outputs/list.csv), which puts its Save under your answer. Never give the user a folder or file path, nor link a file you haven't seen in a report.
 - With the browser tools listed, read or use a few pages yourself; a long browsing job goes to an operate worker."
         )
@@ -218,6 +229,7 @@ How to work:
 - Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. {workers}{computer}
 - Answer code questions yourself from the Brain, code_search, code_refs and a few precise reads, quoting the file:line each point rests on (src/cart.ts:42); explain an error from the code that raises it. Never start a worker for what reading answers.
 - {fan_out} {clarify}
+- {fusion}
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) with run_check, not your shell, before your final answer. {CHECK_PREFIXES} Never background a command yourself (`&`, nohup): one still going after a minute goes to the background by itself. Run dev servers and apps with start_preview.
 - {own_commits}
@@ -250,6 +262,7 @@ How to talk to the user:
         details = details_rule!(),
         fan_out = research_fan_out!(),
         clarify = clarify_rule!(),
+        fusion = fusion_rule!(),
         workers = workers_rule(start_workers).replace("{quiet}", QUIET),
         code_rules = WORKER_CODE_RULES,
         preferences = preference_lines(preferences),
@@ -1070,6 +1083,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, while merging on its own is on: a change the user can see (a page, a screen, a control, its words or its look), however small, comes with its proof before you merge it: the app run (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message (attach_proof), as your instructions say. Reading the code, a grep or a passing test isn't that proof. When the proof can't be had, decide whether to merge or wait, and say in the merge message that nobody saw the change work.",
         worker: "",
     },
+    Revision {
+        number: FUSION_REVISION,
+        thread: concat!("From now on: ", fusion_rule!()),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1098,8 +1116,8 @@ pub(crate) fn revision_note(told: u32, worker: bool) -> Option<String> {
 /// A Chat's contract: its instructions didn't change with the thread's. Version 2 gives Chats and
 /// tab chats the thread's voice and the research answer's format (Q79); 3 its breakdown in
 /// sentences; 4 no bold at the start of any of its lines, colon or not; 5 a Chat is a thread
-/// without a project (Q76: workers, cards, one clarifying card).
-const CHAT_CONTRACT: u32 = 5;
+/// without a project (Q76: workers, cards, one clarifying card); 6 it fuses a costly question (Q77).
+const CHAT_CONTRACT: u32 = 6;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
 /// The first Chat contract with the breakdown rule as it is now; a Chat told the voice before
@@ -1108,6 +1126,9 @@ const CHAT_BREAKDOWN_CONTRACT: u32 = 4;
 /// The first Chat contract with a thread's abilities; a Chat told an older one hears
 /// [`CHAT_THREAD_NOTE`] (a tab chat has none of them).
 const CHAT_THREAD_CONTRACT: u32 = 5;
+/// The first Chat contract with fusion; a Chat told a thread's abilities before hears
+/// [`CHAT_FUSION_NOTE`] (one told less hears it within [`CHAT_THREAD_NOTE`]).
+const CHAT_FUSION_CONTRACT: u32 = 6;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1140,6 +1161,9 @@ const CHAT_BREAKDOWN_NOTE: &str = concat!(
 /// Tells a Chat from before it became a thread what it can do now (Q76).
 const CHAT_THREAD_NOTE: &str = concat!("[instructions] From now on: ", chat_thread!());
 
+/// Tells a Chat that was already a thread that it fuses a costly question (Q77).
+const CHAT_FUSION_NOTE: &str = concat!("[instructions] From now on: ", fusion_rule!());
+
 /// Tells a Chat or tab chat told an older contract how it writes now (Q79).
 fn chat_voice_note(reports: bool) -> String {
     format!(
@@ -1152,6 +1176,7 @@ const CONTRACT_LABEL: &str = "notes replace instructions";
 const CHAT_VOICE_LABEL: &str = "voice and answer format";
 const CHAT_BREAKDOWN_LABEL: &str = "research breakdown";
 const CHAT_THREAD_LABEL: &str = "chat as a thread";
+const CHAT_FUSION_LABEL: &str = "fused answers";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
@@ -1528,6 +1553,8 @@ pub(crate) const CLARIFY_REVISION: u32 = 111;
 /// A change the user can see is merged on its own with its proof, however small: a grep or a
 /// test isn't proof (Q68; a one-file page change merged on a grep check, phase BR's live run).
 pub(crate) const VISIBLE_PROOF_REVISION: u32 = 112;
+/// A research question costly to get wrong is fused: both vendors, judged blind (Q77).
+pub(crate) const FUSION_REVISION: u32 = 113;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1711,12 +1738,22 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
         });
     }
     // After the voice's, so its contract is the one the log keeps.
+    // The thread note holds the fusion rule too.
     if now.chat && now.reports && told.contract.unwrap_or(0) < CHAT_THREAD_CONTRACT {
         notes.push(Note {
             text: CHAT_THREAD_NOTE.to_owned(),
             label: CHAT_THREAD_LABEL,
             told: Told {
-                contract: Some(CHAT_THREAD_CONTRACT),
+                contract: Some(CHAT_FUSION_CONTRACT),
+                ..Told::default()
+            },
+        });
+    } else if now.chat && now.reports && told.contract.unwrap_or(0) < CHAT_FUSION_CONTRACT {
+        notes.push(Note {
+            text: CHAT_FUSION_NOTE.to_owned(),
+            label: CHAT_FUSION_LABEL,
+            told: Told {
+                contract: Some(CHAT_FUSION_CONTRACT),
                 ..Told::default()
             },
         });
@@ -3891,8 +3928,9 @@ mod environment_tests {
         // for a revised whole answer after a worker's findings, with no file promised (Q81),
         // then to 13,900 for offering out-of-scope work as a session (Q73), and to 14,100 for no
         // bold-led breakdown line, even where what the thread read has one (#319), and to 14,500
-        // for one clarifying card before research (Q78).
-        assert!(codex.len() < 14_500, "{}", codex.len());
+        // for one clarifying card before research (Q78), and to 15,300 for fusing a costly
+        // research question, judged blind (Q77).
+        assert!(codex.len() < 15_300, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -5248,6 +5286,68 @@ mod environment_tests {
         );
         assert!(rule.contains(CHAT_THREAD_RULES[0]));
     }
+
+    /// Q77: a Chat that was already a thread (contract 5) hears once that it fuses a costly
+    /// question, a tab chat nothing; one from before hears it within the thread note, once.
+    #[test]
+    fn a_chat_that_was_a_thread_hears_once_that_it_fuses() {
+        let now = Current::chat(Vec::new());
+        let mut told = now.told();
+        told.contract = Some(CHAT_FUSION_CONTRACT - 1);
+        let sent = notes(&told, &now);
+        assert_eq!(labels(&sent), vec![CHAT_FUSION_LABEL]);
+        for words in FUSION_RULES {
+            assert!(sent[0].text.contains(words), "{words}");
+            assert!(chat(&[]).contains(words), "{words}");
+        }
+        took(&mut told, &sent);
+        assert_eq!(told.contract, Some(CHAT_CONTRACT));
+        assert!(notes(&told, &now).is_empty());
+        told.contract = Some(CHAT_THREAD_CONTRACT - 1);
+        let sent = notes(&told, &now);
+        assert_eq!(labels(&sent), vec![CHAT_THREAD_LABEL]);
+        assert_eq!(sent[0].text.matches(FUSION_RULES[0]).count(), 1);
+        took(&mut told, &sent);
+        assert!(notes(&told, &now).is_empty());
+        let tab = Current::tab_chat();
+        let mut told = tab.told();
+        told.contract = Some(CHAT_FUSION_CONTRACT - 1);
+        assert!(notes(&told, &tab).is_empty());
+    }
+
+    /// Q77: open threads hear the fusion rule once, workers nothing; a new thread's
+    /// instructions hold it.
+    #[test]
+    fn open_threads_hear_once_to_fuse_a_costly_question() {
+        let note = revision_note(FUSION_REVISION - 1, false).unwrap();
+        for words in FUSION_RULES {
+            assert!(note.contains(words), "{words}");
+        }
+        assert!(revision_note(FUSION_REVISION - 1, true).is_none());
+        let rule = thread(
+            &session("approveForMe"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Claude,
+            true,
+        );
+        for words in FUSION_RULES {
+            assert!(rule.contains(words), "{words}");
+        }
+    }
+
+    /// The words of the fusion rule the tests look for.
+    const FUSION_RULES: &[&str] = &[
+        "delegate that research with fuse: true",
+        "answers A and B",
+        "first name where they disagree",
+        "`Confidence: high, medium or low, and why`",
+        "`Disagreement: none` when they agree",
+        "Never guess or say which model gave which answer.",
+        "neither line and no word about it",
+    ];
 
     /// The words of a Chat's thread rules the tests look for.
     const CHAT_THREAD_RULES: &[&str] = &[

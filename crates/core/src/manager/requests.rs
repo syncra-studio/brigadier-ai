@@ -235,6 +235,15 @@ impl SessionManager {
         if board.requests.is_empty() {
             return;
         }
+        // A fused answer whose partner ended without one goes alone; its request works until
+        // then. Not from here: delivering settles requests too.
+        if lone_fused(&board) {
+            let manager = self.arc();
+            let id = conversation_id.clone();
+            self.spawn(async move {
+                manager.deliver_lone_fused(&id).await;
+            });
+        }
         let Ok(conv) = self.conv(conversation_id) else {
             return;
         };
@@ -544,6 +553,31 @@ fn tasks_in(board: &Board, request: &str, matches: impl Fn(TaskState) -> bool) -
         .any(|task| task.request_id.as_deref() == Some(request) && matches(task.state))
 }
 
+/// Whether a fused answer of the request waits to reach the thread with its partner's, or
+/// alone (Q77): its request still works.
+fn held_fused_in(board: &Board, request: &str) -> bool {
+    board.tasks.values().any(|task| {
+        task.request_id.as_deref() == Some(request)
+            && task.report.is_some()
+            && task.fusion.as_ref().is_some_and(|fusion| !fusion.delivered)
+    })
+}
+
+/// Whether a fused answer of `board` waits for a partner that ended without a report: it goes
+/// alone ([`SessionManager::deliver_lone_fused`]).
+fn lone_fused(board: &Board) -> bool {
+    board.tasks.values().any(|task| {
+        task.report.is_some()
+            && task.fusion.as_ref().is_some_and(|fusion| {
+                !fusion.delivered
+                    && board
+                        .tasks
+                        .get(&fusion.partner)
+                        .is_none_or(|partner| partner.state.is_final() && partner.report.is_none())
+            })
+    })
+}
+
 /// Whether a task of the request runs, lands, or is about to (a fix Brigadier checks and
 /// lands once its worker's turn is over), or a command of its thread runs in the background:
 /// its result comes as a message.
@@ -554,6 +588,7 @@ fn runs_in(board: &Board, request: &str) -> bool {
             TaskState::Queued | TaskState::Starting | TaskState::Running | TaskState::Landing
         )
     }) || relanding_in(board, request)
+        || held_fused_in(board, request)
         || board.background_runs.values().any(|run| {
             run.state == crate::work::BackgroundRunState::Running
                 && run.request_id.as_deref() == Some(request)

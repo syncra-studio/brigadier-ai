@@ -188,6 +188,12 @@ pub struct DelegateTask {
     /// go by `attachments`.
     #[serde(default)]
     pub include_request: bool,
+    /// Research only, when a wrong answer would cost the user (money, a choice hard to
+    /// undo): true has both vendors' workers research the same brief independently, and
+    /// their reports come to you together as answers A and B. Leave `provider` and `model`
+    /// out.
+    #[serde(default)]
+    pub fuse: bool,
     /// Optional: the parts of the codebase it touches ("frontend", "backend", "infra",
     /// "docs", "tests"), when the spec's paths don't make it plain. Routing and the user's
     /// routing rules go by them.
