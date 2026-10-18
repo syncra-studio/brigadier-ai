@@ -1883,7 +1883,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             conversation_id,
             shown,
         } => {
-            sessions.set_composer_shown(conversation_id, shown).await;
+            heap(|| sessions.set_composer_shown(conversation_id, shown)).await;
             Response::SetComposerShown
         }
         Request::ReadThreadImage {
@@ -1966,7 +1966,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             outcome: heap(|| sessions.replace_in_files(&target, query, replacement, files)).await?,
         },
         Request::ListProjectFiles { project_id, query } => {
-            let (files, truncated) = sessions.list_project_files(&project_id, query).await?;
+            let (files, truncated) =
+                heap(|| sessions.list_project_files(&project_id, query)).await?;
             Response::ListProjectFiles { files, truncated }
         }
         Request::GetProjectSourceState { project_id } => Response::GetProjectSourceState {
@@ -2000,7 +2001,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             state: heap(|| sessions.source_action(&target, action)).await?,
         },
         Request::GetSourceGitOutput { target } => Response::GetSourceGitOutput {
-            runs: sessions.source_git_output(&target).await?,
+            runs: heap(|| sessions.source_git_output(&target)).await?,
         },
         Request::GetConflictFile { target, path } => Response::GetConflictFile {
             file: heap(|| sessions.conflict_file(&target, path)).await?,
