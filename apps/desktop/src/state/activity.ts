@@ -277,16 +277,15 @@ const QUIET: RowActivity = { running: false, awaiting: null, phase: null, worker
 export function rowActivity(activity: Activity | undefined): RowActivity {
   if (!activity) return QUIET;
   const states = Object.values(activity.tasks);
-  const running =
-    activity.run === "running" ||
-    activity.run === "starting" ||
-    states.some((state) => WORKING.has(state));
+  const turn = activity.run === "running" || activity.run === "starting";
+  const running = turn || states.some((state) => WORKING.has(state));
+  // A failed turn waits for the user even while its workers still run, as the engine says.
   const awaiting =
     activity.approvals.size > 0 || states.some((state) => LANDING.has(state))
       ? "approval"
       : activity.questions.size > 0
         ? "input"
-        : activity.failed && !running
+        : activity.failed && !turn
           ? "failed"
           : null;
   const phases = new Set(Object.values(activity.phases));

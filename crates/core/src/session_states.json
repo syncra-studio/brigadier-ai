@@ -153,6 +153,26 @@
     "expect": "needsYou"
   },
   {
+    "name": "a failed turn needs you while a worker still runs",
+    "activity": {
+      "conversationId": "s",
+      "run": "idle",
+      "tasks": [
+        [
+          "t1",
+          "running"
+        ]
+      ],
+      "approvals": [],
+      "questions": [],
+      "phases": [],
+      "failed": true
+    },
+    "quotaWait": false,
+    "settled": null,
+    "expect": "needsYou"
+  },
+  {
     "name": "a failed turn waiting for a limit is work",
     "activity": {
       "conversationId": "s",
