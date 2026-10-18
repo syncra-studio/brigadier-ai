@@ -24,6 +24,10 @@ if (params.has("drive")) {
 }
 
 const HOUR = 3_600_000;
+// The page's clock reads noon today, so "2h ago" and "Yesterday" don't depend on the time of day.
+const realNow = Date.now.bind(Date);
+const offset = new Date(realNow()).setHours(12, 0, 0, 0) - realNow();
+Date.now = () => realNow() + offset;
 const now = Date.now();
 const repos: RepoSuggestion[] = [
   { path: "/Users/you/code/brigadier", name: "brigadier", lastUsedMs: now - 2 * HOUR, projectId: null },
