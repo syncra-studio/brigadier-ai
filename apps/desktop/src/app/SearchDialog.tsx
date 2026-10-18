@@ -1,5 +1,5 @@
-import { Chat, Dock, Folder } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { Chat, Comment, Folder, Search, Terminal } from "@openai/apps-sdk-ui/components/Icon";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { create } from "zustand";
 
 import {
@@ -8,16 +8,27 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { openConversation, select, setProjectExpanded } from "@/state/actions";
+import { openFeedback } from "@/state/feedback";
 import { useApp } from "@/state/store";
 
 type Result =
-  | { kind: "project"; id: string; title: string; detail: string }
-  | { kind: "session" | "chat"; id: string; title: string; detail: string };
+  | { kind: "project" | "session" | "chat"; id: string; title: string; detail: string | null }
+  | { kind: "feedback"; id: "feedback"; title: string; detail: null };
 
 const MAX_RESULTS = 50;
+
+/** Send feedback… shows among the results once what is typed is part of its name. */
+const FEEDBACK = "Send feedback…";
+
+/** The groups, in order, with their labels. */
+const GROUPS = [
+  { kinds: ["project"], label: "Projects" },
+  { kinds: ["session"], label: "Sessions" },
+  { kinds: ["chat"], label: "Chats" },
+  { kinds: ["feedback"], label: "Help" },
+] as const satisfies readonly { kinds: readonly Result["kind"][]; label: string }[];
 
 function useResults(query: string): Result[] {
   const projects = useApp((s) => s.projects);
@@ -26,40 +37,60 @@ function useResults(query: string): Result[] {
     const needle = query.trim().toLocaleLowerCase();
     const matches = (title: string) =>
       needle === "" || title.toLocaleLowerCase().includes(needle);
+    // Archived conversations are listed in the Archived view only; side chats are temporary,
+    // shown only beside their conversation.
+    const listed = Object.values(conversations).filter(
+      (conversation) => conversation.lifecycle !== "archived" && !conversation.sideOf,
+    );
+    const sessionsIn = (projectId: string) =>
+      listed.filter((conversation) => conversation.kind === "session" && conversation.projectId === projectId).length;
     const projectResults: Result[] = Object.values(projects)
       .filter((project) => matches(project.name))
       .toSorted((a, b) => a.name.localeCompare(b.name))
-      .map((project) => ({
-        kind: "project",
-        id: project.id,
-        title: project.name,
-        detail: "Project",
-      }));
-    // Archived conversations are listed in the Archived view only.
-    const conversationResults: Result[] = Object.values(conversations)
-      .filter(
-        (conversation) =>
-          conversation.lifecycle !== "archived" &&
-          // Side chats are temporary, shown only beside their conversation.
-          !conversation.sideOf &&
-          matches(conversation.title),
-      )
+      .map((project) => {
+        const count = sessionsIn(project.id);
+        return {
+          kind: "project",
+          id: project.id,
+          title: project.name,
+          detail: `${count} ${count === 1 ? "session" : "sessions"}`,
+        };
+      });
+    const conversationResults: Result[] = listed
+      .filter((conversation) => matches(conversation.title))
       .toSorted((a, b) => b.updatedAtMs - a.updatedAtMs)
       .map((conversation) => ({
         kind: conversation.kind,
         id: conversation.id,
         title: conversation.title,
-        detail:
-          conversation.kind === "session"
-            ? (projects[conversation.projectId ?? ""]?.name ?? "Session")
-            : "Chat",
+        detail: conversation.kind === "session" ? (projects[conversation.projectId ?? ""]?.name ?? null) : null,
       }));
-    return [...projectResults, ...conversationResults].slice(0, MAX_RESULTS);
+    const found = [...projectResults, ...conversationResults].slice(0, MAX_RESULTS);
+    // In the listed order, grouped: projects, sessions, chats.
+    const grouped = GROUPS.flatMap(({ kinds }) => found.filter((result) => (kinds as readonly string[]).includes(result.kind)));
+    const feedback: Result[] =
+      needle !== "" && FEEDBACK.toLocaleLowerCase().includes(needle)
+        ? [{ kind: "feedback", id: "feedback", title: FEEDBACK, detail: null }]
+        : [];
+    return [...grouped, ...feedback];
   }, [query, projects, conversations]);
 }
 
-const ICONS = { project: Folder, session: Dock, chat: Chat } as const;
+const ICONS = { project: Folder, session: Terminal, chat: Chat, feedback: Comment } as const;
 
+/** A key, as the palette shows it ("esc", "↵", "↑"). */
+function Key({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="bg-settings-raised border-settings-track text-settings-badge text-settings-text-secondary rounded-palette-key flex h-5 shrink-0 items-center justify-center border px-1.5 font-sans font-medium">
+      {children}
+    </kbd>
+  );
+}
+
+/**
+ * Search, drawn to the user's design: a palette at the top centre over projects, sessions and
+ * chats by title, grouped, the selected one with Open ↵; Send feedback… when typed for.
+ */
 export function SearchDialog({
   open,
   onOpenChange,
@@ -67,20 +98,41 @@ export function SearchDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  // What a chosen result opens next (Send feedback), once the palette has closed and handed the
+  // keyboard on, so the closing palette doesn't take it back.
+  const after = useRef<(() => void) | null>(null);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="max-w-lg gap-0 p-0">
+      <DialogContent
+        data-slot="search-palette"
+        showCloseButton={false}
+        onCloseAutoFocus={(event) => {
+          const next = after.current;
+          after.current = null;
+          if (!next) return;
+          event.preventDefault();
+          next();
+        }}
+        className="bg-settings-surface border-settings-border rounded-design-dialog shadow-design-dialog max-w-palette top-42 block translate-y-0 gap-0 border p-0 ring-0"
+      >
         <DialogTitle className="sr-only">Search</DialogTitle>
         <DialogDescription className="sr-only">
           Find projects, sessions and chats by title.
         </DialogDescription>
-        {open && <SearchBody onDone={() => onOpenChange(false)} />}
+        {open && (
+          <SearchBody
+            onDone={(next) => {
+              after.current = next ?? null;
+              onOpenChange(false);
+            }}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );
 }
 
-function SearchBody({ onDone }: { onDone: () => void }) {
+function SearchBody({ onDone }: { onDone: (after?: () => void) => void }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const results = useResults(query);
@@ -88,13 +140,17 @@ function SearchBody({ onDone }: { onDone: () => void }) {
 
   const choose = (result: Result | undefined) => {
     if (!result) return;
+    if (result.kind === "feedback") {
+      onDone(() => openFeedback());
+      return;
+    }
+    onDone();
     if (result.kind === "project") {
       setProjectExpanded(result.id, true);
       select({ type: "draft", kind: "session", projectId: result.id });
     } else {
       openConversation(result.id);
     }
-    onDone();
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -112,8 +168,9 @@ function SearchBody({ onDone }: { onDone: () => void }) {
 
   return (
     <div className="flex flex-col">
-      <div className="border-b p-2">
-        <Input
+      <div className="border-settings-divider flex h-13.5 items-center gap-3 border-b ps-4.5 pe-4">
+        <Search className="text-settings-text-secondary size-4 shrink-0" />
+        <input
           autoFocus
           value={query}
           placeholder="Search projects, sessions and chats"
@@ -125,45 +182,90 @@ function SearchBody({ onDone }: { onDone: () => void }) {
             setActive(0);
           }}
           onKeyDown={onKeyDown}
-          className="bg-transparent focus-visible:bg-transparent border-none outline-none"
+          className="text-settings-heading text-settings-text placeholder:text-settings-text-tertiary caret-settings-link min-w-0 flex-1 bg-transparent outline-none"
         />
+        <Key>esc</Key>
       </div>
       <div
         id="search-results"
         role="listbox"
         aria-label="Results"
-        className="max-h-(--container-sm) overflow-y-auto p-1"
+        className="flex max-h-(--container-sm) flex-col gap-1.5 overflow-y-auto px-2 pt-2 pb-2.5"
       >
         {results.length === 0 && (
-          <p className="text-muted-foreground px-3 py-6 text-center text-sm">
+          <p className="text-settings-small text-settings-text-tertiary px-3 py-6 text-center">
             {query.trim() ? `Nothing matches “${query.trim()}”.` : "Nothing here yet."}
           </p>
         )}
-        {results.map((result, index) => {
-          const Icon = ICONS[result.kind];
+        {GROUPS.map(({ kinds, label }) => {
+          const group = results.flatMap((result, index) =>
+            (kinds as readonly string[]).includes(result.kind) ? [{ result, index }] : [],
+          );
+          if (group.length === 0) return null;
           return (
-            <div
-              key={`${result.kind}:${result.id}`}
-              id={`search-${index}`}
-              role="option"
-              tabIndex={-1}
-              aria-selected={index === current}
-              onMouseMove={() => setActive(index)}
-              onClick={() => choose(result)}
-              onKeyDown={(event) => event.key === "Enter" && choose(result)}
-              className={cn(
-                "h-row rounded-control flex cursor-default items-center gap-2 px-2 text-sm",
-                index === current && "bg-accent text-accent-foreground",
-              )}
-            >
-              <Icon className="text-muted-foreground size-icon-md shrink-0" />
-              <span className="min-w-0 flex-1 truncate">{result.title}</span>
-              <span className="text-muted-foreground shrink-0 text-xs">
-                {result.detail}
+            <div key={label} role="group" aria-label={label} className="flex flex-col gap-px">
+              <span className="text-settings-meta text-settings-text-tertiary px-2.5 pt-2 pb-1.5 font-medium">
+                {label}
               </span>
+              {group.map(({ result, index }) => {
+                const Icon = ICONS[result.kind];
+                const selected = index === current;
+                return (
+                  <div
+                    key={`${result.kind}:${result.id}`}
+                    id={`search-${index}`}
+                    role="option"
+                    tabIndex={-1}
+                    aria-selected={selected}
+                    onMouseMove={() => setActive(index)}
+                    onClick={() => choose(result)}
+                    onKeyDown={(event) => event.key === "Enter" && choose(result)}
+                    className={cn(
+                      "rounded-palette-row flex h-9.5 cursor-default items-center gap-3 px-2.5",
+                      selected && "bg-settings-raised",
+                    )}
+                  >
+                    <Icon
+                      className={cn(
+                        "size-3.75 shrink-0",
+                        selected ? "text-settings-text" : "text-settings-text-secondary",
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "text-settings-body min-w-0 flex-1 truncate",
+                        selected ? "text-settings-text" : "text-menu-label",
+                      )}
+                    >
+                      {result.title}
+                    </span>
+                    {selected ? (
+                      <span className="text-settings-meta text-settings-text-secondary flex shrink-0 items-center gap-2">
+                        Open
+                        <Key>↵</Key>
+                      </span>
+                    ) : (
+                      result.detail && (
+                        <span className="text-settings-meta text-settings-text-tertiary shrink-0">{result.detail}</span>
+                      )
+                    )}
+                  </div>
+                );
+              })}
             </div>
           );
         })}
+      </div>
+      <div className="border-settings-divider text-settings-meta text-settings-text-tertiary flex h-10 items-center gap-4.5 border-t px-4.5">
+        <span className="flex items-center gap-1.5">
+          <Key>↑</Key>
+          <Key>↓</Key>
+          Navigate
+        </span>
+        <span className="flex items-center gap-1.5">
+          <Key>↵</Key>
+          Open
+        </span>
       </div>
     </div>
   );

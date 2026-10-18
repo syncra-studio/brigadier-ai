@@ -72,7 +72,7 @@ const twMerge = extendTailwindMerge({
         "notice-close",
         "notice-close-icon",
       ],
-      container: ["thread", "setup", "onboarding", "onboarding-agents", "onboarding-detail", "summary", "summary-stack", "settings", "settings-wide", "question", "trust", "add-project", "feedback"],
+      container: ["thread", "setup", "onboarding", "onboarding-agents", "onboarding-detail", "summary", "summary-stack", "settings", "settings-wide", "question", "trust", "add-project", "feedback", "palette"],
       radius: [
         "document",
         "control",
@@ -96,6 +96,8 @@ const twMerge = extendTailwindMerge({
         "design-row",
         "design-mark",
         "design-badge",
+        "palette-key",
+        "palette-row",
       ],
       shadow: ["hairline", "menu", "tooltip", "summary", "thumb", "page", "design-dialog", "design-tooltip", "foot-popover"],
       text: [

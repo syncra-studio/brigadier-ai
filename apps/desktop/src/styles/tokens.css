@@ -463,6 +463,8 @@
   --container-question: 25rem;
   /* Send feedback's card, from the user's design. */
   --container-feedback: 37.5rem;
+  /* The search palette's card, from the user's design. */
+  --container-palette: 40rem;
   --container-setup: min(68rem, calc(100vw - 2rem));
   --container-onboarding: 45rem;
   --container-onboarding-agents: 39rem;
@@ -684,6 +686,9 @@
   /* The usage list's bars, and the help menu's words (the user's design). */
   --color-usage-bar: #d4d4d4;
   --color-menu-label: #c9c9c9;
+  /* The search palette's key hints and rows (the user's design). */
+  --radius-palette-key: 0.3125rem;
+  --radius-palette-row: 0.5rem;
 }
 
 @theme inline {
