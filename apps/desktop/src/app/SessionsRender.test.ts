@@ -9,6 +9,7 @@ import { renderFixturePage } from "@/fixtures/headless";
 test("sidebar: a project's sessions are rows of their own, the sessions of an old workspace too, each with its state and why", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html", "sessions-result", 20000)) as {
     rows: { title: string; status: string | null; active: boolean }[];
+    widths: { title: string; titleShare: number; stateWhole: boolean }[];
     count: { text: string; title: string } | null;
     opened: unknown;
     activeAfter: string[];
@@ -35,6 +36,13 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
       ["Ship the release", "merging:Merging"],
     ],
   );
+  // The title tells sessions apart: the state takes at most two fifths of the row, and its
+  // reason is cut before the state's own words.
+  assert.equal(seen.widths.length, 10);
+  for (const row of seen.widths) {
+    assert.ok(row.titleShare >= 55, `${row.title}: the title keeps most of the row (${row.titleShare}%)`);
+    assert.ok(row.stateWhole, `${row.title}: the state's words show whole`);
+  }
   assert.deepEqual(seen.count, { text: "2 need you", title: "2 need you" }, "the project counts the sessions that need the user");
   assert.deepEqual(seen.opened, { type: "conversation", id: "w1-a" }, "the row opens its own session");
   assert.deepEqual(seen.activeAfter, ["Header"]);
@@ -62,6 +70,7 @@ test("closing a working session's tab stops nothing and says so in a note; it st
   assert.deepEqual(seen.reopened, { type: "conversation", id: "w5-a" }, "its row opens it again");
   assert.equal(seen.chatTab, "Lone worker");
   assert.equal(seen.chatTabStatus, "Working", "the chat tab says where it stands");
+  assert.ok((seen.chatTabStatusShare as number) <= 40, "its state leaves the tab's title most of the room");
   assert.deepEqual(seen.notes, ["Still running. Reopen it from the sidebar."], "closing it leaves a small note");
   assert.equal(seen.dialog, false, "no dialog");
   assert.deepEqual(seen.idleNotes, [], "an idle session closes quietly");

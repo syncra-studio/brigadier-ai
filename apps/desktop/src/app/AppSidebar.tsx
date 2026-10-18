@@ -226,7 +226,7 @@ function NeedYouCount({ count }: { count: number }) {
     <span
       data-slot="need-you-count"
       title={words}
-      className="bg-success/15 text-success rounded-capsule h-pill px-pill flex shrink-0 items-center text-2xs tabular-nums"
+      className="bg-success/15 text-success rounded-capsule h-pill px-pill-x flex shrink-0 items-center text-2xs tabular-nums"
     >
       {count}
       <span className="sr-only"> {count === 1 ? "needs" : "need"} you</span>

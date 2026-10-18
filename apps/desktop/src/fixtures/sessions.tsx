@@ -112,6 +112,24 @@ const needYou = () => {
 /** The worker rows under a session's row, and their fold. */
 const workerRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="session-worker"]')].map((row) => row.textContent?.trim());
 const workersFold = () => document.querySelector<HTMLButtonElement>('[data-slot="session-workers"] > button[aria-expanded]');
+/**
+ * How each row with a state shares its width: the title's share of the row's inside in percent, and
+ * whether the state's own words ("Needs you") show whole, the reason being cut first.
+ */
+const rowWidths = () => [...document.querySelectorAll<HTMLElement>('[data-slot="row-status"][data-status]')]
+  .filter((status) => status.dataset.status !== "unread")
+  .map((status) => {
+    const button = status.closest("button")!;
+    const title = button.querySelector("span")!;
+    const words = status.querySelector<HTMLElement>(":scope > span")!;
+    const style = getComputedStyle(button);
+    const inside = button.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    return {
+      title: title.textContent?.trim(),
+      titleShare: Math.round((title.getBoundingClientRect().width / inside) * 100),
+      stateWhole: words.scrollWidth <= words.clientWidth,
+    };
+  });
 const rowStatus = (title: string) => rows().find((row) => row.title === title)?.status ?? null;
 
 /** The toasts on screen, by their text. */
@@ -144,6 +162,8 @@ async function closeAndReopen() {
   const chatTab = document.querySelector('[data-slot="session-tabs"] [data-tab-id="chat"] [role="tab"]');
   seen.chatTab = chatTab?.querySelector(".session-tab-title")?.textContent?.trim();
   seen.chatTabStatus = chatTab?.querySelector('[data-slot="tab-status"]')?.textContent?.trim();
+  const tabStatus = chatTab?.querySelector('[data-slot="tab-status"]');
+  seen.chatTabStatusShare = tabStatus && chatTab ? Math.round((tabStatus.getBoundingClientRect().width / chatTab.clientWidth) * 100) : null;
   // An idle session's tab closes quietly: nothing still runs to reopen.
   useToasts.setState({ toasts: [] });
   rowButton("Old fix")!.click();
@@ -176,7 +196,7 @@ function Fixture() {
       return () => { disposed = true; };
     }
     const timer = setTimeout(async () => {
-      const seen: Record<string, unknown> = { rows: rows(), count: needYou(), workers: workerRows(), fold: workersFold()?.textContent?.trim() };
+      const seen: Record<string, unknown> = { rows: rows(), widths: rowWidths(), count: needYou(), workers: workerRows(), fold: workersFold()?.textContent?.trim() };
       // A worker's row opens its session with that worker asked for in its Workers panel.
       document.querySelector<HTMLButtonElement>('[data-slot="session-worker"][data-task="t-2"]')!.click();
       seen.workerOpened = { selection: useApp.getState().selection, worker: useOpenWorker.getState().request };
