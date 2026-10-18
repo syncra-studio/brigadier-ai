@@ -59,6 +59,7 @@ import {
   splitAtMarkers,
 } from "@/app/conversation/inlineImages";
 import { mentionOf } from "@/app/conversation/Mentions";
+import { askPausedSend } from "@/app/conversation/PausedSend";
 import { chipContent, pastedText, pasteKind, structuredHtml } from "@/app/conversation/pasteContent";
 import { usePullQueued } from "@/app/conversation/QueueCard";
 import {
@@ -268,6 +269,7 @@ function ComposerKeys({
   // A project's session: ⌘⏎ starts a new one in the background.
   const taskTab = target?.conversation && isTaskTab(target.conversation) ? target.conversation.id : null;
   const privateLogs = Boolean(target?.conversation?.tabChat);
+  const conversationId = target?.conversation?.id ?? null;
   const dictation = useDictation(owner);
   // Dictated text lands at the caret (or at the end, if the field never had one), spaced
   // from the word before it.
@@ -357,9 +359,11 @@ function ComposerKeys({
           }
           if (thread.isRunning && !thread.capabilities.queue) return true;
           if (refuseBlockedImages(imagesBlocked) || refuseUploading(aui)) return true;
-          aui.composer().send(
-            action === "other" && thread.isRunning ? { steer: followUp === "queue" } : undefined,
-          );
+          const send = () =>
+            aui.composer().send(
+              action === "other" && thread.isRunning ? { steer: followUp === "queue" } : undefined,
+            );
+          if (!askPausedSend(conversationId, send)) send();
           return true;
         },
         COMMAND_PRIORITY_NORMAL,
@@ -434,6 +438,7 @@ function ComposerKeys({
     mac,
     followUp,
     taskTab,
+    conversationId,
   ]);
   return null;
 }

@@ -22,3 +22,11 @@ test("Send waits while attached files upload: disabled, its tip Files uploadingâ
   assert.equal(seen.enterWhileUploading, false);
   assert.deepEqual(seen.afterUpload, { disabled: false, tip: "Send message" });
 });
+
+test("sending while the queue is paused asks Send message?: Send now sends it ahead of the paused queue, Keep paused queues it, Esc sends nothing (issue 303)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "paused");
+  assert.deepEqual(seen.asked, { title: "Send message?", buttons: ["Keep paused", "Send now", "Close"], sent: 0 });
+  assert.deepEqual(seen.escaped, { sent: 0, kept: "first" });
+  assert.deepEqual(seen.keptPaused, [{ text: "first", queueIndex: 1 }]);
+  assert.deepEqual(seen.sentNow, [{ text: "second", queueIndex: null }]);
+});

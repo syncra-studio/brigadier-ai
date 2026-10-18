@@ -56,6 +56,7 @@ import { type BlobAttachmentAdapter, FILES_UPLOADING, uploading as anyUploading 
 import { useImagesBlocked, useImagesUnsupportedToast } from "@/app/conversation/imageInput";
 import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import { StatusCard, StatusCardContext } from "@/app/conversation/StatusCard";
+import { askPausedSend, PausedSendDialog } from "@/app/conversation/PausedSend";
 import { NewSessionChip, PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } from "@/app/conversation/PlusMenu";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { SelectionPill } from "@/app/conversation/SelectionPill";
@@ -269,6 +270,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
           </div>
           <ComposerHint target={target} />
         </ComposerPrimitive.Root>
+        {conversation && !archived && <PausedSendDialog conversationId={conversation.id} />}
       </div>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
@@ -584,6 +586,7 @@ function SendControls({
   running: boolean;
   onResume: (() => void) | null;
 }) {
+  const aui = useAui();
   const target = useContext(ComposerTargetContext);
   const conversationId = target?.conversation?.id ?? null;
   const starting = useBoard(
@@ -643,11 +646,17 @@ function SendControls({
         state === "resume"
           ? (onResume ?? undefined)
           : (event: MouseEvent<HTMLButtonElement>) => {
+              const toNewSession = sending && !empty && (mac ? event.metaKey : event.ctrlKey);
+              // Into a paused queue it asks first; the Send primitive's own click doesn't send.
+              if (sending && !empty && !(projectSession && toNewSession) && askPausedSend(conversationId, () => aui.composer().send())) {
+                event.preventDefault();
+                return;
+              }
               if (!projectSession) return;
               // A ⌘-click whose send never came is not this send's.
               clearBackgroundSend(projectSession);
               // Before the Send primitive's own click sends: this send goes to a new session.
-              if (sending && !empty && (mac ? event.metaKey : event.ctrlKey)) markBackgroundSend(projectSession);
+              if (toNewSession) markBackgroundSend(projectSession);
             }
       }
     >

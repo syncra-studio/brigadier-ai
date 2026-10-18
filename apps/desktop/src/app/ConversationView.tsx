@@ -26,6 +26,7 @@ import { ConversationToolbar } from "@/app/conversation/ConversationToolbar";
 import { WorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
 import { RightSidebar, RightSidebarContext } from "@/app/conversation/RightSidebar";
 import { ConversationComposer } from "@/app/conversation/Composer";
+import { takeQueueSend } from "@/app/conversation/PausedSend";
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { ChatActions, RenameDialog } from "@/app/conversation/ChatActions";
@@ -650,6 +651,8 @@ export function ConversationView({
       const refs = attachments.messageRefs(text, message.attachments ?? []);
       // ⌘⏎ asked for a new background session.
       const background = takeBackgroundSend(conversationId);
+      // Asked to wait in the paused queue (Send message?): at its end.
+      const keepPaused = takeQueueSend(conversationId);
       // A queued message pulled out to edit goes back to its slot, unless steered in now.
       const slot = pulled.take(conversationId);
       if (!text && refs.length === 0) return;
@@ -661,7 +664,9 @@ export function ConversationView({
         void startSessionFrom(source, outgoing).catch(fail);
         return;
       }
-      const into = sendLane(lane, { pulled: !!slot, followUp: useApp.getState().settings.followUp });
+      const into = keepPaused
+        ? "queue"
+        : sendLane(lane, { pulled: !!slot, followUp: useApp.getState().settings.followUp });
       send(
         outgoing,
         draftTarget ?? undefined,

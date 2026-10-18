@@ -42,6 +42,11 @@ const request = {
   suggestion: null,
 } as unknown as UserRequest;
 
+/** The message queue: paused after an interrupt, with one message waiting, for the `paused` case. */
+const queue = which === "paused"
+  ? { items: [{ id: "q1", text: "Then update the docs.", attachments: [], mentions: [], queuedAtMs: start, editedAtMs: null }], paused: true }
+  : { items: [], paused: false };
+
 /** What the composer sent, by method. */
 const sent: Request[] = [];
 /** Stores the file being attached, once the case lets it (`null`: none waits). */
@@ -63,7 +68,7 @@ mockIPC((command, payload) => {
         view: {
           conversation, context: null, messages: { messages, hasMore: false }, tasks: [], approvals: [], questions: [],
           plans: [], requests: [request], workerSteps: [], orchestratorSteps: [], machineSteps: [], thinking: [],
-          compactions: [], decisions: [], waiting: [], queue: { items: [], paused: false }, run: "idle",
+          compactions: [], decisions: [], waiting: [], queue, run: "idle",
           runRequest: null, head: "a1", ratings: {}, streaming: null, notices: [], memories: [], overnight: [],
           reviews: [], previews: [],
         } as unknown as View,
@@ -144,9 +149,56 @@ async function uploadingCase(seen: Record<string, unknown>) {
   seen.afterUpload = { disabled: sendButton()?.disabled, tip: sendButton()?.textContent };
 }
 
+/** The open dialog, if any. */
+const dialog = () => document.querySelector<HTMLElement>("[role=dialog]");
+/** Whether the dialog is open and done moving in (a click mid-animation can miss it). */
+const dialogSettled = () =>
+  dialog() !== null && dialog()!.getAnimations({ subtree: true }).every((animation) => animation.playState === "finished");
+const dialogButton = (name: string) =>
+  [...(dialog()?.querySelectorAll("button") ?? [])].find((button) => button.textContent?.trim() === name) ?? null;
+/** The messages sent, with the slot each asked for. */
+const sends = () =>
+  sent.flatMap((req) => (req.method === "sendMessage" ? [{ text: req.text, queueIndex: req.queueIndex }] : []));
+
+/**
+ * #303: sending while the queue is paused asks first ("Send message?"): Send now sends it ahead
+ * of the paused queue, Keep paused puts it in the queue, which stays paused; Esc sends nothing.
+ */
+async function pausedCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  await fixtureClick(field()!);
+  await fixtureInput({ type: "type", text: "first" });
+  await until("the typed text", () => field()?.textContent === "first");
+  await fixtureInput({ type: "key", key: "Enter" });
+  await until("the dialog", () => dialog() !== null, 3000).catch(() => {});
+  seen.asked = {
+    title: dialog()?.querySelector("h2")?.textContent ?? null,
+    buttons: [...(dialog()?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim()).filter(Boolean),
+    sent: sends().length,
+  };
+  await fixtureInput({ type: "key", key: "Escape" });
+  await until("the dialog closed", () => dialog() === null, 3000).catch(() => {});
+  seen.escaped = { sent: sends().length, kept: field()?.textContent };
+  await fixtureInput({ type: "key", key: "Enter" });
+  await until("the dialog again", () => dialogSettled() && dialogButton("Keep paused") !== null, 3000);
+  await fixtureClick(dialogButton("Keep paused")!);
+  await until("the message queued", () => sends().length === 1, 3000).catch(() => {});
+  seen.keptPaused = sends();
+  await until("the field empty, the dialog gone", () => field()?.textContent === "" && dialog() === null, 3000);
+  await fixtureClick(field()!);
+  await fixtureInput({ type: "type", text: "second" });
+  await until("the second text", () => field()?.textContent === "second");
+  await fixtureClick(sendButton()!);
+  await until("the dialog from Send", () => dialogSettled() && dialogButton("Send now") !== null, 3000);
+  await fixtureClick(dialogButton("Send now")!);
+  await until("the message sent", () => sends().length === 2, 3000).catch(() => {});
+  seen.sentNow = sends().slice(1);
+}
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
   focus: focusCase,
   uploading: uploadingCase,
+  paused: pausedCase,
 };
 
 async function drive() {
