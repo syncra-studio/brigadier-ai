@@ -157,7 +157,7 @@ export function ProviderAccounts({
   const rows =
     views === null ? (
       wide ? (
-        <p className="text-muted-foreground px-4 py-3 text-sm">Reading the accounts…</p>
+        <p className="text-muted-foreground px-1 py-3.5 text-sm">Reading the accounts…</p>
       ) : (
         <SettingsRow label="Reading the accounts…" />
       )
@@ -191,22 +191,20 @@ export function ProviderAccounts({
 
   if (wide) {
     return (
-      <div data-slot="provider-accounts">
-        <SettingsCard>
-          {rows}
-          {terminal || (
-            <button
-              type="button"
-              aria-label={addLabel}
-              disabled={views === null}
-              onClick={() => start(null)}
-              className="text-link text-label flex w-fit items-center gap-2 px-4 py-3 hover:underline disabled:opacity-50"
-            >
-              <Plus className="size-icon-sm" />
-              {addLabel}
-            </button>
-          )}
-        </SettingsCard>
+      <div data-slot="provider-accounts" className="divide-divider flex flex-col divide-y border-divider border-b">
+        {rows}
+        {terminal || (
+          <button
+            type="button"
+            aria-label={addLabel}
+            disabled={views === null}
+            onClick={() => start(null)}
+            className="text-link flex w-fit items-center gap-2 px-1 py-3.5 text-sm hover:underline disabled:opacity-50"
+          >
+            <Plus className="size-icon-sm" />
+            {addLabel}
+          </button>
+        )}
       </div>
     );
   }
@@ -393,33 +391,29 @@ function AccountRow({
     else if (wideTitle !== title) wideDetails.push(title);
     const all = signedIn && view.quota ? ordered(view.quota) : [];
     return (
-      <div data-slot="account-row" className="flex flex-col gap-3 px-4 py-3.5">
-        <div className="flex items-center gap-3">
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            {nameField || (
-              <span className="flex min-w-0 items-center gap-1">
-                <span data-slot="account-title" className="text-label truncate font-medium">
-                  {wideTitle}
-                </span>
-                {eye}
+      <div data-slot="account-row" className="flex items-center gap-6 px-1 py-3.5">
+        <div className="flex w-60 min-w-0 shrink-0 flex-col gap-0.5">
+          {nameField || (
+            <span className="flex min-w-0 items-center gap-1">
+              <span data-slot="account-title" className="text-label truncate font-mono">
+                {wideTitle}
               </span>
-            )}
-            <span className="text-foreground/65 truncate text-xs">{wideDetails.join(" · ")}</span>
-            {view.error && <span className="text-destructive text-xs">{view.error}</span>}
-            <ErrorLine error={action.error} />
-          </div>
-          <div className="flex shrink-0 items-center justify-end gap-3">
-            {use}
-            {menu}
-          </div>
+              {eye}
+            </span>
+          )}
+          <span className="text-foreground/65 truncate text-xs">{wideDetails.join(" · ")}</span>
+          {view.error && <span className="text-destructive text-xs">{view.error}</span>}
+          <ErrorLine error={action.error} />
         </div>
-        {all.length > 0 && (
-          <div className="flex gap-5">
-            {all.map((window) => (
-              <UsageMeter key={window.id} window={window} now={now} />
-            ))}
-          </div>
-        )}
+        <div className="flex min-w-0 flex-1 flex-wrap gap-x-5 gap-y-2">
+          {all.map((window) => (
+            <UsageMeter key={window.id} window={window} now={now} />
+          ))}
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-3">
+          {use}
+          {menu}
+        </div>
       </div>
     );
   }
@@ -485,6 +479,9 @@ function UsageBar({ window, now }: { window: QuotaWindow; now: number }) {
   );
 }
 
+/** Segments in a usage meter's bar. */
+const METER_SEGMENTS = 32;
+
 /**
  * A window's short name on a meter: what it is limited to ("Fable"), else its length ("5h",
  * "7d"), else its label.
@@ -502,34 +499,38 @@ export function meterName(window: QuotaWindow): string {
   return SHORT_WINDOW[window.label] ?? window.label;
 }
 
-/** A meter's name in words, for the windows that have one ("5 hours", "Week"). */
-const METER_WORDS: Record<string, string> = { "5h": "5 hours", "7d": "Week" };
-
 /**
- * A usage window on Settings › Providers: its name and the share used over a thin bar, and when
- * it resets under it; coloured only near its limit.
+ * A usage window on Settings › Providers: its name and the share used over a bar of segments,
+ * and when it resets; coloured only near its limit.
  */
 function UsageMeter({ window, now }: { window: QuotaWindow; now: number }) {
   const percent = used(window);
-  const usage = usageTone(percent, { normal: { text: "text-foreground/80", fill: "bg-foreground/55" } });
+  const usage = usageTone(percent, { normal: { text: "text-foreground", fill: "bg-foreground/80" } });
   const name = meterName(window);
   const resets = window.resetsAtMs !== null ? formatCountdown(window.resetsAtMs, now) : null;
+  const filled = Math.round((percent / 100) * METER_SEGMENTS);
   return (
     <div
       data-slot="account-usage"
-      className="flex min-w-0 flex-1 flex-col gap-1 text-xs tabular-nums"
+      className="flex w-56 min-w-0 flex-col gap-1.5 font-mono text-xs"
       title={`${window.label}: ${percent}% used${resets ? `, resets in ${resets}` : ""}`}
     >
       <span className="flex items-baseline justify-between gap-2 whitespace-nowrap">
-        <span className="text-muted-foreground truncate">{METER_WORDS[name] ?? name}</span>
-        <span data-slot="account-usage-share" className={usage.text}>
-          {percent}%
+        <span>
+          <span className="text-muted-foreground">{name} · </span>
+          <span className={usage.text}>{percent}% used</span>
         </span>
+        {resets && <span className="text-muted-foreground truncate">resets {resets}</span>}
       </span>
-      <span aria-hidden className="bg-foreground/8 block h-1 overflow-hidden rounded-full">
-        <span className={cn("block h-full rounded-full", usage.fill)} style={{ width: `${percent}%` }} />
+      <span aria-hidden className="flex h-2 gap-px">
+        {Array.from({ length: METER_SEGMENTS }, (_, index) => (
+          <span
+            // oxlint-disable-next-line react/no-array-index-key -- the segments are positions.
+            key={index}
+            className={cn("flex-1 rounded-xs", index < filled ? usage.fill : "bg-foreground/12")}
+          />
+        ))}
       </span>
-      {resets && <span className="text-muted-foreground text-2xs truncate">resets in {resets}</span>}
     </div>
   );
 }

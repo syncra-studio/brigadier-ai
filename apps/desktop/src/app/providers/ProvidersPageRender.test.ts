@@ -5,16 +5,14 @@ import { createServer } from "vite";
 import type { AccountView } from "@/ipc/generated";
 import { renderFixtureLive } from "@/fixtures/headless";
 
-// The real page in Chromium over a faked daemon: the agents listed with their version and how
-// they stand, the chosen one's accounts (emails masked, one row's revealed until the page is
-// left, usage coloured only near the limit) and models with their rule tags, and the links that
-// moved to Routing (the old Usage page's, a rule's, a new model's).
-test("Providers lists the agents, masks emails, and links to Routing for rules", { timeout: 60000 }, async (t) => {
+// The real page in Chromium over a faked daemon: a tab per agent, emails masked, one row's
+// revealed until the page is left, usage coloured only near the limit, the models with their
+// rule tags, and the links that moved to Routing (the old Usage page's, a rule's, a new model's).
+test("Providers shows a tab per agent, masks emails, and links to Routing for rules", { timeout: 60000 }, async (t) => {
   const dump = await renderFixtureLive(t, "providers.html?drive=1", "providers-result", 30000);
   const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
-  assert.deepEqual(seen.list, ["Claudev2.1.0Signed in · Max plan", "Codexv2.1.0Signed in · Plus plan"]);
-  assert.equal(seen.chosen, "Claudev2.1.0Signed in · Max plan");
-  assert.equal(seen.panelPlain, true);
+  assert.deepEqual(seen.tabs, ["ClaudeMax", "CodexPlus"]);
+  assert.equal(seen.status, "Readyv2.1.0 · Max plan · /usr/local/bin/claudeOn");
   assert.equal(seen.switchRow, true);
   // The page's column is the one every Settings page has (#259).
   assert.equal(seen.settingsColumn, true);
@@ -22,10 +20,10 @@ test("Providers lists the agents, masks emails, and links to Routing for rules",
   assert.deepEqual(seen.masked, masked);
   assert.equal(seen.eyes, 3);
   assert.deepEqual(seen.usage, [
-    { name: "5 hours", text: "32%", tone: "text-foreground/80" },
-    { name: "Week", text: "69%", tone: "text-foreground/80" },
-    { name: "5 hours", text: "84%", tone: "text-warning" },
-    { name: "Week", text: "93%", tone: "text-destructive" },
+    { text: "32% used", tone: "text-foreground" },
+    { text: "69% used", tone: "text-foreground" },
+    { text: "84% used", tone: "text-warning" },
+    { text: "93% used", tone: "text-destructive" },
   ]);
   assert.deepEqual(seen.models, [
     "Opus 5.5opus · defaultFrontier · Best for writing code, reviewing changes and resolving conflicts",
@@ -43,7 +41,6 @@ test("Providers lists the agents, masks emails, and links to Routing for rules",
     rule: "in Rules",
     inView: true,
   });
-  assert.equal(seen.codexChosen, "Codexv2.1.0Signed in · Plus plan");
   assert.deepEqual(seen.codexModels, [
     "GPT-6gpt-6 · defaultFrontier · Best for writing code, reviewing changes and research",
     "GPT-6 Lunagpt-6-lunaNewBrigadier gives it no tasks until you allow itAllow in Routing",
@@ -56,8 +53,6 @@ test("Providers lists the agents, masks emails, and links to Routing for rules",
   });
   // Routing's old name finds its page.
   assert.deepEqual(seen.searched, { type: "settings", page: "routing" });
-  // The list sits beside the chosen agent's side, and above it on a narrow page.
-  assert.deepEqual(seen.layout, { wide: "beside", narrow: "under" });
   // The same account as this computer's login and added here is one row: the added one, saying
   // it is this computer's login, in use when either is (#263).
   assert.deepEqual(seen.twin, [

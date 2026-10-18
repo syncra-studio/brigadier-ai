@@ -1,13 +1,14 @@
-import { ChevronRight, InfoCircle } from "@openai/apps-sdk-ui/components/Icon";
+import { CheckCircle, ChevronRight, InfoCircle, Stop } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { agentState, SetupTerminal } from "@/app/onboarding/SetupTerminal";
 import { ProviderAccounts, type Revealed } from "@/app/providers/AccountRows";
 import { bestFor } from "@/app/routing/models";
-import { SettingsButton, SettingsCard, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsButton, SettingsSwitch } from "@/app/settings/parts";
 import { revealSetting } from "@/app/settings/reveal";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
+import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type {
   AccountView,
@@ -34,6 +35,7 @@ import {
   modelAvailable,
   providerOn,
   setModelAvailable,
+  setProviderOn,
 } from "@/state/providers";
 import { useApp } from "@/state/store";
 
@@ -47,19 +49,21 @@ export const EXPENSIVE_NOTE =
 /** The line under a model a "Don't give work" rule keeps from tasks. */
 const NO_WORK_NOTE = "Gets no tasks: a rule in Routing keeps it to chats and sessions you pick it for";
 
-/** A heading over a part of the panel ("Accounts"). */
+/** A small heading over a part of the panel ("ACCOUNTS"). */
 export function PanelHeading({ children }: { children: string }) {
   return (
-    <h3 data-setting={children} className="text-label px-1 pb-2 font-medium">
+    <h3
+      data-setting={children}
+      className="text-muted-foreground px-1 pt-6 pb-1 font-mono text-2xs font-medium tracking-eyebrow uppercase"
+    >
       {children}
     </h3>
   );
 }
 
 /**
- * The chosen agent's side of the page: the one step that gets it working when it needs one,
- * then its accounts, then its models with a switch each. Its version, how it stands and its
- * switch are on its line in the list.
+ * One agent's tab: how it stands (the one action that gets it working, its version, plan and
+ * where it is installed) with its switch, then its accounts, then its models with a switch each.
  */
 export function ProviderPanel({
   provider,
@@ -79,47 +83,81 @@ export function ProviderPanel({
   revealed: Revealed;
 }) {
   const on = useApp((s) => providerOn(s.settings, provider));
+  const toggle = useAction();
   const state = agentState(overview);
-  const needs = on && (state === "install" || state === "signIn");
+  const label = VENDOR_LABELS[provider];
+  const needs = state === "install" || state === "signIn";
   // Installing or signing in the agent; its terminal closes by itself once that is done.
   const [setup, setSetup] = useState<{ install: boolean } | null>(null);
   const settingUp = setup && state === (setup.install ? "install" : "signIn") ? setup : null;
   const status = overview?.status;
+  const facts = [
+    status?.version && `v${status.version}`,
+    status?.plan && `${status.plan.charAt(0).toUpperCase()}${status.plan.slice(1)} plan`,
+    status?.path,
+  ].filter(Boolean);
 
   return (
-    <div data-slot="provider-panel" className="flex flex-col gap-6 p-5">
-      {!on && <p className="text-muted-foreground px-1 text-sm">{OFF_NOTE}</p>}
-      {needs && (
-        <SettingsCard>
-          <div className="flex items-center justify-between gap-6 px-4 py-3">
-            <span className="text-label flex min-w-0 items-center gap-2">
-              <span aria-hidden className="bg-warning size-1.5 shrink-0 rounded-full" />
-              {state === "install" ? (status?.guidance ?? providerStatusText(overview)) : providerStatusText(overview)}
-            </span>
-            <SettingsButton disabled={settingUp !== null} onClick={() => setSetup({ install: state === "install" })}>
-              {state === "install" ? "Install" : "Sign in"}
-            </SettingsButton>
-          </div>
-          {settingUp && (
-            <div className="px-4 pb-4">
-              <SetupTerminal
-                key={String(settingUp.install)}
-                provider={provider}
-                install={settingUp.install}
-                onClose={() => {
-                  setSetup(null);
-                  void refreshProviders(provider).catch(() => {});
-                }}
-              />
-            </div>
+    <div data-slot="provider-panel" className="flex flex-col">
+      <div className="border-divider flex min-h-14 items-center justify-between gap-6 border-b px-1 py-3">
+        <div className="flex min-w-0 items-center gap-3 text-sm">
+          {!on ? (
+            <span className="text-muted-foreground">{OFF_NOTE}</span>
+          ) : state === "ready" ? (
+            <>
+              <span className="text-success flex shrink-0 items-center gap-1.5">
+                <CheckCircle aria-hidden className="size-icon-sm" />
+                Ready
+              </span>
+              <span className="text-muted-foreground truncate font-mono text-xs" title={status?.path ?? undefined}>
+                {facts.join(" · ")}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="flex items-center gap-1.5">
+                {needs && <span aria-hidden className="bg-warning size-1.5 shrink-0 rounded-full" />}
+                {state === "install" ? (status?.guidance ?? providerStatusText(overview)) : providerStatusText(overview)}
+              </span>
+              {needs && (
+                <SettingsButton disabled={settingUp !== null} onClick={() => setSetup({ install: state === "install" })}>
+                  {state === "install" ? "Install" : "Sign in"}
+                </SettingsButton>
+              )}
+            </>
           )}
-        </SettingsCard>
+        </div>
+        <span className="text-muted-foreground flex shrink-0 items-center gap-3 font-mono text-xs">
+          {on ? "On" : "Off"}
+          <SettingsSwitch
+            label={`Use ${label}`}
+            checked={on}
+            disabled={toggle.busy}
+            onCheckedChange={(next) => toggle.run(() => setProviderOn(provider, next))}
+          />
+        </span>
+      </div>
+      {toggle.error && (
+        <p role="alert" className="text-destructive px-1 pt-2 text-xs">
+          {toggle.error}
+        </p>
+      )}
+      {settingUp && (
+        <div className="pt-3">
+          <SetupTerminal
+            key={String(settingUp.install)}
+            provider={provider}
+            install={settingUp.install}
+            onClose={() => {
+              setSetup(null);
+              void refreshProviders(provider).catch(() => {});
+            }}
+          />
+        </div>
       )}
 
-      <section className="flex flex-col">
-        <PanelHeading>Accounts</PanelHeading>
-        <ProviderAccounts wide provider={provider} views={accounts} now={now} revealed={revealed} />
-      </section>
+      <PanelHeading>Accounts</PanelHeading>
+      <ProviderAccounts wide provider={provider} views={accounts} now={now} revealed={revealed} />
 
       {on && <ProviderModels provider={provider} overview={overview} merged={merged} groups={groups} />}
     </div>
@@ -147,10 +185,10 @@ function ProviderModels({
     <ModelRow key={model.id} provider={provider} model={model} merged={merged} groups={groups} />
   );
   return (
-    <section className="flex flex-col">
+    <>
       <PanelHeading>Models</PanelHeading>
       {models.length === 0 ? (
-        <p className="text-muted-foreground px-1 py-2 text-sm">
+        <p className="text-muted-foreground px-1 py-3.5 text-sm">
           {state === "checking"
             ? "Checking…"
             : state === "install"
@@ -160,11 +198,11 @@ function ProviderModels({
                 : "Reading the models…"}
         </p>
       ) : (
-        <SettingsCard>
+        <div className="divide-divider flex flex-col divide-y">
           {current.map(row)}
           {older.length > 0 && (
             <Collapsible className="flex flex-col">
-              <CollapsibleTrigger className="text-foreground/65 hover:text-foreground group flex w-full items-center gap-2 px-4 py-3 text-sm">
+              <CollapsibleTrigger className="text-foreground/65 hover:text-foreground group flex w-full items-center gap-2 px-1 py-3.5 text-sm">
                 <ChevronRight
                   aria-hidden
                   className="size-icon-sm transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
@@ -176,9 +214,9 @@ function ProviderModels({
               </CollapsibleContent>
             </Collapsible>
           )}
-        </SettingsCard>
+        </div>
       )}
-    </section>
+    </>
   );
 }
 
@@ -258,8 +296,8 @@ function ModelRow({
     description = NO_WORK_NOTE;
   } else if (expensive) {
     description = (
-      <span className="flex items-start gap-1.5">
-        <InfoCircle aria-hidden className="size-icon-xs mt-0.5 shrink-0" />
+      <span className="flex items-center gap-1.5">
+        <InfoCircle aria-hidden className="size-icon-xs shrink-0" />
         {EXPENSIVE_NOTE}
       </span>
     );
@@ -273,7 +311,7 @@ function ModelRow({
     <div
       data-slot="provider-model"
       data-setting={model.displayName}
-      className="flex items-center justify-between gap-6 px-4 py-3"
+      className="flex items-center justify-between gap-6 px-1 py-3.5"
     >
       <div className="flex min-w-0 flex-col gap-1">
         <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
@@ -282,15 +320,16 @@ function ModelRow({
             {model.id}
             {model.isDefault && " · default"}
           </span>
-          {fresh && <span className="text-warning text-xs">New</span>}
+          {fresh && <Badge variant="warning">New</Badge>}
           {tags.map((rule) => (
             <button
               key={rule.id}
               type="button"
               title={`${ruleSentence(rule, groups, projects)}: open it in Routing`}
-              className="text-foreground/65 hover:text-foreground text-xs hover:underline"
+              className="bg-foreground/6 text-foreground/65 hover:text-foreground rounded-nav flex items-center gap-1 px-1.5 py-0.5 text-2xs"
               onClick={() => showRule(rule)}
             >
+              <Stop aria-hidden className="size-icon-xs" />
               {ruleTag(rule)} · rule in Routing
             </button>
           ))}

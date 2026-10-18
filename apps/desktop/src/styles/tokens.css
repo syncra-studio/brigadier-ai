@@ -108,9 +108,6 @@
  *               max-w-settings-wide           the Inspector's panes
  *               max-w-setup, h-setup          the first-run setup sheet (near full window, capped)
  *               max-h-picker                  a dialog that picks from a list (capped, then it scrolls)
- *               max-h-providers-card, w-providers-list  Settings › Providers' card (the window's
- *                                             height less the page above it) and its agent list,
- *                                             side by side from @providers-split
  *               setup-card                    a setup card's minimum width in its auto-filled grid
  *               max-w-onboarding{,-agents,-detail}  the first-run setup's headings, its two
  *                                             agent columns, an agent's own page
@@ -432,10 +429,6 @@
   --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 13rem;
   --spacing-picker: min(34rem, calc(100dvh - 6rem));
-  /* Settings › Providers' card: what the window leaves under the page's title and switch row,
-     never less than a short list; the chosen agent's side scrolls inside it. */
-  --spacing-providers-card: max(28rem, calc(100dvh - 20rem));
-  --spacing-providers-list: 16rem;
   --spacing-agent-mark: 4.5rem;
   --spacing-user-message: 20lh;
   --spacing-peer-message: 6lh;
@@ -455,8 +448,6 @@
   --container-thread: 46rem;
   --container-settings: 60rem;
   --container-settings-wide: 80rem;
-  /* Settings › Providers lists its agents beside the chosen one's side from this width, above it below. */
-  --container-providers-split: 40rem;
   /* The pinned summary's cards, and their column with its gap to the pane's edges. */
   --container-summary: 18.75rem;
   --container-summary-stack: calc(var(--container-summary) + var(--spacing-summary-inset) * 2);

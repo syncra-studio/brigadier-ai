@@ -1,4 +1,4 @@
-/** Settings → Providers over a faked daemon: the agents listed, the chosen one's accounts (masked emails) and models. */
+/** Settings → Providers over a faked daemon: a tab per agent, accounts with masked emails, models. */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -68,24 +68,15 @@ const button = (name: string, root: ParentNode = document) =>
     (element) => text(element) === name || element.getAttribute("aria-label") === name,
   );
 const titles = () => all('[data-slot="account-title"]').map(text);
-/** Chooses an agent in the page's list. */
-const choose = (name: string) =>
-  all('[data-slot="provider-item"]')
-    .find((item) => text(item).startsWith(name))
-    ?.querySelector<HTMLButtonElement>('button:not([role="switch"])')
-    ?.click();
+/** Presses a tab the way a pointer does (Radix switches tabs on mouse down). */
+const press = (element: Element | undefined | null) => {
+  element?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+};
 /** Whether the element is in the page's scrolled view. */
 const inView = (element: Element | undefined | null) => {
   if (!element) return false;
   const box = element.getBoundingClientRect();
   return box.bottom > 0 && box.top < window.innerHeight;
-};
-/** Where the chosen agent's side is: beside the list, or under it. */
-const layout = () => {
-  const list = document.querySelector('[data-slot="provider-item"]')?.getBoundingClientRect();
-  const panel = document.querySelector('[data-slot="provider-panel"]')?.getBoundingClientRect();
-  if (!list || !panel) return "";
-  return panel.left >= list.right ? "beside" : panel.top >= list.bottom ? "under" : "overlapping";
 };
 const typeSearch = (value: string) => {
   const input = document.querySelector<HTMLInputElement>('input[aria-label="Search settings"]');
@@ -116,11 +107,8 @@ function Fixture() {
     const seen: Record<string, unknown> = {};
     const steps: (() => void)[] = [
       () => {
-        seen.list = all('[data-slot="provider-item"]').map(text);
-        seen.chosen = text(document.querySelector('[data-slot="provider-item"] button[aria-current]'));
-        // The version shows once, in the list; the path nowhere.
-        const panel = text(document.querySelector('[data-slot="provider-panel"]'));
-        seen.panelPlain = !panel.includes("2.1.0") && !panel.includes("/usr/local/bin");
+        seen.tabs = all('[data-slot="tabs-trigger"]').map(text);
+        seen.status = text(document.querySelector('[data-slot="provider-panel"] > div'));
         seen.switchRow = Boolean(document.querySelector('[data-setting="Switch to another account when one runs out"]'));
         const column = document.querySelector('[data-slot="settings-page"] h1')?.closest(".mx-auto");
         const probe = document.body.appendChild(Object.assign(document.createElement("div"), { className: "max-w-settings" }));
@@ -129,8 +117,8 @@ function Fixture() {
         seen.masked = titles();
         seen.eyes = all("button").filter((element) => element.getAttribute("aria-label") === "Show email").length;
         seen.usage = all('[data-slot="account-usage"]').slice(0, 4).map((element) => {
-          const share = element.querySelector('[data-slot="account-usage-share"]');
-          return { name: text(element.firstElementChild?.firstElementChild), text: text(share), tone: share?.className };
+          const share = all("span", element).find((span) => span.textContent?.endsWith("% used") && span.children.length === 0);
+          return { text: text(share), tone: share?.className };
         });
         seen.models = all('[data-slot="provider-model"]').map(text);
         // Reveal the second account's email only.
@@ -165,10 +153,9 @@ function Fixture() {
         openSettings("providers");
       },
       () => {
-        choose("Codex");
+        press(all('[data-slot="tabs-trigger"]').find((element) => text(element).startsWith("Codex")));
       },
       () => {
-        seen.codexChosen = text(document.querySelector('[data-slot="provider-item"] button[aria-current]'));
         seen.codexModels = all('[data-slot="provider-model"]').map(text);
         button("Allow in Routing")?.click();
       },
@@ -189,13 +176,6 @@ function Fixture() {
         openSettings("providers");
       },
       () => {
-        seen.layout = { wide: layout() };
-        // A narrow page (a small window, a wide sidebar) puts the list above the chosen agent's side.
-        document.querySelector("main")?.classList.add("max-w-lg");
-      },
-      () => {
-        (seen.layout as Record<string, unknown>).narrow = layout();
-        document.querySelector("main")?.classList.remove("max-w-lg");
         seen.twin = all('[data-slot="account-row"]').map((row) => ({
           title: text(row.querySelector('[data-slot="account-title"]')),
           own: text(row).includes("This computer's login"),
