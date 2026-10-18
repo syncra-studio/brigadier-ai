@@ -267,11 +267,16 @@ worktree. We add only grouping, shortcuts, a read-only board and states. No work
 ## Phase 3 · Auto-merge (Q62, Q68)
 
 **Take, don't rebuild:** the agent uses `gh` itself (`gh pr create`, `gh pr checks`, `gh pr merge`), as Claude
-Code and Codex do. Brigadier adds the setting, the bar in the instructions, the fresh verifier's inputs, and
-the Revert button. The engine never decides whether a merge may happen.
+Code and Codex do. Brigadier adds the setting, the bar as guidance in the instructions, the UI that shows what was
+checked (merge message, proof, Revert), and code only where the thread can't do something it wants today: a fresh
+verifier for its own work, an other-vendor review it can call on any change, the #177 router fix, the session
+branch reconciled after a GitHub squash or rebase merge, and `ci_status` reading PR checks. The engine never
+decides, holds or gates whether a merge may happen. The LLM stays free (user, 10-18): verification is expected in
+the instructions, never enforced; the merge message always shows what was verified, so a lightly verified merge is
+visible, not blocked.
 
 ### Scope
-- **The setting.** "Merge on its own when everything passes", in Settings › Git (`D/app/settings/GitPage.tsx`).
+- **The setting.** "Merge on its own when the work is ready", in Settings › Git (`D/app/settings/GitPage.tsx`).
   Stored as `Settings.auto_merge: bool`, default `true` (`model.rs:817`). It is the one allowed knob (Q62).
 - **When on, the tab does the whole job.**
   - With a GitHub remote and a signed-in `gh`, the PR path: push the branch, open a PR, babysit CI and reviews, fix,
@@ -282,41 +287,43 @@ the Revert button. The engine never decides whether a merge may happen.
     onto the new base, as the local merge path already advances it. The tab reads Merged, and its next request
     starts from base, not from stale commits.
   - Without them, the local path: merge into base via `finish_session` (`M/landing.rs:1437`).
-  - The merge needs no user consent when the setting is on. `finish_session` records the origin as `auto`.
+  - The merge needs no user consent and shows no consent card when the setting is on. `finish_session` records the
+    origin as `auto`.
 - **When off.** The tab says the work is Ready, and today's consent rule applies (b2a16dd9). A peer's request is not
   the user's yes.
-- **Every auto-merge gets the other vendor's review, small ones included.** A new thread tool,
+- **The thread can ask the other vendor for a review of any change, small ones included.** A new thread tool,
   `review_candidate { commit }`, asks the other vendor to review the final candidate. Today the thread's own changes
   are reviewed only past the size/risk line (`review_range_if_due`, `M/unreviewed.rs:501`) and `review_code` is a
   worker's tool. `review_candidate` reuses existing coverage: a range already reviewed at that commit isn't reviewed
   again, only what came after it (#138). If no other-vendor reviewer can take it, or reviews are off
-  (`reviews_on()`), auto-merge is unavailable for that change: the tab says Ready and leaves the merge to the user.
-  No new setting.
-- **The bar lives in the instructions (below).** The engine does not gate merges. The merge result still states where
-  checks, CI and the review stand, as w36's #241/#242 leaves it.
+  (`reviews_on()`), the call says so as a fact; the agent decides whether to merge or wait, and the merge message
+  says the review was missing. No new setting.
+- **The bar lives in the instructions (below), as guidance the agent judges.** The engine does not refuse, hold or
+  gate merges. The merge result still states where checks, CI and the review stand, as w36's #241/#242 leaves it.
 - **Revert.** A one-click Revert on the merge message.
 - **Findings beyond the request** are listed in the merge message, never silently dismissed. When the repo is on
   GitHub, each is also filed as an issue (Q58).
 
 ### The Q68 bar, as the agent instructions it becomes
-New revision note and thread rule, active only when `auto_merge` is on:
+New revision note and thread guidance, active only when `auto_merge` is on. It says how to ship well; the agent
+judges what a change needs. No must-lists, no thresholds, no loop:
 
-> Before you merge, all of this holds for the final commit, the one that merges:
-> 1. Its tests and type checks pass, run on that commit after your last change.
-> 2. The other vendor's review of the final commit has finished (`review_candidate`, which reuses a review that
->    already covers it), and every finding is fixed or answered in one line. Wait for a running review; never merge
->    past one.
-> 3. With a PR, its CI is green.
-> 4. A change the user can see: run the dev app in the background (`start_preview`, never in front), use the change
->    the way the user would, and attach a screenshot or short recording to the merge message.
-> 5. A big or risky change (several workers, more than ~400 changed lines of code, or a risky mark: persistence,
->    security, migrations, concurrency, deletion, public API): call `start_verifier` with `fresh: true` and act on
->    what it finds. It tries to break the change against the original request.
-> If any of these fails, fix it and start the list again. If one can't hold (CI is broken on main, the other vendor
-> is out of quota), don't merge: say Ready, name what's missing, and leave the merge to the user.
-> The merge message lists: the PR or commit, what was checked on the final commit, the review and how each finding
-> was settled, CI, the proof, the verifier's verdict, and "Beyond this request:" for anything you found outside it
-> (filed as issues when the repo is on GitHub). Never drop a finding without saying so.
+> Ship it the way a careful engineer would, then merge. You judge how much a change needs. What usually makes a
+> merge safe:
+> - Tests and type checks run on the final commit, after your last change.
+> - The other vendor's review of the final commit (`review_candidate`, which reuses a review that already covers
+>   it), with each finding fixed or answered in one line. A running review is usually worth waiting for.
+> - With a PR, green CI on it.
+> - For a change the user can see: run the dev app in the background (`start_preview`), use the change the way the
+>   user would, and attach a screenshot or short recording to the merge message.
+> - For a change you judge big or risky: a fresh verifier (`start_verifier` with `fresh: true`) that tries to break
+>   it against the original request.
+> When something can't be had (CI broken on main, the other vendor out of quota), decide whether to merge or wait,
+> and say what was missing in the merge message.
+> The merge message shows what was verified: the PR or commit, the checks on the final commit, the review and how
+> each finding was settled, CI, the proof, the verifier's verdict if one ran, and anything left out. "Beyond this
+> request:" lists what you found outside it (filed as issues when the repo is on GitHub); never drop a finding
+> without saying so.
 
 ### The fresh verifier's exact inputs
 - **API change.** `start_verifier` today takes a `TaskRef` and verifies a reported implement task (`verify_task`,
@@ -354,7 +361,7 @@ New revision note and thread rule, active only when `auto_merge` is on:
 3. **`review_candidate` + #137 + #138.**
    - Done when: `review_tiers_tests` show a 10-line thread change reviewed through `review_candidate`, a candidate
      already covered not reviewed again, findings in the check reply, a re-check scoped to the fix range, and with
-     no other-vendor reviewer the call saying so (the thread then says Ready).
+     no other-vendor reviewer the call saying so as a fact (the thread decides what to do).
 4. **PR plumbing.**
    - `ci_status` (`M/ci.rs:1039`) reports a PR's checks when the branch has one.
    - The `pull_request.rs` doc no longer says Brigadier never creates one; the agent does, with `gh`.
@@ -366,7 +373,7 @@ New revision note and thread rule, active only when `auto_merge` is on:
 5. **Setting + bar (behind `BRIGADIER_AUTO_MERGE=1`).** The setting, the revision note, and `finish_session`
    accepting `auto`.
    - Done when: flow tests show an auto merge with no consent when on, and consent still needed when off. Prompt tests
-     cover the bar text, and the Git page render test covers the switch.
+     cover the bar text (guidance, no must-lists or thresholds), and the Git page render test covers the switch.
 6. **#142 + UI proof attachments.** The merge message shows an attached screenshot or recording.
    - Done when: the render test shows the media in the merge message, and a `preview_tests` case shows a relaunch
      with no focus taken.
@@ -614,8 +621,8 @@ Everyone rebases on origin/main right before each landing.
   reachable from base, so reachability alone would lie.
 - **Readiness is the engine's `RequestReady` record (a request settled with unmerged commits), not the answer's
   text.** It gives the bench one structured population for both merge modes.
-- **`review_candidate` is a new thread tool; with no other-vendor reviewer or with reviews off, the tab says Ready.**
-  Q68 needs a review on every change; no new setting.
+- **`review_candidate` is a new thread tool; with no other-vendor reviewer or with reviews off, it says so as a
+  fact.** The agent decides whether to merge or wait and says the review was missing; no new setting.
 - **After a PR merge the session branch moves onto the new base, with the old head and merge commit recorded.**
   Squash and rebase merges then still read Merged, and the next request starts clean.
 - **Phase 3's end-to-end runs on a local bare remote with a stub `gh`, plus one tiny real PR on
@@ -644,10 +651,11 @@ Everyone rebases on origin/main right before each landing.
 - **⌘1–9 count across the strip.** One rule, no mode.
 - **Auto-merge picks the PR path when a GitHub remote and a signed-in `gh` exist, otherwise a local merge.** It
   works without GitHub.
-- **"Big or risky" = several workers, more than ~400 changed lines of code, or a risky mark.** It reuses
-  `run_check`'s existing risky mark.
-- **When a bar item can't hold (CI broken on main, reviewer out of quota), the tab says Ready and leaves the merge to
-  the user.** It never merges below the bar.
+- **"Big or risky" is the agent's call; no line or worker counts.** The agent decides when a fresh verifier is
+  worth it (user, 10-18).
+- **When a bar item can't be had (CI broken on main, reviewer out of quota), the agent decides whether to merge or
+  wait, and says what was missing in the merge message.** Verification is expected, shown, never enforced (user,
+  10-18).
 - **Findings beyond the request are filed as GitHub issues when the repo is on GitHub, and always listed.** This is
   Q58.
 - **Revert sends the thread a fixed request instead of the engine reverting.** Reverts can conflict; the LLM judges.
