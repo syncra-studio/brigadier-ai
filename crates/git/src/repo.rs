@@ -759,8 +759,35 @@ impl Repo {
             })
             .collect();
         let include = self.root.join(".worktreeinclude");
-        if include.is_file() {
-            let from = format!("--exclude-from={}", include.display());
+        if fs::symlink_metadata(&include).is_ok_and(|meta| meta.is_file()) {
+            // Read the rules without following a link, then give git a private regular file.
+            // Git's exclude-file reader itself follows links.
+            let mut options = fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                options.custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+                options.custom_flags(0x00200000); // FILE_FLAG_OPEN_REPARSE_POINT
+            }
+            let mut rules = options.open(&include)?;
+            if !rules.metadata()?.is_file() {
+                return Err(Error::Invalid(
+                    ".worktreeinclude must be a regular file".into(),
+                ));
+            }
+            let patterns = TempIndex::new()?;
+            let mut output = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&patterns.path)?;
+            std::io::copy(&mut rules, &mut output)?;
+            drop(output);
+            let from = format!("--exclude-from={}", patterns.path.display());
             let out = self.cmd(&["ls-files", "-z", "--others", "--ignored", &from], true)?;
             for path in out
                 .split(|byte| *byte == 0)
@@ -2969,6 +2996,33 @@ pub(crate) mod tests {
         assert_eq!(
             repo.worktree_copies(100).expect("copies"),
             [".env", ".env.local", "apps/web/.env", "config/local.json"],
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worktree_copies_do_not_follow_a_linked_include_file_or_directory() {
+        use std::os::unix::fs::symlink;
+        let (dir, git) = test_git("20261017-2108-workspaces-rework-w54-linked-include");
+        let root = dir.join("repo");
+        git.init(&root).unwrap();
+        let repo = git.open(&root).unwrap();
+        fs::write(root.join(".gitignore"), ".env*\nconfig/\n").unwrap();
+        fs::write(root.join(".env"), "KEY=local\n").unwrap();
+        fs::create_dir(root.join("config")).unwrap();
+        fs::write(root.join("config/local"), "local").unwrap();
+        let outside = dir.join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("rules"), "config/\n").unwrap();
+        fs::write(outside.join("token"), "outside").unwrap();
+        symlink(outside.join("rules"), root.join(".worktreeinclude")).unwrap();
+        assert_eq!(repo.worktree_copies(100).unwrap(), [".env"]);
+        fs::remove_file(root.join(".worktreeinclude")).unwrap();
+        fs::write(root.join(".worktreeinclude"), "config/\n").unwrap();
+        symlink(&outside, root.join("config/linked")).unwrap();
+        assert_eq!(
+            repo.worktree_copies(100).unwrap(),
+            [".env", "config/linked", "config/local"]
         );
     }
 

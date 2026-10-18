@@ -8,6 +8,11 @@
 //! never committed. Copies live inside the worktree and go with it. The values of the env files
 //! and the listed ones are hidden; other `.worktreeinclude` files are copied as they are.
 
+mod files;
+
+#[cfg(test)]
+mod tests;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -52,14 +57,12 @@ pub(crate) fn copy_into(
     let mut values = Vec::new();
     let mut copied = Vec::new();
     for (file, secret) in worktree_files(&checkout, repo, files)? {
-        let source = repo.join(&file);
-        let target = worktree.join(&file);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| Error::Invalid(err.to_string()))?;
-        }
-        std::fs::copy(&source, &target)
+        let Some(mut source) = files::source(repo, &file) else {
+            continue;
+        };
+        files::copy(&mut source, worktree, &file)
             .map_err(|err| Error::Invalid(format!("copying {}: {err}", file.display())))?;
-        if secret && let Ok(text) = std::fs::read_to_string(&source) {
+        if secret && let Ok(text) = files::copied_text(&mut source) {
             values.extend(env_file_values(&text));
         }
         copied.push(file);
@@ -81,7 +84,7 @@ pub(crate) async fn values(git: &brigadier_git::Git, repo: &Path, files: &[Strin
         }
         let mut values = Vec::new();
         for file in names {
-            if let Ok(text) = std::fs::read_to_string(repo.join(file)) {
+            if let Some(text) = files::text(&repo, &file) {
                 values.extend(env_file_values(&text));
             }
         }
@@ -184,7 +187,7 @@ fn usable(checkout: &brigadier_git::Repo, repo: &Path, files: &[String]) -> Resu
     let mut usable = Vec::new();
     for file in files {
         let path = clean(file)?;
-        if !repo.join(&path).is_file() {
+        if files::source(repo, &path).is_none() {
             tracing::info!(file, "secret file not found in the checkout; skipped");
             continue;
         }
