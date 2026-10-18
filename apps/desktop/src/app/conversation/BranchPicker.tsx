@@ -117,3 +117,52 @@ export function ago(atMs: number, nowMs: number): string {
   const days = Math.floor(hours / 24);
   return days < 30 ? say(days, "day") : days < 365 ? say(Math.floor(days / 30), "month") : say(Math.floor(days / 365), "year");
 }
+
+/**
+ * The name box over the Source panel, in the picker's place: Create Branch…'s new branch name
+ * and Rename Branch…'s. Enter takes the name, Escape or a click outside closes it.
+ */
+export const BranchNameBox: FC<{
+  placeholder: string;
+  /** What the box says it does, under it. */
+  hint: string;
+  initial?: string;
+  onName: (name: string) => void;
+  onClose: () => void;
+}> = ({ placeholder, hint, initial = "", onName, onClose }) => {
+  const [name, setName] = useState(initial);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const away = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) onClose();
+    };
+    window.addEventListener("pointerdown", away);
+    return () => window.removeEventListener("pointerdown", away);
+  }, [onClose]);
+  return (
+    <div
+      ref={root}
+      data-slot="branch-name-box"
+      className="bg-popover text-popover-foreground border-border rounded-surface shadow-menu absolute inset-x-2 top-1 z-20 flex flex-col border p-1"
+    >
+      <input
+        autoFocus
+        value={name}
+        aria-label={placeholder}
+        placeholder={placeholder}
+        onFocus={(event) => event.target.select()}
+        onChange={(event) => setName(event.target.value)}
+        onKeyDown={(event) => {
+          // Enter that ends an input method's composition only ends it.
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "Escape") onClose();
+          else if (event.key === "Enter" && name.trim()) onName(name.trim());
+          else return;
+          event.preventDefault();
+        }}
+        className="border-ring rounded-control placeholder:text-muted-foreground h-control-md shrink-0 border bg-transparent px-2 text-sm outline-none"
+      />
+      <p className="text-muted-foreground px-2 pt-1 pb-0.5 text-xs">{hint}</p>
+    </div>
+  );
+};

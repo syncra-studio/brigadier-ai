@@ -20,7 +20,7 @@ test("the Source panel commits from its menu, merges a branch in, lists its conf
   ]);
   assert.deepEqual(seen.commitMenu, ["Commit", "Commit (Amend)", "Commit & Push", "Commit & Sync"]);
   // A session works on its own branch: no Checkout to….
-  assert.deepEqual(seen.moreMenu, ["Pull", "Push", "Fetch", "Commit", "Changes", "Pull, Push", "Branch"]);
+  assert.deepEqual(seen.moreMenu, ["Pull", "Push", "Fetch", "Commit", "Changes", "Pull, Push", "Branch", "Stash", "Show Git Output"]);
   assert.equal(seen.pickerPlaceholder, "Select a branch to merge from");
   assert.equal((seen.picker as string[]).length, 3, "the current branch isn't offered");
   assert.match((seen.picker as string[])[0]!, /^main2 hours agobranchesStephen • Member discount$/);

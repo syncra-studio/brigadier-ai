@@ -221,3 +221,12 @@ menu adds Clear rating, and so does the rated answer's Feedback menu. Ratings se
 board as the daemon's events would. It writes what it saw as JSON into `#plan-rating-result`;
 `PlanRatingRender.test.ts` checks it. `stop=1` holds the page for a screenshot. This entry is absent
 from the production build.
+
+# Source panel menu
+
+`/fixtures/source-menu.html` is the Source panel on a project's folder with More Actions' Branch ›
+(Merge…, Rebase Branch…, Create Branch…, Create Branch From…, Rename Branch…, Delete Branch…,
+Publish Branch), Stash › and Show Git Output. It creates a branch from the name box, deletes one git
+won't delete as not merged through the toast's Delete Anyway, drops a stash after asking, and opens
+Git Output (a failure in red, Copy). It writes what it saw as JSON into `#source-menu-result`;
+`SourceMenuRender.test.ts` checks it. This entry is absent from the production build.

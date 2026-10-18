@@ -14,7 +14,7 @@ import {
 } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { BranchPicker } from "@/app/conversation/BranchPicker";
+import { BranchNameBox, BranchPicker } from "@/app/conversation/BranchPicker";
 import { conflictCount, parseConflicts } from "@/app/conversation/conflicts";
 import { LETTERS } from "@/app/conversation/sourceStatus";
 import { FileIcon } from "@/components/glyphs/fileIcons";
@@ -41,7 +41,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { request } from "@/ipc/client";
 import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
-import type { CommitOutcome, SourceAction, SourceBranch, SourceChange, SourceFile, SourceScope, SourceState } from "@/ipc/generated";
+import type { CommitOutcome, SourceAction, SourceBranch, SourceChange, SourceFile, SourceGitRun, SourceScope, SourceState } from "@/ipc/generated";
+import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useCheckoutChanges } from "@/state/board";
 import { noteSourceState } from "@/state/review";
@@ -54,9 +55,10 @@ import { toast } from "@/state/toasts";
  * model writes one from the staged diff), Commit with its menu (Amend, & Push, & Sync), the
  * branch, and the changes as "Merge Changes", "Staged Changes" and "Changes", each file with
  * its letter (M, A, D, R, !…) to open as a diff in the Review tab (a conflicted one in its
- * conflict tab), stage or unstage, or discard. More Actions pulls, pushes, fetches, and merges
- * a branch in; a merge with conflicts is resolved file by file, then committed with Continue,
- * or aborted.
+ * conflict tab), stage or unstage, or discard. More Actions pulls, pushes, fetches, merges a
+ * branch in or rebases onto one, makes, renames, deletes and publishes branches, stashes, and
+ * shows Git Output (what it ran); a merge with conflicts is resolved file by file, then
+ * committed with Continue, or aborted.
  *
  * Before a session starts it shows its project's folder instead. A session that will work in
  * that folder can stage and commit there already (there is no Review tab yet); one that will
@@ -189,6 +191,19 @@ type StagingConflicts = { paths: string[]; marked: number };
 
 const CONFLICTS_LEFT = "There are merge conflicts. Resolve them before committing your changes.";
 
+/** What a branch pick is for, and what its picker asks. */
+type Picking = "merge" | "checkout" | "rebase" | "from" | "delete";
+const PICK_PLACEHOLDER: Record<Picking, string> = {
+  merge: "Select a branch to merge from",
+  checkout: "Select a branch to checkout",
+  rebase: "Select a branch to rebase onto",
+  from: "Select a branch to create the new branch from",
+  delete: "Select a branch to delete",
+};
+
+/** A name box open: a new branch's (from what is checked out, or `from`), or the branch's new name. */
+type Naming = { kind: "create"; from: string | null } | { kind: "rename" };
+
 export function SourcePanel({ target }: { target: SourceTarget }) {
   const { state, error, set, load, cacheTarget } = useSourceState(target);
   const conversationId = sessionOf(target);
@@ -201,7 +216,11 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
   const [discarding, setDiscarding] = useState<Discarding | null>(null);
   const [stagingConflicts, setStagingConflicts] = useState<StagingConflicts | null>(null);
   const [open, setOpen] = useState(true);
-  const [picker, setPicker] = useState<null | "merge" | "checkout">(null);
+  const [picker, setPicker] = useState<Picking | null>(null);
+  const [naming, setNaming] = useState<Naming | null>(null);
+  const [droppingStash, setDroppingStash] = useState(false);
+  // Git Output while it is open: null while it loads.
+  const [gitOutput, setGitOutput] = useState<SourceGitRun[] | null | "closed">("closed");
   const [branches, setBranches] = useState<SourceBranch[] | null>(null);
   const [nowMs, setNowMs] = useState(0);
   // A diff opens in the session's Review tab; before it starts there is none.
@@ -243,7 +262,8 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
         set(next);
         emitWorkspaceChanged(cacheTarget);
         const conflicted = next.changes.filter((file) => file.status === "conflicted").map((file) => file.path);
-        if ((action.type === "merge" || action.type === "pull") && next.merging && conflicted.length > 0) {
+        const merged = (action.type === "merge" || action.type === "pull") && next.merging;
+        if ((merged || action.type === "applyStash") && conflicted.length > 0) {
           showConflicts(conflicted);
           return null;
         }
@@ -266,7 +286,51 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
     void run({ type: "pull" }, "Failed to pull").then((next) => next && push());
   };
 
-  const pick = (which: "merge" | "checkout") => {
+  const rebase = (onto: string) =>
+    void run({ type: "rebase", branch: onto }, "Failed to rebase", (next) => `Rebased ${next.branch ?? "the branch"} onto ${onto}`);
+  const publish = () => void run({ type: "push" }, "Failed to publish the branch", (next) => `Published ${next.branch ?? "the branch"}`);
+  const stash = (untracked: boolean) => void run({ type: "stash", untracked }, "Failed to stash", () => "Stashed the changes");
+  const applyStash = (pop: boolean) => void run({ type: "applyStash", pop }, pop ? "Failed to pop the stash" : "Failed to apply the stash");
+  const dropStash = () => void run({ type: "dropStash" }, "Failed to drop the stash", () => "Dropped the latest stash");
+  /** Deletes a branch; one git won't delete as not merged is offered again, to delete anyway. */
+  const deleteBranch = (name: string, force: boolean) => {
+    setBusy(true);
+    request({ method: "sourceAction", target: cacheTarget, action: { type: "deleteBranch", name, force } })
+      .then(({ state: next }) => {
+        set(next);
+        emitWorkspaceChanged(cacheTarget);
+        toast(`Deleted ${name}`);
+      })
+      .catch((cause: unknown) => {
+        const said = reason(cause);
+        if (!force && /not fully merged/.test(said)) {
+          toast(`${name} isn't merged yet. Delete it anyway? Its commits are lost.`, {
+            tone: "error",
+            actions: [{ label: "Delete Anyway", run: () => deleteBranch(name, true) }],
+          });
+        } else toast(`Failed to delete the branch: ${said}`, { tone: "error" });
+      })
+      .finally(() => setBusy(false));
+  };
+  const named = (name: string) => {
+    const which = naming;
+    setNaming(null);
+    if (locked || !which) return;
+    if (which.kind === "create") void run({ type: "createBranch", name, from: which.from }, "Failed to create the branch");
+    else void run({ type: "renameBranch", name }, "Failed to rename the branch");
+  };
+  const showGitOutput = () => {
+    setGitOutput(null);
+    request({ method: "getSourceGitOutput", target: cacheTarget })
+      // Closed while it loaded: it stays closed.
+      .then(({ runs }) => setGitOutput((now) => (now === null ? runs : now)))
+      .catch((cause: unknown) => {
+        setGitOutput("closed");
+        toast(`Failed to read Git Output: ${reason(cause)}`, { tone: "error" });
+      });
+  };
+
+  const pick = (which: Picking) => {
     setPicker(which);
     setBranches(null);
     setNowMs(Date.now());
@@ -284,6 +348,9 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
     if (locked) return;
     if (which === "merge") void run({ type: "merge", branch: branch.name }, "Failed to merge", () => `Merged ${branch.name}`);
     else if (which === "checkout") void run({ type: "checkout", branch: branch.name }, "Failed to check out");
+    else if (which === "rebase") rebase(branch.name);
+    else if (which === "from") setNaming({ kind: "create", from: branch.name });
+    else if (which === "delete") deleteBranch(branch.name, false);
   };
 
   /**
@@ -394,19 +461,77 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
                 <DropdownMenuSubTrigger>Branch</DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
                   <DropdownMenuItem disabled={merging !== null} onSelect={() => pick("merge")}>Merge…</DropdownMenuItem>
+                  <DropdownMenuItem disabled={merging !== null || !state?.branch} onSelect={() => pick("rebase")}>
+                    Rebase Branch…
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  {/* A session works on its own branch: it makes and renames none. */}
+                  {canCheckout && (
+                    <>
+                      <DropdownMenuItem onSelect={() => setNaming({ kind: "create", from: null })}>Create Branch…</DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => pick("from")}>Create Branch From…</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem disabled={!state?.branch} onSelect={() => setNaming({ kind: "rename" })}>
+                        Rename Branch…
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  <DropdownMenuItem onSelect={() => pick("delete")}>Delete Branch…</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem disabled={!state?.branch || !!state.upstream} onSelect={publish}>
+                    Publish Branch
+                  </DropdownMenuItem>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>Stash</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <DropdownMenuItem disabled={merging !== null} onSelect={() => stash(false)}>Stash</DropdownMenuItem>
+                  <DropdownMenuItem disabled={merging !== null} onSelect={() => stash(true)}>
+                    Stash (Include Untracked)
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem disabled={merging !== null} onSelect={() => applyStash(false)}>
+                    Apply Latest Stash
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={merging !== null} onSelect={() => applyStash(true)}>
+                    Pop Latest Stash
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setDroppingStash(true)}>Drop Stash…</DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={showGitOutput}>Show Git Output</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         )}
       </header>
       {picker && (
         <BranchPicker
-          placeholder={picker === "merge" ? "Select a branch to merge from" : "Select a branch to checkout"}
-          branches={branches && branches.filter((branch) => branch.remote || branch.name !== state?.branch)}
+          placeholder={PICK_PLACEHOLDER[picker]}
+          branches={
+            branches &&
+            branches.filter((branch) =>
+              picker === "from" ? true : picker === "delete" ? !branch.remote && branch.name !== state?.branch : branch.remote || branch.name !== state?.branch,
+            )
+          }
           nowMs={nowMs}
           onPick={picked}
           onClose={() => setPicker(null)}
+        />
+      )}
+      {naming && (
+        <BranchNameBox
+          placeholder={naming.kind === "create" ? "New branch name" : "New name for the branch"}
+          hint={
+            naming.kind === "rename"
+              ? `Enter renames ${state?.branch ?? "the branch"}`
+              : `Enter creates it from ${naming.from ?? state?.branch ?? "what is checked out"} and switches to it`
+          }
+          initial={naming.kind === "rename" ? (state?.branch ?? "") : ""}
+          onName={named}
+          onClose={() => setNaming(null)}
         />
       )}
       {/* Folded, it stays mounted: a commit under way keeps its state. */}
@@ -581,6 +706,29 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
           setDiscarding(null);
         }}
       />
+      <Dialog open={droppingStash} onOpenChange={setDroppingStash}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Drop the latest stash?</DialogTitle>
+            <DialogDescription>Its changes are deleted for good.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDroppingStash(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setDroppingStash(false);
+                dropStash();
+              }}
+            >
+              Drop
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <GitOutputDialog runs={gitOutput} onClose={() => setGitOutput("closed")} />
       <Dialog open={stagingConflicts !== null} onOpenChange={(next) => !next && setStagingConflicts(null)}>
         <DialogContent>
           {stagingConflicts && (
@@ -616,6 +764,53 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
     </div>
   );
 }
+
+/** A Git Output entry as text: its time, the command, then what it printed. */
+function gitRunText(run: SourceGitRun): string {
+  return `${formatTime(run.atMs)}  > ${run.command}${run.output ? `\n${run.output}` : ""}`;
+}
+
+/**
+ * Git Output: the git commands the panel ran on this checkout, oldest first, a failure's output
+ * in red; Copy takes it all, for a bug report.
+ */
+const GitOutputDialog: FC<{ runs: SourceGitRun[] | null | "closed"; onClose: () => void }> = ({ runs, onClose }) => (
+  <Dialog open={runs !== "closed"} onOpenChange={(open) => !open && onClose()}>
+    <DialogContent data-slot="git-output" className="max-w-2xl">
+      <DialogHeader>
+        <DialogTitle>Git Output</DialogTitle>
+        <DialogDescription>What the Source panel ran here, newest last.</DialogDescription>
+      </DialogHeader>
+      <pre className="bg-muted/40 rounded-control text-foreground/80 max-h-96 overflow-auto p-3 font-mono text-xs leading-5 whitespace-pre-wrap">
+        {runs === null && <span className="text-muted-foreground">Loading…</span>}
+        {runs !== null && runs !== "closed" && runs.length === 0 && <span className="text-muted-foreground">Nothing ran yet.</span>}
+        {runs !== null &&
+          runs !== "closed" &&
+          runs.map((run, index) => (
+            <span key={`${run.atMs}-${index}`} data-slot="git-output-run" className="block pb-2">
+              <span className="text-muted-foreground">{formatTime(run.atMs)} </span>
+              <span className="text-foreground">&gt; {run.command}</span>
+              {run.output && "\n"}
+              {run.output && <span className={run.ok ? undefined : "text-destructive"}>{run.output}</span>}
+            </span>
+          ))}
+      </pre>
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={runs === null || runs === "closed" || runs.length === 0}
+          onClick={() => {
+            if (runs === null || runs === "closed") return;
+            void navigator.clipboard.writeText(runs.map(gitRunText).join("\n\n")).then(() => toast("Copied Git Output"));
+          }}
+        >
+          Copy
+        </Button>
+      </div>
+    </DialogContent>
+  </Dialog>
+);
 
 const OpenFileButton: FC<{ onClick: () => void }> = ({ onClick }) => (
   <TooltipIconButton tooltip="Open File" size="icon-xs" onClick={onClick}>
