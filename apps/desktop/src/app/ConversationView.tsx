@@ -309,6 +309,8 @@ function useItems(
       if (changed) {
         const meta: BlockMeta = {
           texts: block.texts.map((text) => ({
+            messageId: text.messageId,
+            ...(text.atMs !== undefined && { atMs: text.atMs }),
             position: text.position,
             model: text.model,
             update: text.update,

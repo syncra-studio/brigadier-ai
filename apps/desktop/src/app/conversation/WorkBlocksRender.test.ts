@@ -243,11 +243,30 @@ test("an ending that opens with Update: is the answer, its own Details folded wh
   }
 });
 
-test("a follow-up that joined a turn as it ended leaves the first answer in view, above its bubble", { timeout: 120000 }, async (t) => {
-  const seen = await drive<{ first: boolean; second: boolean; firstAboveBubble: boolean; header: string | null }>(t, "drive=joined&kind=session");
+test("a follow-up that joined a turn as it ended leaves the first answer in view, above its bubble, with its own actions", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{
+    first: boolean; second: boolean; firstAboveBubble: boolean; header: string | null; firstActions: string[]; firstActionsOpacity: string | null;
+  }>(t, "drive=joined&kind=session");
   assert.equal(seen.first, true, JSON.stringify(seen));
   assert.equal(seen.second, true, JSON.stringify(seen));
   assert.equal(seen.firstAboveBubble, true, JSON.stringify(seen));
+  // Every reply has Copy and the others, not only the turn's last one (Q81).
+  assert.ok(seen.firstActions.includes("Copy response"), JSON.stringify(seen.firstActions));
+  assert.ok(seen.firstActions.includes("Feedback"), JSON.stringify(seen.firstActions));
+  assert.equal(seen.firstActionsOpacity, "1");
+});
+
+test("a worker the thread starts is a card where it started: live while it works, in view with how it ended once answered", { timeout: 120000 }, async (t) => {
+  const seen = await drive<{
+    workerLive: { shown: boolean; name: string | null };
+    workerDone: { shown: boolean; words: string | null; underBubble: boolean; aboveAnswer: boolean };
+  }>(t, "drive=joined&kind=session");
+  assert.equal(seen.workerLive.shown, true, JSON.stringify(seen));
+  assert.match(seen.workerLive.name ?? "", /Changelog check/);
+  assert.equal(seen.workerDone.shown, true, JSON.stringify(seen));
+  assert.match(seen.workerDone.words ?? "", /Changelog check.*finished/);
+  assert.equal(seen.workerDone.underBubble, true, JSON.stringify(seen));
+  assert.equal(seen.workerDone.aboveAnswer, true, JSON.stringify(seen));
 });
 
 test("a plan approved: its request's new steps show under the plan as they come", { timeout: 120000 }, async (t) => {

@@ -42,10 +42,12 @@ import type {
   QueuedMessage,
   Request,
   Settings,
+  Task,
   ThinkingSegment,
   UserRequest,
 } from "@/ipc/generated";
 import { answerHtml } from "@/app/conversation/RequestBlock";
+import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import { loadConversation, openConversation } from "@/state/actions";
 import { type Board, type ShownApproval, useBoard } from "@/state/board";
 import { closeTab, sessionTabs } from "@/state/sessionTabs";
@@ -727,6 +729,20 @@ async function driveJoined(): Promise<object> {
   change((board) => ({ requests: { ...board.requests, r2: daemon.requests.r2! }, head: "r2" }));
   await settle();
   steps([...daemon.steps, { ...tool("edit", 3.1, "Edit", "/repo/CHANGELOG.md", "completed"), requestId: "r2" } as OrchestratorStep]);
+  // The follow-up starts a worker: its card in the thread, where it started, says what it is at (Q81).
+  const worker = (state: Task["state"]): Task => ({
+    ...(Object.values(night.tasks)[0] as unknown as Task), id: "w1", number: 1, title: "Changelog check", conversationId: ID, state,
+    blockedReason: null, role: null, phase: null, run: null, attempts: [{ startedAtMs: Date.now() - 2000, endedAtMs: null } as unknown as Task["attempts"][number]],
+    requestId: "r2", gateLink: null, candidate: null, report: null, quotaWait: null, position: 3.2, createdAtMs: Date.now() - 2000, updatedAtMs: Date.now(),
+  } as Task);
+  change(() => ({ tasks: { w1: worker("running") }, workerSteps: [{ taskId: "w1", requestId: "r2", kind: "started", atMs: Date.now(), position: 3.2 }] }));
+  await settle(300);
+  const liveCard = one("[data-slot=worker-card]", turn() ?? document.body);
+  const workerLive = { shown: !!liveCard && visible(liveCard), name: text(one("[data-task=w1]", liveCard ?? document.body)) };
+  change((board) => ({
+    tasks: { w1: worker("done") },
+    workerSteps: [...board.workerSteps, { taskId: "w1", requestId: "r2", kind: "finished", atMs: Date.now(), position: 3.3 }],
+  }));
   const second: Message = {
     id: "a2", conversationId: ID, seq: 4, role: "assistant", blob: null, createdAtMs: begun + 9000, attachments: [], mentions: [],
     text: "I added a CHANGELOG entry.", model: null, requestId: "r2", parentId: "r2",
@@ -743,7 +759,21 @@ async function driveJoined(): Promise<object> {
     all("[data-slot=aui_assistant-message-content]", block).some((element) => text(element)?.includes(words) && element.getClientRects().length > 0 && !element.closest("[data-slot=request-fold][data-fold=closed], [hidden]"));
   const firstAnswer = all("[data-slot=joined-answer]", block)[0] ?? null;
   const bubble = one("[data-slot=request-steer]", block);
+  const card = one("[data-slot=worker-card]", block);
+  const lastAnswer = all("[data-answer]", block).at(-1) ?? null;
+  const firstActions = firstAnswer ? one("[data-slot=answer-actions]", firstAnswer) : null;
   return {
+    workerLive,
+    // Answered, the worker's card stays in view, under the bubble that started it, above the answer.
+    workerDone: {
+      shown: !!card && visible(card),
+      words: text(card),
+      underBubble: !!card && !!bubble && !!(bubble.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING),
+      aboveAnswer: !!card && !!lastAnswer && !!(card.compareDocumentPosition(lastAnswer) & Node.DOCUMENT_POSITION_FOLLOWING),
+    },
+    // The answer the follow-up joined has its own actions, shown without a hover.
+    firstActions: all("button", firstActions ?? document.createElement("div")).map((button) => button.getAttribute("aria-label") ?? text(one(".sr-only", button))),
+    firstActionsOpacity: firstActions ? getComputedStyle(firstActions).opacity : null,
     first: shown("rounded to cents"),
     second: shown("I added a CHANGELOG entry"),
     firstAboveBubble: !!firstAnswer && !!bubble && !!(firstAnswer.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING),
