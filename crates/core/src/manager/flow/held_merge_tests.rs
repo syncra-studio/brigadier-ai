@@ -364,6 +364,11 @@ async fn a_wait_written_while_held_stops_the_merge() {
             })
         })
         .await;
+    // The engine records the step inside the call; the thread logs its reply after (#285).
+    super::eventually("the thread's stop_merge reply", || {
+        held.logged("stop_merge: Stopped") > 0
+    })
+    .await;
     assert_eq!(held.logged("stop_merge: Stopped"), 1);
     held.release.store(true, Ordering::SeqCst);
     held.flow.settled().await;
