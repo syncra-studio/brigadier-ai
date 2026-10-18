@@ -361,7 +361,7 @@ pub(super) struct ReplyClaims {
 
 impl ReplyClaims {
     /// How many ranges calls wait on now.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn waiting(&self) -> usize {
         self.waiting.len()
     }
