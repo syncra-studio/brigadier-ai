@@ -14,7 +14,8 @@
 //!   session (such as an orchestrator) has all of them declined, so nothing runs.
 //!
 //! Threads and workers ([`ToolSet::user_setup`]) run with the user's own Codex setup: their
-//! config, `AGENTS.md`, plugins, hooks, skills catalog and MCP servers, beside Brigadier's;
+//! config, `AGENTS.md`, plugins, hooks and MCP servers, beside Brigadier's. Threads keep the
+//! skills catalog; workers leave it out of their instructions to keep their start small;
 //! the project's `.codex` config too where Codex reads it (a worker working in its worktree of
 //! a trusted project). Every other session keeps the user's setup out: plugins and hooks are
 //! switched off per process, and the MCP servers from their config are disabled per thread.
@@ -339,6 +340,10 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
         // live on 0.159.2), so a worker has no sub-agents.
         args.push("-c".into());
         args.push(NO_SUB_AGENTS.into());
+    }
+    if user_setup && tools != ToolSet::Thread {
+        args.push("-c".into());
+        args.push(NO_SKILLS_CATALOG.into());
     }
     args.push("-c".into());
     args.push("notify=[]".into());
@@ -1149,45 +1154,11 @@ async fn thread_config(
             &json!({ "includeLayers": false, "cwd": cwd.display().to_string() }),
         )
         .await?;
-    let mut servers: Map<String, Value> = effective
-        .pointer("/config/mcp_servers")
-        .and_then(Value::as_object)
-        .filter(|_| !spec.tools.user_setup())
-        .map(|servers| {
-            servers
-                .keys()
-                .map(|name| (name.clone(), json!({ "enabled": false })))
-                .collect()
-        })
-        .unwrap_or_default();
-    for server in &spec.mcp_servers {
-        let env: Map<String, Value> = server
-            .env
-            .iter()
-            .map(|(name, value)| (name.clone(), Value::String(value.clone())))
-            .collect();
-        let mut config = json!({
-            "command": server.command.display().to_string(),
-            "args": server.args,
-            "env": env,
-        });
-        if let Some(secs) = server.tool_timeout_secs {
-            config["tool_timeout_sec"] = json!(secs);
-        }
-        if server.trusted {
-            config["default_tools_approval_mode"] = json!("approve");
-        }
-        // `mcp_servers.<id>.tools.<tool>.approval_mode` ("Per-tool approval behavior override
-        // for one MCP tool on this server", Codex config reference): `prompt` sends the call
-        // through the session's approvals.
-        for tool in &server.prompt_tools {
-            config["tools"][tool.as_str()] = json!({ "approval_mode": "prompt" });
-        }
-        servers.insert(server.name.clone(), config);
-    }
-
     let mut config = Map::new();
-    config.insert("mcp_servers".into(), Value::Object(servers));
+    config.insert(
+        "mcp_servers".into(),
+        Value::Object(mcp_config(&effective, spec)),
+    );
     if !spec.auto_compact {
         // Codex clamps the limit to 90% of the model's window.
         config.insert(
@@ -1232,6 +1203,49 @@ async fn thread_config(
         );
     }
     Ok(config)
+}
+
+/// MCP overrides leave the user's servers inherited in sessions with their setup, and add
+/// Brigadier's servers beside them. Other sessions explicitly disable the user's servers.
+fn mcp_config(effective: &Value, spec: &SessionSpec) -> Map<String, Value> {
+    let mut servers: Map<String, Value> = effective
+        .pointer("/config/mcp_servers")
+        .and_then(Value::as_object)
+        .filter(|_| !spec.tools.user_setup())
+        .map(|servers| {
+            servers
+                .keys()
+                .map(|name| (name.clone(), json!({ "enabled": false })))
+                .collect()
+        })
+        .unwrap_or_default();
+    for server in &spec.mcp_servers {
+        let env: Map<String, Value> = server
+            .env
+            .iter()
+            .map(|(name, value)| (name.clone(), Value::String(value.clone())))
+            .collect();
+        let mut config = json!({
+            "command": server.command.display().to_string(),
+            "args": server.args,
+            "env": env,
+        });
+        if let Some(secs) = server.tool_timeout_secs {
+            config["tool_timeout_sec"] = json!(secs);
+        }
+        if server.trusted {
+            config["default_tools_approval_mode"] = json!("approve");
+        }
+        // `mcp_servers.<id>.tools.<tool>.approval_mode` ("Per-tool approval behavior override
+        // for one MCP tool on this server", Codex config reference): `prompt` sends the call
+        // through the session's approvals.
+        for tool in &server.prompt_tools {
+            config["tools"][tool.as_str()] = json!({ "approval_mode": "prompt" });
+        }
+        servers.insert(server.name.clone(), config);
+    }
+
+    servers
 }
 
 /// A profiled session's thread config: its permission profile, and at Approve for me
@@ -2363,9 +2377,9 @@ mod tests {
         assert!(!already_gone("permission denied"));
     }
 
-    /// A thread and a worker run with the user's plugins, hooks and skills catalog; every
-    /// other session, and a control connection, without. Apps, computer and browser use and
-    /// memories stay off for all.
+    /// Threads keep the user's skills catalog; workers omit it but keep plugins, hooks and
+    /// MCP servers. Every other session, and a control connection, keeps a sealed setup.
+    /// Apps, computer and browser use and memories stay off for all.
     #[test]
     fn threads_and_workers_run_with_the_users_own_setup() {
         let disabled = |args: &[String]| -> Vec<String> {
@@ -2383,10 +2397,32 @@ mod tests {
             for feature in DISABLED_FEATURES {
                 assert!(off.iter().any(|f| f == feature), "{tools:?}: {args:?}");
             }
-            assert!(
-                !args.iter().any(|arg| arg == NO_SKILLS_CATALOG),
-                "{tools:?}"
+            assert_eq!(
+                args.windows(2)
+                    .filter(|pair| pair[0] == "-c" && pair[1] == NO_SKILLS_CATALOG)
+                    .count(),
+                usize::from(tools != ToolSet::Thread),
+                "{tools:?}: {args:?}"
             );
+            // No override disables an inherited server. Brigadier's own server is added
+            // beside it, rather than replacing the user's setup.
+            let effective = json!({ "config": { "mcp_servers": {
+                "personal": { "command": "personal-mcp", "enabled": true }
+            }}});
+            let mut session = spec(tools, None);
+            session.mcp_servers.push(McpServer {
+                name: "brigadier".into(),
+                command: "brigadier-mcp".into(),
+                args: Vec::new(),
+                env: Vec::new(),
+                tool_timeout_secs: None,
+                trusted: true,
+                prompt_tools: Vec::new(),
+                always_load: false,
+            });
+            let servers = mcp_config(&effective, &session);
+            assert!(!servers.contains_key("personal"), "{tools:?}: {servers:?}");
+            assert_eq!(servers["brigadier"]["command"], "brigadier-mcp");
         }
         for args in [
             ToolSet::Default,
