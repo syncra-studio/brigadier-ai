@@ -5209,6 +5209,8 @@ impl SessionManager {
     /// `task:<id>` is removed. Branches with unlanded work stay; a task branch with nothing to
     /// keep goes with the worktree.
     pub(crate) async fn dispose_task(&self, task: &Task, state: TaskState) {
+        // A yes the user gave it in the browser goes with it.
+        self.browser.forget_task(&task.conversation_id, &task.id);
         // A terminal it is open in ends first, handing nothing back.
         self.end_takeover(task, &format!("{state:?}")).await;
         if let Some(live) = self.existing_task_live(&task.id) {

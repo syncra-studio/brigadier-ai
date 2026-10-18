@@ -238,6 +238,7 @@ pub(crate) fn stuck_cards(board: &Board, now: i64, after: i64) -> Vec<StuckCard>
             ApprovalSubject::PeerMessage { title, .. } => {
                 format!("Send or don't send the message to “{title}”")
             }
+            ApprovalSubject::Browser { question, .. } => format!("Allow or decline: {question}"),
         };
         stuck.push(StuckCard {
             card_id: approval.id.clone(),

@@ -501,8 +501,8 @@ research across sites) goes to a worker, which gets the same tools. Answers with
 the page as text: each control as `[ref] role \"name\"`, which browser_click and browser_type \
 take. When the user clicks or types in your tab, it pauses: your calls on it wait until they \
 press Continue. Paying, entering a password, card or code, and sending anything in the \
-user's name always ask the user first, whoever asked you. Close your tabs when done unless \
-the user wants them.";
+user's name always ask the user first, whoever asked you: the call waits for their answer. \
+Close your tabs when done unless the user wants them.";
 
 const BROWSER_NAVIGATE: &str = "Go to `url` in one of your Browser tabs, or `go` back, \
 forward or reload. Answers with the page as text, once it has loaded (20 seconds at most; \
@@ -515,17 +515,17 @@ until the page loads again; read again after anything changes it.";
 const BROWSER_CLICK: &str = "Click a control in one of your Browser tabs by its ref from the \
 last read. Answers with the page as text afterwards. Set `asks` when the click pays or commits \
 money (\"pay\"), sends anything in the user's name to someone (\"send\": a message, email, post, \
-comment, review, invitation or form), or signs in (\"sign_in\"): the user is asked first and \
-nothing happens until they say yes. Clicking to submit a filled password, card or one-time \
-code asks too. On a yes, make the same call again; it holds only on that page.";
+comment, review, invitation or form), or signs in (\"sign_in\"): the user is asked first, and \
+the call waits for their answer: on a yes it goes on, on a no nothing is done. Clicking to \
+submit a filled password, card or one-time code asks too.";
 
 const BROWSER_TYPE: &str = "Type into a field of one of your Browser tabs by its ref from \
 the last read: the text replaces the field's, and `submit` presses Enter afterwards (a search, \
 a form, a chat message). A select takes an option's text. Answers with the page as text \
 afterwards. Set `asks` as for browser_click when typing or submitting pays, sends something in \
 the user's name (\"send\": Enter in a chat or a mail field) or signs in. A password, card or \
-one-time-code field always asks first; give the password with `submit` so the user is asked \
-once. On a yes, make the same call again; it holds only on that page.";
+one-time-code field always asks first, and the call waits for the user's answer; give the \
+password with `submit` so they are asked once.";
 
 const BROWSER_SCREENSHOT: &str = "A picture of one of your Browser tabs' page as it shows, \
 returned to you and saved as a PNG whose path the answer gives: attach_proof takes it (the UI \

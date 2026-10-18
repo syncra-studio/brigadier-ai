@@ -58,7 +58,7 @@ impl Waiters {
             .unwrap_or_default()
     }
 
-    fn is_waited_for(&self, id: &CardId) -> bool {
+    pub(crate) fn is_waited_for(&self, id: &CardId) -> bool {
         self.cards
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -307,6 +307,9 @@ impl SessionManager {
                     _ => None,
                 };
                 self.answer_peer_card(&approval, said.is_none(), said).await;
+            }
+            ApprovalSubject::Browser { .. } => {
+                self.answer_browser_card(&approval, &decision).await;
             }
             ApprovalSubject::OutwardCommand { .. }
             | ApprovalSubject::Landing { .. }
@@ -819,6 +822,8 @@ impl SessionManager {
                 ApprovalSubject::Action { .. } => continue,
                 // Its Send delivers the stored text: the card comes back after a restart.
                 ApprovalSubject::PeerMessage { .. } => continue,
+                // Answering it tells the agent, which makes its call again on a yes.
+                ApprovalSubject::Browser { .. } => continue,
                 // The landing that asked is gone; `recover` tells the orchestrator to accept
                 // the task again.
                 ApprovalSubject::Landing { .. } => {}

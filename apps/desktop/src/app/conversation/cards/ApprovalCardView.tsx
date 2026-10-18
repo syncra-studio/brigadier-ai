@@ -147,6 +147,13 @@ function describe(
         subtitle: by,
         body: <p className="text-sm whitespace-pre-wrap">{subject.text}</p>,
       };
+    case "browser":
+      return {
+        icon: <Globe />,
+        title: subject.question,
+        subtitle: by,
+        body: <p className="text-sm whitespace-pre-wrap">{subject.details}</p>,
+      };
   }
 }
 

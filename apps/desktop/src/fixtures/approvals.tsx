@@ -32,7 +32,15 @@ approvals["peer"] = {
   id: "peer", conversationId, taskId: null, requestId: null, position: 0, state: { type: "pending" }, createdAtMs: 0, resolvedAtMs: null,
   subject: { type: "peerMessage", messageId: "m-1", to: "c-2", title: "Math helper", project: "Alpha", text: "What is 9 + 10?" },
 };
-const shown = [...variants.map(([id]) => id), "peer"];
+// An agent's browser action that asks first (Q67): what it does, never a secret it types.
+approvals["browser"] = {
+  id: "browser", conversationId, taskId: null, requestId: null, position: 0, state: { type: "pending" }, createdAtMs: 0, resolvedAtMs: null,
+  subject: {
+    type: "browser", tab: "browser:agent-1", url: "https://shop.example/checkout", generation: 3, sensitive: "pay",
+    question: "Pay on shop.example?", details: "Clicks button “Pay $5”.\nOn https://shop.example/checkout", fingerprint: "click\u001fe4",
+  },
+};
+const shown = [...variants.map(([id]) => id), "peer", "browser"];
 useBoard.setState({ board: { ...emptyBoard(conversationId), loaded: true, approvals } });
 const calls: { id: string; decision: string }[] = [];
 mockIPC((command, payload) => {
@@ -86,7 +94,15 @@ function Fixture() {
       peer().focus();
       peer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     });
+    at(2600, () => setOnly(null));
     at(2700, () => {
+      seen.browser = {
+        title: card("browser").querySelector("[role=alert]")?.textContent ?? null,
+        body: card("browser").querySelector(".whitespace-pre-wrap")?.textContent ?? null,
+      };
+      buttons("browser").find((button) => button.textContent === "Go ahead")?.click();
+    });
+    at(2900, () => {
       seen.calls = calls;
       const result = document.createElement("pre");
       result.id = "approvals-result";

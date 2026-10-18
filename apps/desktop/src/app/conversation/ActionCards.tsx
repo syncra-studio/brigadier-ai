@@ -477,6 +477,15 @@ function describe(
         allow: "Send",
         deny: "Don't send",
       };
+    case "browser":
+      return {
+        icon: <Globe />,
+        kind: "Browser",
+        title: subject.question,
+        body: <CardProse>{subject.details}</CardProse>,
+        allow: "Go ahead",
+        deny: "Don't",
+      };
   }
 }
 

@@ -814,6 +814,7 @@ fn pending_approval(event: &EventEnvelope) -> Option<(String, String)> {
         ApprovalSubject::PeerMessage { title, project, .. } => {
             format!("Send a message to {title} in {project}?")
         }
+        ApprovalSubject::Browser { question, .. } => question,
     };
     Some((approval.id.0, what))
 }

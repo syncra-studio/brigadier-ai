@@ -11,12 +11,17 @@ use tokio::sync::{Notify, broadcast, oneshot};
 
 use base64::Engine as _;
 
+use brigadier_providers::ApprovalDecision;
+
 use super::SessionManager;
+use super::cards::CardAnswer;
+use super::conversation::Envelope;
 use crate::browser::{
-    BrowserCall, BrowserGo, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult,
-    BrowserSensitive,
+    BrowserApproved, BrowserCall, BrowserGo, BrowserGuard, BrowserOp, BrowserPageRead,
+    BrowserResult, BrowserSensitive,
 };
 use crate::tools::{BrowserAsks, BrowserStep, BrowserToolCall, ToolReply};
+use crate::work::{Approval, ApprovalSubject, CardState, InjectionKind};
 use crate::{ConversationId, TaskId};
 
 /// How long the app may take over a call: a page load it waits for, at most.
@@ -35,6 +40,19 @@ pub(crate) struct BrowserHub {
     paused: Mutex<HashSet<(ConversationId, String)>>,
     /// Told whenever a tab is paused or goes on.
     pause_changed: Notify,
+    /// The user's yes to an action that asked first, until it is done: for that very call, by
+    /// that agent, on that tab and page.
+    grants: Mutex<HashMap<GrantKey, BrowserApproved>>,
+}
+
+/// Whose yes, for which call: the session, the worker (none: the thread), the tab and the
+/// call's fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct GrantKey {
+    conversation_id: ConversationId,
+    task_id: Option<TaskId>,
+    tab: String,
+    fingerprint: String,
 }
 
 impl Default for BrowserHub {
@@ -45,6 +63,7 @@ impl Default for BrowserHub {
             next: AtomicU64::new(1),
             paused: Mutex::default(),
             pause_changed: Notify::new(),
+            grants: Mutex::default(),
         }
     }
 }
@@ -148,6 +167,25 @@ impl BrowserHub {
         }
     }
 
+    fn grants(&self) -> std::sync::MutexGuard<'_, HashMap<GrantKey, BrowserApproved>> {
+        self.grants
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The tab closed: what was granted on it goes.
+    pub(crate) fn forget_tab(&self, conversation_id: &ConversationId, tab: &str) {
+        self.grants()
+            .retain(|key, _| !(key.conversation_id == *conversation_id && key.tab == tab));
+    }
+
+    /// A worker ended: what was granted to it goes.
+    pub(crate) fn forget_task(&self, conversation_id: &ConversationId, task_id: &TaskId) {
+        self.grants().retain(|key, _| {
+            !(key.conversation_id == *conversation_id && key.task_id.as_ref() == Some(task_id))
+        });
+    }
+
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<BrowserCall> {
         self.calls.subscribe()
     }
@@ -244,6 +282,115 @@ fn browser_op(call: BrowserToolCall) -> Result<BrowserOp, String> {
     })
 }
 
+/// What came of asking the user first.
+enum Asked {
+    /// They said yes: the call goes on.
+    Yes,
+    /// The agent hears this instead.
+    Reply(ToolReply),
+}
+
+/// The user's reason for a no, when they gave one.
+fn said(message: &str) -> String {
+    if message.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" They said: {}", message.trim())
+    }
+}
+
+/// The call an op is, for a yes to hold for it alone: clicks and typing only.
+fn fingerprint(op: &BrowserOp) -> Option<String> {
+    match op {
+        BrowserOp::Click { target, .. } => Some(format!("click\u{1f}{target}")),
+        BrowserOp::Type {
+            target,
+            text,
+            submit,
+            ..
+        } => Some(format!("type\u{1f}{target}\u{1f}{submit}\u{1f}{text}")),
+        _ => None,
+    }
+}
+
+fn guard_of(op: &mut BrowserOp) -> Option<&mut BrowserGuard> {
+    match op {
+        BrowserOp::Click { guard, .. } | BrowserOp::Type { guard, .. } => Some(guard),
+        _ => None,
+    }
+}
+
+/// Whether two browser cards ask about the same call on the same page.
+fn same_ask(a: &ApprovalSubject, b: &ApprovalSubject) -> bool {
+    match (a, b) {
+        (
+            ApprovalSubject::Browser {
+                tab,
+                generation,
+                fingerprint,
+                ..
+            },
+            ApprovalSubject::Browser {
+                tab: other_tab,
+                generation: other_generation,
+                fingerprint: other_fingerprint,
+                ..
+            },
+        ) => tab == other_tab && generation == other_generation && fingerprint == other_fingerprint,
+        _ => false,
+    }
+}
+
+/// A page's site as the user knows it: its host.
+fn site(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    if host.is_empty() { url } else { host }
+}
+
+/// A browser card's question.
+pub(crate) fn question(sensitive: BrowserSensitive, url: &str) -> String {
+    let site = site(url);
+    match sensitive {
+        BrowserSensitive::Pay => format!("Pay on {site}?"),
+        BrowserSensitive::Send => format!("Send something in your name on {site}?"),
+        BrowserSensitive::SignIn => format!("Sign in to {site}?"),
+        BrowserSensitive::Credentials => format!("Enter your password on {site}?"),
+        BrowserSensitive::Card => format!("Enter a payment card on {site}?"),
+        BrowserSensitive::OneTimeCode => format!("Enter a one-time code on {site}?"),
+    }
+}
+
+/// What the agent would do, for a browser card: never a password, card or code it types.
+pub(crate) fn details(
+    op: &BrowserOp,
+    sensitive: BrowserSensitive,
+    what: &str,
+    url: &str,
+) -> String {
+    let what = what.trim();
+    let doing = match op {
+        BrowserOp::Click { .. } => format!("Clicks {what}."),
+        BrowserOp::Type { text, submit, .. } => {
+            let secret = matches!(
+                sensitive,
+                BrowserSensitive::Credentials
+                    | BrowserSensitive::Card
+                    | BrowserSensitive::OneTimeCode
+            );
+            let then = if *submit { ", then presses Enter" } else { "" };
+            if secret {
+                format!("Types into {what}{then}.")
+            } else {
+                format!("Types \u{201c}{}\u{201d} into {what}{then}.", text.trim())
+            }
+        }
+        _ => String::new(),
+    };
+    format!("{doing}\nOn {url}")
+}
+
 /// `url` when it is a web address the tab may load.
 fn web_address(url: &str) -> Result<String, String> {
     let url = url.trim();
@@ -279,24 +426,6 @@ fn page_text(tab: &str, page: &BrowserPageRead) -> String {
     format!("{tab} · {title} — {}{loading}\n\n{}", page.url, page.text)
 }
 
-/// What an action that asks first does, in plain words.
-pub(crate) fn needs(sensitive: BrowserSensitive, what: &str) -> String {
-    let doing = match sensitive {
-        BrowserSensitive::Pay => "Paying",
-        BrowserSensitive::Send => "Sending in the user's name",
-        BrowserSensitive::SignIn => "Signing in",
-        BrowserSensitive::Credentials => "Entering a password",
-        BrowserSensitive::Card => "Entering a payment card",
-        BrowserSensitive::OneTimeCode => "Entering a one-time code",
-    };
-    let what = what.trim();
-    if what.is_empty() {
-        doing.to_owned()
-    } else {
-        format!("{doing} (\"{what}\")")
-    }
-}
-
 fn failed(message: &str) -> BrowserResult {
     BrowserResult::Failed {
         message: message.to_owned(),
@@ -329,12 +458,226 @@ impl SessionManager {
             Ok(op) => op,
             Err(message) => return ToolReply::error(message),
         };
+        let key = fingerprint(&op).map(|fingerprint| GrantKey {
+            conversation_id: conversation_id.clone(),
+            task_id: task_id.clone(),
+            tab: op.tab().unwrap_or_default().to_owned(),
+            fingerprint,
+        });
         let label = self.browser_label(&conversation_id, task_id.as_ref()).await;
-        let result = self
-            .browser
-            .run(&conversation_id, task_id.as_ref(), &label, op, PAUSE_WAIT)
-            .await;
-        self.browser_reply(&conversation_id, result)
+        // Asked first, the call goes on once the user says yes; the page may have moved by then,
+        // and then it asks again.
+        for _ in 0..3 {
+            // A yes the user gave this very call goes with it.
+            let mut sent = op.clone();
+            if let Some(key) = &key
+                && let Some(granted) = self.browser.grants().get(key).cloned()
+                && let Some(guard) = guard_of(&mut sent)
+            {
+                guard.approved = Some(granted);
+            }
+            let result = self
+                .browser
+                .run(&conversation_id, task_id.as_ref(), &label, sent, PAUSE_WAIT)
+                .await;
+            match &result {
+                // Done: the yes was for once.
+                BrowserResult::Page { .. } => {
+                    if let Some(key) = &key {
+                        self.browser.grants().remove(key);
+                    }
+                }
+                BrowserResult::Closed { tab } => self.browser.forget_tab(&conversation_id, tab),
+                BrowserResult::NeedsApproval {
+                    tab,
+                    url,
+                    generation,
+                    sensitive,
+                    what,
+                } => {
+                    // A yes from another page is void.
+                    if let Some(key) = &key {
+                        self.browser.grants().remove(key);
+                    }
+                    let subject = ApprovalSubject::Browser {
+                        tab: tab.clone(),
+                        url: url.clone(),
+                        generation: *generation,
+                        sensitive: *sensitive,
+                        question: question(*sensitive, url),
+                        details: details(&op, *sensitive, what, url),
+                        fingerprint: key
+                            .as_ref()
+                            .map(|key| key.fingerprint.clone())
+                            .unwrap_or_default(),
+                    };
+                    match self
+                        .ask_browser_card(&conversation_id, task_id.as_ref(), subject)
+                        .await
+                    {
+                        Asked::Yes => continue,
+                        Asked::Reply(reply) => return reply,
+                    }
+                }
+                _ => {}
+            }
+            return self.browser_reply(&conversation_id, result);
+        }
+        ToolReply::error(
+            "The page kept asking for the user's yes again; nothing more was done. Read it and try once more.",
+        )
+    }
+
+    /// Asks the user about an action that asks first, on one card however often the agent
+    /// tries it, and waits for their answer as a worker's question waits.
+    async fn ask_browser_card(
+        &self,
+        conversation_id: &ConversationId,
+        task_id: Option<&TaskId>,
+        subject: ApprovalSubject,
+    ) -> Asked {
+        let ApprovalSubject::Browser { question, .. } = &subject else {
+            return Asked::Reply(ToolReply::error("Not a browser question."));
+        };
+        let question = question.clone();
+        let waiting = self
+            .core
+            .board(conversation_id)
+            .await
+            .ok()
+            .and_then(|board| {
+                board
+                    .approvals
+                    .values()
+                    .find(|approval| {
+                        approval.state == CardState::Pending
+                            && approval.task_id.as_ref() == task_id
+                            && same_ask(&approval.subject, &subject)
+                    })
+                    .map(|approval| approval.id.clone())
+            });
+        let answer = match waiting {
+            Some(card) => self.waiters.register(card),
+            None => match self
+                .open_approval(conversation_id, task_id.cloned(), subject)
+                .await
+            {
+                Ok((_, answer)) => answer,
+                Err(err) => {
+                    return Asked::Reply(ToolReply::error(format!(
+                        "The user couldn't be asked: {err}"
+                    )));
+                }
+            },
+        };
+        if let Some(task) = task_id {
+            self.set_task_blocked(task, Some(format!("Waiting for your answer: {question}")))
+                .await;
+        }
+        let timeout = Duration::from_millis(
+            self.question_timeout_ms
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let answer = tokio::time::timeout(timeout, answer).await;
+        if let Some(task) = task_id {
+            self.set_task_blocked(task, None).await;
+        }
+        Asked::Reply(match answer {
+            Ok(Ok(CardAnswer::Decision(
+                ApprovalDecision::Allow | ApprovalDecision::AllowSimilar,
+            ))) => {
+                return Asked::Yes;
+            }
+            Ok(Ok(CardAnswer::Decision(ApprovalDecision::Deny { message }))) => {
+                ToolReply::ok(format!(
+                    "The user said no: {question}{} Nothing was done. Don't do it, or anything else that does the same.",
+                    said(&message)
+                ))
+            }
+            Ok(_) => ToolReply::error(format!(
+                "The question went away unanswered: {question} Nothing was done."
+            )),
+            Err(_) => ToolReply::ok(format!(
+                "No answer yet: {question} Nothing was done. Their answer comes as a message; on a yes, make this same call again (the yes holds on this page only, for this call)."
+            )),
+        })
+    }
+
+    /// The user answered a browser card: on a yes the agent's same call goes through, once, on
+    /// that page; either way the agent hears it.
+    pub(crate) async fn answer_browser_card(
+        &self,
+        approval: &Approval,
+        decision: &ApprovalDecision,
+    ) {
+        let ApprovalSubject::Browser {
+            tab,
+            url,
+            generation,
+            question,
+            fingerprint,
+            ..
+        } = &approval.subject
+        else {
+            return;
+        };
+        // The call that asked waits for it, and goes on itself.
+        let waited = self.waiters.is_waited_for(&approval.id);
+        let text = match decision {
+            ApprovalDecision::Allow | ApprovalDecision::AllowSimilar => {
+                self.browser.grants().insert(
+                    GrantKey {
+                        conversation_id: approval.conversation_id.clone(),
+                        task_id: approval.task_id.clone(),
+                        tab: tab.clone(),
+                        fingerprint: fingerprint.clone(),
+                    },
+                    BrowserApproved {
+                        generation: *generation,
+                        url: url.clone(),
+                    },
+                );
+                format!(
+                    "[decision] The user said yes: {question} Make the same browser call on {tab} again now; the yes holds on that page, for that call only."
+                )
+            }
+            ApprovalDecision::Deny { message } => format!(
+                "[decision] The user said no: {question}{} Don't do it, or anything else that does the same.",
+                said(message)
+            ),
+        };
+        if waited {
+            return;
+        }
+        match &approval.task_id {
+            Some(task_id) => {
+                let Ok(task) = self.task_by_id(&approval.conversation_id, task_id).await else {
+                    return;
+                };
+                if task.state.is_final() {
+                    return;
+                }
+                if let Err(err) = self
+                    .tell_worker(&approval.conversation_id, &task, text, "the user")
+                    .await
+                {
+                    tracing::warn!(task = %task.id, error = %err, "a worker didn't hear the user's browser decision");
+                }
+            }
+            None => {
+                self.deliver_for(
+                    &approval.conversation_id,
+                    Envelope {
+                        kind: InjectionKind::Decision,
+                        label: "browser decision".into(),
+                        task_id: None,
+                        text,
+                    },
+                    approval.request_id.clone(),
+                )
+                .await;
+            }
+        }
     }
 
     /// The agent as the user knows it: its task's or thread's title.
@@ -390,16 +733,10 @@ impl SessionManager {
             BrowserResult::Paused { tab } => ToolReply::error(format!(
                 "Still paused: the user is using {tab}, so nothing was done. The tab goes on when they press Continue; try again then, or do something else meanwhile."
             )),
-            BrowserResult::NeedsApproval {
-                tab,
-                url,
-                sensitive,
-                what,
-                ..
-            } => ToolReply::error(format!(
-                "{} on {tab} ({url}) needs the user's yes first, and they can't be asked from here, so nothing was done.",
-                needs(sensitive, &what)
-            )),
+            // Asked on a card before it gets here.
+            BrowserResult::NeedsApproval { .. } => {
+                ToolReply::error("This needs the user's yes first; nothing was done.")
+            }
             BrowserResult::Failed { message } => ToolReply::error(message),
         }
     }

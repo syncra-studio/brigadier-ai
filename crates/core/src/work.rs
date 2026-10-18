@@ -1068,6 +1068,21 @@ pub enum ApprovalSubject {
         project: String,
         text: String,
     },
+    /// Ask first (Q67): an agent's action in one of its Browser tabs pays, signs in, enters a
+    /// password, card or one-time code, or sends something in the user's name.
+    Browser {
+        tab: String,
+        url: String,
+        /// The page it was asked on: a yes holds there only.
+        generation: u64,
+        sensitive: crate::browser::BrowserSensitive,
+        /// The question, in plain words ("Pay on shop.example?").
+        question: String,
+        /// What the agent would do there ("Clicks button “Pay $5”.").
+        details: String,
+        /// The very call asked about: a yes holds for it alone.
+        fingerprint: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

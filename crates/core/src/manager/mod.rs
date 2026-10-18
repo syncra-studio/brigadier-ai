@@ -23,7 +23,7 @@ mod brain_jobs;
 mod brains;
 mod branch_names;
 mod branches;
-mod browser_tool;
+pub(crate) mod browser_tool;
 mod cards;
 mod checks;
 mod ci;

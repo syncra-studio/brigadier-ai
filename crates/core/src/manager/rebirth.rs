@@ -1020,6 +1020,7 @@ impl SessionManager {
                 ApprovalSubject::PeerMessage { title, .. } => {
                     format!("sending a message to the session “{title}”")
                 }
+                ApprovalSubject::Browser { question, .. } => question.clone(),
             };
             text.push_str(&format!(
                 "Waiting for the user's approval: {}\n",

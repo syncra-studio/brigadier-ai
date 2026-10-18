@@ -13,6 +13,7 @@ test("approval cards show safe session scopes, dispatch decisions, send a peer m
     peerFocused: boolean;
     peerHint: string;
     peerHintBlurred: string;
+    browser: { title: string | null; body: string | null };
   };
   assert.equal(seen.network, "Allow connecting to https://example.com?");
   assert.equal(seen.networkBody, "example.com isn’t on this session’s list of allowed sites.");
@@ -25,6 +26,9 @@ test("approval cards show safe session scopes, dispatch decisions, send a peer m
     assert.deepEqual(seen.buttons[id], ["DenyEsc", "Allow once"]);
   }
   assert.deepEqual(seen.buttons["peer"], ["Don't sendEsc", "Send⏎"]);
+  // A browser action that asks first: the question, what the agent would do, and plain answers.
+  assert.deepEqual(seen.buttons["browser"], ["Don'tEsc", "Go ahead"]);
+  assert.deepEqual(seen.browser, { title: "Pay on shop.example?", body: "Clicks button “Pay $5”.\nOn https://shop.example/checkout" });
   assert.deepEqual(seen.calls, [
     // A window-wide Enter allows nothing: allowing takes a click or Enter on a focused Allow.
     { id: "command", decision: "allowSimilar" },
@@ -33,6 +37,7 @@ test("approval cards show safe session scopes, dispatch decisions, send a peer m
     { id: "files", decision: "allowSimilar" },
     // The message to another session: Enter on the focused card sends it, a window-wide one doesn't.
     { id: "peer", decision: "allow" },
+    { id: "browser", decision: "allow" },
   ]);
   assert.equal(seen.peerFocused, true);
   assert.equal(seen.peerHint, "contents", "its ⏎ shows while the card has focus");
