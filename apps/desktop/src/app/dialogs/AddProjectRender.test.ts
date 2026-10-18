@@ -5,8 +5,8 @@ import { renderFixturePage } from "@/fixtures/headless";
 
 // The real dialog in Chromium over a faked daemon: the repositories on this computer most
 // recent first, a project already added that can't be picked, search, and the three ways to
-// add one (a repository from the list, a new repository).
-test("Add project lists the repositories on this computer and adds or starts one", { timeout: 60000 }, async (t) => {
+// add one (a repository from the list, a clone, a new repository).
+test("Add project lists the repositories on this computer and adds, clones or starts one", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "add-project.html?drive=1", "add-project-result", 12000)) as Record<
     string,
     unknown
@@ -26,12 +26,16 @@ test("Add project lists the repositories on this computer and adds or starts one
   assert.equal(seen.addLabel, "Add website");
   assert.equal(seen.picked, "infra-scripts · 3 days ago · picked");
   assert.equal(seen.closedAfterAdd, true);
-  // A new repository goes to ~/code/<its name>, git started in it.
+  // A clone goes to ~/code/<the repository's name>; a new repository too, git started in it.
+  assert.equal(seen.cloneTitle, "Clone from URL");
+  assert.equal(seen.saveTo, "~/code/website");
+  assert.equal(seen.closedAfterClone, true);
   assert.equal(seen.newTitle, "New repository");
   assert.equal(seen.newSaveTo, "~/code/notes");
   assert.equal(seen.closedAfterNew, true);
   assert.deepEqual(seen.asked, [
     "add /Users/you/code/infra-scripts",
+    "clone https://github.com/acme/website.git into ~/code/website",
     "add ~/code/notes init",
   ]);
 });

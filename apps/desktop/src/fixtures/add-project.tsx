@@ -1,7 +1,8 @@
 /**
  * The Add project dialog over a faked daemon: five repositories on this computer (`hello`
- * already a project) and a new repository that works. ?view=new opens New repository.
- * ?drive=1 searches, picks, adds and starts a repository, and writes what it saw to #add-project-result (AddProjectRender.test.ts
+ * already a project) and a clone or a new repository that works. ?view=clone opens Clone from
+ * URL with a URL pasted, ?view=new New repository. ?drive=1 searches, picks, adds, clones and
+ * starts a repository, and writes what it saw to #add-project-result (AddProjectRender.test.ts
  * reads it). Without it the page stays as it opens, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -105,6 +106,17 @@ async function drive(): Promise<string> {
   button("Add infra-scripts")?.click();
   await settle();
   seen.closedAfterAdd = card() === null;
+
+  openAddProject();
+  await settle();
+  button("Clone from URL")?.click();
+  await settle();
+  seen.cloneTitle = card()?.querySelector("h2")?.textContent;
+  await type(card()!.querySelector<HTMLInputElement>("input")!, "https://github.com/acme/website.git");
+  seen.saveTo = card()?.querySelector("[data-slot=save-to]")?.textContent;
+  button("Clone and add")?.click();
+  await settle();
+  seen.closedAfterClone = card() === null;
 
   openAddProject();
   await settle();

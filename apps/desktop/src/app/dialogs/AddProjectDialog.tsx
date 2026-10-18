@@ -8,7 +8,7 @@ import {
   Search,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useEffectEvent, useId, useMemo, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { DialogPill } from "@/app/dialogs/pills";
@@ -495,41 +495,92 @@ function folderFromUrl(url: string): string {
 }
 
 function CloneView({ onBack }: { onBack: () => void }) {
+  const id = useId();
   const [url, setUrl] = useState("");
+  const [parent, setParent] = useState(DEFAULT_PARENT);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const folder = folderFromUrl(url);
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy || !folder) return;
+    if (busy) return;
+    if (!url.trim()) {
+      setError("Paste the repository's URL.");
+      return;
+    }
+    if (!folder) {
+      setError("That URL doesn't name a repository.");
+      return;
+    }
     setBusy(true);
+    setError(null);
+    // The clone goes on if the dialog closes; its outcome then shows as a toast.
     try {
-      const project = await cloneProject(cloneUrl(url), DEFAULT_PARENT, folder, "");
-      closeAddProject();
+      const project = await cloneProject(cloneUrl(url), parent, folder, "");
+      if (mounted.current) closeAddProject();
       showProject(project.id);
       toast(`Cloned ${project.name}`);
     } catch (cause) {
-      setError(errorText(cause));
-      setBusy(false);
+      if (mounted.current) {
+        setError(errorText(cause));
+        setBusy(false);
+      } else {
+        toast(`Could not clone ${folder}: ${errorText(cause)}`, { tone: "error" });
+      }
     }
   };
+
   return (
     <form onSubmit={(event) => void submit(event)} className="flex flex-col">
-      <Header title="Clone from URL" line="Paste a link to a git repository." onBack={onBack} />
-      <div className="flex flex-col gap-2 px-7 pb-7">
-        <input
-          value={url}
-          autoFocus
-          aria-label="Repository URL"
-          onChange={(event) => setUrl(event.target.value)}
-          className="bg-settings-inset border-settings-divider rounded-design-row text-settings-meta h-10.5 border px-3 font-mono outline-none"
+      <Header
+        title="Clone from URL"
+        line="Paste a link to a git repository. We'll copy it to your Mac and add it."
+        onBack={busy ? undefined : onBack}
+      />
+      <div className="flex flex-col gap-5.5 px-7 pt-1 pb-7">
+        <div className="flex flex-col gap-2">
+          <FieldLabel htmlFor={`${id}-url`} label="Repository URL" />
+          <div className={cn(BOX, "border-settings-divider focus-within:border-settings-accent px-3")}>
+            <Link />
+            <input
+              id={`${id}-url`}
+              value={url}
+              autoFocus
+              spellCheck={false}
+              autoComplete="off"
+              disabled={busy}
+              placeholder="https://github.com/owner/repo.git"
+              onChange={(event) => {
+                setUrl(event.target.value);
+                setError(null);
+              }}
+              className="text-settings-text text-settings-meta placeholder:text-settings-text-tertiary caret-settings-link min-w-0 flex-1 bg-transparent font-mono outline-none"
+            />
+          </div>
+        </div>
+        <SaveTo
+          parent={parent}
+          name={folder}
+          aside="Named after the repository"
+          disabled={busy}
+          onParent={setParent}
+          onError={setError}
         />
         <ErrorLine error={error} />
       </div>
       <Footer>
-        <CancelButton />
+        <CancelButton label={busy ? "Close" : "Cancel"} />
         <DialogPill look="primary" type="submit" disabled={busy}>
-          Clone and add
+          {busy && <Spinner className="size-icon-xs animate-spin" />}
+          {busy ? "Cloning…" : "Clone and add"}
         </DialogPill>
       </Footer>
     </form>
