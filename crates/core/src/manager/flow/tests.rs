@@ -3574,10 +3574,19 @@ async fn a_check_right_after_a_landing_rewrites_the_task_branch_keeps_the_rewrit
         workspace.target.clone().unwrap(),
     );
     let landed = super::git(&flow.repo, &["rev-parse", &target]);
-    assert_eq!(
-        super::git(&flow.repo, &["rev-parse", &branch]),
-        landed,
-        "the task branch stays at the commits that landed"
+    // The task branch stays at the commits that landed, or is gone: deleted once merged (at
+    // once, or when its review settles), which a branch put back at its old tip never is.
+    let tip = super::git(
+        &flow.repo,
+        &[
+            "for-each-ref",
+            "--format=%(objectname)",
+            &format!("refs/heads/{branch}"),
+        ],
+    );
+    assert!(
+        tip.is_empty() || tip == landed,
+        "the task branch stays at the commits that landed: {tip} vs {landed}"
     );
     let files = super::git(&flow.repo, &["ls-tree", "-r", "--name-only", &target]);
     assert!(

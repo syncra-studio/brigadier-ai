@@ -495,6 +495,7 @@ pub fn launch_in_background() {
 }
 
 /// The user came to the app (its Dock icon): from now on it comes forward as usual.
+#[cfg(target_os = "macos")]
 pub fn user_came_to_it() {
     BACKGROUND.store(false, Ordering::SeqCst);
 }
