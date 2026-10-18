@@ -1579,8 +1579,10 @@ async fn an_outlined_phase_is_verified_and_landed_before_the_next_phase() {
                             let reply =
                                 turn.call("start_verifier", json!({"task": "task-1"})).await;
                             assert!(!reply.is_error, "{}", reply.text);
-                            let refused = turn.call("land_phase", json!({"task": "task-1"})).await;
-                            assert!(refused.is_error, "the lead alone doesn't land");
+                            // The lead alone doesn't land: told so, not refused (#251).
+                            let told = turn.call("land_phase", json!({"task": "task-1"})).await;
+                            assert!(!told.is_error, "{}", told.text);
+                            assert!(told.text.starts_with("Nothing landed"), "{}", told.text);
                             return Reply::text("[quiet]");
                         }
                         Some(n) => {
