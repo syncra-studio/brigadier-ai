@@ -2592,6 +2592,12 @@ impl SessionManager {
                     start.clone(),
                 );
                 let platform = self.runtime.platform().clone();
+                // A new branch starts from the newest base: its remote is fetched first.
+                let fresh = match &start {
+                    None => Some(self.fresh_tip(repo, base).await?),
+                    Some(_) => None,
+                };
+                let newer = fresh.as_ref().and_then(|(_, gap)| gap.clone());
                 let (made, warmed) = blocking(move || {
                     let repo = git.open(&repo_path).map_err(git_error)?;
                     if let Some(parent) = path.parent() {
@@ -2601,9 +2607,10 @@ impl SessionManager {
                     let (spec, made) = match repo.branch_tip(&name).map_err(git_error)? {
                         Some(_) => (WorktreeSpec::Branch { name }, None),
                         None => {
-                            let start = match &from {
-                                Some(commit) => repo.resolve(commit),
-                                None => repo.branch_commit(&base_name),
+                            let start = match (&from, fresh) {
+                                (Some(commit), _) => repo.resolve(commit),
+                                (None, Some((tip, _))) => Ok(tip),
+                                (None, None) => repo.branch_commit(&base_name),
                             }
                             .map_err(git_error)?;
                             (
@@ -2652,6 +2659,13 @@ impl SessionManager {
                         super::prompts::copied_in_line(&warmed)
                     ))
                     .await;
+                }
+                if made.is_some()
+                    && let Some(gap) = &newer
+                    && let Ok(conv) = self.conv(conversation_id)
+                {
+                    conv.note(super::fresh_base::started_from_upstream_line(base, gap))
+                        .await;
                 }
                 // A branch that was there already (the user's, or one a restored session
                 // made before) is only Brigadier's when its records say so.
@@ -2724,15 +2738,29 @@ impl SessionManager {
         target: &str,
         may_ask: bool,
     ) -> Result<(Oid, bool)> {
+        // A worker starts from the newest target: its remote is fetched first.
         let (git, repo_path, branch) = (self.git.clone(), repo.to_owned(), target.to_owned());
-        let (tip, dirty, current) = blocking(move || {
-            let repo = git.open(&repo_path).map_err(git_error)?;
-            let tip = repo
+        let exists = blocking(move || {
+            Ok(git
+                .open(&repo_path)
+                .map_err(git_error)?
                 .branch_tip(&branch)
                 .map_err(git_error)?
-                .ok_or_else(|| Error::Invalid(format!("branch {branch} does not exist")))?;
-            let state = repo.state().map_err(git_error)?;
-            Ok((tip, state.dirty_files, state.current_branch))
+                .is_some())
+        })
+        .await?;
+        if !exists {
+            return Err(Error::Invalid(format!("branch {target} does not exist")));
+        }
+        let (tip, _) = self.fresh_tip(repo, target).await?;
+        let (git, repo_path) = (self.git.clone(), repo.to_owned());
+        let (dirty, current) = blocking(move || {
+            let state = git
+                .open(&repo_path)
+                .map_err(git_error)?
+                .state()
+                .map_err(git_error)?;
+            Ok((state.dirty_files, state.current_branch))
         })
         .await?;
         let conversation = self.core.conversation(conversation_id)?;

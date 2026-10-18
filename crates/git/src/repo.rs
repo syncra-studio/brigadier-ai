@@ -1606,6 +1606,17 @@ impl Repo {
         }))
     }
 
+    /// Where new work from local `branch` starts: its upstream's tip as last fetched when
+    /// local `branch` is only behind it (someone else pushed), with that gap; else local
+    /// `branch`'s own tip (ahead, diverged, level, or no upstream: the user's commits win).
+    pub fn newer_tip(&self, branch: &str) -> Result<(Oid, Option<UpstreamGap>)> {
+        let local = self.branch_commit(branch)?;
+        Ok(match self.upstream_gap(branch)? {
+            Some(gap) if gap.ahead == 0 && gap.behind > 0 => (gap.tip.clone(), Some(gap)),
+            _ => (local, None),
+        })
+    }
+
     /// Pushes `branch` to its upstream, or to `origin` as its new upstream. Never forces, and
     /// git asks nothing on a terminal.
     pub fn push(&self, branch: &str) -> Result<()> {
@@ -2647,6 +2658,56 @@ pub(crate) mod tests {
         run(&["remote", "add", "fork", origin.to_str().expect("path")]);
         run(&["config", "branch.main.remote", "fork"]);
         assert_eq!(repo.upstream_gap("main").expect("gap"), None);
+    }
+
+    #[test]
+    fn new_work_starts_from_the_newer_of_main_and_its_upstream() {
+        let (dir, git) = test_git("newer-tip");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        let run = |args: &[&str]| repo.cmd(args, false).expect("git");
+        fs::write(root.join("a.txt"), "a\n").expect("a file");
+        let base = repo.commit_changes("Base", true).expect("a commit");
+        run(&["branch", "-M", "main"]);
+        // No remote: the local tip.
+        assert_eq!(repo.newer_tip("main").expect("tip"), (base.clone(), None));
+        let origin = dir.join("origin.git");
+        run(&[
+            "clone",
+            "--quiet",
+            "--bare",
+            ".",
+            origin.to_str().expect("path"),
+        ]);
+        run(&["remote", "add", "origin", origin.to_str().expect("path")]);
+        run(&["fetch", "--quiet", "origin"]);
+        // Level with origin, tracking nothing: the local tip.
+        assert_eq!(repo.newer_tip("main").expect("tip"), (base.clone(), None));
+        let other = dir.join("other");
+        run(&[
+            "clone",
+            "--quiet",
+            origin.to_str().expect("path"),
+            other.to_str().expect("path"),
+        ]);
+        let other = git.open(&other).expect("the clone");
+        fs::write(other.root().join("b.txt"), "b\n").expect("a file");
+        let pushed = other.commit_changes("Add b", true).expect("a commit");
+        other
+            .cmd(&["push", "--quiet", "origin", "HEAD:main"], false)
+            .expect("a push");
+        repo.fetch_remote_of("main", std::time::Duration::from_secs(20))
+            .expect("a fetch");
+        // Only behind: origin's tip, with how far.
+        let (tip, gap) = repo.newer_tip("main").expect("tip");
+        assert_eq!(tip, pushed);
+        let gap = gap.expect("the gap");
+        assert_eq!((gap.name.as_str(), gap.behind), ("origin/main", 1));
+        // Diverged: the user's own commits win.
+        fs::write(root.join("c.txt"), "c\n").expect("a file");
+        let own = repo.commit_changes("Add c", true).expect("a commit");
+        assert_eq!(repo.newer_tip("main").expect("tip"), (own, None));
     }
 
     #[test]

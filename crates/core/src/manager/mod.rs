@@ -48,6 +48,7 @@ mod files;
 #[cfg(all(test, unix))]
 mod flow;
 mod fork;
+mod fresh_base;
 mod git_actions;
 mod inbox_store;
 mod instructions;

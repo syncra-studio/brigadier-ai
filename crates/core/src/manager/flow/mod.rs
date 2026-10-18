@@ -1982,6 +1982,8 @@ mod fault_tests;
 #[cfg(test)]
 mod findings_tests;
 #[cfg(test)]
+mod fresh_base_tests;
+#[cfg(test)]
 mod gate_fixes_tests;
 #[cfg(test)]
 mod git_writing_tests;
