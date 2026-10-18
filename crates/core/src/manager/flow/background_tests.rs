@@ -341,6 +341,46 @@ async fn a_check_waiting_for_the_build_lease_goes_to_the_background() {
     flow.stop().await;
 }
 
+/// #245: the thread's heavy check doesn't queue behind the full checks holding the lease: it
+/// runs at once, in its call, and its reply says what the full checks run and the machine load.
+#[tokio::test]
+async fn the_threads_check_runs_beside_the_full_checks() {
+    let (inputs, replies): (Log, Log) = Default::default();
+    let flow = Flow::start(
+        "background-beside",
+        Options::default(),
+        checking(
+            vec![("run_check", "make() { echo built; }; make all")],
+            inputs.clone(),
+            replies.clone(),
+        ),
+    )
+    .await;
+    flow.background_commands();
+    let full = format!("checks:{}", flow.conversation);
+    let (held, now, _) = flow
+        .manager
+        .machine
+        .ask_check(&full, "cargo test --workspace");
+    assert!(now, "the lease was free");
+    flow.say("Build it.").await;
+    let board = flow.settled().await;
+    flow.manager.machine.end_check(held);
+    assert!(
+        board.background_runs.is_empty(),
+        "{:?}",
+        board.background_runs
+    );
+    let replies = replies.lock().unwrap().join("\n");
+    assert!(
+        replies.contains("built")
+            && replies
+                .contains("[beside the full checks] The full checks run `cargo test --workspace`"),
+        "{replies}"
+    );
+    flow.stop().await;
+}
+
 /// The user's Stop ends a background run: recorded stopped, and the thread hears nothing of it.
 #[tokio::test]
 async fn the_users_stop_ends_a_background_run_quietly() {

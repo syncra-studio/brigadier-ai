@@ -23,6 +23,9 @@
 //!   granted it starts, and its processes are never stopped or paused: it holds the lease as
 //!   a ticket until it ends, and gives it back like any holder when it runs too long or sits
 //!   idle while others wait.
+//! - **The thread never waits for the full checks.** A check of a session's thread that asks
+//!   while the full checks (a background run) hold the lease starts at once beside them,
+//!   without the lease, unless the machine is strained (#245).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -43,6 +46,12 @@ pub(crate) const IDLE: Duration = Duration::from_secs(30);
 pub(crate) const CRITICAL_HOLD: Duration = Duration::from_secs(60);
 /// Time between two pauses while the heat stays critical.
 pub(crate) const STEP: Duration = Duration::from_secs(20);
+
+/// Whether `owner` is a session's thread: its CLI (`orch:<session>`), or its commands that may
+/// go to the background, its `run_check` among them (`background:<session>`).
+fn thread(owner: &str) -> bool {
+    owner.starts_with("orch:") || owner.starts_with("background:")
+}
 
 /// A process by its pid and start time, so a later process reusing the pid is never taken
 /// for it.
@@ -144,6 +153,8 @@ struct Ticket {
     held_for: Option<MachineStepReason>,
     /// The check's own process once it started ([`Builds::attach`]).
     cli: Option<u32>,
+    /// The full checks' command it started beside, without waiting for them.
+    beside: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,7 +192,8 @@ impl Builds {
     /// A heavy `run_check` asks for the lease before it starts, at `now` under `load`. Returns
     /// its ticket, whether it holds the lease at once, and the notes for its thread when it
     /// waits. It goes when nothing holds the lease, nothing waits before it and the machine
-    /// isn't strained; otherwise it queues with the stopped commands, oldest first.
+    /// isn't strained, and a thread's ([`thread`]) goes beside the full checks holding it;
+    /// otherwise it queues with the stopped commands, oldest first.
     pub(crate) fn ask(
         &mut self,
         owner: &str,
@@ -195,6 +207,9 @@ impl Builds {
             .builds_held()
             .then(|| MachineStepReason::from_load(load));
         let free = self.lease.is_none() && held_for.is_none() && !self.anything_waiting();
+        let beside = (!free && held_for.is_none() && thread(owner))
+            .then(|| self.full_checks_holding())
+            .flatten();
         let mut actions = Vec::new();
         let state = if free {
             self.lease = Some(Holder::Check(seq));
@@ -202,6 +217,8 @@ impl Builds {
                 since: now,
                 quiet_since: None,
             }
+        } else if beside.is_some() {
+            TicketState::LongRunning
         } else {
             actions.push(Action::Note {
                 proc: None,
@@ -224,9 +241,27 @@ impl Builds {
                 warning_since: None,
                 held_for,
                 cli: None,
+                beside: beside.clone(),
             },
         );
-        (seq, free, actions)
+        (seq, free || beside.is_some(), actions)
+    }
+
+    /// The full checks' command the check of `ticket` started beside, without waiting for them.
+    pub(crate) fn beside(&self, ticket: u64) -> Option<String> {
+        self.tickets.get(&ticket)?.beside.clone()
+    }
+
+    /// What the full checks (owner `checks:<session>`) run, when they hold the lease.
+    fn full_checks_holding(&self) -> Option<String> {
+        let Some(Holder::Check(holder)) = self.lease else {
+            return None;
+        };
+        let ticket = self.tickets.get(&holder)?;
+        ticket
+            .owner
+            .starts_with("checks:")
+            .then(|| ticket.command.clone())
     }
 
     /// Whether the check of `ticket` may start: it holds the lease, or ran on past it.
@@ -756,6 +791,55 @@ mod tests {
         assert!(matches!(notes(&actions)[..], [(_, Note::WaitingToCool(_))]));
         let _ = builds.tick(Vec::new(), CALM, t0 + STEP * 4);
         assert!(builds.granted(third));
+    }
+
+    /// #245: the thread's own check never queues behind the full checks running in the
+    /// background: it starts at once beside them, and they keep the lease; a worker's waits.
+    #[test]
+    fn the_threads_check_starts_beside_the_full_checks_and_a_workers_waits() {
+        let mut builds = Builds::default();
+        let t0 = Instant::now();
+        let (full, now, _) = builds.ask("checks:s", "cargo test --workspace", CALM, t0);
+        assert!(now);
+        let (thread, now, actions) = builds.ask("background:s", "cargo test -p core", CALM, t0);
+        assert!(
+            now && builds.granted(thread) && actions.is_empty(),
+            "{actions:?}"
+        );
+        assert_eq!(
+            builds.beside(thread).as_deref(),
+            Some("cargo test --workspace")
+        );
+        let (worker, now, _) = builds.ask("task:a", "cargo test -p ui", CALM, t0);
+        assert!(!now && builds.beside(worker).is_none());
+        // Neither check is ever stopped, and the full checks still hold the lease: the
+        // worker's goes once they end.
+        let actions = builds.tick(
+            vec![
+                check_seen(5, "checks:s", full),
+                check_seen(6, "background:s", thread),
+            ],
+            CRITICAL,
+            t0 + STEP,
+        );
+        assert!(stops(&actions).is_empty(), "{actions:?}");
+        assert!(!builds.granted(worker));
+        builds.end(full);
+        let _ = builds.tick(
+            vec![check_seen(6, "background:s", thread)],
+            CALM,
+            t0 + STEP * 2,
+        );
+        assert!(builds.granted(worker));
+        // A build holds the lease, or the machine is hot: the thread's check waits as before.
+        let (later, now, _) = builds.ask("background:s", "cargo test -p core", CALM, t0 + STEP * 3);
+        assert!(!now && builds.beside(later).is_none());
+        builds.end(worker);
+        builds.end(later);
+        let (full, _, _) = builds.ask("checks:s", "cargo test --workspace", CALM, t0 + STEP * 4);
+        let (hot, now, _) = builds.ask("background:s", "cargo test -p core", HOT, t0 + STEP * 4);
+        assert!(!now && builds.beside(hot).is_none());
+        builds.end(full);
     }
 
     #[test]

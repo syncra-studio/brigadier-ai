@@ -1247,6 +1247,12 @@ impl SessionManager {
         } else {
             None
         };
+        // The thread's check didn't wait for the full checks: it hears that they run, and how
+        // the machine bears it (#245).
+        let beside = lease
+            .as_ref()
+            .and_then(|lease| self.machine.beside(lease.ticket))
+            .map(|full| beside_note(&full, self.machine.guard.current()));
         let started = Instant::now();
         let ran = super::run::run_command_streamed(
             self.runtime.platform().clone(),
@@ -1299,7 +1305,10 @@ impl SessionManager {
             self.learn_check(caller, workdir, command).await;
         }
         Ok(CheckDone {
-            reply,
+            reply: match beside {
+                Some(note) => format!("{reply}\n{note}"),
+                None => reply,
+            },
             status: ran.status,
             alias,
         })
@@ -1882,6 +1891,26 @@ fn redact(output: Vec<u8>, redactors: &[Option<Arc<Redactor>>]) -> Vec<u8> {
         text = redactor.redact(&text).into_owned();
     }
     text.into_bytes()
+}
+
+/// What a thread's check that ran beside the full checks' `command` says of them and of the
+/// machine's `load`, below its output.
+fn beside_note(command: &str, load: brigadier_sandbox::MachineLoad) -> String {
+    use brigadier_sandbox::{Heat, MemoryPressure};
+    let heat = match load.heat {
+        Heat::Nominal => "cool",
+        Heat::Fair => "warm",
+        Heat::Serious => "hot",
+        Heat::Critical => "very hot",
+    };
+    let memory = match load.memory {
+        MemoryPressure::Normal => "free",
+        MemoryPressure::Warning => "tight",
+        MemoryPressure::Critical => "very tight",
+    };
+    format!(
+        "[beside the full checks] The full checks run `{command}` in the background at the same time: this check didn't wait for them. The machine is {heat}, its memory {memory}."
+    )
 }
 
 /// The top of the git checkout `dir` is in: the nearest folder up that holds `.git`.
@@ -3722,6 +3751,20 @@ mod tests {
         assert_eq!(
             listed(&paths),
             "f0, f1, f2, f3, f4, f5, f6, f7, f8, f9 and 2 more"
+        );
+    }
+
+    /// #245: a thread's check that didn't wait for the full checks says what they run and how
+    /// the machine bears it.
+    #[test]
+    fn a_check_beside_the_full_checks_says_what_runs_and_the_machine_load() {
+        let load = brigadier_sandbox::MachineLoad {
+            heat: brigadier_sandbox::Heat::Fair,
+            memory: brigadier_sandbox::MemoryPressure::Warning,
+        };
+        assert_eq!(
+            beside_note("cargo test --workspace", load),
+            "[beside the full checks] The full checks run `cargo test --workspace` in the background at the same time: this check didn't wait for them. The machine is warm, its memory tight."
         );
     }
 }

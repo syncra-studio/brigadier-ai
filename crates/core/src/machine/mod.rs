@@ -130,6 +130,14 @@ impl MachineWatch {
             .attach(ticket, pid);
     }
 
+    /// The full checks' command the check of `ticket` started beside, without waiting for them.
+    pub(crate) fn beside(&self, ticket: u64) -> Option<String> {
+        self.builds
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .beside(ticket)
+    }
+
     /// The check of `ticket` ended, or won't start: its lease is free.
     pub(crate) fn end_check(&self, ticket: u64) {
         self.builds
