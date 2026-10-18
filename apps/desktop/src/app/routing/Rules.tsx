@@ -1,0 +1,206 @@
+import { DotsHorizontal, Info, Plus, Warning } from "@openai/apps-sdk-ui/components/Icon";
+import { useState } from "react";
+
+import { useAction } from "@/app/conversation/useAction";
+import {
+  BanIcon,
+  Badge,
+  Card,
+  GhostButton,
+  LightButton,
+  Note,
+  OutlineButton,
+  PillSelect,
+  PillTrigger,
+  PreferIcon,
+  Section,
+} from "@/app/routing/parts";
+import { TargetItems } from "@/app/routing/pickers";
+import { type Draft, type DraftEffect, draftRule, type Names, previewDraft, ruleLine, ruleTitle } from "@/app/routing/ruleWords";
+import { ROUTED_KINDS, shortModelName, shortPlaceName } from "@/app/routing/words";
+import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import type { OverrideRule, OverrideTarget, RoutePreview, TaskCategory } from "@/ipc/generated";
+import { newRuleId, PLAIN_KIND_NAMES } from "@/lib/routing";
+import { isNewModelRule } from "@/state/providers";
+import { addOverride, removeOverride } from "@/state/routing";
+import { useApp } from "@/state/store";
+import { toast } from "@/state/toasts";
+import { useUsage } from "@/state/usage";
+
+export const RULES = {
+  label: "Rules",
+  description: "Keep a model away from some work, or prefer it for some work",
+} as const;
+
+const EFFECTS: { value: DraftEffect; label: string }[] = [
+  { value: "never", label: "Never" },
+  { value: "prefer", label: "Prefer" },
+];
+
+const KINDS: { value: TaskCategory | ""; label: string }[] = [
+  { value: "", label: "Any work" },
+  ...ROUTED_KINDS.map((value) => ({ value, label: PLAIN_KIND_NAMES[value] })),
+];
+
+/** The names the rules' words need, from the model list and the projects. */
+function useNames(groups: readonly ModelGroup[]): Names {
+  const projects = useApp((s) => s.projects);
+  return {
+    target: (target) => shortPlaceName(target, groups),
+    model: (provider, model) => shortModelName(groups, provider, model),
+    project: (id) => projects[id]?.name ?? null,
+  };
+}
+
+/**
+ * Rules: each as a sentence with where it applies, removed from its menu. Add rule opens a
+ * sentence to complete at the top of the card, which says what it would change before it is
+ * added; an added rule is marked New and a toast offers Undo.
+ */
+export function Rules({ routes, groups }: { routes: RoutePreview[] | null; groups: readonly ModelGroup[] }) {
+  const rules = useApp((s) => s.settings.routingOverrides);
+  const [adding, setAdding] = useState(false);
+  const [fresh, setFresh] = useState<string | null>(null);
+  const remove = useAction();
+  const names = useNames(groups);
+  const added = rules.find((rule) => rule.id === fresh);
+  // The rule just added leads the list while it is new.
+  const shown = added ? [added, ...rules.filter((rule) => rule !== added)] : rules;
+  const onAdded = (rule: OverrideRule) => {
+    setAdding(false);
+    setFresh(rule.id);
+    toast("Rule added", { actions: [{ label: "Undo", run: () => void removeOverride(rule.id) }] });
+  };
+  return (
+    <Section
+      title={RULES.label}
+      description={RULES.description}
+      actions={
+        <OutlineButton data-slot="add-rule" disabled={adding} onClick={() => setAdding(true)}>
+          <Plus aria-hidden />
+          Add rule
+        </OutlineButton>
+      }
+    >
+      {(shown.length > 0 || adding) && (
+        <Card data-slot="routing-rules">
+          {adding && <DraftRow routes={routes} names={names} onCancel={() => setAdding(false)} onAdded={onAdded} />}
+          {shown.map((rule) => (
+            <div key={rule.id} data-slot="routing-rule" data-setting={ruleTitle(rule, names)} className="flex items-center gap-3.5 py-3.5">
+              {rule.effect === "never" ? <BanIcon /> : <PreferIcon />}
+              <span className="flex min-w-0 flex-1 flex-col gap-1">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="text-settings-body text-settings-text truncate font-medium">{ruleTitle(rule, names)}</span>
+                  {rule.id === fresh && <Badge tone="link">New</Badge>}
+                </span>
+                <span className="text-settings-small text-settings-text-secondary truncate">
+                  {ruleLine(rule, names, isNewModelRule(rule))}
+                </span>
+              </span>
+              <DropdownMenu modal={false}>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={`${ruleTitle(rule, names)}: actions`}
+                    className="text-settings-text-tertiary hover:text-settings-text flex shrink-0 items-center"
+                  >
+                    <DotsHorizontal aria-hidden className="size-3.75" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem disabled={remove.busy} onSelect={() => remove.run(() => removeOverride(rule.id))}>
+                    Remove
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          ))}
+        </Card>
+      )}
+      {remove.error && (
+        <p role="alert" className="text-destructive text-settings-small">
+          {remove.error}
+        </p>
+      )}
+    </Section>
+  );
+}
+
+/** A new rule as a sentence to complete: "[Never] use [a model] for [Any work]", then what it would change. */
+function DraftRow({
+  routes,
+  names,
+  onCancel,
+  onAdded,
+}: {
+  routes: RoutePreview[] | null;
+  names: Names;
+  onCancel: () => void;
+  onAdded: (rule: OverrideRule) => void;
+}) {
+  const rules = useApp((s) => s.settings.routingOverrides);
+  const rankings = useApp((s) => s.settings.routingRankings);
+  const models = useUsage((s) => s.view?.models);
+  const [draft, setDraft] = useState<Draft>({ effect: "never", target: null, kind: "" });
+  const add = useAction();
+  const target = draft.target;
+  const preview = previewDraft(draft, {
+    rules,
+    rankings,
+    routes,
+    names,
+    family: (provider, model) => models?.find((found) => found.provider === provider && found.id === model)?.family ?? null,
+  });
+  const submit = () => {
+    if (!target) return;
+    const rule = draftRule({ ...draft, target }, newRuleId(), Date.now());
+    add.run(async () => {
+      await addOverride(rule);
+      onAdded(rule);
+    });
+  };
+  const set = (change: Partial<Draft>) => setDraft((current) => ({ ...current, ...change }));
+  return (
+    <div data-slot="routing-rule-form" className="flex flex-col gap-3 py-4">
+      <div className="flex items-center gap-3.5">
+        {draft.effect === "never" ? <BanIcon /> : <PreferIcon />}
+        <div className="text-settings-body text-settings-text-secondary flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <PillSelect label="What the rule does" value={draft.effect} options={EFFECTS} onChange={(effect) => set({ effect })} />
+          use
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <PillTrigger label="The model the rule is about" placeholder={!target}>
+                {target ? names.target(target) : "Choose a model"}
+              </PillTrigger>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="max-h-96 w-xs overflow-y-auto">
+              <TargetItems onPick={(picked: OverrideTarget) => set({ target: picked })} />
+            </DropdownMenuContent>
+          </DropdownMenu>
+          for
+          <PillSelect label="The kind of work the rule is about" value={draft.kind} options={KINDS} onChange={(kind) => set({ kind })} />
+        </div>
+        <GhostButton onClick={onCancel}>Cancel</GhostButton>
+        <LightButton disabled={!target || add.busy} onClick={submit}>
+          Add rule
+        </LightButton>
+      </div>
+      {preview && (
+        <Note tone={preview.tone} icon={preview.tone === "info" ? <Info aria-hidden /> : <Warning aria-hidden />}>
+          {preview.text}
+        </Note>
+      )}
+      {add.error && (
+        <p role="alert" className="text-destructive text-settings-small">
+          {add.error}
+        </p>
+      )}
+    </div>
+  );
+}

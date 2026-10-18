@@ -13,8 +13,18 @@ import {
 import type { ComponentType, SVGProps } from "react";
 
 import { findModel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
-import type { Factor, OverrideTarget, Ranking, RouteCandidate, RoutePreview, TaskCategory } from "@/ipc/generated";
-import { VENDOR_LABELS } from "@/lib/routing";
+import type {
+  Factor,
+  MergedModel,
+  OverrideTarget,
+  ProviderKind,
+  QualityTier,
+  Ranking,
+  RouteCandidate,
+  RoutePreview,
+  TaskCategory,
+} from "@/ipc/generated";
+import { DEFAULT_FLOORS, joinWords, tierBelow, VENDOR_LABELS } from "@/lib/routing";
 import { modelName } from "@/lib/setup";
 
 /*
@@ -63,6 +73,22 @@ export const KIND_HEADS: Record<TaskCategory, string> = {
   orchestrate: "Coordinate",
   gitText: "Commits",
 };
+
+/** The tier a model counts as for a kind of work (a model of some kinds only has its own per kind). */
+export function tierFor(model: MergedModel, category: TaskCategory): QualityTier {
+  return model.only?.[category] ?? model.tier;
+}
+
+/** A model's score for a kind of work, when it takes that kind. */
+export function strengthFor(model: MergedModel, category: TaskCategory): number | null {
+  if (model.only && !(category in model.only)) return null;
+  return model.strengths[category] ?? null;
+}
+
+/** Whether a model is shown faded for a kind of work: below its floor, or a legacy model. */
+export function faded(model: MergedModel, category: TaskCategory): boolean {
+  return model.legacy || tierBelow(tierFor(model, category), DEFAULT_FLOORS[category]);
+}
 
 /** A model's own name, without its vendor ("Opus 5.5"). */
 export function shortModelName(groups: readonly ModelGroup[], provider: RouteCandidate["provider"], model: string): string {
@@ -196,4 +222,24 @@ export function authorPicks(
       return `${whose} → ${model}${effort && outcome.choice.effort ? ` · ${outcome.choice.effort}` : ""}`;
     })
     .join(", ");
+}
+
+/**
+ * When a review's pick depends on who wrote the change (Automatic reviews go to the other vendor
+ * from the author): each picked model's key ("codex/gpt-6") with whose changes it reviews. Null
+ * when one model takes every review.
+ */
+export function reviewers(route: RoutePreview | null): Map<string, ProviderKind[]> | null {
+  const chosen = (route?.byAuthor ?? []).flatMap(({ author, outcome }) =>
+    outcome.type === "chosen" ? [{ author, key: `${outcome.choice.provider}/${outcome.choice.model ?? ""}` }] : [],
+  );
+  if (new Set(chosen.map(({ key }) => key)).size < 2) return null;
+  const byModel = new Map<string, ProviderKind[]>();
+  for (const { author, key } of chosen) byModel.set(key, [...(byModel.get(key) ?? []), author]);
+  return byModel;
+}
+
+/** "Reviews Codex's changes". */
+export function reviewsWords(authors: readonly ProviderKind[]): string {
+  return `Reviews ${joinWords(authors.map((author) => `${VENDOR_LABELS[author]}'s`))} changes`;
 }
