@@ -1,12 +1,17 @@
-//! Auto-merge (WORKSPACES-PLAN.md phase 3): a pull request the thread merged on GitHub is
-//! recorded as the tab's merge, and the session branch moves onto the new base, so the next
-//! request starts from it rather than from the commits a squash merge rewrote.
+//! Auto-merge (WORKSPACES-PLAN.md phase 3): with "Merge on its own" on, the thread merges with
+//! no consent asked, and its instructions carry the bar as guidance; off, the merge needs the
+//! user's consent. A pull request the thread merged on GitHub is recorded as the tab's merge,
+//! and the session branch moves onto the new base, so the next request starts from it rather
+//! than from the commits a squash merge rewrote.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use serde_json::json;
+
 use super::{Flow, Options, Reply, Script, Turn, git};
 use crate::manager::ci::Gh;
+use crate::manager::prompts::AUTO_MERGE;
 use crate::work::{OrchestratorStepKind, TabState};
 
 fn script<F, Fut>(f: F) -> Script
@@ -73,7 +78,10 @@ async fn a_squash_merged_pull_request_is_recorded_and_the_next_request_starts_fr
     let (dir, said) = (scratch.clone(), log.clone());
     let flow = Flow::start(
         "auto-merge-squash",
-        Options::default(),
+        Options {
+            auto_merge: true,
+            ..Options::default()
+        },
         script(move |turn| {
             let (dir, said) = (dir.clone(), said.clone());
             async move {
@@ -191,7 +199,7 @@ async fn a_squash_merged_pull_request_is_recorded_and_the_next_request_starts_fr
             Some(head.clone()),
             Some(squash.clone()),
             Some(7),
-            false,
+            true,
             vec![request],
             "main".to_owned(),
             1
@@ -303,6 +311,157 @@ async fn a_pull_request_into_another_branch_or_not_fetched_yet_is_not_recorded()
     assert!(!recorded(&board), "its merge commit isn't here");
     assert_eq!(git(&flow.repo, &["rev-parse", &branch]), tip);
     let calls = std::fs::read_to_string(root.join("gh/calls")).unwrap();
-    assert_eq!(calls.lines().count(), 2, "{calls}");
+    // Looked up at each request's end (a request may settle more than once).
+    assert!(calls.lines().count() >= 2, "{calls}");
+    flow.stop().await;
+}
+
+type Log = Arc<Mutex<Vec<String>>>;
+
+/// A session whose thread commits NOTES.md on "Ship it." and calls finish_session with no
+/// consent; it logs whether its instructions carry the bar, and finish_session's reply.
+async fn shipping(name: &str, auto_merge: bool) -> (Flow, Log) {
+    let log: Log = Arc::default();
+    let said = log.clone();
+    let flow = Flow::start(
+        name,
+        Options {
+            auto_merge,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let said = said.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("Done.");
+                }
+                if turn.input.contains("Ship it.") {
+                    said.lock()
+                        .unwrap()
+                        .push(format!("bar: {}", turn.prompt.contains(AUTO_MERGE)));
+                    let workspace = &turn.add_dirs[0];
+                    std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
+                    git(workspace, &["add", "NOTES.md"]);
+                    git(workspace, &["commit", "-q", "-m", "Add notes"]);
+                    let reply = turn.call("finish_session", json!({})).await;
+                    said.lock()
+                        .unwrap()
+                        .push(format!("finish_session: {} {}", reply.is_error, reply.text));
+                    return Reply::text("Done.");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    (flow, log)
+}
+
+fn merges(board: &crate::board::Board) -> Vec<(bool, Option<String>)> {
+    board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::Merged {
+                auto, merge_commit, ..
+            } => Some((*auto, merge_commit.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// On: the thread's instructions carry the bar, and its finish_session merges with no consent,
+/// recorded as an auto merge.
+#[tokio::test]
+async fn with_merging_on_its_own_on_the_thread_merges_with_no_consent() {
+    let (flow, log) = shipping("auto-merge-on", true).await;
+    flow.say("Ship it.").await;
+    let board = flow.settled().await;
+    let log = log.lock().unwrap().clone();
+    assert_eq!(log[0], "bar: true");
+    assert!(
+        log[1].starts_with(
+            "finish_session: false [finished] On its own, as the user's setting has it: "
+        ),
+        "{}",
+        log[1]
+    );
+    let main = git(&flow.repo, &["rev-parse", "main"]);
+    assert_eq!(merges(&board), [(true, Some(main))]);
+    assert!(
+        board.questions.is_empty(),
+        "no card: {:#?}",
+        board.questions
+    );
+    flow.stop().await;
+}
+
+/// Off: no bar in the instructions, and finish_session with no consent merges nothing.
+#[tokio::test]
+async fn with_merging_on_its_own_off_a_merge_still_needs_consent() {
+    let (flow, log) = shipping("auto-merge-off", false).await;
+    flow.say("Ship it.").await;
+    let board = flow.settled().await;
+    let log = log.lock().unwrap().clone();
+    assert_eq!(log[0], "bar: false");
+    assert!(log[1].starts_with("finish_session: true "), "{}", log[1]);
+    assert!(merges(&board).is_empty());
+    assert!(!super::thread_tests::on_main(&flow, "NOTES.md"));
+    flow.stop().await;
+}
+
+/// A merge held on an auto go-ahead (workers still wrote, or conflicts) doesn't outlive the
+/// switch: once the user turns merging on its own off, it needs their consent.
+#[tokio::test]
+async fn a_merge_held_on_its_own_needs_consent_once_the_switch_is_off() {
+    let flow = Flow::start(
+        "auto-merge-held-off",
+        Options {
+            auto_merge: true,
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if turn.is_orchestrator() && turn.input.contains("Add notes.") {
+                let workspace = &turn.add_dirs[0];
+                std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
+                git(workspace, &["add", "NOTES.md"]);
+                git(workspace, &["commit", "-q", "-m", "Add notes"]);
+            }
+            Reply::text("Done.")
+        }),
+    )
+    .await;
+    flow.say("Add notes.").await;
+    flow.settled().await;
+    let checkout = PathBuf::from(flow.manager.checkout_dir(&flow.conversation).unwrap());
+    let branch = git(&checkout, &["branch", "--show-current"]);
+    flow.manager
+        .orchestrator_step(
+            &flow.conversation,
+            OrchestratorStepKind::MergeHeld {
+                branch: branch.clone(),
+                base: "main".into(),
+                asked_in: "auto:1".into(),
+                consented_at_ms: 1,
+                condition: crate::work::MergeCondition::Now,
+                waiting: Vec::new(),
+                tip: git(&flow.repo, &["rev-parse", &branch]),
+            },
+        )
+        .await;
+    let mut settings = flow.core.settings();
+    settings.auto_merge = false;
+    flow.core.update_settings(settings).await.unwrap();
+    let refused = flow
+        .manager
+        .finish_session(&flow.conversation, "", None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("merging on its own was turned off since this merge was held"),
+        "{refused}"
+    );
+    assert!(!super::thread_tests::on_main(&flow, "NOTES.md"));
     flow.stop().await;
 }

@@ -11,14 +11,23 @@ const WRITER = "The model that writes a commit message when you commit from the 
 // branch prefix checked by git's rules.
 test("git settings: writer model, styles, instructions that save themselves, branch prefix", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "git.html?drive=1", "git-result", 20000)) as Record<string, unknown>;
-  assert.deepEqual(seen.sections, ["Writing", "Branches"]);
+  assert.deepEqual(seen.sections, ["Writing", "Merging", "Branches"]);
   assert.deepEqual(seen.rows, [
     "Write with",
     "Commit messages",
     "Leave out AI co-author lines",
     "Pull requests",
+    "Merge on its own when the work is ready",
     "Branch prefix",
   ]);
+  // Merging on its own: on by default, one switch, and a click turns it off and saves it.
+  assert.deepEqual(seen.autoMerge, {
+    description:
+      "The agent checks its work, opens a pull request when the project is on GitHub, and merges it. Off, it tells you the work is ready and you merge",
+    checked: "true",
+  });
+  assert.deepEqual(seen.autoMergeOff, { checked: "false", saved: false });
+  assert.equal(seen.autoMergeWritten, true);
   assert.equal(seen.writer, "Automatic");
   // Automatic's own line is in the menu (below), not under the row.
   assert.equal(seen.writerLine, WRITER);
@@ -50,4 +59,14 @@ test("git settings: writer model, styles, instructions that save themselves, bra
   assert.deepEqual(seen.pr, { style: "conventional", instructions: "Title under 70 characters.", box: false });
   // Typed on while a save was on its way, then left: the newer edit is saved after it.
   assert.equal(seen.prDuringSave, "Title under 70 characters. Body in bullets. No emoji.");
+});
+
+// Until auto-merge is built in (BRIGADIER_AUTO_MERGE=1), the page has no merge switch.
+test("git settings: no merge switch while auto-merge isn't built in", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "git.html?drive=1&autoMerge=0", "git-result", 20000)) as Record<
+    string,
+    unknown
+  >;
+  assert.deepEqual(seen.sections, ["Writing", "Branches"]);
+  assert.ok(!(seen.rows as string[]).includes("Merge on its own when the work is ready"));
 });

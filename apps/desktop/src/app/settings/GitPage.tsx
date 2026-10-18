@@ -30,6 +30,7 @@ import {
   status,
   type Autosave,
 } from "@/lib/autosave";
+import { autoMergeOn } from "@/lib/autoMerge";
 import { branchPrefixProblem } from "@/lib/refname";
 import { builtInDefault, useAvailableModelGroups, useModelGroups, withChoice } from "@/lib/setup";
 import { cn } from "@/lib/utils";
@@ -76,7 +77,17 @@ export const GIT_ROWS = {
     description:
       "Commits from the Source panel and the agents' commits leave out Co-authored-by lines that name an AI, not people's",
   },
+  autoMerge: {
+    label: "Merge on its own when the work is ready",
+    description:
+      "The agent checks its work, opens a pull request when the project is on GitHub, and merges it. Off, it tells you the work is ready and you merge",
+  },
 } as const;
+
+/** The rows Settings search finds: the merge switch only while auto-merge is built in. */
+export function gitRows() {
+  return Object.values(GIT_ROWS).filter((row) => row !== GIT_ROWS.autoMerge || autoMergeOn());
+}
 
 const AUTOMATIC_HINT =
   "A fast, light model Brigadier picks for each message. When an agent is out of quota, another one writes.";
@@ -106,7 +117,11 @@ export function GitPage() {
   return (
     <SettingsPage
       title="Git"
-      description="How Brigadier and its agents write commit messages and pull requests, and name new branches."
+      description={
+        autoMergeOn()
+          ? "How Brigadier and its agents write commit messages and pull requests, merge the work, and name new branches."
+          : "How Brigadier and its agents write commit messages and pull requests, and name new branches."
+      }
     >
       <SettingsSection title="Writing">
         <SettingsCard>
@@ -144,6 +159,14 @@ export function GitPage() {
           )}
         </SettingsCard>
       </SettingsSection>
+
+      {autoMergeOn() && (
+        <SettingsSection title="Merging">
+          <SettingsCard>
+            <SwitchSetting setting="autoMerge" row={GIT_ROWS.autoMerge} />
+          </SettingsCard>
+        </SettingsSection>
+      )}
 
       <SettingsSection title="Branches">
         <SettingsCard>

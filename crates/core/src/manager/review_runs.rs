@@ -2362,6 +2362,20 @@ impl SessionManager {
         Ok(reply)
     }
 
+    /// Whether the tab merges its work on its own (Settings › Git, Q62). Until auto-merge is
+    /// finished it is built in only with `BRIGADIER_AUTO_MERGE=1` (WORKSPACES-PLAN.md phase 3);
+    /// tests always have it.
+    pub(crate) fn auto_merge_on(&self) -> bool {
+        (cfg!(test) || option_env!("BRIGADIER_AUTO_MERGE") == Some("1"))
+            && self.core.settings().auto_merge
+    }
+
+    /// [`Self::auto_merge_on`] for session `id`: never while an overnight run goes in it, whose
+    /// verified work only the user merges.
+    pub(crate) fn auto_merge_in(&self, id: &crate::model::ConversationId) -> bool {
+        self.auto_merge_on() && self.overnight.active.get(id).is_none()
+    }
+
     /// Whether the user has the work reviewed (Settings' "Review the work").
     pub(crate) fn reviews_on(&self) -> bool {
         self.core.settings().review_work

@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { GitPage } from "@/app/settings/GitPage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ModelInfo, ProviderKind, ProviderOverview, Request, Settings } from "@/ipc/generated";
+import { setAutoMergeOn } from "@/lib/autoMerge";
 import { useApp } from "@/state/store";
 
 /*
@@ -16,6 +17,8 @@ import { useApp } from "@/state/store";
  * page with a picked model and custom commit instructions, for screenshots.
  */
 const params = new URLSearchParams(location.search);
+// Auto-merge is built in for the fixture; ?autoMerge=0 shows the page without it.
+setAutoMergeOn(params.get("autoMerge") !== "0");
 document.documentElement.dataset.density = params.get("density") === "compact" ? "compact" : "normal";
 if (params.has("drive")) {
   const still = document.createElement("style");
@@ -97,8 +100,9 @@ mockIPC(async (command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   if (req.method === "updateSettings") {
-    const { gitWriter, commitStyle, commitInstructions, prStyle, prInstructions, branchPrefix } = req.settings;
-    writes.push({ gitWriter, commitStyle, commitInstructions, prStyle, prInstructions, branchPrefix });
+    const { gitWriter, commitStyle, commitInstructions, prStyle, prInstructions, branchPrefix, autoMerge } =
+      req.settings;
+    writes.push({ gitWriter, commitStyle, commitInstructions, prStyle, prInstructions, branchPrefix, autoMerge });
     if (slow > 0) await new Promise((resolve) => setTimeout(resolve, slow));
     return { method: req.method, settings: req.settings };
   }
@@ -244,9 +248,27 @@ function Fixture() {
       () => setValue(box("Pull request instructions"), "Title under 70 characters. Body in bullets. No emoji."),
       () => openMenu("Pull requests"),
       () => pickMenu("Conventional Commits"),
+      () => {
+        // The merge switch: on by default, and a click turns it off and saves it.
+        const merge = row("Merge on its own when the work is ready");
+        seen.autoMerge = {
+          description: text(merge?.querySelector(".text-xs")),
+          checked: merge?.querySelector('[role="switch"]')?.getAttribute("aria-checked"),
+        };
+        merge?.querySelector<HTMLElement>('[role="switch"]')?.click();
+      },
+      () => {
+        const merge = row("Merge on its own when the work is ready");
+        seen.autoMergeOff = {
+          checked: merge?.querySelector('[role="switch"]')?.getAttribute("aria-checked"),
+          saved: settings().autoMerge,
+        };
+      },
       async () => {
         await new Promise((resolve) => setTimeout(resolve, 3000));
         seen.prDuringSave = settings().prInstructions;
+        // Saved behind the pull request edit still on its way.
+        seen.autoMergeWritten = writes.some((write) => write.autoMerge === false);
         seen.writes = writes.length;
         setResult(JSON.stringify(seen));
       },

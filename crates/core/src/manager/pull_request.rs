@@ -227,7 +227,7 @@ impl SessionManager {
                 head: Some(head),
                 merge_commit: Some(onto.0),
                 pr: Some(pr.number),
-                auto: false,
+                auto: self.auto_merge_in(id),
                 requests,
             },
         )

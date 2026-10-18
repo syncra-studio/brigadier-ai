@@ -1474,6 +1474,9 @@ pub(crate) struct Options {
     /// The user's answer to "Trust this folder?" for the repository (trusted by default, as
     /// the app asks when the project is first entered); `None` leaves it unanswered.
     pub trusted: Option<bool>,
+    /// Settings › Git's "Merge on its own" (on by default in the app); off here, so a merge
+    /// needs the user's consent unless a test turns it on.
+    pub auto_merge: bool,
 }
 
 impl Default for Options {
@@ -1488,6 +1491,7 @@ impl Default for Options {
             behavior: Arc::default(),
             files: Vec::new(),
             trusted: Some(true),
+            auto_merge: false,
         }
     }
 }
@@ -1523,6 +1527,11 @@ impl Flow {
         let (manager, core) =
             boot(&data, store, &script, &reviews, &specs, &options.behavior).await;
         dir.ledger = Some(manager.runtime.ledger().clone());
+        let mut settings = core.settings();
+        if settings.auto_merge != options.auto_merge {
+            settings.auto_merge = options.auto_merge;
+            core.update_settings(settings).await.unwrap();
+        }
         let project = core
             .create_project("Flow".into(), Some(repo.display().to_string()))
             .await

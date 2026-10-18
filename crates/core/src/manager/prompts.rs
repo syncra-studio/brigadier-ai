@@ -862,6 +862,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, review_candidate asks the other vendor to review a candidate commit of yours (your checkout's HEAD by default), small changes too. What earlier reviews cover isn't reviewed again; after findings it re-checks only their fix. It waits for the findings and returns them in its reply (wait_seconds; one still running arrives as a message later). With no other-vendor reviewer or reviews off it says so as a fact. When to ask for one is yours to judge.",
         worker: "",
     },
+    Revision {
+        number: PR_MERGE_REVISION,
+        thread: "From now on, when a request ends, a pull request of your session branch that was merged on GitHub (by you or the user) is recorded as the session's merge: the base is brought up to date and your branch moves onto it, so the next change starts from there. ci_status also reports the checks on the branch's pull request.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -946,6 +951,41 @@ pub(crate) const BROWSER_OFF: &str = "Brigadier's built-in browser is off (the u
 /// What an agent with the `computer` tools is told about them.
 pub(crate) const COMPUTER_USE: &str = "You can see and drive apps on this Mac with the `computer` tools. They work in the background: the user's windows stay where they are and their pointer doesn't move. Before your first one, load the `computer-use` skill and follow it. Use them when the job needs an app's interface (operating an app, checking a change in the running app); never bring a window to the front unless asked. A look or demo shows pages in the app it is about when it can; else in one browser window and one tab, navigated from page to page, never a new window per page. Close what you opened at the end.";
 
+const AUTO_MERGE_ON_LABEL: &str = "merging on its own on";
+const AUTO_MERGE_OFF_LABEL: &str = "merging on its own off";
+
+/// How the thread ships and merges while the user has "Merge on its own" on (WORKSPACES-PLAN.md
+/// phase 3, Q62, Q68): guidance it judges, never a list the engine checks. The engine doesn't
+/// gate a merge; the merge message shows what was verified.
+pub(crate) const AUTO_MERGE: &str = "Merging on its own is on (the user's setting): when the work is ready, ship it and merge it yourself, with no consent asked; this replaces what your instructions say about waiting for the user's yes to merge. With a GitHub remote and `gh` signed in: push the branch, open a pull request, babysit its CI and reviews, fix, and merge it with `gh pr merge`; Brigadier records the merge and brings the base up to date when your request ends. Otherwise finish_session merges it into the base here.
+Ship it the way a careful engineer would; you judge how much a change needs. What usually makes a merge safe:
+- tests and type checks run on the final commit, after your last change;
+- the other vendor's review of the final commit (review_candidate reuses a review that covers it), each finding fixed or answered in one line; a running review is usually worth waiting for;
+- with a pull request, green CI on it (ci_status reads its checks);
+- for a change the user can see: the dev app run in the background (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message;
+- for a change you judge big or risky: a fresh verifier (start_verifier with fresh: true) that tries to break it against the original request.
+When something can't be had (CI broken on main, the other vendor out of quota), decide whether to merge or wait, and say what was missing. The merge message (your reply that says it merged) shows what was verified: the pull request or commit, the checks on the final commit, the review and how each finding was settled, CI, the proof, the verifier's verdict if one ran, and anything left out. \"Beyond this request:\" lists what you found outside it (filed as issues when the repo is on GitHub); never drop a finding without saying so.";
+
+/// The instructions' paragraph while the tab merges on its own; nothing while it doesn't.
+pub(crate) fn auto_merge_section(on: bool) -> String {
+    if on {
+        format!("\n\n{AUTO_MERGE}")
+    } else {
+        String::new()
+    }
+}
+
+/// Tells a running session the user switched "Merge on its own".
+pub(crate) fn auto_merge_note(on: bool) -> String {
+    if on {
+        format!(
+            "[settings] Merging on its own is now on. From now on: {AUTO_MERGE} Don't mention this note."
+        )
+    } else {
+        "[settings] Merging on its own is now off. From now on, when the work is ready, say so in one line and leave the merge to the user: finish_session needs their consent again, as your instructions say. This replaces what an earlier note said about merging on its own. Don't mention this note.".to_owned()
+    }
+}
+
 /// The instructions' paragraph while the browser is off; nothing while it is on.
 pub(crate) fn browser_section(on: bool) -> String {
     if on {
@@ -992,6 +1032,8 @@ pub(crate) struct Current {
     pub git_writing: Option<String>,
     /// Whether Brigadier's built-in browser is on (Settings › Browser); on unless set.
     pub browser: bool,
+    /// Whether the tab merges its work on its own (Settings › Git); off unless set.
+    pub auto_merge: bool,
     pub permission: PermissionLevel,
     pub folder_trusted: bool,
     /// Where accepted work lands and the permission level, as the instructions say them
@@ -1191,6 +1233,10 @@ pub(crate) const FRESH_VERIFIER_REVISION: u32 = 99;
 /// any candidate of its own; covered ranges are reused, fixes re-checked alone, and the
 /// findings come back in the call's reply (#137, #138).
 pub(crate) const REVIEW_CANDIDATE_REVISION: u32 = 100;
+/// A pull request merged on GitHub is recorded as the session's merge when a request ends,
+/// and the session branch moves onto the new base; ci_status reads the PR's checks
+/// (WORKSPACES-PLAN.md phase 3).
+pub(crate) const PR_MERGE_REVISION: u32 = 101;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1237,6 +1283,7 @@ impl Current {
             review_work: true,
             git_writing: None,
             browser: true,
+            auto_merge: false,
             permission,
             folder_trusted: trusted,
             plain: setting_texts(conversation, trusted, None),
@@ -1258,6 +1305,7 @@ impl Current {
             review_work: true,
             git_writing: None,
             browser: true,
+            auto_merge: false,
             permission: PermissionLevel::ApproveForMe,
             folder_trusted: true,
             plain: (String::new(), String::new()),
@@ -1294,6 +1342,7 @@ impl Current {
             review_work: session.then_some(self.review_work),
             git_writing: session.then(|| git_writing_fingerprint(self.git_writing.as_deref())),
             browser: session.then_some(self.browser),
+            auto_merge: session.then_some(self.auto_merge),
             first_use: None,
         }
     }
@@ -1450,6 +1499,21 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
                 },
             });
         }
+        // Instructions from before the setting never said the tab merges on its own.
+        if told.auto_merge.unwrap_or(false) != now.auto_merge {
+            notes.push(Note {
+                text: auto_merge_note(now.auto_merge),
+                label: if now.auto_merge {
+                    AUTO_MERGE_ON_LABEL
+                } else {
+                    AUTO_MERGE_OFF_LABEL
+                },
+                told: Told {
+                    auto_merge: Some(now.auto_merge),
+                    ..Told::default()
+                },
+            });
+        }
         let run = now.run_fingerprint();
         let told_run = told.run.as_deref();
         match &now.run {
@@ -1582,6 +1646,7 @@ pub(crate) fn fill_told(told: &mut Told, older: &Told) {
         told.git_writing.clone_from(&older.git_writing);
     }
     told.browser = told.browser.or(older.browser);
+    told.auto_merge = told.auto_merge.or(older.auto_merge);
     if let Some(older) = &older.first_use {
         let mine = told.first_use.get_or_insert_with(Vec::new);
         for rules in older {
@@ -3843,6 +3908,23 @@ mod environment_tests {
     }
 
     #[test]
+    fn the_pr_merge_revision_tells_the_thread_a_merged_pr_is_recorded() {
+        let added = REVISIONS
+            .iter()
+            .find(|revision| revision.number == PR_MERGE_REVISION)
+            .unwrap();
+        assert!(added.worker.is_empty());
+        let note = revision_note(PR_MERGE_REVISION - 1, false).unwrap();
+        for words in [
+            "merged on GitHub (by you or the user) is recorded as the session's merge",
+            "your branch moves onto it",
+            "ci_status also reports the checks",
+        ] {
+            assert!(note.contains(words), "{words}: {note}");
+        }
+    }
+
+    #[test]
     fn a_running_session_hears_the_browser_switched_once() {
         let conversation = session("fullAccess");
         let mut now = Current::session(&conversation, true, None, true, vec![], None);
@@ -3869,6 +3951,84 @@ mod environment_tests {
         // A new session is told as its instructions say; a Chat never hears of it.
         assert_eq!(now.told().browser, Some(true));
         assert_eq!(Current::chat(vec![]).told().browser, None);
+    }
+
+    /// "Merge on its own" reaches a running session once per switch; instructions from before
+    /// the setting count as off, so a session with it on hears the bar at its next message.
+    #[test]
+    fn a_running_session_hears_merging_on_its_own_switched_once() {
+        let conversation = session("fullAccess");
+        let mut now = Current::session(&conversation, true, None, true, vec![], None);
+        let mut told = now.told();
+        told.auto_merge = None;
+        assert!(notes(&told, &now).is_empty(), "unknown counts as off");
+        now.auto_merge = true;
+        let on = notes(&told, &now);
+        assert_eq!(on.len(), 1, "{on:#?}");
+        assert!(
+            on[0]
+                .text
+                .starts_with("[settings] Merging on its own is now on.")
+        );
+        assert!(on[0].text.contains(AUTO_MERGE));
+        let mut after = on[0].told.clone();
+        fill_told(&mut after, &told);
+        assert!(notes(&after, &now).is_empty(), "told once");
+        now.auto_merge = false;
+        let off = notes(&after, &now);
+        assert_eq!(off.len(), 1, "{off:#?}");
+        assert!(off[0].text.contains("leave the merge to the user"));
+        assert_eq!(off[0].told.auto_merge, Some(false));
+        // A new session is told as its instructions say; a Chat never hears of it.
+        now.auto_merge = true;
+        assert_eq!(now.told().auto_merge, Some(true));
+        assert_eq!(Current::chat(vec![]).told().auto_merge, None);
+        assert!(auto_merge_section(false).is_empty());
+        assert_eq!(auto_merge_section(true), format!("\n\n{AUTO_MERGE}"));
+    }
+
+    /// The Q68 bar is guidance the agent judges (the user, 10-18: the LLM stays free): what
+    /// usually makes a merge safe, no must-lists, thresholds or loops, no hand-back when an
+    /// item can't be had, and the merge message shows what was verified.
+    #[test]
+    fn the_merge_bar_is_guidance_the_agent_judges() {
+        for words in [
+            "with no consent asked",
+            "you judge how much a change needs",
+            "What usually makes a merge safe",
+            "tests and type checks run on the final commit",
+            "review_candidate",
+            "each finding fixed or answered in one line",
+            "green CI",
+            "start_preview",
+            "a screenshot or short recording attached to the merge message",
+            "a change you judge big or risky",
+            "start_verifier with fresh: true",
+            "decide whether to merge or wait, and say what was missing",
+            "shows what was verified",
+            "\"Beyond this request:\"",
+            "filed as issues when the repo is on GitHub",
+            "`gh pr merge`",
+        ] {
+            assert!(AUTO_MERGE.contains(words), "{words}");
+        }
+        let lower = AUTO_MERGE.to_lowercase();
+        for words in [
+            "must",
+            "never merge",
+            "don't merge",
+            "only merge",
+            "start the list again",
+            "leave the merge to the user",
+            "lines changed",
+            "workers",
+        ] {
+            assert!(!lower.contains(words), "{words}");
+        }
+        assert!(
+            !AUTO_MERGE.chars().any(|c| c.is_ascii_digit()),
+            "no thresholds"
+        );
     }
 
     /// No agent can reach Brigadier's built-in browser: while it is on, nothing in the

@@ -98,6 +98,12 @@ branchPrefix: string,
  */
 reviewWork: boolean, 
 /**
+ * The tab merges its work on its own once it judges it ready (WORKSPACES-PLAN.md phase 3,
+ * Q62): a pull request on GitHub, or into the base here, with no consent asked. Off, it
+ * says the work is ready and the user merges.
+ */
+autoMerge: boolean, 
+/**
  * The first-run setup (welcome, name, agents, then projects) was finished or skipped.
  */
 onboarded: boolean, 

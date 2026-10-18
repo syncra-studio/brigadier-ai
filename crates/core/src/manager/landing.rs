@@ -1466,7 +1466,26 @@ impl SessionManager {
         // The landing lock, held to the move of the base: a Cancel either comes first and
         // spends the consent, or finds it merged.
         let landing_lock = conv.merge_lock.lock().await;
-        let consent = self.merge_consent(id, named, &branch, &base).await?;
+        // Merging on its own (the user's setting, Q62): the thread's judgement is the go-ahead,
+        // and no consent is asked. A consent the user gave still counts as theirs; a merge held
+        // on an auto go-ahead stays an auto merge.
+        let consent = match self.merge_consent(id, named, &branch, &base).await {
+            // A merge held on an auto go-ahead after the user turned merging on its own off.
+            Ok(consent)
+                if consent.asked_in.starts_with(AUTO_GO_AHEAD) && !self.auto_merge_in(id) =>
+            {
+                return Err(not_consented(
+                    "merging on its own was turned off since this merge was held, so it needs the user's consent now".into(),
+                ));
+            }
+            Ok(consent) => consent,
+            Err(_) if self.auto_merge_in(id) => Consent {
+                asked_in: format!("{AUTO_GO_AHEAD}{}", crate::now_ms()),
+                at_ms: crate::now_ms(),
+            },
+            Err(err) => return Err(err),
+        };
+        let auto = consent.asked_in.starts_with(AUTO_GO_AHEAD);
         // What the thread committed itself gets its review before the branch is merged.
         self.scan_thread_commits(id, self.thread_turn_running(id).await)
             .await;
@@ -1719,7 +1738,7 @@ impl SessionManager {
                 head: Some(session_tip.0.clone()),
                 merge_commit: Some(new_tip.0.clone()),
                 pr: None,
-                auto: false,
+                auto,
                 requests,
             },
         )
@@ -1737,7 +1756,12 @@ impl SessionManager {
             .follow_merge(&repo, &branch, &base, session_tip, new_tip.clone())
             .await;
         Ok(format!(
-            "[finished] As the user asked: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{pushed}{running}{moved}{checks}{reviews}{released}{since}",
+            "[finished] {}: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{pushed}{running}{moved}{checks}{reviews}{released}{since}",
+            if auto {
+                "On its own, as the user's setting has it"
+            } else {
+                "As the user asked"
+            },
             if commits == 1 { "" } else { "s" },
             short(&new_tip)
         ))
@@ -2470,6 +2494,10 @@ fn conflict_marker(line: &[u8]) -> bool {
 }
 
 /// The user's consent to a session merge.
+/// What an auto merge's go-ahead is recorded as, where a merge on the user's consent records
+/// their message or click: no consent was asked.
+const AUTO_GO_AHEAD: &str = "auto:";
+
 pub(super) struct Consent {
     /// The user message, or "Merge into main" click, that gave it.
     asked_in: String,

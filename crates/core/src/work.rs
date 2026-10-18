@@ -3396,6 +3396,10 @@ pub struct Told {
     /// as no instructions mentioned it before the switch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<bool>,
+    /// Whether the tab merges its work on its own (Settings › Git); `None` counts as off, as
+    /// no instructions said so before the switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_merge: Option<bool>,
     /// The rules sent in a note when they first apply (BUILD-PLAN C1) that this CLI session
     /// has had: `workers`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
