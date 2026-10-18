@@ -776,7 +776,7 @@ function gitRunText(run: SourceGitRun): string {
  */
 const GitOutputDialog: FC<{ runs: SourceGitRun[] | null | "closed"; onClose: () => void }> = ({ runs, onClose }) => (
   <Dialog open={runs !== "closed"} onOpenChange={(open) => !open && onClose()}>
-    <DialogContent data-slot="git-output" className="max-w-2xl">
+    <DialogContent data-slot="git-output" className="max-w-git-output">
       <DialogHeader>
         <DialogTitle>Git Output</DialogTitle>
         <DialogDescription>What the Source panel ran here, newest last.</DialogDescription>

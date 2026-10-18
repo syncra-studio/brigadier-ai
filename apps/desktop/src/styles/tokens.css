@@ -468,6 +468,8 @@
   --container-thread: 46rem;
   --container-settings: 60rem;
   --container-settings-wide: 80rem;
+  /* The Source panel's Git Output dialog: wide enough for a git command's lines. */
+  --container-git-output: 42rem;
   /* The pinned summary's cards, and their column with its gap to the pane's edges. */
   --container-summary: 18.75rem;
   --container-summary-stack: calc(var(--container-summary) + var(--spacing-summary-inset) * 2);
