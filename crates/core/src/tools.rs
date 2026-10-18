@@ -1791,6 +1791,10 @@ pub trait ToolHost: Send + Sync {
 
     /// Runs a tool call. The host re-checks the grant and that its role may make this call.
     fn call(&self, grant: &str, call: ToolCall) -> BoxFuture<'_, ToolReply>;
+
+    /// A call to `tool` whose arguments didn't match its schema: the host may count it (the
+    /// bench's tripwire report). It changes nothing for the caller.
+    fn bad_call(&self, _grant: &str, _tool: &str) {}
 }
 
 #[cfg(test)]

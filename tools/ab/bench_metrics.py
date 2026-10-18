@@ -26,7 +26,7 @@ Only typed records are read (#190): a payload must be a JSON object whose `type`
 `kind` stands for; others are skipped and counted in `skipped_untyped`.
 
 usage: bench_metrics.py <data-dir> [--repo DIR] [--until MS] [--json OUT]"""
-import argparse, collections, json, os, re, sqlite3, subprocess, sys
+import argparse, atexit, collections, json, os, re, shutil, sqlite3, subprocess, sys, tempfile
 
 DAY_MS = 86_400_000
 ESCAPE_MS = 7 * DAY_MS
@@ -51,12 +51,20 @@ TYPES = {
 
 
 def connect(path):
+    """`path` read-only. A WAL database whose daemon is gone has no -shm to open read-only: a
+    copy with its WAL is opened instead, so rows still in the WAL count."""
     db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         db.execute("PRAGMA schema_version").fetchone()
-    except sqlite3.OperationalError:  # a WAL database whose daemon is gone has no -shm to open read-only
-        db = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
-    return db
+        return db
+    except sqlite3.OperationalError:
+        db.close()
+    copy = os.path.join(tempfile.mkdtemp(prefix="bench-metrics-db-"), os.path.basename(path))
+    atexit.register(shutil.rmtree, os.path.dirname(copy), True)
+    for suffix in ("", "-wal"):
+        if os.path.exists(path + suffix):
+            shutil.copyfile(path + suffix, copy + suffix)
+    return sqlite3.connect(copy)
 
 
 def typed(kind, text):

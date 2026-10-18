@@ -1937,6 +1937,8 @@ mod auto_merge_tests;
 #[cfg(test)]
 mod background_tests;
 #[cfg(test)]
+mod bad_tool_call_tests;
+#[cfg(test)]
 mod base_merge_tests;
 #[cfg(test)]
 mod brain_first_tests;

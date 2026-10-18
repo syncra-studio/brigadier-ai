@@ -20,10 +20,10 @@ pub mod schema;
 
 use std::sync::Arc;
 
-use brigadier_core::tools::{Role, ToolHost, ToolReply};
+use brigadier_core::tools::{Role, ToolCall, ToolHost, ToolReply};
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
-    Implementation, InitializeRequestParams, InitializeResult, ListToolsResult,
+    Implementation, InitializeRequestParams, InitializeResult, JsonObject, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::{RequestContext, ServerInitializeError};
@@ -131,6 +131,23 @@ fn reply_result(reply: ToolReply) -> CallToolResult {
     }
 }
 
+/// A `tools/call` as a [`ToolCall`], or the error the model sees. Arguments that don't match
+/// the tool's schema are told to the host, which counts them.
+fn parse(
+    host: &dyn ToolHost,
+    grant: &str,
+    role: &Role,
+    name: &str,
+    arguments: Option<JsonObject>,
+) -> Result<ToolCall, String> {
+    catalog::parse_call(role, name, arguments).map_err(|err| {
+        if matches!(err, catalog::ParseError::BadArguments { .. }) {
+            host.bad_call(grant, name);
+        }
+        err.to_string()
+    })
+}
+
 impl ServerHandler for BrigadierServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
@@ -168,9 +185,15 @@ impl ServerHandler for BrigadierServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let role = self.role()?;
-        let call = match catalog::parse_call(role, &request.name, request.arguments) {
+        let call = match parse(
+            &*self.host,
+            &self.grant,
+            role,
+            &request.name,
+            request.arguments,
+        ) {
             Ok(call) => call,
-            Err(err) => return Ok(text_result(err.to_string(), true).into()),
+            Err(err) => return Ok(text_result(err, true).into()),
         };
         tracing::debug!(tool = %request.name, "brigadier tool call");
         tokio::select! {
@@ -187,7 +210,65 @@ impl ServerHandler for BrigadierServer {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use brigadier_core::tools::RunTools;
+
     use super::*;
+
+    /// A host that only remembers the bad calls it was told of.
+    #[derive(Default)]
+    struct Counting(Mutex<Vec<(String, String)>>);
+
+    impl ToolHost for Counting {
+        fn role(&self, _grant: &str) -> Option<Role> {
+            None
+        }
+
+        fn call(
+            &self,
+            _grant: &str,
+            _call: ToolCall,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolReply> + Send + '_>> {
+            Box::pin(async { ToolReply::ok("") })
+        }
+
+        fn bad_call(&self, grant: &str, tool: &str) {
+            self.0.lock().unwrap().push((grant.into(), tool.into()));
+        }
+    }
+
+    #[test]
+    fn a_call_whose_arguments_miss_the_schema_is_counted_and_others_are_not() {
+        let host = Counting::default();
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        let bad = serde_json::json!({"task": "task-2"}).as_object().cloned();
+        let err = parse(&host, "g1", &thread, "stop_worker", bad).unwrap_err();
+        assert!(
+            err.starts_with("Invalid arguments for stop_worker"),
+            "{err}"
+        );
+        // Not one of its tools: no schema was missed.
+        assert!(parse(&host, "g1", &thread, "no_such_tool", None).is_err());
+        let good = serde_json::json!({"task": "task-2", "reason": "Done."});
+        assert!(
+            parse(
+                &host,
+                "g1",
+                &thread,
+                "stop_worker",
+                good.as_object().cloned()
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            *host.0.lock().unwrap(),
+            [("g1".to_owned(), "stop_worker".to_owned())]
+        );
+    }
 
     #[test]
     fn a_reply_with_an_image_puts_it_first_as_base64() {

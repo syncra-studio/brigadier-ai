@@ -261,6 +261,18 @@ exact definitions. The Source panel's own git commands leave no record in the lo
 count only what the log records. Records whose payload lacks its kind's `type` are skipped and
 counted (#190). Tests: `python3 -I tools/ab/checks/bench_metrics_test.py`.
 
+## Token tripwire (token doc item 3, `tripwire.py`)
+
+One bench task's tokens next to the last ship's, read-only over a data dir's `routing.sqlite`:
+
+    python3 -I tools/ab/tripwire.py $DATA <conversation> <from_ms> <to_ms> [--last TOKENS]
+
+Above 1.25 × `--last` it says the phase report needs one line on what bought it; it never blocks.
+It also prints the cache-hit share, the opening calls' writes and misses by `cause`, the rest as one
+unattributed line with the unestimated calls, the invalid tool calls (`bad_tool_calls`, by tool)
+and the tier behind each `brain` and `upkeep` row (above standard is flagged). Tests:
+`python3 -I tools/ab/checks/tripwire_test.py`.
+
 ## Tokens
 
 Per provider: uncached input, cache reads, cache writes and output, kept apart, plus raw and raw

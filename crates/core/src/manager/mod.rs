@@ -956,6 +956,38 @@ impl ToolHost for SessionManager {
             }
         })
     }
+
+    fn bad_call(&self, grant: &str, tool: &str) {
+        let Some(store) = self.runtime.routing_store().cloned() else {
+            return;
+        };
+        let (conversation, task) = match self.grants.resolve(grant) {
+            Some(Role::Worker {
+                conversation_id,
+                task_id,
+                ..
+            }) => (Some(conversation_id.0), Some(task_id.0)),
+            Some(
+                Role::Orchestrator {
+                    conversation_id, ..
+                }
+                | Role::Chat { conversation_id }
+                | Role::TabChat {
+                    conversation_id, ..
+                },
+            ) => (Some(conversation_id.0), None),
+            _ => (None, None),
+        };
+        let tool = tool.to_owned();
+        tokio::spawn(async move {
+            if let Err(err) = store
+                .add_bad_tool_call(crate::now_ms(), conversation, task, tool)
+                .await
+            {
+                tracing::warn!(error = %err, "could not count a bad tool call");
+            }
+        });
+    }
 }
 
 /// Files of a session's checkout listed for @-mentions; a bigger checkout lists the first ones.
