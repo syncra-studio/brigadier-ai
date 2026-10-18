@@ -1,6 +1,7 @@
 import { useAui } from "@assistant-ui/react";
 import { type DragEvent, useCallback, useContext, useEffect, useState } from "react";
 
+import { whileReading } from "@/app/conversation/attachments";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { droppedFile, registerDropTarget } from "@/app/nativeDrop";
 import { openFolders } from "@/state/addProject";
@@ -54,15 +55,20 @@ export function useFileDrops(zone: HTMLElement | null): {
         if (!aui.thread().getState().capabilities.attachments) return;
         for (const entry of entries) {
           if (entry.folder) continue;
-          droppedFile(entry.path)
-            .then((file) => aui.composer().addAttachment(file))
-            .catch((error: unknown) =>
-              toast(error instanceof Error ? error.message : String(error), { tone: "error" }),
-            );
+          // Send waits until it's attached, so the file goes with this message (#330): through
+          // the read, then until its tile, uploading, is in the composer (by the next task: its
+          // first state comes in microtasks), whose upload holds Send from then on, or until
+          // adding it failed. Removing the tile frees Send.
+          const read = droppedFile(entry.path);
+          const added = read.then((file) => aui.composer().addAttachment(file));
+          const shown = read.then(() => Promise.race([added, new Promise((next) => setTimeout(next, 0))]));
+          // A failed read or add is told below.
+          whileReading(owner, shown).catch(() => {});
+          added.catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: "error" }));
         }
       },
     });
-  }, [zone, aui, typePaths]);
+  }, [zone, aui, owner, typePaths]);
 
   const drag = useCallback((event: DragEvent) => {
     if (!event.dataTransfer.types.includes("Files")) return;

@@ -78,3 +78,11 @@ test("Shift while dropping files on the thread types their paths at the caret, n
   assert.deepEqual(seen.offThread, { overlay: false, veil: true });
   assert.deepEqual(seen.folders, ["/Users/me/repo"]);
 });
+
+test("a message sent while a dropped file is still being read waits for it: the file goes with that message and the next draft is empty (issue 330)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "dropSend");
+  assert.deepEqual(seen.whileReading, { sent: 0, disabled: true, tip: "Files uploading…" });
+  assert.deepEqual(seen.messages, [{ text: "see this", attachments: ["a.png"] }]);
+  assert.deepEqual(seen.nextDraft, { text: "", attachments: 0 });
+  assert.deepEqual(seen.removedWhileUploading, { disabled: false, tip: "Send message" });
+});

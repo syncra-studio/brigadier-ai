@@ -35,7 +35,7 @@ import {
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import { WorkerGlyph, useWorkerName } from "@/app/conversation/WorkerChip";
-import { type BlobAttachmentAdapter, FILES_UPLOADING, uploading } from "@/app/conversation/attachments";
+import { type BlobAttachmentAdapter, FILES_UPLOADING, readingFiles, uploading } from "@/app/conversation/attachments";
 import { usePromptHistory } from "@/app/conversation/composerDraft";
 import { enterAction } from "@/app/conversation/composerKeys";
 import { clearBackgroundSend, markBackgroundSend } from "@/state/backgroundSend";
@@ -390,13 +390,13 @@ function ComposerKeys({
           if (action === "background" && taskTab) {
             // Not this conversation's send: it goes to a new tab (on the same model), running
             // or not.
-            if (aui.composer().getState().isEmpty || refuseBlockedImages(imagesBlocked) || refuseUploading(aui)) return true;
+            if (aui.composer().getState().isEmpty || refuseBlockedImages(imagesBlocked) || refuseUploading(aui, owner)) return true;
             markBackgroundSend(taskTab);
             aui.composer().send();
             return true;
           }
           if (thread.isRunning && !thread.capabilities.queue) return true;
-          if (refuseBlockedImages(imagesBlocked) || refuseUploading(aui)) return true;
+          if (refuseBlockedImages(imagesBlocked) || refuseUploading(aui, owner)) return true;
           const send = () =>
             aui.composer().send(
               action === "other" && thread.isRunning ? { steer: followUp === "queue" } : undefined,
@@ -552,9 +552,9 @@ function refuseBlockedImages(blocked: { current: boolean }): boolean {
   return true;
 }
 
-/** Files still being stored: the message waits, as the send button says. */
-function refuseUploading(aui: ReturnType<typeof useAui>): boolean {
-  if (!uploading(aui.composer().getState().attachments)) return false;
+/** Files still being read or stored: the message waits, as the send button says. */
+function refuseUploading(aui: ReturnType<typeof useAui>, owner: string): boolean {
+  if (!readingFiles(owner) && !uploading(aui.composer().getState().attachments)) return false;
   toast(FILES_UPLOADING);
   return true;
 }

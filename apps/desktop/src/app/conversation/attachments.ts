@@ -5,6 +5,7 @@ import type {
   CreateAttachment,
   PendingAttachment,
 } from "@assistant-ui/react";
+import { useSyncExternalStore } from "react";
 
 import { draftRefs, inlineKey, inlineRefs } from "@/lib/inlineImages";
 import { inlineNumberOf, isPastedFile } from "@/components/assistant-ui/elements/attachment-tile";
@@ -18,6 +19,37 @@ export const FILES_UPLOADING = "Files uploading…";
 /** Whether one of `attachments` is still being stored: the message waits for it. */
 export function uploading(attachments: readonly Attachment[]): boolean {
   return attachments.some((attachment) => attachment.status.type === "running");
+}
+
+/** Dropped files whose bytes are still being read (macOS), by composer: its Send waits (#330). */
+const reading = new Map<string, number>();
+const readingHeard = new Set<() => void>();
+
+function subscribeReading(heard: () => void): () => void {
+  readingHeard.add(heard);
+  return () => readingHeard.delete(heard);
+}
+
+/** Holds `owner`'s Send while `read` (a dropped file's read and its attaching) is under way. */
+export function whileReading(owner: string, read: Promise<unknown>): Promise<unknown> {
+  const change = (by: number) => {
+    const left = (reading.get(owner) ?? 0) + by;
+    if (left > 0) reading.set(owner, left);
+    else reading.delete(owner);
+    for (const heard of readingHeard) heard();
+  };
+  change(1);
+  return read.finally(() => change(-1));
+}
+
+/** Whether a dropped file is still being read for `owner`'s message: it waits for it. */
+export function readingFiles(owner: string): boolean {
+  return reading.has(owner);
+}
+
+/** {@link readingFiles}, as it changes. */
+export function useReadingFiles(owner: string): boolean {
+  return useSyncExternalStore(subscribeReading, () => reading.has(owner));
 }
 
 /** The daemon's limit per attachment (MAX_ATTACHMENT_BYTES in the core). */

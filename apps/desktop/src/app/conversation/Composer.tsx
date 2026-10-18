@@ -52,7 +52,12 @@ import { ComposerStatusSlot } from "@/app/conversation/ComposerStatusSlot";
 import { QueueCard } from "@/app/conversation/QueueCard";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { useComposerDraft } from "@/app/conversation/composerDraft";
-import { type BlobAttachmentAdapter, FILES_UPLOADING, uploading as anyUploading } from "@/app/conversation/attachments";
+import {
+  type BlobAttachmentAdapter,
+  FILES_UPLOADING,
+  uploading as anyUploading,
+  useReadingFiles,
+} from "@/app/conversation/attachments";
 import { useImagesBlocked, useImagesUnsupportedToast } from "@/app/conversation/imageInput";
 import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import { StatusCard, StatusCardContext } from "@/app/conversation/StatusCard";
@@ -653,10 +658,11 @@ function SendControls({
   const modHeld = useModHeld(mac, projectSession !== null);
   const chip = useBackgroundArmed(projectSession);
   // Images for a model that takes none hold the message until they go or the model changes;
-  // files still being stored hold it until they are.
+  // files still being read or stored hold it until they are.
   const imagesBlocked = useImagesBlocked();
   useImagesUnsupportedToast();
-  const uploading = useAuiState((s) => anyUploading(s.composer.attachments));
+  const stored = useAuiState((s) => anyUploading(s.composer.attachments));
+  const uploading = useReadingFiles(dictationOwner) || stored;
   const state: SendState =
     armed
       ? "armed"

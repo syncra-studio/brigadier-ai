@@ -64,11 +64,20 @@ const attached: string[] = [];
 /** The window's own drags and drops (macOS), for the `shift` case: Shift held, and the last drop. */
 let shiftHeld = false;
 let dropped: { shift: boolean; entries: { path: string; folder: boolean }[] } | null = null;
+/** Reads a dropped file's bytes, once the `dropSend` case lets it (`null`: none waits). */
+let finishRead: (() => void) | null = null;
+let holdRead = false;
 mockWindows("main");
 mockIPC((command, payload) => {
   if (command === "drag_shift") return shiftHeld;
   if (command === "last_drop") return dropped;
-  if (command === "read_dropped") return new TextEncoder().encode("notes").buffer;
+  if (command === "read_dropped") {
+    const bytes = new TextEncoder().encode("notes").buffer;
+    if (!holdRead) return bytes;
+    return new Promise((resolve) => {
+      finishRead = () => resolve(bytes);
+    });
+  }
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
@@ -428,6 +437,59 @@ async function shiftCase(seen: Record<string, unknown>) {
   seen.folders = sent.flatMap((req) => (req.method === "checkFolder" ? [req.path] : []));
 }
 
+/** The second dropped file's remove ×, in the `dropSend` case. */
+const remove = () => document.querySelector<HTMLElement>("[aria-label='Remove b.png']");
+
+/**
+ * #330: Send while a file dropped on the window (macOS) is still being read waits for it, as for
+ * an upload: the file goes with that message, and the next draft starts empty.
+ */
+async function dropSendCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  await fixtureClick(field()!);
+  await fixtureInput({ type: "type", text: "see this" });
+  await until("the typed text", () => field()?.textContent === "see this");
+  holdRead = true;
+  const at = middle(field()!);
+  await emit("tauri://drag-enter", { paths: ["/Users/me/a.png"], position: at });
+  await emit("tauri://drag-over", { position: at });
+  dropped = { shift: false, entries: [{ path: "/Users/me/a.png", folder: false }] };
+  await emit("tauri://drag-drop", { paths: ["/Users/me/a.png"], position: at });
+  await until("the read", () => finishRead !== null, 3000);
+  await fixtureInput({ type: "key", key: "Enter" });
+  await sleep(200);
+  seen.whileReading = { sent: sends().length, disabled: sendButton()?.disabled, tip: sendButton()?.textContent };
+  finishRead!();
+  await until("the upload", () => finishUpload !== null, 3000);
+  finishUpload!();
+  await until("Send ready", () => sendButton()?.disabled === false, 3000);
+  await fixtureInput({ type: "key", key: "Enter" });
+  await until("the message sent", () => sends().length > 0, 3000);
+  await sleep(300);
+  seen.messages = sent.flatMap((req) =>
+    req.method === "sendMessage" ? [{ text: req.text, attachments: req.attachments.map((ref) => ref.name) }] : [],
+  );
+  seen.nextDraft = {
+    text: field()?.textContent ?? null,
+    attachments: document.querySelectorAll("[data-slot=composer-attachment]").length,
+  };
+  // Another drop, read, its tile removed while it uploads: Send is free again.
+  finishRead = null;
+  finishUpload = null;
+  await fixtureInput({ type: "type", text: "again" });
+  dropped = { shift: false, entries: [{ path: "/Users/me/b.png", folder: false }] };
+  await emit("tauri://drag-enter", { paths: ["/Users/me/b.png"], position: at });
+  await emit("tauri://drag-drop", { paths: ["/Users/me/b.png"], position: at });
+  await until("the second read", () => finishRead !== null, 3000);
+  finishRead!();
+  await until("the second upload", () => finishUpload !== null, 3000);
+  await until("its tile", () => remove() !== null, 3000);
+  await fixtureClick(remove()!);
+  await until("the tile gone", () => remove() === null, 3000).catch(() => {});
+  await sleep(200);
+  seen.removedWhileUploading = { disabled: sendButton()?.disabled, tip: sendButton()?.textContent };
+}
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
   focus: focusCase,
   uploading: uploadingCase,
@@ -437,6 +499,7 @@ const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = 
   plan: planCase,
   drop: dropCase,
   shift: shiftCase,
+  dropSend: dropSendCase,
 };
 
 async function drive() {
