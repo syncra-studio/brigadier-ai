@@ -899,3 +899,69 @@ async fn only_what_is_not_brigadiers_own_git_keeps_a_folder_busy() {
     git.wait().unwrap();
     flow.stop().await;
 }
+
+/// A project's usage says where it is, when it was last used and how many conversations it
+/// has; what a scan offers names the project it belongs to.
+#[tokio::test]
+async fn projects_say_where_and_when_and_their_items_name_them() {
+    let (flow, worktree, _) = session("disk-project").await;
+    leave_behind(&flow, &worktree).await;
+    let conversation = flow.core.conversation(&flow.conversation).unwrap();
+    let project = conversation.project_id.clone().unwrap();
+    let (items, usage) = scan(&flow, context()).await;
+    let used = usage
+        .projects
+        .iter()
+        .find(|p| p.project_id == project)
+        .expect("the project's usage");
+    let path = PathBuf::from(used.path.as_deref().expect("its folder"));
+    assert_eq!(
+        path.canonicalize().unwrap(),
+        flow.repo.canonicalize().unwrap()
+    );
+    assert_eq!((used.conversations, used.archived), (1, 1));
+    assert!(used.last_used_ms >= conversation.updated_at_ms);
+    let folder = named(&items, "Work folder of “Flow”");
+    assert_eq!(folder.item.project_id.as_ref(), Some(&project));
+    flow.stop().await;
+}
+
+/// Freeing up a project deletes its conversations and keeps the project, its repository and
+/// its branches with work on them.
+#[tokio::test]
+async fn freeing_up_a_project_keeps_the_project_its_files_and_branches() {
+    let (flow, worktree, branch) = session("disk-free-up").await;
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id
+        .unwrap();
+    // Its Brain would go to the real Trash: this test leaves that to Remove project's tests.
+    let brain = flow.manager.project_brain_dir(&project);
+    flow.manager.close_project_brain(&project).await;
+    let _ = std::fs::remove_dir_all(&brain);
+    // Work of its own on the branch, which must stay.
+    std::fs::write(worktree.join("WORK.md"), "work\n").unwrap();
+    git(&worktree, &["add", "WORK.md"]);
+    git(&worktree, &["commit", "-q", "-m", "Work"]);
+    let freed = flow
+        .manager
+        .free_up_projects(vec![project.clone(), project.clone()])
+        .await;
+    assert!(freed.failures.is_empty(), "{:?}", freed.failures);
+    assert_eq!((freed.freed, freed.conversations_deleted), (1, 1));
+    assert!(flow.core.project(&project).is_ok());
+    assert!(flow.core.conversation(&flow.conversation).is_err());
+    assert!(!worktree.exists());
+    assert!(flow.repo.join(".git").exists());
+    assert!(branch_exists(&flow.repo, &branch));
+    let (_, usage) = scan(&flow, context()).await;
+    let used = usage
+        .projects
+        .iter()
+        .find(|p| p.project_id == project)
+        .expect("the project stays");
+    assert_eq!(used.conversations, 0);
+    flow.stop().await;
+}

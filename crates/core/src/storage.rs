@@ -44,8 +44,15 @@ pub struct KeptLine {
 pub struct ProjectUsage {
     pub project_id: ProjectId,
     pub name: String,
+    /// Its repository folder (the first one), when it has one.
+    pub path: Option<String>,
     /// Its repository folder is there (a disconnected drive isn't).
     pub repo_found: bool,
+    /// When it was last used: its conversations' latest activity, else when it was added.
+    pub last_used_ms: i64,
+    /// Its conversations (chats and sessions, side chats left out), archived ones included.
+    pub conversations: u32,
+    pub archived: u32,
     pub worktrees_bytes: u64,
     /// Its Brain and code index.
     pub brain_bytes: u64,
@@ -95,6 +102,8 @@ pub struct CleanItem {
     /// Removing it moves it to the Trash: its space comes back once the Trash is emptied.
     pub to_trash: bool,
     pub badges: Vec<CleanBadge>,
+    /// The project it belongs to, when it belongs to exactly one.
+    pub project_id: Option<ProjectId>,
 }
 
 /// The plain groups Free up space shows. The first six hold the sweep; the rest are only ever
@@ -150,9 +159,38 @@ pub struct CleanReport {
     pub codex_threads_deleted: u32,
 }
 
+/// How a clean under way goes: sent to the app after each item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanProgress {
+    pub scan_id: String,
+    /// Items done (removed or failed) so far.
+    pub done: u32,
+    pub total: u32,
+}
+
+/// What `freeUpProjects` did: the projects' conversations deleted and their Brains moved to
+/// the Trash, the projects, their repositories and files kept.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct FreeUpProjectsReport {
+    /// Projects freed up in full.
+    pub freed: u32,
+    pub conversations_deleted: u32,
+    /// Stored files nothing uses any more, deleted.
+    pub reclaimed_bytes: u64,
+    /// Their Brains, now in the Trash.
+    pub trashed_bytes: u64,
+    /// Branches left in place, as they stand now (Storage offers them later).
+    pub kept_branches: Vec<RemovalBranch>,
+    pub failures: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanFailure {
+    /// The item's id in its scan.
+    pub id: String,
     pub label: String,
     pub path: Option<String>,
     pub error: String,

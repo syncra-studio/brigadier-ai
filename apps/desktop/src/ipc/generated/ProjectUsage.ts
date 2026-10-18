@@ -6,9 +6,21 @@ import type { ProjectId } from "./ProjectId";
  */
 export type ProjectUsage = { projectId: ProjectId, name: string, 
 /**
+ * Its repository folder (the first one), when it has one.
+ */
+path: string | null, 
+/**
  * Its repository folder is there (a disconnected drive isn't).
  */
-repoFound: boolean, worktreesBytes: number, 
+repoFound: boolean, 
+/**
+ * When it was last used: its conversations' latest activity, else when it was added.
+ */
+lastUsedMs: number, 
+/**
+ * Its conversations (chats and sessions, side chats left out), archived ones included.
+ */
+conversations: number, archived: number, worktreesBytes: number, 
 /**
  * Its Brain and code index.
  */

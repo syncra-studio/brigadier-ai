@@ -414,6 +414,9 @@ impl Bridge {
             ServerFrame::Metrics { metrics } => self.emit(BridgeEvent::Metrics { metrics }),
             ServerFrame::Terminal { output } => self.emit(BridgeEvent::Terminal { output }),
             ServerFrame::Dictation { update } => self.emit(BridgeEvent::Dictation { update }),
+            ServerFrame::StorageClean { progress } => {
+                self.emit(BridgeEvent::StorageClean { progress });
+            }
             ServerFrame::PageChanged { id, revision } => {
                 self.emit(BridgeEvent::PageChanged { id, revision });
             }

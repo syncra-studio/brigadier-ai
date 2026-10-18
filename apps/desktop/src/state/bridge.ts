@@ -28,7 +28,7 @@ import { applyUpdateEvents, loadUpdates } from "@/state/updates";
 import { applyUsageEvents } from "@/state/usage";
 import { onDictationDisconnected, onDictationUpdate } from "@/state/dictation";
 import { openFeedback } from "@/state/feedback";
-import { openUninstall } from "@/state/storage";
+import { emitCleanProgress, openUninstall } from "@/state/storage";
 import { emitTerminalOutput } from "@/state/terminalPlaces";
 
 let queued: EventEnvelope[] = [];
@@ -132,6 +132,9 @@ function onBridgeEvent(message: BridgeEvent) {
       break;
     case "pageChanged":
       emitPageChanged({ id: message.id, revision: message.revision });
+      break;
+    case "storageClean":
+      emitCleanProgress(message.progress);
       break;
     case "workspaceChanged":
       emitWorkspaceChanged(message.target);

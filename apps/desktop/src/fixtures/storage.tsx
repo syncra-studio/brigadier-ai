@@ -38,6 +38,7 @@ function item(id: string, fields: Partial<CleanItem>): CleanItem {
     selectable: true,
     toTrash: false,
     badges: [],
+    projectId: null,
     ...fields,
   };
 }
@@ -48,8 +49,8 @@ const report: StorageReport = {
   totalBytes: 31 * GB,
   cleanableBytes: 0,
   projects: [
-    { projectId: "web", name: "storefront-web", repoFound: true, worktreesBytes: 14 * GB, brainBytes: GB, blobsBytes: 2 * GB, scratchBytes: 200 * MB },
-    { projectId: "api", name: "billing-api", repoFound: false, worktreesBytes: 4 * GB, brainBytes: 300 * MB, blobsBytes: 500 * MB, scratchBytes: 0 },
+    { projectId: "web", name: "storefront-web", path: "/Users/me/code/storefront-web", repoFound: true, lastUsedMs: Date.now(), conversations: 4, archived: 0, worktreesBytes: 14 * GB, brainBytes: GB, blobsBytes: 2 * GB, scratchBytes: 200 * MB },
+    { projectId: "api", name: "billing-api", path: "/Users/me/code/billing-api", repoFound: false, lastUsedMs: Date.now(), conversations: 2, archived: 1, worktreesBytes: 4 * GB, brainBytes: 300 * MB, blobsBytes: 500 * MB, scratchBytes: 0 },
   ],
   shared: [
     { part: "database", bytes: 600 * MB },

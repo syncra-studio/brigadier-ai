@@ -20,8 +20,8 @@ use crate::ledger::BranchOwnership;
 use crate::model::{Conversation, ConversationId, Environment, KeptBranch, ProjectId, Setup};
 use crate::overnight::OvernightRun;
 use crate::storage::{
-    BranchChoice, ProjectRemoval, RemovalBranch, RemovalConversation, RemovalWorktree,
-    RemoveProjectReport, UnlandedBranch,
+    BranchChoice, FreeUpProjectsReport, ProjectRemoval, RemovalBranch, RemovalConversation,
+    RemovalWorktree, RemoveProjectReport, UnlandedBranch,
 };
 use crate::work::Task;
 use crate::{Error, Result};
@@ -127,6 +127,92 @@ impl SessionManager {
             brain_trashed_bytes,
             failures,
         })
+    }
+
+    /// The projects of `ids` one of whose conversations works now: freeing up leaves them.
+    pub async fn free_up_blocked(&self, ids: &[ProjectId]) -> HashSet<ProjectId> {
+        let mut working = HashSet::new();
+        for conversation in self.core.catalog().conversations {
+            if let Some(project) = &conversation.project_id
+                && ids.contains(project)
+                && !working.contains(project)
+                && self.conversation_running(&conversation.id).await
+            {
+                working.insert(project.clone());
+            }
+        }
+        working
+    }
+
+    /// Frees up projects not in use (Settings › Storage): each one's conversations are deleted
+    /// as a project removal deletes them, every branch kept (recorded, so Storage offers them
+    /// later), and its Brain and code index go to the Trash. The projects stay, with their
+    /// repositories, files and settings; a Brain is built again when one is used. A project
+    /// one of whose conversations works is left as it is. Then the stored files nothing uses
+    /// any more go.
+    pub async fn free_up_projects(&self, ids: Vec<ProjectId>) -> FreeUpProjectsReport {
+        let mut report = FreeUpProjectsReport::default();
+        let mut seen = HashSet::new();
+        for id in ids {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let name = self
+                .core
+                .project(&id)
+                .map_or_else(|_| id.0.clone(), |project| project.name);
+            match self.free_up_project(&id, &mut report).await {
+                Ok(()) => report.freed += 1,
+                Err(err) => report.failures.push(format!("{name}: {err}")),
+            }
+        }
+        match self.core.store().gc_blobs().await {
+            Ok(stats) => report.reclaimed_bytes += stats.removed_bytes,
+            Err(err) => {
+                tracing::warn!(error = %err, "could not collect stored files after freeing up projects")
+            }
+        }
+        report
+    }
+
+    async fn free_up_project(
+        &self,
+        id: &ProjectId,
+        report: &mut FreeUpProjectsReport,
+    ) -> Result<()> {
+        let plan = self.removal_plan(id).await?;
+        if let Some(why) = plan.preview.blocked {
+            return Err(Error::Invalid(why));
+        }
+        let listed: HashSet<&ConversationId> =
+            plan.preview.conversations.iter().map(|c| &c.id).collect();
+        for conversation in &plan.conversations {
+            // A side chat went with its parent.
+            if self.core.conversation(conversation).is_err() {
+                continue;
+            }
+            self.delete_conversation(conversation.clone(), false, false)
+                .await?;
+            if listed.contains(conversation) {
+                report.conversations_deleted += 1;
+            }
+        }
+        let (git, owned) = (self.git.clone(), self.runtime.ledger().branch_ownership());
+        let branches = plan.preview.branches;
+        let (kept, failures) =
+            blocking(move || Ok(settle_branches(&git, &owned, branches, &[]))).await?;
+        self.record_kept(&kept).await;
+        report.kept_branches.extend(kept);
+        report.failures.extend(failures);
+        self.close_project_brain(id).await;
+        match self.trash_project_brain(id).await {
+            Ok(bytes) => report.trashed_bytes += bytes,
+            Err(err) => report
+                .failures
+                .push(format!("Its Brain stays ({err}); Storage offers it later.")),
+        }
+        tracing::info!(project = %id, "project freed up");
+        Ok(())
     }
 
     /// Records the Brigadier branches a deleted conversation left behind as kept, as they stand

@@ -4,6 +4,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use brigadier_core::storage::CleanProgress;
+
 use crate::metrics::{BudgetId, DaemonMetrics, LatencySummary};
 use crate::protocol::{DaemonInfo, DictationUpdate, EventEnvelope, TerminalOutput};
 
@@ -47,6 +49,10 @@ pub enum BridgeEvent {
     PageChanged {
         id: String,
         revision: Option<String>,
+    },
+    /// How a clean under way goes (Settings › Storage).
+    StorageClean {
+        progress: CleanProgress,
     },
     /// The checkout the right sidebar watches changed: read it again.
     WorkspaceChanged {

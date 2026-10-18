@@ -33,7 +33,8 @@ use brigadier_store::{Compacted, DbSpace};
 use super::{SessionManager, blocking, git_error};
 use crate::ledger::BranchOwnership;
 use crate::model::{
-    Conversation, ConversationId, Environment, KeptBranch, Lifecycle, Project, Setup, streams,
+    Conversation, ConversationId, Environment, KeptBranch, Lifecycle, Project, ProjectId, Setup,
+    streams,
 };
 use crate::overnight::OvernightRun;
 use crate::storage::{
@@ -369,6 +370,7 @@ impl SessionManager {
             scan.logs_and_recordings();
             scan.site_icons();
             scan.models(embeddings_busy, context.speech_busy);
+            scan.attribute_projects();
             let mut usage = scan.usage(&project_blobs);
             usage.kept = scan.kept;
             Ok((scan.items, usage))
@@ -1141,7 +1143,81 @@ fn item(
         selectable: true,
         to_trash: false,
         badges: Vec::new(),
+        project_id: None,
     }
+}
+
+/// The one project a removal belongs to: the project of the conversation, task or run that
+/// owns it, of its repository (when no other project shares it), or whose worktrees folder
+/// holds it. `None` when it names none, or more than one.
+fn project_of(records: &Records, worktrees: &Path, action: &Action) -> Option<ProjectId> {
+    let of_conversation = |id: &str| records.conversation(id)?.project_id.clone();
+    let of_repo = |repo: &Path| {
+        let mut found = records
+            .projects
+            .iter()
+            .filter(|project| project.repos.iter().any(|r| Path::new(&r.path) == repo));
+        let first = found.next()?;
+        found.next().is_none().then(|| first.id.clone())
+    };
+    let canonical = std::fs::canonicalize(worktrees).unwrap_or_else(|_| worktrees.to_owned());
+    let of_path = |path: &Path| {
+        let rest = path
+            .strip_prefix(worktrees)
+            .or_else(|_| path.strip_prefix(&canonical))
+            .ok()?;
+        let id = rest.components().next()?;
+        let id = id.as_os_str().to_str()?;
+        records
+            .projects
+            .iter()
+            .find(|project| project.id.0 == id)
+            .map(|project| project.id.clone())
+    };
+    let of_owner = |owner: &str| {
+        let known = match owner.split_once(':') {
+            Some(("task" | "review-hold", id)) => records
+                .task(id)
+                .and_then(|(conversation, _)| conversation.project_id.clone()),
+            Some(("overnight", id)) => records
+                .run(id)
+                .and_then(|(conversation, _)| conversation.project_id.clone()),
+            Some((_, id)) => of_conversation(id),
+            None => None,
+        };
+        known.or_else(|| {
+            let (_, artifacts, _) = records.owners.iter().find(|(name, _, _)| name == owner)?;
+            one(worktree_places(artifacts).map(|place| of_path(&place)))
+        })
+    };
+    match action {
+        Action::RemoveWorktree { repo, worktree, .. } => {
+            of_path(worktree.path()).or_else(|| of_repo(repo))
+        }
+        Action::PruneWorktrees { repo } | Action::DeleteBranch { repo, .. } => of_repo(repo),
+        Action::DeleteBuildFiles(files) => of_conversation(&files.conversation().0),
+        Action::SweepThreadScratch(ids) => one(ids.iter().map(|id| of_conversation(&id.0))),
+        Action::Dispose { owners } => one(owners.iter().map(|(owner, _)| of_owner(owner))),
+        Action::Delete(entries) | Action::Trash(entries) => {
+            one(entries.iter().map(|(bound, _)| of_path(bound.path())))
+        }
+        Action::RemoveEmptyDir(bound) => of_path(bound.path()),
+        _ => None,
+    }
+}
+
+/// The project all of `found` name, when there is at least one and each names the same.
+fn one(found: impl Iterator<Item = Option<ProjectId>>) -> Option<ProjectId> {
+    let mut first: Option<ProjectId> = None;
+    for project in found {
+        let project = project?;
+        match &first {
+            Some(seen) if *seen != project => return None,
+            Some(_) => {}
+            None => first = Some(project),
+        }
+    }
+    first
 }
 
 /// When anything in `path` last changed (the newest modification time in it, links not
@@ -1272,6 +1348,16 @@ impl Scanner<'_> {
             action,
             routine: false,
         });
+    }
+
+    /// Tags each item with the project it belongs to, when what removing it takes names
+    /// exactly one (Storage's per-project Free up).
+    fn attribute_projects(&mut self) {
+        let records = self.records;
+        let worktrees = records.data_dir.join("worktrees");
+        for scanned in &mut self.items {
+            scanned.item.project_id = project_of(records, &worktrees, &scanned.action);
+        }
     }
 
     /// An item housekeeping may remove on its own too.
@@ -2237,12 +2323,20 @@ impl Scanner<'_> {
         let mut projects = Vec::new();
         for project in &self.records.projects {
             let mut scratch = 0;
+            let (mut last_used_ms, mut conversations, mut archived) = (project.created_at_ms, 0, 0);
             for conversation in self
                 .records
                 .conversations
                 .iter()
                 .filter(|c| c.project_id.as_ref() == Some(&project.id))
             {
+                last_used_ms = last_used_ms.max(conversation.updated_at_ms);
+                if conversation.side_of.is_none() && !conversation.deleting {
+                    conversations += 1;
+                    if conversation.lifecycle == Lifecycle::Archived {
+                        archived += 1;
+                    }
+                }
                 scratch += size(self.data("orch").join(&conversation.id.0));
                 scratch += size(self.data("chat").join(&conversation.id.0));
                 for task in self
@@ -2264,10 +2358,14 @@ impl Scanner<'_> {
             projects.push(ProjectUsage {
                 project_id: project.id.clone(),
                 name: project.name.clone(),
+                path: project.repos.first().map(|repo| repo.path.clone()),
                 repo_found: project
                     .repos
                     .first()
                     .is_some_and(|repo| Path::new(&repo.path).is_dir()),
+                last_used_ms,
+                conversations,
+                archived,
                 worktrees_bytes: size(self.data("worktrees").join(&project.id.0)),
                 brain_bytes: size(self.data("brains").join(&project.id.0)),
                 blobs_bytes,

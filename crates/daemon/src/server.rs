@@ -13,6 +13,7 @@ use brigadier_core::manager::workspace::WorkspaceWatch;
 use brigadier_core::manager::{ComputerNews, SessionManager};
 use brigadier_core::pages::{PageChange, PageError, Pages};
 use brigadier_core::runtime::{Runtime, StartRaw};
+use brigadier_core::storage::CleanProgress;
 use brigadier_core::{
     Conversation, ConversationId, Core, Lifecycle, MAX_ATTACHMENT_BYTES, ProjectId, SearchUpdate,
     Setup, WorkspaceTarget, streams,
@@ -211,6 +212,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         dictation_feed: None,
         dictations: Started::new(daemon.dictation.clone()),
         page_feed: None,
+        storage_feed: None,
         computer_feed: None,
         checkout_saves: None,
         workspace_watch: None,
@@ -252,6 +254,8 @@ struct Session {
     dictations: Started,
     /// Page changes, once subscribed to the live feed.
     page_feed: Option<broadcast::Receiver<PageChange>>,
+    /// How a clean under way goes (Settings › Storage), once subscribed to the live feed.
+    storage_feed: Option<broadcast::Receiver<CleanProgress>>,
     /// Computer use's news, once subscribed to the live feed.
     computer_feed: Option<broadcast::Receiver<ComputerNews>>,
     /// The checkouts a tab chat saved a file in, once subscribed to the live feed.
@@ -364,6 +368,11 @@ impl Session {
                         }
                     }
                 }
+                progress = next_clean_progress(&mut self.storage_feed) => {
+                    if let Some(progress) = progress {
+                        self.writer.write(&ServerFrame::StorageClean { progress }).await?;
+                    }
+                }
                 change = next_page_change(&mut self.page_feed) => {
                     if let Some(PageChange { id, revision }) = change {
                         self.writer.write(&ServerFrame::PageChanged { id, revision }).await?;
@@ -422,6 +431,9 @@ impl Session {
                 self.set_metrics(metrics);
                 if self.page_feed.is_none() {
                     self.page_feed = Some(self.daemon.pages.subscribe());
+                }
+                if self.storage_feed.is_none() {
+                    self.storage_feed = Some(self.daemon.storage.subscribe_progress());
                 }
                 if self.checkout_saves.is_none() {
                     self.checkout_saves = Some(self.daemon.sessions.subscribe_checkout_saves());
@@ -622,6 +634,7 @@ impl Session {
             | Request::CleanStorage { .. }
             | Request::PreviewRemoveProject { .. }
             | Request::RemoveProject { .. }
+            | Request::FreeUpProjects { .. }
             | Request::PreviewUninstall { .. }
             | Request::Uninstall { .. }) => {
                 let daemon = self.daemon.clone();
@@ -1164,6 +1177,23 @@ async fn next_computer_news(
         Some(rx) => match rx.recv().await {
             Ok(news) => Some(news),
             // Only the newest status matters, and the next one follows.
+            Err(RecvError::Lagged(_)) => None,
+            Err(RecvError::Closed) => {
+                *feed = None;
+                None
+            }
+        },
+        None => std::future::pending().await,
+    }
+}
+
+async fn next_clean_progress(
+    feed: &mut Option<broadcast::Receiver<CleanProgress>>,
+) -> Option<CleanProgress> {
+    match feed {
+        Some(rx) => match rx.recv().await {
+            Ok(progress) => Some(progress),
+            // Behind: the next one says where it stands.
             Err(RecvError::Lagged(_)) => None,
             Err(RecvError::Closed) => {
                 *feed = None;
@@ -2154,6 +2184,22 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             }
             Response::RemoveProject {
                 report: heap(|| sessions.remove_project(id, delete_branches, keep_brain)).await?,
+            }
+        }
+        Request::FreeUpProjects { ids } => {
+            // Their conversations' terminals close with them, as a project removal's do.
+            let working = heap(|| sessions.free_up_blocked(&ids)).await;
+            for conversation in core.catalog().conversations {
+                if conversation
+                    .project_id
+                    .as_ref()
+                    .is_some_and(|project| ids.contains(project) && !working.contains(project))
+                {
+                    daemon.terminals.close_conversation(&conversation.id.0);
+                }
+            }
+            Response::FreeUpProjects {
+                report: heap(|| sessions.free_up_projects(ids)).await,
             }
         }
         Request::Delete { ids } => {

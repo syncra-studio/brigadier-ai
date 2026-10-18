@@ -10,8 +10,10 @@ use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use brigadier_core::manager::disk::counted;
-use brigadier_core::manager::disk::{Action, ScanContext, ScanItem};
-use brigadier_core::storage::{CleanCategory, CleanFailure, CleanItem, CleanReport, StorageReport};
+use brigadier_core::manager::disk::{Action, Cleaned, ScanContext, ScanItem};
+use brigadier_core::storage::{
+    CleanCategory, CleanFailure, CleanItem, CleanProgress, CleanReport, StorageReport,
+};
 use brigadier_ipc::protocol::{ClientFrame, ClientInfo, Outcome, Request, Response, ServerFrame};
 use brigadier_sandbox::AppPaths;
 use brigadier_sandbox::footprint::CacheRoots;
@@ -23,6 +25,8 @@ use crate::server::Daemon;
 
 /// How long a scan's items can be cleaned.
 const SCAN_LIFETIME: Duration = Duration::from_secs(15 * 60);
+/// Clean updates a connection may fall behind by before it misses some.
+const PROGRESS_BACKLOG: usize = 64;
 /// How long another daemon gets to answer.
 const ASK_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long another daemon gets to quit.
@@ -75,14 +79,30 @@ struct Scan {
     entries: HashMap<String, Entry>,
 }
 
-#[derive(Default)]
 pub struct Storage {
     scans: Mutex<HashMap<String, Scan>>,
     /// One clean at a time.
     cleaning: tokio::sync::Mutex<()>,
+    /// How the clean under way goes, for the app's Free up space card.
+    progress: tokio::sync::broadcast::Sender<CleanProgress>,
+}
+
+impl Default for Storage {
+    fn default() -> Self {
+        Self {
+            scans: Mutex::default(),
+            cleaning: tokio::sync::Mutex::default(),
+            progress: tokio::sync::broadcast::channel(PROGRESS_BACKLOG).0,
+        }
+    }
 }
 
 impl Storage {
+    /// How cleans go from now on: one update after each item.
+    pub fn subscribe_progress(&self) -> tokio::sync::broadcast::Receiver<CleanProgress> {
+        self.progress.subscribe()
+    }
+
     fn scans(&self) -> std::sync::MutexGuard<'_, HashMap<String, Scan>> {
         self.scans.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -200,43 +220,35 @@ impl Storage {
         scan_id: &str,
         picked: Vec<String>,
     ) -> Result<CleanReport, String> {
+        self.clean_with(scan_id, picked, |action, own| remove(daemon, action, own))
+            .await
+    }
+
+    /// [`Self::clean`], each item removed by `remove`; subscribers hear how it goes after each.
+    async fn clean_with<F>(
+        &self,
+        scan_id: &str,
+        picked: Vec<String>,
+        mut remove: impl FnMut(Action, Option<DaemonAction>) -> F,
+    ) -> Result<CleanReport, String>
+    where
+        F: Future<Output = Result<Cleaned, String>>,
+    {
         let _one = self.cleaning.lock().await;
         let entries = self.take(scan_id, &picked)?;
         let mut report = CleanReport::default();
-        for entry in entries {
+        let total = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+        let progress = |done: u32| {
+            let _ = self.progress.send(CleanProgress {
+                scan_id: scan_id.to_owned(),
+                done,
+                total,
+            });
+        };
+        progress(0);
+        for (done, entry) in (1..).zip(entries) {
             let private_logs = entry.action.private_logs();
-            let outcome = match (&entry.action, entry.own) {
-                (
-                    Action::External(_),
-                    Some(DaemonAction::QuitDaemon {
-                        data_dir,
-                        pid,
-                        started_at,
-                    }),
-                ) => quit_daemon(&data_dir, pid, started_at)
-                    .await
-                    .map(|()| Default::default()),
-                (
-                    Action::External(_),
-                    Some(DaemonAction::DeleteCaches {
-                        app,
-                        identifiers,
-                        entries,
-                    }),
-                ) => {
-                    tokio::task::spawn_blocking(move || delete_caches(&app, &identifiers, &entries))
-                        .await
-                        .map_err(|err| err.to_string())
-                        .and_then(|outcome| outcome)
-                }
-                (Action::External(_), _) => Err("This item can't be removed from here.".into()),
-                (action, _) => {
-                    daemon
-                        .sessions
-                        .clean_storage(action.clone(), context(daemon))
-                        .await
-                }
-            };
+            let outcome = remove(entry.action, entry.own).await;
             match outcome {
                 Ok(cleaned) => {
                     report.reclaimed_bytes += cleaned.reclaimed;
@@ -249,6 +261,7 @@ impl Storage {
                         let error = cleaned.failures.join("; ");
                         crate::logging::private_trace!(private_logs, warn, "cleaned only in part"; item = %entry.item.label, %error);
                         report.failures.push(CleanFailure {
+                            id: entry.item.id,
                             label: entry.item.label,
                             path: entry.item.path,
                             error,
@@ -258,14 +271,49 @@ impl Storage {
                 Err(error) => {
                     crate::logging::private_trace!(private_logs, warn, "could not clean"; item = %entry.item.label, %error);
                     report.failures.push(CleanFailure {
+                        id: entry.item.id,
                         label: entry.item.label,
                         path: entry.item.path,
                         error,
                     });
                 }
             }
+            progress(done);
         }
         Ok(report)
+    }
+}
+
+/// Removes one picked item: the daemon's own kinds here, the rest through the session manager.
+async fn remove(
+    daemon: &Daemon,
+    action: Action,
+    own: Option<DaemonAction>,
+) -> Result<Cleaned, String> {
+    match (action, own) {
+        (
+            Action::External(_),
+            Some(DaemonAction::QuitDaemon {
+                data_dir,
+                pid,
+                started_at,
+            }),
+        ) => quit_daemon(&data_dir, pid, started_at)
+            .await
+            .map(|()| Cleaned::default()),
+        (
+            Action::External(_),
+            Some(DaemonAction::DeleteCaches {
+                app,
+                identifiers,
+                entries,
+            }),
+        ) => tokio::task::spawn_blocking(move || delete_caches(&app, &identifiers, &entries))
+            .await
+            .map_err(|err| err.to_string())
+            .and_then(|outcome| outcome),
+        (Action::External(_), _) => Err("This item can't be removed from here.".into()),
+        (action, _) => daemon.sessions.clean_storage(action, context(daemon)).await,
     }
 }
 
@@ -496,6 +544,7 @@ fn plain_item(
         selectable,
         to_trash: false,
         badges: Vec::new(),
+        project_id: None,
     }
 }
 
@@ -1012,6 +1061,51 @@ mod tests {
 
     fn ids(entries: &[Entry]) -> Vec<&str> {
         entries.iter().map(|entry| entry.item.id.as_str()).collect()
+    }
+
+    /// Subscribers hear where a clean stands before the first item and after each; an item
+    /// that fails is reported by its id.
+    #[tokio::test]
+    async fn a_clean_says_how_it_goes_after_each_item() {
+        let storage = storage_with("scan", Instant::now());
+        storage.scans().get_mut("scan").unwrap().entries.extend(
+            [entry("item-2", true)]
+                .into_iter()
+                .map(|entry| (entry.item.id.clone(), entry)),
+        );
+        let mut heard = storage.subscribe_progress();
+        let mut calls = 0;
+        let report = storage
+            .clean_with(
+                "scan",
+                vec!["item-0".into(), "item-1".into(), "item-2".into()],
+                |_, _| {
+                    calls += 1;
+                    let first = calls == 1;
+                    async move {
+                        if first {
+                            Ok(Cleaned {
+                                reclaimed: 5,
+                                ..Cleaned::default()
+                            })
+                        } else {
+                            Err("in use".into())
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!((report.removed, report.reclaimed_bytes), (1, 5));
+        assert_eq!(report.failures.len(), 1);
+        assert!(report.failures[0].id.starts_with("item-"));
+        let mut steps = Vec::new();
+        while let Ok(progress) = heard.try_recv() {
+            assert_eq!(progress.scan_id, "scan");
+            steps.push((progress.done, progress.total));
+        }
+        // item-1 can't be picked: two go.
+        assert_eq!(steps, [(0, 2), (1, 2), (2, 2)]);
     }
 
     #[test]

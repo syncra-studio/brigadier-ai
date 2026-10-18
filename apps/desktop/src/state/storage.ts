@@ -4,7 +4,10 @@ import { create } from "zustand";
 import { request } from "@/ipc/client";
 import type {
   BranchChoice,
+  CleanProgress,
   CleanReport,
+  FreeUpProjectsReport,
+  ProjectId,
   StorageReport,
   UninstallApp,
   UninstallPlan,
@@ -40,9 +43,31 @@ export async function scanStorage(): Promise<StorageReport> {
   return (await request(app ? { method: "scanStorage", app } : { method: "scanStorage" })).report;
 }
 
-/** Removes the picked items of a scan. */
+/** Removes the picked items of a scan; `onCleanProgress` hears how it goes. */
 export async function cleanStorage(scanId: string, items: string[]): Promise<CleanReport> {
   return (await request({ method: "cleanStorage", scanId, items })).report;
+}
+
+const cleanListeners = new Set<(progress: CleanProgress) => void>();
+
+/** How each clean goes from now on, after each item; returns the unsubscribe. */
+export function onCleanProgress(listener: (progress: CleanProgress) => void): () => void {
+  cleanListeners.add(listener);
+  return () => {
+    cleanListeners.delete(listener);
+  };
+}
+
+export function emitCleanProgress(progress: CleanProgress): void {
+  for (const listener of cleanListeners) listener(progress);
+}
+
+/**
+ * Frees up projects not in use: their conversations are deleted and their Brains go to the
+ * Trash; the projects, their repositories, files and branches stay.
+ */
+export async function freeUpProjects(ids: ProjectId[]): Promise<FreeUpProjectsReport> {
+  return (await request({ method: "freeUpProjects", ids })).report;
 }
 
 /** What uninstalling this app removes. */

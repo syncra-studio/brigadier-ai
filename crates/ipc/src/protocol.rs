@@ -9,8 +9,9 @@
 use brigadier_brain::{BrainAnswer, BrainGraph, BrainQuery, Node, NodeFilter};
 use brigadier_core::pages::{Page, PageContent, PageError, PageSummary, PageWriteOutcome};
 use brigadier_core::storage::{
-    BranchChoice, CleanReport, ProjectRemoval, RemoveProjectReport, StorageReport, UninstallApp,
-    UninstallPlan, UninstallReport, UnlandedBranch,
+    BranchChoice, CleanProgress, CleanReport, FreeUpProjectsReport, ProjectRemoval,
+    RemoveProjectReport, StorageReport, UninstallApp, UninstallPlan, UninstallReport,
+    UnlandedBranch,
 };
 use brigadier_core::{
     AccountEntry, AccountsView, AttachmentRef, BrainJobKind, BrainOverview, CardId, Catalog,
@@ -1273,9 +1274,17 @@ pub enum Request {
         app: Option<String>,
     },
     /// Removes the picked items of a scan (by the ids it gave them), each checked again first.
+    /// Subscribed connections hear how it goes (`storageClean`) after each item.
     CleanStorage {
         scan_id: String,
         items: Vec<String>,
+    },
+    /// Frees up projects not in use (Settings › Storage): their conversations are deleted (as
+    /// `Delete` does, keeping every branch, recorded as kept) and their Brains go to the
+    /// Trash. The projects, their repositories, files and branches stay. A project one of
+    /// whose conversations works is left as it is.
+    FreeUpProjects {
+        ids: Vec<ProjectId>,
     },
     /// What uninstalling Brigadier removes (Settings → Storage, or the app menu).
     PreviewUninstall {
@@ -1827,6 +1836,9 @@ pub enum Response {
     CleanStorage {
         report: CleanReport,
     },
+    FreeUpProjects {
+        report: FreeUpProjectsReport,
+    },
     PreviewUninstall {
         plan: Box<UninstallPlan>,
     },
@@ -1998,6 +2010,11 @@ pub enum ServerFrame {
     /// An agent needs computer use and its setup isn't finished: the app opens the setup
     /// window. Live only.
     ComputerUseSetupNeeded,
+    /// How a clean under way goes (Settings › Storage). Sent to every subscribed connection.
+    /// Live only.
+    StorageClean {
+        progress: CleanProgress,
+    },
     /// The daemon is shutting down; the connection closes next.
     Closing,
 }

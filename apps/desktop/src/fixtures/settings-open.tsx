@@ -138,7 +138,7 @@ const STORAGE: StorageReport = {
   totalBytes: 12 * GB,
   cleanableBytes: 2 * GB,
   projects: [
-    { projectId: "web", name: "storefront-web", repoFound: true, worktreesBytes: 6 * GB, brainBytes: GB, blobsBytes: GB, scratchBytes: 0 },
+    { projectId: "web", name: "storefront-web", path: "/Users/me/code/storefront-web", repoFound: true, lastUsedMs: Date.now(), conversations: 4, archived: 0, worktreesBytes: 6 * GB, brainBytes: GB, blobsBytes: GB, scratchBytes: 0 },
   ],
   shared: [
     { part: "database", bytes: GB },

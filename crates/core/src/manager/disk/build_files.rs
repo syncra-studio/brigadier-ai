@@ -51,6 +51,13 @@ pub struct BuildFiles {
     entries: Vec<(Bound, String, u64)>,
 }
 
+impl BuildFiles {
+    /// The session whose work folder it is.
+    pub(super) fn conversation(&self) -> &ConversationId {
+        &self.conversation
+    }
+}
+
 /// A work folder an open session uses.
 struct InUse {
     conversation: ConversationId,
