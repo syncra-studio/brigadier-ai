@@ -122,8 +122,10 @@ impl CliEnv {
         {
             return Some(PathBuf::from(dir));
         }
-        // Only this environment's own HOME: one without it (a test's) looks nowhere else.
-        self.var("HOME")
+        // Only this environment's own home (USERPROFILE on Windows): one without it (a test's)
+        // looks nowhere else.
+        let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        self.var(home)
             .filter(|home| !home.is_empty())
             .map(|home| Path::new(home).join(".local").join("bin"))
     }

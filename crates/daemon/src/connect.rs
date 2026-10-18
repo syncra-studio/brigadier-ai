@@ -30,6 +30,7 @@ use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -50,6 +51,8 @@ use crate::server::Daemon;
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// The vendor's sign-in page left open this long is given up on.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// How long a connected agent's row waits for its overview before it goes anyway.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 /// How often the agent is asked whether it is signed in yet.
 const POLL_EVERY: Duration = Duration::from_secs(3);
 /// After asking a process to end, how long before it is killed.
@@ -64,9 +67,15 @@ const LINK_EVERY: Duration = Duration::from_millis(200);
 #[derive(Default)]
 pub struct Connects {
     state: Mutex<HashMap<ProviderKind, Entry>>,
+    /// Numbers each attempt, so one cancelled and still ending can't touch the retry after it.
+    attempts: AtomicU64,
+    /// Held while a view is read and published, so the last one published is the newest.
+    publishing: tokio::sync::Mutex<()>,
 }
 
 struct Entry {
+    /// Which attempt this is.
+    attempt: u64,
     progress: ConnectProgress,
     /// Present while it runs.
     cancel: Option<CancellationToken>,
@@ -79,6 +88,89 @@ impl Connects {
 
     pub fn view(&self) -> ConnectView {
         view_of(&self.state())
+    }
+
+    /// A new attempt for `provider`, beginning at `progress`. None while one already runs.
+    fn begin(
+        &self,
+        provider: ProviderKind,
+        progress: ConnectProgress,
+    ) -> Option<(u64, CancellationToken)> {
+        let mut state = self.state();
+        if state
+            .get(&provider)
+            .is_some_and(|entry| entry.cancel.is_some())
+        {
+            return None;
+        }
+        let attempt = self.attempts.fetch_add(1, Ordering::Relaxed);
+        let cancel = CancellationToken::new();
+        state.insert(
+            provider,
+            Entry {
+                attempt,
+                progress,
+                cancel: Some(cancel.clone()),
+            },
+        );
+        Some((attempt, cancel))
+    }
+
+    /// The attempt's next step; false (nothing to publish) once it is not the running one.
+    fn report(&self, provider: ProviderKind, attempt: u64, progress: ConnectProgress) -> bool {
+        let mut state = self.state();
+        match state.get_mut(&provider) {
+            Some(entry) if entry.attempt == attempt && entry.cancel.is_some() => {
+                entry.progress = progress;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// How the attempt ended: kept to show, or its row gone. False once it is not the current one.
+    fn finish(
+        &self,
+        provider: ProviderKind,
+        attempt: u64,
+        outcome: Option<ConnectProgress>,
+    ) -> bool {
+        let mut state = self.state();
+        if state
+            .get(&provider)
+            .is_none_or(|entry| entry.attempt != attempt)
+        {
+            return false;
+        }
+        match outcome {
+            Some(progress) => {
+                state.insert(
+                    provider,
+                    Entry {
+                        attempt,
+                        progress,
+                        cancel: None,
+                    },
+                );
+            }
+            None => {
+                state.remove(&provider);
+            }
+        }
+        true
+    }
+
+    /// Stops the agent's attempt, if it runs; its row leaves the view either way. False when
+    /// there was no row.
+    fn stop(&self, provider: ProviderKind) -> bool {
+        let mut state = self.state();
+        let Some(entry) = state.remove(&provider) else {
+            return false;
+        };
+        if let Some(cancel) = entry.cancel {
+            cancel.cancel();
+        }
+        true
     }
 }
 
@@ -98,96 +190,67 @@ fn view_of(state: &HashMap<ProviderKind, Entry>) -> ConnectView {
 
 /// Starts connecting `provider` in the background. Refused while it already runs.
 pub fn start(daemon: &Arc<Daemon>, provider: ProviderKind) -> Result<(), String> {
-    let cancel = CancellationToken::new();
-    let view = {
-        let mut state = daemon.connects.state();
-        if state
-            .get(&provider)
-            .is_some_and(|entry| entry.cancel.is_some())
-        {
-            return Err(format!("{} is already connecting", provider.label()));
-        }
-        // What the last check found says where it begins; the flow checks again first.
-        let missing = daemon
-            .runtime
-            .overview(provider)
-            .and_then(|overview| overview.status)
-            .is_some_and(|status| status.path.is_none());
-        let progress = if missing {
-            ConnectProgress::Installing
-        } else {
-            ConnectProgress::SigningIn
-        };
-        state.insert(
-            provider,
-            Entry {
-                progress,
-                cancel: Some(cancel.clone()),
-            },
-        );
-        view_of(&state)
+    // What the last check found says where it begins; the flow checks again first.
+    let missing = daemon
+        .runtime
+        .overview(provider)
+        .and_then(|overview| overview.status)
+        .is_some_and(|status| status.path.is_none());
+    let progress = if missing {
+        ConnectProgress::Installing
+    } else {
+        ConnectProgress::SigningIn
+    };
+    let Some((attempt, cancel)) = daemon.connects.begin(provider, progress) else {
+        return Err(format!("{} is already connecting", provider.label()));
     };
     let daemon = daemon.clone();
     tokio::spawn(async move {
-        publish(&daemon, view).await;
+        publish(&daemon).await;
         let ops = Ops::of(&daemon);
         let reporter = daemon.clone();
         let report = move |progress: ConnectProgress| {
-            let view = {
-                let mut state = reporter.connects.state();
-                match state.get_mut(&provider) {
-                    Some(entry) if entry.cancel.is_some() => entry.progress = progress,
-                    _ => return,
-                }
-                view_of(&state)
-            };
-            let reporter = reporter.clone();
-            tokio::spawn(async move { publish(&reporter, view).await });
+            if reporter.connects.report(provider, attempt, progress) {
+                let reporter = reporter.clone();
+                tokio::spawn(async move { publish(&reporter).await });
+            }
         };
         let outcome = connect(&ops, provider, &cancel, &report).await;
-        let view = {
-            let mut state = daemon.connects.state();
-            match outcome {
-                Some(progress) => {
-                    state.insert(
-                        provider,
-                        Entry {
-                            progress,
-                            cancel: None,
-                        },
-                    );
-                }
-                None => {
-                    state.remove(&provider);
-                }
+        let outcome = if outcome == Some(ConnectProgress::Connected) {
+            // Its row says Connected until its overview (signed in, its models) is in, then
+            // goes: the overview says Connected from then on, and a later sign-out shows as one.
+            if daemon
+                .connects
+                .report(provider, attempt, ConnectProgress::Connected)
+            {
+                publish(&daemon).await;
             }
-            view_of(&state)
+            daemon.runtime.check_provider(provider, CHECK_TIMEOUT).await;
+            None
+        } else {
+            // Its overview (found or not, signed in or not) is published by the check.
+            daemon.runtime.refresh_providers(Some(provider));
+            outcome
         };
-        // Its overview (found, signed in, its models) is published by the check.
-        daemon.runtime.refresh_providers(Some(provider));
-        publish(&daemon, view).await;
+        if daemon.connects.finish(provider, attempt, outcome) {
+            publish(&daemon).await;
+        }
     });
     Ok(())
 }
 
 /// Stops the agent's Connect, if it runs; its row leaves the view either way.
 pub async fn cancel(daemon: &Arc<Daemon>, provider: ProviderKind) {
-    let view = {
-        let mut state = daemon.connects.state();
-        match state.remove(&provider) {
-            Some(Entry {
-                cancel: Some(cancel),
-                ..
-            }) => cancel.cancel(),
-            Some(_) => {}
-            None => return,
-        }
-        view_of(&state)
-    };
-    publish(daemon, view).await;
+    if daemon.connects.stop(provider) {
+        publish(daemon).await;
+    }
 }
 
-async fn publish(daemon: &Daemon, connect: ConnectView) {
+/// Publishes the view as it is now. Each change publishes after it, one at a time, so the
+/// last view published is never older than the last change.
+async fn publish(daemon: &Daemon) {
+    let _publishing = daemon.connects.publishing.lock().await;
+    let connect = daemon.connects.view();
     let event = DomainEvent::AgentConnectChanged { connect };
     let result = async {
         let new = NewEvent::new(streams::CONNECT, event.kind(), now_ms(), &event)?;
@@ -986,6 +1049,52 @@ echo "asked: $answer" > "$HOME/asked"
             .output()
             .unwrap();
         assert!(leftover.stdout.is_empty(), "the sign-in process still runs");
+    }
+
+    #[test]
+    fn a_cancelled_attempt_still_ending_leaves_the_retry_after_it_alone() {
+        let connects = Connects::default();
+        let progress = |connects: &Connects| {
+            connects
+                .view()
+                .agents
+                .into_iter()
+                .map(|agent| agent.progress)
+                .collect::<Vec<_>>()
+        };
+        let (first, first_cancel) = connects
+            .begin(ProviderKind::Claude, ConnectProgress::Installing)
+            .unwrap();
+        assert!(
+            connects
+                .begin(ProviderKind::Claude, ConnectProgress::Installing)
+                .is_none()
+        );
+        // Cancel, then Connect again while the first is still shutting down.
+        assert!(connects.stop(ProviderKind::Claude));
+        assert!(first_cancel.is_cancelled());
+        let (retry, retry_cancel) = connects
+            .begin(ProviderKind::Claude, ConnectProgress::Installing)
+            .unwrap();
+        // The first's last step and its end change nothing of the retry's.
+        assert!(!connects.report(ProviderKind::Claude, first, ConnectProgress::SigningIn));
+        assert!(!connects.finish(ProviderKind::Claude, first, None));
+        assert_eq!(progress(&connects), [ConnectProgress::Installing]);
+        assert!(connects.report(ProviderKind::Claude, retry, ConnectProgress::SigningIn));
+        assert_eq!(progress(&connects), [ConnectProgress::SigningIn]);
+        // The retry can still be cancelled, and once ended it shows how.
+        assert!(!retry_cancel.is_cancelled());
+        let failed = ConnectProgress::Failed {
+            step: ConnectStep::SignIn,
+            error: "Signing in to Claude Code didn't finish. Try again.".into(),
+        };
+        assert!(connects.finish(ProviderKind::Claude, retry, Some(failed.clone())));
+        assert_eq!(progress(&connects), [failed]);
+        assert!(
+            connects
+                .begin(ProviderKind::Claude, ConnectProgress::SigningIn)
+                .is_some()
+        );
     }
 
     #[test]

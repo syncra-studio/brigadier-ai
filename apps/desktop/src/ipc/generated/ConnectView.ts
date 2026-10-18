@@ -2,6 +2,7 @@
 import type { AgentConnect } from "./AgentConnect";
 
 /**
- * Every agent Connect ran for since launch (one cancelled is left out).
+ * Every agent Connect ran for since launch: one cancelled is left out, and one connected
+ * once its overview is in.
  */
 export type ConnectView = { agents: Array<AgentConnect>, };

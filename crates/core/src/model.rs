@@ -1692,7 +1692,8 @@ pub struct AgentConnect {
     pub progress: ConnectProgress,
 }
 
-/// Every agent Connect ran for since launch (one cancelled is left out).
+/// Every agent Connect ran for since launch: one cancelled is left out, and one connected
+/// once its overview is in.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectView {

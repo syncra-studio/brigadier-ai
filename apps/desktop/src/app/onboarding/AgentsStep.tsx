@@ -17,7 +17,7 @@ import { shortPath } from "@/lib/format";
 import { providerStatusText } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { accountsOf, loadAccounts, refreshAccounts } from "@/state/accounts";
-import { connectAgent, connecting, useConnectProgress } from "@/state/connect";
+import { connectAgent, connecting, useConnect, useConnectProgress } from "@/state/connect";
 import { useApp } from "@/state/store";
 
 const PROVIDERS: readonly ProviderKind[] = ["claude", "codex"];
@@ -155,6 +155,9 @@ function AgentColumn({
 }) {
   const label = PROVIDER_LABELS[provider];
   const progress = useConnectProgress(provider);
+  // Asking to connect failed (the daemon was away): said like a failed Connect.
+  const askError = useConnect((s) => s.errors[provider]);
+  const failed = progress?.type === "failed" || askError !== undefined;
   const ready = state === "ready";
   // Connect said Connected and the agent's check is on its way: still busy until it arrives.
   const busy = !ready && (connecting(progress) || progress?.type === "connected");
@@ -191,13 +194,13 @@ function AgentColumn({
           </>
         ) : (
           <>
-            {progress?.type === "failed" ? "Try again" : "Connect"}
+            {failed ? "Try again" : "Connect"}
             <ArrowRight />
           </>
         )}
       </Button>
       <div className="mt-2.5 flex min-h-8 w-full flex-col items-center">
-        {busy || progress?.type === "failed" ? (
+        {busy || failed ? (
           <ConnectStatus provider={provider} retry={false} className="w-full justify-center text-start" />
         ) : (
           <output data-slot="agent-connection" className="text-muted-foreground truncate text-xs">

@@ -828,6 +828,16 @@ impl Runtime {
         }
     }
 
+    /// Checks `kind` again and waits until that check's overview is published, or `within`
+    /// passes: a refresh still running when this is asked counts only once it ran again.
+    pub async fn check_provider(self: &Arc<Self>, kind: ProviderKind, within: Duration) {
+        self.refresh_providers(Some(kind));
+        let deadline = tokio::time::Instant::now() + within;
+        while self.state().refreshing.contains(&kind) && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
     /// Checks every provider and every extra account again, and answers the generation that
     /// says when that is done: each account reports the generation its last finished check
     /// began in, and a check already running when this is asked runs once more after it.
