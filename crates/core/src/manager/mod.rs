@@ -938,7 +938,12 @@ impl ToolHost for SessionManager {
                         conversation_id, ..
                     },
                     ToolCall::Orchestrator(call),
-                ) => manager.orchestrator_call(conversation_id, call).await,
+                ) => {
+                    // On the heap, as the worker's and a Chat's arms: a debug build gives each
+                    // unboxed await of these big futures its own room in this frame, which a
+                    // landing flow runs through (#354).
+                    crate::heap(|| manager.orchestrator_call(conversation_id, call)).await
+                }
                 (
                     Role::Worker {
                         conversation_id,
@@ -946,7 +951,7 @@ impl ToolHost for SessionManager {
                         ..
                     },
                     ToolCall::Worker(call),
-                ) => manager.worker_call(conversation_id, task_id, call).await,
+                ) => crate::heap(|| manager.worker_call(conversation_id, task_id, call)).await,
                 (
                     Role::Orchestrator {
                         conversation_id, ..
@@ -976,7 +981,7 @@ impl ToolHost for SessionManager {
                 (Role::Chat { conversation_id }, ToolCall::Orchestrator(call))
                     if call.in_chat() =>
                 {
-                    manager.orchestrator_call(conversation_id, call).await
+                    crate::heap(|| manager.orchestrator_call(conversation_id, call)).await
                 }
                 (Role::Chat { conversation_id }, ToolCall::Browser(call)) => {
                     crate::heap(|| manager.browser_tool(conversation_id, None, call)).await

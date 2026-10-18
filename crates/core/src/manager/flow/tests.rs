@@ -757,7 +757,9 @@ async fn an_outline_gets_its_go_ahead_at_once_and_a_plan_review_in_the_backgroun
 /// thread's tool call, its land_phase, the landing). Before the tool dispatch's awaits went
 /// through [`crate::heap`] this flow needed over 1.5 MiB. Phase C's waits brought the landing
 /// back to 1.3; with the landing's own awaits, the manager's start and the thread's event
-/// pump on the heap too, its deepest path (a worker's launch) is about 0.95.
+/// pump on the heap too, its deepest path (a worker's launch) is about 0.95. A Chat's own
+/// orchestrator arm took it over again (#354) until the thread's and a worker's tool calls went
+/// to the heap as well.
 #[test]
 fn a_landing_flow_fits_well_inside_a_runtime_threads_stack() {
     std::thread::Builder::new()
