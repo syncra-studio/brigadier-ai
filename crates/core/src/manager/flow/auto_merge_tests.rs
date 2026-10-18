@@ -556,3 +556,62 @@ async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
     assert_eq!(data, brigadier_providers::image_base64(b"\x89PNG proof"));
     flow.stop().await;
 }
+
+/// Revert on the merge message sends the thread "Revert merge ‹sha› on ‹base› and push it the
+/// way it went in" as the user's message: one message, and the thread's revert lands on the
+/// base the way the merge went in (here, merged on this Mac on its own).
+#[tokio::test]
+async fn a_revert_from_the_merge_message_is_one_request_and_the_threads_revert_lands() {
+    let flow = Flow::start(
+        "auto-merge-revert",
+        Options {
+            auto_merge: true,
+            ..Options::default()
+        },
+        script(|turn| async move {
+            if !turn.is_orchestrator() {
+                return Reply::text("Done.");
+            }
+            let workspace = &turn.add_dirs[0];
+            if turn.input.contains("Ship it.") {
+                std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
+                git(workspace, &["add", "NOTES.md"]);
+                git(workspace, &["commit", "-q", "-m", "Add notes"]);
+            } else if let Some(rest) = turn.input.split("Revert merge ").nth(1) {
+                let sha = rest.split_whitespace().next().unwrap();
+                git(workspace, &["revert", "--no-edit", sha]);
+            } else {
+                return Reply::text("Noted.");
+            }
+            let reply = turn.call("finish_session", json!({})).await;
+            assert!(!reply.is_error, "{}", reply.text);
+            Reply::text("Merged.")
+        }),
+    )
+    .await;
+    flow.say("Ship it.").await;
+    let board = flow.settled().await;
+    assert!(super::thread_tests::on_main(&flow, "NOTES.md"));
+    let merged = merges(&board)[0].1.clone().unwrap();
+    // The request the merge message's Revert sends.
+    let revert = format!(
+        "Revert merge {} on main and push it the way it went in",
+        &merged[..7]
+    );
+    flow.say(&revert).await;
+    let board = flow.settled().await;
+    assert!(!super::thread_tests::on_main(&flow, "NOTES.md"));
+    assert_eq!(merges(&board).len(), 2, "{:?}", merges(&board));
+    let messages = flow
+        .core
+        .list_messages(flow.conversation.clone(), None, 50)
+        .await
+        .unwrap()
+        .messages;
+    let asked = messages
+        .iter()
+        .filter(|message| message.role == crate::model::MessageRole::User && message.text == revert)
+        .count();
+    assert_eq!(asked, 1);
+    flow.stop().await;
+}

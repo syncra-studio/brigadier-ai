@@ -15,3 +15,13 @@ test("the merge message shows the thread's screenshot and recording", { timeout:
   assert.equal(seen.rows, 0);
   assert.deepEqual(seen.read, ["proof-shot", "proof-video"]);
 });
+
+// Revert on the merge message sends the thread its fixed request once, shown as the user's.
+test("Revert on the merge message sends the fixed request once", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "merge-message.html?drive=1", "merge-message-result", 15000)) as { revert: Record<string, unknown> };
+  assert.deepEqual(seen.revert, {
+    shown: "Revert",
+    sent: ["Revert merge f00dfee (PR #7) on main and push it the way it went in"],
+    after: "Revert asked",
+  });
+});
