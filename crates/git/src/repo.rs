@@ -1609,7 +1609,7 @@ impl Repo {
         let args = ["fetch", "--quiet", "--no-tags", "--end-of-options", &remote];
         let env: Environment = vec![("GIT_TERMINAL_PROMPT".into(), "0".into())];
         self.git
-            .checked_within(Some(&self.root), &args, &env, limit)?;
+            .checked_within(Some(&self.root), &args, false, &env, limit)?;
         Ok(())
     }
 

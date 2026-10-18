@@ -502,7 +502,7 @@ impl Runtime {
         &self.platform
     }
 
-    /// The folders the user's own sessions of each CLI ran in.
+    /// The folders the user's own sessions of each CLI ran in, the latest used first.
     pub async fn past_folders(&self) -> Vec<(ProviderKind, PastFolder)> {
         let (claude, codex) = tokio::join!(self.claude.past_folders(), self.codex.past_folders());
         let claude = claude
@@ -511,7 +511,9 @@ impl Runtime {
         let codex = codex
             .into_iter()
             .map(|folder| (ProviderKind::Codex, folder));
-        claude.chain(codex).collect()
+        let mut folders: Vec<_> = claude.chain(codex).collect();
+        folders.sort_by_key(|(_, folder)| std::cmp::Reverse(folder.last_active_ms));
+        folders
     }
 
     /// Whether CLI session `native_id` of `kind` took `needle` as input, by its transcript.

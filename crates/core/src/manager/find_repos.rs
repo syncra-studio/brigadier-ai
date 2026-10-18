@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::past_projects::skipped_roots;
+use super::past_projects::{repos_of, skipped_roots};
 use super::{SessionManager, blocking};
 use crate::Result;
 use crate::model::RepoSuggestion;
@@ -70,18 +70,21 @@ impl SessionManager {
             };
             // Where the user worked lately: those repositories, and the folders beside them.
             let mut near = Vec::new();
-            for (_, folder) in past {
-                let Ok(cwd) = folder.cwd.canonicalize() else {
-                    continue;
-                };
-                if is_skipped(&cwd) {
-                    continue;
-                }
-                if let Ok(Some(repo)) = git.find_repo(&cwd)
+            let past: Vec<_> = past
+                .into_iter()
+                .filter_map(|(_, folder)| {
+                    let cwd = folder.cwd.canonicalize().ok()?;
+                    (!is_skipped(&cwd)).then_some((cwd, folder.last_active_ms))
+                })
+                .collect();
+            let cwds: Vec<_> = past.iter().map(|(cwd, _)| cwd.clone()).collect();
+            let repos = repos_of(&git, &cwds);
+            for (cwd, used) in past {
+                if let Some(repo) = repos.get(&cwd)
                     && !is_skipped(&repo.root)
                 {
                     near.extend(repo.root.parent().map(Path::to_owned));
-                    note(repo.root, folder.last_active_ms);
+                    note(repo.root.clone(), used);
                 }
             }
             // The projects' own, wherever they are.

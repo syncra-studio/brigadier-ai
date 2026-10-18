@@ -1,9 +1,13 @@
 //! The first run's project suggestions: the repositories the user's own Claude Code and Codex
 //! sessions worked in, one per repository however many folders and worktrees of it they used.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
+use brigadier_git::{FoundRepo, Git};
 use brigadier_providers::ProviderKind;
 
 use super::{SessionManager, blocking};
@@ -21,20 +25,18 @@ impl SessionManager {
         blocking(move || {
             let skipped = skipped_roots(&data_dir);
             let is_skipped = |path: &Path| skipped.iter().any(|root| path.starts_with(root));
-            // Several CLIs (and sessions) share folders: look each one up once.
-            let mut repos: HashMap<PathBuf, Option<brigadier_git::FoundRepo>> = HashMap::new();
+            let past: Vec<_> = past
+                .into_iter()
+                .filter_map(|(provider, folder)| {
+                    let cwd = folder.cwd.canonicalize().ok()?;
+                    (!is_skipped(&cwd)).then_some((provider, folder, cwd))
+                })
+                .collect();
+            let cwds: Vec<_> = past.iter().map(|(_, _, cwd)| cwd.clone()).collect();
+            let repos = repos_of(&git, &cwds);
             let mut found: HashMap<PathBuf, ProjectCandidate> = HashMap::new();
-            for (provider, folder) in past {
-                let Ok(cwd) = folder.cwd.canonicalize() else {
-                    continue;
-                };
-                if is_skipped(&cwd) {
-                    continue;
-                }
-                let repo = repos
-                    .entry(cwd.clone())
-                    .or_insert_with(|| git.find_repo(&cwd).ok().flatten());
-                let Some(repo) = repo else {
+            for (provider, folder, cwd) in past {
+                let Some(repo) = repos.get(&cwd) else {
                     continue;
                 };
                 if is_skipped(&repo.root) {
@@ -97,6 +99,43 @@ pub(super) fn skipped_roots(data_dir: &Path) -> BTreeSet<PathBuf> {
         .collect()
 }
 
+/// How long git may take to say which repository one past session's folder is in, and all of
+/// them together: a folder git gets stuck in is passed over, and so are the rest once the time
+/// is up, so the lists built from them always come.
+const PROBE_LIMIT: Duration = Duration::from_secs(1);
+const PROBES_BUDGET: Duration = Duration::from_secs(3);
+/// Folders looked up at once.
+const PROBES_AT_ONCE: usize = 8;
+
+/// The repository each of `folders` (canonical) is in, those in none left out. Each folder is
+/// looked up once, a few at a time, the first ones first.
+pub(super) fn repos_of(git: &Git, folders: &[PathBuf]) -> HashMap<PathBuf, FoundRepo> {
+    let deadline = Instant::now() + PROBES_BUDGET;
+    let mut seen = HashSet::new();
+    let folders: Vec<&PathBuf> = folders.iter().filter(|dir| seen.insert(*dir)).collect();
+    let next = AtomicUsize::new(0);
+    let found = Mutex::new(HashMap::new());
+    std::thread::scope(|scope| {
+        for _ in 0..PROBES_AT_ONCE.min(folders.len()) {
+            scope.spawn(|| {
+                while let Some(folder) = folders.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    if let Ok(Some(repo)) = git.find_repo_within(folder, left.min(PROBE_LIMIT)) {
+                        found
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .insert((*folder).clone(), repo);
+                    }
+                }
+            });
+        }
+    });
+    found.into_inner().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// `owner/name` from a remote URL (`git@host:owner/name.git`, `https://host/owner/name`),
 /// else the folder's name.
 fn repo_name(origin: Option<&str>, root: &Path) -> String {
@@ -120,4 +159,56 @@ fn repo_name(origin: Option<&str>, root: &Path) -> String {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.display().to_string())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn folders_git_never_answers_for_are_passed_over_without_holding_up_the_rest() {
+        let dir =
+            std::env::temp_dir().join(format!("brigadier-repo-probe-{}", uuid::Uuid::now_v7()));
+        let folders: Vec<_> = (0..20).map(|n| dir.join(format!("folder-{n}"))).collect();
+        for folder in &folders {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let stuck = dir.join("git");
+        std::fs::write(&stuck, "#!/bin/sh\nsleep 20\n").unwrap();
+        let mut permissions = std::fs::metadata(&stuck).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&stuck, permissions).unwrap();
+        let started = Instant::now();
+        let found = repos_of(&Git::new(stuck, Vec::new()), &folders);
+        let took = started.elapsed();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(found.is_empty());
+        assert!(
+            took < PROBES_BUDGET + Duration::from_secs(2),
+            "took {took:?}"
+        );
+    }
+
+    #[test]
+    fn many_folders_git_answers_for_quickly_are_all_looked_up_in_time() {
+        let git = Git::new("git".into(), std::env::vars_os().collect());
+        let dir =
+            std::env::temp_dir().join(format!("brigadier-repo-probe-{}", uuid::Uuid::now_v7()));
+        git.init(&dir.join("repo")).unwrap();
+        std::fs::create_dir_all(dir.join("plain")).unwrap();
+        let root = dir.join("repo").canonicalize().unwrap();
+        let mut folders: Vec<_> = (0..150).map(|n| root.join(format!("folder-{n}"))).collect();
+        for folder in &folders {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let plain = dir.join("plain").canonicalize().unwrap();
+        folders.push(plain.clone());
+        folders.push(folders[0].clone());
+        let found = repos_of(&git, &folders);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(found.len(), 150);
+        assert!(found.values().all(|repo| repo.root == root));
+        assert!(!found.contains_key(&plain));
+    }
 }

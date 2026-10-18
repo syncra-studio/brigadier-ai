@@ -139,22 +139,55 @@ impl Git {
     /// The repository a folder is in: its main checkout's top level (also for a folder in a
     /// linked worktree) and its `origin` URL. `None` when the folder is in no repository.
     pub fn find_repo(&self, path: &Path) -> Result<Option<FoundRepo>> {
-        let out = self.run(
-            Some(path),
+        self.find_repo_by(path, None)
+    }
+
+    /// [`Self::find_repo`] that gives up when the lookup takes over `limit`: git is stopped
+    /// then and an error returned.
+    pub fn find_repo_within(
+        &self,
+        path: &Path,
+        limit: std::time::Duration,
+    ) -> Result<Option<FoundRepo>> {
+        self.find_repo_by(path, Some(limit))
+    }
+
+    fn find_repo_by(
+        &self,
+        path: &Path,
+        limit: Option<std::time::Duration>,
+    ) -> Result<Option<FoundRepo>> {
+        let deadline = limit.map(|limit| std::time::Instant::now() + limit);
+        // What git printed, `None` when it said no.
+        let ask = |dir: &Path, args: &[&str]| -> Result<Option<Vec<u8>>> {
+            match deadline {
+                None => {
+                    let out = self.run(Some(dir), args, true, &[], None)?;
+                    Ok(out.status.success().then_some(out.stdout))
+                }
+                Some(deadline) => {
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    match self.checked_within(Some(dir), args, true, &[], left) {
+                        Ok(stdout) => Ok(Some(stdout)),
+                        Err(Error::Command { .. }) => Ok(None),
+                        Err(err) => Err(err),
+                    }
+                }
+            }
+        };
+        let Some(out) = ask(
+            path,
             &[
                 "rev-parse",
                 "--path-format=absolute",
                 "--show-toplevel",
                 "--git-common-dir",
             ],
-            true,
-            &[],
-            None,
-        )?;
-        if !out.status.success() {
+        )?
+        else {
             return Ok(None);
-        }
-        let text = String::from_utf8_lossy(&out.stdout);
+        };
+        let text = String::from_utf8_lossy(&out);
         let mut lines = text.lines();
         let (Some(toplevel), Some(common)) = (lines.next(), lines.next()) else {
             return Ok(None);
@@ -166,14 +199,8 @@ impl Git {
             _ => Path::new(toplevel),
         };
         let root = fs::canonicalize(root)?;
-        let origin = self.run(
-            Some(&root),
-            &["config", "--get", "remote.origin.url"],
-            true,
-            &[],
-            None,
-        )?;
-        let origin = String::from_utf8_lossy(&origin.stdout).trim().to_owned();
+        let origin = ask(&root, &["config", "--get", "remote.origin.url"])?.unwrap_or_default();
+        let origin = String::from_utf8_lossy(&origin).trim().to_owned();
         Ok(Some(FoundRepo {
             root,
             origin: (!origin.is_empty()).then_some(origin),
@@ -262,15 +289,17 @@ impl Git {
         }
     }
 
-    /// [`Self::checked`] that gives up after `limit`: git is killed then, and reaped.
+    /// [`Self::checked`] that gives up after `limit`: git is killed then, and reaped. A
+    /// `read_only` command holds no locks, so it isn't given time to remove them.
     pub(crate) fn checked_within<S: AsRef<OsStr>>(
         &self,
         path: Option<&Path>,
         args: &[S],
+        read_only: bool,
         extra: &[(OsString, OsString)],
         limit: std::time::Duration,
     ) -> Result<Vec<u8>> {
-        let mut command = self.command(path, args, false, extra, false);
+        let mut command = self.command(path, args, read_only, extra, false);
         // Its own process group, so what git started (ssh, a credential helper) stops with it.
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
@@ -287,23 +316,30 @@ impl Git {
         let out = read(child.stdout.take().map(|p| Box::new(p) as _));
         let err = read(child.stderr.take().map(|p| Box::new(p) as _));
         let deadline = std::time::Instant::now() + limit;
+        // Looked at often at first, so a quick command is answered at once.
+        let mut pause = std::time::Duration::from_millis(1);
         let status = loop {
             if let Some(status) = child.try_wait()? {
                 break Some(status);
             }
             if std::time::Instant::now() >= deadline {
-                // Asked first, so git removes the locks it holds; killed if it doesn't go.
-                signal_group(&child, false);
-                let grace = std::time::Instant::now() + std::time::Duration::from_secs(2);
-                while child.try_wait()?.is_none() && std::time::Instant::now() < grace {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+                if !read_only {
+                    // Asked first, so git removes the locks it holds; killed if it doesn't go.
+                    signal_group(&child, false);
+                    let grace = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                    while child.try_wait()?.is_none() && std::time::Instant::now() < grace {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
                 }
                 signal_group(&child, true);
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
             }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(
+                pause.min(deadline.saturating_duration_since(std::time::Instant::now())),
+            );
+            pause = (pause * 2).min(std::time::Duration::from_millis(50));
         };
         // What git started and left behind goes too.
         signal_group(&child, true);
@@ -560,4 +596,51 @@ fn drain(pipe: Option<impl std::io::Read>) -> Vec<u8> {
         let _ = pipe.read_to_end(&mut bytes);
     }
     bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_repo_within_answers_as_find_repo_does() {
+        let git = Git::new("git".into(), std::env::vars_os().collect());
+        let dir = std::env::temp_dir().join(format!(
+            "brigadier-find-repo-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let main = dir.join("main");
+        let linked = dir.join("linked");
+        let plain = dir.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        git.init(&main).unwrap();
+        let run = |args: &[&str]| git.checked(Some(&main), args, false, &[], None).unwrap();
+        run(&["remote", "add", "origin", "git@example.com:team/app.git"]);
+        run(&[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "side",
+            linked.to_str().unwrap(),
+        ]);
+        let limit = std::time::Duration::from_secs(10);
+        let root = fs::canonicalize(&main).unwrap();
+        for folder in [&main, &linked] {
+            let found = git.find_repo_within(folder, limit).unwrap();
+            assert_eq!(found, git.find_repo(folder).unwrap());
+            let found = found.unwrap();
+            assert_eq!(found.root, root);
+            assert_eq!(
+                found.origin.as_deref(),
+                Some("git@example.com:team/app.git")
+            );
+        }
+        assert_eq!(git.find_repo_within(&plain, limit).unwrap(), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
