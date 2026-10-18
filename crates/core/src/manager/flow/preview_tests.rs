@@ -210,6 +210,7 @@ async fn a_preview_runs_in_the_workspace_and_outlives_the_threads_cli() {
     assert!(running(&flow.board().await).len() == 1);
 
     // A fresh CLI (as after a rebirth or a fallback, which close the old one) reads its log.
+    flow.settled().await;
     flow.say("Show me the log.").await;
     flow.until("the log", |_| replies.lock().unwrap().len() == 2)
         .await;
@@ -238,6 +239,7 @@ async fn a_preview_runs_in_the_workspace_and_outlives_the_threads_cli() {
     assert_eq!(bytes, b"listening on 8123\n");
     assert!(alive(&flow, pid));
 
+    flow.settled().await;
     flow.say("Please stop it.").await;
     flow.until("the stop", |_| replies.lock().unwrap().len() == 3)
         .await;
@@ -1326,6 +1328,8 @@ async fn a_web_preview_runs_once_a_port_its_group_listens_on_answers() {
         !processes.descendants(leader).unwrap().contains(&server),
         "its launcher exited, so it was reparented"
     );
+    // The start's turn over: a message sent into it would join it, and this script reads none.
+    flow.settled().await;
     flow.say("Please stop it.").await;
     flow.until("the stop", |_| replies.lock().unwrap().len() == 2)
         .await;
