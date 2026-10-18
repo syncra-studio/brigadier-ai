@@ -77,6 +77,7 @@ import {
   CommentaryMessageText,
   MessageText,
   StreamingMessageText,
+  TimeSeparator,
 } from "@/components/assistant-ui/thread";
 import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
 import { jumpInThread } from "@/components/assistant-ui/thread-scroll";
@@ -320,6 +321,8 @@ function entryKey(entry: Entry): string {
       return `compaction:${entry.compaction.id}`;
     case "row":
       return `task:${entry.row.taskId}:${entry.position}`;
+    case "gap":
+      return `gap:${entry.position}`;
   }
 }
 
@@ -412,6 +415,8 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: boolean
       return <CompactionRow compaction={entry.compaction} />;
     case "row":
       return <TeamSentence row={entry.row} />;
+    case "gap":
+      return <TimeSeparator atMs={entry.atMs} className="py-2" />;
   }
 };
 

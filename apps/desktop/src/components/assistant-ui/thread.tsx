@@ -743,9 +743,18 @@ const DaySeparator: FC = () => {
   });
   const now = useNow(60_000);
   if (!separatesTurn(sentAt, previous, now)) return null;
+  return <TimeSeparator atMs={sentAt} className="pt-2 pb-4" />;
+};
+
+/**
+ * "Today 3:36 PM", centred: where more than an hour passed, above a user's message or inside
+ * the thread's turn (#130).
+ */
+export const TimeSeparator: FC<{ atMs: number; className?: string }> = ({ atMs, className }) => {
+  const now = useNow(60_000);
   return (
-    <p className="text-muted-foreground self-stretch pt-2 pb-4 text-center text-sm">
-      {formatDaySeparator(sentAt, now)}
+    <p data-slot="time-separator" className={cn("text-muted-foreground self-stretch text-center text-sm", className)}>
+      {formatDaySeparator(atMs, now)}
     </p>
   );
 };

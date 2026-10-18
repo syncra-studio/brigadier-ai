@@ -186,3 +186,11 @@ row above the composer (a muted shield, "Full access: workers run without asking
 Don't show again and ×). `drive=1` scrolls the thread to its bottom, measures the line and the thread's
 last row, closes it with × and writes JSON into `#full-access-notice-result`;
 `FullAccessNoticeRender.test.ts` checks it. This entry is absent from the production build.
+
+# A pause inside a turn
+
+`/fixtures/thread-gaps.html` is a session whose one finished turn paused for over two hours between its
+steps. Its opened work shows the first group, a centred time line at the moment the work went on (as
+above a user's message sent after an hour or more), then the second group. It writes what it saw as
+JSON into `#thread-gaps-result`; `ThreadGapsRender.test.ts` checks it. `stop=1` holds the page for a
+screenshot. This entry is absent from the production build.

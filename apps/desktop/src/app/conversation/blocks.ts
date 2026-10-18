@@ -25,6 +25,7 @@ import type {
   WorkerStepKind,
   WorkSpan,
 } from "@/ipc/generated";
+import { SEPARATOR_GAP_MS } from "@/lib/format";
 import type { Board } from "@/state/board";
 import { shownIdOf } from "@/state/shownIds";
 import type { PendingMessage } from "@/state/store";
@@ -62,6 +63,8 @@ export type BlockText = {
   answerAtMs?: number;
   /** It streams, and its CLI said it is a line between the turn's steps. */
   commentary?: boolean;
+  /** When it was written (a reply still streaming: when it started). */
+  atMs?: number;
 };
 
 /**
@@ -758,6 +761,7 @@ export function buildBlocks(
         update: isUpdate(item.text),
         ...(anchors && { anchors }),
         ...(message.answerAtMs !== undefined && { answerAtMs: message.answerAtMs }),
+        atMs: message.createdAtMs,
       });
       continue;
     }
@@ -792,6 +796,7 @@ export function buildBlocks(
       update: isUpdate(streaming.text),
       ...(streaming.phase === "answer" && { answerAtMs: streaming.startedAtMs }),
       ...(streaming.phase === "commentary" && { commentary: true }),
+      atMs: streaming.startedAtMs,
     });
   }
 
@@ -974,7 +979,7 @@ function joinSteered(blocks: Block[], requests: BoardDigest["requests"]): Block[
 
 /** What a block's work is made of, as its message metadata carries it. */
 export type SequenceSource = {
-  texts: readonly { position: number; anchors?: readonly string[]; answerAtMs?: number }[];
+  texts: readonly { position: number; anchors?: readonly string[]; answerAtMs?: number; atMs?: number }[];
   cards: readonly BlockCard[];
   steers: readonly { position: number; text: string; atMs: number; attachments: readonly AttachmentRef[]; requestId?: string; peer?: PeerOf }[];
   compactions: readonly BlockCompaction[];
@@ -992,7 +997,9 @@ export type SequenceEntry =
   | { kind: "steer"; text: string; atMs: number; attachments: readonly AttachmentRef[]; position: number; requestId?: string; peer?: PeerOf }
   | { kind: "orchestrator"; steps: BlockOrchestratorStep[]; position: number }
   | { kind: "compaction"; compaction: BlockCompaction; position: number }
-  | { kind: "row"; row: BlockRow; position: number };
+  | { kind: "row"; row: BlockRow; position: number }
+  /** More than an hour passed in the turn before what follows, which came at `atMs` (#130). */
+  | { kind: "gap"; atMs: number; position: number };
 
 /** Whether a lead's step is an image the thread looked at or made: its row stands apart from the work. */
 export function isImageStep(step: BlockOrchestratorStep): boolean {
@@ -1053,7 +1060,49 @@ export function blockSequence(source: SequenceSource): SequenceEntry[] {
     }
     merged.push(entry);
   }
-  return waves(merged);
+  return gaps(waves(merged), source.texts);
+}
+
+/** When an entry began and when it last did something, as far as the thread knows. */
+function entryTimes(entry: SequenceEntry, texts: SequenceSource["texts"]): { from?: number | undefined; to?: number | undefined } {
+  switch (entry.kind) {
+    case "thinking":
+      return { from: entry.segment.startedAtMs, to: entry.segment.updatedAtMs };
+    case "text": {
+      const text = texts[entry.index];
+      return { from: text?.answerAtMs ?? text?.atMs, to: text?.atMs };
+    }
+    case "steer":
+      return { from: entry.atMs, to: entry.atMs };
+    case "orchestrator": {
+      const ends = entry.steps.map((step) => (step.kind.type === "tool" ? step.kind.endedAtMs : undefined) ?? step.atMs);
+      return { from: entry.steps[0]?.atMs, to: ends.every((end) => end !== undefined) ? Math.max(...ends) : undefined };
+    }
+    case "compaction":
+      return { from: entry.compaction.startedAtMs, to: entry.compaction.endedAtMs ?? entry.compaction.startedAtMs };
+    default:
+      // Cards and team sentences carry no time of their own here.
+      return {};
+  }
+}
+
+/**
+ * A "time passed" line inside the turn: between two things the thread did more than an hour
+ * apart, as above a user's message sent more than an hour after the one before it (#130).
+ */
+function gaps(entries: SequenceEntry[], texts: SequenceSource["texts"]): SequenceEntry[] {
+  const out: SequenceEntry[] = [];
+  let reached: number | undefined;
+  for (const entry of entries) {
+    const { from, to } = entryTimes(entry, texts);
+    if (from !== undefined && reached !== undefined && from - reached > SEPARATOR_GAP_MS) {
+      out.push({ kind: "gap", atMs: from, position: entry.position });
+    }
+    const latest = to ?? from;
+    if (latest !== undefined) reached = Math.max(reached ?? latest, latest);
+    out.push(entry);
+  }
+  return out;
 }
 
 /**

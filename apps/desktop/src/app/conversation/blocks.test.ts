@@ -871,3 +871,31 @@ test("a request that works again after its answer reads as reopened, not as stil
   assert.equal(reopenedSince([{ fromMs: 1_000, toMs: 6_000 }], 5_000), false);
   assert.equal(reopenedSince([{ fromMs: 9_000, toMs: null }], undefined), false);
 });
+
+const gapCall = (position: number, atMs: number, endedAtMs: number) => ({
+  position,
+  atMs,
+  kind: { type: "tool" as const, itemId: `c${position}`, name: "Read", detail: "a.ts", status: "completed" as const, throughPosition: position, endedAtMs },
+});
+const gapKinds = (steps: ReturnType<typeof gapCall>[], texts: { position: number; atMs: number }[]) =>
+  blockSequence({ texts, cards: [], steers: [], compactions: [], orchestratorSteps: steps, rows: [] }).map((entry) =>
+    entry.kind === "gap" ? `gap@${entry.atMs}` : entry.kind,
+  );
+
+test("more than an hour between two things a turn did puts a time line between them, never at its edges", () => {
+  const HOUR = 3_600_000;
+  const call = gapCall;
+  // Two hours after the first call ended, the next one: a line, at the time it came.
+  assert.deepEqual(gapKinds([call(1, 0, 1000), call(2, 2 * HOUR, 2 * HOUR + 1000)], [{ position: 3, atMs: 2 * HOUR + 5000 }]), [
+    "orchestrator",
+    `gap@${2 * HOUR}`,
+    "orchestrator",
+    "text",
+  ]);
+  // A call that itself ran two hours says so on its row: no line after it.
+  assert.deepEqual(gapKinds([call(1, 0, 2 * HOUR), call(2, 2 * HOUR + 1000, 2 * HOUR + 2000)], []), ["orchestrator", "orchestrator"]);
+  // An hour or less: none.
+  assert.deepEqual(gapKinds([call(1, 0, 1000), call(2, HOUR, HOUR + 1000)], []), ["orchestrator", "orchestrator"]);
+  // The answer written long after the work: the line comes before it.
+  assert.deepEqual(gapKinds([call(1, 0, 1000)], [{ position: 2, atMs: 3 * HOUR }]), ["orchestrator", `gap@${3 * HOUR}`, "text"]);
+});
