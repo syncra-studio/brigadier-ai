@@ -53,7 +53,7 @@ use crate::model::{
 };
 use crate::routing::{TokenMeter, WriteCause};
 use crate::runtime::{is_delta, merge_delta};
-use crate::sessions::{inline_image_tokens, inline_paste, place_inline_paste, push_block};
+use crate::sessions::{inline_image_tokens, inline_paste, place_inline_pastes, push_block};
 use crate::tools::{Role, RunTools};
 use crate::work::{
     AttachmentRef, Compaction, CompactionState, ContextInjection, HeldBy, InjectionKind,
@@ -3782,7 +3782,7 @@ impl SessionManager {
                     self.attachment_file(conv, attachment).await,
                 );
             }
-            let mut text = name_inline_images(
+            let text = name_inline_images(
                 &user_text,
                 &message.attachments,
                 &copied,
@@ -3790,18 +3790,15 @@ impl SessionManager {
                 &mut files,
             );
             // Text pasted as a chip goes where it was pasted, marked as the user's paste.
+            let mut pastes = Vec::new();
             for attachment in &message.attachments {
                 if let Some(n) = inline_paste(attachment)
                     && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
                 {
-                    place_inline_paste(
-                        &mut text,
-                        n,
-                        &pasted_inline(&pasted, attachment, conv.kind),
-                    );
+                    pastes.push((n, pasted_inline(&pasted, attachment, conv.kind)));
                 }
             }
-            let mut inline = vec![InputPart::Text(text)];
+            let mut inline = vec![InputPart::Text(place_inline_pastes(&text, &pastes))];
             for attachment in plan.rows.iter().filter(|a| a.inline.is_none()) {
                 if attachment.pasted
                     && let Ok(pasted) = self.core.read_blob_text(attachment.id.clone()).await
@@ -4023,21 +4020,22 @@ impl SessionManager {
     /// Everything the user wrote in a message: what they typed, with the texts they pasted as
     /// chips where they pasted them, then the texts they pasted as cards.
     pub(super) async fn full_words(&self, message: &Message) -> String {
-        let mut words = self.full_text(message).await;
         let (chips, cards): (Vec<_>, Vec<_>) = message
             .attachments
             .iter()
             .filter(|attachment| attachment.pasted)
             .cloned()
             .partition(|attachment| inline_paste(attachment).is_some());
+        let mut pastes = Vec::new();
         for chip in &chips {
             if let (Some(n), Ok(pasted)) = (
                 inline_paste(chip),
                 self.core.read_blob_text(chip.id.clone()).await,
             ) {
-                place_inline_paste(&mut words, n, &pasted);
+                pastes.push((n, pasted));
             }
         }
+        let mut words = place_inline_pastes(&self.full_text(message).await, &pastes);
         for pasted in self.core.pasted_texts(&cards).await {
             push_block(&mut words, &pasted);
         }

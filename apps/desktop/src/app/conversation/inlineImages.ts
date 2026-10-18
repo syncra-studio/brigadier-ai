@@ -67,6 +67,32 @@ export function splitAtImages(text: string): (string | number)[] {
     .filter((piece) => piece !== "");
 }
 
+/**
+ * `text` in pieces around its `[Image #n]` and `[Pasted text #n]` markers: the text between
+ * them, and each marker's kind and number.
+ */
+export function splitAtMarkers(text: string): (string | { kind: InlineKind; n: number })[] {
+  return text
+    .split(/(\[Image #\d+\]|\[Pasted text #\d+\])/)
+    .map((piece, index) => {
+      if (index % 2 === 0) return piece;
+      const marker = inlineMarkerAt(piece, 0)!;
+      return { kind: marker.kind, n: marker.n };
+    })
+    .filter((piece) => piece !== "");
+}
+
+/**
+ * Pasted `text` with each pasted text that came with it renumbered (`numbers`); the marker of
+ * one that didn't come with it becomes plain words, as `renumberImages` does for images.
+ */
+export function renumberPastes(text: string, numbers: ReadonlyMap<number, number>): string {
+  return text.replace(PASTE, (_, digits: string) => {
+    const next = numbers.get(Number(digits));
+    return next === undefined ? `Pasted text #${digits}` : pasteMarker(next);
+  });
+}
+
 /** `text` as words: each `[Image #n]` of an image pasted into it (`numbers`) as "Image #n". */
 export function namedImages(text: string, numbers: Iterable<number>): string {
   let words = text;

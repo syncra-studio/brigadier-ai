@@ -51,10 +51,12 @@ import {
   markersIn,
   nextImageNumber,
   pastedImageNumbers,
+  pasteMarkersIn,
   pastesInline,
   renumberImages,
+  renumberPastes,
   sameImages,
-  splitAtImages,
+  splitAtMarkers,
 } from "@/app/conversation/inlineImages";
 import { mentionOf } from "@/app/conversation/Mentions";
 import { chipContent, pastedText, pasteKind, structuredHtml } from "@/app/conversation/pasteContent";
@@ -64,6 +66,7 @@ import {
   AttachmentReaderContext,
   type AttachmentSource,
   inlineImageFile,
+  inlinePastedFile,
   pastedTextFile,
 } from "@/components/assistant-ui/elements/attachment-tile";
 import {
@@ -290,9 +293,9 @@ function ComposerKeys({
     // Lexical puts the selection's text on the clipboard; its images are noted here, and the
     // clipboard marked as theirs.
     const copy = (event: ClipboardEvent | KeyboardEvent | null) => {
-      copiedImages = copiedFrom($getSelection()?.getTextContent() ?? "", aui, reader);
-      if (copiedImages && event instanceof ClipboardEvent) {
-        event.clipboardData?.setData(COPIED_IMAGES_TYPE, copiedImages.token);
+      copiedChips = copiedFrom($getSelection()?.getTextContent() ?? "", aui, reader);
+      if (copiedChips && event instanceof ClipboardEvent) {
+        event.clipboardData?.setData(COPIED_CHIPS_TYPE, copiedChips.token);
       }
       return false;
     };
@@ -351,22 +354,24 @@ function ComposerKeys({
           const files = [...event.clipboardData.files];
           const text = event.clipboardData.getData("text/plain");
           const composer = aui.composer();
-          const context = { editor, formatter, aui, reader, adapter, deleted, privateLogs };
-          // Chips cut or copied with their images come back as chips, however long their text.
-          const copied = copiedImagesOn(event.clipboardData, text);
+          const context = { editor, formatter, aui, reader, adapter, deleted, deletedPastes, privateLogs };
+          // Chips cut or copied with their images and texts come back as chips, however long
+          // their text.
+          const copied = copiedChipsOn(event.clipboardData, text);
           if (files.length === 0) {
             // oxlint-disable-next-line no-underscore-dangle -- Lexical's only way to the editor's namespace
             const paste = pastedText(event.clipboardData, editor._config.namespace);
-            if (copied.size === 0 && pasteKind(paste, structuredHtml) === "chip") {
+            if (!copied && pasteKind(paste, structuredHtml) === "chip") {
               event.preventDefault();
-              pasteChipText(chipContent(paste), { ...context, deletedPastes });
+              pasteChipText(chipContent(paste), context);
               return true;
             }
             // The rest the field pastes itself (formatted, where it has formatting), but
-            // `[Image #n]` markers, whose images come along or which become words.
-            if (imageMarkersIn(text).size === 0) return false;
+            // `[Image #n]` and `[Pasted text #n]` markers, whose images and texts come along
+            // or which become words.
+            if (imageMarkersIn(text).size === 0 && pasteMarkersIn(text).size === 0) return false;
             event.preventDefault();
-            pasteWithImages(text, copied, context);
+            pasteWithImages(text, copied ?? NOTHING_COPIED, context);
             return true;
           }
           event.preventDefault();
@@ -406,41 +411,53 @@ function ComposerKeys({
 /** The images of deleted chips by their number, until the composer is sent or cleared. */
 type DeletedImages = Map<number, File | CreateAttachment>;
 
+/** The images and pasted texts of chips cut or copied, by number. */
+type CopiedChips = {
+  images: ReadonlyMap<number, AttachmentSource>;
+  pastes: ReadonlyMap<number, AttachmentSource>;
+};
+
+const NOTHING_COPIED: CopiedChips = { images: new Map(), pastes: new Map() };
+
 /**
- * The images of the chips last cut or copied from a composer, by number, with the text that
- * went on the clipboard and the token marking it: pasting that clipboard again, in any
- * composer, brings them along.
+ * The images and pasted texts of the chips last cut or copied from a composer, by number, with
+ * the text that went on the clipboard and the token marking it: pasting that clipboard again,
+ * in any composer, brings them along.
  */
-let copiedImages: { text: string; token: string; images: Map<number, AttachmentSource> } | null =
-  null;
+let copiedChips: (CopiedChips & { text: string; token: string }) | null = null;
 
-/** Where a cut or copy marks the clipboard as holding `copiedImages`' text. */
-const COPIED_IMAGES_TYPE = "application/x-brigadier-images";
+/** Where a cut or copy marks the clipboard as holding `copiedChips`' text. */
+const COPIED_CHIPS_TYPE = "application/x-brigadier-images";
 
-/** The images of the chips in `text` (cut or copied from the composer), if any. */
+/** The images and pasted texts of the chips in `text` (cut or copied from the composer), if any. */
 function copiedFrom(
   text: string,
   aui: ReturnType<typeof useAui>,
   reader: AttachmentReader | null,
-): typeof copiedImages {
+): typeof copiedChips {
   const { attachments } = aui.composer().getState();
-  const images = new Map<number, AttachmentSource>();
-  for (const n of imageMarkersIn(text)) {
-    const attachment = attachments.find((entry) => composerInlineNumber(entry, reader) === n);
-    if (attachment) images.set(n, { file: attachment.file, ref: reader?.composerRef(attachment.id) });
-  }
-  return images.size > 0 ? { text, token: crypto.randomUUID(), images } : null;
+  const of = (kind: InlineKind) => {
+    const found = new Map<number, AttachmentSource>();
+    for (const n of markersIn(kind, text)) {
+      const attachment = attachments.find((entry) => composerInlineNumber(entry, reader, kind) === n);
+      if (attachment) found.set(n, { file: attachment.file, ref: reader?.composerRef(attachment.id) });
+    }
+    return found;
+  };
+  const images = of("image");
+  const pastes = of("paste");
+  return images.size + pastes.size > 0 ? { text, token: crypto.randomUUID(), images, pastes } : null;
 }
 
 /**
- * The images that came along with pasted `text`: those of the last cut or copy, if this is
- * still its clipboard (not the same text copied since from elsewhere).
+ * The images and pasted texts that came along with pasted `text`: those of the last cut or
+ * copy, if this is still its clipboard (not the same text copied since from elsewhere).
  */
-function copiedImagesOn(clipboard: DataTransfer, text: string): Map<number, AttachmentSource> {
-  if (copiedImages?.text !== text || clipboard.getData(COPIED_IMAGES_TYPE) !== copiedImages.token) {
-    return new Map();
+function copiedChipsOn(clipboard: DataTransfer, text: string): CopiedChips | null {
+  if (copiedChips?.text !== text || clipboard.getData(COPIED_CHIPS_TYPE) !== copiedChips.token) {
+    return null;
   }
-  return copiedImages.images;
+  return copiedChips;
 }
 
 /** What pasting into a composer works with. */
@@ -452,6 +469,7 @@ type PasteContext = {
   reader: AttachmentReader | null;
   adapter: BlobAttachmentAdapter | null;
   deleted: DeletedImages;
+  deletedPastes: DeletedImages;
 };
 
 /** Images for a model that takes none: the message waits, as the send button says. */
@@ -701,7 +719,10 @@ function pasteImages(files: readonly File[], context: PasteContext) {
   mergeSameImages(images, pasted, context);
 }
 
-/** Whether a deleted chip's image is `source` (the chip was cut, and is pasted back). */
+/**
+ * Whether a deleted chip's image (or pasted text) is `source` (the chip was cut, and is pasted
+ * back).
+ */
 function isImage(
   image: File | CreateAttachment,
   source: AttachmentSource | undefined,
@@ -725,48 +746,87 @@ function pastedImage(
   return inlineImageFile(new File([source.file], name, { type, lastModified }), n);
 }
 
+/** `source` as the attachment for pasted text `n`: its stored reference, else its file. */
+function pastedCopy(
+  source: AttachmentSource,
+  n: number,
+  adapter: BlobAttachmentAdapter | null,
+): File | CreateAttachment | null {
+  if (source.ref && adapter) return adapter.adopt({ ...source.ref, inline: n });
+  if (!source.file) return null;
+  const { name, type, lastModified } = source.file;
+  return inlinePastedFile(new File([source.file], name, { type, lastModified }), n);
+}
+
 /**
- * Pastes text with `[Image #n]` markers in it: the chips cut or copied with it (`copied`) come
- * back as chips with their images, numbered anew where their number is taken (by an image in
- * the composer, or one undo could bring back). A marker whose image didn't come along becomes
- * plain words. A copied image the composer has already then takes that image's number.
+ * The pasted-text numbers taken in the composer: those in its text, of its pasted texts, and
+ * of deleted ones, which keep theirs while undo can bring them back.
  */
-function pasteWithImages(
-  text: string,
-  copied: ReadonlyMap<number, AttachmentSource>,
-  context: PasteContext,
-) {
-  const { editor, formatter, aui, reader, adapter, deleted } = context;
+function takenPasteNumbers({ aui, reader, deletedPastes }: PasteContext): number[] {
+  const state = aui.composer().getState();
+  return [
+    ...pasteMarkersIn(state.text),
+    ...deletedPastes.keys(),
+    ...state.attachments.flatMap((attachment) => {
+      const n = composerInlineNumber(attachment, reader, "paste");
+      return n === null ? [] : [n];
+    }),
+  ];
+}
+
+/**
+ * Pastes text with `[Image #n]` or `[Pasted text #n]` markers in it: the chips cut or copied
+ * with it (`copied`) come back as chips with their images and texts, numbered anew where their
+ * number is taken (by one in the composer, or one undo could bring back). A marker whose image
+ * or text didn't come along becomes plain words. A copied image the composer has already then
+ * takes that image's number.
+ */
+function pasteWithImages(text: string, copied: CopiedChips, context: PasteContext) {
+  const { editor, formatter, aui, reader, adapter, deleted, deletedPastes } = context;
   const composer = aui.composer();
   // A cut chip pasted back takes its number back from undo; it is attached again below.
-  const back = [...deleted].filter(([n, image]) => isImage(image, copied.get(n), reader));
-  for (const [n] of back) deleted.delete(n);
+  for (const [cut, from] of [[deleted, copied.images], [deletedPastes, copied.pastes]] as const) {
+    const back = [...cut].filter(([n, image]) => isImage(image, from.get(n), reader));
+    for (const [n] of back) cut.delete(n);
+  }
   const numbers = pastedImageNumbers(
-    [...imageMarkersIn(text)].filter((n) => copied.has(n)),
+    [...imageMarkersIn(text)].filter((n) => copied.images.has(n)),
     takenNumbers(context),
   );
-  // The chips go in first: an image's attachment counts once its chip is in the text.
+  const pasteNumbers = pastedImageNumbers(
+    [...pasteMarkersIn(text)].filter((n) => copied.pastes.has(n)),
+    takenPasteNumbers(context),
+  );
+  // The chips go in first: an attachment counts once its chip is in the text.
   const pasted = updated(
     editor,
-    () => $insertWithImageChips(renumberImages(text, numbers), formatter),
+    () => $insertWithChips(renumberPastes(renumberImages(text, numbers), pasteNumbers), formatter),
     { tag: PASTE_TAG },
   );
   const images: PastedImage[] = [];
   for (const [n, next] of numbers) {
-    const source = copied.get(n);
+    const source = copied.images.get(n);
     const image = source && pastedImage(source, next, adapter);
     if (image) images.push({ n: next, image, added: composer.addAttachment(image) });
+  }
+  for (const [n, next] of pasteNumbers) {
+    const source = copied.pastes.get(n);
+    const copy = source && pastedCopy(source, next, adapter);
+    if (copy) void composer.addAttachment(copy);
   }
   mergeSameImages(images, pasted, context);
 }
 
-/** Puts pasted `text` at the caret, its `[Image #n]` markers as chips. */
-function $insertWithImageChips(text: string, formatter: Unstable_DirectiveFormatter) {
-  for (const piece of splitAtImages(text)) {
+/** Puts pasted `text` at the caret, its `[Image #n]` and `[Pasted text #n]` markers as chips. */
+function $insertWithChips(text: string, formatter: Unstable_DirectiveFormatter) {
+  for (const piece of splitAtMarkers(text)) {
     const selection = $getSelection();
     if (!$isRangeSelection(selection)) return;
     if (typeof piece === "string") selection.insertRawText(piece);
-    else selection.insertNodes([$createDirectiveNodeWithFormatter(imageChip(piece), formatter)]);
+    else {
+      const item = piece.kind === "paste" ? pasteChip(piece.n) : imageChip(piece.n);
+      selection.insertNodes([$createDirectiveNodeWithFormatter(item, formatter)]);
+    }
   }
 }
 
@@ -802,22 +862,15 @@ function $insertChips(items: readonly Unstable_TriggerItem[], formatter: Unstabl
  */
 function pasteChipText(
   { content, markdown }: { content: string; markdown: boolean },
-  { editor, formatter, aui, reader, deletedPastes }: PasteContext & { deletedPastes: DeletedImages },
+  context: PasteContext,
 ) {
+  const { editor, formatter, aui } = context;
   const composer = aui.composer();
-  const state = composer.getState();
-  if (state.text.trim() === "") {
+  if (composer.getState().text.trim() === "") {
     void composer.addAttachment(pastedTextFile(content, { markdown }));
     return;
   }
-  const n = nextImageNumber([
-    ...markersIn("paste", state.text),
-    ...deletedPastes.keys(),
-    ...state.attachments.flatMap((attachment) => {
-      const taken = composerInlineNumber(attachment, reader, "paste");
-      return taken === null ? [] : [taken];
-    }),
-  ]);
+  const n = nextImageNumber(takenPasteNumbers(context));
   // The chip goes in first: its text's attachment counts once its chip is in the text.
   editor.update(() => $insertChips([pasteChip(n)], formatter), {
     discrete: true,

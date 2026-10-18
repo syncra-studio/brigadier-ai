@@ -95,9 +95,13 @@ export function PageEditor({ body, label, editorRef, onChange, onOpenLink, edita
       <MarkdownShortcutPlugin transformers={PAGE_TRANSFORMERS} />
       <OnChangePlugin ignoreSelectionChange onChange={(state) => onChange(state.read(() => $exportPage()))} />
       <EditorRefPlugin editorRef={editorRef} />
-      <SlashMenu />
-      <SelectionToolbar mac={mac} />
-      <DragHandles anchor={anchor} />
+      {editable && (
+        <>
+          <SlashMenu />
+          <SelectionToolbar mac={mac} />
+          <DragHandles anchor={anchor} />
+        </>
+      )}
     </LexicalComposer>
   );
 }

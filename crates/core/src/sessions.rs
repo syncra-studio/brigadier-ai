@@ -2835,32 +2835,50 @@ pub(crate) fn paste_marker(n: u32) -> String {
     format!("[Pasted text #{n}]")
 }
 
-/// Puts pasted text `n` (`content`) where the user pasted it: its first `[Pasted text #n]` in
-/// `text`, marked as pasted there by the user; any later one says it is that text again.
-/// Without one (edited out), it goes at the end, as pasted with the message.
-pub(crate) fn place_inline_paste(text: &mut String, n: u32, content: &str) {
-    let marker = paste_marker(n);
-    if text.contains(&marker) {
-        *text = text
-            .replacen(
-                &marker,
-                &format!(
-                    "[Pasted text #{n}, pasted here by the user:]\n{content}\n[end of pasted text #{n}]"
-                ),
-                1,
-            )
-            .replace(
-                &marker,
-                &format!("[Pasted text #{n} again: the same text as above]"),
-            );
-    } else {
-        push_block(
-            text,
-            &format!(
-                "[Pasted text #{n}, pasted with this message by the user:]\n{content}\n[end of pasted text #{n}]"
-            ),
-        );
+/// Puts each pasted text (`pastes`: its number and content) where the user pasted it: its
+/// first `[Pasted text #n]` in `text`, marked as pasted there by the user; any later one says
+/// it is that text again. Without one (edited out), it goes at the end, as pasted with the
+/// message. Only the message's own text is read for markers, never a pasted text put in.
+pub(crate) fn place_inline_pastes(text: &str, pastes: &[(u32, String)]) -> String {
+    const OPEN: &str = "[Pasted text #";
+    let mut placed = HashSet::new();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(OPEN) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + OPEN.len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        let paste = after[..digits]
+            .parse::<u32>()
+            .ok()
+            .filter(|_| after[digits..].starts_with(']'))
+            .and_then(|n| pastes.iter().find(|(m, _)| *m == n));
+        let Some((n, content)) = paste else {
+            out.push_str(OPEN);
+            rest = after;
+            continue;
+        };
+        if placed.insert(*n) {
+            out.push_str(&format!(
+                "[Pasted text #{n}, pasted here by the user:]\n{content}\n[end of pasted text #{n}]"
+            ));
+        } else {
+            out.push_str(&format!("[Pasted text #{n} again: the same text as above]"));
+        }
+        rest = &after[digits + 1..];
     }
+    out.push_str(rest);
+    for (n, content) in pastes {
+        if !placed.contains(n) {
+            push_block(
+                &mut out,
+                &format!(
+                    "[Pasted text #{n}, pasted with this message by the user:]\n{content}\n[end of pasted text #{n}]"
+                ),
+            );
+        }
+    }
+    out
 }
 
 /// Plain text for titles, previews and quoted snippets; never changes the stored message.
@@ -2967,18 +2985,30 @@ mod tests {
 
     #[test]
     fn pasted_text_goes_where_it_was_pasted_marked_as_the_users() {
-        let mut text = "Fix this:\n[Pasted text #1]\nand again [Pasted text #1]".to_owned();
-        place_inline_paste(&mut text, 1, "# Error\nline 2");
+        let text = place_inline_pastes(
+            "Fix this:\n[Pasted text #1]\nand again [Pasted text #1]",
+            &[(1, "# Error\nline 2".to_owned())],
+        );
         assert_eq!(
             text,
             "Fix this:\n[Pasted text #1, pasted here by the user:]\n# Error\nline 2\n[end of pasted text #1]\nand again [Pasted text #1 again: the same text as above]"
         );
         // Edited out of the text: it goes with the message, at the end.
-        let mut text = "Look".to_owned();
-        place_inline_paste(&mut text, 2, "x");
         assert_eq!(
-            text,
+            place_inline_pastes("Look", &[(2, "x".to_owned())]),
             "Look\n\n[Pasted text #2, pasted with this message by the user:]\nx\n[end of pasted text #2]"
+        );
+        // A pasted text that holds a marker itself stays as pasted: only the message's own
+        // text is read for markers.
+        assert_eq!(
+            place_inline_pastes(
+                "[Pasted text #2] then [Pasted text #1] [Pasted text #9] [Pasted text #x]",
+                &[
+                    (1, "one".to_owned()),
+                    (2, "has [Pasted text #1] in it".to_owned())
+                ],
+            ),
+            "[Pasted text #2, pasted here by the user:]\nhas [Pasted text #1] in it\n[end of pasted text #2] then [Pasted text #1, pasted here by the user:]\none\n[end of pasted text #1] [Pasted text #9] [Pasted text #x]"
         );
         let chip = AttachmentRef {
             id: "t".into(),

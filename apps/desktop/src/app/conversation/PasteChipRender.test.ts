@@ -20,5 +20,9 @@ test("text pasted as a chip: an image and a pasted text of the same number come 
     kinds: [{ ...image, mime: "image/png" }, markdown],
     edited: "## Title\n\n- a\n- b more",
   });
-  assert.deepEqual(seen.bubble, { done: false, text: "a" });
+  // A copied chip comes back with its text: numbered on in the same composer, as itself in one without it.
+  assert.deepEqual(seen.copied, { text: "c [Pasted text #1] c [Pasted text #2]", kinds: [markdown, { ...markdown, inline: 2 }], same: true });
+  assert.deepEqual(seen.copiedAgain, { text: "again c [Pasted text #1]", kinds: [markdown], content: "## Title\n\n- a\n- b" });
+  assert.equal(seen.big, "Pasted text #1· Start and end are sent");
+  assert.deepEqual(seen.bubble, { done: false, text: "a", handles: 0 });
 });

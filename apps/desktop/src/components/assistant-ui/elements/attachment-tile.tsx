@@ -64,6 +64,13 @@ export function inlineImageFile(file: File, n: number): File {
   return file;
 }
 
+/** A pasted text's file, copied, as text `n` pasted into the text. */
+export function inlinePastedFile(file: File, n: number): File {
+  pastedFiles.add(file);
+  inlineFiles.set(file, n);
+  return file;
+}
+
 /** The number of an image or a text pasted into the text, if `file` is one. */
 export function inlineNumberOf(file: File): number | null {
   return inlineFiles.get(file) ?? null;

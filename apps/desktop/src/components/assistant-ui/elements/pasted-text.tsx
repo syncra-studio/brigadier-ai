@@ -10,6 +10,8 @@ import {
   AttachmentReaderContext,
   type AttachmentSource,
   pastedTextFile,
+  PasteShortened,
+  pasteTooLong,
   readAttachmentText,
   TileRemove,
 } from "@/components/assistant-ui/elements/attachment-tile";
@@ -155,6 +157,11 @@ export function InlinePastedText({
         <FileDocument aria-hidden className="size-icon-xs" />
         {label}
       </button>
+      {source && pasteTooLong(source.file?.size ?? source.ref?.bytes ?? 0) && (
+        <span className="text-muted-foreground pe-0.5">
+          · <PasteShortened />
+        </span>
+      )}
       {onRemove && (
         <TileRemove
           label={`Remove ${label}`}

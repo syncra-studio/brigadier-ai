@@ -211,6 +211,41 @@ async function drive() {
     const card = await send();
     seen.cardSent = kinds(card.attachments);
 
+    // A chip copied and pasted again brings its text along, numbered on where its number is taken.
+    await type("c ");
+    pasteData({ "text/html": LIST_HTML, "text/plain": "Title\na\nb" });
+    await until("the chip to copy", () => pasteChip() !== null);
+    await sleep(150);
+    await selectAll();
+    const clipboard = new DataTransfer();
+    field()!.dispatchEvent(new ClipboardEvent("copy", { clipboardData: clipboard, bubbles: true, cancelable: true }));
+    await key("ArrowRight");
+    // The editor takes the caret's move on selectionchange.
+    await sleep(60);
+    field()!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: clipboard, bubbles: true, cancelable: true }));
+    await until("the copied chip", () => pasteChip(2) !== null);
+    const copiedSend = await send();
+    seen.copied = {
+      text: copiedSend.text,
+      kinds: kinds(copiedSend.attachments),
+      same: copiedSend.attachments.map(content).every((text) => text === "## Title\n\n- a\n- b"),
+    };
+    // Into a composer without it (sent since), it comes with its text.
+    field()!.focus();
+    await type("again ");
+    field()!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: clipboard, bubbles: true, cancelable: true }));
+    await until("the copied chip again", () => pasteChip() !== null);
+    const againSend = await send();
+    seen.copiedAgain = { text: againSend.text, kinds: kinds(againSend.attachments), content: content(againSend.attachments[0]) };
+
+    // Text too long to go whole says so on its chip.
+    await type("big ");
+    pasteData({ "text/plain": "y".repeat(210_000) });
+    await until("the big paste's chip", () => pasteChip() !== null);
+    await until("the big paste stored", () => field()!.querySelector("[data-slot=inline-paste]")?.textContent?.includes("Start and end are sent") === true);
+    seen.big = field()!.querySelector("[data-slot=inline-paste]")?.textContent;
+    await send();
+
     // An image and a pasted text together: two chips of the same number, two attachments.
     const canvas = document.createElement("canvas");
     canvas.width = 8;
@@ -257,6 +292,7 @@ async function drive() {
     seen.bubble = {
       done: [...document.querySelectorAll("button")].some((button) => button.textContent === "Done"),
       text: shown()!.querySelector("li:last-child")?.textContent,
+      handles: document.querySelectorAll("[data-slot=pasted-text-editor] [data-slot=page-drag-handle]").length,
     };
   } catch (error) {
     seen.error = String(error);
