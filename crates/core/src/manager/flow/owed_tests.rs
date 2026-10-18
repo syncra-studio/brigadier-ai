@@ -312,6 +312,11 @@ async fn stop_during_a_ci_watch_stops_the_request_and_ends_the_watch() {
 #[tokio::test]
 async fn a_failed_turn_stays_failed_while_its_ci_watch_runs() {
     let (flow, request) = watching("owed-ci-failed", Reply::failed("API error 500")).await;
+    // The turn's end settles it a moment later (a tab's ready check reads git first).
+    flow.until("the request to end", |board| {
+        board.requests[&request].state != RequestState::Working
+    })
+    .await;
     let state = stays(&flow, &request).await;
     assert!(matches!(state, RequestState::Failed { .. }), "{state:?}");
     assert_eq!(ci_result(&flow).await.as_deref(), Some(""), "still watched");

@@ -684,7 +684,10 @@ async fn each_message_steered_into_one_turn_gets_its_reply() {
     // The script notes a message once its reply is sent, a moment after the board has it.
     let board = flow
         .until("both answered", |board| {
-            sent_by(board).len() == 2 && read.lock().unwrap().len() == 2
+            sent_by(board).len() == 2
+                && read.lock().unwrap().len() == 2
+                && !from_api.lock().unwrap().is_empty()
+                && !from_docs.lock().unwrap().is_empty()
         })
         .await;
     for (from, sent) in [(&api, &from_api), (&docs, &from_docs)] {
