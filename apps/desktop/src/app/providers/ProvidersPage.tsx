@@ -5,20 +5,18 @@ import { useAction } from "@/app/conversation/useAction";
 import { agentState } from "@/app/onboarding/SetupTerminal";
 import { useRevealedEmails } from "@/app/providers/AccountRows";
 import { ProviderPanel } from "@/app/providers/ProviderPanel";
-import { SettingsButton, SettingsPage, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsButton, SettingsCard, SettingsPage, SettingsRow, SettingsSwitch } from "@/app/settings/parts";
 import { useReveal } from "@/app/settings/reveal";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useNow } from "@/hooks/use-now";
 import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";
 import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";
-import { useModelGroups } from "@/lib/setup";
+import { providerStatusText, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { refreshProviders } from "@/state/actions";
 import { accountsOf, loadAccounts, refreshAccounts } from "@/state/accounts";
-import { providerOn } from "@/state/providers";
+import { providerOn, setProviderOn } from "@/state/providers";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 import { useUsage, useUsageRefresh } from "@/state/usage";
@@ -57,8 +55,8 @@ export const PROVIDERS_ROWS = {
   },
   installed: {
     label: "Installed agents",
-    description: "Where each agent is installed, and its version",
-    target: "Accounts",
+    description: "Each agent's version, and whether it is signed in",
+    target: "Agents",
   },
   models: {
     label: "Models",
@@ -67,19 +65,78 @@ export const PROVIDERS_ROWS = {
   },
 } as const;
 
-/** A dot for how an agent stands: ready, needing a step, or off. */
-function stateDot(on: boolean, overview: ProviderOverview | undefined): string {
-  if (!on) return "bg-muted-foreground/50";
-  const state = agentState(overview);
-  if (state === "ready") return "bg-success";
-  if (state === "checking") return "bg-muted-foreground/50";
-  return "bg-warning";
+/** How an agent stands, on its line in the list: "Signed in · Max plan", "Not installed", or Off. */
+export function providerLine(on: boolean, overview: ProviderOverview | undefined): string {
+  if (!on) return "Off";
+  if (agentState(overview) !== "ready") return providerStatusText(overview);
+  const plan = overview?.status?.plan;
+  return plan ? `Signed in · ${plan.charAt(0).toUpperCase()}${plan.slice(1)} plan` : "Signed in";
 }
 
 /**
- * Settings › Providers: the switch for moving chats between accounts, then a tab per agent with
- * how it stands and its switch, its accounts with how much of each limit is used, and its
- * models. Who does which work is on Routing.
+ * An agent in the page's list: its logo, name and version, how it stands, and its switch.
+ * Pressing it shows its accounts and models beside the list.
+ */
+function ProviderItem({
+  provider,
+  overview,
+  selected,
+  onSelect,
+}: {
+  provider: ProviderKind;
+  overview: ProviderOverview | undefined;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const on = useApp((s) => providerOn(s.settings, provider));
+  const toggle = useAction();
+  const label = VENDOR_LABELS[provider];
+  const version = overview?.status?.version;
+  const ready = on && agentState(overview) === "ready";
+  return (
+    <div
+      data-slot="provider-item"
+      className={cn(
+        "border-divider flex items-start gap-3 border-b px-4 py-3.5 transition-colors",
+        selected ? "bg-foreground/5" : "hover:bg-foreground/3",
+      )}
+    >
+      <button
+        type="button"
+        aria-current={selected || undefined}
+        onClick={onSelect}
+        className="flex min-w-0 flex-1 items-start gap-3 text-start"
+      >
+        <ProviderGlyph provider={provider} className="size-icon-md mt-0.5 shrink-0" />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="text-label font-medium">{label}</span>
+            {version && <span className="text-muted-foreground truncate font-mono text-2xs">v{version}</span>}
+          </span>
+          <span className={cn("text-xs", ready || !on ? "text-foreground/65" : "text-warning")}>
+            {providerLine(on, overview)}
+          </span>
+          {toggle.error && (
+            <span role="alert" className="text-destructive text-xs">
+              {toggle.error}
+            </span>
+          )}
+        </span>
+      </button>
+      <SettingsSwitch
+        label={`Use ${label}`}
+        checked={on}
+        disabled={toggle.busy}
+        onCheckedChange={(next) => toggle.run(() => setProviderOn(provider, next))}
+      />
+    </div>
+  );
+}
+
+/**
+ * Settings › Providers: the switch for moving chats between accounts, then one card with the
+ * agents listed on its start (each with its version, how it stands and its switch) and the chosen
+ * one's accounts and models beside them. Who does which work is on Routing.
  */
 export function ProvidersPage() {
   // The models' plain descriptions come with the usage view.
@@ -134,71 +191,48 @@ export function ProvidersPage() {
         </>
       }
     >
-      <div className="-mt-3 flex flex-col">
-        <div
-          data-setting={PROVIDERS_ROWS.switch.label}
-          className="border-divider flex items-center justify-between gap-6 border-b px-1 pb-4"
+      <SettingsCard>
+        <SettingsRow
+          label={PROVIDERS_ROWS.switch.label}
+          description={PROVIDERS_ROWS.switch.description}
+          error={switching.error}
         >
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <span className="text-sm">{PROVIDERS_ROWS.switch.label}</span>
-            <span className="text-foreground/65 text-xs">{PROVIDERS_ROWS.switch.description}</span>
-            {switching.error && (
-              <p role="alert" className="text-destructive text-xs">
-                {switching.error}
-              </p>
-            )}
-          </div>
           <SettingsSwitch
             label={PROVIDERS_ROWS.switch.label}
             checked={settings.switchAccounts}
             disabled={switching.busy}
             onCheckedChange={(next) => switching.run(() => setSetting("switchAccounts", next))}
           />
-        </div>
+        </SettingsRow>
+      </SettingsCard>
 
-        <Tabs value={tab} onValueChange={(next) => setTab(next as ProviderKind)} className="gap-0 pt-5">
-          <TabsList variant="line" className="border-divider h-auto w-full justify-start gap-6 rounded-none border-b p-0">
-            {PROVIDERS.map((provider) => {
-              const overview = overviews?.find((entry) => entry.provider === provider);
-              const plan = overview?.status?.plan;
-              return (
-                <TabsTrigger
-                  key={provider}
-                  value={provider}
-                  className="h-auto flex-none gap-2 rounded-none px-1 pb-3 text-base font-normal after:-bottom-px data-[state=active]:font-medium"
-                >
-                  <span className="bg-foreground/8 rounded-nav flex size-6 items-center justify-center">
-                    <ProviderGlyph provider={provider} className="size-icon-sm" />
-                  </span>
-                  {VENDOR_LABELS[provider]}
-                  {plan && (
-                    <Badge variant="secondary" className="text-2xs font-normal">
-                      {plan.charAt(0).toUpperCase()}
-                      {plan.slice(1)}
-                    </Badge>
-                  )}
-                  <span
-                    aria-hidden
-                    className={cn("size-1.5 rounded-full", stateDot(providerOn(settings, provider), overview))}
-                  />
-                </TabsTrigger>
-              );
-            })}
-          </TabsList>
-          {PROVIDERS.map((provider) => (
-            <TabsContent key={provider} value={provider}>
-              <ProviderPanel
+      {/* The list beside the chosen agent's side where there is room for both, above it where not. */}
+      <div data-setting={PROVIDERS_ROWS.agents.label} className="@container -mt-4">
+        <div className="bg-card border-divider rounded-settings @providers-split:max-h-providers-card @providers-split:flex-row flex flex-col overflow-hidden border">
+          <div className="border-divider @providers-split:w-providers-list @providers-split:border-e flex shrink-0 flex-col overflow-y-auto">
+            {PROVIDERS.map((provider) => (
+              <ProviderItem
+                key={provider}
                 provider={provider}
                 overview={overviews?.find((entry) => entry.provider === provider)}
-                accounts={accounts === undefined ? null : accountsOf(accounts, provider)}
-                merged={merged}
-                groups={groups}
-                now={now}
-                revealed={revealed}
+                selected={provider === tab}
+                onSelect={() => setTab(provider)}
               />
-            </TabsContent>
-          ))}
-        </Tabs>
+            ))}
+          </div>
+          <div className="min-w-0 flex-1 overflow-y-auto">
+            <ProviderPanel
+              key={tab}
+              provider={tab}
+              overview={overviews?.find((entry) => entry.provider === tab)}
+              accounts={accounts === undefined ? null : accountsOf(accounts, tab)}
+              merged={merged}
+              groups={groups}
+              now={now}
+              revealed={revealed}
+            />
+          </div>
+        </div>
       </div>
     </SettingsPage>
   );
