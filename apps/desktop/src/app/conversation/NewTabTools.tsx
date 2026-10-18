@@ -18,6 +18,7 @@ import { closeTab, openPageTab, replaceNewTab, useSessionTabs } from "@/state/se
 import { useApp } from "@/state/store";
 import { isTaskTab } from "@/state/tabStates";
 import { setTerminalOpen } from "@/state/terminalPlaces";
+import { toast } from "@/state/toasts";
 
 import { suggestedSites, type SuggestedSite } from "./newTabSites";
 import "./NewTabTools.css";
@@ -72,7 +73,10 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
         {workspaceTab && (
           <div data-slot="new-tab-session" className="new-tab-card new-tab-session">
             <button type="button" onClick={() => {
-              void openNewTaskTab(workspaceTab).then(() => closeTab(conversationId, tabId));
+              openNewTaskTab(workspaceTab).then(
+                () => closeTab(conversationId, tabId),
+                (error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: "error" }),
+              );
             }} className="new-tab-tool">
               <Chat aria-hidden /><span className="new-tab-tool-label">New session</span>
             </button>
