@@ -16,7 +16,7 @@ import {
   Stop,
   TextShorterConcise,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { type ComponentProps, type ComponentType, type FC, Fragment, lazy, type MouseEvent, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { type ComponentProps, type ComponentType, createContext, type FC, Fragment, lazy, type MouseEvent, Suspense, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { ThinkingLine } from "@/app/conversation/ThinkingLine";
@@ -36,6 +36,7 @@ import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadS
 import { describePeerStep, peerStepRow, usePeerLookup } from "@/app/conversation/activity/PeerRow";
 import { PeerMessageBlock } from "@/app/conversation/PeerMessageBlock";
 import { CHEVRON, ROW, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
+import { CitationContext } from "@/components/assistant-ui/file-links";
 import {
   type BlockCard,
   type BlockCompaction,
@@ -65,7 +66,8 @@ import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { HeldNote } from "@/app/conversation/HeldNote";
 import { AnsweredStatus, StatusLine, type ThreadStatusProps, useThreadStatusHead } from "@/app/conversation/ThreadStatus";
-import { TurnDiff } from "@/app/conversation/TurnDiff";
+import { TurnDiff, useTurnChanged } from "@/app/conversation/TurnDiff";
+import { linkMarkers, splitSources } from "@/app/conversation/answerSources";
 import { AnswerFiles } from "@/app/conversation/AnswerFiles";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { describeTurnError, interruptedByQuit } from "@/app/conversation/turnError";
@@ -353,26 +355,56 @@ const ReplyText: FC<{ index: number; streaming: boolean; report?: boolean; comme
 );
 
 /**
+ * Whether the finished answer keeps its `### Details`: a run's morning report and a turn that
+ * changed code do; an answer that changed nothing (a question, research) doesn't (Q79).
+ */
+const AnswerDetails = createContext(true);
+
+/**
  * A finished answer, a run's morning report too: what it came to in view, its `### Details`
  * (the checks run, review findings, what wasn't tested) folded under "Details", whether the
- * app asked for the section or the model wrote one of its own (#198).
+ * app asked for the section or the model wrote one of its own (#198), when the turn changed code.
+ * A research answer's trailing sources list folds under "Sources · N", and its numbered markers
+ * ([1]) link to their source (Q79).
  */
 const ReportText: FC<TextMessagePartProps> = (props) => {
+  const keepDetails = useContext(AnswerDetails);
   const report = splitReport(props.text);
-  if (!report) return <MessageText {...props} />;
+  const head = report?.head ?? props.text;
+  const sourced = splitSources(head);
+  const details = keepDetails ? report?.details : undefined;
+  if (!sourced && !details) {
+    return report ? <MarkdownBlock text={report.head} /> : <MessageText {...props} />;
+  }
+  const cite = (n: number) => sourced?.sources.find((source) => source.n === n) ?? null;
   return (
     <div className="flex flex-col gap-3">
-      <MarkdownBlock text={report.head} />
-      <details data-slot="report-details" className="group/details">
-        {/* Folds like a work row: its words, then the same quiet chevron, never the browser's marker. */}
-        <summary className={cn(ROW, ROW_TOGGLE, "list-none [&::-webkit-details-marker]:hidden")}>
-          Details
-          <ChevronRightAlt aria-hidden className={cn(CHEVRON, "group-open/details:rotate-90")} />
-        </summary>
-        <div className="pt-2">
-          <MarkdownBlock text={report.details} />
-        </div>
-      </details>
+      <CitationContext.Provider value={cite}>
+        <MarkdownBlock text={sourced ? linkMarkers(sourced.head, sourced.sources) : head} />
+      </CitationContext.Provider>
+      {sourced && (
+        <details data-slot="answer-sources" className="group/sources">
+          <summary className={cn(ROW, ROW_TOGGLE, "list-none [&::-webkit-details-marker]:hidden")}>
+            Sources · {sourced.sources.length}
+            <ChevronRightAlt aria-hidden className={cn(CHEVRON, "group-open/sources:rotate-90")} />
+          </summary>
+          <div data-slot="answer-source-list" className="pt-2 text-sm">
+            <MarkdownBlock text={sourced.sources.map((source) => `${source.n}. [${source.title.replace(/[[\]]/g, "")}](<${source.url}>)`).join("\n")} />
+          </div>
+        </details>
+      )}
+      {details && (
+        <details data-slot="report-details" className="group/details">
+          {/* Folds like a work row: its words, then the same quiet chevron, never the browser's marker. */}
+          <summary className={cn(ROW, ROW_TOGGLE, "list-none [&::-webkit-details-marker]:hidden")}>
+            Details
+            <ChevronRightAlt aria-hidden className={cn(CHEVRON, "group-open/details:rotate-90")} />
+          </summary>
+          <div className="pt-2">
+            <MarkdownBlock text={details} />
+          </div>
+        </details>
+      )}
     </div>
   );
 };
@@ -699,6 +731,7 @@ export const RequestBlock: FC = () => {
   }, [holds, show]);
   const quotaWait = useViewConversation()?.quotaWait ?? null;
   const requestIds = meta?.requestIds;
+  const changed = useTurnChanged(requestIds ?? []);
   const phase = useBoard(
     useShallow((s) => (meta && s.board && isRunRequest(meta.requestId) ? phaseViewOf(s.board.overnight, s.board.plans, meta.requestId) : null)),
   );
@@ -869,7 +902,9 @@ export const RequestBlock: FC = () => {
                 data-peer-message={meta.texts[answer]?.anchors?.join(" ")}
                 className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0 || before.length > 0) && "pt-activity")}
               >
-                <ReplyText index={answer} streaming={streams(answer)} report={!streams(answer)} />
+                <AnswerDetails.Provider value={!!phase || changed}>
+                  <ReplyText index={answer} streaming={streams(answer)} report={!streams(answer)} />
+                </AnswerDetails.Provider>
               </div>
             )}
             {/* Answered, it may still wait for another session's reply: that line stays under the answer. */}

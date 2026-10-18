@@ -229,15 +229,17 @@ test("a finished answer's file chip holds still while a later turn works: never 
   assert.ok(seen.color, "the chip is there, in link blue");
 });
 
-test("an ending that opens with Update: is the answer, its own Details folded, in a session and a Chat", { timeout: 180000 }, async (t) => {
+test("an ending that opens with Update: is the answer, its own Details folded where it changed code, in a session and a Chat", { timeout: 180000 }, async (t) => {
   for (const kind of ["session", "chat"]) {
     const seen = await drive<{ answers: (string | null)[]; updates: number; quotes: number; details: { summary: string | null; open: boolean }[]; opening: boolean }>(
       t, `drive=update&kind=${kind}`);
     // One answer in view, down to its Details; no update row and no quote block under an opening line.
-    assert.deepEqual(seen.answers, ["Update: the session's full checks still don't pass, so it isn't merged. The rounding fix itself is in. Details"], kind);
+    const shown = "Update: the session's full checks still don't pass, so it isn't merged. The rounding fix itself is in.";
+    assert.deepEqual(seen.answers, [kind === "session" ? `${shown} Details` : shown], kind);
     assert.deepEqual([seen.updates, seen.quotes, seen.opening], [0, 0, false], kind);
-    // The model's own `### Details` folds like the app's.
-    assert.deepEqual(seen.details, [{ summary: "Details", open: false }], kind);
+    // The model's own `### Details` folds like the app's where the turn changed code; a Chat's
+    // turn changed none, so its answer has no Details (Q79).
+    assert.deepEqual(seen.details, kind === "session" ? [{ summary: "Details", open: false }] : [], kind);
   }
 });
 

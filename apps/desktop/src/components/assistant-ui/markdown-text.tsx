@@ -13,11 +13,12 @@ import {
   useRef,
   useState,
 } from "react";
-import type { TextMessagePartProps } from "@assistant-ui/react";
-import { Check, Copy, ExpandLg, Globe, Mail } from "@openai/apps-sdk-ui/components/Icon";
+import { TextMessagePartProvider, type TextMessagePartProps } from "@assistant-ui/react";
+import { Check, Copy, Document, ExpandLg, Globe, Mail } from "@openai/apps-sdk-ui/components/Icon";
 
 import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
 import {
+  CitationContext,
   InlineImageContext,
   InlinePasteContext,
   LinkTimeContext,
@@ -45,9 +46,10 @@ import {
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
-import { openArtifact, openFolder, openUrl, request, revealPath, saveArtifact, saveCopy } from "@/ipc/client";
-import type { StoredCopy } from "@/ipc/generated";
+import { openArtifact, openFolder, openUrl, pageRead, request, revealPath, saveArtifact, saveCopy } from "@/ipc/client";
+import type { Page, StoredCopy } from "@/ipc/generated";
 import { openLink } from "@/state/links";
+import { openPageTab } from "@/state/sessionTabs";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
@@ -351,6 +353,8 @@ export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, c
   if (href?.startsWith("brigadier-task:")) return <>{task?.(Number(href.slice("brigadier-task:".length))) ?? children}</>;
   if (href?.startsWith("brigadier-image:")) return <>{image?.(Number(href.slice("brigadier-image:".length))) ?? children}</>;
   if (href?.startsWith("brigadier-paste:")) return <>{paste?.(Number(href.slice("brigadier-paste:".length))) ?? children}</>;
+  if (href?.startsWith("brigadier-cite:")) return <CitationMarker n={Number(href.slice("brigadier-cite:".length))}>{children}</CitationMarker>;
+  if (href?.startsWith("brigadier-page:")) return <ReportLink pageId={href.slice("brigadier-page:".length)}>{children}</ReportLink>;
   if (href && !/^(https?:|mailto:|#)/i.test(href)) {
     return <FileChip href={href}>{children}</FileChip>;
   }
@@ -400,6 +404,85 @@ export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, c
     </ContextMenu>
   );
 };
+
+/**
+ * A research answer's numbered marker ([1]): a small raised number that opens its source, whose
+ * words and address show on hover. A number with no source stays as written.
+ */
+function CitationMarker({ n, children }: { n: number; children: ReactNode }) {
+  const source = useContext(CitationContext)?.(n) ?? null;
+  if (!source) return <>[{children}]</>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <a
+          href={source.url}
+          data-slot="citation"
+          onClick={(event) => {
+            event.preventDefault();
+            openLink(source.url, { agent: true }).catch(failed);
+          }}
+          className="bg-foreground/8 text-muted-foreground hover:bg-foreground/15 hover:text-foreground ms-0.5 inline-flex h-4 min-w-4 -translate-y-1 items-center justify-center rounded-full px-1 align-baseline text-2xs leading-none font-medium no-underline tabular-nums"
+        >
+          {n}
+        </a>
+      </TooltipTrigger>
+      <TooltipContent side="top" data-slot="citation-source" className="max-w-sm">
+        {source.title}
+        <span className="text-muted-foreground block break-all">{source.url}</span>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * The link to a research answer's full report (`brigadier-page:<id>`, a page `save_report` made):
+ * a session opens it as a page tab beside the thread; a Chat, which has no tabs, shows it over the
+ * thread.
+ */
+function ReportLink({ pageId, children }: { pageId: string; children: ReactNode }) {
+  const conversationId = useLinkConversation();
+  const tabbed = useApp((s) => (conversationId ? s.conversations[conversationId]?.kind === "session" : false));
+  const [page, setPage] = useState<Page | null>(null);
+  const open = () => {
+    if (tabbed && conversationId) {
+      openPageTab(conversationId, pageId, typeof children === "string" ? children : "Report");
+      return;
+    }
+    pageRead(pageId).then(setPage).catch(failed);
+  };
+  return (
+    <>
+      <a
+        href={`brigadier-page:${pageId}`}
+        data-slot="report-link"
+        onClick={(event) => {
+          event.preventDefault();
+          open();
+        }}
+        className="aui-md-file text-link hover:text-link/80 cursor-pointer whitespace-nowrap no-underline"
+      >
+        <Document aria-hidden className="me-0.5 inline-block size-icon-sm align-text-bottom" />
+        {children}
+      </a>
+      <Dialog open={page !== null} onOpenChange={(shown) => !shown && setPage(null)}>
+        <DialogContent data-slot="report-dialog" className="max-w-thread flex max-h-full flex-col overflow-y-auto">
+          <DialogTitle>{page?.content.title || "Report"}</DialogTitle>
+          {page && <ReportBody text={page.content.body} />}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/** A report's text in its dialog: the same Markdown as the answer. */
+function ReportBody({ text }: { text: string }) {
+  return (
+    <TextMessagePartProvider text={text} isRunning={false}>
+      <MarkdownText />
+    </TextMessagePartProvider>
+  );
+}
 
 /**
  * A web link's site icon, 16px before its words: a globe until the daemon has the icon, and when

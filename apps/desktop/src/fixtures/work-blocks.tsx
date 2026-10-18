@@ -772,7 +772,9 @@ async function driveUpdate(): Promise<object> {
   daemon.run = "idle";
   useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
   change(() => ({ run: "idle", runRequest: null, head: "a2" }));
-  request("r1", { state: { type: "done" }, endedAtMs: begun + 4000, worked: [{ fromMs: begun, toMs: begun + 4000 }] });
+  // The session's rounding fix changed code, so its Details stay; a Chat changes none, so it has none (Q79).
+  const changes = { stat: { files: [{ path: "src/math.js", insertions: 2, deletions: 1, binary: false }], insertions: 2, deletions: 1 }, settled: true };
+  request("r1", { state: { type: "done" }, endedAtMs: begun + 4000, worked: [{ fromMs: begun, toMs: begun + 4000 }], ...(session ? { changes } : {}) } as Partial<UserRequest>);
   await settle(300);
   const block = turn() ?? document.body;
   const details = all<HTMLDetailsElement>("[data-slot=report-details]", block);

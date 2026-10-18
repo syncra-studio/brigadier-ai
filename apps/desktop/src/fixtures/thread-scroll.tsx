@@ -20,7 +20,7 @@ import planned from "@/fixtures/boards/thread-plan-2026-10-10.events.json";
 import { roomFor } from "@/components/assistant-ui/thread-scroll";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { Conversation, ConversationView as View, EventEnvelope, Message, Request } from "@/ipc/generated";
+import type { Conversation, ConversationView as View, EventEnvelope, Message, Request, UserRequest } from "@/ipc/generated";
 import { select, send } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
 import { applyEvents, emptyThread, useApp } from "@/state/store";
@@ -117,13 +117,24 @@ for (const list of Object.values(stored)) {
   }
 }
 
+/** A report's request changed code, so its answer keeps its Details (Q79). */
+function requests(id: string): UserRequest[] {
+  if (id !== "long") return [];
+  return (stored[id] ?? []).filter((message) => message.role === "user").map((message) => ({
+    id: message.requestId!, conversationId: id, preview: "", state: { type: "done" }, startedAtMs: message.createdAtMs,
+    endedAtMs: message.createdAtMs + 30_000, steeredInto: null, steeredAfter: null, undo: null,
+    worked: [{ fromMs: message.createdAtMs, toMs: message.createdAtMs + 30_000 }], quotaWait: false,
+    changes: { stat: { files: [{ path: "src/scroll.ts", insertions: 1, deletions: 0, binary: false }], insertions: 1, deletions: 0 }, settled: true },
+  }) as UserRequest);
+}
+
 function view(id: string): View {
   const running = id === "working";
   return {
     conversation: conversations[id]!,
     context: null,
     messages: { messages: stored[id] ?? [], hasMore: false },
-    tasks: [], approvals: [], questions: [], plans: [], requests: [], workerSteps: [], orchestratorSteps: [],
+    tasks: [], approvals: [], questions: [], plans: [], requests: requests(id), workerSteps: [], orchestratorSteps: [],
     machineSteps: [], thinking: [], compactions: [], decisions: [], waiting: [],
     queue: { items: [], paused: false },
     run: running ? "running" : "idle",

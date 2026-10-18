@@ -215,6 +215,20 @@ const ReviewRow: FC<{
 );
 
 /**
+ * Whether the turn's requests changed code: a change of their own recorded, or a worker of theirs
+ * landed. A Chat's never do. An answer that changed nothing has no Details (Q79).
+ */
+export function useTurnChanged(requestIds: readonly string[]): boolean {
+  return useBoard(
+    (s) =>
+      requestIds.some((id) => (s.board?.requests[id]?.changes?.stat.files.length ?? 0) > 0) ||
+      Object.values(s.board?.tasks ?? {}).some(
+        (task) => task.requestId !== null && requestIds.includes(task.requestId) && task.landed !== null,
+      ),
+  );
+}
+
+/**
  * The card under a finished turn's answer: "Edited 3 files" (or the one file's name) over
  * "+a −d", which says "View changes ↗" while hovered and opens the first file (a lone file's diff
  * in place), then Undo (where one request's changes can be taken back whole), which turns into
