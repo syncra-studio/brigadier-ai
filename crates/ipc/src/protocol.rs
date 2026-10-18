@@ -466,12 +466,13 @@ pub enum Request {
     CancelDictation {
         dictation_id: String,
     },
-    /// Rates an answer ("Good response" / "Bad response").
+    /// Rates an answer ("Good response" / "Bad response") or a plan ("Good plan" / "Bad plan");
+    /// no rating takes it back ("Clear rating").
     RateMessage {
         conversation_id: ConversationId,
-        /// A message id, or `task:<id>` for a worker's report.
+        /// A message id, or `task:<id>` for a worker's report; `plan:<id>` for a plan.
         subject: String,
-        rating: Rating,
+        rating: Option<Rating>,
     },
     /// What a worktree session's branch changed against its base (the pinned summary card).
     GetSessionDiff {

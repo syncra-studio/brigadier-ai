@@ -648,12 +648,20 @@ impl SessionManager {
         .await
     }
 
-    /// Keeps the user's rating of an answer. It stays on this machine.
-    pub async fn rate(&self, id: &ConversationId, subject: String, rating: Rating) -> Result<()> {
+    /// Keeps the user's rating of an answer or a plan, or with `None` takes it back. It stays
+    /// on this machine.
+    pub async fn rate(
+        &self,
+        id: &ConversationId,
+        subject: String,
+        rating: Option<Rating>,
+    ) -> Result<()> {
         self.core.conversation(id)?;
-        self.core
-            .record_conversation(id, vec![DomainEvent::MessageRated { subject, rating }])
-            .await?;
+        let event = match rating {
+            Some(rating) => DomainEvent::MessageRated { subject, rating },
+            None => DomainEvent::RatingCleared { subject },
+        };
+        self.core.record_conversation(id, vec![event]).await?;
         Ok(())
     }
 

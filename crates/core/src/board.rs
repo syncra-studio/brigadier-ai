@@ -44,6 +44,7 @@ pub(crate) const KINDS: &[&str] = &[
     "orchestrator.step",
     "compaction.updated",
     "message.rated",
+    "rating.cleared",
     "conversation.branch",
     "memory.updated",
     "decision.made",
@@ -710,6 +711,9 @@ impl Board {
             DomainEvent::MessageRated { subject, rating } => {
                 self.ratings.insert(subject.clone(), *rating);
             }
+            DomainEvent::RatingCleared { subject } => {
+                self.ratings.remove(subject);
+            }
             DomainEvent::BranchSwitched { head, .. } => {
                 self.head = Some((head.clone(), stream_seq));
             }
@@ -1037,5 +1041,49 @@ mod ci_tests {
         assert_eq!(board.orchestrator_steps[0].at_ms, 1_000);
         board.apply(&at(watch("o/fork", Some("passed")), 90_000), 3);
         assert_eq!(board.orchestrator_steps[0].at_ms, 90_000);
+    }
+}
+
+#[cfg(test)]
+mod rating_tests {
+    use super::*;
+
+    /// A plan is rated like an answer, and either rating can be taken back (#127).
+    #[test]
+    fn a_plan_or_answer_rating_is_kept_until_cleared() {
+        let mut board = Board::default();
+        let rated = |subject: &str, rating| DomainEvent::MessageRated {
+            subject: subject.into(),
+            rating,
+        };
+        board.apply(&rated("plan:p1", Rating::Good), 1);
+        board.apply(&rated("m1", Rating::Bad), 2);
+        assert_eq!(board.ratings.get("plan:p1"), Some(&Rating::Good));
+        board.apply(
+            &DomainEvent::RatingCleared {
+                subject: "plan:p1".into(),
+            },
+            3,
+        );
+        assert_eq!(board.ratings.get("plan:p1"), None);
+        assert_eq!(board.ratings.get("m1"), Some(&Rating::Bad));
+        // Rated again after a clear, it counts again.
+        board.apply(&rated("plan:p1", Rating::Bad), 4);
+        assert_eq!(board.ratings.get("plan:p1"), Some(&Rating::Bad));
+    }
+
+    /// A board rebuilt from the stored events replays a clear too, so a cleared rating stays
+    /// cleared after a restart.
+    #[test]
+    fn a_rebuilt_board_replays_ratings_and_their_clears() {
+        let rated = DomainEvent::MessageRated {
+            subject: "m1".into(),
+            rating: Rating::Good,
+        };
+        let cleared = DomainEvent::RatingCleared {
+            subject: "m1".into(),
+        };
+        assert!(KINDS.contains(&rated.kind()));
+        assert!(KINDS.contains(&cleared.kind()));
     }
 }

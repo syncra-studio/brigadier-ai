@@ -1286,7 +1286,7 @@ pub struct ConversationView {
     /// The last message of the branch the thread shows (the newest message until the user
     /// edits, regenerates or switches branches).
     pub head: Option<String>,
-    /// The user's ratings of answers, by subject (see `DomainEvent::MessageRated`).
+    /// The user's ratings of answers and plans, by subject (see `DomainEvent::MessageRated`).
     pub ratings: HashMap<String, Rating>,
     pub streaming: Option<StreamingMessage>,
     /// The latest notices (environment problems, fallbacks), newest last.
@@ -2178,11 +2178,15 @@ pub enum DomainEvent {
     CompactionUpdated {
         compaction: Compaction,
     },
-    /// The user rated an answer. Ratings stay on this machine.
+    /// The user rated an answer or a plan. Ratings stay on this machine.
     MessageRated {
-        /// The answer: a message id, or `task:<id>` for a worker's report.
+        /// The answer: a message id, or `task:<id>` for a worker's report; `plan:<id>` for a plan.
         subject: String,
         rating: Rating,
+    },
+    /// The user took back their rating of `subject` (as in `MessageRated`).
+    RatingCleared {
+        subject: String,
     },
     /// The thread now shows the branch that ends at `head`; new messages continue it.
     BranchSwitched {
@@ -2479,6 +2483,7 @@ impl DomainEvent {
             Self::MachineStepped { .. } => "machine.step",
             Self::CompactionUpdated { .. } => "compaction.updated",
             Self::MessageRated { .. } => "message.rated",
+            Self::RatingCleared { .. } => "rating.cleared",
             Self::BranchSwitched { .. } => "conversation.branch",
             Self::ConversationNotice { .. } => "conversation.notice",
             Self::TaskUpdated { .. } => "task.updated",

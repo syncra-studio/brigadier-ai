@@ -10,14 +10,15 @@ import { type AgentPlanStepStatus, StepMark } from "@/components/assistant-ui/el
 import { SummarySection, summaryRowInteractive } from "@/components/assistant-ui/elements/summary-section";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { Plan, TaskState } from "@/ipc/generated";
+import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
+import type { Plan, Rating, TaskState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { usePlanOpens } from "@/state/planDoc";
 import { openPlanTab } from "@/state/sessionTabs";
 
 import { useApp } from "@/state/store";
-import { decidePlan } from "@/state/actions";
+import { decidePlan, rateMessage } from "@/state/actions";
 
 /** A step's state at the end of its row, as the worker's own row would say it in short. */
 const STEP_WORDS: Record<AgentPlanStepStatus, string> = {
@@ -104,6 +105,20 @@ function statusLine(plan: Plan, statuses: readonly AgentPlanStepStatus[]): strin
   return done > 0 ? `${done} of ${statuses.length} done` : "Not started";
 }
 
+/** "Rate this plan": Good plan / Bad plan, and Clear rating once rated; kept on this machine like an answer's (#127). */
+function PlanRating({ plan }: { plan: Plan }) {
+  const subject = `plan:${plan.id}`;
+  const rated = useBoard((s) => s.board?.ratings[subject] ?? null);
+  const action = useAction();
+  const rate = (rating: Rating | null) => action.run(() => rateMessage(plan.conversationId, subject, rating));
+  return (
+    <RateMenu rated={rated} onClear={() => rate(null)} tooltip="Rate this plan" below className="text-muted-foreground size-6 shrink-0">
+      <RateItem rating="good" of="plan" onSelect={() => rate("good")} />
+      <RateItem rating="bad" of="plan" onSelect={() => rate("bad")} />
+    </RateMenu>
+  );
+}
+
 /**
  * The session's plan, a section of the summary's context card: its title and state, one row per
  * phase marked Pending, In progress, Done or Stopped (each opening to its worker and description),
@@ -171,52 +186,55 @@ export const PlanSection = memo(function PlanSection({
       aria-label={`Plan: ${plan.title}`}
       className=""
     >
-      <div className="flex flex-col gap-0.5 pb-1">
-        {onShowCurrent && (
-          <p className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs">
-            <span>An earlier plan</span>
-            <span aria-hidden>·</span>
+      <div className="flex items-center gap-2 pb-1">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          {onShowCurrent && (
+            <p className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs">
+              <span>An earlier plan</span>
+              <span aria-hidden>·</span>
+              <button
+                type="button"
+                onClick={onShowCurrent}
+                className="text-link rounded-control hover:underline"
+              >
+                Show the current plan
+              </button>
+            </p>
+          )}
+          {plan.body && opens ? (
+            // A plan written as a document opens it in its own tab.
             <button
               type="button"
-              onClick={onShowCurrent}
-              className="text-link rounded-control hover:underline"
+              title={plan.title}
+              onClick={() => {
+                openPlanTab(plan.conversationId, { type: "plan", id: plan.id }, plan.title);
+              }}
+              className={cn(summaryRowInteractive, "relative isolate flex min-w-0 items-start gap-2 py-1 text-start text-label")}
             >
-              Show the current plan
+              <Lightbulb aria-hidden className="size-icon-md h-(--text-label--line-height) shrink-0" />
+              <span className="line-clamp-2 min-w-0 flex-1 wrap-anywhere">{plan.title}</span>
             </button>
-          </p>
-        )}
-        {plan.body && opens ? (
-          // A plan written as a document opens it in its own tab.
-          <button
-            type="button"
-            title={plan.title}
-            onClick={() => {
-              openPlanTab(plan.conversationId, { type: "plan", id: plan.id }, plan.title);
-            }}
-            className={cn(summaryRowInteractive, "relative isolate flex min-w-0 items-start gap-2 py-1 text-start text-label")}
-          >
-            <Lightbulb aria-hidden className="size-icon-md h-(--text-label--line-height) shrink-0" />
-            <span className="line-clamp-2 min-w-0 flex-1 wrap-anywhere">{plan.title}</span>
-          </button>
-        ) : (
-          <p title={plan.title} className="line-clamp-2 text-label wrap-anywhere">
-            {plan.title}
-          </p>
-        )}
-        <p
-          className={cn(
-            "text-xs",
-            statuses.includes("failed") || plan.state.type === "rejected"
-              ? "text-destructive"
-              : plan.state.type === "proposed"
-                ? "text-warning"
-                : allDone
-                  ? "text-success"
-                  : "text-muted-foreground",
+          ) : (
+            <p title={plan.title} className="line-clamp-2 text-label wrap-anywhere">
+              {plan.title}
+            </p>
           )}
-        >
-          {statusLine(plan, statuses)}
-        </p>
+          <p
+            className={cn(
+              "text-xs",
+              statuses.includes("failed") || plan.state.type === "rejected"
+                ? "text-destructive"
+                : plan.state.type === "proposed"
+                  ? "text-warning"
+                  : allDone
+                    ? "text-success"
+                    : "text-muted-foreground",
+            )}
+          >
+            {statusLine(plan, statuses)}
+          </p>
+        </div>
+        <PlanRating plan={plan} />
       </div>
       <ol hidden={!phaseRows} className="flex flex-col">
         {plan.steps.map((step, index) => {

@@ -245,7 +245,7 @@ function Answer({ task, text, earlier = false }: { task: Task; text?: string | u
   const [artifact, setArtifact] = useState<ArtifactRef | null>(null);
   const files = [...new Map([...(task.report?.artifacts ?? []), ...task.outputs].map((file) => [file.id, file])).values()];
   if (!summary) return null;
-  const rate = (rating: Rating) =>
+  const rate = (rating: Rating | null) =>
     action.run(() => rateMessage(task.conversationId, subject, rating));
   return (
     <div data-slot={earlier ? "worker-earlier-report" : "worker-report"} className="group/answer flex scroll-mt-4 flex-col gap-2">
@@ -262,7 +262,7 @@ function Answer({ task, text, earlier = false }: { task: Task; text?: string | u
         >
           {isCopied ? <Check /> : <Copy />}
         </TooltipIconButton>
-        <RateMenu rated={rated}>
+        <RateMenu rated={rated} onClear={() => rate(null)}>
           <RateItem rating="good" onSelect={() => rate("good")} />
           <RateItem rating="bad" onSelect={() => rate("bad")} />
         </RateMenu>

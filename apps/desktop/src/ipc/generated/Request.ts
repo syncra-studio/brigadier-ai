@@ -78,9 +78,9 @@ fresh?: boolean, cols: number, rows: number, } | { "method": "openSideChat", con
  */
 audio: string, } | { "method": "finishDictation", dictationId: string, } | { "method": "cancelDictation", dictationId: string, } | { "method": "rateMessage", conversationId: ConversationId, 
 /**
- * A message id, or `task:<id>` for a worker's report.
+ * A message id, or `task:<id>` for a worker's report; `plan:<id>` for a plan.
  */
-subject: string, rating: Rating, } | { "method": "getSessionDiff", id: ConversationId, } | { "method": "getWorkerDiffs", conversationId: ConversationId, } | { "method": "createConversation", kind: ConversationKind, projectId: ProjectId | null, title: string | null, setup: SetupRequest | null, } | { "method": "forkConversation", conversationId: ConversationId, messageId: string, place: ForkPlace, } | { "method": "updateSetup", id: ConversationId, setup: Setup, } | { "method": "getConversation", id: ConversationId, limit: number, } | { "method": "sendMessage", conversationId: ConversationId, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, steer: boolean, 
+subject: string, rating: Rating | null, } | { "method": "getSessionDiff", id: ConversationId, } | { "method": "getWorkerDiffs", conversationId: ConversationId, } | { "method": "createConversation", kind: ConversationKind, projectId: ProjectId | null, title: string | null, setup: SetupRequest | null, } | { "method": "forkConversation", conversationId: ConversationId, messageId: string, place: ForkPlace, } | { "method": "updateSetup", id: ConversationId, setup: Setup, } | { "method": "getConversation", id: ConversationId, limit: number, } | { "method": "sendMessage", conversationId: ConversationId, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, steer: boolean, 
 /**
  * Queue it at this slot whenever it would wait (a turn runs, an answer works, or the
  * queue is paused): a queued message pulled into the composer to edit, or a deleted

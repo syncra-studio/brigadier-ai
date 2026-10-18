@@ -79,7 +79,7 @@ runRequest: string | null,
  */
 head: string | null, 
 /**
- * The user's ratings of answers, by subject (see `DomainEvent::MessageRated`).
+ * The user's ratings of answers and plans, by subject (see `DomainEvent::MessageRated`).
  */
 ratings: { [key in string]: Rating }, streaming: StreamingMessage | null, 
 /**

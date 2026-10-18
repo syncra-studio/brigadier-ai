@@ -99,6 +99,8 @@ function summary(event: DomainEvent): string {
       return `compaction ${event.compaction.state.type}`;
     case "messageRated":
       return `${event.rating} ${event.subject}`;
+    case "ratingCleared":
+      return `cleared ${event.subject}`;
     case "branchSwitched":
       return `branch → ${event.head}`;
     case "conversationNotice":

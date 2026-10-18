@@ -211,3 +211,12 @@ level in use and its icon; `/perm` and Enter open the permission menu above the 
 `/model` and Enter open the model picker the same way; ↑ on the focused pill opens the permission menu
 too. It writes what it saw as JSON into `#composer-permissions-result`;
 `ComposerPermissionsRender.test.ts` checks it. This entry is absent from the production build.
+
+# Rating a plan
+
+`/fixtures/plan-rating.html` is a session with a plan and a rated answer, the context card's Plan
+section beside it with a thumbs button on its title row ("Rate this plan": Good plan, Bad plan); once rated its
+menu adds Clear rating, and so does the rated answer's Feedback menu. Ratings sent come back on the
+board as the daemon's events would. It writes what it saw as JSON into `#plan-rating-result`;
+`PlanRatingRender.test.ts` checks it. `stop=1` holds the page for a screenshot. This entry is absent
+from the production build.

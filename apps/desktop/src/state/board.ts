@@ -325,6 +325,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "thinkingDelta",
   "compactionUpdated",
   "messageRated",
+  "ratingCleared",
   "memoryUpdated",
   "decidedForYou",
   "waitingOnYou",
@@ -649,6 +650,10 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, compactions: placed(board.compactions, event.compaction, envelope, board) };
     case "messageRated":
       return { ...board, ratings: { ...board.ratings, [event.subject]: event.rating } };
+    case "ratingCleared": {
+      const { [event.subject]: _cleared, ...ratings } = board.ratings;
+      return { ...board, ratings };
+    }
     case "queueChanged":
       return { ...board, queue: event.queue };
     case "memoryUpdated": {

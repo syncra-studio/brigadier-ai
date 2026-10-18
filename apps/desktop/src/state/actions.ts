@@ -460,11 +460,11 @@ export async function listProjectFiles(
   return { files, truncated };
 }
 
-/** Rates an answer: a message id, or `task:<id>` for a worker's report. */
+/** Rates an answer (a message id, or `task:<id>` for a worker's report) or a plan (`plan:<id>`); null clears the rating. */
 export async function rateMessage(
   conversationId: string,
   subject: string,
-  rating: Rating,
+  rating: Rating | null,
 ): Promise<void> {
   await request({ method: "rateMessage", conversationId, subject, rating });
 }

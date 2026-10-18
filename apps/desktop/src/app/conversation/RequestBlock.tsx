@@ -90,7 +90,8 @@ import { VENDOR_LABELS } from "@/lib/routing";
 import { modelName, sameModel, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { openConversation, resume, send } from "@/state/actions";
+import { openConversation, rateMessage, resume, send } from "@/state/actions";
+import { toast } from "@/state/toasts";
 import { readAloud, stopReading, useReading } from "@/state/readAloud";
 import { RETRYING, useBoard } from "@/state/board";
 import { useRevealing } from "@/state/reveal";
@@ -903,6 +904,7 @@ export const RequestBlock: FC = () => {
           atMs={meta.endedAtMs}
           shown={answer === null ? null : [answer, ...updates]}
           forkId={meta.forkId}
+          answerId={meta.answerId}
         />
       )}
       <ContinuedFrom forkId={meta.forkId} />
@@ -1006,7 +1008,8 @@ const AnswerActions: FC<{
   atMs: number | null;
   shown: number[] | null;
   forkId: string | null;
-}> = ({ session, rework, atMs, shown, forkId }) => {
+  answerId: string | null;
+}> = ({ session, rework, atMs, shown, forkId, answerId }) => {
   const conversation = useViewConversation();
   const answer = useAuiState((s) => {
     const parts = s.message.parts;
@@ -1045,7 +1048,13 @@ const AnswerActions: FC<{
         )}
       </TooltipIconButton>
       <ReadAloud text={answer} />
-      <RateMenu rated={rated}>
+      <RateMenu rated={rated} onClear={() => {
+        if (conversation && answerId) {
+          rateMessage(conversation.id, answerId, null).catch((error: unknown) =>
+            toast(error instanceof Error ? error.message : String(error), { tone: "error" }),
+          );
+        }
+      }}>
         <ActionBarPrimitive.FeedbackPositive asChild>
           <RateItem rating="good" />
         </ActionBarPrimitive.FeedbackPositive>

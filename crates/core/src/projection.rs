@@ -140,6 +140,7 @@ impl Projection {
             | DomainEvent::MachineStepped { .. }
             | DomainEvent::CompactionUpdated { .. }
             | DomainEvent::MessageRated { .. }
+            | DomainEvent::RatingCleared { .. }
             | DomainEvent::BranchSwitched { .. }
             | DomainEvent::ConversationNotice { .. }
             | DomainEvent::TaskUpdated { .. }
