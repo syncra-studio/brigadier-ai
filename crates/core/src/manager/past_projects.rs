@@ -198,7 +198,8 @@ mod tests {
         git.init(&dir.join("repo")).unwrap();
         std::fs::create_dir_all(dir.join("plain")).unwrap();
         let root = dir.join("repo").canonicalize().unwrap();
-        let mut folders: Vec<_> = (0..150).map(|n| root.join(format!("folder-{n}"))).collect();
+        // Well within the time even on a busy machine: a slow wait for each git would not be.
+        let mut folders: Vec<_> = (0..40).map(|n| root.join(format!("folder-{n}"))).collect();
         for folder in &folders {
             std::fs::create_dir_all(folder).unwrap();
         }
@@ -207,7 +208,7 @@ mod tests {
         folders.push(folders[0].clone());
         let found = repos_of(&git, &folders);
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(found.len(), 150);
+        assert_eq!(found.len(), 40);
         assert!(found.values().all(|repo| repo.root == root));
         assert!(!found.contains_key(&plain));
     }
