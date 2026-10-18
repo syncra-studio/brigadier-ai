@@ -283,6 +283,19 @@
   --color-providers-bar: #d4d4d4;
   --color-providers-chip-text: #bdbdbd;
   --color-providers-chip-text-strong: #cfcfcf;
+  /* Settings › Storage's own colours in the user's design: what disk use is made of (work
+     folders, conversations, Brains, models, everything else; logs are settings-success), the
+     red Uninstall pill (fill, edge, text), the projects' search box and an unticked box. */
+  --color-storage-work: #f5a524;
+  --color-storage-conversations: #a78bfa;
+  --color-storage-brains: #f87c63;
+  --color-storage-models: #f06bb0;
+  --color-storage-other: #8a8a8a;
+  --color-storage-danger: #2a1d1c;
+  --color-storage-danger-edge: #4a2b28;
+  --color-storage-danger-text: #f2675a;
+  --color-storage-search: #1b1b1b;
+  --color-storage-box: #5a5a5a;
   --spacing-attachment-card: 14rem;
   /* A mockup's tab (SESSION-FIXES-PLAN.md Q10): its header band, a floating control's height,
      a note's marker and the gap from it to the note's box, the box's width and heights
@@ -503,6 +516,10 @@
   --radius-providers-chip-lg: 0.375rem;
   --radius-providers-menu: 0.4375rem;
   --radius-providers-bar: 0.125rem;
+  /* Settings › Storage's cards, its projects' search box and a tick box. */
+  --radius-storage-card: 0.75rem;
+  --radius-storage-search: 0.5rem;
+  --radius-storage-box: 0.25rem;
 
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
@@ -551,6 +568,8 @@
   --text-plan--line-height: 1.421875rem;
 
   --shadow-hairline: inset 0 0 1px 0 oklch(1 0 0 / 20%);
+  /* Settings › Storage's unticked box: its 1.5px edge. */
+  --shadow-storage-box: inset 0 0 0 1.5px var(--color-storage-box);
   --shadow-tooltip: 0 8px 18px oklch(0 0 0 / 25%);
   --shadow-menu: 0 12px 32px oklch(0 0 0 / 35%);
   --shadow-summary: 0 0 0 0.5px oklch(1 0 0 / 16%), 0 3px 7.5px oklch(0 0 0 / 4%), 0 0 20px oklch(0 0 0 / 5%);
@@ -635,6 +654,10 @@
   --text-settings-meta--line-height: 0.9375rem;
   --text-settings-badge: 0.6875rem;
   --text-settings-badge--line-height: 0.8125rem;
+  /* Settings › Storage's total ("245.5 MB used by Brigadier"). */
+  --text-storage-total: 1.625rem;
+  --text-storage-total--line-height: 1;
+  --text-storage-total--letter-spacing: -0.0115em;
 }
 
 @theme inline {
