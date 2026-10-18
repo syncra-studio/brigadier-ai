@@ -157,6 +157,11 @@ reworkRounds: number,
  */
 liveLook?: boolean, 
 /**
+ * A fresh verifier's candidate commit: its worktree starts there, and it gets no
+ * outline, report, Brain section or context pack of the build, only its spec.
+ */
+freshCommit?: string, 
+/**
  * What it took from and gave to the project's Brain (SESSION-FIXES-PLAN.md Q6.6).
  */
 brain: BrainUse, 

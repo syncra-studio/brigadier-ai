@@ -269,3 +269,176 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip_with_reviews_on() {
 async fn a_phase_settles_done_only_with_evidence_at_its_tip_with_reviews_off() {
     a_phase_settles_done_only_with_evidence_at_its_tip(false).await;
 }
+
+const FRESH_RULE: &str = "A standing rule for this session: keep every greeting lowercase.";
+const FRESH_RULE_WORDS: &str = "keep every greeting lowercase";
+const LEAD_REPORT: &str = "Wrote hello.txt; LEAD-REPORT-MARK.";
+
+/// What a fresh verifier saw: its instructions and first message, and the candidate's sha.
+#[derive(Default)]
+struct FreshSeen {
+    verifier: Option<(String, String)>,
+    candidate: Option<String>,
+    reply: Option<String>,
+}
+
+/// A fresh verifier, of a worker's reported task or of the thread's own commit with no task:
+/// it reads the request verbatim, the user's constraint, the criteria and the candidate's sha,
+/// and none of the build's report, Brain section or context pack.
+async fn a_fresh_verifier_gets_only_the_request_constraints_criteria_and_commit(own: bool) {
+    let seen: Arc<Mutex<FreshSeen>> = Arc::default();
+    let log = seen.clone();
+    let flow = Flow::start(
+        if own { "fresh-own" } else { "fresh-task" },
+        Options::default(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    if turn.prompt.contains("You are a fresh verifier") {
+                        log.lock()
+                            .unwrap()
+                            .verifier
+                            .get_or_insert((turn.prompt.clone(), turn.input.clone()));
+                        let reply = turn
+                            .call(
+                                "submit_report",
+                                json!({"summary": "Tried to break it; it holds.",
+                                       "done_when": "[met] hello.txt says hello: hello.txt:1 `hello`"}),
+                            )
+                            .await;
+                        assert!(!reply.is_error, "{}", reply.text);
+                        return Reply::text("Reported.");
+                    }
+                    turn.write("hello.txt", "hello\n");
+                    turn.git(&["add", "hello.txt"]);
+                    turn.git(&["commit", "-qm", "Add hello.txt"]);
+                    log.lock().unwrap().candidate = Some(turn.git(&["rev-parse", "HEAD"]));
+                    let reply = turn
+                        .call(
+                            "submit_report",
+                            json!({"summary": LEAD_REPORT, "changes": ["hello.txt"],
+                                   "done_when": "[met] hello.txt says hello: hello.txt:1 `hello`"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Reported.");
+                }
+                if turn.input.contains(FRESH_RULE) {
+                    let reply = turn
+                        .call(
+                            "remember",
+                            json!({"kind": "constraint", "title": "Greeting rule",
+                                   "user_message": "latest", "quote": FRESH_RULE_WORDS,
+                                   "scope": "session"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("Noted.");
+                }
+                let fresh = |task: Option<&str>| {
+                    let turn = &turn;
+                    let mut args = json!({"fresh": true, "done_when": ["hello.txt says hello."]});
+                    if let Some(task) = task {
+                        args["task"] = json!(task);
+                    }
+                    async move { turn.call("start_verifier", args).await }
+                };
+                if turn.input.contains("Add a greeting file.") && !own {
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "high", "title": "Add a greeting", "kind": "implement",
+                                   "spec": "Create hello.txt.", "provider": "claude"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("Add a greeting file.") {
+                    // The thread builds it itself, then verifies its own commit.
+                    let workspace = &turn.add_dirs[0];
+                    std::fs::write(workspace.join("hello.txt"), "hello\n").unwrap();
+                    super::git(workspace, &["add", "hello.txt"]);
+                    super::git(workspace, &["commit", "-qm", "Add hello.txt"]);
+                    log.lock().unwrap().candidate =
+                        Some(super::git(workspace, &["rev-parse", "HEAD"]));
+                    let reply = fresh(None).await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    log.lock().unwrap().reply = Some(reply.text);
+                    return Reply::text("[quiet]");
+                }
+                if turn.input.contains("[report task-1") && !own {
+                    let reply = fresh(Some("task-1")).await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    log.lock().unwrap().reply = Some(reply.text);
+                    return Reply::text("[quiet]");
+                }
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    flow.say(FRESH_RULE).await;
+    flow.settled().await;
+    flow.say("Add a greeting file.").await;
+    flow.until("the fresh verifier ran", |_| {
+        seen.lock().unwrap().verifier.is_some()
+    })
+    .await;
+    flow.settled().await;
+    let (prompt, input, candidate, reply) = {
+        let seen = seen.lock().unwrap();
+        let (prompt, input) = seen.verifier.clone().unwrap();
+        (
+            prompt,
+            input,
+            seen.candidate.clone().unwrap(),
+            seen.reply.clone().unwrap(),
+        )
+    };
+    let candidate = candidate.trim();
+    assert!(reply.contains("a fresh verifier of"), "{reply}");
+    // The request verbatim, the constraint in the user's words, the criteria and the sha.
+    assert!(prompt.contains("Add a greeting file."), "{prompt}");
+    assert!(prompt.contains(FRESH_RULE_WORDS), "{prompt}");
+    assert!(prompt.contains("hello.txt says hello."), "{prompt}");
+    assert!(prompt.contains(candidate), "{candidate}: {prompt}");
+    assert!(prompt.contains("hello.txt (+1"), "{prompt}");
+    // Nothing of the build.
+    let all = format!("{prompt}\n{input}");
+    for build in [
+        "LEAD-REPORT-MARK",
+        "Create hello.txt.",
+        "[outline",
+        crate::manager::context_pack::BRAIN_HEADING,
+        "Files the thread read",
+        "Definitions in the files",
+    ] {
+        assert!(!all.contains(build), "{build}: {all}");
+    }
+    // Its worktree started at the candidate.
+    let board = flow.board().await;
+    let verifier = board
+        .tasks
+        .values()
+        .find(|task| task.fresh_commit.is_some())
+        .expect("the fresh verifier's task");
+    assert_eq!(verifier.fresh_commit.as_deref(), Some(candidate));
+    assert_eq!(
+        verifier.subject.is_some(),
+        !own,
+        "a task's verifier names it; the thread's own has none"
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_fresh_verifier_of_a_workers_task_gets_only_the_request_and_the_commit() {
+    a_fresh_verifier_gets_only_the_request_constraints_criteria_and_commit(false).await;
+}
+
+#[tokio::test]
+async fn a_fresh_verifier_of_the_threads_own_commit_gets_only_the_request_and_the_commit() {
+    a_fresh_verifier_gets_only_the_request_constraints_criteria_and_commit(true).await;
+}

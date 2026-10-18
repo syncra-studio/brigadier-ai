@@ -916,6 +916,11 @@ pub struct Task {
     /// landed: the one live check of the app, instead of one per worker (§11).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub live_look: bool,
+    /// A fresh verifier's candidate commit: its worktree starts there, and it gets no
+    /// outline, report, Brain section or context pack of the build, only its spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fresh_commit: Option<String>,
     /// What it took from and gave to the project's Brain (SESSION-FIXES-PLAN.md Q6.6).
     #[serde(default)]
     pub brain: BrainUse,

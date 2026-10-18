@@ -125,7 +125,7 @@ How to work:
 - {own_commits}
 - The session's full checks run once per request, on their own; run more yourself when it's worth it, and never ask the user how much to check. [checks failed …]: fix what's the code's; [checks couldn't run …]: fix the cause, then rerun_checks.
 - Reviews by the other vendor scale with risk: one per landing of a worker's; your own changes get one once, since the last review, they pass 150 lines or 5 files of code (not tests/docs), or you mark one risky (run_check's risky); a tiny edit gets none. While a review of your work runs, reply {quiet}; fix its valid findings before your final answer.
-- A big job (many parts, several workers, or hours of work): one plan reviewed with review_plan before building, and start_verifier at the end.
+- A big job (many parts, several workers, or hours of work): one plan reviewed with review_plan before building, and start_verifier at the end (fresh: true sees only request, constraints, done_when, commit; own work too).
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
 - Ask query_brain before you ask the user or start a worker, and check an unverified Brain line before relying on it. When the user settles something later work must respect, keep it with @remember citing their message, silently; a standing rule of theirs (never X, always Y, an exception to one) is a constraint. ask_user answers and outline go-aheads are kept for you. Never reopen a settled decision.
 - Ask the user only what only they can decide, only with ask_user (never a question in your text), then reply {quiet}. Note a judgement call you made for them with note_for_user, kind decided, in the same message as your last run_check, never in a call of its own. Checking it in the app by hand is your job or a worker's, never the user's.
@@ -852,6 +852,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, route_follow_up takes route instead of joins: \"join\", \"wait\", \"new_tab\" (it waits offering the user \"Open as a new tab?\"; you never open tabs yourself) or \"tab\" with another tab's session id (it goes there as the user's message, and this tab shows the user a notice with Undo). A [follow-up …] block lists this workspace's other tabs and their states. list_sessions with workspace true lists those tabs as data: title, state, branch, base and changed files; [workspace] lines tell you when a tab's changed files first overlap yours and when one merges. They are plain facts: whether to warn, rebase, message or ignore is yours to judge.",
         worker: "",
     },
+    Revision {
+        number: FRESH_VERIFIER_REVISION,
+        thread: "From now on, start_verifier takes fresh: true for a verifier that never saw the build: it gets only the original request, the user's constraints, the done_when you pass and the candidate commit (a task's last commit, or with no task your own at commit, your checkout's HEAD by default), no outline, report or context, and tries to break it. Without fresh it works as before. When one is worth it is yours to judge.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1173,6 +1178,10 @@ pub(crate) const SETTLE_GAPS_REVISION: u32 = 97;
 /// Workspaces (WORKSPACES-PLAN.md phase 2): route_follow_up routes a follow-up to join, wait,
 /// offer a new tab, or go to another tab; the board and its facts are named.
 pub(crate) const WORKSPACE_ROUTES_REVISION: u32 = 98;
+/// A fresh verifier (WORKSPACES-PLAN.md phase 3): start_verifier with fresh gets only the
+/// request, the constraints, the criteria and the candidate commit, of a task or the thread's
+/// own work.
+pub(crate) const FRESH_VERIFIER_REVISION: u32 = 99;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -4317,6 +4326,27 @@ mod environment_tests {
         assert!(block.ends_with(&format!(
             "If you have nothing to say now, reply with exactly {QUIET}."
         )));
+    }
+
+    /// The fresh verifier: open threads hear of start_verifier's fresh form once, as their
+    /// call.
+    #[test]
+    fn the_fresh_verifier_reaches_an_open_thread_as_its_call() {
+        let added = REVISIONS
+            .iter()
+            .find(|revision| revision.number == FRESH_VERIFIER_REVISION)
+            .unwrap();
+        assert!(added.worker.is_empty());
+        let note = revision_note(FRESH_VERIFIER_REVISION - 1, false).unwrap();
+        for words in [
+            "fresh: true",
+            "the original request",
+            "your own at commit",
+            "no outline, report or context",
+            "yours to judge",
+        ] {
+            assert!(note.contains(words), "{words}: {note}");
+        }
     }
 
     /// Workspaces: open threads hear the routes and the board once (workers nothing); a

@@ -10,9 +10,9 @@ use brigadier_core::tools::{
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, RecordFindings,
     RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck,
     RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, SettleWait,
-    StartPreview, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
-    SuggestFullAccess, TabChatCall, TabTools, TaskRef, ThreadRunCheck, ToolCall, WaitForReplies,
-    WorkerCall, WritePage, WriteTabFile,
+    StartPreview, StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline,
+    SubmitReport, SuggestFullAccess, TabChatCall, TabTools, ThreadRunCheck, ToolCall,
+    WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -169,7 +169,9 @@ const START_VERIFIER: &str = "Your call, for big or risky work only: start a fre
 on top of a reported implement task's commits. It asks for a review of the whole work by the \
 other vendor, checks every \"done when\" for real, fixes and commits what fails, triages the \
 review's findings and reports. Land the verifier's task then (its commits hold the lead's), not \
-the lead's. Small work needs none: land the lead. Returns at once.";
+the lead's. Small work needs none: land the lead. With fresh: true it gets only the original \
+request, the user's constraints, done_when and the candidate commit (a task's, or commit for your \
+own work) and tries to break it. Returns at once.";
 
 const SETTLE_STEP: &str = "Only during an overnight run: settle a step of the run's plan, by \
 its number, once you have judged its whole scope and every \"done when\" (your own edits \
@@ -579,7 +581,11 @@ fn orchestrator_tools() -> Vec<Tool> {
             APPROVE_OUTLINE,
             input_schema::<ApproveOutline>(),
         ),
-        tool("start_verifier", START_VERIFIER, input_schema::<TaskRef>()),
+        tool(
+            "start_verifier",
+            START_VERIFIER,
+            input_schema::<StartVerifier>(),
+        ),
         tool(
             "propose_overnight",
             "Fill the user's unstarted overnight proposal from their brief or source files. Keep source phase numbers, dependencies, done-when and Rules verbatim; no invented scope. Include every phase the user's words select, also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. A bare goal keeps empty phases: the thread plans it once the run starts. Does not start, review or implement anything: only the user's Start does that. Use the run_id and revision from the proposal briefing.",

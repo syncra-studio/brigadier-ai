@@ -303,12 +303,34 @@ impl RouteFollowUp {
     }
 }
 
-/// A task reference only (`start_verifier`).
+/// A task reference only.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TaskRef {
     /// The task, e.g. "task-3".
     pub task: String,
+}
+
+/// `start_verifier`: a verifier of a reported implement task, or with `fresh` one that gets
+/// only the request, the constraints, the criteria and the candidate commit.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StartVerifier {
+    /// The task, e.g. "task-3". Without it, `fresh` verifies your own work at `commit`.
+    #[serde(default)]
+    pub task: Option<String>,
+    /// A fresh verifier: no outline, report or context of the build, only the original
+    /// request, the user's constraints, the acceptance criteria and the candidate commit.
+    #[serde(default)]
+    pub fresh: bool,
+    /// Your own candidate commit to verify (a fresh verifier with no task); your checkout's
+    /// HEAD when absent. With a task, its last commit is the candidate.
+    #[serde(default)]
+    pub commit: Option<String>,
+    /// The acceptance criteria, word for word from the request or its plan (a fresh
+    /// verifier only).
+    #[serde(default)]
+    pub done_when: Vec<String>,
 }
 
 /// `stop_worker`: stop a worker for good, saying why.
@@ -1182,7 +1204,7 @@ pub enum OrchestratorCall {
     PlanPhases(PlanPhases),
     ProposePlan(ProposePlan),
     ApproveOutline(ApproveOutline),
-    StartVerifier(TaskRef),
+    StartVerifier(StartVerifier),
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
     FinishSession(FinishSession),

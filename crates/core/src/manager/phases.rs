@@ -14,7 +14,7 @@ use super::conversation::Envelope;
 use super::prompts::QUIET;
 use super::workers::TaskExtra;
 use crate::model::{ConversationId, PermissionLevel};
-use crate::tools::{ApproveOutline, PlanPhases, TaskRef};
+use crate::tools::{ApproveOutline, PlanPhases, StartVerifier};
 use crate::work::{
     ApprovalSubject, CardId, InjectionKind, PhaseStage, Plan, PlanApprover, PlanState, PlanStep,
     Task, TaskId, TaskKind, TaskState, WorkerRole,
@@ -801,10 +801,27 @@ impl SessionManager {
         }
     }
 
-    /// `start_verifier`: the orchestrator's call for big or risky work. Starts a fresh verifier
-    /// of a reported lead's work, which the orchestrator then lands instead of the lead.
-    pub(crate) async fn verify_task(&self, id: &ConversationId, args: TaskRef) -> Result<String> {
-        let lead = self.find_task(id, &args.task).await?;
+    /// `start_verifier`: the orchestrator's call for big or risky work. Starts a verifier of a
+    /// reported lead's work, which the orchestrator then lands instead of the lead; with
+    /// `fresh`, one that gets only the request, the constraints, the criteria and the
+    /// candidate commit, of a task's work or of the thread's own.
+    pub(crate) async fn verify_task(
+        &self,
+        id: &ConversationId,
+        args: StartVerifier,
+    ) -> Result<String> {
+        let lead = match &args.task {
+            Some(task) => Some(self.find_task(id, task).await?),
+            None if args.fresh => None,
+            None => {
+                return Err(Error::Invalid(
+                    "start_verifier needs a task, or fresh: true to verify your own work at a commit".into(),
+                ));
+            }
+        };
+        let Some(lead) = lead else {
+            return self.verify_fresh(id, None, args).await;
+        };
         if lead.kind != TaskKind::Implement || lead.role == Some(WorkerRole::Verifier) {
             return Err(Error::Invalid(format!(
                 "task-{} gets no verifier: only implement work does, and not a verifier's own",
@@ -836,6 +853,9 @@ impl SessionManager {
                 "The overnight run is ending: no verifier starts now. Land what is ready; what is left goes into the morning report.".into(),
             ));
         }
+        if args.fresh {
+            return self.verify_fresh(id, Some(lead), args).await;
+        }
         let verifier = self.start_verifier(&lead, &report).await?;
         self.orchestrator_step(
             id,
@@ -856,6 +876,173 @@ impl SessionManager {
             "Started task-{v}, a fresh verifier of task-{n}'s work, on top of its commits. Its report arrives later as a message; land task-{v}, not task-{n}, once it reports.",
             v = verifier.number,
             n = lead.number,
+        ))
+    }
+
+    /// A fresh verifier (`start_verifier` with `fresh`): of `lead`'s reported work, or without
+    /// one of the thread's own at `commit` (its checkout's HEAD when absent). Its spec holds
+    /// only the request verbatim, the user's constraints, the acceptance criteria and the
+    /// candidate commit with its diff against the merge base: no outline, report, Brain
+    /// section or context pack. Its worktree starts at the candidate; the thread lands it.
+    async fn verify_fresh(
+        &self,
+        id: &ConversationId,
+        lead: Option<Task>,
+        args: StartVerifier,
+    ) -> Result<String> {
+        let conversation = self.core.conversation(id)?;
+        let Some(crate::model::Setup::Session { environment, .. }) = &conversation.setup else {
+            return Err(Error::Invalid("a verifier belongs to a session".into()));
+        };
+        // The candidate: a task's last commit in its worktree, else the thread's own at
+        // `commit`, in its effective workspace (an overnight run's worktree while one runs).
+        let (checkout, wanted, base) = match &lead {
+            Some(lead) => {
+                let workspace = lead.workspace.as_ref();
+                let Some(worktree) = workspace.and_then(|w| w.worktree.clone()) else {
+                    return Err(Error::Invalid(format!(
+                        "task-{} has no worktree to verify",
+                        lead.number
+                    )));
+                };
+                (worktree, None, workspace.and_then(|w| w.base.clone()))
+            }
+            None => {
+                let Some(workspace) = self.effective_workspace(id).await? else {
+                    return Err(Error::Invalid("a verifier belongs to a session".into()));
+                };
+                let base = match environment {
+                    crate::model::Environment::NewWorktree { base, .. } => base.clone(),
+                    crate::model::Environment::LocalCheckout { branch } => {
+                        format!("{branch}@{{upstream}}")
+                    }
+                };
+                (
+                    workspace.path.to_string_lossy().into_owned(),
+                    args.commit.clone(),
+                    Some(base),
+                )
+            }
+        };
+        let git = self.git.clone();
+        let (commit, merge_base, stat) = super::blocking(move || {
+            let repo = git
+                .open(std::path::Path::new(&checkout))
+                .map_err(super::git_error)?;
+            let commit = repo
+                .resolve(wanted.as_deref().unwrap_or("HEAD"))
+                .map_err(super::git_error)?;
+            // No base found (a branch without an upstream): no range is claimed.
+            let merge_base = base
+                .and_then(|base| repo.resolve(&base).ok())
+                .and_then(|base| repo.merge_base(&commit, &base).ok())
+                .filter(|merge_base| merge_base != &commit);
+            let stat = merge_base
+                .as_ref()
+                .and_then(|merge_base| repo.diff_stat(merge_base, &commit).ok());
+            Ok((commit, merge_base, stat))
+        })
+        .await?;
+        let request = match &lead {
+            Some(lead) => lead.request_id.clone(),
+            None => self.request_for(id, None).await,
+        };
+        let request_text = match &request {
+            Some(request) => self.request_verbatim(id, request).await?,
+            None => String::new(),
+        };
+        let constraints = super::constraints::brief_text(&self.active_constraints(id).await)
+            .unwrap_or_else(|| "The user set no standing constraints for this session.".to_owned());
+        let criteria = if args.done_when.is_empty() {
+            "None were named: judge the change against the request itself.".to_owned()
+        } else {
+            args.done_when
+                .iter()
+                .map(|line| format!("- {}", line.trim()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let short = &commit.0[..commit.0.len().min(12)];
+        let candidate = match (&merge_base, &stat) {
+            (Some(merge_base), Some(stat)) => {
+                let mut text = format!(
+                    "Commit {} ({} files, +{} \u{2212}{} against the merge base {}). Read the diff with `git diff {} {}`.",
+                    commit.0,
+                    stat.files.len(),
+                    stat.insertions,
+                    stat.deletions,
+                    merge_base.0,
+                    merge_base.0,
+                    commit.0,
+                );
+                for file in &stat.files {
+                    text.push_str(&format!(
+                        "\n- {} (+{} \u{2212}{})",
+                        file.path, file.insertions, file.deletions
+                    ));
+                }
+                text
+            }
+            _ => format!(
+                "Commit {}. Its range against a base couldn't be established here: read it with `git show {}` and the commits before it with `git log`.",
+                commit.0, commit.0
+            ),
+        };
+        let spec = format!(
+            "You are a fresh verifier: you never saw this change being built, and you get no outline, report or notes of the build, only what is below. Your worktree is a new branch at the candidate commit. Try to break the change against the original request: run it, use it, read the diff, and check each acceptance criterion for real, plus the project's checks (typecheck, lint, build and the tests of what changed). Fix and commit what fails, in small steps, without widening the scope; say plainly what you found beyond the request. Then submit_report: pass or fail per criterion with its evidence, what you fixed, and what is left. needs_user: only what the user alone can do.\n\nThe original request, verbatim:\n{request_text}\n\n{constraints}\n\nThe acceptance criteria:\n{criteria}\n\nThe candidate:\n{candidate}"
+        );
+        let title = match &lead {
+            Some(lead) => lead.title.clone(),
+            None => format!("commit {short}"),
+        };
+        let verifier = self
+            .create_task_as(
+                id,
+                format!("Verify {title}"),
+                TaskKind::Implement,
+                spec,
+                None,
+                None,
+                Vec::new(),
+                None,
+                lead.clone(),
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+                TaskExtra {
+                    role: Some(WorkerRole::Verifier),
+                    phase: lead.as_ref().and_then(|lead| lead.phase),
+                    request,
+                    fresh_commit: Some(commit.0.clone()),
+                    ..TaskExtra::default()
+                },
+            )
+            .await?;
+        if let Some(lead) = &lead {
+            self.set_phase_stage(lead, PhaseStage::Verifying).await;
+        }
+        self.orchestrator_step(
+            id,
+            crate::work::OrchestratorStepKind::Created {
+                task_id: verifier.id.clone(),
+            },
+        )
+        .await;
+        let of = match &lead {
+            Some(lead) => format!("task-{}'s work", lead.number),
+            None => format!("your commit {short}"),
+        };
+        if let Some(wait) = &verifier.quota_wait {
+            return Ok(format!(
+                "Created task-{v}, a fresh verifier of {of}, but no model it may use can take it now: {}. It starts on its own when one can; land task-{v} once it reports.",
+                wait.reason,
+                v = verifier.number,
+            ));
+        }
+        Ok(format!(
+            "Started task-{v}, a fresh verifier of {of}: it gets only the request, the constraints, the criteria and the candidate commit. Its report arrives later as a message; land task-{v} once it reports.",
+            v = verifier.number,
         ))
     }
 

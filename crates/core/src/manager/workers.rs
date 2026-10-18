@@ -1321,6 +1321,7 @@ impl SessionManager {
             review_hold: None,
             review_settled: false,
             live_look: extra.live_look,
+            fresh_commit: extra.fresh_commit,
             brain: Default::default(),
             resuming: false,
             takeover: None,
@@ -1462,17 +1463,25 @@ impl SessionManager {
         }
         // What the Brain knows about the task, then what the thread already read, go with its
         // first message (SESSION-FIXES-PLAN.md Q6.6, THREAD-PLAN.md Q8 lever 1).
-        let brain = self
-            .brain_section(&task, workspace.worktree.as_deref())
-            .await;
+        // A fresh verifier gets none of the build's context: its spec holds all it reads.
+        let fresh = task.fresh_commit.is_some();
+        let brain = match fresh {
+            true => None,
+            false => {
+                self.brain_section(&task, workspace.worktree.as_deref())
+                    .await
+            }
+        };
         let pack = match &workspace.worktree {
-            Some(worktree) => self.context_pack(&task, worktree).await,
-            None => None,
+            Some(worktree) if !fresh => self.context_pack(&task, worktree).await,
+            _ => None,
         };
         let mut text = String::new();
-        // The user's standing constraints first, word for word (BUILD-PLAN D1.1).
-        if let Some(section) =
-            super::constraints::brief_text(&self.active_constraints(&conversation_id).await)
+        // The user's standing constraints first, word for word (BUILD-PLAN D1.1); a fresh
+        // verifier's spec already holds them.
+        if !fresh
+            && let Some(section) =
+                super::constraints::brief_text(&self.active_constraints(&conversation_id).await)
         {
             text.push_str(&section);
             text.push_str("\n\n");
@@ -2368,6 +2377,12 @@ impl SessionManager {
                     || (task.kind == TaskKind::Implement && continues_work(subject)) =>
             {
                 self.work_head(subject).await?
+            }
+            // A fresh verifier of the thread's own work starts at its candidate commit; its
+            // commits go on top of it.
+            (_, None) if task.fresh_commit.is_some() => {
+                let commit = Oid(task.fresh_commit.clone().unwrap_or_default());
+                (commit.clone(), commit, false)
             }
             // A run's workers start from its branch's tip, never the user's uncommitted files.
             _ if run_branch.is_some() => {
@@ -5339,6 +5354,8 @@ pub(crate) struct TaskExtra {
     pub mockup: Option<crate::work::MockupPart>,
     /// The live look at the integrated tree's dev build (`delegate_task`'s `live_look`).
     pub live_look: bool,
+    /// A fresh verifier's candidate commit (`start_verifier` with `fresh`).
+    pub fresh_commit: Option<String>,
 }
 
 pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {
