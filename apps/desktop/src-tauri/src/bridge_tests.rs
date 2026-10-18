@@ -124,7 +124,9 @@ async fn quota_recovery(initially_ready: bool) {
                     .writer
                     .write(&ServerFrame::Response {
                         id,
-                        result: Outcome::Ok { value: response },
+                        result: Outcome::Ok {
+                            value: Box::new(response),
+                        },
                     })
                     .await
                     .unwrap();

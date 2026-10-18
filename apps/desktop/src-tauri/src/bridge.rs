@@ -414,15 +414,14 @@ impl Bridge {
         match frame {
             ServerFrame::Response { id, result } => {
                 if pending.get(&id).is_some_and(Option::is_none)
-                    && let Outcome::Ok {
-                        value: Response::GetAccounts { accounts },
-                    } = &result
+                    && let Outcome::Ok { value } = &result
+                    && let Response::GetAccounts { accounts } = value.as_ref()
                 {
                     self.notify_warnings(accounts);
                 }
                 if let Some(Some(reply)) = pending.remove(&id) {
                     let _ = reply.send(match result {
-                        Outcome::Ok { value } => Ok(value),
+                        Outcome::Ok { value } => Ok(*value),
                         Outcome::Err { error } => Err(error),
                     });
                 }

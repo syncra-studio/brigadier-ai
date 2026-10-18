@@ -2250,14 +2250,16 @@ pub enum DictationUpdate {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum Outcome {
-    Ok { value: Response },
+    Ok { value: Box<Response> },
     Err { error: IpcError },
 }
 
 impl From<Result<Response, IpcError>> for Outcome {
     fn from(result: Result<Response, IpcError>) -> Self {
         match result {
-            Ok(value) => Self::Ok { value },
+            Ok(value) => Self::Ok {
+                value: Box::new(value),
+            },
             Err(error) => Self::Err { error },
         }
     }

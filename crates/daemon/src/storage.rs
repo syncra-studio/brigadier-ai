@@ -947,7 +947,7 @@ async fn ask(
             match connection.reader.read::<ServerFrame>().await {
                 Ok(Some(ServerFrame::Response { id: 1, result })) => {
                     return match result {
-                        Outcome::Ok { value } => Ok(Some(value)),
+                        Outcome::Ok { value } => Ok(Some(*value)),
                         Outcome::Err { error } => Err(error.message),
                     };
                 }
