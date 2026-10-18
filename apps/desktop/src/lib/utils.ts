@@ -102,7 +102,6 @@ const twMerge = extendTailwindMerge({
         "browser",
         "notice",
         "notice-button",
-        "settings-title",
         "settings-heading",
         "settings-body",
         "settings-small",
