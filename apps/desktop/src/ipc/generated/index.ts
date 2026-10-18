@@ -398,6 +398,7 @@ export type { SourceAction } from "./SourceAction";
 export type { SourceBranch } from "./SourceBranch";
 export type { SourceChange } from "./SourceChange";
 export type { SourceFile } from "./SourceFile";
+export type { SourceGitRun } from "./SourceGitRun";
 export type { SourceMerge } from "./SourceMerge";
 export type { SourceScope } from "./SourceScope";
 export type { SourceSnapshot } from "./SourceSnapshot";

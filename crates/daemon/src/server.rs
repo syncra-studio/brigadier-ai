@@ -1941,6 +1941,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::SourceAction { target, action } => Response::SourceAction {
             state: heap(|| sessions.source_action(&target, action)).await?,
         },
+        Request::GetSourceGitOutput { target } => Response::GetSourceGitOutput {
+            runs: sessions.source_git_output(&target).await?,
+        },
         Request::GetConflictFile { target, path } => Response::GetConflictFile {
             file: heap(|| sessions.conflict_file(&target, path)).await?,
         },

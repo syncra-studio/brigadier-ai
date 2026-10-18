@@ -2047,6 +2047,8 @@ mod review_picks_tests;
 mod review_switch_tests;
 #[cfg(test)]
 mod review_tiers_tests;
+#[cfg(test)]
+mod source_branch_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
 mod same_session_tests;

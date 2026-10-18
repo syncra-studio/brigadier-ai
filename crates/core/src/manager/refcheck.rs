@@ -68,6 +68,11 @@ pub(crate) struct RefRecords {
 }
 
 impl RefRecords {
+    /// The branches recorded in the repository whose shared git folder is `common`.
+    pub(crate) fn branches_of(&self, common: &Path) -> Vec<String> {
+        self.with(common, |records| records.branches.keys().cloned().collect())
+    }
+
     fn with<R>(&self, common: &Path, work: impl FnOnce(&mut RepoRecords) -> R) -> R {
         let mut repos = self.repos.lock().unwrap_or_else(|p| p.into_inner());
         work(repos.entry(common.to_owned()).or_default())

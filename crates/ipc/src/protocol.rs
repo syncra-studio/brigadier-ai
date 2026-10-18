@@ -23,10 +23,10 @@ use brigadier_core::{
     ProjectPatch, ProposedPlan, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals,
     RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome,
     ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, Setup,
-    SetupRequest, SourceAction, SourceBranch, SourceChange, SourceScope, SourceState, StoredCopy,
-    TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
-    UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
-    WorkspaceTree,
+    SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState,
+    StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget,
+    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -777,6 +777,10 @@ pub enum Request {
     SourceAction {
         target: WorkspaceTarget,
         action: SourceAction,
+    },
+    /// A Source panel's Git Output: the git commands it ran on the checkout, oldest first.
+    GetSourceGitOutput {
+        target: WorkspaceTarget,
     },
     /// A conflicted file's versions, for its conflict and merge editor tabs.
     GetConflictFile {
@@ -1590,6 +1594,9 @@ pub enum Response {
     },
     SourceAction {
         state: SourceState,
+    },
+    GetSourceGitOutput {
+        runs: Vec<SourceGitRun>,
     },
     GetConflictFile {
         file: ConflictFile,

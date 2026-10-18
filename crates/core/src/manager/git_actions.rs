@@ -197,13 +197,16 @@ impl SessionManager {
         path: PathBuf,
         change: impl FnOnce(&Repo) -> brigadier_git::Result<()> + Send + 'static,
     ) -> Result<SourceState> {
-        let git = self.git.clone();
-        blocking(move || {
-            let repo = git.open(&path).map_err(git_error)?;
+        let (git, log) = self.logged_git();
+        let dir = path.clone();
+        let done = blocking(move || {
+            let repo = git.open(&dir).map_err(git_error)?;
             change(&repo).map_err(git_error)?;
             source_state_of(&repo)
         })
-        .await
+        .await;
+        self.file_output(&path, &log);
+        done
     }
 
     /// The user's commit of the checkout's changes (with `include_unstaged`, every change),
@@ -295,10 +298,11 @@ impl SessionManager {
         } else {
             message
         };
-        let git = self.git.clone();
+        let (git, log) = self.logged_git();
         let text = message.clone();
-        blocking(move || {
-            let repo = git.open(&path).map_err(git_error)?;
+        let dir = path.clone();
+        let done = blocking(move || {
+            let repo = git.open(&dir).map_err(git_error)?;
             let branch = repo
                 .state()
                 .map_err(git_error)?
@@ -318,7 +322,9 @@ impl SessionManager {
                 note,
             })
         })
-        .await
+        .await;
+        self.file_output(&path, &log);
+        done
     }
 
     /// The user's push of the checkout's branch.

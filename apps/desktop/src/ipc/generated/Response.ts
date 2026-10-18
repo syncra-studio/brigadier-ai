@@ -60,6 +60,7 @@ import type { RoutePreview } from "./RoutePreview";
 import type { SendOutcome } from "./SendOutcome";
 import type { Settings } from "./Settings";
 import type { SourceBranch } from "./SourceBranch";
+import type { SourceGitRun } from "./SourceGitRun";
 import type { SourceState } from "./SourceState";
 import type { StorageReport } from "./StorageReport";
 import type { StoredCopy } from "./StoredCopy";
@@ -121,7 +122,7 @@ bytes: number, } | { "method": "getReviewDiff", review: ReviewDiff, } | { "metho
 /**
  * Whether a watch runs now (false when stopped, or the target has no checkout).
  */
-watching: boolean, } | { "method": "startSearch", id: number, } | { "method": "cancelSearch" } | { "method": "replaceInFiles", outcome: ReplaceOutcome, } | { "method": "getProjectSourceState", state: SourceState, } | { "method": "changeProjectSource", state: SourceState, } | { "method": "commitProjectChanges", outcome: CommitOutcome, } | { "method": "listSourceBranches", branches: Array<SourceBranch>, } | { "method": "sourceAction", state: SourceState, } | { "method": "getConflictFile", file: ConflictFile, } | { "method": "writeCommitMessage", message: string, 
+watching: boolean, } | { "method": "startSearch", id: number, } | { "method": "cancelSearch" } | { "method": "replaceInFiles", outcome: ReplaceOutcome, } | { "method": "getProjectSourceState", state: SourceState, } | { "method": "changeProjectSource", state: SourceState, } | { "method": "commitProjectChanges", outcome: CommitOutcome, } | { "method": "listSourceBranches", branches: Array<SourceBranch>, } | { "method": "sourceAction", state: SourceState, } | { "method": "getSourceGitOutput", runs: Array<SourceGitRun>, } | { "method": "getConflictFile", file: ConflictFile, } | { "method": "writeCommitMessage", message: string, 
 /**
  * Why the user's chosen model didn't write it, when it didn't.
  */

@@ -2762,6 +2762,35 @@ pub enum SourceAction {
     Pull,
     Push,
     Fetch,
+    /// Rebases the checked-out branch onto a branch (local, or remote as `origin/main`); one
+    /// that stops on conflicts is undone.
+    Rebase {
+        branch: String,
+    },
+    /// Creates a branch and switches to it, from what is checked out or from `from`.
+    CreateBranch {
+        name: String,
+        from: Option<String>,
+    },
+    /// Renames the checked-out branch.
+    RenameBranch {
+        name: String,
+    },
+    /// Deletes a local branch; with `force` also one not merged.
+    DeleteBranch {
+        name: String,
+        force: bool,
+    },
+    /// Stashes the changes; with `untracked` the untracked files too.
+    Stash {
+        untracked: bool,
+    },
+    /// Applies the latest stash; with `pop` drops it once applied.
+    ApplyStash {
+        pop: bool,
+    },
+    /// Drops the latest stash.
+    DropStash,
     /// Writes a conflicted file as the user resolved it, only while it is still `expected`
     /// (absent: deleted); with `stage`, marks it resolved.
     Resolve {
@@ -2770,6 +2799,19 @@ pub enum SourceAction {
         text: String,
         stage: bool,
     },
+}
+
+/// A git command the Source panel ran on a checkout, for its Git Output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceGitRun {
+    /// When it ended, in ms since the Unix epoch.
+    pub at_ms: i64,
+    /// `git` and its arguments.
+    pub command: String,
+    /// What it printed, out and error together.
+    pub output: String,
+    pub ok: bool,
 }
 
 /// One file of the Source panel.

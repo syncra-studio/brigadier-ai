@@ -201,6 +201,8 @@ pub struct SessionManager {
     /// The engine's branches and their tips, for the ref check (PLAN bug 6); read and written
     /// under each repository's ref lock, off the async threads.
     ref_records: Arc<refcheck::RefRecords>,
+    /// Each checkout's Git Output, for the Source panel ([`source_actions`]).
+    source_output: source_actions::SourceOutput,
     /// The sessions' full checks on the integrated tree ([`integrated_checks`]).
     integrated: integrated_checks::IntegratedChecks,
     /// The thread's commands gone to the background ([`background_runs`]).
@@ -374,6 +376,7 @@ impl SessionManager {
             known_windows: std::sync::Mutex::new(HashMap::new()),
             run_passes: run::RunPasses::default(),
             ref_records: Arc::default(),
+            source_output: source_actions::SourceOutput::default(),
             integrated: integrated_checks::IntegratedChecks::default(),
             background_runs: background_runs::BackgroundRuns::default(),
             previews: preview::Previews::default(),

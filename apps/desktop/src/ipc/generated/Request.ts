@@ -98,7 +98,7 @@ amend?: boolean, } | { "method": "pushChanges", conversationId: ConversationId, 
 /**
  * Rewrites the last commit instead (a blank message keeps its own).
  */
-amend?: boolean, } | { "method": "listSourceBranches", target: WorkspaceTarget, } | { "method": "sourceAction", target: WorkspaceTarget, action: SourceAction, } | { "method": "getConflictFile", target: WorkspaceTarget, path: string, } | { "method": "writeCommitMessage", target: WorkspaceTarget, } | { "method": "answerCard", conversationId: ConversationId, cardId: CardId, decision: ApprovalDecision, } | { "method": "answerQuestion", conversationId: ConversationId, cardId: CardId, answers: Array<string>, 
+amend?: boolean, } | { "method": "listSourceBranches", target: WorkspaceTarget, } | { "method": "sourceAction", target: WorkspaceTarget, action: SourceAction, } | { "method": "getSourceGitOutput", target: WorkspaceTarget, } | { "method": "getConflictFile", target: WorkspaceTarget, path: string, } | { "method": "writeCommitMessage", target: WorkspaceTarget, } | { "method": "answerCard", conversationId: ConversationId, cardId: CardId, decision: ApprovalDecision, } | { "method": "answerQuestion", conversationId: ConversationId, cardId: CardId, answers: Array<string>, 
 /**
  * How the user gave the answer, kept with it.
  */

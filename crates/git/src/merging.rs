@@ -1,13 +1,14 @@
 //! The Source panel's own git: merging a branch into the checkout's, resolving its conflicts
-//! file by file, aborting it; switching branches, pulling and fetching. Each change takes the
-//! landing lock, as a commit does, and leaves git's own refusals (local changes in the way, a
-//! branch with no upstream) to the caller as errors.
+//! file by file, aborting it; switching, rebasing, creating and renaming branches; stashing;
+//! pulling and fetching. Each change takes the landing lock, as a commit does (a rebase runs
+//! under its caller's), and leaves git's own refusals (local changes in the way, a branch with
+//! no upstream) to the caller as errors.
 
 use std::fs;
 
 use crate::{
     Error, Repo, Result,
-    command::{TempIndex, failure, valid_path},
+    command::{TempIndex, check, failure, valid_path},
     parse,
 };
 
@@ -139,9 +140,18 @@ impl Repo {
         let lock = self.landing_lock();
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         self.refuse_busy()?;
+        let name = self.git_name(branch)?;
+        // Hooks run as they would for the user's own `git merge`.
+        let args = ["merge", "--no-edit", "--no-autostash", name.as_str()];
+        let out = self.run(&args, false)?;
+        self.stopped_on_conflicts(&args, &out)
+    }
+
+    /// The name to hand git for a local or remote branch's short name: the short name, which
+    /// git writes in messages and conflict markers, unless git would read it as something else
+    /// (a tag of the same name), then its full ref.
+    fn git_name(&self, branch: &str) -> Result<String> {
         let full = self.branch_ref(branch)?;
-        // The short name, which git writes in the merge message and the conflict markers,
-        // unless git would read it as something else (a tag of the same name).
         let picked = self.run(
             &[
                 "rev-parse",
@@ -152,15 +162,13 @@ impl Repo {
             ],
             true,
         )?;
-        let name = if picked.status.success() && parse::line(&picked.stdout)? == full {
-            branch
-        } else {
-            full.as_str()
-        };
-        // Hooks run as they would for the user's own `git merge`.
-        let args = ["merge", "--no-edit", "--no-autostash", name];
-        let out = self.run(&args, false)?;
-        self.stopped_on_conflicts(&args, &out)
+        Ok(
+            if picked.status.success() && parse::line(&picked.stdout)? == full {
+                branch.to_owned()
+            } else {
+                full
+            },
+        )
     }
 
     /// After a merge or pull: false when it went through, true when it stopped on conflicts,
@@ -211,6 +219,142 @@ impl Repo {
         self.validate_branch(&local)?;
         self.cmd(&["switch", "--quiet", "--no-guess", &local], false)?;
         Ok(())
+    }
+
+    /// Rebases the checked-out branch onto `branch` (a local or remote branch's short name), as
+    /// `git rebase` does. One that stops on conflicts is undone and says so: the panel resolves
+    /// a merge's conflicts, not a rebase's, and a rebase left half done keeps the checkout busy.
+    /// Only while `current` is still the branch checked out. Takes no lock: the caller holds
+    /// the ref lock ([`Self::with_ref_lock`]), so the branch's new tip is recorded before any
+    /// ref check reads it.
+    pub fn rebase_onto(&self, current: &str, branch: &str) -> Result<()> {
+        self.refuse_busy()?;
+        if self.state()?.current_branch.as_deref() != Some(current) {
+            return Err(Error::Invalid(format!(
+                "{current} is no longer checked out; look again"
+            )));
+        }
+        let name = self.git_name(branch)?;
+        // Only the checked-out branch moves, whatever `rebase.updateRefs` says.
+        let args = [
+            "rebase",
+            "--no-autostash",
+            "--no-update-refs",
+            name.as_str(),
+        ];
+        let out = self.run(&args, false)?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let dir = self.git_dir()?;
+        if dir.join("rebase-merge").exists() || dir.join("rebase-apply").exists() {
+            let conflicted = !self.cmd(&["ls-files", "--unmerged"], true)?.is_empty();
+            self.cmd(&["rebase", "--abort"], false)?;
+            // Stopped for another reason (a commit it couldn't sign): git's own words.
+            if !conflicted {
+                return Err(failure(&args, &out));
+            }
+            return Err(Error::Invalid(format!(
+                "rebasing onto {branch} stopped on conflicts, so it was undone. Merge {branch} \
+                 instead to resolve them here"
+            )));
+        }
+        Err(failure(&args, &out))
+    }
+
+    /// Creates branch `name` and switches to it, from what is checked out or from `from` (a
+    /// local or remote branch's short name). An existing branch is never replaced.
+    pub fn create_and_switch(&self, name: &str, from: Option<&str>) -> Result<()> {
+        let lock = self.landing_lock();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.refuse_busy()?;
+        self.validate_branch(name)?;
+        let start = from.map(|from| self.git_name(from)).transpose()?;
+        let mut args = vec!["switch", "--quiet", "-c", name];
+        args.extend(start.as_deref());
+        self.cmd(&args, false)?;
+        Ok(())
+    }
+
+    /// Renames the checked-out branch, `current`, to `name`, only while `current` is still the
+    /// one checked out; an existing branch is never replaced.
+    pub fn rename_current_branch(&self, current: &str, name: &str) -> Result<()> {
+        let lock = self.landing_lock();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.refuse_busy()?;
+        self.validate_branch(name)?;
+        if self.state()?.current_branch.as_deref() != Some(current) {
+            return Err(Error::Invalid(format!(
+                "{current} is no longer checked out; look again"
+            )));
+        }
+        self.cmd(&["branch", "-m", current, name], false)?;
+        Ok(())
+    }
+
+    /// Stashes the checkout's changes (with `untracked`, its untracked files too) and leaves it
+    /// as its last commit.
+    pub fn stash(&self, untracked: bool) -> Result<()> {
+        let lock = self.landing_lock();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.refuse_busy()?;
+        let before = self.stash_count()?;
+        let mut args = vec!["stash", "push", "--quiet"];
+        if untracked {
+            args.push("--include-untracked");
+        }
+        check(&args, self.stash_run(&args)?)?;
+        if self.stash_count()? == before {
+            return Err(Error::Invalid("there are no changes to stash".into()));
+        }
+        Ok(())
+    }
+
+    /// Applies the latest stash to the checkout; with `pop` it is dropped once it applied
+    /// cleanly. Returns whether it stopped on conflicts (the stash is kept then).
+    pub fn apply_stash(&self, pop: bool) -> Result<bool> {
+        let lock = self.landing_lock();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.refuse_busy()?;
+        if self.stash_count()? == 0 {
+            return Err(Error::Invalid("there is no stash".into()));
+        }
+        let args = ["stash", if pop { "pop" } else { "apply" }, "--quiet"];
+        let out = self.stash_run(&args)?;
+        if out.status.success() {
+            return Ok(false);
+        }
+        if !self.cmd(&["ls-files", "--unmerged"], true)?.is_empty() {
+            return Ok(true);
+        }
+        Err(failure(&args, &out))
+    }
+
+    /// Drops the latest stash.
+    pub fn drop_stash(&self) -> Result<()> {
+        let lock = self.landing_lock();
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if self.stash_count()? == 0 {
+            return Err(Error::Invalid("there is no stash".into()));
+        }
+        self.cmd(&["stash", "drop", "--quiet"], false)?;
+        Ok(())
+    }
+
+    /// A stash command. Git's stash reads paths of its own as pathspecs (cleaning out what it
+    /// stashed), which literal pathspecs would leave behind.
+    fn stash_run(&self, args: &[&str]) -> Result<std::process::Output> {
+        let literal = [("GIT_LITERAL_PATHSPECS".into(), "0".into())];
+        self.git.run(Some(&self.root), args, false, &literal, None)
+    }
+
+    /// How many stashes the repository keeps.
+    pub fn stash_count(&self) -> Result<usize> {
+        let out = self.cmd(&["stash", "list", "--format=%H"], true)?;
+        Ok(out
+            .split(|&b| b == b'\n')
+            .filter(|line| !line.is_empty())
+            .count())
     }
 
     /// Pulls the checked-out branch from its upstream as `git pull` does, always merging (the
@@ -408,6 +552,131 @@ mod tests {
         fs::write(root.join("f.txt"), "a\nmain\nc\n").unwrap();
         repo.commit_changes("Main", true).unwrap();
         (dir, repo, root)
+    }
+
+    #[test]
+    fn a_rebase_replays_the_branch_and_one_that_conflicts_is_undone() {
+        let (_dir, repo, root) = conflicting("rebase");
+        let main = repo.branch_tip("main").unwrap().unwrap();
+        // feature changed `b` its own way: the rebase stops, and is undone.
+        repo.cmd(&["checkout", "-q", "feature"], false).unwrap();
+        let feature = repo.branch_tip("feature").unwrap().unwrap();
+        let err = repo.rebase_onto("feature", "main").unwrap_err().to_string();
+        assert!(
+            err.contains("stopped on conflicts, so it was undone"),
+            "{err}"
+        );
+        assert_eq!(repo.branch_tip("feature").unwrap(), Some(feature));
+        assert_eq!(repo.busy().unwrap(), None);
+        assert_eq!(
+            fs::read_to_string(root.join("f.txt")).unwrap(),
+            "a\nfeature\nc\n"
+        );
+        // A branch of its own from main's parent rebases cleanly onto main.
+        repo.cmd(&["checkout", "-q", "-b", "side", "main~1"], false)
+            .unwrap();
+        fs::write(root.join("side.txt"), "side\n").unwrap();
+        repo.commit_changes("Side", true).unwrap();
+        assert!(
+            repo.rebase_onto("feature", "main").is_err(),
+            "not checked out"
+        );
+        repo.rebase_onto("side", "main").unwrap();
+        let parent = repo.read_only(&["rev-parse", "side~1"]).unwrap();
+        assert_eq!(parent.trim(), main.0);
+    }
+
+    #[test]
+    fn branches_are_created_from_head_or_another_and_renamed() {
+        let (_dir, repo, _root) = conflicting("branch-create");
+        let main = repo.branch_tip("main").unwrap();
+        repo.create_and_switch("topic", None).unwrap();
+        assert_eq!(
+            repo.state().unwrap().current_branch.as_deref(),
+            Some("topic")
+        );
+        assert_eq!(repo.branch_tip("topic").unwrap(), main);
+        repo.create_and_switch("from-feature", Some("feature"))
+            .unwrap();
+        assert_eq!(
+            repo.branch_tip("from-feature").unwrap(),
+            repo.branch_tip("feature").unwrap()
+        );
+        // An existing branch is never replaced.
+        assert!(repo.create_and_switch("main", None).is_err());
+        assert_eq!(repo.branch_tip("main").unwrap(), main);
+        assert!(
+            repo.rename_current_branch("topic", "renamed").is_err(),
+            "not checked out"
+        );
+        repo.rename_current_branch("from-feature", "renamed")
+            .unwrap();
+        assert_eq!(
+            repo.state().unwrap().current_branch.as_deref(),
+            Some("renamed")
+        );
+        assert!(repo.branch_tip("from-feature").unwrap().is_none());
+        assert!(repo.rename_current_branch("renamed", "main").is_err());
+    }
+
+    #[test]
+    fn changes_are_stashed_applied_popped_and_dropped() {
+        let (_dir, repo, root) = conflicting("stash");
+        assert!(repo.stash(false).is_err(), "nothing to stash");
+        assert!(repo.apply_stash(false).is_err(), "no stash yet");
+        fs::write(root.join("f.txt"), "edited\n").unwrap();
+        fs::write(root.join("new.txt"), "new\n").unwrap();
+        repo.stash(false).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("f.txt")).unwrap(),
+            "a\nmain\nc\n"
+        );
+        assert!(
+            root.join("new.txt").exists(),
+            "untracked files stay without the option"
+        );
+        repo.stash(true).unwrap();
+        assert!(!root.join("new.txt").exists());
+        assert_eq!(repo.stash_count().unwrap(), 2);
+        // Apply keeps the stash, pop drops it.
+        assert!(!repo.apply_stash(false).unwrap());
+        assert!(root.join("new.txt").exists());
+        assert_eq!(repo.stash_count().unwrap(), 2);
+        fs::remove_file(root.join("new.txt")).unwrap();
+        assert!(!repo.apply_stash(true).unwrap());
+        assert_eq!(repo.stash_count().unwrap(), 1);
+        repo.cmd(&["checkout", "-q", "--", "."], false).unwrap();
+        fs::remove_file(root.join("new.txt")).unwrap();
+        repo.drop_stash().unwrap();
+        assert_eq!(repo.stash_count().unwrap(), 0);
+        assert!(repo.drop_stash().is_err());
+    }
+
+    #[test]
+    fn a_logging_git_lists_what_could_change_something() {
+        let (dir, repo, root) = conflicting("git-log");
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let logged = repo.git.logging(log.clone()).open(&root).unwrap();
+        logged.create_and_switch("topic", None).unwrap();
+        assert!(logged.create_and_switch("main", None).is_err());
+        let runs = log.lock().unwrap().clone();
+        let commands: Vec<(&str, bool)> = runs
+            .iter()
+            .map(|run| (run.command.as_str(), run.ok))
+            .collect();
+        assert_eq!(
+            commands,
+            [
+                ("git switch --quiet -c topic", true),
+                ("git switch --quiet -c main", false)
+            ]
+        );
+        assert!(
+            runs[1].output.contains("already exists"),
+            "{}",
+            runs[1].output
+        );
+        drop(dir);
     }
 
     #[test]

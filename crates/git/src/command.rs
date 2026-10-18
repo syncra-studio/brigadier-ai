@@ -22,6 +22,23 @@ pub struct FoundRepo {
     pub origin: Option<String>,
 }
 
+/// One git command that could change something (not a read-only look), as a Source panel's
+/// Git Output lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRun {
+    /// When it ended, in ms since the Unix epoch.
+    pub at_ms: i64,
+    /// `git` and its arguments, as typed in a terminal.
+    pub command: String,
+    /// What it printed, out and error together, trimmed (the end of a long one).
+    pub output: String,
+    /// Whether it succeeded.
+    pub ok: bool,
+}
+
+/// What one command's output keeps at most, its end.
+const RUN_OUTPUT_MAX: usize = 16 * 1024;
+
 /// The user's git binary and captured login-shell environment.
 #[derive(Debug, Clone)]
 pub struct Git {
@@ -30,6 +47,8 @@ pub struct Git {
     /// Its version, once found new enough: every [`Git::open`] checks it, without asking git
     /// again each time.
     checked_version: Arc<OnceLock<String>>,
+    /// Where the commands that could change something go, when they are logged.
+    log: Option<Arc<std::sync::Mutex<Vec<GitRun>>>>,
 }
 
 impl Git {
@@ -39,6 +58,15 @@ impl Git {
             program,
             env,
             checked_version: Arc::default(),
+            log: None,
+        }
+    }
+
+    /// This git, its commands that could change something also written to `log`.
+    pub fn logging(&self, log: Arc<std::sync::Mutex<Vec<GitRun>>>) -> Self {
+        Self {
+            log: Some(log),
+            ..self.clone()
         }
     }
 
@@ -184,6 +212,23 @@ impl Git {
     }
 
     pub(crate) fn run<S: AsRef<OsStr>>(
+        &self,
+        path: Option<&Path>,
+        args: &[S],
+        read_only: bool,
+        extra: &[(OsString, OsString)],
+        input: Option<&[u8]>,
+    ) -> Result<Output> {
+        let output = self.run_quietly(path, args, read_only, extra, input);
+        if !read_only && let Some(log) = &self.log {
+            log.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(run_of(args, &output));
+        }
+        output
+    }
+
+    fn run_quietly<S: AsRef<OsStr>>(
         &self,
         path: Option<&Path>,
         args: &[S],
@@ -339,6 +384,56 @@ impl Git {
     ) -> Result<Vec<u8>> {
         let output = self.run(path, args, read_only, extra, input)?;
         check(args, output)
+    }
+}
+
+/// A command as Git Output lists it: what it printed, or why it couldn't run.
+fn run_of<S: AsRef<OsStr>>(args: &[S], output: &Result<Output>) -> GitRun {
+    let command = std::iter::once("git".to_owned())
+        .chain(args.iter().map(|arg| {
+            let arg = arg.as_ref().to_string_lossy();
+            if arg.is_empty() || arg.contains(char::is_whitespace) {
+                format!("'{arg}'")
+            } else {
+                arg.into_owned()
+            }
+        }))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (text, ok) = match output {
+        Ok(out) => {
+            let mut text = String::from_utf8_lossy(&out.stdout).trim_end().to_owned();
+            let err = String::from_utf8_lossy(&out.stderr);
+            if !err.trim().is_empty() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(err.trim_end());
+            }
+            (text, out.status.success())
+        }
+        Err(err) => (err.to_string(), false),
+    };
+    let text = text.trim_start_matches('\n');
+    let output = if text.len() > RUN_OUTPUT_MAX {
+        let mut start = text.len() - RUN_OUTPUT_MAX;
+        while !text.is_char_boundary(start) {
+            start += 1;
+        }
+        format!("…{}", &text[start..])
+    } else {
+        text.to_owned()
+    };
+    let at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| {
+            i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
+        });
+    GitRun {
+        at_ms,
+        command,
+        output,
+        ok,
     }
 }
 
