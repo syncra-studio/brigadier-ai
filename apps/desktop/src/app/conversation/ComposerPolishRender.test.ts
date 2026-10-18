@@ -41,3 +41,11 @@ test("while a task runs the empty composer says Working for {time}, from a secon
   assert.equal(seen.justStarted, "Do anything");
   assert.equal(seen.secondIn, "Working for 1s");
 });
+
+test("Esc puts the cursor in the composer (keeps it there when it has it) and cancels dictation that is getting going (issue 298)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "esc");
+  assert.equal(seen.inComposer, "Message input");
+  assert.equal(seen.fromNowhere, "Message input");
+  assert.equal(seen.dictating, "downloading");
+  assert.deepEqual(seen.afterEsc, { dictate: "dictate", cancelled: true });
+});

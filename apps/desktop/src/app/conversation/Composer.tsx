@@ -529,15 +529,21 @@ function UtilityBar({ resolved }: { resolved: ResolvedDraft }) {
 /** A second Esc within this long stops the model (the first one arms the button). */
 const ESC_WINDOW_MS = 2000;
 
+/** Other fields that keep the keyboard on Esc. */
+const TEXT_FIELD = "input, textarea, select, [contenteditable=true], [contenteditable='']";
+
 /**
  * A two-press stop: the first Esc outside menus and cards arms the send button (it reads
- * "Esc"), a second within two seconds stops the model. Esc in the composer also leaves the
- * field, keeping the text.
+ * "Esc"), a second within two seconds stops the model; Esc in the composer then also leaves the
+ * field, keeping the text. With nothing running, Esc puts the cursor in the composer instead.
+ * Esc while dictation (`dictationOwner`'s) downloads, starts or records cancels it, and only that.
  */
-function useEscToStop(canCancel: boolean): boolean {
+function useEscToStop(canCancel: boolean, dictationOwner: string): boolean {
   const aui = useAui();
   const { embedded } = useContext(ViewContext);
   const [armedAt, setArmedAt] = useState<number | null>(null);
+  const dictation = useDictation(dictationOwner).phase.type;
+  const dictating = dictation === "downloading" || dictation === "starting" || dictation === "recording";
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
@@ -547,9 +553,21 @@ function useEscToStop(canCancel: boolean): boolean {
       if (inSideChat !== embedded) return;
       // Menus, dialogs and the composer's own popovers take their Esc first.
       if (document.querySelector("[role=dialog], [role=menu], [role=listbox], [data-slot=composer-commands], [data-slot=composer-mentions]")) return;
+      if (dictating) {
+        cancelDictation();
+        return;
+      }
       const active = document.activeElement;
-      if (active instanceof HTMLElement && active.matches(COMPOSER_EDITABLE)) active.blur();
-      if (!canCancel) return;
+      const inComposer = active instanceof HTMLElement && active.matches(COMPOSER_EDITABLE);
+      if (!canCancel) {
+        if (inComposer || (active instanceof HTMLElement && active.matches(TEXT_FIELD))) return;
+        const mine = [...document.querySelectorAll<HTMLElement>(COMPOSER_EDITABLE)].find(
+          (field) => (field.closest("[data-embedded-view]") !== null) === embedded,
+        );
+        mine?.focus();
+        return;
+      }
+      if (inComposer) active.blur();
       const now = event.timeStamp;
       if (armedAt !== null && now - armedAt < ESC_WINDOW_MS) {
         setArmedAt(null);
@@ -560,7 +578,7 @@ function useEscToStop(canCancel: boolean): boolean {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [aui, canCancel, armedAt, embedded]);
+  }, [aui, canCancel, armedAt, embedded, dictating]);
   useEffect(() => {
     if (armedAt === null) return;
     const timer = setTimeout(() => setArmedAt(null), ESC_WINDOW_MS);
@@ -626,8 +644,8 @@ function SendControls({
   );
   const empty = useAuiState((s) => s.composer.isEmpty);
   const canCancel = useAuiState((s) => s.composer.canCancel);
-  const armed = useEscToStop(canCancel);
   const dictationOwner = conversationId ?? NEW_CHAT_SCOPE;
+  const armed = useEscToStop(canCancel, dictationOwner);
   const steers = useApp((s) => s.settings.followUp === "steer");
   const mac = useApp((s) => s.info?.platform === "macos");
   // A project's session: ⌘⏎ and ⌘-click start a new session in the background.

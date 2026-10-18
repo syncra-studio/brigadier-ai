@@ -62,6 +62,9 @@ mockIPC((command, payload) => {
         finishUpload = () => resolve({ method: req.method, attachment });
       });
     }
+    case "getDictation":
+      // Dictation is on offer, its speech model not yet downloaded (starting it downloads first).
+      return { method: req.method, dictation: { available: true, installed: false, downloading: false, modelBytes: 1000 } };
     case "getConversation":
       return {
         method: req.method,
@@ -227,11 +230,40 @@ async function workingCase(seen: Record<string, unknown>) {
   seen.secondIn = placeholder();
 }
 
+/** The Dictate button's state ("dictate", "downloading", …). */
+const dictate = () => document.querySelector<HTMLElement>(".aui-composer-dictate")?.dataset.state ?? null;
+
+/**
+ * #298: Esc (no menu open, nothing running) puts the cursor in the composer rather than taking
+ * it out; Esc while dictation gets going cancels it.
+ */
+async function escCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  await fixtureClick(field()!);
+  await fixtureInput({ type: "type", text: "hi" });
+  await until("the typed text", () => field()?.textContent === "hi");
+  await fixtureInput({ type: "key", key: "Escape" });
+  await sleep(100);
+  seen.inComposer = focused();
+  (document.activeElement as HTMLElement | null)?.blur();
+  await fixtureInput({ type: "key", key: "Escape" });
+  await until("the composer focused", () => focused() === "Message input", 1000).catch(() => {});
+  seen.fromNowhere = focused();
+  await until("the Dictate button", () => dictate() === "dictate");
+  await fixtureInput({ type: "key", key: "d", modifiers: ["Control", "Shift"] });
+  await until("dictation starting", () => dictate() === "downloading", 3000).catch(() => {});
+  seen.dictating = dictate();
+  await fixtureInput({ type: "key", key: "Escape" });
+  await until("dictation cancelled", () => dictate() === "dictate", 1000).catch(() => {});
+  seen.afterEsc = { dictate: dictate(), cancelled: sent.some((req) => req.method === "cancelDictationDownload") };
+}
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
   focus: focusCase,
   uploading: uploadingCase,
   paused: pausedCase,
   working: workingCase,
+  esc: escCase,
 };
 
 async function drive() {
