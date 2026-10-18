@@ -20,7 +20,7 @@ You can run this again from **Settings › General › Run setup again**.
 
 A project is a git repository on your Mac. In the sidebar, press **+** next to **Projects**:
 **Add project** lists the git repositories on your Mac, most recent first. Pick one and press
-**Add**, or:
+**Add** followed by its name, or:
 
 - **Choose folder…**: any folder (Brigadier starts git in one that has none).
 - **Clone from URL**: a repository to clone, into `~/code` unless you change where.

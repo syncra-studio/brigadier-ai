@@ -11,9 +11,9 @@ worktrees, and the other vendor's model reviews every change in the background.
 ![Brigadier: a task merged into main, with what changed, what was checked and a Revert button](docs/user/images/hero.png)
 
 - **Parallel agents, cross-vendor review.** Each task runs in its own worktree on the model
-  best suited to it, and its commits land by fast-forward. Every change also gets a read-only
-  review from the other vendor (Codex reviews Claude's work, Claude reviews Codex's) in the
-  background, and the work doesn't wait for it. The thread fixes the findings or says why not.
+  best suited to it, and its commits land by fast-forward. Every worker's change also gets a
+  read-only review from the other vendor (Codex reviews Claude's work, Claude reviews Codex's) in
+  the background, and the work doesn't wait for it. The thread fixes the findings or says why not.
 - **Computer use in the background (macOS).** Workers can open and use the apps they build, and
   any other app a task needs, without moving your cursor or bringing the app to the front: a
   step that would interrupt you is refused. System Settings is read-only to them. The
@@ -41,13 +41,13 @@ Brigadier to Applications. It updates itself. More ways, and how to uninstall:
 [docs/user/install.md](docs/user/install.md).
 
 You also need at least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
-[Codex](https://github.com/openai/codex); Brigadier's first screen can install them. Both is
+[Codex](https://github.com/openai/codex); Brigadier's setup can install them. Both is
 better: each reviews the other's work. To build from source (or for Windows and Linux), see
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Quick start
 
-1. Open Brigadier. Its first screen connects your agents: it finds `claude` and `codex`, and can
+1. Open Brigadier. Its setup connects your agents: it finds `claude` and `codex`, and can
    install them or sign them in for you.
 2. Pick a project: one it suggests from your recent Claude Code and Codex work, or any git
    repository (**+** next to **Projects**). It can also clone one, or start git in a folder.
@@ -97,8 +97,8 @@ Brigadier is alpha software, built in the open by one developer since September 
 rough edges.
 
 - **macOS** is the main platform, and every feature here works on it.
-- **Windows and Linux** build and pass a launch check in CI on every push, but are not ready for
-  real use. The worker sandbox, computer use, agents in the browser and browser data import are
+- **Windows and Linux** build and pass a launch check in CI (Linux on every push, Windows
+  nightly), but are not ready for real use. The worker sandbox, computer use, agents in the browser and browser data import are
   macOS-only for now, and Linux has no built-in browser.
 - **Agents:** Claude Code and Codex today. Next: the Cursor, opencode and Grok CLIs, and local
   models.
@@ -174,10 +174,13 @@ A worker reports when it's done. Its commits then **land**:
   task waits as "ready to land" and nothing changes.
 - **Checked** once on the combined work. Workers run only the checks of their own change; the
   project's full checks run in the background on the branch the work landed on, and a failure
-  goes back to the worker that caused it. A merge of a session's work waits for a pass at its tip.
-- **Reviewed** in the background. Every change gets one read-only review by the other vendor,
-  in its own checkout. A worker starts it once its work is committed and reports without
-  waiting for it; the thread's own commits get theirs once it makes them. Findings that reach a
+  goes back to the worker that caused it. The merge doesn't wait for them: its message says
+  where they stood.
+- **Reviewed** in the background. Every worker's change gets one read-only review by the other
+  vendor, in its own checkout. A worker starts it once its work is committed and reports without
+  waiting for it. The thread's own changes get one once they reach about 150 changed lines or
+  more than five code files, or when it marks them risky, and it waits for those findings before
+  it answers. Findings that reach a
   worker before it reports are its to fix. Later ones go to the thread as a message, and the
   thread fixes them or says why not. Settings › Configuration › "Review the work" turns reviews
   off (they're on by default).
@@ -228,9 +231,10 @@ yarn and bun caches, `~/Library/Caches`, the temporary folder), so builds, tests
 just work. Claude's sandbox lets network traffic out only as HTTP(S) through its proxy, so a push
 over `git://` or `ssh` from a sandboxed Claude worker fails.
 
-At every level, workers never push, publish, deploy or open pull requests on their own: they
-list such steps, and you start them. The thread asks for your approval before it spends money,
-uses credentials or the keychain, or destroys something outside the session's own work.
+At every level, workers and the thread push, publish, deploy or open pull requests when the
+task calls for it, with your own git and `gh` sign-ins. The thread asks for your approval before
+it spends money, uses credentials or the keychain, or destroys something outside the session's
+own work; a worker lists such steps for you instead.
 
 ### What still depends on trust
 
@@ -243,8 +247,9 @@ uses credentials or the keychain, or destroys something outside the session's ow
   On Linux and Windows, which have no worker sandbox yet, nothing refuses it.
 - A process that detaches and moves out of Brigadier's folders escapes the cleanup.
 - A thread can message sessions in other projects. The receiver hears it as coming from another
-  session, not from you; a chain of messages stops at the ninth hop until you write again, and
-  one session takes at most twenty messages a minute.
+  session, not from you. After eight messages with no word from you, the next one still goes
+  and the sending thread is told how many went back and forth. One session can send another at
+  most twenty messages a minute.
 - Codex writes a trust entry into `~/.codex/config.toml` when a thread starts with a writable
   sandbox in a folder you never trusted. Brigadier starts every thread without a sandbox of its
   own and sets it per turn, so Codex writes none. If one ever appears for a folder Brigadier
@@ -289,8 +294,8 @@ Brigadier picks each worker's model and says why on the worker's card.
 - **Quota.** Brigadier reads Claude's and Codex's usage windows, projects each one to its reset,
   and shifts new work away from a provider that's running hot.
 - **Fewer tokens, built in.** Nothing to turn on. A thread idle past its prompt cache restarts
-  from a checkpoint briefing instead of resending its whole history. A worker at 70% of its
-  model's context window (200k tokens at most) hands over to a fresh session of the same model.
+  from a checkpoint briefing instead of resending its whole history. A worker at about two-thirds of
+  its model's context window (200k tokens at most) hands over to a fresh session of the same model.
   Workers start without the built-in tools they never use. Brain answers return a few results of each kind and page the rest.
 
 ### Settings

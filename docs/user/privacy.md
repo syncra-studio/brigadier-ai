@@ -17,7 +17,7 @@
 
 - Your sessions, chats, settings and each project's Brain live in
   `~/Library/Application Support/Brigadier`.
-- The first screen suggests projects from your Claude Code and Codex history, read on your Mac.
+- Setup suggests projects from your Claude Code and Codex history, read on your Mac.
 - Dictation runs a speech model on your Mac; the audio never leaves it. Read aloud uses the
   system voice.
 - Env files you mark as secrets (such as `.env.local`) are copied into a session's worktree,
@@ -26,16 +26,20 @@
 ## What Brigadier itself fetches
 
 - **Updates**: Brigadier's latest release on GitHub, and the newest version of each agent CLI
-  from wherever it was installed from (its own updater, npm or Homebrew). A minute after launch,
+  from npm's registry, or from Homebrew for a Homebrew install. A minute after launch,
   then every few hours.
 - **Model list**: once a day, this repository's list of models and what each is good at.
 - **Two small local models**, downloaded once from Hugging Face: the search model each project's
   Brain uses, and the speech model, the first time you use dictation.
 - **Site icons** for links in agents' answers, from those sites.
-- **Agent installs**, only when you click Install on the first screen: the CLI's official install
-  script from Anthropic or OpenAI.
+- **Agent installs**, only when you press **Connect** in setup or **Set up** in Settings ›
+  Providers: the CLI's official install script from Anthropic or OpenAI.
+- **Your project's remote**: git fetches and pushes, and `gh` for pull requests and CI, as your
+  own git would.
+- **Web searches** you type in the built-in browser's address bar go to Google.
 
-None of these requests carries anything about you, your code or how you use Brigadier.
+Apart from your project's remote and your own searches, none of these requests carries anything
+about you, your code or how you use Brigadier.
 
 ## Removing everything
 

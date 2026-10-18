@@ -5,7 +5,7 @@ by Apple, so it opens like any other app.
 
 You also need at least one of the two agent CLIs: [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 or [Codex](https://github.com/openai/codex). Both is better: each one reviews the other's work.
-If they aren't installed yet, Brigadier's first screen can install them for you.
+If they aren't installed yet, Brigadier's setup can install them for you.
 
 ## With Homebrew
 
