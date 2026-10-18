@@ -329,9 +329,11 @@ impl Repo {
             )));
         }
         let name = self.git_name(branch)?;
-        // Only the checked-out branch moves, whatever `rebase.updateRefs` says.
+        // Only the checked-out branch moves, whatever `rebase.updateRefs` says; the merge
+        // backend, whatever `rebase.backend` says, drops a commit its resolution left empty.
         let args = [
             "rebase",
+            "--merge",
             "--no-autostash",
             "--no-update-refs",
             name.as_str(),
@@ -353,7 +355,14 @@ impl Repo {
                 "resolve the rebase conflicts and stage those files first".into(),
             ));
         }
-        let args = ["rebase", "--continue"];
+        // One `git am` style (started in a terminal) refuses a commit left empty: it is skipped.
+        let applying = self.git_dir()?.join("rebase-apply").exists();
+        let empty = applying
+            && self
+                .run(&["diff", "--cached", "--quiet", "HEAD", "--"], true)?
+                .status
+                .success();
+        let args = ["rebase", if empty { "--skip" } else { "--continue" }];
         let out = self.rebase_run(&args)?;
         self.rebase_stopped(&args, &out, false)
     }
@@ -845,6 +854,45 @@ mod tests {
             repo.land(&request).unwrap(),
             crate::LandOutcome::Landed { new_tip } if new_tip == next
         ));
+    }
+
+    /// A resolution that keeps only the current side leaves the commit empty: Continue drops
+    /// it, whatever `rebase.backend` says, and in a rebase started `git am` style too.
+    #[test]
+    fn a_rebase_continues_past_a_commit_its_resolution_left_empty() {
+        for started_here in [true, false] {
+            let name = format!("rebase-empty-{started_here}");
+            let (_dir, repo, root) = conflicting(&name);
+            repo.cmd(&["config", "rebase.backend", "apply"], false)
+                .unwrap();
+            repo.cmd(&["checkout", "-q", "feature"], false).unwrap();
+            if started_here {
+                assert!(repo.rebase_onto("feature", "main").unwrap());
+            } else {
+                assert!(
+                    !repo
+                        .run(&["rebase", "main"], false)
+                        .unwrap()
+                        .status
+                        .success()
+                );
+            }
+            let text = repo.conflict_file("f.txt").unwrap().text;
+            repo.resolve_conflict("f.txt", text.as_deref(), "a\nmain\nc\n", true)
+                .unwrap();
+            repo.cmd(&["checkout", "HEAD", "--", "other.txt"], false)
+                .unwrap();
+            assert!(!repo.continue_rebase().unwrap(), "finished");
+            assert_eq!(repo.rebasing().unwrap(), None);
+            assert_eq!(
+                repo.branch_tip("feature").unwrap(),
+                repo.branch_tip("main").unwrap()
+            );
+            assert_eq!(
+                fs::read_to_string(root.join("f.txt")).unwrap(),
+                "a\nmain\nc\n"
+            );
+        }
     }
 
     #[test]

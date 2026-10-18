@@ -114,7 +114,8 @@ async fn the_source_panel_makes_renames_deletes_rebases_and_stashes() {
             .unwrap_or_else(|| panic!("{command} in {commands:?}"))
     };
     assert!(
-        at("git switch --quiet -c topic") < at("git rebase --no-autostash --no-update-refs main")
+        at("git switch --quiet -c topic")
+            < at("git rebase --merge --no-autostash --no-update-refs main")
     );
     assert!(runs.iter().any(|run| {
         run.command == "git switch --quiet -c topic" && !run.ok && run.output.contains("exists")
