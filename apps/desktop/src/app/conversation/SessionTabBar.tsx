@@ -37,7 +37,6 @@ import {
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { Conversation, TabState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { workspacesOn } from "@/lib/workspaces";
 import { archive, openConversation, openNewTaskTab } from "@/state/actions";
 import { TAB_STATE_WORDS, isTaskTab, useTabState, workspaceTabs } from "@/state/tabStates";
 import {
@@ -272,7 +271,7 @@ function TaskGroup({ on, reveal, children }: { on: boolean; reveal: number; chil
 
 /** The workspace's task tabs, oldest first, this one among them; none outside a workspace. */
 function useTaskTabs(conversation: Conversation): Conversation[] {
-  const workspaceId = workspacesOn() && isTaskTab(conversation) ? conversation.workspaceId : undefined;
+  const workspaceId = isTaskTab(conversation) ? conversation.workspaceId : undefined;
   return useApp(useShallow((s) => (workspaceId ? workspaceTabs(s.conversations, workspaceId) : NO_TASKS)));
 }
 

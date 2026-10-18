@@ -2,7 +2,7 @@
  * Headless exercise of a session's top bar: a title with ⋯, the toolbar and "+" last while nothing is open,
  * tabs with "+" after them once something is, their measures at both densities, the widths kept
  * after a close, and Delete on a tab. `compact=1` runs it at compact density. `workspace=1` gives
- * the session two sibling task tabs (workspaces on): the strip's task group, their states, ⌘T,
+ * the session two sibling task tabs: the strip's task group, their states, ⌘T,
  * ⌘1–9 across the strip and a sibling's ×.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
@@ -15,7 +15,6 @@ import { SessionTabBar } from "@/app/conversation/SessionTabBar";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, Request } from "@/ipc/generated";
-import { setWorkspacesOn } from "@/lib/workspaces";
 import { applyActivityEvents } from "@/state/activity";
 import { useSettledTabs } from "@/state/tabStates";
 import { closeTab, newSessionTab, selectTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
@@ -33,7 +32,6 @@ const conversation: Conversation = {
   forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
 };
 const workspace = params.has("workspace");
-if (workspace) setWorkspacesOn(true);
 const sibling = (siblingId: string, title: string, createdAtMs: number): Conversation => ({
   ...conversation, id: siblingId, title, createdAtMs, updatedAtMs: createdAtMs, workspaceId: "ws-fixture",
 });

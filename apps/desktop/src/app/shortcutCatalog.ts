@@ -7,7 +7,6 @@
  */
 
 import type { FollowUp, SendShortcut } from "@/ipc/generated";
-import { workspacesOn } from "@/lib/workspaces";
 
 export type ShortcutArea =
   | "General"
@@ -73,7 +72,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "next-message", name: "Next message", line: "Scroll the thread to your next message", area: "Conversations", keys: ["⌥↓"] },
 
   // Tabs and panes
-  { id: "new-tab", name: "New tab", line: "Open a new tab in the session", area: "Tabs and panes", keys: ["⌘T"], menu: "new" },
+  { id: "new-tab", name: "New task tab", line: "Open a task tab in the workspace, on a worktree of its own", area: "Tabs and panes", keys: ["⌘T"], menu: "new" },
   { id: "new-browser", name: "New browser tab", line: "Open a web page in a tab", area: "Tabs and panes", keys: ["⇧⌘B"], menu: "new-browser" },
   { id: "new-side-chat", name: "New side chat", line: "Ask something beside the session", area: "Tabs and panes", keys: ["⌥⌘S"], menu: "new-side-chat" },
   { id: "new-page", name: "New page", line: "Start a page of notes in a tab, saved as you type", area: "Tabs and panes", keys: ["⌥⌘N"], menu: "new-page" },
@@ -92,7 +91,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     keys: ["⌃⇧Tab"],
     menu: "cycle-previous",
   },
-  { id: "show-tab", name: "Show tab", line: "⌘1 shows the chat, ⌘2 to ⌘9 the tabs after it", area: "Tabs and panes", keys: ["⌘1–9"], menu: "tab-1" },
+  { id: "show-tab", name: "Show tab", line: "⌘1 to ⌘9 show the tabs in the strip, task tabs first", area: "Tabs and panes", keys: ["⌘1–9"], menu: "tab-1" },
   { id: "terminal", name: "Toggle terminal", line: "Show or hide the bottom terminal", area: "Tabs and panes", keys: ["⌘J"], menu: "terminal" },
   {
     id: "new-terminal",
@@ -119,7 +118,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     name: "Steer",
     line: "While an answer works, send the message into it now",
     area: "Composer",
-    keys: ["⌘⏎"],
+    keys: ["⌥⏎"],
   },
   {
     id: "start-in-tab",
@@ -191,31 +190,18 @@ export const BROWSER_SHORTCUTS: ReadonlySet<string> = new Set([
   "zoom-reset",
 ]);
 
-/** Only with workspaces (task tabs). */
-const WORKSPACE_SHORTCUTS = new Set(["start-in-tab"]);
-
 /** How the composer sends, as Settings › General › Composer sets it. */
 export type ComposerKeys = { sendShortcut: SendShortcut; followUp: FollowUp };
 
 const DEFAULT_COMPOSER_KEYS: ComposerKeys = { sendShortcut: "enter", followUp: "queue" };
 
 /**
- * The composer's entries with the keys chosen for sending and the follow-up's other way; with
- * workspaces, ⌘T opens a task tab and ⌘⏎ (⇧⌘⏎) starts one, so the other way takes ⌥.
+ * The composer's entries with the keys chosen for sending, starting a task in a new tab and the
+ * follow-up's other way.
  */
-function withComposerKeys(
-  shortcut: Shortcut,
-  { sendShortcut, followUp }: ComposerKeys,
-  workspaces: boolean,
-): Shortcut {
+function withComposerKeys(shortcut: Shortcut, { sendShortcut, followUp }: ComposerKeys): Shortcut {
   const mod = sendShortcut === "modEnter";
   switch (shortcut.id) {
-    case "new-tab":
-      return workspaces
-        ? { ...shortcut, name: "New task tab", line: "Open a task tab in the workspace, on a worktree of its own" }
-        : shortcut;
-    case "show-tab":
-      return workspaces ? { ...shortcut, line: "⌘1 to ⌘9 show the tabs in the strip, task tabs first" } : shortcut;
     case "start-in-tab":
       return { ...shortcut, keys: [mod ? "⇧⌘⏎" : "⌘⏎"] };
     case "send":
@@ -228,7 +214,7 @@ function withComposerKeys(
         ...(followUp === "queue"
           ? { name: "Steer", line: "While an answer works, send the message into it now" }
           : { name: "Queue", line: "While an answer works, send the message to wait its turn" }),
-        keys: [workspaces ? (mod ? "⌥⌘⏎" : "⌥⏎") : mod ? "⇧⌘⏎" : "⌘⏎"],
+        keys: [mod ? "⌥⌘⏎" : "⌥⏎"],
       };
     default:
       return shortcut;
@@ -239,18 +225,10 @@ function withComposerKeys(
  * The shortcuts this platform has, with the browser's only while it is on and the composer's
  * keys as chosen.
  */
-export function shortcutsFor(
-  mac: boolean,
-  browser = true,
-  composer = DEFAULT_COMPOSER_KEYS,
-  workspaces = workspacesOn(),
-): Shortcut[] {
+export function shortcutsFor(mac: boolean, browser = true, composer = DEFAULT_COMPOSER_KEYS): Shortcut[] {
   return SHORTCUTS.filter(
-    (shortcut) =>
-      (mac || !shortcut.macOnly) &&
-      (browser || !BROWSER_SHORTCUTS.has(shortcut.id)) &&
-      (workspaces || !WORKSPACE_SHORTCUTS.has(shortcut.id)),
-  ).map((shortcut) => withComposerKeys(shortcut, composer, workspaces));
+    (shortcut) => (mac || !shortcut.macOnly) && (browser || !BROWSER_SHORTCUTS.has(shortcut.id)),
+  ).map((shortcut) => withComposerKeys(shortcut, composer));
 }
 
 export type Stroke = { ctrl: boolean; alt: boolean; shift: boolean; cmd: boolean; key: string };

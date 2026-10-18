@@ -63,7 +63,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { openFolder } from "@/ipc/client";
 import type { Conversation, Project, SessionPhase } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { workspacesOn } from "@/lib/workspaces";
 import {
   archive,
   archiveAll,
@@ -140,7 +139,7 @@ type Sections = {
   projects: Project[];
   sessions: Record<string, Conversation[]>;
   /**
-   * With workspaces, a project lists one row per workspace (its tab touched last stands for
+   * A project lists one row per workspace (its tab touched last stands for
    * it): each workspace's tabs, touched last first.
    */
   workspaceTabs: Record<string, string[]>;
@@ -177,7 +176,7 @@ function useSections(): Sections {
     for (const conversation of recent) {
       if (conversation.kind === "chat" || !conversation.projectId) {
         chats.push(conversation);
-      } else if (workspacesOn() && conversation.workspaceId && !conversation.tabChat) {
+      } else if (conversation.workspaceId && !conversation.tabChat) {
         const tabs = (workspaceTabs[conversation.workspaceId] ??= []);
         if (tabs.length === 0) (sessions[conversation.projectId] ??= []).push(conversation);
         tabs.push(conversation.id);
@@ -984,7 +983,7 @@ const ConversationRow = memo(function ConversationRow({
   active: boolean;
   actions: RowActions;
   /**
-   * Its workspace's tabs, with workspaces: the row stands for the workspace, opens the tab had
+   * Its workspace's tabs: the row stands for the workspace, opens the tab had
    * open last, archives and deletes them all, and with several tabs carries the workspace's
    * title.
    */

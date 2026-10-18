@@ -2,7 +2,6 @@ import { create } from "zustand";
 
 import { request } from "@/ipc/client";
 import type { Conversation, EventEnvelope, TabState } from "@/ipc/generated";
-import { workspacesOn } from "@/lib/workspaces";
 import { type RowActivity, rowActivity, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
 
@@ -144,7 +143,6 @@ export function workspaceTabs(
  * not pinned, which have rows of their own).
  */
 export function rowTabs(conversations: Readonly<Record<string, Conversation>>, ids: readonly string[]): string[] {
-  if (!workspacesOn()) return [...ids];
   const tabs = new Set<string>();
   for (const id of ids) {
     tabs.add(id);

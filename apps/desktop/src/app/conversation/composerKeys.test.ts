@@ -12,7 +12,7 @@ const enter = (mods: { ctrl?: boolean; alt?: boolean; shift?: boolean; cmd?: boo
   metaKey: mods.cmd ?? false,
 });
 
-test("Enter sends, ⌘Enter sends the other way and Shift+Enter is left to the editor", () => {
+test("Enter sends, ⌘Enter and ⌥Enter send the other way and Shift+Enter is left to the editor", () => {
   assert.equal(enterAction(enter(), true, "enter"), "send");
   assert.equal(enterAction(enter({ cmd: true }), true, "enter"), "other");
   assert.equal(enterAction(enter({ shift: true }), true, "enter"), null);
@@ -20,7 +20,8 @@ test("Enter sends, ⌘Enter sends the other way and Shift+Enter is left to the e
   assert.equal(enterAction(enter({ ctrl: true }), false, "enter"), "other");
   assert.equal(enterAction(enter({ cmd: true }), false, "enter"), null);
   assert.equal(enterAction(enter({ ctrl: true }), true, "enter"), null);
-  assert.equal(enterAction(enter({ alt: true }), true, "enter"), null);
+  assert.equal(enterAction(enter({ alt: true }), true, "enter"), "other");
+  assert.equal(enterAction(enter({ alt: true, cmd: true }), true, "enter"), null);
 });
 
 test("with ⌘Enter chosen, Enter starts a new line and ⇧⌘Enter sends the other way", () => {
@@ -63,13 +64,12 @@ test("a message sent while an answer works goes the default way unless the other
 
 test("the shortcuts page shows the composer keys the composer acts on, on both platforms", () => {
   for (const workspaces of [false, true]) {
-    const actions = workspaces
-      ? ({ send: "send", "follow-up-other": "other", "start-in-tab": "background" } as const)
-      : ({ send: "send", "follow-up-other": "other" } as const);
+    // Outside a task tab, Start in a new tab's key is the other way.
+    const actions = { send: "send", "follow-up-other": "other", "start-in-tab": workspaces ? "background" : "other" } as const;
     for (const mac of [true, false]) {
       for (const sendShortcut of ["enter", "modEnter"] as SendShortcut[]) {
         for (const followUp of ["queue", "steer"] as FollowUp[]) {
-          const shortcuts = shortcutsFor(mac, true, { sendShortcut, followUp }, workspaces);
+          const shortcuts = shortcutsFor(mac, true, { sendShortcut, followUp });
           const keysOf = (id: string) => shortcuts.find((s) => s.id === id)?.keys ?? [];
           const pressOf = (chip: string) => {
             const stroke = parseStroke(chip);
@@ -80,7 +80,7 @@ test("the shortcuts page shows the composer keys the composer acts on, on both p
               cmd: mac && stroke.cmd,
             });
           };
-          const where = `${sendShortcut}, ${followUp}, ${mac ? "macOS" : "other"}, workspaces ${workspaces}`;
+          const where = `${sendShortcut}, ${followUp}, ${mac ? "macOS" : "other"}, task tab ${workspaces}`;
           for (const [id, action] of Object.entries(actions)) {
             const [chip = ""] = keysOf(id);
             assert.equal(enterAction(pressOf(chip), mac, sendShortcut, workspaces), action, `${id}: ${where}`);
@@ -90,7 +90,6 @@ test("the shortcuts page shows the composer keys the composer acts on, on both p
           }
           const other = shortcuts.find((s) => s.id === "follow-up-other");
           assert.equal(other?.name, followUp === "queue" ? "Steer" : "Queue", where);
-          assert.equal(keysOf("start-in-tab").length > 0, workspaces, where);
         }
       }
     }

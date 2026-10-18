@@ -25,10 +25,6 @@ export default defineConfig({
     },
   },
   envPrefix: ["VITE_", "TAURI_ENV_"],
-  // Workspaces stay off until finished (src/lib/workspaces.ts); only this one variable is read.
-  define: {
-    BRIGADIER_WORKSPACES_FLAG: JSON.stringify(process.env.BRIGADIER_WORKSPACES ?? ""),
-  },
   build: {
     // WKWebView on macOS 14+ is Safari 17; WebView2 is evergreen Chromium; WebKitGTK tracks Safari.
     target: platform === "windows" ? "chrome120" : "safari17",

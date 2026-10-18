@@ -37,7 +37,6 @@ import { WorkerGlyph, useWorkerName } from "@/app/conversation/WorkerChip";
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { usePromptHistory } from "@/app/conversation/composerDraft";
 import { enterAction } from "@/app/conversation/composerKeys";
-import { workspacesOn } from "@/lib/workspaces";
 import { clearBackgroundSend, markBackgroundSend } from "@/state/backgroundSend";
 import { isTaskTab } from "@/state/tabStates";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
@@ -210,7 +209,7 @@ function ComposerKeys({
   const adapter = target?.queue.attachments ?? null;
   const owner = target?.conversation?.id ?? NEW_CHAT_SCOPE;
   // A task tab of a workspace: ⌘⏎ starts a new one in the background.
-  const taskTab = workspacesOn() && target?.conversation && isTaskTab(target.conversation) ? target.conversation.id : null;
+  const taskTab = target?.conversation && isTaskTab(target.conversation) ? target.conversation.id : null;
   const privateLogs = Boolean(target?.conversation?.tabChat);
   const dictation = useDictation(owner);
   // Dictated text lands at the caret (or at the end, if the field never had one), spaced

@@ -204,18 +204,14 @@ test("the Browser menu holds the browser's items, which leave with it", () => {
   }
 });
 
-test("with workspaces ⌘T opens a task tab, ⌘⏎ starts one and the follow-up's other way takes ⌥", () => {
-  const on = shortcutsFor(true, true, undefined, true);
-  const off = shortcutsFor(true, true, undefined, false);
+test("⌘T opens a task tab, ⌘⏎ starts one and the follow-up's other way takes ⌥", () => {
+  const on = shortcutsFor(true, true);
   const of = (list: typeof on, id: string) => list.find((shortcut) => shortcut.id === id);
   assert.equal(of(on, "new-tab")?.name, "New task tab");
   assert.deepEqual(of(on, "new-tab")?.keys, ["⌘T"]);
   assert.deepEqual(of(on, "start-in-tab")?.keys, ["⌘⏎"]);
   assert.deepEqual(of(on, "follow-up-other")?.keys, ["⌥⏎"]);
-  assert.equal(of(off, "new-tab")?.name, "New tab");
-  assert.equal(of(off, "start-in-tab"), undefined);
-  assert.deepEqual(of(off, "follow-up-other")?.keys, ["⌘⏎"]);
-  const mod = shortcutsFor(true, true, { sendShortcut: "modEnter", followUp: "queue" }, true);
+  const mod = shortcutsFor(true, true, { sendShortcut: "modEnter", followUp: "queue" });
   assert.deepEqual(of(mod, "start-in-tab")?.keys, ["⇧⌘⏎"]);
   assert.deepEqual(of(mod, "follow-up-other")?.keys, ["⌥⌘⏎"]);
 });

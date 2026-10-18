@@ -3,7 +3,6 @@ import { subscribe } from "@/ipc/client";
 import type { BridgeEvent, EventEnvelope } from "@/ipc/generated";
 import { markApplied, noteFlush, setSamplingPaused } from "@/lib/perf";
 import { markStartup } from "@/lib/startup";
-import { workspacesOn } from "@/lib/workspaces";
 import {
   loadCatalog,
   loadConversation,
@@ -72,7 +71,7 @@ async function resync() {
     ),
   });
   // Ready and merged count commits in each tab's worktree: they come when they come.
-  if (workspacesOn()) void loadSettledTabs().catch(() => {});
+  void loadSettledTabs().catch(() => {});
   await Promise.all([loadCatalog(), loadActivity(), loadUpdates()]);
   const log = useBoard.getState().orchestrator;
   if (log) void openOrchestratorLog(log.conversationId);

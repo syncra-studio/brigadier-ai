@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { Conversation, EventEnvelope } from "@/ipc/generated";
-import { setWorkspacesOn } from "@/lib/workspaces";
 import {
   applySettledTabEvents,
   rowTabs,
@@ -61,10 +60,6 @@ test("picked sidebar rows stand for their workspace's tabs, except pinned ones",
     tab("a", "w1"), tab("b", "w1"), tab("pinned", "w1", { pinnedAtMs: 1 }), tab("gone", "w1", { lifecycle: "archived" }),
     tab("c", "w2"),
   ].map((each) => [each.id, each]));
-  setWorkspacesOn(false);
-  assert.deepEqual(rowTabs(conversations, ["a"]), ["a"]);
-  setWorkspacesOn(true);
   assert.deepEqual(rowTabs(conversations, ["a", "c"]).toSorted(), ["a", "b", "c"]);
   assert.deepEqual(rowTabs(conversations, ["pinned"]), ["pinned"], "a pinned tab's row is its own");
-  setWorkspacesOn(false);
 });

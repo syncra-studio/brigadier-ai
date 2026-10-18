@@ -13,13 +13,11 @@ import { AppSidebar, AppStrip } from "@/app/AppSidebar";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, EventEnvelope, Project, Request, Workspace } from "@/ipc/generated";
-import { setWorkspacesOn } from "@/lib/workspaces";
 import { applyActivityEvents } from "@/state/activity";
 import { useLastOpened } from "@/state/lastOpened";
 import { useApp } from "@/state/store";
 import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
 
-setWorkspacesOn(true);
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   return { method: (payload as { request: Request }).request.method };
