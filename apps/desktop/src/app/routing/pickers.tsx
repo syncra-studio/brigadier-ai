@@ -1,29 +1,16 @@
-import { Check, ChevronDown } from "@openai/apps-sdk-ui/components/Icon";
-import { type ReactNode, useEffect, useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
-import { selectTrigger } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import type { OverrideTarget, RouteCandidate } from "@/ipc/generated";
 import { PROVIDERS, sameTarget, VENDOR_LABELS } from "@/lib/routing";
 import { useAvailableModelGroups } from "@/lib/setup";
-import { cn } from "@/lib/utils";
 import { providerOn } from "@/state/providers";
 import { useApp } from "@/state/store";
 import { loadUsage, useUsage } from "@/state/usage";
 
 /*
- * The menus Settings › Routing's sentences are made of: a chip that opens a choice, the models
- * a list or a rule may name, and where a setting applies.
+ * The models an order or a rule may name, as menu items.
  */
 
 /** Each provider's family words, from the merged model list (read on opening). */
@@ -44,80 +31,6 @@ export function useFamilies(): { families: Map<string, string[]>; error: string 
     return byProvider;
   }, [models]);
   return { families, error: models ? null : error };
-}
-
-/** A word of a sentence that opens a menu: its value with a chevron. */
-export function ChipTrigger({
-  label,
-  children,
-  className,
-  ...props
-}: {
-  label: string;
-  children: ReactNode;
-  className?: string;
-} & Omit<React.ComponentProps<"button">, "children">) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      className={cn(selectTrigger, "inline-flex gap-1.5 align-middle", className)}
-      {...props}
-    >
-      <span className="min-w-0 truncate">{children}</span>
-      <ChevronDown aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
-    </button>
-  );
-}
-
-/** One choice of a few, as a word of a sentence. */
-export function ChipSelect<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  value: T;
-  options: readonly { value: T; label: string }[];
-  onChange: (value: T) => void;
-  disabled?: boolean;
-}) {
-  const chosen = options.find((option) => option.value === value);
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild disabled={disabled}>
-        <ChipTrigger label={label}>
-          {chosen?.label}
-        </ChipTrigger>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-96 overflow-y-auto">
-        <DropdownMenuRadioGroup value={value} onValueChange={(next) => onChange(next as T)}>
-          {options.map((option) => (
-            <DropdownMenuRadioItem
-              key={option.value}
-              value={option.value}
-              indicator={<Check className="size-icon-md" />}
-            >
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-/** "All projects" and each project by name, for where a setting applies. */
-export function useScopeOptions(): { value: string; label: string }[] {
-  const projects = useApp((s) => s.projects);
-  return [
-    { value: "", label: "All projects" },
-    ...Object.values(projects)
-      .toSorted((a, b) => a.name.localeCompare(b.name))
-      .map((project) => ({ value: project.id, label: project.name })),
-  ];
 }
 
 /**
@@ -188,32 +101,5 @@ export function TargetItems({
         </p>
       )}
     </>
-  );
-}
-
-/** A model (or a family or vendor) as a word of a sentence, changed from its menu. */
-export function TargetSelect({
-  label,
-  value,
-  name,
-  onChange,
-}: {
-  label: string;
-  value: OverrideTarget | null;
-  /** The value in words; shown when there is one. */
-  name: string;
-  onChange: (target: OverrideTarget) => void;
-}) {
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <ChipTrigger label={label}>
-          {value ? name : "Choose a model"}
-        </ChipTrigger>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-96 w-xs overflow-y-auto">
-        <TargetItems onPick={onChange} />
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

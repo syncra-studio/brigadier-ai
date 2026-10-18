@@ -1,4 +1,7 @@
-/** Settings → Routing over a faked daemon: kinds of work, orders, rules and the models' ratings. */
+/**
+ * Settings → Routing over a faked daemon: kinds of work, orders, rules, model strength and how a
+ * model is picked.
+ */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -7,20 +10,24 @@ import { ROUTING_PAGE_ROWS } from "@/app/routing/RoutingPage";
 import { revealSetting } from "@/app/settings/reveal";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
+import { Toaster } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { accounts, overviews, previewRoutes, projects, rankings, rules, usageView } from "@/fixtures/routingData";
-import type { Request } from "@/ipc/generated";
+import type { RankingsRefresh, Request, RoutePreview } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
 import { setModelAvailable, setProviderOn } from "@/state/providers";
 import { useApp } from "@/state/store";
+import { useToasts } from "@/state/toasts";
 
 /*
- * ?drive=1 opens Advanced through search, opens Review changes, reads its order, the ranking, the
- * rules and overrides, asks the ranking about a change Codex wrote, removes a model from the
- * order, makes the order wait, switches to Automatic and back, opens a model's profile and adds a
- * rule, writing what it saw to #routing-result
- * (RoutingPageRender.test.ts reads it). Without it the page stays as it opens, for screenshots:
- * ?kind=<name> opens a kind, ?open=<model> opens a model's profile, ?show=<row> reveals one.
+ * ?drive=1 reads who does what, opens Review changes, removes a model from its order, switches it
+ * to Automatic and back, follows See strengths, writes a rule (its preview, a clash, Add, Undo),
+ * opens How a model is picked through search and switches models off and on, writing what it saw
+ * to #routing-result (RoutingPageRender.test.ts reads it). Without it the page stays as it opens,
+ * for screenshots: ?auto=<category> sets a kind to Automatic first, ?kind=<name> opens a kind,
+ * ?more=strength|steps opens a row of More, ?rule=1|2|2b|3 shows a rule being added (a draft, its
+ * preview, a clash, added). ?drive=1&edge=1 instead opens Research while it waits with no order
+ * of its own and asks for My order, then reads a ratings refresh that failed.
  */
 const params = new URLSearchParams(location.search);
 if (params.has("drive")) {
@@ -30,14 +37,38 @@ if (params.has("drive")) {
   document.head.append(still);
 }
 
+const auto = params.get("auto");
+const edge = params.has("edge");
 useApp.setState((state) => ({
   info: { ...state.info, platform: "macos" } as typeof state.info,
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
-  settings: { ...state.settings, routingOverrides: rules, routingRankings: rankings },
+  settings: {
+    ...state.settings,
+    routingOverrides: rules,
+    routingRankings: rankings
+      .filter((ranking) => !(edge && ranking.category === "research"))
+      .map((ranking) => (ranking.category === auto ? { ...ranking, manual: false } : ranking)),
+  },
   projects,
   accounts: { accounts, warnings: [] },
   providers: { ...state.providers, view: { providers: overviews, sessions: [], fixtures: [] } },
 }));
+
+/** ?edge: a refresh that failed after it started, and a kind with nothing that can run. */
+const FAILED_REFRESH: RankingsRefresh = {
+  state: "failed",
+  jobId: "job",
+  startedAtMs: Date.now() - 60_000,
+  finishedAtMs: Date.now() - 30_000,
+  model: null,
+  provider: null,
+  baseRevision: null,
+  changes: [],
+  errors: ["the research model timed out"],
+  overlayApplied: true,
+  overlayAtMs: null,
+};
+const WAITING: RoutePreview["outcome"] = { type: "wait", reason: "", resetsAtMs: null, rule: null, ranking: null };
 
 /** Every preview asked for, in order. */
 const asked: { projectId: string | null; areas: string[]; author: string | null }[] = [];
@@ -53,10 +84,17 @@ mockIPC((command, payload) => {
     case "getUsage":
       return { method: req.method, usage: usageView(req.projectId) };
     case "getRankingsRefresh":
-      return { method: req.method, refresh: null };
-    case "previewRoutes":
+      return { method: req.method, refresh: edge ? FAILED_REFRESH : null };
+    case "previewRoutes": {
       asked.push({ projectId: req.projectId, areas: req.areas, author: req.author });
-      return { method: req.method, routes: previewRoutes(req.areas, req.author) };
+      const routes = previewRoutes(req.areas, req.author);
+      return {
+        method: req.method,
+        routes: edge
+          ? routes.map((route) => (route.category === "research" ? { ...route, outcome: WAITING } : route))
+          : routes,
+      };
+    }
     default:
       return { method: req.method };
   }
@@ -75,184 +113,187 @@ const press = (element: Element | undefined | null) => {
   element?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
 };
 const menuItem = (name: string) =>
-  all('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]').find((item) => text(item) === name);
+  all<HTMLElement>('[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]').find((item) =>
+    text(item).startsWith(name),
+  );
 /** A kind of work's row in Who does what, by its name. */
 const kindButton = (name: string) =>
   all<HTMLButtonElement>('[data-slot="routing-kind"] > button').find((element) => text(element).startsWith(name));
-/** A Model strength row's model name, and every row's in order. */
-const strengthName = (row: Element) => text(row.querySelector(".font-medium"));
-const strengthNames = () => all('[data-slot="strength-row"] > button').map(strengthName);
 const openKind = () => document.querySelector('[data-slot="routing-kind"][data-open]');
+const strengthNames = () => all('[data-slot="strength-name"]').map(text);
 const review = () => useApp.getState().settings.routingRankings.find((ranking) => ranking.id === "rank-review");
+const ruleRows = () => all('[data-slot="routing-rule"]').map(text);
+const form = () => document.querySelector('[data-slot="routing-rule-form"]');
+const note = () => text(form()?.querySelector('[role="status"], [role="alert"]'));
+/** Picks `item` from the menu `trigger` opens: one step presses, the next picks. */
+const pick = (trigger: string, item: string): (() => void)[] => [
+  () => press(button(trigger)),
+  () => menuItem(item)?.click(),
+];
+
+/** The steps that show a rule being added, up to `stage`, for screenshots. */
+function ruleSteps(stage: string): (() => void)[] {
+  const steps: (() => void)[] = [() => (document.querySelector('[data-slot="add-rule"]') as HTMLButtonElement | null)?.click()];
+  if (stage === "1") return steps;
+  steps.push(...pick("What the rule does", "Prefer"));
+  steps.push(...pick("The model the rule is about", stage === "2b" ? "Sonnet 5.5" : "GPT-6"));
+  steps.push(...pick("The kind of work the rule is about", stage === "2b" ? "Review changes" : "Write commit messages"));
+  if (stage === "3") steps.push(() => button("Add rule", form() ?? document)?.click());
+  return steps;
+}
 
 function Fixture() {
   const page = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
   const [result, setResult] = useState("");
   useEffect(() => {
     openSettings("routing");
-    if (!params.has("drive")) {
-      const timer = setTimeout(() => {
-        const kind = params.get("kind");
-        if (kind) kindButton(kind)?.click();
-        const open = params.get("open");
-        if (open) all<HTMLButtonElement>('[data-slot="rating-row"] > button').find((row) => text(row).startsWith(open))?.click();
-        const show = params.get("show");
-        if (show) revealSetting(show);
-      }, 800);
-      return () => clearTimeout(timer);
-    }
     const seen: Record<string, unknown> = {};
-    const steps: (() => void)[] = [
-      () => {
-        // Advanced starts closed; search bringing one of its rows into view opens it.
-        seen.advancedClosed = !document.querySelector('[data-slot="ranking-now"]');
-        revealSetting(ROUTING_PAGE_ROWS.scores.label);
-      },
-      () => {
-        seen.advancedRevealed = Boolean(document.querySelector('[data-slot="ranking-now"]'));
-        seen.steps = all('[data-setting]')
-          .map((row) => row.dataset.setting ?? "")
-          .filter((label) => /^\d\. /.test(label));
-        seen.kinds = all('[data-slot="routing-kind"] > button').map(text);
-        seen.openAtStart = all('[data-slot="routing-kind"][data-open]').length;
-        kindButton("Review changes")?.click();
-      },
-      () => {
-        seen.heading = text(openKind()?.querySelector("button .font-medium"));
-        seen.order = text(openKind()?.querySelector('[data-slot="try-order"]'));
-        seen.ranked = all('[data-slot="route-candidate"]').map(text);
-        seen.strengthFor = text(button("The kind of work the models are ranked for"));
-        seen.strength = all('[data-slot="strength-row"] > button').map(text);
-        seen.blocked = all('[data-slot="blocked-candidate"]').length;
-        seen.more = text(all('[data-slot="ranking-now"] button').find((element) => text(element).includes("more")));
-        seen.rules = all('[data-slot="routing-rules"] [data-slot="settings-row"]').map((row) => row.dataset.setting);
-        seen.ruleRows = all('[data-slot="routing-rules"] [data-slot="settings-row"]').map(text);
-        seen.overrides = all('[data-slot="area-override"]').map(text);
-        seen.rankingFor = text(button("The kind of work the ranking is for"));
-        // Every searchable row without a replacement has a place search can bring into view.
-        seen.unrevealable = Object.values(ROUTING_PAGE_ROWS)
-          .filter((row) => !("target" in row))
-          .map((row) => row.label)
-          .filter(
-            (label) =>
-              !all("[data-setting]").some((element) => element.dataset.setting === label) &&
-              !all("section[aria-labelledby] h2").some((heading) => text(heading) === label),
-          );
-        seen.authors = asked.filter((question) => question.author !== null).map((question) => question.author);
-        press(button("Who wrote the change under review"));
-      },
-      () => {
-        (menuItem("Codex") as HTMLElement | undefined)?.click();
-      },
-      () => {
-        seen.askedCodex = asked.some((question) => question.author === "codex");
-        seen.reasonAfter = text(document.querySelector('[data-slot="route-candidate"][data-chosen] p'));
-        button("Remove GPT-6")?.click();
-      },
-      () => {
-        seen.afterRemove = review()?.entries.map((entry) => (entry.target.type === "model" ? entry.target.id : ""));
-        seen.orderAfterRemove = text(openKind()?.querySelector('[data-slot="try-order"] ol'));
-        press(button("When none of Review changes's models can run"));
-      },
-      () => {
-        (menuItem("wait") as HTMLElement | undefined)?.click();
-      },
-      () => {
-        seen.waits = review()?.only;
-        button("Automatic", openKind() ?? document)?.click();
-      },
-      () => {
-        seen.afterReset = { manual: review()?.manual, kept: review()?.entries.length };
-        seen.automatic = text(openKind()?.querySelector('[data-slot="try-order"]'));
-        seen.reviewRow = text(kindButton("Review changes"));
-        seen.ratingGroups = all('[data-slot="model-ratings"] .font-medium')
-          .map(text)
-          .filter((name) => ["Claude", "Codex", "Not in the registry"].includes(name));
-        seen.ratingRows = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
-        seen.best = all('[data-slot="rating-row"] .text-success').map(text);
-        all<HTMLButtonElement>('[data-slot="rating-row"] > button').find((row) => text(row).startsWith("GPT-6"))?.click();
-      },
-      () => {
-        const profile = document.querySelector('[data-slot="rating-row"] [data-slot="model-profile"]');
-        seen.profile = all("h4", profile ?? document.body).map(text);
-        seen.learned = text(profile?.querySelector(".text-2xl"));
-        button("Add rule")?.click();
-      },
-      () => {
-        seen.form = Boolean(document.querySelector('[data-slot="routing-rule-form"]'));
-        button("Cancel")?.click();
-      },
-      () => {
-        seen.formAfterCancel = Boolean(document.querySelector('[data-slot="routing-rule-form"]'));
-        // The page's column, as wide as every other page's.
-        const column = document.querySelector('[data-slot="settings-page"] h1')?.closest(".mx-auto");
-        const probe = document.body.appendChild(Object.assign(document.createElement("div"), { className: "max-w-settings" }));
-        seen.settingsColumn = Boolean(column) && getComputedStyle(column as Element).maxWidth === getComputedStyle(probe).maxWidth;
-        probe.remove();
-        // Scrolled so Add rule sits just under the page's top edge: a click there reaches it.
-        const add = button("Add rule");
-        const scroller = add?.closest(".overflow-y-auto");
-        if (add && scroller) {
-          scroller.scrollTop += add.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8;
-        }
-      },
-      () => {
-        const add = button("Add rule");
-        const box = add?.getBoundingClientRect();
-        const hit = box ? document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) : null;
-        seen.addRuleNearTop = Boolean(box && box.top < 60);
-        seen.addRuleHit = Boolean(add && hit && add.contains(hit));
-        // A model switched off on Providers, then its whole agent, leave the ratings.
-        void setModelAvailable({ provider: "claude", id: "claude-opus-4-6" }, false);
-      },
-      () => {
-        seen.ratingRowsModelOff = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
-        seen.strengthModelOff = strengthNames();
-        void setProviderOn("codex", false);
-      },
-      () => {
-        seen.ratingRowsAgentOff = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
-        seen.strengthAgentOff = strengthNames();
-        seen.bestAgentOff = all('[data-slot="rating-row"] .text-success').length;
-        void setProviderOn("codex", true);
-        void setModelAvailable({ provider: "claude", id: "claude-opus-4-6" }, true);
-      },
-      () => {
-        seen.ratingRowsBack = all('[data-slot="rating-row"] > button').map((row) => text(row.firstElementChild));
-        seen.strengthBack = strengthNames();
-        all<HTMLButtonElement>('[data-slot="strength-row"] > button').find((row) => strengthName(row) === "GPT-6")?.click();
-      },
-      () => {
-        seen.strengthProfile = all("h4", document.querySelector('[data-slot="strength-row"] [data-slot="model-profile"]') ?? document.body).map(text);
-        // My order brings back the order Automatic kept.
-        button("My order", openKind() ?? document)?.click();
-      },
-      () => {
-        seen.afterMyOrder = { manual: review()?.manual, kept: review()?.entries.length };
-        // In a project without an order of its own, the kind follows All projects' order.
-        press(button("Where these settings apply"));
-      },
-      () => {
-        (menuItem("Brigadier Desktop") as HTMLElement | undefined)?.click();
-      },
-      () => {
-        seen.projectMode = text(openKind()?.querySelector('[data-state="on"]'));
-        seen.projectOrder = text(openKind()?.querySelector('[data-slot="try-order"]'));
-        button("Automatic", openKind() ?? document)?.click();
-      },
-      () => {
-        const own = useApp
-          .getState()
-          .settings.routingRankings.find((ranking) => ranking.category === "review" && ranking.projectId !== null);
-        seen.projectAutomatic = own && { manual: own.manual, entries: own.entries.length };
-        seen.projectModeAfter = text(openKind()?.querySelector('[data-state="on"]'));
-        setResult(JSON.stringify(seen));
-      },
-    ];
+    let steps: (() => void)[];
+    if (!params.has("drive")) {
+      steps = [
+        () => {
+          const kind = params.get("kind");
+          if (kind) kindButton(kind)?.click();
+          const more = params.get("more");
+          if (more === "strength") revealSetting(ROUTING_PAGE_ROWS.strength.label);
+          if (more === "steps") revealSetting(ROUTING_PAGE_ROWS.steps.label);
+        },
+        ...(params.has("rule") ? ruleSteps(params.get("rule") ?? "") : []),
+      ];
+    } else if (edge) {
+      steps = [
+        () => kindButton("Research")?.click(),
+        () => button("My order", openKind() ?? document)?.click(),
+        () => {
+          seen.mode = text(openKind()?.querySelector('[data-state="on"]'));
+          seen.addModel = Boolean(button("Add model", openKind() ?? document));
+          revealSetting(ROUTING_PAGE_ROWS.strength.label);
+        },
+        () => {
+          seen.failure = text(document.querySelector('[data-slot="model-strength"] [role="alert"]'));
+          setResult(JSON.stringify(seen));
+        },
+      ];
+    } else {
+      steps = [
+        () => {
+          seen.note = text(document.querySelector('[data-slot="settings-page"] header'));
+          seen.sections = all("section h2").map(text);
+          seen.kinds = all('[data-slot="routing-kind"] > button').map(text);
+          seen.openAtStart = all('[data-slot="routing-kind"][data-open]').length;
+          kindButton("Review changes")?.click();
+        },
+        () => {
+          seen.mode = text(openKind()?.querySelector('[data-state="on"]'));
+          seen.whoPicks = text(openKind()?.querySelector('[data-slot="who-picks"] > div'));
+          seen.order = all('[data-slot="ranked-place"]', openKind() ?? document).map(text);
+          press(button("GPT-6: actions"));
+        },
+        () => menuItem("Remove")?.click(),
+        () => {
+          seen.afterRemove = review()?.entries.map((entry) => (entry.target.type === "model" ? entry.target.id : ""));
+          button("Automatic", openKind() ?? document)?.click();
+        },
+        () => {
+          seen.afterReset = { manual: review()?.manual, kept: review()?.entries.length };
+          seen.reviewRow = text(kindButton("Review changes"));
+          seen.picks = all('[data-slot="auto-pick"]').map(text);
+          seen.skipped = text(openKind()?.querySelector('[data-slot="auto-picks"] p'));
+          button("See strengths")?.click();
+        },
+        () => {
+          seen.strengthFor = text(button("The kind of work the models are ranked for"));
+          seen.strength = all('[data-slot="strength-row"]').map(text);
+          seen.ratingsFooter = text(document.querySelector('[data-slot="model-strength"] > div:last-of-type'));
+          button("My order", openKind() ?? document)?.click();
+        },
+        () => {
+          seen.afterMyOrder = { manual: review()?.manual, kept: review()?.entries.length };
+          seen.rules = ruleRows();
+          (document.querySelector('[data-slot="add-rule"]') as HTMLButtonElement | null)?.click();
+        },
+        () => {
+          seen.form = text(form());
+          seen.addDisabled = button("Add rule", form() ?? document)?.disabled;
+          seen.headerAddDisabled = (document.querySelector('[data-slot="add-rule"]') as HTMLButtonElement | null)?.disabled;
+        },
+        ...pick("What the rule does", "Prefer"),
+        ...pick("The model the rule is about", "Sonnet 5.5"),
+        ...pick("The kind of work the rule is about", "Review changes"),
+        () => {
+          seen.clash = note();
+        },
+        ...pick("The model the rule is about", "GPT-6"),
+        ...pick("The kind of work the rule is about", "Write commit messages"),
+        () => {
+          seen.preview = note();
+          button("Add rule", form() ?? document)?.click();
+        },
+        () => {
+          seen.formAfterAdd = Boolean(form());
+          seen.rulesAfterAdd = ruleRows();
+          const added = useToasts.getState().toasts.at(-1);
+          seen.toast = added && [added.text, ...added.actions.map((action) => action.label)];
+          added?.actions[0]?.run();
+        },
+        () => {
+          seen.rulesAfterUndo = ruleRows();
+          revealSetting(ROUTING_PAGE_ROWS.steps.label);
+        },
+        () => {
+          seen.steps = all('[data-slot="routing-steps"] li').map(text);
+          seen.strengthClosed = !document.querySelector('[data-slot="model-strength"]');
+          // Every searchable row has a place search can bring into view.
+          revealSetting(ROUTING_PAGE_ROWS.strength.label);
+        },
+        () => {
+          seen.unrevealable = Object.values(ROUTING_PAGE_ROWS)
+            .map((row) => ("target" in row ? row.target : row.label))
+            .filter(
+              (label) =>
+                !all("[data-setting]").some((element) => element.dataset.setting === label) &&
+                !all("section[aria-labelledby] h2").some((heading) => text(heading) === label),
+            );
+          // The page's column, as wide as every other page's.
+          const column = document.querySelector('[data-slot="settings-page"] h1')?.closest(".mx-auto");
+          const probe = document.body.appendChild(Object.assign(document.createElement("div"), { className: "max-w-settings" }));
+          seen.settingsColumn = Boolean(column) && getComputedStyle(column as Element).maxWidth === getComputedStyle(probe).maxWidth;
+          probe.remove();
+          // Scrolled so Add rule sits just under the page's top edge: a click there reaches it.
+          const add = document.querySelector<HTMLElement>('[data-slot="add-rule"]');
+          const scroller = add?.closest(".overflow-y-auto");
+          // Room below the page, so it can scroll that far.
+          scroller?.appendChild(Object.assign(document.createElement("div"), { className: "h-screen shrink-0" }));
+          if (add && scroller) scroller.scrollTop += add.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8;
+        },
+        () => {
+          const add = document.querySelector<HTMLElement>('[data-slot="add-rule"]');
+          const box = add?.getBoundingClientRect();
+          const hit = box ? document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) : null;
+          seen.addRuleNearTop = Boolean(box && box.top < 60);
+          seen.addRuleHit = Boolean(add && hit && add.contains(hit));
+          // A model switched off on Providers, then its whole agent, leave Model strength.
+          void setModelAvailable({ provider: "claude", id: "claude-opus-4-6" }, false);
+        },
+        () => {
+          seen.strengthModelOff = strengthNames();
+          void setProviderOn("codex", false);
+        },
+        () => {
+          seen.strengthAgentOff = strengthNames();
+          void setProviderOn("codex", true);
+          void setModelAvailable({ provider: "claude", id: "claude-opus-4-6" }, true);
+        },
+        () => {
+          seen.strengthBack = strengthNames();
+          setResult(JSON.stringify(seen));
+        },
+      ];
+    }
     let stopped = false;
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     void (async () => {
-      await wait(600);
+      await wait(params.has("drive") ? 600 : 800);
       for (const step of steps) {
         if (stopped) return;
         step();
@@ -273,6 +314,7 @@ function Fixture() {
           <div className="min-w-0 flex-1">{page && <SettingsView page={page} />}</div>
         </main>
       </div>
+      <Toaster className="top-2" />
       {result && <pre id="routing-result">{result}</pre>}
     </TooltipProvider>
   );

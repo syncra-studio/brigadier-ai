@@ -26,7 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { OverrideRule, OverrideTarget, RoutePreview, TaskCategory } from "@/ipc/generated";
-import { newRuleId, PLAIN_KIND_NAMES } from "@/lib/routing";
+import { newRuleId, PLAIN_KIND_NAMES, ruleSentence } from "@/lib/routing";
 import { isNewModelRule } from "@/state/providers";
 import { addOverride, removeOverride } from "@/state/routing";
 import { useApp } from "@/state/store";
@@ -69,6 +69,7 @@ export function Rules({ routes, groups }: { routes: RoutePreview[] | null; group
   const [fresh, setFresh] = useState<string | null>(null);
   const remove = useAction();
   const names = useNames(groups);
+  const projects = useApp((s) => s.projects);
   const added = rules.find((rule) => rule.id === fresh);
   // The rule just added leads the list while it is new.
   const shown = added ? [added, ...rules.filter((rule) => rule !== added)] : rules;
@@ -92,7 +93,12 @@ export function Rules({ routes, groups }: { routes: RoutePreview[] | null; group
         <Card data-slot="routing-rules">
           {adding && <DraftRow routes={routes} names={names} onCancel={() => setAdding(false)} onAdded={onAdded} />}
           {shown.map((rule) => (
-            <div key={rule.id} data-slot="routing-rule" data-setting={ruleTitle(rule, names)} className="flex items-center gap-3.5 py-3.5">
+            <div
+              key={rule.id}
+              data-slot="routing-rule"
+              // Where a rule's link from Providers lands: its sentence.
+              data-setting={ruleSentence(rule, groups, projects)}
+              className="flex items-center gap-3.5 py-3.5">
               {rule.effect === "never" ? <BanIcon /> : <PreferIcon />}
               <span className="flex min-w-0 flex-1 flex-col gap-1">
                 <span className="flex min-w-0 items-center gap-2">

@@ -62,32 +62,6 @@ export const CATEGORY_LABELS: Record<TaskCategory, string> = {
   gitText: "writing git text",
 };
 
-/** The kinds of work the Providers page ranks (the orchestrator keeps its own picker). */
-export const RANKED_CATEGORIES: readonly TaskCategory[] = [
-  "scout",
-  "research",
-  "implement",
-  "review",
-  "merge",
-  "verify",
-  "operate",
-  "chat",
-];
-
-/** What each kind of work is, under its heading. */
-export const KIND_HINTS: Record<TaskCategory, string> = {
-  scout: "Looks around the repository and answers a question",
-  research: "Reads docs and the web",
-  implement: "Changes code; lands as one commit",
-  review: "Reviews another task's change or a plan",
-  merge: "Resolves conflicts between a task and its target branch",
-  verify: "Runs the project's checks",
-  operate: "Uses apps on this Mac to reach a result; changes no code",
-  chat: "Takes over a Chat whose model hits its limit",
-  orchestrate: "Plans and delegates a session's work",
-  gitText: "Writes the commit messages Brigadier writes for you, on a fast, light model",
-};
-
 /** A kind of work in plain words, as the Providers page names it: "Write code". */
 export const PLAIN_KIND_NAMES: Record<TaskCategory, string> = {
   scout: "Explore the code",
@@ -175,13 +149,6 @@ export const TIER_LABELS: Record<QualityTier, string> = {
   standard: "Standard",
   strong: "Strong",
   frontier: "Frontier",
-};
-
-export const HEAT_LABELS: Record<Heat, string> = {
-  cool: "Cool",
-  warm: "Warm",
-  hot: "Hot",
-  limited: "Limit reached",
 };
 
 /** Text and fill tones for a heat: status colors, always beside a label. */

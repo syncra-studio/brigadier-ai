@@ -126,7 +126,7 @@ test("search finds every row of Providers and Routing on its page", async () => 
     // Rows that moved bring their replacement into view.
     assert.equal(on("providers", "Usage")?.row?.target, "Accounts");
     assert.equal(on("providers", "Add account")?.row?.target, "Accounts");
-    assert.equal(on("routing", "Refresh rankings")?.row?.target, "Model strength");
+    assert.equal(on("routing", "Refresh ratings")?.row?.target, "Model strength");
     for (const [name, page] of [["Providers", "providers"], ["Accounts", "providers"], ["Usage", "providers"], ["Routing", "routing"], ["Who does what", "routing"]] as const) {
       assert.ok(found(name).some((result) => result.page.id === page && result.row === null), name);
     }
