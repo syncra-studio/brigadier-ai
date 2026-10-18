@@ -58,6 +58,9 @@ seen.chatValue = byId<HTMLInputElement>("chat").value;
 // A password asks, and goes only with a yes given at this address.
 seen.email = agent({ kind: "type", target: refOf("email"), text: "ada@example.com", submit: false });
 seen.password = agent({ kind: "type", target: refOf("password"), text: "hunter2", submit: false });
+// Declared as a sign-in or a payment, a password or card field still asks as what it is.
+seen.passwordDeclared = agent({ kind: "type", target: refOf("password"), text: "hunter2", submit: false, declared: "signIn" });
+seen.cardDeclared = agent({ kind: "type", target: refOf("card"), text: "4242424242424242", submit: false, declared: "pay" });
 seen.passwordElsewhere = agent({ kind: "type", target: refOf("password"), text: "hunter2", submit: false, approved: "https://other.example/" });
 seen.passwordEmpty = byId<HTMLInputElement>("password").value;
 seen.passwordYes = agent({ kind: "type", target: refOf("password"), text: "hunter2", submit: false, approved: location.href });

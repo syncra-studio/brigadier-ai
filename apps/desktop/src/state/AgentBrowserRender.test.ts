@@ -56,6 +56,8 @@ test("browser tool: the page script reads, clicks, types and asks first", { time
 
   assert.deepEqual(seen.email, done);
   assert.deepEqual(seen.password, ask("credentials", 'textbox "Password"'));
+  assert.deepEqual([seen.passwordDeclared, seen.cardDeclared], [ask("credentials", 'textbox "Password"'), ask("card", 'textbox "Card number"')],
+    "a declared sign-in or payment into a secret's field asks as the field, so its card never shows the secret");
   assert.deepEqual(seen.passwordElsewhere, ask("credentials", 'textbox "Password"'), "a yes given at another address doesn't hold");
   assert.equal(seen.passwordEmpty, "");
   assert.deepEqual([seen.passwordYes, seen.passwordValue], [done, "hunter2"]);

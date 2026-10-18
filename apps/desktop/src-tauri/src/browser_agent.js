@@ -278,8 +278,11 @@
       return { error: `${op.target} isn't a field to type in (it is a ${role || element.localName}).` };
     }
     if (element.disabled || element.readOnly) return { error: `${op.target} can't be typed in now.` };
-    const kind = fieldKind(element) || (op.submit ? filledKind(scopeOf(element), element) : null);
-    const asked = (op.declared && ask(op.declared, element)) || (kind && ask(kind, element));
+    // A password, card or code field asks as what it is, whatever the agent declared, so the
+    // card never shows the secret typed into it.
+    const own = fieldKind(element);
+    const kind = own || (op.submit ? filledKind(scopeOf(element), element) : null);
+    const asked = (own && ask(own, element)) || (op.declared && ask(op.declared, element)) || (kind && ask(kind, element));
     if (asked) return asked;
     element.scrollIntoView({ block: "center", inline: "center" });
     element.focus({ preventScroll: true });
