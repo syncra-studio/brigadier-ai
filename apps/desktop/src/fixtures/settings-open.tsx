@@ -271,7 +271,11 @@ async function drive(): Promise<string> {
   };
   // Settings open and idle: the Inspector's code loads.
   await sleep(1500);
-  const usage = await open("Providers", () => ({ data: mainText().includes("Frontier"), reading: mainText().includes("Reading the models") }));
+  const providers = await open("Providers", () => ({ agents: document.querySelectorAll('[data-slot="agent-row"]').length }));
+  // An agent's page, on the first frame after its row is clicked.
+  document.querySelector<HTMLElement>('[data-slot="agent-row"][data-setting="Claude"]')?.click();
+  await frame();
+  const usage = { ...providers, data: mainText().includes("Frontier"), reading: mainText().includes("Reading the models") };
   const computerUse = await open("Computer use", () => ({
     status: document.querySelector('[data-slot="setup-line"]')?.textContent ?? null,
     readWaiting: waiting("getComputerUse"),

@@ -5,7 +5,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 type Seen = {
   settings: { nav: boolean; backToApp: boolean; title: string | null };
-  usage: { title: string | null; data: boolean; reading: boolean };
+  usage: { title: string | null; agents: number; data: boolean; reading: boolean };
   computerUse: { title: string | null; status: string | null; readWaiting: boolean };
   computerUseRead: string | null;
   importFirst: { title: string | null; placeholder: boolean; loadingLine: boolean; rows: number; listWaiting: boolean };
@@ -23,8 +23,9 @@ test("settings and its pages show on the first frame, data filling in where it g
   assert.equal(seen.error, undefined);
   // Its code loaded at idle: the navigation and General, with no empty frame first.
   assert.deepEqual(seen.settings, { nav: true, backToApp: false, title: "General" });
-  // The usage read made at idle: Providers opens with the models' details filled in.
-  assert.deepEqual(seen.usage, { title: "Providers", data: true, reading: false });
+  // The usage read made at idle: Providers opens with its agents, and an agent's page with the
+  // models' details filled in.
+  assert.deepEqual(seen.usage, { title: "Providers", agents: 2, data: true, reading: false });
   // The permissions read still on its way: the page and its rows show, its setup line saying
   // it is checking; then the answer fills in.
   assert.equal(seen.computerUse.title, "Computer use");
