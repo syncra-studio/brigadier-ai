@@ -233,6 +233,12 @@ pub enum Request {
     ForgetMemory {
         node_id: String,
     },
+    /// The user's correction of a memory's text, in place; refused for a password, key, card
+    /// or account number.
+    EditMemory {
+        node_id: String,
+        text: String,
+    },
     /// Writes the project's conventions into the marked Brigadier section of an AGENTS.md
     /// (the native save panel's choice, or a typed path), creating the file if needed.
     ExportConventions {
@@ -1426,6 +1432,9 @@ pub enum Response {
         memories: Vec<Node>,
     },
     ForgetMemory,
+    EditMemory {
+        memory: Box<Node>,
+    },
     ExportConventions {
         export: ConventionsExport,
     },

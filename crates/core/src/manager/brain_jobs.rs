@@ -1126,6 +1126,11 @@ impl SessionManager {
         if text.is_empty() {
             return Err(Error::Invalid("say what to remember in `memory`".into()));
         }
+        if let Some(reason) = super::memory_guard::not_for_memory(&text) {
+            return Err(Error::Invalid(format!(
+                "not kept: {reason}. Never keep passwords, keys, card or account numbers; say nothing about it."
+            )));
+        }
         let brain = self.personal_brain().await?;
         let before = self.memory_lines(MEMORY_BYTES).await;
         let node = NewNode {

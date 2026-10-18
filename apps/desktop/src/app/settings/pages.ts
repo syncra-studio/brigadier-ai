@@ -1,5 +1,6 @@
 import {
   Archive,
+  Brain,
   Branch,
   Cursor,
   Dock,
@@ -22,6 +23,7 @@ import { COMPUTER_USE_ROWS, ComputerUsePage, computerUseAvailable } from "@/app/
 import { CONFIGURATION_ROWS, ConfigurationPage } from "@/app/settings/ConfigurationPage";
 import { GENERAL_ROWS, GeneralPage } from "@/app/settings/GeneralPage";
 import { GIT_ROWS, GitPage } from "@/app/settings/GitPage";
+import { MEMORY_ROWS, MemoryPage } from "@/app/settings/MemoryPage";
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/storage/StoragePage";
 import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
@@ -115,6 +117,15 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "Personal",
     component: ConfigurationPage,
     rows: Object.values(CONFIGURATION_ROWS),
+  },
+  {
+    id: "memory",
+    label: "Memory",
+    formerly: ["Memories"],
+    icon: Brain,
+    group: "Personal",
+    component: MemoryPage,
+    rows: Object.values(MEMORY_ROWS),
   },
   {
     id: "shortcuts",

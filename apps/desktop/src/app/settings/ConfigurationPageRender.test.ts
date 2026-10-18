@@ -71,10 +71,8 @@ test("Configuration shows its defaults in one card and explains the choices in i
   ]);
   assert.equal(seen.firstCardHeading, false, "the first card has no heading");
   // Every section shows, with no Advanced accordion holding some back.
-  assert.deepEqual(seen.sections, ["Memory", "Composer", "Brain"]);
+  assert.deepEqual(seen.sections, ["Composer", "Brain"]);
   assert.equal(seen.advanced, false, "no Advanced accordion");
-  // Its count shows by its name; search and links still find the row by its name.
-  assert.deepEqual(seen.memories, { setting: "Memories", row: "Memories · 2 saved" });
   assert.deepEqual(seen.buttons, [], "no Use automatic button");
   assert.equal(seen.levelRow, false, "no read-only row for the chosen level");
   assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Approve for me"]);
@@ -90,6 +88,7 @@ test("Configuration shows its defaults in one card and explains the choices in i
   assert.match(seen.permissionMenu[0][1], /safest/i);
   assert.match(seen.permissionMenu[1][1], /reviewer can be wrong/);
   assert.match(seen.permissionMenu[2][1], /delete or leak/);
-  assert.deepEqual(seen.oldLink, { page: { type: "settings", page: "configuration" }, inView: true });
+  // The memories have a page of their own now (Memory, under Personal).
+  assert.deepEqual(seen.oldLink, { page: { type: "settings", page: "memory" }, inView: true });
   assert.deepEqual(seen.search, { page: { type: "settings", page: "configuration" }, inView: true });
 });

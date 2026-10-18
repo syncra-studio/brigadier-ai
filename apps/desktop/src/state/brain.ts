@@ -171,6 +171,12 @@ export async function forgetMemory(nodeId: string): Promise<void> {
   await request({ method: "forgetMemory", nodeId });
 }
 
+/** The user's correction of a memory; the daemon refuses a password, key, card or account number. */
+export async function editMemory(nodeId: string, text: string): Promise<Node> {
+  const { memory } = await request({ method: "editMemory", nodeId, text });
+  return memory;
+}
+
 /**
  * "Export conventions to AGENTS.md…": the save panel starts in the project's repository; the
  * outcome (or the error) shows in a toast.

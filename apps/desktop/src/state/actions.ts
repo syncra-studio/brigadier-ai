@@ -272,7 +272,7 @@ export function inspectedConversation(state: AppState): Conversation | null {
 /** Pages merged into another, by the page they are part of now and the row each opens at. */
 const MERGED_SETTINGS_PAGES = {
   conversations: { page: "configuration", row: "Model for sessions" },
-  personalization: { page: "configuration", row: "Memories" },
+  personalization: { page: "memory", row: "Memories" },
   accounts: { page: "providers", row: "Accounts" },
   usage: { page: "providers", row: "Accounts" },
 } as const satisfies Record<string, { page: SettingsPageId; row: string }>;

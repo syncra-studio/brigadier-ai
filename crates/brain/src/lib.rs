@@ -892,6 +892,34 @@ impl Brain {
         })
     }
 
+    /// The user's correction of a node's text, in place: the same id, key, provenance and
+    /// edges, and no earlier version kept, so what they corrected away is gone and can't come
+    /// back when the node is deleted.
+    pub fn edit(&self, id: &str, title: String, body: String) -> Result<()> {
+        let node = self
+            .node(id)?
+            .ok_or_else(|| Error::NotFound(format!("no node has the id {id}")))?;
+        let embedding = self
+            .inner
+            .embedder
+            .embed(&[&embed_text(&title, &body)])
+            .and_then(|mut vectors| vectors.pop())
+            .map(|vector| vectors::encode(&vector));
+        let fold = write::fold_key(
+            node.kind,
+            node.provenance.session_id.as_deref(),
+            &title,
+            &body,
+        );
+        let id = id.to_owned();
+        let now = db::now_ms();
+        self.write(move |tx, changes| {
+            write::edit(
+                tx, &id, node.kind, &title, &body, fold, embedding, now, changes,
+            )
+        })
+    }
+
     /// Deletes a node and its edges. Its latest earlier version is current again.
     pub fn delete(&self, id: &str) -> Result<()> {
         let id = id.to_owned();

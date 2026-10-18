@@ -1234,3 +1234,32 @@ fn a_message_and_a_thread_command_with_the_same_seq_are_both_found() {
         None
     );
 }
+
+/// The user's edit of a memory changes it in place, keeps no earlier text, and deleting it
+/// afterwards brings nothing back.
+#[test]
+fn an_edit_changes_the_text_in_place_with_no_history() {
+    let brain = TestBrain::new();
+    let id = brain
+        .record(node(
+            NodeKind::Preference,
+            Some("preference:a"),
+            "Lives in Iasi",
+            "",
+        ))
+        .unwrap();
+    brain
+        .edit(&id, "Lives in Chisinau".into(), String::new())
+        .unwrap();
+    let nodes = all(&brain);
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].id, id);
+    assert_eq!(nodes[0].title, "Lives in Chisinau");
+    assert_eq!(nodes[0].key.as_deref(), Some("preference:a"));
+    brain.delete(&id).unwrap();
+    assert!(all(&brain).is_empty());
+    assert!(matches!(
+        brain.edit(&id, "x".into(), String::new()),
+        Err(Error::NotFound(_))
+    ));
+}

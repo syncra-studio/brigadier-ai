@@ -1631,6 +1631,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.forget_memory(node_id)).await?;
             Response::ForgetMemory
         }
+        Request::EditMemory { node_id, text } => Response::EditMemory {
+            memory: Box::new(heap(|| sessions.edit_memory(node_id, text)).await?),
+        },
         Request::ExportConventions { project_id, path } => Response::ExportConventions {
             export: heap(|| sessions.export_conventions(project_id, path)).await?,
         },

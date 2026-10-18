@@ -1,10 +1,5 @@
-import { useEffect, useState } from "react";
-
 import { useAction } from "@/app/conversation/useAction";
-import { errorText } from "@/app/dialogs/fields";
-import { MemoriesDialog } from "@/app/settings/MemoriesDialog";
 import {
-  SettingsButton,
   SettingsCard,
   SettingsPage,
   SettingsRow,
@@ -19,7 +14,7 @@ import {
   type ModelGroup,
 } from "@/components/assistant-ui/elements/model-selector";
 import { Badge } from "@/components/ui/badge";
-import type { ModelChoice, Node, PermissionLevel } from "@/ipc/generated";
+import type { ModelChoice, PermissionLevel } from "@/ipc/generated";
 import {
   builtInDefault,
   modelName,
@@ -30,7 +25,6 @@ import {
   withChoice,
 } from "@/lib/setup";
 import { cn } from "@/lib/utils";
-import { listMemories } from "@/state/brain";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
@@ -78,10 +72,6 @@ export const CONFIGURATION_ROWS = {
     label: "Start workers on its own",
     description: "Choose whether a session starts helpers when they help, or asks you first",
   },
-  memories: {
-    label: "Memories",
-    description: "What Brigadier remembers about you, used by every chat and session",
-  },
   fullAccessNotice: {
     label: "Show the Full access notice",
     description:
@@ -96,7 +86,7 @@ export const CONFIGURATION_ROWS = {
 
 /**
  * How Brigadier works for the user: one card of the defaults new sessions and chats start with
- * (models, permission level, reviews, starting workers), what Brigadier remembers, what the composer
+ * (models, permission level, reviews, starting workers), what the composer
  * shows, and the Brain's spare quota. Each row says in a line what it chooses; its menu explains the
  * choices.
  */
@@ -133,12 +123,6 @@ export function ConfigurationPage() {
         <SwitchSetting setting="reviewWork" row={CONFIGURATION_ROWS.reviewWork} />
         <SwitchSetting setting="startWorkersOnOwn" row={CONFIGURATION_ROWS.startWorkersOnOwn} />
       </SettingsCard>
-
-      <SettingsSection title="Memory">
-        <SettingsCard>
-          <MemoriesRow />
-        </SettingsCard>
-      </SettingsSection>
 
       <SettingsSection title="Composer">
         <SettingsCard>
@@ -233,58 +217,3 @@ function PermissionRow({ value }: { value: PermissionLevel }) {
   );
 }
 
-/** The memories as last read, kept while the app runs. */
-let lastMemories: Node[] | null = null;
-
-/** How many memories Brigadier keeps, and the way to see and forget them. */
-function MemoriesRow() {
-  // As last read, at once; read again as the page opens.
-  const [memories, setMemories] = useState<Node[] | null>(() => lastMemories);
-  const [error, setError] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    lastMemories = memories;
-  }, [memories]);
-
-  useEffect(() => {
-    let current = true;
-    listMemories().then(
-      (list) => current && setMemories(list),
-      (cause: unknown) => current && setError(errorText(cause)),
-    );
-    return () => {
-      current = false;
-    };
-  }, []);
-
-  const count =
-    memories === null ? null : memories.length === 0 ? "nothing saved yet" : `${memories.length} saved`;
-  return (
-    <>
-      <SettingsRow
-        label={
-          <>
-            {CONFIGURATION_ROWS.memories.label}
-            {count && <span className="text-foreground/65 font-normal"> · {count}</span>}
-          </>
-        }
-        // Search and links find it by its name, whatever the count says.
-        setting={CONFIGURATION_ROWS.memories.label}
-        description={CONFIGURATION_ROWS.memories.description}
-        error={error}
-      >
-        <SettingsButton disabled={memories === null} onClick={() => setOpen(true)}>
-          Manage
-        </SettingsButton>
-      </SettingsRow>
-      <MemoriesDialog
-        open={open}
-        onOpenChange={setOpen}
-        memories={memories ?? []}
-        onForgotten={(id) =>
-          setMemories((list) => list?.filter((memory) => memory.id !== id) ?? null)
-        }
-      />
-    </>
-  );
-}

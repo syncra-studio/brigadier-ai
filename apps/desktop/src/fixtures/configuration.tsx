@@ -36,7 +36,9 @@ useApp.setState((state) => ({
   providers: { ...state.providers, view: { providers: OVERVIEWS, sessions: [], fixtures: [] } },
 }));
 
-const memories = [{ id: "m1" }, { id: "m2" }] as Node[];
+const memory = (id: string, title: string) =>
+  ({ id, title, body: "", updatedAtMs: Date.now(), provenance: { origin: "user", sessionId: null } }) as unknown as Node;
+const memories = [memory("m1", "Lives in Lisbon"), memory("m2", "Works as an electrician")];
 
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
@@ -99,7 +101,7 @@ function Fixture() {
     const seen: Record<string, unknown> = {};
     const steps: (() => void)[] = [
       () => {
-        const [first, ...rest] = all('[data-slot="settings-card"]');
+        const [first] = all('[data-slot="settings-card"]');
         seen.firstCard = all('[data-slot="settings-row"]', first).map((row) => ({
           setting: row.dataset.setting,
           helper: text(row.querySelector(".text-xs")),
@@ -107,7 +109,6 @@ function Fixture() {
         seen.firstCardHeading = first?.closest("section") !== null;
         seen.sections = all("main section h2").map(text);
         seen.advanced = all('[data-slot="settings-advanced"]').length > 0;
-        seen.memories = { setting: rest[0]?.querySelector<HTMLElement>("[data-setting]")?.dataset.setting, row: text(rest[0]?.querySelector(".font-medium")) };
         seen.buttons = all("main button").map(text).filter((name) => name === "Use automatic");
         seen.levelRow = all("[data-setting]").some((row) => text(row).endsWith("Default"));
         seen.triggers = Object.values(MENUS).map((label) => text(trigger(label)));

@@ -871,6 +871,11 @@ impl SessionManager {
             return crate::heap(|| self.remember_constraint(id, args, title)).await;
         }
         let personal = args.personal || args.kind == MemoryKind::Preference;
+        if personal && let Some(reason) = super::memory_guard::not_for_memory(&title) {
+            return Err(Error::Invalid(format!(
+                "not kept: {reason}. Never keep passwords, keys, card or account numbers."
+            )));
+        }
         let kind = match args.kind {
             MemoryKind::Decision => NodeKind::Decision,
             MemoryKind::Convention => NodeKind::Convention,
@@ -2178,6 +2183,59 @@ impl SessionManager {
                 .map_err(brain_error)
         })
         .await
+    }
+
+    /// The user's correction of a memory, in place: the same memory (where it came from too),
+    /// with no earlier text kept; a Chat that saved it shows the new text.
+    pub async fn edit_memory(&self, node_id: String, text: String) -> Result<Node> {
+        let text = one_line(&text, 240);
+        if text.is_empty() {
+            return Err(Error::Invalid(
+                "a memory can't be empty; forget it instead".into(),
+            ));
+        }
+        if let Some(reason) = super::memory_guard::not_for_memory(&text) {
+            return Err(Error::Invalid(format!(
+                "Brigadier doesn't keep that: {reason}"
+            )));
+        }
+        let brain = self.personal_brain().await?;
+        let id = node_id.clone();
+        let title = text.clone();
+        let node = blocking(move || {
+            let current = brain.node(&id).map_err(brain_error)?;
+            if current
+                .as_ref()
+                .is_none_or(|node| node.kind != NodeKind::Preference)
+            {
+                return Ok(None);
+            }
+            brain.edit(&id, title, String::new()).map_err(brain_error)?;
+            brain.node(&id).map_err(brain_error)
+        })
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("memory {node_id}")))?;
+        if let Some(session) = node.provenance.session_id.clone() {
+            let conversation = ConversationId(session);
+            if self.core.conversation(&conversation).is_ok() {
+                self.core
+                    .record_conversation(
+                        &conversation,
+                        vec![DomainEvent::MemoryUpdated {
+                            conversation_id: conversation.clone(),
+                            memory: crate::knowledge::MemoryChange {
+                                node_id,
+                                text,
+                                forgotten: false,
+                                request_id: None,
+                                at_ms: now_ms(),
+                            },
+                        }],
+                    )
+                    .await?;
+            }
+        }
+        Ok(node)
     }
 
     /// Removes a memory; a Chat that saved it shows it as removed.

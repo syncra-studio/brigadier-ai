@@ -125,8 +125,9 @@ the next results).";
 
 const REMEMBER: &str = "Keep what later work must respect: a decision the user \
 settled or you made, a convention of this project, a contract between parts, a standing rule of \
-the user's (kind constraint, in their exact words with its `scope`), or (personal) a preference \
-of theirs across projects. What the user settled cites their message (`user_message`, with their \
+the user's (kind constraint, in their exact words with its `scope`), or (personal) a stable fact \
+about them across projects (where they live, their trade, their tools, a preference; never \
+credentials, health or money details). What the user settled cites their message (`user_message`, with their \
 words in `quote`): Brigadier checks both. Anything else is kept as your claim, unverified, with \
 its evidence (`files`, `check` or `finding`, and the words it shows in `quote`), re-read whenever \
 the claim is used. Do it silently. Returns the node id; pass it as `replaces` to correct it, or a \
@@ -468,10 +469,11 @@ everything the short answer leaves out, in Markdown, with its sources. The reply
 to put in your answer ([Full report](brigadier-page:<id>)); one click opens it. Never paste the \
 report into the chat.";
 
-const SAVE_MEMORY: &str = "Save something about the user that will help in later \
-conversations (a preference, their role, what they work on), as one short sentence. Only when \
-they state it or clearly imply it holds beyond this chat; never secrets or passing details. The \
-user sees it saved and can remove it.";
+const SAVE_MEMORY: &str = "Save a stable fact about the user that will help in later \
+conversations (where they live, their trade, the tools or devices they use, a preference), as one \
+short sentence. Only when they state it or clearly imply it holds beyond this chat; never \
+passwords, keys, card or account numbers (refused), health or money details, or passing details. \
+The user sees, edits and deletes it in Settings.";
 
 const ASK_THREAD: &str = "Ask the thread (which gave you this task) a question you \
 cannot settle yourself, such as an unclear requirement or a choice outside your task. One \

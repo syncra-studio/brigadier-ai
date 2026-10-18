@@ -27,6 +27,7 @@ import { confirmPending } from "@/state/shownIds";
 export type SettingsPageId =
   | "general"
   | "configuration"
+  | "memory"
   | "providers"
   | "routing"
   | "git"

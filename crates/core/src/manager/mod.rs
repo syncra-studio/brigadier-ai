@@ -62,6 +62,7 @@ mod kept_live_tests;
 mod landing;
 mod lifecycle;
 mod machine;
+mod memory_guard;
 mod merge_consent;
 mod merge_record;
 mod outcomes;

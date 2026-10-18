@@ -273,8 +273,9 @@ and your answers on cards are recorded without being asked.
 - **Spare quota.** After a project's first scan, the cheapest model maps its modules, stack,
   conventions and build recipe. Quota that would expire unused refreshes stale nodes and fills
   gaps, and it stops as soon as your own work starts.
-- **Personal memory.** Preferences that hold in every project are given to new threads and Chats
-  (Settings › Configuration › Memories).
+- **Personal memory.** Stable facts about you (where you live, your work, your tools, what you
+  prefer) are given to new threads and Chats; you see, edit and delete them in Settings › Memory.
+  Passwords, keys, card and account numbers are never kept.
 
 Everything stays in the data folder: `brains/<project>/brain.sqlite`, `index.sqlite`,
 `brains/personal.sqlite`, and the embedding model under `models/embeddings/`.

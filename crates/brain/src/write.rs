@@ -579,6 +579,41 @@ fn revive(tx: &Transaction, doomed: &[String], now: i64, changes: &mut Vec<Chang
     Ok(())
 }
 
+/// [`crate::Brain::edit`]: `id`'s new text, with no history.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn edit(
+    tx: &Transaction,
+    id: &str,
+    kind: NodeKind,
+    title: &str,
+    body: &str,
+    fold: Option<String>,
+    embedding: Option<Vec<u8>>,
+    now: i64,
+    changes: &mut Vec<Change>,
+) -> Result<()> {
+    let model = embedding.as_ref().map(|_| embed::MODEL_ID);
+    let edited = tx
+        .prepare_cached(
+            "UPDATE nodes SET title = ?2, body = ?3, updated_ms = ?4, embedding = ?5, \
+             embed_model = ?6, fold_key = ?7 WHERE id = ?1",
+        )?
+        .execute(params![id, title, body, now, embedding, model, fold])?;
+    if edited == 0 {
+        return Err(Error::NotFound(format!("no node has the id {id}")));
+    }
+    changes.push(match embedding {
+        Some(blob) => Change::Set {
+            id: id.to_owned(),
+            kind,
+            superseded: false,
+            blob,
+        },
+        None => Change::Remove(id.to_owned()),
+    });
+    Ok(())
+}
+
 pub(crate) fn delete(
     tx: &Transaction,
     id: &str,

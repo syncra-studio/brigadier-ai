@@ -91,6 +91,13 @@ macro_rules! fusion_rule {
     };
 }
 
+/// What a Chat keeps about the user across Chats and sessions (Q78).
+macro_rules! personal_memory {
+    () => {
+        "When the user states a stable fact about themselves that will matter in later conversations (where they live, their trade, the tools or devices they use, a preference), keep it with save_memory, one short sentence, without announcing it; the user sees, edits and deletes what you keep in Settings. Never keep passwords, keys, card or account numbers, health or money details, nor a passing detail of this chat."
+    };
+}
+
 /// Asking before researching, only what changes the answer (Q78).
 macro_rules! clarify_rule {
     () => {
@@ -1113,11 +1120,14 @@ pub(crate) fn revision_note(told: u32, worker: bool) -> Option<String> {
     (!lines.is_empty()).then(|| format!("[instructions] {}", lines.join("\n")))
 }
 
+/// What a Chat keeps about the user (Q78).
+const PERSONAL_MEMORY: &str = personal_memory!();
+
 /// A Chat's contract: its instructions didn't change with the thread's. Version 2 gives Chats and
 /// tab chats the thread's voice and the research answer's format (Q79); 3 its breakdown in
 /// sentences; 4 no bold at the start of any of its lines, colon or not; 5 a Chat is a thread
-/// without a project (Q76: workers, cards, one clarifying card); 6 it fuses a costly question (Q77).
-const CHAT_CONTRACT: u32 = 6;
+/// without a project (Q76: workers, cards, one clarifying card); 6 it fuses a costly question (Q77); 7 it keeps stable personal facts, nothing sensitive (Q78).
+const CHAT_CONTRACT: u32 = 7;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
 /// The first Chat contract with the breakdown rule as it is now; a Chat told the voice before
@@ -1129,6 +1139,9 @@ const CHAT_THREAD_CONTRACT: u32 = 5;
 /// The first Chat contract with fusion; a Chat told a thread's abilities before hears
 /// [`CHAT_FUSION_NOTE`] (one told less hears it within [`CHAT_THREAD_NOTE`]).
 const CHAT_FUSION_CONTRACT: u32 = 6;
+/// The first Chat contract with personal facts as they are now; a Chat told an older one hears
+/// [`CHAT_MEMORY_NOTE`].
+const CHAT_MEMORY_CONTRACT: u32 = 7;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1161,6 +1174,9 @@ const CHAT_BREAKDOWN_NOTE: &str = concat!(
 /// Tells a Chat from before it became a thread what it can do now (Q76).
 const CHAT_THREAD_NOTE: &str = concat!("[instructions] From now on: ", chat_thread!());
 
+/// Tells a Chat from before what it keeps about the user (Q78).
+const CHAT_MEMORY_NOTE: &str = concat!("[instructions] From now on: ", personal_memory!());
+
 /// Tells a Chat that was already a thread that it fuses a costly question (Q77).
 const CHAT_FUSION_NOTE: &str = concat!("[instructions] From now on: ", fusion_rule!());
 
@@ -1177,6 +1193,7 @@ const CHAT_VOICE_LABEL: &str = "voice and answer format";
 const CHAT_BREAKDOWN_LABEL: &str = "research breakdown";
 const CHAT_THREAD_LABEL: &str = "chat as a thread";
 const CHAT_FUSION_LABEL: &str = "fused answers";
+const CHAT_MEMORY_LABEL: &str = "personal facts";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
@@ -1754,6 +1771,16 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             label: CHAT_FUSION_LABEL,
             told: Told {
                 contract: Some(CHAT_FUSION_CONTRACT),
+                ..Told::default()
+            },
+        });
+    }
+    if now.chat && now.reports && told.contract.unwrap_or(0) < CHAT_MEMORY_CONTRACT {
+        notes.push(Note {
+            text: CHAT_MEMORY_NOTE.to_owned(),
+            label: CHAT_MEMORY_LABEL,
+            told: Told {
+                contract: Some(CHAT_MEMORY_CONTRACT),
                 ..Told::default()
             },
         });
@@ -2521,7 +2548,7 @@ pub(crate) fn tab_chat(target: &crate::model::TabTarget, checkout: &str) -> Stri
 
 pub(crate) fn chat(memories: &[String]) -> String {
     let mut text = format!(
-        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{CHAT_THREAD}\nWhen the user tells you something about themselves that will matter in later conversations (a preference, their role, what they work on), keep it with the save_memory tool, one short sentence, without announcing it: the user sees what you saved and can remove it.\n{CHAT_AUTHORITY}{CHAT_VOICE}",
+        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{CHAT_THREAD}\n{PERSONAL_MEMORY}\n{CHAT_AUTHORITY}{CHAT_VOICE}",
         today()
     );
     if !memories.is_empty() {
@@ -4804,6 +4831,7 @@ mod environment_tests {
                 CONTRACT_LABEL,
                 CHAT_VOICE_LABEL,
                 CHAT_THREAD_LABEL,
+                CHAT_MEMORY_LABEL,
                 PREFERENCES_LABEL
             ]
         );
@@ -5214,7 +5242,7 @@ mod environment_tests {
             let sent = notes(&told, &now);
             // A Chat hears that it is a thread too (Q76); a tab chat isn't one.
             let thread = |labels: Vec<&'static str>| match reports {
-                true => [labels, vec![CHAT_THREAD_LABEL]].concat(),
+                true => [labels, vec![CHAT_THREAD_LABEL, CHAT_MEMORY_LABEL]].concat(),
                 false => labels,
             };
             assert_eq!(labels(&sent), thread(vec![CHAT_VOICE_LABEL]));
@@ -5254,7 +5282,7 @@ mod environment_tests {
         assert_eq!(told.contract, Some(CHAT_CONTRACT));
         told.contract = Some(CHAT_THREAD_CONTRACT - 1);
         let sent = notes(&told, &now);
-        assert_eq!(labels(&sent), vec![CHAT_THREAD_LABEL]);
+        assert_eq!(labels(&sent), vec![CHAT_THREAD_LABEL, CHAT_MEMORY_LABEL]);
         for words in CHAT_THREAD_RULES {
             assert!(sent[0].text.contains(words), "{words}");
             assert!(chat(&[]).contains(words), "{words}");
@@ -5295,7 +5323,7 @@ mod environment_tests {
         let mut told = now.told();
         told.contract = Some(CHAT_FUSION_CONTRACT - 1);
         let sent = notes(&told, &now);
-        assert_eq!(labels(&sent), vec![CHAT_FUSION_LABEL]);
+        assert_eq!(labels(&sent), vec![CHAT_FUSION_LABEL, CHAT_MEMORY_LABEL]);
         for words in FUSION_RULES {
             assert!(sent[0].text.contains(words), "{words}");
             assert!(chat(&[]).contains(words), "{words}");
@@ -5305,13 +5333,40 @@ mod environment_tests {
         assert!(notes(&told, &now).is_empty());
         told.contract = Some(CHAT_THREAD_CONTRACT - 1);
         let sent = notes(&told, &now);
-        assert_eq!(labels(&sent), vec![CHAT_THREAD_LABEL]);
+        assert_eq!(labels(&sent), vec![CHAT_THREAD_LABEL, CHAT_MEMORY_LABEL]);
         assert_eq!(sent[0].text.matches(FUSION_RULES[0]).count(), 1);
         took(&mut told, &sent);
         assert!(notes(&told, &now).is_empty());
         let tab = Current::tab_chat();
         let mut told = tab.told();
         told.contract = Some(CHAT_FUSION_CONTRACT - 1);
+        assert!(notes(&told, &tab).is_empty());
+    }
+
+    /// Q78: a Chat told contract 6 hears once that it keeps stable personal facts and nothing
+    /// sensitive, which a new Chat's instructions say; a tab chat (no save_memory) hears nothing.
+    #[test]
+    fn a_chat_from_before_hears_once_what_it_keeps_about_the_user() {
+        let now = Current::chat(Vec::new());
+        let mut told = now.told();
+        told.contract = Some(CHAT_MEMORY_CONTRACT - 1);
+        let sent = notes(&told, &now);
+        assert_eq!(labels(&sent), vec![CHAT_MEMORY_LABEL]);
+        for words in [
+            "a stable fact about themselves",
+            "where they live, their trade, the tools or devices they use, a preference",
+            "the user sees, edits and deletes what you keep in Settings",
+            "Never keep passwords, keys, card or account numbers, health or money details",
+        ] {
+            assert!(sent[0].text.contains(words), "{words}");
+            assert!(chat(&[]).contains(words), "{words}");
+        }
+        took(&mut told, &sent);
+        assert_eq!(told.contract, Some(CHAT_CONTRACT));
+        assert!(notes(&told, &now).is_empty());
+        let tab = Current::tab_chat();
+        let mut told = tab.told();
+        told.contract = Some(CHAT_MEMORY_CONTRACT - 1);
         assert!(notes(&told, &tab).is_empty());
     }
 
