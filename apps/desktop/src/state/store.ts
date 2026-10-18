@@ -706,6 +706,11 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "updatesChanged":
     // Its desktop notification is the shell's; the Usage menu reads `accounts.warnings`.
     case "quotaWillBeLost":
+    // Workspaces aren't shown yet (BRIGADIER_WORKSPACES).
+    case "workspaceCreated":
+    case "workspaceRenamed":
+    case "workspacePinned":
+    case "workspaceArchived":
       return slice;
   }
 }

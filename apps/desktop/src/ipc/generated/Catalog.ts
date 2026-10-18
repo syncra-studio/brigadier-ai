@@ -2,8 +2,13 @@
 import type { Conversation } from "./Conversation";
 import type { Project } from "./Project";
 import type { Settings } from "./Settings";
+import type { Workspace } from "./Workspace";
 
 /**
  * Everything the sidebar needs, in one read.
  */
-export type Catalog = { projects: Array<Project>, conversations: Array<Conversation>, settings: Settings, };
+export type Catalog = { projects: Array<Project>, 
+/**
+ * Every project's workspaces, the implicit ones of older sessions included.
+ */
+workspaces: Array<Workspace>, conversations: Array<Conversation>, settings: Settings, };

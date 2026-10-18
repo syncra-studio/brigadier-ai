@@ -17,7 +17,14 @@ function summary(event: DomainEvent): string {
     case "conversationCreated":
       return `${event.conversation.kind} “${event.conversation.title}”`;
     case "conversationRenamed":
+    case "workspaceRenamed":
       return `“${event.title}”`;
+    case "workspaceCreated":
+      return `“${event.workspace.title}”`;
+    case "workspacePinned":
+      return event.pinnedAtMs === null ? "unpinned" : "pinned";
+    case "workspaceArchived":
+      return event.archived ? "archived" : "restored";
     case "conversationPinned":
       return event.pinnedAtMs === null ? "unpinned" : "pinned";
     case "conversationFallback":

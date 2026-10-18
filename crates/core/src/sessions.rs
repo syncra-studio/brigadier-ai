@@ -14,7 +14,8 @@ use crate::model::{
     Catalog, ContextUsage, Conversation, ConversationId, ConversationKind, ConversationView,
     DomainEvent, EnvironmentKind, ForkOrigin, Lifecycle, Message, MessagePage, MessageRole,
     ModelChoice, OrchestratorLogEntry, OrchestratorPage, Project, ProjectId, ProjectPatch,
-    ProjectRepo, RawEntry, Settings, Setup, ThreadItem, WorkerPage, streams,
+    ProjectRepo, RawEntry, Settings, Setup, ThreadItem, WorkerPage, Workspace, WorkspaceId,
+    streams,
 };
 use crate::projection::Projection;
 
@@ -284,6 +285,13 @@ impl Core {
             .ok_or_else(|| Error::NotFound(format!("project {id}")))
     }
 
+    /// A workspace, the implicit one of a session recorded before workspaces existed included.
+    pub fn workspace(&self, id: &WorkspaceId) -> Result<Workspace> {
+        self.projection()
+            .workspace(id)
+            .ok_or_else(|| Error::NotFound(format!("workspace {id}")))
+    }
+
     pub fn settings(&self) -> Settings {
         self.projection().settings.clone()
     }
@@ -364,6 +372,7 @@ impl Core {
             deleting: false,
             peer_at_ms: None,
             finished_at_ms: None,
+            workspace_id: None,
         };
         events.insert(
             0,

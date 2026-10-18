@@ -5,7 +5,7 @@ import type { ProjectPrefs } from "./ProjectPrefs";
 import type { ProjectRepo } from "./ProjectRepo";
 
 /**
- * A workspace of one or more repos. Owns its sessions.
+ * A project: one or more repos. Owns its workspaces and their sessions.
  */
 export type Project = { id: ProjectId, name: string, createdAtMs: number, 
 /**
