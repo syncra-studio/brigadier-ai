@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 
+import { type Merged, revertRequest } from "@/app/conversation/activity/revert";
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
@@ -17,13 +18,6 @@ import { useThreadImages } from "@/state/threadImages";
  */
 
 type Proof = Extract<OrchestratorStepKind, { type: "proof" }>;
-type Merged = Extract<OrchestratorStepKind, { type: "merged" }>;
-
-/** The request Revert sends as the user's: what to take back, where, and how it went in. */
-export function revertRequest(merge: Merged): string | null {
-  if (!merge.mergeCommit) return null;
-  return `Revert merge ${merge.mergeCommit.slice(0, 7)}${merge.pr === undefined ? "" : ` (PR #${merge.pr})`} on ${merge.base} and push it the way it went in`;
-}
 
 /**
  * Revert on the turn's last merge: one click sends the thread the fixed request, which it

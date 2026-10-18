@@ -73,11 +73,23 @@ fn squash_merge(origin: &Path, scratch: &Path, branch: &str) -> String {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_squash_merged_pull_request_is_recorded_and_the_next_request_starts_from_base() {
+    squash_merged("auto-merge-squash", false).await;
+}
+
+/// A clone that fetches only main (`git clone --depth`, `--single-branch`) gets no
+/// remote-tracking ref for a pushed branch: its configured upstream still says it was pushed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_pull_request_from_a_single_branch_clone_is_recorded_too() {
+    squash_merged("auto-merge-single-branch", true).await;
+}
+
+async fn squash_merged(name: &str, single_branch: bool) {
     let scratch: Arc<OnceLock<PathBuf>> = Arc::default();
     let log: Arc<Mutex<Vec<String>>> = Arc::default();
     let (dir, said) = (scratch.clone(), log.clone());
     let flow = Flow::start(
-        "auto-merge-squash",
+        name,
         Options {
             auto_merge: true,
             ..Options::default()
@@ -96,8 +108,20 @@ async fn a_squash_merged_pull_request_is_recorded_and_the_next_request_starts_fr
                     git(&workspace, &["commit", "-q", "-m", "Add notes"]);
                     let head = git(&workspace, &["rev-parse", "HEAD"]);
                     let branch = git(&workspace, &["branch", "--show-current"]);
-                    // No `-u`: the branch has no upstream, only its remote-tracking ref.
-                    git(&workspace, &["push", "-q", "origin", "HEAD"]);
+                    if single_branch {
+                        // An upstream, but no remote-tracking ref.
+                        git(&workspace, &["push", "-q", "-u", "origin", "HEAD"]);
+                        assert!(
+                            git(
+                                &workspace,
+                                &["for-each-ref", "refs/remotes/origin/brigadier"]
+                            )
+                            .is_empty()
+                        );
+                    } else {
+                        // No `-u`: the branch has no upstream, only its remote-tracking ref.
+                        git(&workspace, &["push", "-q", "origin", "HEAD"]);
+                    }
                     let origin = scratch.join("origin.git");
                     let squash = squash_merge(&origin, &scratch, &branch);
                     std::fs::write(
@@ -143,6 +167,16 @@ async fn a_squash_merged_pull_request_is_recorded_and_the_next_request_starts_fr
         &flow.repo,
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
+    if single_branch {
+        git(
+            &flow.repo,
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/main:refs/remotes/origin/main",
+            ],
+        );
+    }
     git(&flow.repo, &["fetch", "-q", "origin"]);
     git(
         &flow.repo,
@@ -557,9 +591,9 @@ async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
     flow.stop().await;
 }
 
-/// Revert on the merge message sends the thread "Revert merge ‹sha› on ‹base› and push it the
-/// way it went in" as the user's message: one message, and the thread's revert lands on the
-/// base the way the merge went in (here, merged on this Mac on its own).
+/// Revert on the merge message sends the thread "Revert merge ‹sha› on ‹base› the way it went
+/// in" as the user's message: one message, and the thread's revert lands on the base the way
+/// the merge went in (here, merged on this Mac on its own).
 #[tokio::test]
 async fn a_revert_from_the_merge_message_is_one_request_and_the_threads_revert_lands() {
     let flow = Flow::start(
@@ -594,10 +628,7 @@ async fn a_revert_from_the_merge_message_is_one_request_and_the_threads_revert_l
     assert!(super::thread_tests::on_main(&flow, "NOTES.md"));
     let merged = merges(&board)[0].1.clone().unwrap();
     // The request the merge message's Revert sends.
-    let revert = format!(
-        "Revert merge {} on main and push it the way it went in",
-        &merged[..7]
-    );
+    let revert = format!("Revert merge {} on main the way it went in", &merged[..7]);
     flow.say(&revert).await;
     let board = flow.settled().await;
     assert!(!super::thread_tests::on_main(&flow, "NOTES.md"));

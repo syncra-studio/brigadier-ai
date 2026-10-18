@@ -121,11 +121,13 @@ impl SessionManager {
         let _once = conv.pr_merge.lock().await;
         let (git, checkout, name) = (self.git.clone(), PathBuf::from(&worktree), branch.clone());
         // Only a branch that was pushed can have a pull request: no `gh` call otherwise. A push
-        // without `-u` leaves no upstream, but its remote-tracking branch.
+        // without `-u` leaves no upstream, but its remote-tracking branch; a clone that fetches
+        // only main leaves no remote-tracking branch, but the upstream `-u` set.
         let found = blocking(move || {
             let repo = git.open(&checkout).map_err(git_error)?;
             let state = repo.remote_state(&name).map_err(git_error)?;
             let pushed = state.upstream.is_some()
+                || repo.upstream_configured(&name).map_err(git_error)?
                 || state.remote.is_some_and(|remote| {
                     repo.resolve(&format!("refs/remotes/{remote}/{name}"))
                         .is_ok()

@@ -1480,6 +1480,15 @@ impl Repo {
         self.resolve("HEAD")
     }
 
+    /// Whether `branch` has an upstream set (`push -u`, `branch --set-upstream-to`), whether
+    /// or not its remote-tracking ref is here: a clone that fetches only main has none.
+    pub fn upstream_configured(&self, branch: &str) -> Result<bool> {
+        self.validate_branch(branch)?;
+        let key = format!("branch.{branch}.merge");
+        let out = self.run(&["config", "--get", key.as_str()], true)?;
+        Ok(out.status.success())
+    }
+
     /// Where `branch` pushes and how many of its commits are not pushed yet.
     pub fn remote_state(&self, branch: &str) -> Result<RemoteState> {
         self.validate_branch(branch)?;
