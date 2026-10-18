@@ -2051,8 +2051,10 @@ mod peer_wait_tests;
 mod phase_acceptance_tests;
 #[cfg(test)]
 mod plan_tests;
-mod preview_tests;
 #[cfg(test)]
+mod pr_card_tests;
+#[cfg(test)]
+mod preview_tests;
 #[cfg(test)]
 mod quiet_wake_tests;
 #[cfg(test)]

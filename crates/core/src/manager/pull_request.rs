@@ -16,7 +16,7 @@ use super::conversation::ConvLive;
 use super::{SessionManager, blocking, git_error};
 use crate::Result;
 use crate::model::ConversationId;
-use crate::work::{PullRequest, PullRequestState};
+use crate::work::{PullRequest, PullRequestCi, PullRequestState};
 
 /// How long `gh` may take (it asks GitHub) before the row is left out.
 const GH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -39,6 +39,23 @@ struct GhPullRequest {
     /// Set while GitHub's auto-merge waits to merge it (`gh pr merge --auto`).
     #[serde(default)]
     auto_merge_request: Option<serde_json::Value>,
+    /// The card's lookup only: its checks, review decision and whether it merges cleanly.
+    #[serde(default)]
+    status_check_rollup: Option<Vec<GhCheck>>,
+    #[serde(default)]
+    review_decision: Option<String>,
+    #[serde(default)]
+    mergeable: Option<String>,
+}
+
+/// One of a pull request's checks: a check run (status and conclusion) or a commit status
+/// (state).
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct GhCheck {
+    status: Option<String>,
+    conclusion: Option<String>,
+    state: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -76,13 +93,24 @@ impl SessionManager {
             let Some(branch) = branch else {
                 return Ok(None);
             };
-            Ok(match run_gh(&gh.program, &checkout, &branch, &gh.vars) {
-                Ok(found) => found.map(|found| found.pr),
-                Err(reason) => {
-                    tracing::debug!(branch, reason, "no pull request from gh");
-                    None
-                }
-            })
+            Ok(
+                match run_gh(&gh.program, &checkout, &branch, &gh.vars, true) {
+                    Ok(found) => found.map(|found| {
+                        let mut pr = found.pr;
+                        if matches!(pr.state, PullRequestState::Open | PullRequestState::Draft) {
+                            match unresolved_threads(&gh.program, &checkout, &pr, &gh.vars) {
+                                Ok(count) => pr.unresolved = count,
+                                Err(reason) => tracing::debug!(reason, "no review threads from gh"),
+                            }
+                        }
+                        pr
+                    }),
+                    Err(reason) => {
+                        tracing::debug!(branch, reason, "no pull request from gh");
+                        None
+                    }
+                },
+            )
         })
         .await
     }
@@ -150,7 +178,7 @@ impl SessionManager {
             if !pushed {
                 return Ok(None);
             }
-            Ok(run_gh(&gh.program, &checkout, &name, &gh.vars)
+            Ok(run_gh(&gh.program, &checkout, &name, &gh.vars, false)
                 .ok()
                 .flatten())
         })
@@ -384,25 +412,162 @@ impl SessionManager {
     }
 }
 
+/// The branch's pull request; `card` adds what the pinned card's buttons need (checks, review
+/// decision, conflicts), which the merge watch has no use for.
 fn run_gh(
     gh: &Path,
     checkout: &Path,
     branch: &str,
     env: &[(std::ffi::OsString, std::ffi::OsString)],
+    card: bool,
 ) -> std::result::Result<Option<FoundPr>, String> {
+    let mut fields =
+        "number,title,url,state,isDraft,headRefOid,baseRefName,mergeCommit,autoMergeRequest"
+            .to_owned();
+    if card {
+        fields.push_str(",statusCheckRollup,reviewDecision,mergeable");
+    }
+    let text = gh_output(
+        gh,
+        checkout,
+        &[
+            "pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", &fields,
+        ],
+        env,
+    )?;
+    let found: Vec<GhPullRequest> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
+    Ok(found.into_iter().next().map(found_pr))
+}
+
+fn found_pr(pr: GhPullRequest) -> FoundPr {
+    let merge_commit = pr.merge_commit.map(|commit| commit.oid);
+    FoundPr {
+        base: pr.base_ref_name.clone(),
+        head: pr.head_ref_oid,
+        merge_commit: merge_commit.clone(),
+        auto_merge: pr
+            .auto_merge_request
+            .is_some_and(|request| !request.is_null()),
+        pr: PullRequest {
+            number: pr.number,
+            title: pr.title,
+            url: pr.url,
+            state: match (pr.state.as_str(), pr.is_draft) {
+                ("MERGED", _) => PullRequestState::Merged,
+                ("CLOSED", _) => PullRequestState::Closed,
+                (_, true) => PullRequestState::Draft,
+                _ => PullRequestState::Open,
+            },
+            base: pr.base_ref_name,
+            merge_commit,
+            ci: pr.status_check_rollup.as_deref().and_then(checks_state),
+            conflicts: pr.mergeable.as_deref() == Some("CONFLICTING"),
+            changes_requested: pr.review_decision.as_deref() == Some("CHANGES_REQUESTED"),
+            unresolved: 0,
+        },
+    }
+}
+
+/// All of a pull request's checks as one state: failing when any failed, else pending while
+/// any runs, else passing; none when it has no checks.
+fn checks_state(checks: &[GhCheck]) -> Option<PullRequestCi> {
+    if checks.is_empty() {
+        return None;
+    }
+    let failed = |check: &GhCheck| {
+        matches!(
+            check.conclusion.as_deref(),
+            Some("FAILURE" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" | "STARTUP_FAILURE")
+        ) || matches!(check.state.as_deref(), Some("FAILURE" | "ERROR"))
+    };
+    let running = |check: &GhCheck| {
+        check
+            .status
+            .as_deref()
+            .is_some_and(|status| status != "COMPLETED")
+            || matches!(check.state.as_deref(), Some("PENDING" | "EXPECTED"))
+    };
+    Some(if checks.iter().any(failed) {
+        PullRequestCi::Failing
+    } else if checks.iter().any(running) {
+        PullRequestCi::Pending
+    } else {
+        PullRequestCi::Passing
+    })
+}
+
+const REVIEW_THREADS: &str = "query($owner: String!, $name: String!, $number: Int!, $endCursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100, after: $endCursor) { nodes { isResolved } pageInfo { hasNextPage endCursor } } } } }";
+
+/// How many of the pull request's review threads aren't resolved, every page of them: an
+/// approved pull request can still have comments waiting.
+fn unresolved_threads(
+    gh: &Path,
+    checkout: &Path,
+    pr: &PullRequest,
+    env: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> std::result::Result<u32, String> {
+    // https://host/owner/name/pull/N
+    let parts: Vec<&str> = pr.url.split('/').collect();
+    let [_, _, host, owner, name, ..] = parts.as_slice() else {
+        return Err(format!("no repository in {}", pr.url));
+    };
+    let (query, owner, name, number) = (
+        format!("query={REVIEW_THREADS}"),
+        format!("owner={owner}"),
+        format!("name={name}"),
+        format!("number={}", pr.number),
+    );
+    let text = gh_output(
+        gh,
+        checkout,
+        &[
+            "api",
+            "graphql",
+            "--hostname",
+            host,
+            "--paginate",
+            "--slurp",
+            "-f",
+            &query,
+            "-f",
+            &owner,
+            "-f",
+            &name,
+            "-F",
+            &number,
+        ],
+        env,
+    )?;
+    count_unresolved(&text)
+}
+
+/// Counts the unresolved threads in `gh api graphql --paginate --slurp`'s pages.
+fn count_unresolved(text: &str) -> std::result::Result<u32, String> {
+    let pages: Vec<serde_json::Value> =
+        serde_json::from_str(text).map_err(|err| err.to_string())?;
+    let mut count = 0;
+    for page in &pages {
+        let nodes = page
+            .pointer("/data/repository/pullRequest/reviewThreads/nodes")
+            .and_then(|nodes| nodes.as_array())
+            .ok_or("no review threads in gh's answer")?;
+        count += nodes
+            .iter()
+            .filter(|node| node.get("isResolved") == Some(&serde_json::Value::Bool(false)))
+            .count();
+    }
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
+/// Runs `gh` with `args` in `checkout`, with its own environment and a deadline; its output.
+fn gh_output(
+    gh: &Path,
+    checkout: &Path,
+    args: &[&str],
+    env: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> std::result::Result<String, String> {
     let mut child = Command::new(gh)
-        .args([
-            "pr",
-            "list",
-            "--head",
-            branch,
-            "--state",
-            "all",
-            "--limit",
-            "1",
-            "--json",
-            "number,title,url,state,isDraft,headRefOid,baseRefName,mergeCommit,autoMergeRequest",
-        ])
+        .args(args)
         .current_dir(checkout)
         .env_clear()
         .envs(env.iter().map(|(key, value)| (key, value)))
@@ -438,24 +603,70 @@ fn run_gh(
     if !status.success() {
         return Err(format!("gh exited with {status}"));
     }
-    let found: Vec<GhPullRequest> = serde_json::from_str(&text).map_err(|err| err.to_string())?;
-    Ok(found.into_iter().next().map(|pr| FoundPr {
-        base: pr.base_ref_name,
-        head: pr.head_ref_oid,
-        merge_commit: pr.merge_commit.map(|commit| commit.oid),
-        auto_merge: pr
-            .auto_merge_request
-            .is_some_and(|request| !request.is_null()),
-        pr: PullRequest {
-            number: pr.number,
-            title: pr.title,
-            url: pr.url,
-            state: match (pr.state.as_str(), pr.is_draft) {
-                ("MERGED", _) => PullRequestState::Merged,
-                ("CLOSED", _) => PullRequestState::Closed,
-                (_, true) => PullRequestState::Draft,
-                _ => PullRequestState::Open,
-            },
-        },
-    }))
+    Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checks_read_as_failing_then_pending_then_passing() {
+        let rollup = |json: &str| {
+            let checks: Vec<GhCheck> = serde_json::from_str(json).unwrap();
+            checks_state(&checks)
+        };
+        assert_eq!(rollup("[]"), None);
+        assert_eq!(
+            rollup(
+                r#"[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"StatusContext","state":"SUCCESS"},{"status":"COMPLETED","conclusion":"SKIPPED"}]"#
+            ),
+            Some(PullRequestCi::Passing)
+        );
+        assert_eq!(
+            rollup(
+                r#"[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"IN_PROGRESS","conclusion":""}]"#
+            ),
+            Some(PullRequestCi::Pending)
+        );
+        assert_eq!(
+            rollup(r#"[{"state":"PENDING"},{"status":"COMPLETED","conclusion":"SUCCESS"}]"#),
+            Some(PullRequestCi::Pending)
+        );
+        assert_eq!(
+            rollup(r#"[{"status":"IN_PROGRESS"},{"status":"COMPLETED","conclusion":"FAILURE"}]"#),
+            Some(PullRequestCi::Failing)
+        );
+        assert_eq!(
+            rollup(r#"[{"state":"ERROR"}]"#),
+            Some(PullRequestCi::Failing)
+        );
+    }
+
+    #[test]
+    fn an_approved_pull_request_with_conflicts_and_open_threads_reads_so() {
+        let pr: GhPullRequest = serde_json::from_str(
+            r#"{"number":7,"title":"Add notes","url":"https://github.com/o/n/pull/7","state":"OPEN","isDraft":false,"baseRefName":"main","reviewDecision":"APPROVED","mergeable":"CONFLICTING","statusCheckRollup":[]}"#,
+        )
+        .unwrap();
+        let pr = found_pr(pr).pr;
+        assert!(pr.conflicts);
+        assert!(!pr.changes_requested);
+        assert_eq!(pr.ci, None);
+        assert_eq!(pr.base.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn unresolved_threads_are_counted_on_every_page() {
+        let page = |resolved: &[bool]| {
+            serde_json::json!({ "data": { "repository": { "pullRequest": { "reviewThreads": {
+                "nodes": resolved.iter().map(|done| serde_json::json!({ "isResolved": done })).collect::<Vec<_>>(),
+                "pageInfo": { "hasNextPage": false, "endCursor": null },
+            } } } } })
+        };
+        let pages = serde_json::json!([page(&[true, false, true]), page(&[false, false])]);
+        assert_eq!(count_unresolved(&pages.to_string()), Ok(3));
+        assert_eq!(count_unresolved("[]"), Ok(0));
+        assert!(count_unresolved(r#"[{"errors":[{"message":"no"}]}]"#).is_err());
+    }
 }

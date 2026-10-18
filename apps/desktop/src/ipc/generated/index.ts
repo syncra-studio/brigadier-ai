@@ -300,6 +300,7 @@ export type { ProviderTokens } from "./ProviderTokens";
 export type { ProviderUsage } from "./ProviderUsage";
 export type { ProvidersView } from "./ProvidersView";
 export type { PullRequest } from "./PullRequest";
+export type { PullRequestCi } from "./PullRequestCi";
 export type { PullRequestState } from "./PullRequestState";
 export type { QualityTier } from "./QualityTier";
 export type { Question } from "./Question";

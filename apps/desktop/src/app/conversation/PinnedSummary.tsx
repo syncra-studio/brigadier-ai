@@ -23,6 +23,8 @@ import {
 import { useShallow } from "zustand/react/shallow";
 
 import { showCard } from "@/app/conversation/ActionCards";
+import { useAskRequest } from "@/app/conversation/activity/askRequest";
+import { revertPullRequest } from "@/app/conversation/activity/revert";
 import { isRunRequest } from "@/app/conversation/blocks";
 import { PlanSection } from "@/app/conversation/cards/PlanSection";
 import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
@@ -368,25 +370,75 @@ function usePullRequest(conversationId: string): PullRequest | null {
   return found;
 }
 
-/** The pull request row: the branch's pull request, opened in the browser. */
-function PullRequestRow({ pullRequest }: { pullRequest: PullRequest }) {
+/** The pull request row: the branch's pull request, opened in the browser, and what to ask of it. */
+function PullRequestRow({ conversationId, pullRequest }: { conversationId: string; pullRequest: PullRequest }) {
   const state = PULL_REQUEST[pullRequest.state];
+  const asks = pullRequestAsks(pullRequest);
   return (
-    <SummaryRowButton
-      title={`${pullRequest.title}\n${pullRequest.url}`}
-      icon={state.icon}
-      meta={state.label}
-      onClick={() =>
-        openWebLink(pullRequest.url, { agent: true }).catch((cause: unknown) =>
-          toast(cause instanceof Error ? cause.message : String(cause), {
-            tone: "error",
-          }),
-        )
-      }
+    <>
+      <SummaryRowButton
+        title={`${pullRequest.title}\n${pullRequest.url}`}
+        icon={state.icon}
+        meta={state.label}
+        onClick={() =>
+          openWebLink(pullRequest.url, { agent: true }).catch((cause: unknown) =>
+            toast(cause instanceof Error ? cause.message : String(cause), {
+              tone: "error",
+            }),
+          )
+        }
+      >
+        <span className="text-muted-foreground">#{pullRequest.number}</span>{" "}
+        {pullRequest.title}
+      </SummaryRowButton>
+      {asks.length > 0 && (
+        <div data-slot="pr-actions" className="-ms-2 flex flex-wrap gap-0.5 ps-6">
+          {asks.map((ask) => (
+            <AskButton key={ask.label} conversationId={conversationId} {...ask} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * What the user can ask of the pull request, by its state: each button sends the session a fixed
+ * request as the user's, and the thread carries it out.
+ */
+function pullRequestAsks(pr: PullRequest): { label: string; text: string }[] {
+  const n = `PR #${pr.number}`;
+  if (pr.state === "merged") {
+    return pr.mergeCommit && pr.base
+      ? [{ label: "Revert", text: revertPullRequest(pr.mergeCommit, pr.number, pr.base) }]
+      : [];
+  }
+  if (pr.state === "closed") return [];
+  const asks: { label: string; text: string }[] = [];
+  if (pr.ci === "failing") asks.push({ label: "Fix CI", text: `Fix the failing CI on ${n}.` });
+  if (pr.changesRequested || (pr.unresolved ?? 0) > 0) {
+    asks.push({ label: "Address comments", text: `Address the review comments on ${n}.` });
+  }
+  if (pr.conflicts) asks.push({ label: "Resolve conflicts", text: `Resolve the merge conflicts on ${n}.` });
+  else if (pr.state === "open") asks.push({ label: "Merge now", text: `Merge ${n} now.` });
+  return asks;
+}
+
+/** One of the pull request's buttons: sends its request once, then reads as asked. */
+function AskButton({ conversationId, label, text }: { conversationId: string; label: string; text: string }) {
+  const { asked, ask } = useAskRequest(conversationId, text);
+  return (
+    <Button
+      size="xs"
+      variant="ghost"
+      className="text-muted-foreground font-normal"
+      title={asked ? "Asked" : text}
+      disabled={asked}
+      data-asked={asked || undefined}
+      onClick={ask}
     >
-      <span className="text-muted-foreground">#{pullRequest.number}</span>{" "}
-      {pullRequest.title}
-    </SummaryRowButton>
+      {label}
+    </Button>
   );
 }
 
@@ -815,7 +867,7 @@ function SessionSummaryContent({
             <BranchRow branch={run?.workspace?.branch ?? setup.environment.branch} diff={diff} />
             <ReviewRows conversationId={conversation.id} />
             <ChecksRow conversationId={conversation.id} />
-            {pullRequest && <PullRequestRow pullRequest={pullRequest} />}
+            {pullRequest && <PullRequestRow conversationId={conversation.id} pullRequest={pullRequest} />}
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />
           {planId && (

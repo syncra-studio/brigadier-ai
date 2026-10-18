@@ -1,5 +1,4 @@
-import { useRef, useState } from "react";
-
+import { useAskRequest } from "@/app/conversation/activity/askRequest";
 import { type Merged, revertRequest } from "@/app/conversation/activity/revert";
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { useViewConversation } from "@/app/conversation/viewContext";
@@ -7,9 +6,6 @@ import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { Button } from "@/components/ui/button";
 import type { MergeRecord, OrchestratorStepKind } from "@/ipc/generated";
 import { VENDOR_LABELS } from "@/lib/routing";
-import { send } from "@/state/actions";
-import { useBoard } from "@/state/board";
-import { useApp } from "@/state/store";
 import { useThreadImages } from "@/state/threadImages";
 
 /**
@@ -27,18 +23,9 @@ type Proof = Extract<OrchestratorStepKind, { type: "proof" }>;
  */
 function Revert({ conversationId, merge }: { conversationId: string; merge: Merged }) {
   const text = revertRequest(merge);
-  const [sending, setSending] = useState(false);
-  // A second click before the first one's render sends nothing.
-  const clicked = useRef(false);
-  const asked = useApp(
-    (state) =>
-      !!text &&
-      (state.threads[conversationId]?.items.some((item) => item.role === "user" && item.text === text) ||
-        state.pending.some((entry) => entry.conversationId === conversationId && entry.text === text)),
-  );
-  const queued = useBoard((state) => !!text && state.board?.conversationId === conversationId && state.board.queue.items.some((item) => item.text === text));
+  const { asked, ask } = useAskRequest(conversationId, text);
   if (!text) return null;
-  if (asked || queued || sending) {
+  if (asked) {
     return <p data-slot="merge-revert" className="text-muted-foreground text-sm">Revert asked</p>;
   }
   return (
@@ -48,15 +35,7 @@ function Revert({ conversationId, merge }: { conversationId: string; merge: Merg
       variant="ghost"
       className="w-fit font-normal"
       title={text}
-      onClick={() => {
-        if (clicked.current) return;
-        clicked.current = true;
-        setSending(true);
-        send({ text, attachments: [], mentions: [] }, undefined, { to: conversationId }).catch(() => {
-          clicked.current = false;
-          setSending(false);
-        });
-      }}
+      onClick={ask}
     >
       Revert
     </Button>

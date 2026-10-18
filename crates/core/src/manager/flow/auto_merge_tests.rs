@@ -22,12 +22,14 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
-/// A stand-in `gh`: `pr list` prints the file `pr-list` next to it, or no pull request.
+/// A stand-in `gh`: `pr list` prints the file `pr-list` next to it, or no pull request;
+/// `api graphql` the file `threads` (review thread pages), or none.
 const GH: &str = r#"#!/bin/sh
 D="$(dirname "$0")"
 echo "$*" >> "$D/calls"
 case "$1 $2" in
   "pr list") cat "$D/pr-list" 2>/dev/null || echo "[]" ;;
+  "api graphql") cat "$D/threads" 2>/dev/null || echo "[]" ;;
   *) echo "unknown call: $*" >&2; exit 1 ;;
 esac
 "#;

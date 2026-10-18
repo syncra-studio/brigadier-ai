@@ -3078,6 +3078,43 @@ pub struct PullRequest {
     pub title: String,
     pub url: String,
     pub state: PullRequestState,
+    /// The branch it targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub base: Option<String>,
+    /// The commit its merge made on the base, once merged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub merge_commit: Option<String>,
+    /// Its checks on GitHub, when it has any (the card's lookup only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ci: Option<PullRequestCi>,
+    /// GitHub can't merge it: its branch conflicts with the base.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub conflicts: bool,
+    /// A reviewer asked for changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub changes_requested: bool,
+    /// Review threads not resolved yet, whatever the review decision says.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[ts(as = "Option<u32>", optional)]
+    pub unresolved: u32,
+}
+
+fn is_zero(count: &u32) -> bool {
+    *count == 0
+}
+
+/// A pull request's checks on GitHub, all of them together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PullRequestCi {
+    Passing,
+    Failing,
+    Pending,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
