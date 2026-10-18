@@ -60,6 +60,7 @@ Patches applied, in order:
 - `patches/0013-native-accessibility-without-web-wait.diff`: v0.36.0 waited up to four seconds for a web tree in native apps accepting AXEnhancedUserInterface; require a Chromium-family framework in the addressed process's bundle for that wait, preserving Chromium and Electron first-read readiness.
 - `patches/0014-popup-without-speculative-keys.diff`: v0.36.0 selected Chromium popup labels with speculative pid-routed typeahead, which can reach a sibling without confirmed key routing and commit intermediate or invalid prefix selections; use the existing exact-match semantic AX popup route instead.
 - `patches/0015-preserve-original-key-target.diff`: v0.36.0 key-window cleanup could pick a sibling after priming a target that was already AXFocusedWindow but lacked a focused element; when the original window is the target, restore nothing and leave that window focused.
+- `patches/0016-helper-windowserver-identity.diff`: the WindowServer diagnostic recognizes Brigadier's helper bundles (Brigadier Computer Use.app and BrigadierCu.app) and BRIGADIER_CU_EMBEDDED=1, and uses the helper's own launch setup instead of recommending the upstream app daemon.
 <!-- sync:end -->
 
 ## Notes for v0.36.0
@@ -92,9 +93,9 @@ cargo test --offline --manifest-path upstream/Cargo.toml -p platform-macos --lib
 
 The v0.35.4 and v0.36.0 macOS release notes were reviewed, including
 background typing, menus, drags, off-Space reads, focus restoration and the
-new WindowServer health check. Its recognition of Brigadier's own bundle
-identity is tracked separately in issue #317. Existing tool classifications
-are retained;
+new WindowServer health check. Patch 0016 recognizes Brigadier's helper bundle
+and embedded variable for that diagnostic, with remediation through its own
+launch setup (issue #317). Existing tool classifications are retained;
 drag remains withheld. Driver arguments and foreground wording are checked
 by the driver snapshots. Per issue #270, signed warm/cold benchmarks, focus
 checks and the reliability matrix belong in the nightly/release report and

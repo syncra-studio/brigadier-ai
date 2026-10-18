@@ -1,0 +1,125 @@
+Why: the WindowServer diagnostic recognizes Brigadier's helper bundles (Brigadier Computer Use.app and BrigadierCu.app) and BRIGADIER_CU_EMBEDDED=1, and uses the helper's own launch setup instead of recommending the upstream app daemon.
+
+Only this diagnostic reads the host identity; embedded launch and permission
+behavior elsewhere is unchanged. Includes failing-before bundle and embedded
+regressions, plus coverage of the remediation hint and observed 1002 failures.
+
+diff --git a/crates/platform-macos/src/tools/health_report.rs b/crates/platform-macos/src/tools/health_report.rs
+index 15e27369a..369e7e80f 100644
+--- a/crates/platform-macos/src/tools/health_report.rs
++++ b/crates/platform-macos/src/tools/health_report.rs
+@@ -74,12 +74,22 @@ impl HealthCheckProvider for MacosHealthProvider {
+ // ── Individual checks ────────────────────────────────────────────────────────
+
+ /// True when this daemon is neither embedded in a host app nor inside
+-/// CuaDriver.app: it relaunched itself disclaimed, as its own responsible
++/// a supported app bundle: it relaunched itself disclaimed, as its own responsible
+ /// process (CUA-1777).
+ pub fn is_unbundled(embedded: bool, exe_path: &str) -> bool {
+     !embedded
+         && !(exe_path.contains("/CuaDriver.app/Contents/MacOS/")
+-            || exe_path.contains("/CuaDriverLocal.app/Contents/MacOS/"))
++            || exe_path.contains("/CuaDriverLocal.app/Contents/MacOS/")
++            || exe_path.contains("/BrigadierCu.app/Contents/MacOS/")
++            || exe_path.contains("/Brigadier Computer Use.app/Contents/MacOS/"))
++}
++
++fn windowserver_is_unbundled(exe_path: &str) -> bool {
++    is_unbundled(
++        cua_driver_core::embedded_mode()
++            || std::env::var_os("BRIGADIER_CU_EMBEDDED").is_some_and(|value| value == "1"),
++        exe_path,
++    )
+ }
+
+ fn check_windowserver_connection() -> CheckEntry {
+@@ -89,13 +99,14 @@ fn check_windowserver_connection() -> CheckEntry {
+         .and_then(|p| p.to_str().map(str::to_owned))
+         .unwrap_or_default();
+     windowserver_connection_entry(
+-        is_unbundled(cua_driver_core::embedded_mode(), &exe),
++        windowserver_is_unbundled(&exe),
+         crate::input::skylight::windowserver_connection_invalid(),
+     )
+ }
+
+ fn windowserver_connection_entry(unbundled: bool, invalid_seen: bool) -> CheckEntry {
+-    let hint = super::WINDOWSERVER_INVALID_HINT;
++    let hint = "Restart the driver through its app bundle or embedding host, then retry. \
++                Use that app's launch and permission setup.";
+     if invalid_seen {
+         return CheckEntry::fail(
+             NAME_WINDOWSERVER_CONNECTION,
+@@ -106,7 +117,7 @@ fn windowserver_connection_entry(unbundled: bool, invalid_seen: bool) -> CheckEn
+     if unbundled {
+         return CheckEntry::fail(
+             NAME_WINDOWSERVER_CONNECTION,
+-            "Running unbundled (outside CuaDriver.app): the daemon is its own responsible process and its no-raise focus steps are expected to fail with 1002.",
++            "Running unbundled (outside a supported app bundle): the daemon is its own responsible process and its no-raise focus steps are expected to fail with 1002.",
+             hint,
+         );
+     }
+@@ -424,12 +435,62 @@ mod tests {
+         ));
+     }
+
++    #[test]
++    fn regression_brigadier_helper_bundle_is_not_unbundled() {
++        for path in [
++            "/Applications/Brigadier.app/Contents/Helpers/BrigadierCu.app/Contents/MacOS/brigadier-cu",
++            "/Applications/Brigadier.app/Contents/Library/Brigadier Computer Use.app/Contents/MacOS/brigadier-cu",
++            "/Users/me/Library/Application Support/ai.brigadier.app/computer/Brigadier Computer Use.app/Contents/MacOS/brigadier-cu",
++        ] {
++            assert!(!is_unbundled(false, path), "{path}");
++        }
++        assert!(is_unbundled(false, "/usr/local/bin/brigadier-cu"));
++        assert!(is_unbundled(
++            false,
++            "/Applications/BrigadierCu.app.other/Contents/MacOS/brigadier-cu"
++        ));
++    }
++
++    #[test]
++    fn regression_brigadier_embedded_windowserver_identity() {
++        let _guard = env_lock();
++        let upstream = swap_env(cua_driver_core::EMBEDDED_ENV, None);
++        let brigadier = swap_env("BRIGADIER_CU_EMBEDDED", Some("1"));
++        let embedded = windowserver_is_unbundled("/usr/local/bin/brigadier-cu");
++        let mut other_values = Vec::new();
++        for value in [Some("0"), Some("true"), Some(""), None] {
++            swap_env("BRIGADIER_CU_EMBEDDED", value);
++            other_values.push(windowserver_is_unbundled("/usr/local/bin/brigadier-cu"));
++        }
++        restore_env("BRIGADIER_CU_EMBEDDED", brigadier);
++        restore_env(cua_driver_core::EMBEDDED_ENV, upstream);
++        assert!(!embedded);
++        assert!(other_values.iter().all(|unbundled| *unbundled));
++    }
++
++    #[test]
++    fn regression_windowserver_hint_uses_the_helpers_launch_setup() {
++        for entry in [
++            windowserver_connection_entry(false, true),
++            windowserver_connection_entry(true, false),
++        ] {
++            let hint = entry.hint.unwrap();
++            assert!(hint.contains("app bundle or embedding host"), "{hint}");
++            assert!(!hint.contains("CuaDriver"), "{hint}");
++            assert!(!hint.contains("cua-driver"), "{hint}");
++        }
++        assert_eq!(
++            windowserver_connection_entry(false, true).status,
++            CheckStatus::Fail
++        );
++    }
++
+     #[test]
+     fn windowserver_check_fails_loudly_when_invalid_or_unbundled() {
+         let seen = windowserver_connection_entry(false, true);
+         assert_eq!(seen.status, CheckStatus::Fail);
+         assert!(seen.message.contains("1002"));
+-        assert!(seen.hint.unwrap().contains("open -n -g -a CuaDriver"));
++        assert!(seen.hint.unwrap().contains("app bundle or embedding host"));
+         assert_eq!(
+             windowserver_connection_entry(true, false).status,
+             CheckStatus::Fail
