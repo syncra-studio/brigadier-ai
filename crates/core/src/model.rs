@@ -896,6 +896,9 @@ pub struct Settings {
     /// Agents switched off on the Providers page: their models are hidden from every picker
     /// and get no work, not even in the background. Conversations already running go on.
     pub disabled_providers: Vec<ProviderKind>,
+    /// The binary the user chose for an agent on its Providers page, used instead of the one on
+    /// the login PATH while it is there. At most one per agent.
+    pub agent_paths: Vec<AgentPath>,
     /// Models the Providers page makes unavailable: hidden from every picker and never used.
     pub hidden_models: Vec<ModelRef>,
     /// Every model Brigadier has seen in its agent's list. One seen after its agent's first
@@ -1002,6 +1005,15 @@ pub struct AccountView {
     pub checked_generation: u32,
 }
 
+/// The binary the user chose for an agent (Settings › Providers › its page › Location).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPath {
+    pub provider: ProviderKind,
+    /// Absolute path of the binary.
+    pub path: String,
+}
+
 /// An extra account of a CLI: a home of its own under the data directory
 /// (`accounts/<id>`), where the CLI keeps that account's login. Brigadier keeps no secret.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -1091,6 +1103,7 @@ impl Default for Settings {
             routing_overrides: Vec::new(),
             routing_rankings: Vec::new(),
             disabled_providers: Vec::new(),
+            agent_paths: Vec::new(),
             hidden_models: Vec::new(),
             known_models: Vec::new(),
             older_models_off: Vec::new(),

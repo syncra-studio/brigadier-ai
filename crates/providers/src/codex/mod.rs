@@ -125,7 +125,6 @@ const DISABLED_FEATURES: &[&str] = &[
 pub struct Codex {
     platform: Arc<dyn Platform>,
     env: Arc<CliEnv>,
-    binary: Option<PathBuf>,
     /// An extra account's ([`crate::accounts`]): the user's own `CODEX_HOME`, where its
     /// history, settings and generated images are (its own home links them).
     main_home: Option<PathBuf>,
@@ -133,11 +132,9 @@ pub struct Codex {
 
 impl Codex {
     pub fn new(platform: Arc<dyn Platform>, env: Arc<CliEnv>) -> Self {
-        let binary = env.resolve(ProviderKind::Codex);
         Self {
             platform,
             env,
-            binary,
             main_home: None,
         }
     }
@@ -147,11 +144,9 @@ impl Codex {
     pub fn for_account(platform: Arc<dyn Platform>, env: &CliEnv, home: &Path) -> Self {
         let main_home = crate::accounts::main_home(ProviderKind::Codex, env);
         let env = Arc::new(env.for_account(ProviderKind::Codex, home));
-        let binary = env.resolve(ProviderKind::Codex);
         Self {
             platform,
             env,
-            binary,
             main_home,
         }
     }
@@ -194,9 +189,10 @@ impl Codex {
         .await
     }
 
-    fn binary(&self) -> Result<&Path> {
-        self.binary
-            .as_deref()
+    /// The binary it runs, looked up each time: one installed or chosen after launch counts.
+    fn binary(&self) -> Result<PathBuf> {
+        self.env
+            .resolve(ProviderKind::Codex)
             .ok_or(Error::NotInstalled(ProviderKind::Codex))
     }
 
@@ -238,7 +234,7 @@ impl Codex {
     }
 
     async fn version(&self) -> Option<String> {
-        let spec = self.env.spec(self.binary().ok()?).arg("--version");
+        let spec = self.env.spec(&self.binary().ok()?).arg("--version");
         let output = process::run(&self.platform, &spec, STATUS_TIMEOUT)
             .await
             .ok()?;
@@ -255,7 +251,7 @@ impl Codex {
         ledger: Option<Arc<dyn Ledger>>,
         private_logs: bool,
     ) -> Result<(Arc<Rpc>, mpsc::Receiver<String>)> {
-        let mut spec = self.env.spec(self.binary()?);
+        let mut spec = self.env.spec(&self.binary()?);
         spec.args = app_server_args(session)
             .into_iter()
             .map(Into::into)
@@ -450,9 +446,10 @@ impl Provider for Codex {
 
     fn status(&self) -> BoxFuture<'_, ProviderStatus> {
         Box::pin(async move {
+            let found = self.binary();
             let mut status = ProviderStatus {
                 provider: ProviderKind::Codex,
-                path: self.binary.as_ref().map(|path| path.display().to_string()),
+                path: found.as_ref().ok().map(|path| path.display().to_string()),
                 version: None,
                 logged_in: false,
                 auth_method: None,
@@ -462,7 +459,7 @@ impl Provider for Codex {
                 guidance: None,
                 compacts: false,
             };
-            let Ok(binary) = self.binary() else {
+            let Ok(binary) = found else {
                 status.guidance = Some(
                     "Install Codex (https://developers.openai.com/codex) so `codex` is on your \
                      login shell's PATH, then refresh."
@@ -475,7 +472,7 @@ impl Provider for Codex {
                 .version
                 .as_deref()
                 .is_some_and(|version| version_at_least(version, COMPACT_SINCE));
-            let spec = self.env.spec(binary).arg("login").arg("status");
+            let spec = self.env.spec(&binary).arg("login").arg("status");
             match process::run(&self.platform, &spec, STATUS_TIMEOUT).await {
                 Ok(output) => {
                     // `codex login status` prints to stderr on some versions.
@@ -778,7 +775,7 @@ impl Provider for Codex {
                 access: spec.access_with_dirs().resolved(),
                 ..spec
             };
-            let program = self.binary()?.to_owned();
+            let program = self.binary()?;
             let cwd = cwd.canonicalize().map_err(|err| {
                 Error::Invalid(format!("working directory {}: {err}", cwd.display()))
             })?;

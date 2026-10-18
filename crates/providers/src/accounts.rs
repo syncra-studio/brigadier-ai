@@ -114,7 +114,7 @@ impl CliEnv {
             })
             .collect();
         vars.push((home_var(kind).into(), home.as_os_str().to_owned()));
-        CliEnv::from_vars(vars)
+        self.with_vars(vars)
     }
 }
 

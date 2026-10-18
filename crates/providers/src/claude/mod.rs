@@ -90,7 +90,6 @@ const REVIEW_ALLOWED: &str = "Read Grep Glob Bash(git diff:*) Bash(git log:*) Ba
 pub struct Claude {
     platform: Arc<dyn Platform>,
     env: Arc<CliEnv>,
-    binary: Option<PathBuf>,
     /// An extra account's ([`crate::accounts`]): the user's own config directory, where its
     /// history and settings are (its own home links them).
     main_config: Option<PathBuf>,
@@ -98,11 +97,9 @@ pub struct Claude {
 
 impl Claude {
     pub fn new(platform: Arc<dyn Platform>, env: Arc<CliEnv>) -> Self {
-        let binary = env.resolve(ProviderKind::Claude);
         Self {
             platform,
             env,
-            binary,
             main_config: None,
         }
     }
@@ -112,18 +109,17 @@ impl Claude {
     pub fn for_account(platform: Arc<dyn Platform>, env: &CliEnv, home: &Path) -> Self {
         let main_config = crate::accounts::main_home(ProviderKind::Claude, env);
         let env = Arc::new(env.for_account(ProviderKind::Claude, home));
-        let binary = env.resolve(ProviderKind::Claude);
         Self {
             platform,
             env,
-            binary,
             main_config,
         }
     }
 
-    fn binary(&self) -> Result<&Path> {
-        self.binary
-            .as_deref()
+    /// The binary it runs, looked up each time: one installed or chosen after launch counts.
+    fn binary(&self) -> Result<PathBuf> {
+        self.env
+            .resolve(ProviderKind::Claude)
             .ok_or(Error::NotInstalled(ProviderKind::Claude))
     }
 
@@ -160,7 +156,7 @@ impl Claude {
     }
 
     async fn version(&self) -> Option<String> {
-        let spec = self.env.spec(self.binary().ok()?).arg("--version");
+        let spec = self.env.spec(&self.binary().ok()?).arg("--version");
         let output = process::run(&self.platform, &spec, STATUS_TIMEOUT)
             .await
             .ok()?;
@@ -170,7 +166,7 @@ impl Claude {
     /// Runs a throwaway process that answers control requests, then exits. It loads no
     /// settings, no MCP servers and writes no session.
     async fn control(&self, requests: Vec<Map<String, Value>>) -> Result<Vec<Value>> {
-        let mut spec = self.env.spec(self.binary()?);
+        let mut spec = self.env.spec(&self.binary()?);
         spec.args = Self::control_args().into_iter().map(Into::into).collect();
         spec.cwd = Some(self.platform.paths().data_dir.clone());
         let process::Spawned {
@@ -986,9 +982,10 @@ impl Provider for Claude {
 
     fn status(&self) -> BoxFuture<'_, ProviderStatus> {
         Box::pin(async move {
+            let found = self.binary();
             let mut status = ProviderStatus {
                 provider: ProviderKind::Claude,
-                path: self.binary.as_ref().map(|path| path.display().to_string()),
+                path: found.as_ref().ok().map(|path| path.display().to_string()),
                 version: None,
                 logged_in: false,
                 auth_method: None,
@@ -998,7 +995,7 @@ impl Provider for Claude {
                 guidance: None,
                 compacts: false,
             };
-            let Ok(binary) = self.binary() else {
+            let Ok(binary) = found else {
                 status.guidance = Some(
                     "Install Claude Code (https://code.claude.com) so `claude` is on your login \
                      shell's PATH, then refresh."
@@ -1013,7 +1010,7 @@ impl Provider for Claude {
                 .is_some_and(|version| version_at_least(version, COMPACT_SINCE));
             let spec = self
                 .env
-                .spec(binary)
+                .spec(&binary)
                 .arg("auth")
                 .arg("status")
                 .arg("--json");
@@ -1092,7 +1089,7 @@ impl Provider for Claude {
 
     fn start(&self, spec: SessionSpec, ledger: Arc<dyn Ledger>) -> BoxFuture<'_, Result<Started>> {
         Box::pin(async move {
-            let binary = self.binary()?.to_owned();
+            let binary = self.binary()?;
             let cwd = spec.cwd.canonicalize().map_err(|err| {
                 Error::Invalid(format!("working directory {}: {err}", spec.cwd.display()))
             })?;
@@ -1300,7 +1297,7 @@ impl Provider for Claude {
                 ));
             };
             files::check_session_id(native_id)?;
-            let program = self.binary()?.to_owned();
+            let program = self.binary()?;
             let cwd = cwd.canonicalize().map_err(|err| {
                 Error::Invalid(format!("working directory {}: {err}", cwd.display()))
             })?;

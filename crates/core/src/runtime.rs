@@ -40,7 +40,7 @@ use crate::accounts::AccountRef;
 use crate::ledger::CleanupLedger;
 use crate::model::{
     DomainEvent, Fixture, ProviderOverview, ProvidersView, RawApprovals, RawEntry, RawPage,
-    RawSession, RawSessionId, RawSource, RawState, streams,
+    RawSession, RawSessionId, RawSource, RawState, Settings, streams,
 };
 use crate::routing::{QuotaMonitor, RegistryHolder, RoutingStore};
 use crate::{Core, Error, Result, now_ms};
@@ -178,6 +178,7 @@ impl Runtime {
                 .map_err(|err| Error::Invalid(format!("capturing the login environment: {err}")))?
         };
         let env = Arc::new(env);
+        choose_agent_paths(&env, &core.settings());
         let data_dir = platform.paths().data_dir.clone();
         let claude = Arc::new(Claude::new(platform.clone(), env.clone()));
         let codex = Arc::new(Codex::new(platform.clone(), env.clone()));
@@ -489,6 +490,12 @@ impl Runtime {
     /// The environment CLIs (and git) run with: the user's login environment.
     pub fn cli_env(&self) -> &Arc<CliEnv> {
         &self.env
+    }
+
+    /// Runs the binaries the user chose for the agents (`agentPaths`) from now on, and the
+    /// ones on PATH for the others.
+    pub fn choose_agent_paths(&self, settings: &Settings) {
+        choose_agent_paths(&self.env, settings);
     }
 
     pub fn platform(&self) -> &Arc<dyn Platform> {
@@ -827,6 +834,24 @@ impl Runtime {
         self.refresh_providers(None);
         self.refresh_accounts();
         generation
+    }
+
+    /// Waits until every provider's own login has a check that began in `generation` or later
+    /// (see [`Self::refresh_all`]), or `within` passes. Answers whether they all have.
+    pub async fn providers_checked(&self, generation: u32, within: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            if ProviderKind::ALL
+                .iter()
+                .all(|kind| self.checked_generation(*kind) >= generation)
+            {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
 
     /// The generation `provider`'s own login's last finished check began in.
@@ -1728,4 +1753,51 @@ async fn load_fixture(recordings: &Path, id: &str) -> Result<String> {
         .await
         .map_err(|err| Error::Invalid(err.to_string()))?
         .map_err(|_| Error::NotFound(format!("fixture {id}")))
+}
+
+/// Points `env` at the binaries `settings` chose for the agents, and PATH's for the others.
+fn choose_agent_paths(env: &CliEnv, settings: &Settings) {
+    for kind in ProviderKind::ALL {
+        let chosen = settings
+            .agent_paths
+            .iter()
+            .find(|chosen| chosen.provider == kind)
+            .map(|chosen| PathBuf::from(&chosen.path));
+        env.choose(kind, chosen);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::model::AgentPath;
+
+    #[test]
+    fn the_settings_choose_each_agents_binary_and_dropping_one_goes_back_to_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("brigadier-agent-paths-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let chosen = dir.join("my-claude");
+        std::fs::write(&chosen, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&chosen, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let env = CliEnv::from_vars([
+            ("HOME".into(), dir.clone().into_os_string()),
+            ("PATH".into(), dir.join("empty").into_os_string()),
+        ]);
+        let mut settings = Settings {
+            agent_paths: vec![AgentPath {
+                provider: ProviderKind::Claude,
+                path: chosen.display().to_string(),
+            }],
+            ..Settings::default()
+        };
+        choose_agent_paths(&env, &settings);
+        assert_eq!(env.resolve(ProviderKind::Claude), Some(chosen));
+        assert_eq!(env.resolve(ProviderKind::Codex), None);
+        settings.agent_paths.clear();
+        choose_agent_paths(&env, &settings);
+        assert_eq!(env.resolve(ProviderKind::Claude), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

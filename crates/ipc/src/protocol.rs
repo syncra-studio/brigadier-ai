@@ -1131,6 +1131,12 @@ pub enum Request {
         #[serde(default)]
         provider: Option<ProviderKind>,
     },
+    /// Whether `path` is `provider`'s own CLI, before the user's choice of it is saved in
+    /// `agentPaths`: answers its version, or fails with what is wrong in plain words.
+    CheckAgentPath {
+        provider: ProviderKind,
+        path: String,
+    },
     /// The Usage page: quota windows with their estimates and history, Brigadier's own use,
     /// routing activity, the merged model list and what outcomes taught routing (in
     /// `projectId`, or in every project).
@@ -1756,6 +1762,9 @@ pub enum Response {
         view: ProvidersView,
     },
     RefreshProviders,
+    CheckAgentPath {
+        version: String,
+    },
     GetUsage {
         usage: Box<UsageView>,
     },

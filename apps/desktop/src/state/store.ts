@@ -219,6 +219,7 @@ export const useApp = create<AppState>()(() => ({
     routingOverrides: [],
     routingRankings: [],
     disabledProviders: [],
+    agentPaths: [],
     hiddenModels: [],
     knownModels: [],
     olderModelsOff: [],

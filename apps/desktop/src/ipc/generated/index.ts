@@ -6,6 +6,7 @@ export type { AccountTokens } from "./AccountTokens";
 export type { AccountUsage } from "./AccountUsage";
 export type { AccountView } from "./AccountView";
 export type { AccountsView } from "./AccountsView";
+export type { AgentPath } from "./AgentPath";
 export type { Alternative } from "./Alternative";
 export type { AnswerInput } from "./AnswerInput";
 export type { AnswerOrigin } from "./AnswerOrigin";

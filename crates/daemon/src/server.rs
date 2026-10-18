@@ -2226,6 +2226,21 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                     .supervisor
                     .spawn(async move { sessions.browser_switched().await });
             }
+            if before.agent_paths != settings.agent_paths {
+                // The chosen binaries run from now on: the agents, their accounts and their
+                // updates are checked again with them.
+                daemon.runtime.choose_agent_paths(&settings);
+                let generation = daemon.runtime.refresh_all();
+                let checking = daemon.clone();
+                daemon.supervisor.spawn(async move {
+                    // Updates are read from the checks of the chosen binaries.
+                    checking
+                        .runtime
+                        .providers_checked(generation, std::time::Duration::from_secs(60))
+                        .await;
+                    crate::updates::check(&checking).await
+                });
+            }
             // New rules or rankings, or an agent or model turned back on, may let work waiting
             // for quota run now.
             if before.accounts != settings.accounts
@@ -2299,6 +2314,19 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         Request::RefreshProviders { provider } => {
             daemon.runtime.refresh_providers(provider);
             Response::RefreshProviders
+        }
+        Request::CheckAgentPath { provider, path } => {
+            let runtime = &daemon.runtime;
+            let checked = brigadier_providers::cli::check_binary(
+                runtime.platform(),
+                runtime.cli_env(),
+                provider,
+                std::path::Path::new(&path),
+            )
+            .await;
+            Response::CheckAgentPath {
+                version: checked.map_err(invalid)?,
+            }
         }
         Request::GetUsage { project_id } => Response::GetUsage {
             usage: Box::new(heap(|| daemon.sessions.usage_view(project_id)).await?),

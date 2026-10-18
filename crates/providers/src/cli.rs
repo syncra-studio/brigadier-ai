@@ -4,10 +4,11 @@
 //! user's login shell. Variables that would make a CLI think it runs nested inside another agent
 //! session are dropped.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use brigadier_sandbox::{Platform, SpawnSpec};
 
@@ -37,6 +38,9 @@ const NESTED_SESSION_VARS: &[&str] = &[
 #[derive(Debug, Clone)]
 pub struct CliEnv {
     vars: BTreeMap<OsString, OsString>,
+    /// The binary the user chose for an agent instead of the one on PATH. Shared by every copy
+    /// of this environment and each extra account's, so a choice reaches them all at once.
+    chosen: Arc<RwLock<HashMap<ProviderKind, PathBuf>>>,
 }
 
 impl CliEnv {
@@ -54,18 +58,49 @@ impl CliEnv {
             vars.remove(OsStr::new(name));
         }
         add_toolchain_bins(&mut vars);
-        Self { vars }
+        Self {
+            vars,
+            chosen: Arc::default(),
+        }
     }
 
     /// Exactly these variables: for tests, and tools that run a CLI they set up themselves.
     pub fn from_vars(vars: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
         Self {
             vars: vars.into_iter().collect(),
+            chosen: Arc::default(),
         }
     }
 
-    /// Absolute path of a CLI on the login PATH.
+    /// These variables, sharing this environment's chosen binaries (an extra account's).
+    pub(crate) fn with_vars(&self, vars: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
+        Self {
+            vars: vars.into_iter().collect(),
+            chosen: self.chosen.clone(),
+        }
+    }
+
+    /// Uses `path` for the agent instead of the one on PATH; `None` goes back to PATH.
+    pub fn choose(&self, provider: ProviderKind, path: Option<PathBuf>) {
+        let mut chosen = self.chosen.write().unwrap_or_else(|p| p.into_inner());
+        match path {
+            Some(path) => chosen.insert(provider, path),
+            None => chosen.remove(&provider),
+        };
+    }
+
+    /// Absolute path of a CLI: the one the user chose while it is there, else the one on the
+    /// login PATH.
     pub fn resolve(&self, provider: ProviderKind) -> Option<PathBuf> {
+        let chosen = self
+            .chosen
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&provider)
+            .cloned();
+        if let Some(path) = chosen.filter(|path| path.is_file()) {
+            return Some(path);
+        }
         let path = self.vars.get(OsStr::new("PATH"))?;
         let cwd = self.home().unwrap_or_else(|| PathBuf::from("/"));
         which::which_in(provider.binary(), Some(path), cwd).ok()
@@ -217,6 +252,51 @@ pub fn parse_version(output: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// How long a picked binary's `--version` may take.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Checks that `path` is `provider`'s own CLI before the user's choice of it is kept: a file
+/// that runs and names itself in its `--version` (`2.1.302 (Claude Code)`, `codex-cli 0.163.0`).
+/// Answers its version, or what is wrong in plain words.
+pub async fn check_binary(
+    platform: &Arc<dyn Platform>,
+    env: &CliEnv,
+    provider: ProviderKind,
+    path: &Path,
+) -> Result<String, String> {
+    let label = provider.label();
+    if !path.is_absolute() {
+        return Err("Choose the file by its full path.".into());
+    }
+    let metadata =
+        std::fs::metadata(path).map_err(|_| format!("{} doesn't exist.", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("{} is a folder, not a program.", path.display()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(format!("{} isn't a program that can run.", path.display()));
+        }
+    }
+    let output = crate::process::run(platform, &env.spec(path).arg("--version"), CHECK_TIMEOUT)
+        .await
+        .map_err(|err| format!("{} didn't run: {err}", path.display()))?;
+    let first = output.stdout.lines().next().unwrap_or_default();
+    let named = match provider {
+        ProviderKind::Claude => first.contains("Claude Code"),
+        ProviderKind::Codex => first
+            .split_whitespace()
+            .next()
+            .is_some_and(|word| word.starts_with("codex")),
+    };
+    match parse_version(&output.stdout) {
+        Some(version) if named && output.code == Some(0) => Ok(version),
+        _ => Err(format!("{} isn't {label}.", path.display())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +323,121 @@ mod tests {
             .iter()
             .map(|(key, value)| (OsString::from(key), value.to_os_string()))
             .collect()
+    }
+
+    /// Writes an executable script at `path` that prints `answer` for `--version`.
+    #[cfg(unix)]
+    fn script(path: &Path, answer: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, format!("#!/bin/sh\necho '{answer}'\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chosen_binary_wins_over_path_while_it_is_there_and_reaches_extra_accounts() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-cli-chosen-{}", std::process::id())));
+        let (on_path, other) = (dir.join("bin"), dir.join("elsewhere"));
+        std::fs::create_dir_all(&on_path).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        script(&on_path.join("claude"), "2.1.0 (Claude Code)");
+        let chosen = other.join("claude-nightly");
+        script(&chosen, "2.2.0 (Claude Code)");
+        let env = CliEnv::from_vars(vars(&[
+            ("HOME", dir.as_os_str()),
+            ("PATH", on_path.as_os_str()),
+        ]));
+        assert_eq!(
+            env.resolve(ProviderKind::Claude),
+            Some(on_path.join("claude"))
+        );
+
+        env.choose(ProviderKind::Claude, Some(chosen.clone()));
+        assert_eq!(env.resolve(ProviderKind::Claude), Some(chosen.clone()));
+        // Copies and an extra account's environment see the same choice, made before or after.
+        let account = env.for_account(ProviderKind::Claude, &dir.join("account"));
+        assert_eq!(
+            env.clone().resolve(ProviderKind::Claude),
+            Some(chosen.clone())
+        );
+        assert_eq!(account.resolve(ProviderKind::Claude), Some(chosen.clone()));
+        // The other agent keeps its own lookup.
+        assert_eq!(env.resolve(ProviderKind::Codex), None);
+
+        // Gone from disk: PATH's again, until it is back.
+        std::fs::remove_file(&chosen).unwrap();
+        assert_eq!(
+            account.resolve(ProviderKind::Claude),
+            Some(on_path.join("claude"))
+        );
+        script(&chosen, "2.2.0 (Claude Code)");
+        assert_eq!(account.resolve(ProviderKind::Claude), Some(chosen));
+
+        env.choose(ProviderKind::Claude, None);
+        assert_eq!(
+            account.resolve(ProviderKind::Claude),
+            Some(on_path.join("claude"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_picked_binary_is_kept_only_when_it_runs_and_names_its_agent() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-cli-check-{}", std::process::id())));
+        std::fs::create_dir_all(&*dir).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.join("data")),
+        })
+        .unwrap();
+        let env = CliEnv::from_vars(vars(&[
+            ("HOME", dir.as_os_str()),
+            ("PATH", OsStr::new("/usr/bin:/bin")),
+        ]));
+        let check = |provider, path: PathBuf| {
+            let (platform, env) = (platform.clone(), env.clone());
+            async move { check_binary(&platform, &env, provider, &path).await }
+        };
+        let claude = dir.join("claude");
+        script(&claude, "2.1.302 (Claude Code)");
+        let codex = dir.join("codex");
+        script(&codex, "codex-cli 0.163.0");
+        assert_eq!(
+            check(ProviderKind::Claude, claude.clone()).await,
+            Ok("2.1.302".into())
+        );
+        assert_eq!(
+            check(ProviderKind::Codex, codex.clone()).await,
+            Ok("0.163.0".into())
+        );
+        // Another agent's binary, or any other program, isn't taken.
+        assert_eq!(
+            check(ProviderKind::Codex, claude.clone()).await,
+            Err(format!("{} isn't Codex.", claude.display()))
+        );
+        assert_eq!(
+            check(ProviderKind::Claude, PathBuf::from("/bin/ls")).await,
+            Err("/bin/ls isn't Claude Code.".into())
+        );
+        let plain = dir.join("notes.txt");
+        std::fs::write(&plain, "hello").unwrap();
+        assert_eq!(
+            check(ProviderKind::Claude, plain.clone()).await,
+            Err(format!("{} isn't a program that can run.", plain.display()))
+        );
+        assert_eq!(
+            check(ProviderKind::Claude, dir.join("missing")).await,
+            Err(format!("{} doesn't exist.", dir.join("missing").display()))
+        );
+        assert_eq!(
+            check(ProviderKind::Claude, dir.to_path_buf()).await,
+            Err(format!("{} is a folder, not a program.", dir.display()))
+        );
+        assert_eq!(
+            check(ProviderKind::Claude, PathBuf::from("claude")).await,
+            Err("Choose the file by its full path.".into())
+        );
     }
 
     #[test]
