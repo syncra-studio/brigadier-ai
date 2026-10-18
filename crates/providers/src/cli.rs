@@ -101,9 +101,31 @@ impl CliEnv {
         if let Some(path) = chosen.filter(|path| path.is_file()) {
             return Some(path);
         }
-        let path = self.vars.get(OsStr::new("PATH"))?;
         let cwd = self.home().unwrap_or_else(|| PathBuf::from("/"));
-        which::which_in(provider.binary(), Some(path), cwd).ok()
+        let on_path = self
+            .vars
+            .get(OsStr::new("PATH"))
+            .and_then(|path| which::which_in(provider.binary(), Some(path), &cwd).ok());
+        on_path.or_else(|| {
+            let folder = self.installer_folder(provider)?;
+            which::which_in(provider.binary(), Some(folder), &cwd).ok()
+        })
+    }
+
+    /// Where the agent's own native installer puts its binary: `~/.local/bin` for both (Codex's
+    /// moves with `CODEX_INSTALL_DIR`). The login PATH may not hold it: Claude Code's installer
+    /// leaves the shell profiles alone, and Codex's adds it to a profile read after this
+    /// environment was captured. So a binary there counts as installed, PATH first.
+    pub fn installer_folder(&self, provider: ProviderKind) -> Option<PathBuf> {
+        if provider == ProviderKind::Codex
+            && let Some(dir) = self.var("CODEX_INSTALL_DIR").filter(|dir| !dir.is_empty())
+        {
+            return Some(PathBuf::from(dir));
+        }
+        // Only this environment's own HOME: one without it (a test's) looks nowhere else.
+        self.var("HOME")
+            .filter(|home| !home.is_empty())
+            .map(|home| Path::new(home).join(".local").join("bin"))
     }
 
     /// Absolute path of any program on the login PATH.
@@ -379,6 +401,55 @@ mod tests {
             account.resolve(ProviderKind::Claude),
             Some(on_path.join("claude"))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_agent_its_installer_put_off_the_login_path_is_found_there() {
+        let dir = Temp(
+            std::env::temp_dir().join(format!("brigadier-cli-installed-{}", std::process::id())),
+        );
+        let (on_path, installed) = (dir.join("bin"), dir.join(".local").join("bin"));
+        std::fs::create_dir_all(&on_path).unwrap();
+        std::fs::create_dir_all(&installed).unwrap();
+        let env = CliEnv::from_vars(vars(&[
+            ("HOME", dir.as_os_str()),
+            ("PATH", on_path.as_os_str()),
+        ]));
+        // Nowhere yet.
+        assert_eq!(env.resolve(ProviderKind::Claude), None);
+        assert_eq!(env.resolve(ProviderKind::Codex), None);
+
+        // The native installers' folder, which the login PATH doesn't hold.
+        script(&installed.join("claude"), "2.1.302 (Claude Code)");
+        script(&installed.join("codex"), "codex-cli 0.163.0");
+        assert_eq!(
+            env.resolve(ProviderKind::Claude),
+            Some(installed.join("claude"))
+        );
+        assert_eq!(
+            env.resolve(ProviderKind::Codex),
+            Some(installed.join("codex"))
+        );
+
+        // One on PATH comes first.
+        script(&on_path.join("claude"), "2.1.0 (Claude Code)");
+        assert_eq!(
+            env.resolve(ProviderKind::Claude),
+            Some(on_path.join("claude"))
+        );
+
+        // Codex's installer folder moves with CODEX_INSTALL_DIR.
+        let moved = dir.join("codex-bin");
+        std::fs::create_dir_all(&moved).unwrap();
+        let env = CliEnv::from_vars(vars(&[
+            ("HOME", dir.as_os_str()),
+            ("PATH", on_path.as_os_str()),
+            ("CODEX_INSTALL_DIR", moved.as_os_str()),
+        ]));
+        assert_eq!(env.resolve(ProviderKind::Codex), None);
+        script(&moved.join("codex"), "codex-cli 0.163.0");
+        assert_eq!(env.resolve(ProviderKind::Codex), Some(moved.join("codex")));
     }
 
     #[cfg(unix)]
