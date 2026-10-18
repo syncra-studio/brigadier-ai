@@ -442,7 +442,9 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
 
   /**
    * Goes to match `index` of `found`, one in a page not loaded: the pages down to its message
-   * load, and once the thread shows it, it is found there, at the same index, and gone to.
+   * load, and once the thread shows it, it is found there and gone to. It is found counting back
+   * from the thread's first match before the load (as many matches back as it was from the
+   * newest one not loaded), so a count the engine got wrong further back never moves it.
    */
   const loadTo = useCallback(
     async (index: number, found: Found) => {
@@ -451,6 +453,8 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
       const seq = ++reveals.current;
       const live = () => seq === reveals.current && viewport.isConnected;
       const all = found.before + found.ranges.length;
+      const back = found.before - 1 - index;
+      const anchor = found.ranges[0]?.cloneRange() ?? null;
       const mine = { index, all };
       loading.current = mine;
       const going = () => {
@@ -480,15 +484,22 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
       for (let frames = 0; frames < 120 && going(); frames++) {
         await nextFrame();
         const now = research.current();
-        const range = index >= now.before ? now.ranges[index - now.before] : undefined;
-        if (!range || (now.before + now.ranges.length < all && frames < 119)) continue;
+        const loaded = anchor?.startContainer.isConnected
+          ? now.ranges.filter((range) => range.compareBoundaryPoints(Range.START_TO_START, anchor) < 0)
+          : now.ranges;
+        // Counted further back than the thread shows: the oldest it shows, once the wait is up.
+        const range = loaded[loaded.length - 1 - back] ?? (frames === 119 ? loaded[0] : undefined);
+        if (!range) continue;
         const top = range.getBoundingClientRect().top;
         still = top === last ? still + 1 : 0;
         last = top;
         if (still < STILL_FRAMES && frames < 119) continue;
+        const at = now.before + now.ranges.indexOf(range);
         loading.current = null;
-        setActive(index);
-        void reveal(range, index, true);
+        state.current.result = now;
+        setResult(now);
+        setActive(at);
+        void reveal(range, at, true);
         return;
       }
       if (loading.current === mine) loading.current = null;

@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::Duration;
 
 use brigadier_providers::{ProviderEvent, ProviderKind};
 use brigadier_store::{NewEvent, Retention, Store, StreamPage};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -1156,8 +1157,9 @@ impl Core {
                 Some(hash) => self.read_blob_text(hash.clone()).await.ok(),
                 None => None,
             };
-            let text = full.as_deref().unwrap_or(&message.text);
-            let count = u32::try_from(fold_case(text).matches(&needle).count()).unwrap_or(u32::MAX);
+            let text = shown_text(full.as_deref().unwrap_or(&message.text));
+            let count =
+                u32::try_from(fold_case(&text).matches(&needle).count()).unwrap_or(u32::MAX);
             if count == 0 {
                 continue;
             }
@@ -2955,9 +2957,13 @@ pub(crate) fn branch_of(messages: &[Message], leaf: &str) -> Vec<Message> {
     path
 }
 
-/// `text` in lower case, character by character where lowering one would make it longer, as
-/// the thread's Find reads it.
+/// `text` in lower case as the thread's Find reads it: whole (a final sigma lowers as one), or
+/// character by character where lowering the whole would make it longer.
 fn fold_case(text: &str) -> String {
+    let all = text.to_lowercase();
+    if all.encode_utf16().count() == text.encode_utf16().count() {
+        return all;
+    }
     text.chars()
         .map(|char| {
             let mut lower = char.to_lowercase();
@@ -2967,6 +2973,36 @@ fn fold_case(text: &str) -> String {
             }
         })
         .collect()
+}
+
+/// The words a message's Markdown shows, near enough for Find to count what the thread will
+/// show once it is loaded: fences, a line's heading, quote and list marks, and emphasis and code
+/// marks go; a link or an image keeps its words. Code inside fences stays as it is.
+fn shown_text(text: &str) -> String {
+    static LINK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"!?\[([^\]]*)\]\([^)]*\)").unwrap_or_else(|_| unreachable!()));
+    static LINE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^\s*(?:#{1,6}\s+|(?:>\s?)+|[-*+]\s+|\d+[.)]\s+)")
+            .unwrap_or_else(|_| unreachable!())
+    });
+    static MARKS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\*\*|__|~~|`|\*").unwrap_or_else(|_| unreachable!()));
+    let mut fenced = false;
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            lines.push(line.to_owned());
+            continue;
+        }
+        let line = LINE.replace(line, "");
+        let line = LINK.replace_all(&line, "$1");
+        lines.push(MARKS.replace_all(&line, "").into_owned());
+    }
+    lines.join("\n")
 }
 
 /// Adds `block` to `text` as a paragraph of its own.
@@ -3204,6 +3240,27 @@ mod tests {
             search(&shown.id, "wombat", 250).await.unwrap(),
             MessageMatches::default()
         );
+        // As the thread shows the Markdown: a link's address is no match, words emphasis splits
+        // are one; a final sigma lowers as the app lowers it.
+        let markdown = say("See [the docs](https://example.com/ocelot), hello **world**, ΟΣ.")
+            .await
+            .unwrap();
+        let last = answer("The newest.").await.unwrap();
+        let counted = |found: MessageMatches| {
+            found
+                .matches
+                .iter()
+                .filter(|each| each.id == markdown.id)
+                .map(|each| each.count)
+                .sum::<u32>()
+        };
+        assert_eq!(counted(search(&last.id, "ocelot", 250).await.unwrap()), 0);
+        assert_eq!(counted(search(&last.id, "the docs", 250).await.unwrap()), 1);
+        assert_eq!(
+            counted(search(&last.id, "hello world", 250).await.unwrap()),
+            1
+        );
+        assert_eq!(counted(search(&last.id, "ος", 250).await.unwrap()), 1);
     }
 
     /// Events of a feature Brigadier no longer has (computer use's action log and its
