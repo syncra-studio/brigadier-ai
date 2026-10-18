@@ -1707,6 +1707,7 @@ impl SessionManager {
         } else {
             String::new()
         };
+        let requests = board.merging_requests(None);
         self.orchestrator_step(
             id,
             OrchestratorStepKind::Merged {
@@ -1715,6 +1716,11 @@ impl SessionManager {
                 commits,
                 asked_in: Some(consent.asked_in),
                 upstream,
+                head: Some(session_tip.0.clone()),
+                merge_commit: Some(new_tip.0.clone()),
+                pr: None,
+                auto: false,
+                requests,
             },
         )
         .await;
@@ -1742,7 +1748,7 @@ impl SessionManager {
     /// behind. A checkout of it that is busy, or has changes the fast-forward would touch,
     /// keeps it as it is: the merge result says how far it is behind. Returns why the fetch
     /// failed.
-    async fn sync_base(&self, repo: &str, base: &str) -> Option<String> {
+    pub(super) async fn sync_base(&self, repo: &str, base: &str) -> Option<String> {
         let (git, path, branch) = (self.git.clone(), PathBuf::from(repo), base.to_owned());
         let failed = blocking(move || {
             git.open(&path)

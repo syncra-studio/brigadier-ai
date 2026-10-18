@@ -73,7 +73,27 @@ askedIn: string | null,
  * The base's upstream when it merged (#224): the merge is on this Mac only, not pushed
  * to it. None: the base has no upstream.
  */
-upstream?: MergedUpstream, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "mergeHeld", branch: string, base: string, 
+upstream?: MergedUpstream, 
+/**
+ * The session branch's head that merged.
+ */
+head?: string, 
+/**
+ * The commit the merge made on the base (a squash or rebase merge's too).
+ */
+mergeCommit?: string, 
+/**
+ * The pull request it merged on GitHub; none for a merge on this Mac.
+ */
+pr?: number, 
+/**
+ * It merged on its own (auto-merge on), with no consent asked.
+ */
+auto?: boolean, 
+/**
+ * The requests whose work it merged.
+ */
+requests?: Array<string>, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "mergeHeld", branch: string, base: string, 
 /**
  * The user message, or "Merge into main" click (a merge card's, before BUILD-PLAN
  * A4), whose consent it holds.

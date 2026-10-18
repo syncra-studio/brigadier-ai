@@ -216,6 +216,9 @@ pub struct SessionManager {
     /// The reviews a `review_candidate` call waits on, by session and range: the call's reply
     /// carries their outcome, so no message of it is delivered (#137).
     review_replies: Mutex<HashSet<(ConversationId, String, String)>>,
+    /// A stand-in `gh` for tests.
+    #[cfg(test)]
+    pub(crate) gh_override: Mutex<Option<ci::Gh>>,
     /// Held while a task is read, changed and recorded (`update_task`), so two writers can't
     /// each write back a copy that lacks the other's change.
     task_writes: tokio::sync::Mutex<()>,
@@ -390,6 +393,8 @@ impl SessionManager {
             previews: preview::Previews::default(),
             running_reviews: Mutex::default(),
             review_replies: Mutex::default(),
+            #[cfg(test)]
+            gh_override: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
             waiting: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),

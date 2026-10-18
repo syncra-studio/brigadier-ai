@@ -887,6 +887,120 @@ pub(crate) fn short_sha(sha: &str) -> &str {
     sha.get(..8).unwrap_or(sha)
 }
 
+/// A check on a pull request as `gh pr view --json statusCheckRollup` gives it: a check run
+/// (`status`, `conclusion`) or a commit status (`context`, `state`).
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct RollupCheck {
+    name: String,
+    context: String,
+    status: String,
+    conclusion: String,
+    state: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrChecks {
+    number: u32,
+    state: String,
+    #[serde(default)]
+    head_ref_oid: String,
+    #[serde(default)]
+    status_check_rollup: Vec<RollupCheck>,
+}
+
+/// The checks on `branch`'s pull request, as one line for `ci_status`: passed, failing (by
+/// name) and pending, and whether the PR's head is the pushed `sha`. Empty with no pull
+/// request, or when `gh` can't say.
+async fn pr_checks_line(gh: &Gh, repo: &Path, branch: &str, sha: &str) -> String {
+    if branch.is_empty() {
+        return String::new();
+    }
+    let Ok(out) = gh
+        .output_in(
+            Some(repo),
+            &[
+                "pr",
+                "view",
+                branch,
+                "--json",
+                "number,state,headRefOid,statusCheckRollup",
+            ],
+        )
+        .await
+    else {
+        return String::new();
+    };
+    let Some(pr) = out
+        .success()
+        .then(|| serde_json::from_str::<PrChecks>(&out.stdout).ok())
+        .flatten()
+    else {
+        return String::new();
+    };
+    let (mut passed, mut failing, mut pending, mut skipped) = (0, Vec::new(), 0, 0);
+    for check in &pr.status_check_rollup {
+        let name = if check.name.is_empty() {
+            &check.context
+        } else {
+            &check.name
+        };
+        let outcome = if check.state.is_empty() {
+            if check.status != "COMPLETED" {
+                "PENDING"
+            } else {
+                check.conclusion.as_str()
+            }
+        } else {
+            check.state.as_str()
+        };
+        match outcome {
+            "SUCCESS" => passed += 1,
+            "PENDING" | "EXPECTED" => pending += 1,
+            "NEUTRAL" | "SKIPPED" | "STALE" => skipped += 1,
+            _ => failing.push(name.as_str()),
+        }
+    }
+    let mut parts = Vec::new();
+    if passed > 0 {
+        parts.push(format!("{passed} passed"));
+    }
+    if !failing.is_empty() {
+        parts.push(format!(
+            "{} failing ({})",
+            failing.len(),
+            failing.join(", ")
+        ));
+    }
+    if pending > 0 {
+        parts.push(format!("{pending} pending"));
+    }
+    if skipped > 0 {
+        parts.push(format!("{skipped} skipped"));
+    }
+    let checks = if parts.is_empty() {
+        "no checks".to_owned()
+    } else {
+        parts.join(", ")
+    };
+    let head = if pr.head_ref_oid.is_empty() || pr.head_ref_oid.starts_with(sha) {
+        String::new()
+    } else {
+        format!(
+            "; its head is {}, not {}",
+            short_sha(&pr.head_ref_oid),
+            short_sha(sha)
+        )
+    };
+    format!(
+        "
+PR #{} ({}) on `{branch}`: {checks}{head}.",
+        pr.number,
+        pr.state.to_lowercase()
+    )
+}
+
 /// A push that put on the remote's `branch` a commit the local `branch` doesn't have (a fix
 /// pushed with `HEAD:main` from the session branch): the two have parted, and the thread is told
 /// to land it here too. Empty when the local branch has it, or there is no local branch.
@@ -982,7 +1096,11 @@ fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
 /// once the user said yes. The watch runs on its own; its result comes back as a message.
 impl super::SessionManager {
     /// The user's `gh`, from their login PATH, with their environment.
-    fn gh(&self) -> Option<Gh> {
+    pub(crate) fn gh(&self) -> Option<Gh> {
+        #[cfg(test)]
+        if let Some(gh) = self.gh_override.lock().unwrap().clone() {
+            return Some(gh);
+        }
         let env = self.runtime.cli_env();
         Some(Gh {
             program: env.which("gh")?,
@@ -1084,8 +1202,9 @@ impl super::SessionManager {
         Ok((repo, url, sha))
     }
 
-    /// `ci_status`: whether the push's CI can be watched from here, as a fact; asking, watching
-    /// and what to tell the user are the thread's call (#250).
+    /// `ci_status`: whether the push's CI can be watched from here, as a fact, and the checks
+    /// on the branch's pull request when it has one; asking, watching and what to tell the
+    /// user are the thread's call (#250).
     pub(crate) async fn ci_status(
         &self,
         id: &crate::model::ConversationId,
@@ -1094,7 +1213,12 @@ impl super::SessionManager {
         let (repo, url, sha) = self.ci_push(id, &push).await?;
         let short = short_sha(&sha);
         let parted = parted_note(&repo, push.branch.trim(), &sha).await;
-        let status = match probe(&repo, &url, &sha, self.gh().as_ref()).await {
+        let gh = self.gh();
+        let pr = match &gh {
+            Some(gh) => pr_checks_line(gh, &repo, push.branch.trim(), &sha).await,
+            None => String::new(),
+        };
+        let status = match probe(&repo, &url, &sha, gh.as_ref()).await {
             Probe::Watchable { repo, .. } => format!(
                 "watchable: {repo} runs GitHub Actions on {short}; watch_ci follows it with the same remote, branch and sha."
             ),
@@ -1105,7 +1229,7 @@ impl super::SessionManager {
             ),
             Probe::NoCi => "no CI: the pushed commit has no CI files.".to_owned(),
         };
-        Ok(status + &parted)
+        Ok(status + &pr + &parted)
     }
 
     /// `watch_ci`: starts watching the push's runs, shown live as a `CiWatch` row, and returns
@@ -1692,6 +1816,7 @@ D="$(dirname "$0")"
 echo "$*" >> "$D/calls"
 case "$1 $2" in
   "auth status") key=auth ;;
+  "pr view") key="pr-$3" ;;
   "run list")
     limit=""; prev=""
     for a in "$@"; do
@@ -2196,6 +2321,51 @@ exit "$code"
                 matches!(&outcome, Outcome::GhUnavailable { why } if why.starts_with("gh kept failing")),
                 "{outcome:?}"
             );
+        }
+
+        /// A pull request's checks in one line: passed, failing by name, pending, and a head
+        /// that isn't the pushed commit; no line without a pull request.
+        #[tokio::test]
+        async fn pr_checks_are_read_from_the_branchs_pull_request() {
+            let fake = FakeGh::new("prchecks");
+            fake.answer(
+                "pr-feature",
+                &serde_json::json!({
+                    "number": 12,
+                    "state": "OPEN",
+                    "headRefOid": SHA,
+                    "statusCheckRollup": [
+                        {"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                        {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"},
+                        {"__typename": "CheckRun", "name": "build", "status": "IN_PROGRESS", "conclusion": ""},
+                        {"__typename": "StatusContext", "context": "deploy", "state": "PENDING"},
+                        {"__typename": "StatusContext", "context": "cla", "state": "SUCCESS"}
+                    ]
+                })
+                .to_string(),
+            )
+            .answer("pr-gone", "")
+            .answer("pr-gone.exit", "1")
+            .answer("pr-gone.err", "no pull requests found for branch \"gone\"\n")
+            .answer(
+                "pr-old",
+                r#"{"number":3,"state":"MERGED","headRefOid":"0123456789abcdef","statusCheckRollup":[]}"#,
+            );
+            let gh = fake.gh();
+            let dir = fake.path();
+            assert_eq!(
+                pr_checks_line(&gh, dir, "feature", SHA).await,
+                "\nPR #12 (open) on `feature`: 2 passed, 1 failing (lint), 2 pending."
+            );
+            assert_eq!(pr_checks_line(&gh, dir, "gone", SHA).await, "");
+            assert_eq!(
+                pr_checks_line(&gh, dir, "old", SHA).await,
+                format!(
+                    "\nPR #3 (merged) on `old`: no checks; its head is 01234567, not {}.",
+                    short_sha(SHA)
+                )
+            );
+            assert!(fake.calls()[0].starts_with("pr view feature --json number,state"));
         }
 
         #[tokio::test]

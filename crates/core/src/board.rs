@@ -327,6 +327,44 @@ impl Board {
         }
     }
 
+    /// The requests that settled ready since the last merge, oldest first, with the head each
+    /// left.
+    pub(crate) fn unmerged_ready(&self) -> Vec<(String, String)> {
+        let merged = self
+            .orchestrator_steps
+            .iter()
+            .filter(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+            .map(|step| step.position)
+            .max();
+        let mut requests: Vec<(i64, String, String)> = self
+            .ready
+            .iter()
+            .filter(|(_, (_, at))| merged.is_none_or(|merged| *at > merged))
+            .map(|(request, (head, at))| (*at, request.clone(), head.clone()))
+            .collect();
+        requests.sort();
+        requests
+            .into_iter()
+            .map(|(_, request, head)| (request, head))
+            .collect()
+    }
+
+    /// The requests whose work a merge now takes: those that settled ready since the last
+    /// merge, and `current`, the one whose turn merged it.
+    pub(crate) fn merging_requests(&self, current: Option<&str>) -> Vec<String> {
+        let mut requests: Vec<String> = self
+            .unmerged_ready()
+            .into_iter()
+            .map(|(request, _)| request)
+            .collect();
+        if let Some(current) = current
+            && !requests.iter().any(|request| request == current)
+        {
+            requests.push(current.to_owned());
+        }
+        requests
+    }
+
     /// What the conversation is busy with that its sidebar row names, keyed as
     /// [`ConversationActivity::phases`] says; its thread's calls count only while `running`, in
     /// the request its turn serves.

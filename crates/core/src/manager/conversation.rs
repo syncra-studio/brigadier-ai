@@ -607,6 +607,9 @@ pub(crate) struct ConvLive {
     /// the user's consent to the move of the base, and a Cancel of the held merge takes it, so
     /// one of them wins (SESSION-FIXES-PLAN.md Q3).
     pub(super) merge_lock: tokio::sync::Mutex<()>,
+    /// Held while a merged pull request is looked up and recorded, so two request ends
+    /// settling at once record it once.
+    pub(super) pr_merge: tokio::sync::Mutex<()>,
     /// What the thread was last told of the held merge (its consent's `asked_in`, and
     /// "due" or "waiting"), so each is said once.
     pub(super) merge_told: std::sync::Mutex<Option<(String, &'static str)>>,
@@ -680,6 +683,7 @@ impl ConvLive {
             full_access_notice: tokio::sync::Mutex::new(()),
             feedback_offer: tokio::sync::Mutex::new(()),
             merge_lock: tokio::sync::Mutex::new(()),
+            pr_merge: tokio::sync::Mutex::new(()),
             merge_told: std::sync::Mutex::new(None),
             reviews_due: std::sync::atomic::AtomicUsize::new(0),
             workspace_closed: std::sync::atomic::AtomicBool::new(false),

@@ -386,6 +386,9 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
             .await
             .is_err()
     );
+    let (_, branch) = workspace(&flow);
+    let tip = git(&flow.repo, &["rev-parse", &branch]);
+    let request = flow.board().await.latest_request().unwrap().id.clone();
     let reply = flow
         .manager
         .merge_session(&flow.conversation, click())
@@ -395,6 +398,39 @@ async fn a_click_merges_once_and_keeps_the_workspace() {
     flow.until("the merge", |board| merged(board) == 1).await;
     let board = flow.settled().await;
     assert!(on_main(&flow, "NOTES.md"));
+    // The merge on this Mac records the head it merged, its merge commit and the request whose
+    // work it took; no PR, and the user's click, not an auto merge.
+    let record = board
+        .orchestrator_steps
+        .iter()
+        .find_map(|step| match &step.kind {
+            OrchestratorStepKind::Merged {
+                head,
+                merge_commit,
+                pr,
+                auto,
+                requests,
+                ..
+            } => Some((
+                head.clone(),
+                merge_commit.clone(),
+                *pr,
+                *auto,
+                requests.clone(),
+            )),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        record,
+        (
+            Some(tip),
+            Some(git(&flow.repo, &["rev-parse", "main"])),
+            None,
+            false,
+            vec![request]
+        )
+    );
     assert!(
         board.questions.is_empty(),
         "no card: {:#?}",

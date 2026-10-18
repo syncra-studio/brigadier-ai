@@ -234,6 +234,20 @@ impl Repo {
         Ok(())
     }
 
+    /// Moves this checkout's branch to `to` while its HEAD is still `expected` (`git reset
+    /// --keep`): a squash or rebase merge's new base, after its pull request merged. Local
+    /// changes it would touch make it fail rather than be lost. Run it under
+    /// [`Self::with_ref_lock`].
+    pub fn reset_keep(&self, to: &Oid, expected: &Oid) -> Result<()> {
+        valid_oid(to)?;
+        valid_oid(expected)?;
+        if self.resolve("HEAD")? != *expected {
+            return Err(Error::Invalid(format!("HEAD is no longer {}", expected.0)));
+        }
+        self.cmd(&["reset", "--keep", &to.0], false)?;
+        Ok(())
+    }
+
     /// Delete a branch, refusing any branch currently held by a worktree, even with force.
     pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
         self.validate_branch(name)?;

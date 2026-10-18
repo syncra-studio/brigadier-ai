@@ -2132,6 +2132,26 @@ pub enum OrchestratorStepKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         upstream: Option<MergedUpstream>,
+        /// The session branch's head that merged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        head: Option<String>,
+        /// The commit the merge made on the base (a squash or rebase merge's too).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        merge_commit: Option<String>,
+        /// The pull request it merged on GitHub; none for a merge on this Mac.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        pr: Option<u32>,
+        /// It merged on its own (auto-merge on), with no consent asked.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(as = "Option<bool>", optional)]
+        auto: bool,
+        /// The requests whose work it merged.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(as = "Option<Vec<String>>", optional)]
+        requests: Vec<String>,
     },
     /// A notice that something the user asked for needs more than the session's sandbox
     /// allows (`suggest_full_access`), with a button that switches the session to Full access.
