@@ -13,9 +13,12 @@
 //! - Read-only access uses `untrusted`: Codex asks before every command, and a read-only
 //!   session (such as an orchestrator) has all of them declined, so nothing runs.
 //!
-//! The user's personal Codex setup stays out: plugins, apps, hooks, computer and browser use,
-//! memories and `notify` are switched off per process, and the MCP servers from their config are
-//! disabled per thread.
+//! Threads and workers ([`ToolSet::user_setup`]) run with the user's own Codex setup: their
+//! config, `AGENTS.md`, plugins, hooks, skills catalog and MCP servers, beside Brigadier's;
+//! the project's `.codex` config too where Codex reads it (a worker working in its worktree of
+//! a trusted project). Every other session keeps the user's setup out: plugins and hooks are
+//! switched off per process, and the MCP servers from their config are disabled per thread.
+//! Apps, computer and browser use, memories and `notify` are off for every session.
 //!
 //! Brigadier never makes Codex write to `~/.codex/config.toml`. Starting a thread with a
 //! writable sandbox in a project the user never trusted makes Codex persist a trust entry for
@@ -104,23 +107,23 @@ const THREAD_FEATURES: &[&str] = &["multi_agent", "multi_agent_v2", "goals", "sl
 
 /// Per-process overrides for the same sessions (and a thread). The sub-agent tools (`collaboration.*`) come
 /// with the model, whatever the feature flags say; only `agents.enabled` removes them. The
-/// user's personal skills catalog stays out of their context.
-const RESTRICTED_OVERRIDES: &[&str] = &[NO_SUB_AGENTS, "skills.include_instructions=false"];
+/// user's personal skills catalog stays out of their context, but for a thread's, which runs
+/// with the user's setup.
+const RESTRICTED_OVERRIDES: &[&str] = &[NO_SUB_AGENTS, NO_SKILLS_CATALOG];
+
+/// Leaves the user's skills catalog out of the session's instructions.
+const NO_SKILLS_CATALOG: &str = "skills.include_instructions=false";
 
 /// Removes Codex's sub-agent tools. Codex can't hold a sub-agent to a set of models, so a
 /// session whose models are limited ([`SessionSpec::allowed_models`]) runs without them.
 const NO_SUB_AGENTS: &str = "agents.enabled=false";
 
-/// Features that bring the user's personal Codex setup (or desktop integrations) into a
-/// session.
-const DISABLED_FEATURES: &[&str] = &[
-    "plugins",
-    "apps",
-    "hooks",
-    "computer_use",
-    "browser_use",
-    "memories",
-];
+/// Desktop integrations and Codex's own memory, off for every session (Brigadier's Brain is
+/// its memory, its browser and computer tools are Brigadier's own).
+const DISABLED_FEATURES: &[&str] = &["apps", "computer_use", "browser_use", "memories"];
+
+/// The user's personal Codex setup, off for a session without it ([`ToolSet::user_setup`]).
+const USER_SETUP_FEATURES: &[&str] = &["plugins", "hooks"];
 
 pub struct Codex {
     platform: Arc<dyn Platform>,
@@ -317,12 +320,17 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
         ToolSet::Thread => THREAD_FEATURES,
         ToolSet::None | ToolSet::Web | ToolSet::Review => RESTRICTED_FEATURES,
     };
-    for feature in DISABLED_FEATURES.iter().chain(role_features) {
+    let user_setup = tools.user_setup();
+    let sealed: &[&str] = if user_setup { &[] } else { USER_SETUP_FEATURES };
+    for feature in DISABLED_FEATURES.iter().chain(sealed).chain(role_features) {
         args.push("--disable".into());
         args.push((*feature).into());
     }
     if !role_features.is_empty() {
         for value in RESTRICTED_OVERRIDES {
+            if user_setup && *value == NO_SKILLS_CATALOG {
+                continue;
+            }
             args.push("-c".into());
             args.push((*value).into());
         }
@@ -1126,8 +1134,9 @@ async fn remove_project_trust(rpc: &Rpc, path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Per-thread config: the user's MCP servers off, Brigadier's on, and the workspace sandbox
-/// with network access, or the session's permission profile.
+/// Per-thread config: Brigadier's MCP servers on, the user's off but in a session with their
+/// setup ([`ToolSet::user_setup`]), and the workspace sandbox with network access, or the
+/// session's permission profile.
 async fn thread_config(
     rpc: &Rpc,
     spec: &SessionSpec,
@@ -1143,6 +1152,7 @@ async fn thread_config(
     let mut servers: Map<String, Value> = effective
         .pointer("/config/mcp_servers")
         .and_then(Value::as_object)
+        .filter(|_| !spec.tools.user_setup())
         .map(|servers| {
             servers
                 .keys()
@@ -2269,6 +2279,7 @@ mod tests {
             tools,
             skill_plugins: Vec::new(),
             add_dirs: Vec::new(),
+            project: None,
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,
@@ -2350,6 +2361,51 @@ mod tests {
         ));
         assert!(already_gone("thread not found: 01a1"));
         assert!(!already_gone("permission denied"));
+    }
+
+    /// A thread and a worker run with the user's plugins, hooks and skills catalog; every
+    /// other session, and a control connection, without. Apps, computer and browser use and
+    /// memories stay off for all.
+    #[test]
+    fn threads_and_workers_run_with_the_users_own_setup() {
+        let disabled = |args: &[String]| -> Vec<String> {
+            args.windows(2)
+                .filter(|pair| pair[0] == "--disable")
+                .map(|pair| pair[1].clone())
+                .collect()
+        };
+        for tools in [ToolSet::Thread, ToolSet::Lean] {
+            let args = app_server_args(Some(&spec(tools, None)));
+            let off = disabled(&args);
+            for feature in USER_SETUP_FEATURES {
+                assert!(!off.iter().any(|f| f == feature), "{tools:?}: {args:?}");
+            }
+            for feature in DISABLED_FEATURES {
+                assert!(off.iter().any(|f| f == feature), "{tools:?}: {args:?}");
+            }
+            assert!(
+                !args.iter().any(|arg| arg == NO_SKILLS_CATALOG),
+                "{tools:?}"
+            );
+        }
+        for args in [
+            ToolSet::Default,
+            ToolSet::None,
+            ToolSet::Web,
+            ToolSet::Review,
+            ToolSet::Reader,
+        ]
+        .map(|tools| app_server_args(Some(&spec(tools, None))))
+        .into_iter()
+        .chain([app_server_args(None)])
+        {
+            let off = disabled(&args);
+            for feature in USER_SETUP_FEATURES {
+                assert!(off.iter().any(|f| f == feature), "{args:?}");
+            }
+        }
+        let review = app_server_args(Some(&spec(ToolSet::Review, None)));
+        assert!(review.iter().any(|arg| arg == NO_SKILLS_CATALOG));
     }
 
     #[test]

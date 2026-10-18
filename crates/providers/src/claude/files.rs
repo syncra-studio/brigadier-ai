@@ -61,6 +61,91 @@ pub(super) fn staging_dirs(cwd: &Path) -> [PathBuf; 2] {
     [claude, staging]
 }
 
+/// What of a project's `.claude` folder is never linked into a session's folder
+/// ([`link_project`]): Claude's own staging and worktrees, and the instruction files the session
+/// is given in its prompt already (`instructions` in the core), which would load twice.
+#[cfg(unix)]
+const UNLINKED: &[&str] = &[
+    STAGING_DIR,
+    "worktrees",
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    "rules",
+];
+
+/// Links `project`'s own Claude setup into `cwd`, a folder of Brigadier's where a thread or a
+/// worker runs, since Claude reads a project's setup only from its working folder: its
+/// `.mcp.json`, and what its `.claude` folder holds (settings, hooks, skills, agents, commands),
+/// with the user's `settings.local.json` from their own checkout when a worktree has none (it
+/// is gitignored). Links to what `project` lacks are removed, so a session that moves to
+/// another checkout loads only that one's; nothing but links is ever written or removed, and a
+/// file of Claude's own there is left as it is. Each link is replaced in one rename: a CLI
+/// starting meanwhile in the same folder (the session's workers share one) reads the old link
+/// or the new one, never none. Unix only: elsewhere nothing is linked.
+#[cfg(unix)]
+pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
+    let dot_claude = cwd.join(".claude");
+    let mut wanted: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mcp = project.join(".mcp.json");
+    if mcp.is_file() {
+        wanted.push((cwd.join(".mcp.json"), mcp));
+    }
+    if let Ok(entries) = std::fs::read_dir(project.join(".claude")) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !UNLINKED.iter().any(|unlinked| name == *unlinked) {
+                wanted.push((dot_claude.join(&name), entry.path()));
+            }
+        }
+    }
+    let local = dot_claude.join("settings.local.json");
+    if !wanted.iter().any(|(link, _)| *link == local)
+        && let Some(main) = super::main_checkout(&project.join(".git"))
+        && main.join(".claude/settings.local.json").is_file()
+    {
+        wanted.push((local, main.join(".claude/settings.local.json")));
+    }
+    // Links of an earlier project that this one lacks.
+    let stale = |dir: &Path, only: Option<&str>| -> io::Result<()> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Ok(());
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if entry.file_type()?.is_symlink()
+                && only.is_none_or(|name| entry.file_name() == name)
+                && !wanted.iter().any(|(link, _)| *link == path)
+            {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        Ok(())
+    };
+    stale(cwd, Some(".mcp.json"))?;
+    stale(&dot_claude, None)?;
+    if wanted.iter().any(|(link, _)| link.starts_with(&dot_claude)) {
+        std::fs::create_dir_all(&dot_claude)?;
+    }
+    for (link, target) in wanted {
+        match std::fs::symlink_metadata(&link) {
+            Ok(meta) if !meta.file_type().is_symlink() => continue,
+            Ok(_) if std::fs::read_link(&link)? == target => continue,
+            _ => {}
+        }
+        let name = link.file_name().unwrap_or_default().to_string_lossy();
+        let temp = link.with_file_name(format!(".{name}.{}.link", std::process::id()));
+        let _ = std::fs::remove_file(&temp);
+        std::os::unix::fs::symlink(&target, &temp)?;
+        std::fs::rename(&temp, &link)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(super) fn link_project(_cwd: &Path, _project: &Path) -> io::Result<()> {
+    Ok(())
+}
+
 /// Our live CLIs per working directory, and the outermost staging directory one of them
 /// created there.
 static LIVE: Mutex<BTreeMap<PathBuf, Live>> = Mutex::new(BTreeMap::new());
@@ -662,5 +747,105 @@ mod staging_tests {
         drop(cli_started(&kept, None));
         assert!(staging.is_dir());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod link_tests {
+    use super::*;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// A session's folder gets links to the project's `.mcp.json` and `.claude` entries, the
+    /// user's local settings from their own checkout, and never the instruction files; moving
+    /// to another checkout replaces them, and a file of Claude's own there is left alone.
+    #[test]
+    fn a_sessions_folder_links_the_projects_own_setup() {
+        let root = std::env::temp_dir().join(format!("brigadier-link-{}", uuid::Uuid::new_v4()));
+        let (main, worktree, cwd) = (root.join("main"), root.join("wt"), root.join("orch"));
+        std::fs::create_dir_all(main.join(".claude/hooks")).unwrap();
+        std::fs::create_dir_all(main.join(".claude/rules")).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        for (path, text) in [
+            (".mcp.json", r#"{"mcpServers":{}}"#),
+            (".claude/settings.json", "{}"),
+            (".claude/hooks/check.sh", "true"),
+            (".claude/CLAUDE.md", "rules"),
+            (".claude/rules/style.md", "style"),
+        ] {
+            std::fs::write(main.join(path), text).unwrap();
+        }
+        git(&main, &["init", "-q"]);
+        git(&main, &["add", "-A"]);
+        git(
+            &main,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "init",
+            ],
+        );
+        // Gitignored in real projects: only the user's own checkout has it.
+        std::fs::write(main.join(".claude/settings.local.json"), "{}").unwrap();
+        git(&main, &["worktree", "add", "-q", wt(&worktree)]);
+
+        link_project(&cwd, &worktree).unwrap();
+        let target = |link: &str| std::fs::read_link(cwd.join(link)).ok();
+        assert_eq!(target(".mcp.json"), Some(worktree.join(".mcp.json")));
+        assert_eq!(
+            target(".claude/settings.json"),
+            Some(worktree.join(".claude/settings.json"))
+        );
+        assert_eq!(
+            target(".claude/hooks"),
+            Some(worktree.join(".claude/hooks"))
+        );
+        assert_eq!(
+            target(".claude/settings.local.json"),
+            Some(
+                main.canonicalize()
+                    .unwrap()
+                    .join(".claude/settings.local.json")
+            )
+        );
+        assert!(!cwd.join(".claude/CLAUDE.md").exists(), "the prompt has it");
+        assert!(!cwd.join(".claude/rules").exists(), "the prompt has them");
+        assert!(cwd.join(".claude/hooks/check.sh").is_file());
+
+        // Claude's own file stays; the next checkout's setup replaces the links, and what it
+        // lacks goes.
+        std::fs::create_dir_all(cwd.join(".claude/.cc-writes")).unwrap();
+        std::fs::remove_file(worktree.join(".mcp.json")).unwrap();
+        std::fs::remove_dir_all(worktree.join(".claude/hooks")).unwrap();
+        link_project(&cwd, &worktree).unwrap();
+        assert_eq!(target(".mcp.json"), None);
+        assert_eq!(target(".claude/hooks"), None);
+        assert!(cwd.join(".claude/.cc-writes").is_dir());
+        assert_eq!(
+            target(".claude/settings.json"),
+            Some(worktree.join(".claude/settings.json"))
+        );
+        link_project(&cwd, &main).unwrap();
+        assert_eq!(
+            target(".claude/settings.json"),
+            Some(main.join(".claude/settings.json"))
+        );
+        assert_eq!(target(".mcp.json"), Some(main.join(".mcp.json")));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn wt(path: &Path) -> &str {
+        path.to_str().unwrap()
     }
 }

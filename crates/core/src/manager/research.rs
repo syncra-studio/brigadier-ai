@@ -253,6 +253,7 @@ impl SessionManager {
             tools: ToolSet::Web,
             skill_plugins: Vec::new(),
             add_dirs: Vec::new(),
+            project: None,
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,

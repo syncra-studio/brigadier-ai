@@ -1918,6 +1918,12 @@ impl SessionManager {
                 (Some(_), Some(worktree)) => vec![worktree.clone()],
                 _ => Vec::new(),
             },
+            // The project's own setup (its hooks, MCP servers, skills), in a folder the user
+            // trusts.
+            project: workspace
+                .worktree
+                .clone()
+                .filter(|_| self.repo_trust(&conversation_id) == Some(true)),
             env,
             unset_env: Vec::new(),
             low_priority: true,

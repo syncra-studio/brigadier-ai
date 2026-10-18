@@ -122,6 +122,7 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
         }],
         tools: ToolSet::Lean,
         add_dirs: Vec::new(),
+        project: None,
         skill_plugins: Vec::new(),
         env: Vec::new(),
         unset_env: Vec::new(),

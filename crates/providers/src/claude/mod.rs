@@ -20,14 +20,26 @@
 //! (`acceptEdits`) leaving the sandbox asks Brigadier. A read-only session (`dontAsk`) never
 //! asks: what its allow rules don't cover is denied.
 //!
-//! Sessions load only the project's settings plus Brigadier's own (`--setting-sources
-//! project`, `--settings`), so the user's personal hooks, plugins and allow rules never apply,
-//! and only Brigadier's MCP servers (`--strict-mcp-config`).
+//! Threads and workers ([`ToolSet::user_setup`]) run with the user's own Claude setup: their
+//! settings, the project's and their local ones (`--setting-sources user,project,local`), so
+//! their hooks, plugins, skills, allow rules, `CLAUDE.md` and MCP servers apply; skills come as
+//! descriptions until used and MCP tools behind Claude's tool search. Claude reads a project's
+//! setup from its working folder only, and these sessions work from a folder of Brigadier's (a
+//! stable one, which a resume and the cached start of a session's workers need), so the
+//! project's `.mcp.json` and `.claude` entries are linked there ([`files::link_project`]) for a
+//! folder the user trusts ([`SessionSpec::project`]); the instruction files are left out, as
+//! the session's prompt carries them. Brigadier's own `--settings` win over all of these
+//! (permission prompt tool, sandbox, ask and deny rules, the model allowlist). A hook of the
+//! user's that answers a permission request answers it before Brigadier is asked: their own
+//! rule, as in their terminal; the sandbox and deny rules still hold. Every other session
+//! (reviewers, Brain jobs, Chats, one-shot runs) loads only the project's settings plus
+//! Brigadier's own (`--setting-sources project`), and only Brigadier's MCP servers
+//! (`--strict-mcp-config`).
 //!
 //! A worker's sub-agents run only on the models its task may use ([`SessionSpec::allowed_models`]):
 //! `availableModels` in its settings lists their exact ids, and when Claude's prefix matching
-//! would let another model in too, or the project's own settings could widen the list, the
-//! worker runs without its Agent tool ([`sub_agents`]).
+//! would let another model in too, or the project's or the user's own settings could widen
+//! the list, the worker runs without its Agent tool ([`sub_agents`]).
 
 pub(crate) mod files;
 pub mod parse;
@@ -245,12 +257,14 @@ impl Claude {
     }
 
     /// `home_login`: an extra account's session, which must sign in with its home's login
-    /// only ([`settings`]).
+    /// only ([`settings`]). `user_config`: Claude's configuration directory, whose settings a
+    /// session with the user's setup loads.
     fn session_args(
         spec: &SessionSpec,
         cwd: &Path,
         native_id: &str,
         home_login: bool,
+        user_config: Option<&Path>,
     ) -> Result<Vec<String>> {
         let mut args = Self::stream_args();
         args.extend(
@@ -263,7 +277,7 @@ impl Claude {
             ]
             .map(str::to_owned),
         );
-        args.extend(Self::session_flags(spec, cwd, home_login));
+        args.extend(Self::session_flags(spec, cwd, home_login, user_config));
         if let Some(prompt) = &spec.append_system_prompt {
             args.push("--append-system-prompt".into());
             args.push(prompt.clone());
@@ -292,19 +306,32 @@ impl Claude {
 
     /// The session's flags that hold in print mode and in an interactive terminal alike (none
     /// of them is stored in the transcript, so a resume repeats them all).
-    fn session_flags(spec: &SessionSpec, cwd: &Path, home_login: bool) -> Vec<String> {
+    fn session_flags(
+        spec: &SessionSpec,
+        cwd: &Path,
+        home_login: bool,
+        user_config: Option<&Path>,
+    ) -> Vec<String> {
         // Its extra folders are writable wherever its working directory is.
         let spec = &SessionSpec {
             access: spec.access_with_dirs(),
             ..spec.clone()
         };
-        let mut args: Vec<String> = ["--strict-mcp-config", "--setting-sources", "project"]
-            .map(str::to_owned)
-            .to_vec();
+        // A thread or a worker loads the user's settings, the project's and their local ones,
+        // with their MCP servers beside Brigadier's; `--settings` wins over all of them. Every
+        // other session loads only the project's, and only Brigadier's servers.
+        let user_setup = spec.tools.user_setup();
+        let mut args: Vec<String> = if user_setup {
+            vec!["--setting-sources".into(), "user,project,local".into()]
+        } else {
+            ["--strict-mcp-config", "--setting-sources", "project"]
+                .map(str::to_owned)
+                .to_vec()
+        };
         args.push("--mcp-config".into());
         args.push(mcp_config(&spec.mcp_servers).to_string());
         // Decided once, for both the tools and the settings.
-        let sub_agents = sub_agents(spec, cwd);
+        let sub_agents = sub_agents(spec, cwd, user_config.filter(|_| user_setup));
         if let Some(denied) = denied_tools(spec, &sub_agents) {
             args.push("--disallowedTools".into());
             args.push(denied);
@@ -464,12 +491,14 @@ enum SubAgents {
 }
 
 /// How `spec`'s sub-agents are held to [`SessionSpec::allowed_models`], for a session in
-/// `cwd`.
-fn sub_agents(spec: &SessionSpec, cwd: &Path) -> SubAgents {
+/// `cwd` that loads the user's settings from `user_config` too, when given.
+fn sub_agents(spec: &SessionSpec, cwd: &Path, user_config: Option<&Path>) -> SubAgents {
     let Some(allowed) = &spec.allowed_models else {
         return SubAgents::Any;
     };
-    if project_widens_models(cwd) {
+    if project_widens_models(cwd)
+        || user_config.is_some_and(|dir| file_widens_models(&dir.join("settings.json")))
+    {
         return SubAgents::Off;
     }
     available_models(allowed).map_or(SubAgents::Off, SubAgents::Only)
@@ -498,14 +527,20 @@ fn denied_tools(spec: &SessionSpec, sub_agents: &SubAgents) -> Option<String> {
 /// sub-agent run on a model the task may not use. A file that can't be read counts too.
 fn project_widens_models(cwd: &Path) -> bool {
     project_dirs(cwd).iter().any(|dir| {
-        ["settings.json", "settings.local.json"].iter().any(|name| {
-            match std::fs::read_to_string(dir.join(".claude").join(name)) {
-                Ok(text) => serde_json::from_str::<Value>(&text)
-                    .map_or(true, |settings| widens_models(&settings)),
-                Err(err) => err.kind() != std::io::ErrorKind::NotFound,
-            }
-        })
+        ["settings.json", "settings.local.json"]
+            .iter()
+            .any(|name| file_widens_models(&dir.join(".claude").join(name)))
     })
+}
+
+/// Whether a settings file names models ([`widens_models`]); one that can't be read counts.
+fn file_widens_models(path: &Path) -> bool {
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            serde_json::from_str::<Value>(&text).map_or(true, |settings| widens_models(&settings))
+        }
+        Err(err) => err.kind() != std::io::ErrorKind::NotFound,
+    }
 }
 
 /// Whether a settings file's content names models.
@@ -792,6 +827,10 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
     // into a hand-off or a rebirth (BUILD-PLAN D2.3, D2.3b).
     if !spec.auto_compact {
         settings["hooks"]["PreCompact"] = refuse_compaction_hook();
+    }
+    // The user's `disableAllHooks` would switch Brigadier's own hooks off with theirs.
+    if spec.tools.user_setup() && settings.get("hooks").is_some() {
+        settings["disableAllHooks"] = json!(false);
     }
     // In auto mode Claude's classifier settles a command that leaves the sandbox: it refuses
     // what the protection keeps out, whatever the user said. `hard_deny` rules block whatever
@@ -1115,7 +1154,14 @@ impl Provider for Claude {
                     "no saved Claude session {native_id} to resume"
                 )));
             }
-            let mut args = Self::session_args(&spec, &cwd, &native_id, self.main_config.is_some())?;
+            let user_config = self.config_dir();
+            let mut args = Self::session_args(
+                &spec,
+                &cwd,
+                &native_id,
+                self.main_config.is_some(),
+                user_config.as_deref(),
+            )?;
             let cli_version = self.version().await;
             // The CLI's own next-message guess: after each turn, one small request on the
             // conversation's warm cache, emitted as a `prompt_suggestion` message.
@@ -1124,6 +1170,16 @@ impl Provider for Claude {
                 args.push("--prompt-suggestions".into());
             }
 
+            // The project's own setup, where Claude looks for it: before its staging folders
+            // are recorded, so the `.claude` folder holding the links is never taken for one.
+            if spec.tools.user_setup()
+                && spec.owned_cwd
+                && let Some(project) = &spec.project
+                && project.canonicalize().ok().as_ref() != Some(&cwd)
+                && let Err(err) = files::link_project(&cwd, project)
+            {
+                tracing::warn!(error = %err, "could not link the project's Claude setup");
+            }
             // Recorded before the CLI can create them.
             if let Some(config) = self.history_dir() {
                 let project = files::project_dir(&config, &cwd);
@@ -1313,7 +1369,13 @@ impl Provider for Claude {
             // `--input-format`, `--include-partial-messages` and `--replay-user-messages`).
             // Its instructions are in the session record (`--system-prompt-snapshot`, on by
             // default), so `--append-system-prompt` isn't repeated.
-            let mut args = Self::session_flags(&spec, &cwd, self.main_config.is_some());
+            let user_config = self.config_dir();
+            let mut args = Self::session_flags(
+                &spec,
+                &cwd,
+                self.main_config.is_some(),
+                user_config.as_deref(),
+            );
             args.push("--resume".into());
             args.push(native_id.clone());
             let mut process = self.env.spec(&program);
@@ -2146,6 +2208,130 @@ for line in sys.stdin:
         assert!(refused.len() >= 3, "each call refused: {refused:?}");
     }
 
+    /// Item 8 of the day-one hardening, live: a thread working from a folder of Brigadier's
+    /// runs the project's own `SessionStart` hook and calls the project's own MCP server (from
+    /// its `.mcp.json`, found behind tool search), both linked from the project's checkout.
+    /// `BRIGADIER_LIVE_CLAUDE=1 cargo test -p brigadier-providers --lib -- --ignored
+    /// live_a_thread_loads`.
+    #[tokio::test]
+    #[ignore = "runs the real Claude CLI"]
+    async fn live_a_thread_loads_the_projects_own_hook_and_mcp_server() {
+        if std::env::var_os("BRIGADIER_LIVE_CLAUDE").is_none() {
+            return;
+        }
+        struct Kept(std::sync::Mutex<Vec<Artifact>>);
+        impl Ledger for Kept {
+            fn record(&self, artifact: Artifact) -> BoxFuture<'_, Result<()>> {
+                self.0.lock().unwrap().push(artifact);
+                Box::pin(async { Ok(()) })
+            }
+            fn holds(&self, _: &Artifact) -> bool {
+                false
+            }
+        }
+        let temp = Temp::new();
+        let project = temp.path().to_path_buf();
+        let root = project.parent().unwrap().to_path_buf();
+        let (cwd, hook_marker, mcp_marker) = (
+            root.join("orch"),
+            root.join("hook-marker"),
+            root.join("mcp-marker"),
+        );
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        let server = root.join("probe_server.py");
+        std::fs::write(
+            &server,
+            format!(
+                r#"import json, sys
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    method, result = msg.get("method"), {{}}
+    if method == "initialize":
+        result = {{"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {{"tools": {{}}}}, "serverInfo": {{"name": "probe", "version": "1"}}}}
+    elif method == "tools/list":
+        result = {{"tools": [{{"name": "touch_marker", "description": "Writes the marker file.", "inputSchema": {{"type": "object", "properties": {{}}}}}}]}}
+    elif method == "tools/call":
+        open({marker:?}, "w").write("called")
+        result = {{"content": [{{"type": "text", "text": "marker written"}}]}}
+    print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": result}}), flush=True)
+"#,
+                marker = mcp_marker.display().to_string()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            project.join(".mcp.json"),
+            json!({ "mcpServers": { "probe": { "command": "python3", "args": ["-I", server] } } })
+                .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            project.join(".claude/settings.json"),
+            json!({ "hooks": { "SessionStart": [{ "hooks": [{
+                "type": "command",
+                "command": format!("echo started >> {}", hook_marker.display()),
+            }] }] } })
+            .to_string(),
+        )
+        .unwrap();
+        let spec = SessionSpec {
+            ephemeral: true,
+            access: Access::Full,
+            tools: ToolSet::Thread,
+            allowed_models: None,
+            model: Some("claude-haiku-5-5".into()),
+            owned_cwd: true,
+            project: Some(project.clone()),
+            suggestions: false,
+            ..spec(&cwd, &[])
+        };
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(root.join("data")),
+        })
+        .unwrap();
+        let env = Arc::new(CliEnv::capture(&platform));
+        let claude = Claude::new(platform, env);
+        let kept = Arc::new(Kept(Default::default()));
+        let Started {
+            session,
+            mut events,
+        } = claude
+            .start(spec, kept.clone())
+            .await
+            .expect("claude started");
+        session
+            .send(TurnInput::text(
+                "This is a test of the project's MCP server. Find the tool \
+                 mcp__probe__touch_marker with your tool search, call it once, then say done.",
+            ))
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        let turn = async {
+            while let Some(event) = events.recv().await {
+                seen.push(format!("{event:?}"));
+                if matches!(
+                    event,
+                    ProviderEvent::TurnCompleted { .. } | ProviderEvent::Exited { .. }
+                ) {
+                    break;
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(300), turn)
+            .await
+            .expect("the turn ended");
+        session.close().await;
+        let artifacts = kept.0.lock().unwrap().clone();
+        let _ = claude.remove(artifacts).await;
+        eprintln!("{}", seen.join("\n"));
+        assert!(hook_marker.is_file(), "the project's hook ran");
+        assert!(mcp_marker.is_file(), "the project's MCP server was called");
+    }
+
     /// A fresh folder, removed after the test.
     struct Temp(PathBuf);
 
@@ -2268,6 +2454,7 @@ for line in sys.stdin:
             cwd.path(),
             "00000000-0000-4000-8000-000000000000",
             true,
+            None,
         )
         .unwrap();
         let flag = &args[args.iter().position(|arg| arg == "--settings").unwrap() + 1];
@@ -2304,6 +2491,7 @@ for line in sys.stdin:
             tools: ToolSet::Lean,
             skill_plugins: Vec::new(),
             add_dirs: Vec::new(),
+            project: None,
             env: Vec::new(),
             unset_env: Vec::new(),
             low_priority: false,
@@ -2358,7 +2546,7 @@ for line in sys.stdin:
                 ToolSet::Reader,
             ] {
                 spec.tools = tools;
-                let args = Claude::session_args(&spec, dir.path(), native_id, false).unwrap();
+                let args = Claude::session_args(&spec, dir.path(), native_id, false, None).unwrap();
                 assert_thinking_args(&args);
                 assert!(args.iter().any(|arg| arg == "--include-partial-messages"));
             }
@@ -2473,7 +2661,7 @@ for line in sys.stdin:
             ..spec(cwd.path(), &["claude-opus-5-5"])
         };
         let native_id = "00000000-0000-4000-8000-000000000000";
-        let args = Claude::session_args(&review, cwd.path(), native_id, false).expect("args");
+        let args = Claude::session_args(&review, cwd.path(), native_id, false, None).expect("args");
         let after = |flag: &str| {
             args.windows(2)
                 .find(|pair| pair[0] == flag)
@@ -2487,7 +2675,7 @@ for line in sys.stdin:
         assert_eq!(after("--permission-mode").as_deref(), Some("dontAsk"));
         // Other sessions get no allow list on the command line.
         let worker = spec(cwd.path(), &["claude-opus-5-5"]);
-        let args = Claude::session_args(&worker, cwd.path(), native_id, false).expect("args");
+        let args = Claude::session_args(&worker, cwd.path(), native_id, false, None).expect("args");
         assert!(!args.iter().any(|arg| arg == "--allowedTools"));
     }
 
@@ -2519,7 +2707,8 @@ for line in sys.stdin:
             (scoped, false, "acceptEdits"),
         ] {
             let spec = thread(access.clone(), auto_review);
-            let args = Claude::session_args(&spec, cwd.path(), native_id, false).expect("args");
+            let args =
+                Claude::session_args(&spec, cwd.path(), native_id, false, None).expect("args");
             let after = |flag: &str| {
                 args.windows(2)
                     .find(|pair| pair[0] == flag)
@@ -2601,6 +2790,7 @@ for line in sys.stdin:
             cwd.path(),
             "00000000-0000-4000-8000-000000000000",
             false,
+            None,
         )
         .expect("args");
         let added: Vec<&String> = args
@@ -2707,6 +2897,7 @@ for line in sys.stdin:
             cwd.path(),
             "00000000-0000-4000-8000-000000000000",
             false,
+            None,
         )
         .expect("args");
         assert!(!args.iter().any(|arg| arg.contains("brg_secret")));
@@ -2833,6 +3024,7 @@ for line in sys.stdin:
                 cwd.path(),
                 "00000000-0000-4000-8000-000000000000",
                 false,
+                None,
             )
             .expect("args");
             let at = args
@@ -3062,7 +3254,7 @@ for line in sys.stdin:
             tools: ToolSet::Reader,
             ..spec(cwd.path(), &[])
         };
-        let args = Claude::session_args(&session, cwd.path(), "n", false).unwrap();
+        let args = Claude::session_args(&session, cwd.path(), "n", false, None).unwrap();
         let tools = args
             .iter()
             .position(|arg| arg == "--tools")
@@ -3076,7 +3268,7 @@ for line in sys.stdin:
             tools: ToolSet::Lean,
             ..spec(cwd.path(), &[])
         };
-        let args = Claude::session_args(&worker, cwd.path(), "n", false).unwrap();
+        let args = Claude::session_args(&worker, cwd.path(), "n", false, None).unwrap();
         assert!(
             !args
                 .iter()
@@ -3151,7 +3343,7 @@ for line in sys.stdin:
         let cwd = Temp::new();
         let cwd = cwd.path();
         let held = spec(cwd, &["claude-sonnet-5"]);
-        let models = sub_agents(&held, cwd);
+        let models = sub_agents(&held, cwd, None);
         assert_eq!(models, SubAgents::Only(vec!["claude-sonnet-5".to_owned()]));
         assert_eq!(
             settings(&held, cwd, &models, false)["availableModels"],
@@ -3162,7 +3354,7 @@ for line in sys.stdin:
             Some(LEAN_DENIED_TOOLS)
         );
         let leaky = spec(cwd, &["claude-opus-5"]);
-        let models = sub_agents(&leaky, cwd);
+        let models = sub_agents(&leaky, cwd, None);
         assert_eq!(models, SubAgents::Off);
         assert!(
             settings(&leaky, cwd, &models, false)
@@ -3178,7 +3370,7 @@ for line in sys.stdin:
             tools: ToolSet::Default,
             ..spec(cwd, &[])
         };
-        assert_eq!(sub_agents(&unlimited, cwd), SubAgents::Any);
+        assert_eq!(sub_agents(&unlimited, cwd, None), SubAgents::Any);
         assert_eq!(denied_tools(&unlimited, &SubAgents::Any), None);
     }
 
@@ -3188,7 +3380,7 @@ for line in sys.stdin:
             std::fs::create_dir_all(dir.join(".claude")).expect("folder");
             std::fs::write(dir.join(".claude").join(name), text).expect("settings");
         };
-        let held = |cwd: &Path| sub_agents(&spec(cwd, &["claude-sonnet-5"]), cwd);
+        let held = |cwd: &Path| sub_agents(&spec(cwd, &["claude-sonnet-5"]), cwd, None);
         // Settings that leave models alone change nothing.
         let repo = Temp::new();
         let repo = repo.path();
@@ -3276,6 +3468,118 @@ for line in sys.stdin:
         assert!(
             settings(&chat, cwd.path(), &SubAgents::Any, false)["hooks"]
                 .get("PreCompact")
+                .is_none()
+        );
+    }
+
+    /// A thread and a worker load the user's settings, the project's and their local ones, and
+    /// their MCP servers beside Brigadier's; every other role keeps the sealed setup.
+    #[test]
+    fn threads_and_workers_run_with_the_users_own_setup() {
+        let cwd = Temp::new();
+        let flag = |args: &[String], name: &str| {
+            args.iter()
+                .position(|arg| arg == name)
+                .map(|at| args[at + 1].clone())
+        };
+        for tools in [ToolSet::Thread, ToolSet::Lean] {
+            let session = SessionSpec {
+                tools,
+                ..spec(cwd.path(), &[])
+            };
+            let args = Claude::session_args(&session, cwd.path(), "n", false, None).unwrap();
+            assert_eq!(
+                flag(&args, "--setting-sources").as_deref(),
+                Some("user,project,local"),
+                "{tools:?}"
+            );
+            assert!(
+                !args.contains(&"--strict-mcp-config".to_owned()),
+                "{tools:?}"
+            );
+            assert!(
+                flag(&args, "--mcp-config").is_some(),
+                "Brigadier's servers too"
+            );
+        }
+        for tools in [
+            ToolSet::Default,
+            ToolSet::None,
+            ToolSet::Web,
+            ToolSet::Review,
+            ToolSet::Reader,
+        ] {
+            let session = SessionSpec {
+                tools,
+                ..spec(cwd.path(), &[])
+            };
+            let args = Claude::session_args(&session, cwd.path(), "n", false, None).unwrap();
+            assert_eq!(
+                flag(&args, "--setting-sources").as_deref(),
+                Some("project"),
+                "{tools:?}"
+            );
+            assert!(
+                args.contains(&"--strict-mcp-config".to_owned()),
+                "{tools:?}"
+            );
+        }
+    }
+
+    /// The user's own settings can widen the models a worker's sub-agents may use (Claude joins
+    /// the lists of all the settings it loads): a worker then runs without its Agent tool. A
+    /// reviewer, which doesn't load them, is unaffected.
+    #[test]
+    fn user_settings_that_name_models_turn_a_workers_sub_agents_off() {
+        let cwd = Temp::new();
+        let config = cwd.path().parent().unwrap().join("config");
+        std::fs::create_dir_all(&config).unwrap();
+        let worker = spec(cwd.path(), &["claude-sonnet-5"]);
+        let models = |text: &str, spec: &SessionSpec| {
+            std::fs::write(config.join("settings.json"), text).unwrap();
+            let args = Claude::session_args(spec, cwd.path(), "n", false, Some(&config)).unwrap();
+            args.windows(2)
+                .find(|pair| pair[0] == "--disallowedTools")
+                .is_some_and(|pair| pair[1].contains(SUB_AGENT_TOOLS))
+        };
+        assert!(!models(r#"{"permissions": {"allow": ["Bash"]}}"#, &worker));
+        assert!(models(
+            r#"{"availableModels": ["claude-fable-5-1"]}"#,
+            &worker
+        ));
+        assert!(models(
+            r#"{"env": {"CLAUDE_CODE_SUBAGENT_MODEL": "x"}}"#,
+            &worker
+        ));
+        let reviewer = SessionSpec {
+            tools: ToolSet::Review,
+            ..worker.clone()
+        };
+        assert!(!models(
+            r#"{"availableModels": ["claude-fable-5-1"]}"#,
+            &reviewer
+        ));
+    }
+
+    /// The user's `disableAllHooks` can't switch Brigadier's own hooks off in a session that
+    /// loads their settings.
+    #[test]
+    fn brigadier_hooks_stay_on_under_the_users_settings() {
+        let cwd = Temp::new();
+        let worker = SessionSpec {
+            auto_compact: false,
+            ..spec(cwd.path(), &[])
+        };
+        let models = sub_agents(&worker, cwd.path(), None);
+        let on = settings(&worker, cwd.path(), &models, false);
+        assert_eq!(on["disableAllHooks"], json!(false));
+        let reviewer = SessionSpec {
+            tools: ToolSet::Review,
+            ..worker
+        };
+        assert!(
+            settings(&reviewer, cwd.path(), &models, false)
+                .get("disableAllHooks")
                 .is_none()
         );
     }

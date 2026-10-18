@@ -3381,6 +3381,16 @@ impl SessionManager {
                 .map(|workspace| vec![workspace.path.clone()])
                 .or_else(|| tab_checkout.clone().map(|checkout| vec![checkout]))
                 .unwrap_or_default(),
+            // A thread runs with the project's own setup (its hooks, MCP servers, skills) when
+            // the user trusts the folder.
+            project: launch
+                .as_ref()
+                .and_then(|launch| launch.workspace.as_ref())
+                .filter(|_| {
+                    conv.kind == ConversationKind::Session
+                        && self.repo_trust(&conv.id) == Some(true)
+                })
+                .map(|workspace| workspace.path.clone()),
             env: tmp
                 .as_deref()
                 .map(|tmp| SessionManager::thread_env(tmp, choice.provider))

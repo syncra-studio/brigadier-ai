@@ -1150,6 +1150,17 @@ pub enum ToolSet {
     Reader,
 }
 
+impl ToolSet {
+    /// A thread or a worker: it runs with the user's own CLI setup (their settings, hooks,
+    /// plugins, skills, MCP servers and instructions; Claude also the project's, through
+    /// [`SessionSpec::project`]), Brigadier's own rules on top. Every other role (reviewers,
+    /// Brain jobs, Chats, one-shot runs, control connections) keeps a sealed setup.
+    #[must_use]
+    pub fn user_setup(self) -> bool {
+        matches!(self, Self::Thread | Self::Lean)
+    }
+}
+
 /// An MCP server a session gets, launched by the CLI over stdio.
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpServer {
@@ -1202,12 +1213,18 @@ pub struct SessionSpec {
     pub access: Access,
     /// Appended to the CLI's own system prompt.
     pub append_system_prompt: Option<String>,
-    /// MCP servers for the session. Only these are loaded.
+    /// Brigadier's MCP servers for the session; with the user's setup
+    /// ([`ToolSet::user_setup`]) theirs load too, else only these.
     pub mcp_servers: Vec<McpServer>,
     pub tools: ToolSet,
     /// Folders besides `cwd` the session works in (a thread's workspace): Claude gets each as
     /// `--add-dir`. They are writable where the working directory is ([`Self::access_with_dirs`]).
     pub add_dirs: Vec<PathBuf>,
+    /// The checkout whose own project setup a thread or worker loads although it works from a
+    /// folder of Brigadier's ([`ToolSet::user_setup`]): Claude's `.claude` settings, hooks,
+    /// skills and agents and its `.mcp.json` are linked into `cwd`, where Claude looks for them.
+    /// Set only for a folder the user trusts; `None`: none is loaded.
+    pub project: Option<PathBuf>,
     /// Brigadier-owned skill plugins: each folder holds `skills/<name>/SKILL.md` (and a
     /// `.claude-plugin/plugin.json`). Claude loads each with `--plugin-dir`; Codex adds each
     /// one's `skills` folder as an extra skills root. The user's own skills are unaffected.

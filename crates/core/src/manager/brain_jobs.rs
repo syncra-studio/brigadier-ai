@@ -558,6 +558,7 @@ impl SessionManager {
             tools: ToolSet::Reader,
             skill_plugins: Vec::new(),
             add_dirs: Vec::new(),
+            project: None,
             env: vec![("TMPDIR".into(), scratch.to_string_lossy().into_owned())],
             unset_env: Vec::new(),
             low_priority: false,
