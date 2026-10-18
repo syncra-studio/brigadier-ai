@@ -329,7 +329,7 @@ function StartSessionForm() {
             aria-label="Access"
           >
             <ToggleGroupItem value="workspace" className="text-xs">
-              Workspace
+              Edit its folder
             </ToggleGroupItem>
             <ToggleGroupItem value="readOnly" className="text-xs">
               Read-only

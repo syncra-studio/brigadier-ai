@@ -20,7 +20,7 @@ test("approval cards show safe session scopes, dispatch decisions, send a peer m
   for (const [id, label] of [
     ["command", "Allow git push for this session"],
     ["network", "Allow example.com for this session"],
-    ["files", "Allow workspace edits for this session"],
+    ["files", "Allow edits in this folder for this session"],
   ]) assert.deepEqual(seen.buttons[id!], ["DenyEsc", label, "Allow once"]);
   for (const id of ["outside", "permissions", "tool", "unscoped-command"]) {
     assert.deepEqual(seen.buttons[id], ["DenyEsc", "Allow once"]);

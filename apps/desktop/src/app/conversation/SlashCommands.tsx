@@ -168,7 +168,7 @@ export const SlashCommands: FC<{
         description:
           conversation.kind === "chat"
             ? "Fork this chat from its latest answer"
-            : "Fork this session in the current workspace or a new worktree",
+            : "Fork this session in the same folder or a new worktree",
         icon: <BranchAlt />,
         run: () =>
           conversation.kind === "chat"

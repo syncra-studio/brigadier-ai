@@ -17,8 +17,8 @@ import { forkConversation } from "@/state/actions";
 export const FORK_PLACES: readonly { place: ForkPlace; title: string; detail: string }[] = [
   {
     place: "workspace",
-    title: "Fork in this workspace",
-    detail: "Fork from this message in the current workspace",
+    title: "Fork in the same folder",
+    detail: "Fork from this message in this session’s folder",
   },
   {
     place: "newWorktree",

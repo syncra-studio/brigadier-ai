@@ -136,7 +136,7 @@ export function TaskDetails({
       <RouteSections task={task} model={model} groups={groups} inThread={detailsPage ? false : inThread} />
 
       {(workspace || subject !== null) && (
-        <Section title="Workspace">
+        <Section title="Where it works">
           {subject !== null && (
             <p className="flex min-w-0 items-center gap-1.5 text-xs">
               <span className="shrink-0">{task.kind === "review" ? "Reviews" : "Works on"}</span>
