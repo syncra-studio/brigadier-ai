@@ -1261,6 +1261,13 @@ impl ConvLive {
         self.state.lock().await.outcomes.contains_key(request)
     }
 
+    /// Whether no turn runs and nothing waits for one.
+    #[cfg(test)]
+    pub(super) async fn idle(&self) -> bool {
+        let state = self.state.lock().await;
+        !state.busy && state.inbox.is_empty() && state.pending.is_empty()
+    }
+
     /// What the driver holds for each request right now.
     pub(super) async fn request_activity(&self) -> RequestActivity {
         let state = self.state.lock().await;

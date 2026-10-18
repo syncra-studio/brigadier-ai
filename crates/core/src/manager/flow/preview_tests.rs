@@ -350,7 +350,7 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
             .any(|input| input.contains("[preview ended: exit 4]"))
     })
     .await;
-    flow.settled().await;
+    flow.idle().await;
     let ended = inputs
         .lock()
         .unwrap()

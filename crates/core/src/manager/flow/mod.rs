@@ -1896,6 +1896,24 @@ impl Flow {
         .await
     }
 
+    /// Waits until the requests are over and the thread's turn too: a report's turn for a
+    /// request that already ended shows nothing working on the board while it runs.
+    pub async fn idle(&self) -> Board {
+        let deadline = tokio::time::Instant::now() + *PATIENCE;
+        loop {
+            let board = self.settled().await;
+            let conv = self.manager.conv(&self.conversation).unwrap();
+            if conv.idle().await {
+                return board;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for the thread's turn to end"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     /// The conversation's stored events, oldest first.
     pub async fn events(&self) -> Vec<DomainEvent> {
         self.events_of(&self.conversation).await
