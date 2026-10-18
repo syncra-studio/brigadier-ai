@@ -2,14 +2,17 @@
  * The sidebar's workspace rows over a faked daemon (WORKSPACES-PLAN.md "States"): one row per
  * workspace under its project, with the strongest state of its tabs and how many share it, the
  * workspace's title when it has several tabs and the tab's own when it has one, archived tabs
- * left out, and a click that opens the tab had open last. Writes what it saw to
- * #workspaces-result (WorkspacesRender.test.ts reads it).
+ * left out, and a click that opens the tab had open last. `close=1` adds the open tab's bar:
+ * closing a working session's tab stops nothing and a click on its row opens it again. Writes
+ * what it saw to #workspaces-result (WorkspacesRender.test.ts reads it).
  */
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AppSidebar, AppStrip } from "@/app/AppSidebar";
+import { SessionTabBar } from "@/app/conversation/SessionTabBar";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, EventEnvelope, Project, Request, Workspace } from "@/ipc/generated";
@@ -18,9 +21,13 @@ import { useLastOpened } from "@/state/lastOpened";
 import { useApp } from "@/state/store";
 import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
 
+const params = new URLSearchParams(location.search);
+const requests: string[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
-  return { method: (payload as { request: Request }).request.method };
+  const { method } = (payload as { request: Request }).request;
+  requests.push(method);
+  return { method };
 });
 
 const project = "p-1";
@@ -87,9 +94,56 @@ const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~
     };
   });
 
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const until = async (check: () => boolean) => { for (let n = 0; n < 200 && !check(); n++) await wait(20); };
+const rowButton = (title: string) => [...document.querySelectorAll<HTMLButtonElement>("li li button")].find((button) => button.textContent?.includes(title));
+const rowStatus = (title: string) => rows().find((row) => row.title === title)?.status ?? null;
+
+const close = () => document.querySelector<HTMLButtonElement>('[data-slot="session-tabs"] button[aria-label="Close Lone worker tab"]');
+
+/** Opens the lone working session, closes its tab with ×, then opens it again from its row. */
+async function closeAndReopen() {
+  const seen: Record<string, unknown> = {};
+  await until(() => rowButton("Lone worker") !== undefined);
+  rowButton("Lone worker")!.click();
+  await until(() => close() !== null);
+  seen.opened = useApp.getState().selection;
+  seen.statusBefore = rowStatus("Lone worker");
+  requests.length = 0;
+  close()!.click();
+  await until(() => useApp.getState().selection.type !== "conversation");
+  await wait(100);
+  seen.afterClose = useApp.getState().selection;
+  seen.requestsOnClose = [...requests];
+  seen.statusAfter = rowStatus("Lone worker");
+  seen.barAfter = document.querySelector('[data-slot="session-tabs"]') !== null;
+  rowButton("Lone worker")!.click();
+  await until(() => close() !== null);
+  seen.reopened = useApp.getState().selection;
+  seen.chatTab = document.querySelector('[data-slot="session-tabs"] [data-tab-id="chat"] [role="tab"]')?.textContent?.trim();
+  return seen;
+}
+
+function OpenBar() {
+  const selection = useApp((s) => s.selection);
+  const conversation = useApp((s) => (selection.type === "conversation" ? s.conversations[selection.id] : undefined));
+  const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
+  if (!conversation) return null;
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <SessionTabBar conversation={conversation} onRename={() => {}} />
+    </AssistantRuntimeProvider>
+  );
+}
+
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
+    if (params.has("close")) {
+      let disposed = false;
+      void closeAndReopen().then((seen) => { if (!disposed) setResult(JSON.stringify(seen)); });
+      return () => { disposed = true; };
+    }
     const timer = setTimeout(() => {
       const seen: Record<string, unknown> = { rows: rows() };
       const header = [...document.querySelectorAll<HTMLButtonElement>("li li button")].find((button) => button.textContent?.includes("Redesigning the header"))!;
@@ -110,7 +164,7 @@ function Fixture() {
             <SidebarPanel strip={<AppStrip />}>
               <AppSidebar />
             </SidebarPanel>
-            <main className="bg-background flex-1" />
+            <main className="bg-background flex-1">{params.has("close") && <OpenBar />}</main>
           </div>
         </SidebarProvider>
       </div>

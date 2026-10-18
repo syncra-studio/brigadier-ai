@@ -22,6 +22,9 @@
 .new-tab-card { display: flex; align-items: center; min-width: 0; border-radius: .625rem; background: var(--new-tab-card); }
 .new-tab-card:hover, .new-tab-card:has([data-state="open"]) { background: var(--toolbar-hover); }
 .new-tab-tool { display: flex; flex: 1; align-items: center; gap: .5rem; width: 100%; min-width: 0; min-height: 2.5rem; padding: .5rem .625rem; border-radius: .625rem; text-align: start; }
+.new-tab-session { margin-bottom: -1rem; }
+.new-tab-session .new-tab-tool { min-height: 3rem; font-weight: 500; }
+.new-tab-session .new-tab-tool > svg { color: var(--foreground); }
 .new-tab-tool:disabled { opacity: .4; }
 .new-tab-tool:focus-visible, .new-tab-site-link:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .new-tab-tool > svg { flex-shrink: 0; width: var(--new-tab-icon); height: var(--new-tab-icon); color: var(--muted-foreground); }

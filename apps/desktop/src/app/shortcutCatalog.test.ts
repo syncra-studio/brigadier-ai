@@ -204,10 +204,10 @@ test("the Browser menu holds the browser's items, which leave with it", () => {
   }
 });
 
-test("⌘T opens a task tab, ⌘⏎ starts one and the follow-up's other way takes ⌥", () => {
+test("⌘T opens a new tab, ⌘⏎ starts a task tab and the follow-up's other way takes ⌥", () => {
   const on = shortcutsFor(true, true);
   const of = (list: typeof on, id: string) => list.find((shortcut) => shortcut.id === id);
-  assert.equal(of(on, "new-tab")?.name, "New task tab");
+  assert.equal(of(on, "new-tab")?.name, "New tab");
   assert.deepEqual(of(on, "new-tab")?.keys, ["⌘T"]);
   assert.deepEqual(of(on, "start-in-tab")?.keys, ["⌘⏎"]);
   assert.deepEqual(of(on, "follow-up-other")?.keys, ["⌥⏎"]);

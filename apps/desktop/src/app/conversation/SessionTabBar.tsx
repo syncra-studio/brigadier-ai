@@ -12,10 +12,7 @@ import {
   useRef,
 } from "react";
 
-import { useShallow } from "zustand/react/shallow";
-
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
-import { Spinner } from "@/components/glyphs/spinner";
 import { TitlebarButton } from "@/components/titlebar-button";
 import { UNTITLED } from "@/app/TopBar";
 import { sessionTabKey } from "@/state/sessionTabKeys";
@@ -35,10 +32,9 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
-import type { Conversation, TabState } from "@/ipc/generated";
+import type { Conversation } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { archive, openConversation, openNewTaskTab } from "@/state/actions";
-import { TAB_STATE_WORDS, isTaskTab, useTabState, workspaceTabs } from "@/state/tabStates";
+import { closeSession } from "@/state/actions";
 import {
   CHAT_TAB,
   newSessionTab,
@@ -102,12 +98,7 @@ function noAutoscroll(event: ReactMouseEvent): void {
 /** Session keys own main tabs. The bottom pane keeps Cmd+W and bracket navigation; off macOS a focused
  * terminal keeps its shell Ctrl keys. Cmd+T always creates a main tab on macOS. An archived session
  * opens no terminal tabs, so its Ctrl+` goes on to the bottom-terminal toggle. */
-function useTabKeys(
-  conversationId: string,
-  archived: boolean,
-  create: (kind: NewTabKind) => void,
-  tasks: readonly Conversation[],
-): void {
+function useTabKeys(conversationId: string, archived: boolean, create: (kind: NewTabKind) => void): void {
   const mac = useApp((s) => s.info?.platform === "macos");
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -127,27 +118,16 @@ function useTabKeys(
       const action = sessionTabKey(event, mac);
       if (!action || (archived && action.type === "new" && action.kind === "terminal")) return;
       event.preventDefault(); event.stopPropagation();
-      // In a workspace ⌘T opens a task tab, and ⌘1–9 count the task tabs first.
-      const source = tasks.find((task) => task.id === conversationId);
-      if (action.type === "new" && action.kind === "newTab" && source) void openNewTaskTab(source);
-      else if (action.type === "new") create(action.kind);
-      if (action.type === "close") closeTab(conversationId, sessionTabs(conversationId).active);
+      if (action.type === "new") create(action.kind);
+      if (action.type === "close" && sessionTabs(conversationId).active === CHAT_TAB) closeSession(conversationId);
+      else if (action.type === "close") closeTab(conversationId, sessionTabs(conversationId).active);
       if (action.type === "closeOthers") closeOtherTabs(conversationId, sessionTabs(conversationId).active);
-      if (action.type === "number" && tasks.length === 0) selectTabNumber(conversationId, action.number);
-      else if (action.type === "number") {
-        const own = tabOrder(sessionTabs(conversationId)).filter((tab) => tab !== CHAT_TAB);
-        const strip = [...tasks.map((task) => `task:${task.id}`), ...own];
-        const shown = action.number === 9 ? strip.at(-1) : strip[action.number - 1];
-        const task = shown?.startsWith("task:") ? shown.slice("task:".length) : null;
-        if (task === conversationId) selectTab(conversationId, CHAT_TAB);
-        else if (task) openConversation(task);
-        else if (shown) selectTab(conversationId, shown);
-      }
+      if (action.type === "number") selectTabNumber(conversationId, action.number);
       if (action.type === "step") stepTab(conversationId, action.step);
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [conversationId, archived, mac, create, tasks]);
+  }, [conversationId, archived, mac, create]);
 }
 
 /** A tab's right-click menu: Keep open (a preview), Close, Close others, Close to the right. */
@@ -182,7 +162,7 @@ function TabMenu({
             <ContextMenuSeparator />
           </>
         )}
-        <ContextMenuItem disabled={!tab} onSelect={() => closeTab(conversationId, id)}>
+        <ContextMenuItem onSelect={() => (tab ? closeTab(conversationId, id) : closeSession(conversationId))}>
           Close
         </ContextMenuItem>
         <ContextMenuItem
@@ -202,81 +182,6 @@ function TabMenu({
   );
 }
 
-/** A task tab's state where its tab shows its icon: the chat bubble while it has none. */
-function TaskTabIcon({ state }: { state: TabState | null }) {
-  if (!state) return <Chat aria-hidden className="size-icon-sm shrink-0" />;
-  const words = TAB_STATE_WORDS[state].one;
-  if (state === "working") {
-    return <Spinner role="img" aria-label={words} data-tab-state={state} className="size-icon-sm shrink-0 animate-spin motion-reduce:animate-none" />;
-  }
-  return (
-    <span role="img" aria-label={words} data-tab-state={state} className="size-icon-sm flex shrink-0 items-center justify-center">
-      <span className={cn("size-1.5 rounded-full", state === "needsYou" ? "bg-success" : state === "ready" ? "bg-link" : "bg-muted-foreground")} />
-    </span>
-  );
-}
-
-/** Another task tab of the workspace: a click opens it, its × archives it (Settings › Archived brings it back). */
-function TaskTab({ tab, separator }: { tab: Conversation; separator: boolean }) {
-  const state = useTabState(tab.id);
-  const title = UNTITLED.has(tab.title) ? "Chat" : tab.title;
-  return (
-    <div
-      data-task-tab
-      data-tab-id={`task:${tab.id}`}
-      data-separator={separator || undefined}
-      className={cn(TAB, "text-toolbar-foreground hover:bg-toolbar-hover")}
-    >
-      <button
-        type="button"
-        role="tab"
-        aria-selected={false}
-        tabIndex={-1}
-        title={state ? `${title} · ${TAB_STATE_WORDS[state].one}` : title}
-        onClick={() => openConversation(tab.id)}
-        className="flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm"
-      >
-        <TaskTabIcon state={state} />
-        <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">{title}</span>
-      </button>
-      <button
-        type="button"
-        aria-label={`Close ${title} tab`}
-        onClick={() => void archive(tab.id)}
-        className="hover:bg-toolbar-hover invisible flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 group-focus-within/tab:visible group-hover/tab:visible hover:opacity-100"
-      >
-        <X aria-hidden className="size-icon-xs" />
-      </button>
-    </div>
-  );
-}
-
-/**
- * The task tabs, in a scroller of their own once they fill their room, with this one kept in
- * view; without task tabs only this one's chat, as it always was.
- */
-function TaskGroup({ on, reveal, children }: { on: boolean; reveal: number; children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (reveal < 0) return;
-    ref.current?.querySelector<HTMLElement>(`[data-tab-id="${CHAT_TAB}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [reveal]);
-  if (!on) return children;
-  return (
-    <div ref={ref} data-task-group data-tauri-drag-region className="hide-scrollbar flex min-w-0 scroll-px-1 items-center gap-0.5 overflow-x-auto">
-      {children}
-    </div>
-  );
-}
-
-/** The workspace's task tabs, oldest first, this one among them; none outside a workspace. */
-function useTaskTabs(conversation: Conversation): Conversation[] {
-  const workspaceId = isTaskTab(conversation) ? conversation.workspaceId : undefined;
-  return useApp(useShallow((s) => (workspaceId ? workspaceTabs(s.conversations, workspaceId) : NO_TASKS)));
-}
-
-const NO_TASKS: Conversation[] = [];
-
 /** The rule between the bar's own controls and the toolbar's; `hidden` fades it but keeps its place. */
 function BarDivider({ hidden = false }: { hidden?: boolean }) {
   return (
@@ -286,9 +191,9 @@ function BarDivider({ hidden = false }: { hidden?: boolean }) {
 }
 
 /**
- * A session's top bar: always tabs, the chat first under its title with its ⋯ (never closed or
- * moved), even when it is the only one, then the tabs it opened, which shrink to their least and
- * then scroll, and "+" right after them.
+ * A session's top bar: always tabs, the chat first under its title with its ⋯ (never moved; its ×
+ * closes the session's view, which goes on working), even when it is the only one, then the tabs
+ * it opened, which shrink to their least and then scroll, and "+" right after them.
  * Click to show, drag to reorder, middle-click or Delete to close; a preview tab is in italic
  * until double-clicked. After a close the tabs keep their widths, so the next × lands under the
  * pointer, until it leaves them. While the thread keeps something running for the user, its chip
@@ -305,9 +210,6 @@ export function SessionTabBar({
 }) {
   const id = conversation.id;
   const { tabs, active } = useSessionTabsOf(id);
-  const tasks = useTaskTabs(conversation);
-  const here = tasks.findIndex((task) => task.id === id);
-  const state = useTabState(id);
   useMockupTab(id);
   const connection = useApp((s) => s.connection.status);
   const archived = conversation.lifecycle === "archived";
@@ -321,7 +223,7 @@ export function SessionTabBar({
     if (kind === "browser" && !browserOn) return;
     newSessionTab(id, kind, cwd);
   }, [id, archived, cwd, browserOn]);
-  useTabKeys(id, archived, create, tasks);
+  useTabKeys(id, archived, create);
   const presence = useTabPresence(tabs);
   const lock = useCloseLock(presence.tabs.length === 0);
   const { listRef, shown, dragging, grip } = useDragReorder<SessionTab, HTMLDivElement>({
@@ -372,7 +274,7 @@ export function SessionTabBar({
     closeTab(id, tab);
   };
   const newTab = (
-    <TitlebarButton tooltip="New tab" shortcut={tasks.length > 0 ? undefined : shortcutLabel("⌘T", mac)} className="ms-0.5"
+    <TitlebarButton tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} className="ms-0.5"
       onClick={() => { lock.release(); create("newTab"); }}><Plus /></TitlebarButton>
   );
   const connecting = connection !== "connected" && (
@@ -394,7 +296,7 @@ export function SessionTabBar({
         tabIndex={-1}
         data-tauri-drag-region
         className="session-tab-list flex min-w-0 items-center gap-0.5"
-        style={{ "--session-tab-count": (lock.count ?? tabs.length + 1) + Math.max(0, tasks.length - 1) } as CSSProperties}
+        style={{ "--session-tab-count": lock.count ?? tabs.length + 1 } as CSSProperties}
         onPointerEnter={lock.stay}
         onPointerLeave={lock.leave}
         onKeyDown={(event) => {
@@ -439,10 +341,6 @@ export function SessionTabBar({
           });
         }}
       >
-        <TaskGroup on={tasks.length > 0} reveal={here}>
-          {tasks.slice(0, Math.max(0, here)).map((task, index) => (
-            <TaskTab key={task.id} tab={task} separator={index < here - 1} />
-          ))}
         <TabMenu conversationId={id} tab={null} onRename={archived ? undefined : onRename}>
           <div
             data-tab-id={CHAT_TAB}
@@ -462,11 +360,13 @@ export function SessionTabBar({
               tabIndex={active === CHAT_TAB ? 0 : -1}
               title={archived ? `${chatTitle} (Archived)` : chatTitle}
               aria-label={archived ? `${chatTitle} (Archived)` : undefined}
+              onMouseDown={noAutoscroll}
+              onMouseUp={(event) => { if (event.button === 1) { event.preventDefault(); closeSession(id); } }}
               onClick={() => selectTab(id, CHAT_TAB)}
               onDoubleClick={archived ? undefined : onRename}
               className="flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm"
             >
-              {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : tasks.length > 0 ? <TaskTabIcon state={state} /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
+              {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
               <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">{chatTitle}</span>
             </button>
             <ChatActions
@@ -475,20 +375,20 @@ export function SessionTabBar({
               compact
               className="shrink-0"
             />
+            {/* Closes the view only: the session goes on working and stays in the sidebar. */}
+            <button
+              type="button"
+              aria-label={`Close ${chatTitle} tab`}
+              onClick={(event) => { event.stopPropagation(); closeSession(id); }}
+              className={cn(
+                "hover:bg-toolbar-hover flex size-5 shrink-0 items-center justify-center rounded-full opacity-60 hover:opacity-100",
+                active !== CHAT_TAB && "invisible group-focus-within/tab:visible group-hover/tab:visible",
+              )}
+            >
+              <X aria-hidden className="size-icon-xs" />
+            </button>
           </div>
         </TabMenu>
-          {here >= 0 && tasks.slice(here + 1).map((task, index, after) => (
-            <TaskTab key={task.id} tab={task} separator={index < after.length - 1} />
-          ))}
-        </TaskGroup>
-        {tasks.length > 0 && (
-          <>
-            <TitlebarButton tooltip="New task tab" shortcut={shortcutLabel("⌘T", mac)}
-              onClick={() => { lock.release(); void openNewTaskTab(conversation); }}><Plus /></TitlebarButton>
-            {/* The task tabs, then the tabs this one opened. */}
-            <span aria-hidden data-group-divider className="bg-session-tab-separator mx-1 h-4 w-px shrink-0" />
-          </>
-        )}
         <div
           ref={strip}
           data-tauri-drag-region

@@ -1,4 +1,4 @@
-import { ChatCompose, ChevronDown, Dock, Document, DotsHorizontal, Globe, Grid, Search, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Chat, ChatCompose, ChevronDown, Dock, Document, DotsHorizontal, Globe, Grid, Search, X } from "@openai/apps-sdk-ui/components/Icon";
 import { useContext, useEffect, useState } from "react";
 
 import { WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
@@ -9,23 +9,30 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Kbd } from "@/components/ui/kbd";
 import { pageList } from "@/ipc/client";
 import type { BrowserVisit, PageSummary } from "@/ipc/generated";
+import { openNewTaskTab } from "@/state/actions";
 import { browserHistory } from "@/state/browserData";
 import { useBrowsers } from "@/state/browsers";
 import { useBrowserOn } from "@/state/links";
 import { onPageChanged } from "@/state/pageChanges";
-import { openPageTab, replaceNewTab, useSessionTabs } from "@/state/sessionTabs";
+import { closeTab, openPageTab, replaceNewTab, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
+import { isTaskTab } from "@/state/tabStates";
 import { setTerminalOpen } from "@/state/terminalPlaces";
 
 import { suggestedSites, type SuggestedSite } from "./newTabSites";
 import "./NewTabTools.css";
 
-/** A tool or site consumes the New tab in place; Find file waits for a file to be picked. */
+/**
+ * In a workspace, New session first: it opens a new session of the workspace and the New tab
+ * goes. A tool or site consumes the New tab in place; Find file waits for a file to be picked.
+ */
 export function NewTabTools({ conversationId, tabId }: { conversationId: string; tabId: string }) {
   const workspace = useContext(WorkspacePaneContext);
   const cwd = useCheckoutRoot();
   const mac = useApp((s) => s.info?.platform === "macos");
   const archived = useApp((s) => s.conversations[conversationId]?.lifecycle === "archived");
+  const conversation = useApp((s) => s.conversations[conversationId]);
+  const workspaceTab = conversation && isTaskTab(conversation) ? conversation : null;
   const browserOn = useBrowserOn();
   const [history, setHistory] = useState<BrowserVisit[]>([]);
   const [dismissed, setDismissed] = useState<string[]>([]);
@@ -62,6 +69,15 @@ export function NewTabTools({ conversationId, tabId }: { conversationId: string;
   return (
     <div data-slot="new-tab-page" className="new-tab-page">
       <div data-slot="new-tab-column" className="new-tab-column">
+        {workspaceTab && (
+          <div data-slot="new-tab-session" className="new-tab-card new-tab-session">
+            <button type="button" onClick={() => {
+              void openNewTaskTab(workspaceTab).then(() => closeTab(conversationId, tabId));
+            }} className="new-tab-tool">
+              <Chat aria-hidden /><span className="new-tab-tool-label">New session</span>
+            </button>
+          </div>
+        )}
         <section aria-label="Tools" className="new-tab-section">
           <h2>Tools</h2>
           <div data-slot="new-tab-tools" className="new-tab-grid">

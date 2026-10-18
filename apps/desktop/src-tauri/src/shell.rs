@@ -285,7 +285,7 @@ pub fn install_app_menu(app: &AppHandle) -> tauri::Result<()> {
     for (id, title, accelerator) in [
         ("terminal", "Toggle bottom terminal", "CmdOrCtrl+J"),
         ("terminal-alternate", "Terminal", "Ctrl+`"),
-        ("new", "New task tab", "CmdOrCtrl+T"),
+        ("new", "New tab", "CmdOrCtrl+T"),
         ("new-side-chat", "New side chat", "Alt+CmdOrCtrl+S"),
         ("new-page", "New page", "Alt+CmdOrCtrl+N"),
         ("save", "Save file", "CmdOrCtrl+S"),

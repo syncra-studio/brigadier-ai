@@ -342,6 +342,18 @@ export function openConversation(id: string, options: { at?: OpenAt } = {}): voi
   }
 }
 
+/**
+ * Closes a session's view (its chat tab's ×): nothing stops, its work goes on and it stays in
+ * the sidebar with its state, where a click opens it again with its tabs as they were. The
+ * project's new-session page shows in its place.
+ */
+export function closeSession(id: string): void {
+  const shown = useApp.getState().selection;
+  if (shown.type !== "conversation" || shown.id !== id) return;
+  const projectId = useApp.getState().conversations[id]?.projectId;
+  select(projectId ? { type: "draft", kind: "session", projectId } : { type: "draft", kind: "chat" });
+}
+
 /** How many older pages a jump reads at most before it shows what it has. */
 const REVEAL_PAGES = 50;
 
@@ -884,7 +896,7 @@ export async function startTabFrom(source: Conversation, outgoing: Outgoing): Pr
   return conversation;
 }
 
-/** Opens an empty task tab in `source`'s workspace (⌘T), on a worktree of its own. */
+/** Opens an empty task tab in `source`'s workspace (New session on the New tab), on a worktree of its own. */
 export async function openNewTaskTab(source: Conversation): Promise<void> {
   if (!source.workspaceId) return;
   const { conversation } = await request({

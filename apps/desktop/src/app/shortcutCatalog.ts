@@ -72,7 +72,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "next-message", name: "Next message", line: "Scroll the thread to your next message", area: "Conversations", keys: ["⌥↓"] },
 
   // Tabs and panes
-  { id: "new-tab", name: "New task tab", line: "Open a task tab in the workspace, on a worktree of its own", area: "Tabs and panes", keys: ["⌘T"], menu: "new" },
+  { id: "new-tab", name: "New tab", line: "Open a new tab in the session", area: "Tabs and panes", keys: ["⌘T"], menu: "new" },
   { id: "new-browser", name: "New browser tab", line: "Open a web page in a tab", area: "Tabs and panes", keys: ["⇧⌘B"], menu: "new-browser" },
   { id: "new-side-chat", name: "New side chat", line: "Ask something beside the session", area: "Tabs and panes", keys: ["⌥⌘S"], menu: "new-side-chat" },
   { id: "new-page", name: "New page", line: "Start a page of notes in a tab, saved as you type", area: "Tabs and panes", keys: ["⌥⌘N"], menu: "new-page" },
@@ -91,7 +91,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     keys: ["⌃⇧Tab"],
     menu: "cycle-previous",
   },
-  { id: "show-tab", name: "Show tab", line: "⌘1 to ⌘9 show the tabs in the strip, task tabs first", area: "Tabs and panes", keys: ["⌘1–9"], menu: "tab-1" },
+  { id: "show-tab", name: "Show tab", line: "⌘1 shows the chat, ⌘2 to ⌘9 the tabs after it", area: "Tabs and panes", keys: ["⌘1–9"], menu: "tab-1" },
   { id: "terminal", name: "Toggle terminal", line: "Show or hide the bottom terminal", area: "Tabs and panes", keys: ["⌘J"], menu: "terminal" },
   {
     id: "new-terminal",

@@ -1,9 +1,7 @@
 /**
  * Headless exercise of a session's top bar: a title with ⋯, the toolbar and "+" last while nothing is open,
  * tabs with "+" after them once something is, their measures at both densities, the widths kept
- * after a close, and Delete on a tab. `compact=1` runs it at compact density. `workspace=1` gives
- * the session two sibling task tabs: the strip's task group, their states, ⌘T,
- * ⌘1–9 across the strip and a sibling's ×.
+ * after a close, and Delete on a tab. `compact=1` runs it at compact density.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -15,8 +13,6 @@ import { SessionTabBar } from "@/app/conversation/SessionTabBar";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, Request } from "@/ipc/generated";
-import { applyActivityEvents } from "@/state/activity";
-import { useSettledTabs } from "@/state/tabStates";
 import { closeTab, newSessionTab, selectTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
@@ -31,20 +27,13 @@ const conversation: Conversation = {
   pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, setup: null, lifecycle: "active",
   forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
 };
-const workspace = params.has("workspace");
-const sibling = (siblingId: string, title: string, createdAtMs: number): Conversation => ({
-  ...conversation, id: siblingId, title, createdAtMs, updatedAtMs: createdAtMs, workspaceId: "ws-fixture",
-});
-if (workspace) Object.assign(conversation, { createdAtMs: 5, workspaceId: "ws-fixture" });
-const siblings = workspace ? [sibling("sib-1", "Write the intro", 1), sibling("sib-2", "Fix the links", 9)] : [];
 useApp.setState({
-  conversations: Object.fromEntries([conversation, ...siblings].map((each) => [each.id, each])),
+  conversations: { [id]: conversation },
   selection: { type: "conversation", id },
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   connection: { status: "connected", daemon: null, reason: null },
 });
 const eventListeners = new Map<number, string>();
-const requests: Request[] = [];
 mockIPC((command, payload) => {
   const values = payload as Record<string, unknown>;
   if (command === "plugin:event|listen") {
@@ -63,12 +52,7 @@ mockIPC((command, payload) => {
     return null;
   }
   if (command !== "ipc_request") return null;
-  const request = (payload as { request: Request }).request;
-  requests.push(request);
-  if (request.method === "createTab") {
-    return { method: request.method, conversation: sibling("made-1", "New tab", 20) };
-  }
-  return { method: request.method };
+  return { method: (payload as { request: Request }).request.method };
 });
 
 const bar = () => document.querySelector<HTMLElement>('[data-slot="session-tabs"]')!;
@@ -94,11 +78,6 @@ function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
     if (params.has("manual")) return;
-    if (workspace) {
-      let disposed = false;
-      void checkWorkspace().then((seen) => { if (!disposed) setResult(JSON.stringify(seen)); });
-      return () => { disposed = true; };
-    }
     if (params.has("live")) {
       let disposed = false;
       void checkMotionAndMenu().then((seen) => { if (!disposed) setResult(JSON.stringify(seen)); });
@@ -206,48 +185,6 @@ function Fixture() {
       </main>
     </AssistantRuntimeProvider>
   );
-}
-
-/** The task group: siblings around the chat, their states, ⌘T, ⌘1–9 and a sibling's ×. */
-async function checkWorkspace() {
-  const seen: Record<string, unknown> = {};
-  const ready = async (condition: () => boolean) => {
-    for (let tries = 0; !condition() && tries < 500; tries++) await wait(10);
-    if (!condition()) throw new Error("Workspace fixture step did not become ready");
-  };
-  await ready(() => eventListeners.size > 0 && labels().length === 3);
-  applyActivityEvents([{ seq: 1, stream: "conversation:sib-2", streamSeq: 1, atMs: 1, event: { type: "runStateChanged", conversationId: "sib-2", state: "running", error: null, requestId: null } }]);
-  useSettledTabs.setState({ byTab: { "sib-1": "ready" } });
-  await wait(50);
-  const menu = async (name: string) => { await emit("pane-shortcut", name); await wait(30); };
-  seen.labels = labels();
-  seen.states = [...bar().querySelectorAll<HTMLElement>("[data-tab-id] [data-tab-state]")].map((icon) => [
-    icon.closest<HTMLElement>("[data-tab-id]")!.dataset.tabId, icon.dataset.tabState,
-  ]);
-  const tablist = bar().querySelector('[role="tablist"]')!;
-  seen.group = [...tablist.querySelectorAll<HTMLElement>("[data-tab-id], [data-group-divider], button[aria-label='New task tab']")]
-    .map((element) => element.dataset.tabId ?? (element.dataset.groupDivider !== undefined ? "|" : "+task"));
-  seen.taskScroller = getComputedStyle(bar().querySelector("[data-task-group]")!).overflowX;
-  newSessionTab(id, "browser", "/fixture");
-  await wait(50);
-  const own = sessionTabs(id).tabs[0]!.id;
-  await menu("tab-1");
-  seen.first = useApp.getState().selection;
-  useApp.setState({ selection: { type: "conversation", id } });
-  await menu("tab-4");
-  seen.fourth = sessionTabs(id).active === own;
-  await menu("tab-2");
-  seen.second = sessionTabs(id).active;
-  await menu("new");
-  await ready(() => requests.some((request) => request.method === "createTab"));
-  seen.created = requests.find((request) => request.method === "createTab");
-  await ready(() => useApp.getState().selection.type === "conversation" && (useApp.getState().selection as { id: string }).id === "made-1");
-  seen.openedNew = true;
-  seen.afterNew = labels();
-  tabEl("task:sib-2").querySelector<HTMLButtonElement>('button[aria-label^="Close"]')!.click();
-  await ready(() => requests.some((request) => request.method === "archive"));
-  seen.archived = requests.find((request) => request.method === "archive");
-  return seen;
 }
 
 /** Exercise the event bridge with the shell unfocused, and tab motion with real frames. */
