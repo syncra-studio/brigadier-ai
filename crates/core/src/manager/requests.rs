@@ -240,6 +240,7 @@ impl SessionManager {
         };
         let activity = conv.request_activity().await;
         let reviews_on = self.reviews_on();
+        let mut settled_now = false;
         for request in board.requests.values() {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
@@ -313,7 +314,13 @@ impl SessionManager {
                     super::request_changes::Refresh::Settle,
                 )
                 .await;
+                settled_now |=
+                    matches!(request.state, RequestState::Working | RequestState::Waiting);
             }
+        }
+        // A request that just ended may have changed files a sibling tab changed too.
+        if settled_now {
+            self.tell_overlaps(conversation_id).await;
         }
         // What another session asked and is answered now gets its reply (sent apart: it settles
         // the asker's requests in turn).

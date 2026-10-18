@@ -231,6 +231,10 @@ pub struct SessionManager {
     /// Requests the last restart cut off before they answered: a message they owe a reply
     /// to hears that, so its sender can ask again.
     cut_off: Mutex<HashSet<String>>,
+    /// The files each pair of a workspace's tabs were told they both changed (by tab ids,
+    /// in order), so an overlap is told once.
+    workspace_overlaps:
+        Mutex<HashMap<(ConversationId, ConversationId), std::collections::BTreeSet<String>>>,
     /// Tasks the user stopped (a worker's Stop, Stop all, or the stop of a turn), from the
     /// moment the stop starts: the thread may no longer message, steer or approve them.
     user_stops: Mutex<HashSet<TaskId>>,
@@ -388,6 +392,7 @@ impl SessionManager {
             fixes_starting: tokio::sync::Mutex::new(()),
             peer_sends: tokio::sync::Mutex::new(()),
             cut_off: Mutex::new(HashSet::new()),
+            workspace_overlaps: Mutex::new(HashMap::new()),
             user_stops: Mutex::new(HashSet::new()),
             waiters: Waiters::default(),
             admitting: AtomicBool::new(true),

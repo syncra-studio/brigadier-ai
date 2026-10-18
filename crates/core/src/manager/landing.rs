@@ -1718,6 +1718,7 @@ impl SessionManager {
             },
         )
         .await;
+        self.tell_merged(id, &base, &new_tip.0).await;
         *conv.merge_told.lock().unwrap() = None;
         drop(landing_lock);
         // The session's work is merged. Its worktree and branch stay with the session (BUILD-PLAN

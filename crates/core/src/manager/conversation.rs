@@ -329,6 +329,7 @@ struct ConvState {
     /// Notes about messages between sessions, by message id, which the next turn carries,
     /// starting none of its own: a reply that came after its request was over (stopped, or
     /// its overnight run ended), and the user's answer to a send that waited for their OK.
+    /// Also the workspace board's facts ([`ConvLive::hold_fact`]).
     peer_notes: Vec<(String, String)>,
     /// A turn cut short by a limit, from its end until its messages are back in `pending` (on
     /// another account, a stand-in, or waiting for quota) or it has failed. No turn starts
@@ -1147,6 +1148,13 @@ impl ConvLive {
         if !state.peer_notes.iter().any(|(id, _)| id == message_id) {
             state.peer_notes.push((message_id.to_owned(), note));
         }
+    }
+
+    /// Keeps a fact for the next turn, whatever starts it (a user message, a report, a peer),
+    /// starting none of its own: the workspace board's news.
+    pub(super) async fn hold_fact(&self, fact: String) {
+        let key = format!("fact:{}", uuid::Uuid::now_v7());
+        self.state.lock().await.peer_notes.push((key, fact));
     }
 
     /// Whether the inbox holds an envelope of `kind`, `label` and `task` for `request`.

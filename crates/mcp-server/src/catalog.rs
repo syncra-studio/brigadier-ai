@@ -1606,7 +1606,10 @@ mod tests {
         assert!(matches!(
             parse("list_sessions", serde_json::json!({})),
             Ok(ToolCall::Orchestrator(OrchestratorCall::ListSessions(
-                ListSessions { query: None }
+                ListSessions {
+                    query: None,
+                    workspace: false
+                }
             )))
         ));
         assert!(matches!(

@@ -95,7 +95,7 @@ impl SessionManager {
     }
 
     /// Where a session stands for others: `working`, `idle` or `sleeping`.
-    async fn peer_state(&self, conversation: &Conversation) -> &'static str {
+    pub(super) async fn peer_state(&self, conversation: &Conversation) -> &'static str {
         if conversation.lifecycle == Lifecycle::Hibernated {
             return "sleeping";
         }
@@ -119,7 +119,11 @@ impl SessionManager {
         &self,
         caller: &ConversationId,
         query: Option<&str>,
+        workspace: bool,
     ) -> Result<String> {
+        if workspace {
+            return self.list_siblings(caller).await;
+        }
         let query = query
             .map(|query| query.trim().to_lowercase())
             .filter(|query| !query.is_empty());

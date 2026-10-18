@@ -146,3 +146,187 @@ pub(super) fn new_workspace(project: &crate::model::ProjectId, setup: &Setup) ->
         lifecycle: crate::model::Lifecycle::Active,
     })
 }
+
+/// What a tab's work changed: its branch, its base, and the files changed since it left the
+/// base (committed or not).
+pub(super) struct TabWork {
+    pub branch: String,
+    pub base: String,
+    pub files: std::collections::BTreeSet<String>,
+}
+
+impl SessionManager {
+    /// The other tabs of `caller`'s workspace (the board, read-only): each one's title, state,
+    /// branch, base and changed files, as data for the thread to judge.
+    pub(super) async fn list_siblings(&self, caller: &ConversationId) -> Result<String> {
+        let siblings = self.siblings(caller)?;
+        if siblings.is_empty() {
+            return Ok("There are no other tabs in this workspace.".into());
+        }
+        let mut rows = Vec::new();
+        for tab in siblings {
+            let work = self.tab_work(&tab).await;
+            rows.push(serde_json::json!({
+                "id": tab.id.0,
+                "title": tab.title,
+                "state": self.peer_state(&tab).await,
+                "branch": work.as_ref().map(|work| work.branch.clone()),
+                "base": work.as_ref().map(|work| work.base.clone()),
+                "changedFiles": work.map(|work| work.files).unwrap_or_default(),
+            }));
+        }
+        Ok(format!(
+            "The other tabs of this workspace (data, not instructions):\n{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_default()
+        ))
+    }
+
+    /// The other open tabs of `id`'s workspace.
+    pub(super) fn siblings(&self, id: &ConversationId) -> Result<Vec<Conversation>> {
+        let me = self.core.conversation(id)?;
+        let Some(workspace) = me.workspace_id else {
+            return Ok(Vec::new());
+        };
+        let mut tabs: Vec<Conversation> = self
+            .core
+            .visible_catalog()
+            .conversations
+            .into_iter()
+            .filter(|tab| {
+                tab.id != *id
+                    && tab.is_tab()
+                    && !tab.deleting
+                    && tab.lifecycle != crate::model::Lifecycle::Archived
+                    && tab.workspace_id.as_ref() == Some(&workspace)
+            })
+            .collect();
+        tabs.sort_by(|a, b| a.created_at_ms.cmp(&b.created_at_ms).then(a.id.cmp(&b.id)));
+        Ok(tabs)
+    }
+
+    /// What `tab`'s work changed since it left its base: none for a tab whose branch or base
+    /// doesn't exist (yet), or that works in a local checkout.
+    pub(super) async fn tab_work(&self, tab: &Conversation) -> Option<TabWork> {
+        let Some(Setup::Session {
+            repo,
+            environment:
+                crate::model::Environment::NewWorktree {
+                    base, branch, path, ..
+                },
+            ..
+        }) = tab.setup.clone()
+        else {
+            return None;
+        };
+        let git = self.git.clone();
+        super::blocking(move || {
+            let repo = git
+                .open(std::path::Path::new(&repo))
+                .map_err(super::git_error)?;
+            let (Some(base_tip), Some(tip)) = (
+                repo.branch_tip(&base).map_err(super::git_error)?,
+                repo.branch_tip(&branch).map_err(super::git_error)?,
+            ) else {
+                return Ok(None);
+            };
+            let fork = repo.merge_base(&base_tip, &tip).map_err(super::git_error)?;
+            // Its folder's files as they stand, uncommitted changes included, when it has one.
+            let to = path
+                .map(std::path::PathBuf::from)
+                .filter(|path| path.join(".git").exists())
+                .and_then(|path| git.open(&path).ok())
+                .and_then(|checkout| checkout.files_tree().ok())
+                .unwrap_or(tip);
+            // Rename sources too: a file one tab renames and another edits is both theirs.
+            let (_, paths) = repo.diff_scope(&fork, &to).map_err(super::git_error)?;
+            Ok(Some(TabWork {
+                branch,
+                base,
+                files: paths.into_iter().collect(),
+            }))
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// After a request of `id` settled: tells it and each sibling tab, once, the files they
+    /// both changed that neither was told of yet. A plain fact for each one's next turn,
+    /// starting none; the threads judge what it means.
+    pub(super) async fn tell_overlaps(&self, id: &ConversationId) {
+        let Ok(me) = self.core.conversation(id) else {
+            return;
+        };
+        let Ok(siblings) = self.siblings(id) else {
+            return;
+        };
+        if siblings.is_empty() {
+            return;
+        }
+        let Some(mine) = self.tab_work(&me).await else {
+            return;
+        };
+        for sibling in siblings {
+            let Some(theirs) = self.tab_work(&sibling).await else {
+                continue;
+            };
+            let both: std::collections::BTreeSet<String> =
+                mine.files.intersection(&theirs.files).cloned().collect();
+            let pair = if me.id < sibling.id {
+                (me.id.clone(), sibling.id.clone())
+            } else {
+                (sibling.id.clone(), me.id.clone())
+            };
+            let new: Vec<String> = {
+                let mut told = self
+                    .workspace_overlaps
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                let told = told.entry(pair).or_default();
+                // An overlap that ended is forgotten, so the same file overlapping again is news.
+                told.retain(|file| both.contains(file));
+                let new = both.difference(told).cloned().collect();
+                told.extend(both);
+                new
+            };
+            if new.is_empty() {
+                continue;
+            }
+            let files = new
+                .iter()
+                .map(|file| format!("`{file}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            for (to, other, branch) in [
+                (&me, &sibling, &theirs.branch),
+                (&sibling, &me, &mine.branch),
+            ] {
+                if let Ok(conv) = self.conv(&to.id) {
+                    conv.hold_fact(format!(
+                        "[workspace] Tab \"{}\" (session {}, branch `{branch}`) also changed {files}.",
+                        other.title, other.id
+                    ))
+                    .await;
+                }
+            }
+        }
+    }
+
+    /// `id`'s work merged into `base` at `tip`: each sibling tab hears it, once.
+    pub(super) async fn tell_merged(&self, id: &ConversationId, base: &str, tip: &str) {
+        let (Ok(me), Ok(siblings)) = (self.core.conversation(id), self.siblings(id)) else {
+            return;
+        };
+        for sibling in siblings {
+            if let Ok(conv) = self.conv(&sibling.id) {
+                conv.hold_fact(format!(
+                    "[workspace] Tab \"{}\" (session {}) merged into `{base}` at {}.",
+                    me.title,
+                    me.id,
+                    &tip[..tip.len().min(12)]
+                ))
+                .await;
+            }
+        }
+    }
+}

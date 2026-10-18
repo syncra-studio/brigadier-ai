@@ -26,11 +26,11 @@ fn writing(meet: Option<Arc<tokio::sync::Barrier>>) -> Script {
             if !turn.is_orchestrator() {
                 return Reply::text("Done.");
             }
+            // The user's words come last (a fact before them may quote a tab's title).
             let Some(name) = turn
                 .input
-                .split("Write ")
-                .nth(1)
-                .and_then(|rest| rest.split('.').next())
+                .rsplit_once("Write ")
+                .and_then(|(_, rest)| rest.split('.').next())
                 .map(str::to_owned)
             else {
                 return Reply::text("Noted.");
@@ -258,5 +258,228 @@ async fn a_background_tab_whose_message_fails_goes() {
         flow.core.catalog().conversations.len() == before
     })
     .await;
+    flow.stop().await;
+}
+
+/// Whether the user's words, which come last in a turn's input, are `words`: a fact before
+/// them may quote another tab's title.
+fn said(turn: &Turn, words: &str) -> bool {
+    turn.input.trim_end().ends_with(words)
+}
+
+type Inputs = Arc<std::sync::Mutex<Vec<(PathBuf, String)>>>;
+
+/// A thread that, besides [`writing`], commits `shared.txt` on "Share." and removes it on
+/// "Unshare.", reads the board on "List tabs.", messages session ‹id› on "Ping ‹id›.", and
+/// merges on the user's click. Every thread input is logged by worktree.
+fn sharing(inputs: Inputs) -> Script {
+    let write = writing(None);
+    script(move |turn| {
+        let (inputs, write) = (inputs.clone(), write.clone());
+        async move {
+            if !turn.is_orchestrator() {
+                return Reply::text("Done.");
+            }
+            inputs
+                .lock()
+                .unwrap()
+                .push((turn.add_dirs[0].clone(), turn.input.clone()));
+            if turn.input.contains("[merge] The user clicked") {
+                let reply = turn.call("finish_session", serde_json::json!({})).await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Merged.");
+            }
+            if said(&turn, "List tabs.") {
+                let reply = turn
+                    .call("list_sessions", serde_json::json!({ "workspace": true }))
+                    .await;
+                return Reply::text(reply.text);
+            }
+            // A sibling's message, or the reply to one: its header holds the sender's title.
+            if turn.input.contains("Hello from a sibling tab.")
+                || turn.input.contains("Seen by the sibling.")
+            {
+                return Reply::text("Seen by the sibling.");
+            }
+            if let Some(to) = turn
+                .input
+                .split("Ping ")
+                .nth(1)
+                .and_then(|rest| rest.split('.').next())
+            {
+                let reply = turn
+                    .call(
+                        "message_session",
+                        serde_json::json!({ "to": to, "text": "Hello from a sibling tab." }),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                return Reply::text("Pinged.");
+            }
+            if said(&turn, "Unshare.") {
+                let folder = &turn.add_dirs[0];
+                git(folder, &["rm", "-q", "shared.txt"]);
+                git(folder, &["commit", "-q", "-m", "Unshare"]);
+                return Reply::text("Unshared.");
+            }
+            if said(&turn, "Share.") {
+                let text = format!("{} {}\n", turn.add_dirs[0].display(), crate::now_ms());
+                commit_in_workspace(&turn, "shared.txt", &text, "Share");
+                return Reply::text("Shared.");
+            }
+            write(turn).await
+        }
+    })
+}
+
+/// The thread inputs of the tab working in `folder` that hold `what`.
+fn heard(inputs: &Inputs, folder: &std::path::Path, what: &str) -> usize {
+    inputs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(at, input)| at == folder && input.contains(what))
+        .count()
+}
+
+/// The board, read-only: a tab lists its sibling's title, state, branch, base and changed
+/// files; when both tabs change the same file each hears it once, as a plain fact; a merge of
+/// one is told to the other once; reading the board writes nothing.
+#[tokio::test]
+async fn the_board_lists_siblings_and_tells_an_overlap_and_a_merge_once() {
+    let inputs: Inputs = Arc::default();
+    let flow = Flow::start(
+        "workspaces-board",
+        Options::default(),
+        sharing(inputs.clone()),
+    )
+    .await;
+    let a = flow.conversation.clone();
+    let workspace = workspace_of(&flow, &a);
+    let b = flow.manager.create_tab(&workspace, None).await.unwrap().id;
+
+    flow.say_to(&a, "Share.").await;
+    flow.settled_in(&a).await;
+    flow.say_to(&b, "Write beta.").await;
+    flow.settled_in(&b).await;
+    let (Some(folder_a), _, _) = worktree(&flow, &a) else {
+        panic!("a's worktree")
+    };
+    let (Some(folder_b), _, branch_b) = worktree(&flow, &b) else {
+        panic!("b's worktree")
+    };
+
+    // The board as data.
+    let catalog = flow.core.catalog();
+    flow.say_to(&a, "List tabs.").await;
+    flow.settled_in(&a).await;
+    let answer = flow
+        .core
+        .conversation_view(a.clone(), 20)
+        .await
+        .unwrap()
+        .messages
+        .messages
+        .last()
+        .unwrap()
+        .text
+        .clone();
+    assert!(answer.contains(&b.0), "{answer}");
+    assert!(
+        answer.contains(&format!("\"branch\": \"{branch_b}\"")),
+        "{answer}"
+    );
+    assert!(answer.contains("\"base\": \"main\""), "{answer}");
+    assert!(
+        answer.contains("beta.txt") && !answer.contains("alpha.txt"),
+        "{answer}"
+    );
+    // Reading the board changed no workspace (beyond the message's own activity).
+    let settled = |workspaces: Vec<crate::model::Workspace>| {
+        workspaces
+            .into_iter()
+            .map(|workspace| crate::model::Workspace {
+                updated_at_ms: 0,
+                ..workspace
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        settled(flow.core.catalog().workspaces),
+        settled(catalog.workspaces)
+    );
+    assert_eq!(
+        heard(&inputs, &folder_a, "[workspace]"),
+        0,
+        "no overlap yet"
+    );
+
+    // Both change shared.txt: each hears it once, at its next turn.
+    flow.say_to(&b, "Share.").await;
+    flow.settled_in(&b).await;
+    flow.say_to(&a, "Write alpha.").await;
+    flow.settled_in(&a).await;
+    flow.say_to(&b, "Write gamma.").await;
+    flow.settled_in(&b).await;
+    let fact = "also changed `shared.txt`";
+    assert_eq!(heard(&inputs, &folder_a, fact), 1);
+    assert_eq!(heard(&inputs, &folder_b, fact), 1);
+    // The same overlap again is no news.
+    flow.say_to(&a, "Share.").await;
+    flow.settled_in(&a).await;
+    flow.say_to(&a, "Write delta.").await;
+    flow.settled_in(&a).await;
+    flow.say_to(&b, "Write epsilon.").await;
+    flow.settled_in(&b).await;
+    assert_eq!(heard(&inputs, &folder_a, fact), 1, "told once");
+    assert_eq!(heard(&inputs, &folder_b, fact), 1, "told once");
+    // An overlap that ended and came back is news again.
+    flow.say_to(&a, "Unshare.").await;
+    flow.settled_in(&a).await;
+    flow.say_to(&a, "Share.").await;
+    flow.settled_in(&a).await;
+    flow.say_to(&a, "Write theta.").await;
+    flow.settled_in(&a).await;
+    assert_eq!(heard(&inputs, &folder_a, fact), 2, "told again");
+
+    // B merges: A hears it once.
+    flow.manager
+        .merge_session(&b, super::click())
+        .await
+        .unwrap();
+    flow.until_in(&b, "b's merge", |board| {
+        board
+            .orchestrator_steps
+            .iter()
+            .any(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. }))
+    })
+    .await;
+    flow.settled_in(&b).await;
+    // A turn that no user message starts (a sibling's message) carries the fact too.
+    let pings = heard(&inputs, &folder_a, "Hello from a sibling tab.");
+    flow.say_to(&b, &format!("Ping {}.", a.0)).await;
+    flow.settled_in(&b).await;
+    let pinged = || {
+        inputs.lock().unwrap().iter().any(|(at, input)| {
+            at == &folder_a
+                && input.contains("Hello from a sibling tab.")
+                && input.contains("merged into `main` at")
+        })
+    };
+    super::eventually("a's turn on the sibling's message", || {
+        heard(&inputs, &folder_a, "Hello from a sibling tab.") > pings
+    })
+    .await;
+    flow.settled_in(&a).await;
+    assert!(pinged(), "the merge fact rides on the peer turn");
+    flow.say_to(&a, "Write eta.").await;
+    flow.settled_in(&a).await;
+    let merged = "merged into `main` at";
+    assert_eq!(heard(&inputs, &folder_a, merged), 1);
+    assert_eq!(
+        heard(&inputs, &folder_b, merged),
+        0,
+        "not told of its own merge"
+    );
     flow.stop().await;
 }

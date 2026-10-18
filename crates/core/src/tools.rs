@@ -893,6 +893,10 @@ pub struct ListSessions {
     /// Keeps only the sessions whose title or project name contains it, ignoring case.
     #[serde(default)]
     pub query: Option<String>,
+    /// Only the other tabs of this session's workspace, each with its state, branch, base and
+    /// the files its work changed since it left its base.
+    #[serde(default)]
+    pub workspace: bool,
 }
 
 /// `message_session`: send another session a message. Returns at once; a reply comes later as
