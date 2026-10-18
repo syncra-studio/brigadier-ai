@@ -1687,7 +1687,7 @@ impl SessionManager {
         let mut tabs = Vec::new();
         for tab in self.siblings(&conv.id).unwrap_or_default() {
             tabs.push(prompts::TabLine {
-                state: self.peer_state(&tab).await.to_owned(),
+                state: self.tab_words(&tab).await.to_owned(),
                 id: tab.id.0,
                 title: tab.title,
             });

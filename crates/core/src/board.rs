@@ -13,8 +13,8 @@ use crate::overnight::OvernightRun;
 use crate::work::{
     Approval, BackgroundRunState, CardId, CardState, Compaction, ConversationActivity, Decision,
     IntegratedCheckState, MessageQueue, OrchestratorStep, OrchestratorStepKind, Plan, PlanState,
-    Question, ReviewRun, ReviewState, RunState, SessionPhase, Task, TaskId, TaskKind, TaskState,
-    UserRequest, WaitingItem, WorkerStep,
+    Question, ReviewRun, ReviewState, RunState, SessionPhase, TabState, Task, TaskId, TaskKind,
+    TaskState, UserRequest, WaitingItem, WorkerStep,
 };
 
 /// Notices kept per conversation.
@@ -40,6 +40,7 @@ pub(crate) const KINDS: &[&str] = &[
     "previews.cleared",
     "queue.changed",
     "request.updated",
+    "request.ready",
     "worker.step",
     "orchestrator.step",
     "compaction.updated",
@@ -154,6 +155,11 @@ pub(crate) struct Board {
     pub(crate) run: RunState,
     /// The request the running turn serves.
     pub(crate) run_request: Option<String>,
+    /// Where the active (or last) turn started in the stream: its own steps come after it.
+    pub(crate) run_since: i64,
+    /// The requests that settled with their branch ahead of base: the head then, and where
+    /// it was recorded.
+    pub(crate) ready: HashMap<String, (String, i64)>,
     /// The request whose turn was still starting or running when the daemon last stopped (a
     /// quit or a crash cut it off), and when the conversation last recorded anything, which is
     /// as far as it is known to have worked: found when the board is first read after a start,
@@ -267,6 +273,54 @@ impl Board {
         })
     }
 
+    /// Where the tab stands (WORKSPACES-PLAN.md "States"): needs you (a card or question
+    /// open, or `quota_wait`), working (its turn, a worker or a phase), ready (idle with
+    /// commits its base lacks), merged (a merge of its work, recorded or seen in git, and
+    /// nothing newer unmerged), or none (untouched, or idle with nothing to merge).
+    ///
+    /// `ahead` is its branch's commits not in base now, from git; without it the records
+    /// decide: a request that settled ready after the last merge is ready.
+    pub(crate) fn tab_state(
+        &self,
+        id: &ConversationId,
+        quota_wait: bool,
+        ahead: Option<u32>,
+    ) -> Option<TabState> {
+        let activity = self.activity(id);
+        if quota_wait
+            || activity.as_ref().is_some_and(|activity| {
+                !activity.approvals.is_empty() || !activity.questions.is_empty()
+            })
+        {
+            return Some(TabState::NeedsYou);
+        }
+        if let Some(activity) = &activity
+            && (matches!(activity.run, RunState::Starting | RunState::Running)
+                || !activity.tasks.is_empty()
+                || !activity.phases.is_empty())
+        {
+            return Some(TabState::Working);
+        }
+        let merged = self
+            .orchestrator_steps
+            .iter()
+            .filter(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+            .map(|step| step.position)
+            .max();
+        let ready = self.ready.values().map(|(_, at)| *at).max();
+        match ahead {
+            Some(0) => (merged.is_some() || ready.is_some()).then_some(TabState::Merged),
+            Some(_) => Some(TabState::Ready),
+            None => match (ready, merged) {
+                (Some(ready), merged) if merged.is_none_or(|merged| ready > merged) => {
+                    Some(TabState::Ready)
+                }
+                (_, Some(_)) => Some(TabState::Merged),
+                _ => None,
+            },
+        }
+    }
+
     /// What the conversation is busy with that its sidebar row names, keyed as
     /// [`ConversationActivity::phases`] says; its thread's calls count only while `running`, in
     /// the request its turn serves.
@@ -322,7 +376,12 @@ impl Board {
                     name,
                     status: brigadier_providers::ItemStatus::InProgress,
                     ..
-                } if running && step.request_id == self.run_request => {
+                    // The active turn's own call only: an earlier turn of the same request
+                    // may have left one marked running (#253).
+                } if running
+                    && step.request_id == self.run_request
+                    && step.position >= self.run_since =>
+                {
                     let phase = match name.rsplit("__").next().unwrap_or(name) {
                         "run_check" => SessionPhase::Checking,
                         "finish_session" => SessionPhase::Merging,
@@ -463,6 +522,11 @@ impl Board {
             DomainEvent::RunStateChanged {
                 state, request_id, ..
             } => {
+                let live =
+                    |state: RunState| matches!(state, RunState::Starting | RunState::Running);
+                if live(*state) && !live(self.run) {
+                    self.run_since = stream_seq;
+                }
                 self.run = *state;
                 self.run_request.clone_from(request_id);
                 if *state != RunState::Running {
@@ -471,6 +535,12 @@ impl Board {
             }
             DomainEvent::RequestUpdated { request } => {
                 self.requests.insert(request.id.clone(), request.clone());
+            }
+            DomainEvent::RequestReady {
+                request_id, head, ..
+            } => {
+                self.ready
+                    .insert(request_id.clone(), (head.clone(), stream_seq));
             }
             DomainEvent::PeerMessageSent {
                 message_id,
@@ -1085,5 +1155,201 @@ mod rating_tests {
         };
         assert!(KINDS.contains(&rated.kind()));
         assert!(KINDS.contains(&cleared.kind()));
+    }
+}
+
+#[cfg(test)]
+mod tab_state_tests {
+    use super::*;
+    use crate::work::{Question, QuestionKind};
+
+    fn id() -> ConversationId {
+        ConversationId("tab".into())
+    }
+
+    fn event(json: serde_json::Value) -> DomainEvent {
+        serde_json::from_value(json).unwrap()
+    }
+
+    fn run(state: &str) -> DomainEvent {
+        event(serde_json::json!({
+            "type": "runStateChanged", "conversationId": "tab", "state": state,
+            "error": null, "requestId": "r1",
+        }))
+    }
+
+    fn run_check(status: &str) -> DomainEvent {
+        event(serde_json::json!({
+            "type": "orchestratorStepped",
+            "step": {
+                "requestId": "r1", "atMs": 0, "position": 0,
+                "kind": {
+                    "type": "tool", "itemId": "check-1", "name": "mcp__brigadier__run_check",
+                    "detail": null, "status": status, "throughPosition": 0,
+                },
+            },
+        }))
+    }
+
+    fn ready(request: &str) -> DomainEvent {
+        DomainEvent::RequestReady {
+            conversation_id: id(),
+            request_id: request.into(),
+            head: "abc123".into(),
+        }
+    }
+
+    fn merged() -> DomainEvent {
+        event(serde_json::json!({
+            "type": "orchestratorStepped",
+            "step": {
+                "requestId": "r2", "atMs": 0, "position": 0,
+                "kind": { "type": "merged", "branch": "brigadier/tab/session", "base": "main", "commits": 1 },
+            },
+        }))
+    }
+
+    /// Each row of the states table, first match winning: a new tab has none (not Merged); a
+    /// quota wait or an open question needs the user, over a running turn; a running turn or
+    /// a phase works; a request that settled ahead of base is ready; a merge after it is
+    /// merged, until a later request settles ahead again; idle with nothing to merge is none.
+    #[test]
+    fn a_tab_states_from_needs_you_down_to_none() {
+        let tab = id();
+        let mut board = Board::default();
+        assert_eq!(board.tab_state(&tab, false, None), None, "an untouched tab");
+        assert_eq!(board.tab_state(&tab, true, None), Some(TabState::NeedsYou));
+
+        board.apply(&run("running"), 1);
+        assert_eq!(board.tab_state(&tab, false, None), Some(TabState::Working));
+        board.questions.insert(
+            CardId("q1".into()),
+            Question {
+                id: CardId("q1".into()),
+                conversation_id: tab.clone(),
+                task_id: None,
+                request_id: Some("r1".into()),
+                position: 2,
+                kind: QuestionKind::Orchestrator,
+                text: "Which colour?".into(),
+                options: Vec::new(),
+                recommended: None,
+                items: Vec::new(),
+                answer: None,
+                answers: Vec::new(),
+                created_at_ms: 0,
+                answered_at_ms: None,
+                words_id: None,
+                answered_by: None,
+            },
+        );
+        assert_eq!(board.tab_state(&tab, false, None), Some(TabState::NeedsYou));
+        board.questions.clear();
+        board.apply(&run("idle"), 3);
+        assert_eq!(
+            board.tab_state(&tab, false, None),
+            None,
+            "idle, nothing ahead"
+        );
+
+        // A phase alone (a CI watch) is work.
+        board.apply(
+            &event(serde_json::json!({
+                "type": "orchestratorStepped",
+                "step": {
+                    "requestId": "r1", "atMs": 0, "position": 0,
+                    "kind": {
+                        "type": "ciWatch", "repo": "o/n", "branch": "main", "sha": "97c298d5",
+                        "waiting": false, "runs": [], "result": null, "consent": null,
+                    },
+                },
+            })),
+            4,
+        );
+        assert_eq!(board.tab_state(&tab, false, None), Some(TabState::Working));
+        board.orchestrator_steps.clear();
+
+        board.apply(&ready("r1"), 5);
+        assert_eq!(board.tab_state(&tab, false, None), Some(TabState::Ready));
+        board.apply(&merged(), 6);
+        assert_eq!(board.tab_state(&tab, false, None), Some(TabState::Merged));
+        board.apply(&ready("r3"), 7);
+        assert_eq!(
+            board.tab_state(&tab, false, None),
+            Some(TabState::Ready),
+            "newer work"
+        );
+        board.apply(&merged(), 8);
+        assert_eq!(board.tab_state(&tab, false, None), Some(TabState::Merged));
+    }
+
+    /// A merge with no recorded ready request (merged right away) still reads merged.
+    #[test]
+    fn a_merge_alone_reads_merged() {
+        let mut board = Board::default();
+        board.apply(&merged(), 1);
+        assert_eq!(board.tab_state(&id(), false, None), Some(TabState::Merged));
+    }
+
+    /// With git's count: commits ahead read ready whatever the records say (a late request
+    /// after a merge), none ahead read merged once the work was merged or was ever ready (a
+    /// merge from the Source panel or a terminal records no step), and an untouched tab none.
+    #[test]
+    fn the_branchs_count_now_decides_ready_and_merged() {
+        let tab = id();
+        let mut board = Board::default();
+        assert_eq!(board.tab_state(&tab, false, Some(0)), None, "untouched");
+        assert_eq!(board.tab_state(&tab, false, Some(2)), Some(TabState::Ready));
+        board.apply(&ready("r1"), 1);
+        assert_eq!(
+            board.tab_state(&tab, false, Some(0)),
+            Some(TabState::Merged),
+            "merged elsewhere"
+        );
+        board.apply(&merged(), 2);
+        assert_eq!(
+            board.tab_state(&tab, false, Some(1)),
+            Some(TabState::Ready),
+            "newer commits"
+        );
+        assert_eq!(
+            board.tab_state(&tab, false, Some(0)),
+            Some(TabState::Merged)
+        );
+        board.apply(&run("running"), 3);
+        assert_eq!(
+            board.tab_state(&tab, false, Some(1)),
+            Some(TabState::Working)
+        );
+    }
+
+    /// #253: a run_check an earlier turn left marked running is no phase of a later turn of
+    /// the same request (a reconnect reads the board); the live turn's own call is.
+    #[test]
+    fn a_phase_comes_from_the_active_turn_only() {
+        let mut board = Board::default();
+        board.apply(&run("running"), 1);
+        board.apply(&run_check("inProgress"), 2);
+        assert_eq!(
+            board.activity(&id()).unwrap().phases,
+            [("tool:check-1".to_owned(), SessionPhase::Checking)]
+        );
+        board.apply(&run("idle"), 3);
+        // A report starts another turn for the same request.
+        board.apply(&run("starting"), 4);
+        board.apply(&run("running"), 5);
+        assert!(board.activity(&id()).unwrap().phases.is_empty());
+        assert_eq!(board.tab_state(&id(), false, None), Some(TabState::Working));
+    }
+
+    /// One ready record per request: the board keeps each request's head.
+    #[test]
+    fn a_ready_record_is_kept_per_request() {
+        let mut board = Board::default();
+        board.apply(&ready("r1"), 1);
+        board.apply(&ready("r2"), 2);
+        assert_eq!(board.ready.len(), 2);
+        assert_eq!(board.ready["r1"], ("abc123".to_owned(), 1));
+        assert!(KINDS.contains(&ready("r1").kind()));
     }
 }

@@ -843,3 +843,100 @@ async fn an_open_thread_resumes_with_the_routes_note_and_joins_still_routes() {
     assert!(!last.contains("[instructions]"), "{last}");
     flow.stop().await;
 }
+
+/// A request that settles with the tab's branch ahead of base records one RequestReady with
+/// the head; the tab reads ready, then merged after its merge (whose request records none),
+/// and the board names those states.
+#[tokio::test]
+async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
+    let inputs: Inputs = Arc::default();
+    let flow = Flow::start(
+        "workspaces-ready",
+        Options::default(),
+        sharing(inputs.clone()),
+    )
+    .await;
+    let a = flow.conversation.clone();
+    let workspace = workspace_of(&flow, &a);
+    let b = flow.manager.create_tab(&workspace, None).await.unwrap().id;
+    let state = |id: &ConversationId| {
+        let tab = flow.core.conversation(id).unwrap();
+        let manager = flow.manager.clone();
+        async move { manager.tab_state(&tab).await }
+    };
+    assert_eq!(state(&b).await, None, "a new tab has no state");
+
+    flow.say_to(&a, "Write alpha.").await;
+    flow.settled_in(&a).await;
+    // Recorded before the request reads done.
+    let board = flow.core.board(&a).await.unwrap();
+    assert_eq!(board.ready.len(), 1, "{:?}", board.ready);
+    let (_, _, branch) = worktree(&flow, &a);
+    let head = git(&flow.repo, &["rev-parse", &branch]);
+    assert_eq!(board.ready.values().next().unwrap().0, head);
+    assert_eq!(state(&a).await, Some(crate::work::TabState::Ready));
+    // Settles at once record it once.
+    let request = board.ready.keys().next().unwrap().clone();
+    let mut settles = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let (manager, a, request) = (flow.manager.clone(), a.clone(), request.clone());
+        settles.spawn(async move { manager.note_ready(&a, &request).await });
+    }
+    while settles.join_next().await.is_some() {}
+    let recorded = flow
+        .events_of(&a)
+        .await
+        .into_iter()
+        .filter(|event| matches!(event, crate::model::DomainEvent::RequestReady { .. }))
+        .count();
+    assert_eq!(recorded, 1);
+
+    flow.say_to(&b, "List tabs.").await;
+    flow.settled_in(&b).await;
+    let listed = inputs.lock().unwrap().len();
+    assert!(listed > 0);
+    let answer = |flow: &Flow, id: &ConversationId| {
+        let core = flow.core.clone();
+        let id = id.clone();
+        async move {
+            core.conversation_view(id, 20)
+                .await
+                .unwrap()
+                .messages
+                .messages
+                .last()
+                .unwrap()
+                .text
+                .clone()
+        }
+    };
+    let board_text = answer(&flow, &b).await;
+    assert!(
+        board_text.contains("\"state\": \"ready to merge\""),
+        "{board_text}"
+    );
+
+    flow.manager
+        .merge_session(&a, super::click())
+        .await
+        .unwrap();
+    flow.until_in(&a, "a's merge", |board| {
+        board
+            .orchestrator_steps
+            .iter()
+            .any(|step| matches!(step.kind, crate::work::OrchestratorStepKind::Merged { .. }))
+    })
+    .await;
+    flow.settled_in(&a).await;
+    assert_eq!(state(&a).await, Some(crate::work::TabState::Merged));
+    assert_eq!(
+        flow.core.board(&a).await.unwrap().ready.len(),
+        1,
+        "the merge's own request is not ready"
+    );
+    flow.say_to(&b, "List tabs.").await;
+    flow.settled_in(&b).await;
+    let board_text = answer(&flow, &b).await;
+    assert!(board_text.contains("\"state\": \"merged\""), "{board_text}");
+    flow.stop().await;
+}

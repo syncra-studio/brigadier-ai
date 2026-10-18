@@ -1877,6 +1877,33 @@ pub enum SessionPhase {
     WatchingCi,
 }
 
+/// Where a task tab stands, as its tab and its workspace's sidebar row show it; the first
+/// that holds wins ([`crate::board::Board::tab_state`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum TabState {
+    /// An open approval, plan, question or quota wait.
+    NeedsYou,
+    /// Its turn, a worker or a phase runs.
+    Working,
+    /// Idle, with commits its base doesn't have since its last merge.
+    Ready,
+    /// Its work merged, and nothing newer is unmerged.
+    Merged,
+}
+
+impl TabState {
+    /// The state in the thread's words (the board, a [follow-up …] block).
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::NeedsYou => "needs the user",
+            Self::Working => "working",
+            Self::Ready => "ready to merge",
+            Self::Merged => "merged",
+        }
+    }
+}
+
 // ----- worker steps -----------------------------------------------------------------------
 
 /// A turn in a worker's life, as the thread tells it ("task-2 finished").

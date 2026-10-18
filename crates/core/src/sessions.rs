@@ -1569,6 +1569,41 @@ impl Core {
         Ok(stored)
     }
 
+    /// Records that request `request_id` of `id` settled with its branch ahead of base at
+    /// `head`, unless it is recorded at that head already (checked under the board's lock, so
+    /// concurrent settles record it once).
+    pub(crate) async fn record_ready(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        head: String,
+    ) -> Result<()> {
+        let mut boards = self.boards.lock().await;
+        if !boards.contains_key(id) {
+            let board = self.load_board(id).await?;
+            boards.insert(id.clone(), board);
+        }
+        if boards
+            .get(id)
+            .and_then(|board| board.ready.get(request_id))
+            .is_some_and(|(recorded, _)| *recorded == head)
+        {
+            return Ok(());
+        }
+        let event = DomainEvent::RequestReady {
+            conversation_id: id.clone(),
+            request_id: request_id.to_owned(),
+            head,
+        };
+        let stored = self
+            .record(vec![(streams::conversation(id), event.clone())])
+            .await?;
+        if let Some(board) = boards.get_mut(id) {
+            board.apply(&event, stored[0]);
+        }
+        Ok(())
+    }
+
     /// Records a request's new state, unless it already has it. Returns whether it changed.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn update_request(

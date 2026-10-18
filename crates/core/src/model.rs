@@ -2246,6 +2246,13 @@ pub enum DomainEvent {
     RequestUpdated {
         request: UserRequest,
     },
+    /// A session's request settled with its branch ahead of its base at `head`: the work is
+    /// ready to merge (a structured fact, not read from the answer's words).
+    RequestReady {
+        conversation_id: ConversationId,
+        request_id: String,
+        head: String,
+    },
     /// A worker started, finished, waits for the user, and so on.
     WorkerStepped {
         step: WorkerStep,
@@ -2567,6 +2574,7 @@ impl DomainEvent {
             Self::ThinkingDelta { .. } => "thinking.delta",
             Self::RunStateChanged { .. } => "conversation.run",
             Self::RequestUpdated { .. } => "request.updated",
+            Self::RequestReady { .. } => "request.ready",
             Self::WorkerStepped { .. } => "worker.step",
             Self::OrchestratorStepped { .. } => "orchestrator.step",
             Self::MachineStepped { .. } => "machine.step",

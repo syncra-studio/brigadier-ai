@@ -240,7 +240,7 @@ impl SessionManager {
         };
         let activity = conv.request_activity().await;
         let reviews_on = self.reviews_on();
-        let mut settled_now = false;
+        let mut told_overlaps = false;
         for request in board.requests.values() {
             let id = request.id.as_str();
             let outcome = activity.outcomes.get(id);
@@ -292,6 +292,15 @@ impl SessionManager {
             };
             let over = !matches!(state, RequestState::Working | RequestState::Waiting);
             let jobs = jobs.filter(|running| *running > 0 && state == RequestState::Working);
+            if over && matches!(request.state, RequestState::Working | RequestState::Waiting) {
+                // Before it reads done: whether it left work ready to merge, and the files a
+                // sibling tab changed too, are known by then.
+                self.note_ready(conversation_id, id).await;
+                if !told_overlaps {
+                    told_overlaps = true;
+                    self.tell_overlaps(conversation_id).await;
+                }
+            }
             if let Err(err) = self
                 .core
                 .update_request(
@@ -314,13 +323,7 @@ impl SessionManager {
                     super::request_changes::Refresh::Settle,
                 )
                 .await;
-                settled_now |=
-                    matches!(request.state, RequestState::Working | RequestState::Waiting);
             }
-        }
-        // A request that just ended may have changed files a sibling tab changed too.
-        if settled_now {
-            self.tell_overlaps(conversation_id).await;
         }
         // What another session asked and is answered now gets its reply (sent apart: it settles
         // the asker's requests in turn).

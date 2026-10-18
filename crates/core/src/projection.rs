@@ -180,6 +180,7 @@ impl Projection {
             | DomainEvent::ThinkingDelta { .. }
             | DomainEvent::RunStateChanged { .. }
             | DomainEvent::RequestUpdated { .. }
+            | DomainEvent::RequestReady { .. }
             | DomainEvent::WorkerStepped { .. }
             | DomainEvent::OrchestratorStepped { .. }
             | DomainEvent::MachineStepped { .. }

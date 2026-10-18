@@ -96,6 +96,8 @@ function summary(event: DomainEvent): string {
       return event.error === null ? event.state : `${event.state}: ${event.error}`;
     case "requestUpdated":
       return `request ${event.request.state.type}`;
+    case "requestReady":
+      return `ready at ${event.head.slice(0, 12)}`;
     case "workerStepped":
       return `${event.step.kind} ${event.step.taskId}`;
     case "orchestratorStepped":
