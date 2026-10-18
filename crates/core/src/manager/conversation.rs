@@ -3292,7 +3292,7 @@ impl SessionManager {
                     fallback.unwrap_or_else(|| model.clone()),
                     prompt,
                     servers,
-                    prompts::Current::chat(Vec::new()),
+                    prompts::Current::tab_chat(),
                 )
             }
             (Some(Setup::Chat { .. }) | None, ConversationKind::Chat) => {
@@ -6259,6 +6259,15 @@ impl SessionManager {
                     current.provider = cli.provider;
                 }
                 current
+            }
+            // A tab chat has no memories and no save_report.
+            ConversationKind::Chat
+                if self
+                    .core
+                    .conversation(&conv.id)
+                    .is_ok_and(|conversation| conversation.tab_chat.is_some()) =>
+            {
+                prompts::Current::tab_chat()
             }
             ConversationKind::Chat => {
                 prompts::Current::chat(self.memory_lines(super::brain_jobs::MEMORY_BYTES).await)

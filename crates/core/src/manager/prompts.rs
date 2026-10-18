@@ -12,6 +12,66 @@ use crate::work::{
     WorkerRole,
 };
 
+/// How every thread, Chat and tab chat writes (PLAN.md §7): brief, plain and lossless. The 10-04
+/// voice, restored whole (Q79): terse without slang, with the rules against over-compression. A
+/// macro, so the notes that restate it are built from the same words.
+macro_rules! voice_core {
+    () => {
+        "
+
+How to write:
+- Answer first: the result, the decision, or yes or no, then only what the reader needs to act on it. Most answers fit in a few lines; give full detail when the facts need it or the reader asks.
+- Cut every sentence that adds no fact: no greetings, praise, apologies, filler, restating the question, recaps or closing offers. Say each fact once. From a log, quote only the decisive line.
+- Write whole, plain sentences in the active voice, with their articles and verbs. Use plain words, not jargon. No arrows, symbols or dropped words in place of a sentence, and no emoji. Use a list only for three or more parallel items, and headings only in long answers. No bold labels (\"**Price:** …\"): say it in the sentence.
+- Lose nothing: keep every fact, number, path, name, command, error text, negation (\"not\", \"only\", \"except\") and condition exact. If you don't know something, say so once.
+- Security, irreversible actions and steps whose order matters get full, careful sentences."
+    };
+}
+
+/// What the thread's voice adds: its reply's length, fixed at its short default (BUILD-PLAN
+/// §1.4), and what stays complete.
+macro_rules! thread_voice {
+    () => {
+        "
+- To the user: the outcome in the first line, then at most about five short lines, unless they ask for more or their preferences say otherwise. Never quote a reviewer's or verifier's text to the user: name what it found in a few words. Name a worker by its title, never as task-N.
+- Plans, handoff notes, task specs, exact commands and error text, and evidence the user needs to decide stay complete; commit messages follow the project's style. An overnight run's morning answer is at most three lines: what got done, what is left, and what waits on the user."
+    };
+}
+
+/// How a research answer is laid out (Q79): the recommendation first, numbered sources folded
+/// at the end by the app.
+macro_rules! research_format {
+    () => {
+        "
+
+A research answer (you looked things up to answer):
+- Your recommendation first, in 3 to 5 lines: what to pick or do, and why. Then a short breakdown: only what changes the choice.
+- Mark each fact from a source with its number, [1] or [2, 3]. End with one `### Sources` heading, in English whatever language you write in, over a numbered list: `1. [Title](https://…)`. Nothing after it except `### Details` when that applies. Never list sources anywhere else: the app folds the list and links the numbers."
+    };
+}
+
+/// Where a research answer's full findings go, for those that have `save_report` (Q79).
+macro_rules! research_report {
+    () => {
+        "
+- Findings longer than that (many options compared, prices, a full write-up) go in a report: save it with save_report and link it in one line ([Full report](brigadier-page:…)). Never paste the report into the chat."
+    };
+}
+
+/// When an answer has Details (Q79): only when its request changed code.
+macro_rules! details_rule {
+    () => {
+        "When this request changed code, a last heading `### Details`, shown folded, holds three labelled lines: `Checks:` each check you ran in this request with its result (or \"none run\"), `Review:` its state (none for a tiny edit, off, still running, or what it found and what you fixed) and `Not checked:` what nobody checked (or \"nothing\"). An answer that changed no code (a question, research, an explained error) has no Details."
+    };
+}
+
+/// When a research question fans out to workers (Q79).
+macro_rules! research_fan_out {
+    () => {
+        "A research question that is broad or costly to get wrong (many options to compare, prices, a purchase or a choice hard to undo): split it across 2 to 4 research workers, each on its own angle (the options, prices and limits, independent tests and reviews), and write the answer from their reports. A quick fact you look up yourself."
+    };
+}
+
 /// Logged on `orch:<id>` when a conversation's CLI files were removed: the next CLI session
 /// starts over from the transcript instead of resuming.
 pub(crate) const SESSION_RESET: &str = "brigadier: CLI session reset";
@@ -120,6 +180,7 @@ You are this session's one long-lived thread: you read, search, run commands and
 How to work:
 - Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. {workers}{computer}
 - Answer code questions yourself from the Brain, code_search, code_refs and a few precise reads, quoting the file:line each point rests on (src/cart.ts:42); explain an error from the code that raises it. Never start a worker for what reading answers.
+- {fan_out}
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) with run_check, not your shell, before your final answer. {CHECK_PREFIXES} Never background a command yourself (`&`, nohup): one still going after a minute goes to the background by itself. Run dev servers and apps with start_preview.
 - {own_commits}
@@ -140,7 +201,7 @@ How to talk to the user:
 - A user message and everything it sets in motion is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. The user sees each line you write as you write it, a short one before or between tool calls too: speak when it helps them, and reply exactly {quiet} when there's nothing to say.
 - {LEAD}
 - While work runs, write one line only for: a failure of what you started (what failed, its key error line, what you do about it); work the user didn't ask for, before it starts; and [status due]: what runs and what's left.
-- When the request is done (work, a question or an error explained alike), write one final answer: at most about five short lines of what changed and what to know, and, when a review ran, what it found and what you fixed. Then, if any, one line "To check: …" only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). Then a last heading `### Details`, shown folded, which always holds three labelled lines: `Checks:` each check you ran in this request with its result (or "none run"), `Review:` its state (none for a tiny edit, off, still running, or what it found and what you fixed) and `Not checked:` what nobody checked (or "nothing"). Say code compiles, works or runs only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text.
+- When the request is done (work, a question or an error explained alike), write one final answer: at most about five short lines of what changed and what to know, and, when a review ran, what it found and what you fixed. Then, if any, one line "To check: …" only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). {details} Say code compiles, works or runs only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text.
 - Fix a known defect in a deliverable yourself, with no card (write a fixed copy; store a worker's with store_output and link it as outputs/<name>, else link its full path), or send it back, before you answer.
 - {LATE_EVENT} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that request: answer about it briefly.{voice}
@@ -148,6 +209,8 @@ How to talk to the user:
         today = today(),
         quiet = QUIET,
         voice = VOICE,
+        details = details_rule!(),
+        fan_out = research_fan_out!(),
         workers = workers_rule(start_workers).replace("{quiet}", QUIET),
         code_rules = WORKER_CODE_RULES,
         preferences = preference_lines(preferences),
@@ -332,16 +395,15 @@ fn permission_text(permission: PermissionLevel, trusted: bool) -> String {
     }
 }
 
-/// How the thread writes (PLAN.md §7): brief, plain and lossless, with the reply voice fixed at
-/// its short default (BUILD-PLAN §1.4).
-const VOICE: &str = "
-
-How to write:
-- Answer first: the result, the decision, or yes or no, then only what the reader needs to act on it. To the user: the outcome in the first line, then at most about five short lines, unless they ask for more or their preferences say otherwise; no headings or bold labels besides `### Details`. Give full detail when the facts need it.
-- Cut every sentence that adds no fact (greetings, praise, apologies, filler, restating the question, recaps, closing offers); say each fact once; from a log, quote only the decisive line. Never quote a reviewer's or verifier's text to the user: name what it found in a few words.
-- Write whole, plain sentences in the active voice: no arrows, symbols or dropped words in place of a sentence, no emoji, a list only for three or more parallel items. Name a worker by its title, never as task-N.
-- Lose nothing: keep every fact, number, path, name, command, error text, negation (\"not\", \"only\", \"except\") and condition exact. If you don't know something, say so once.
-- Security, irreversible actions and steps whose order matters get full, careful sentences. Plans, handoff notes, task specs, exact commands and error text, and evidence the user needs to decide stay complete; commit messages follow the project's style. An overnight run's morning answer is at most three lines: what got done, what is left, and what waits on the user.";
+/// The thread's voice, with how it lays out a research answer.
+const VOICE: &str = concat!(
+    voice_core!(),
+    thread_voice!(),
+    research_format!(),
+    research_report!()
+);
+/// A worker's: the voice without the research answer's layout, which is the thread's to write.
+const WORKER_WRITING: &str = concat!(voice_core!(), thread_voice!());
 
 /// The reply voice, fixed at the measured best default (PLAN.md §7, BUILD-PLAN §1.4), as the note
 /// to a thread whose instructions had Short replies off tells it; new instructions carry it in
@@ -887,6 +949,21 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, a message the user sends while you work reaches you at once as the user's message in your turn, the same as when you are idle: [follow-up …] blocks no longer come and nothing waits for route_follow_up. Judge it as you read it. If it belongs to another session of the project, send it there with message_session; if it is a separate task, say so in a line: the user can start it as a session of its own with ⌘⏎. route_follow_up is only for a message still waiting in the queue, and \"new_session\" there just leaves it waiting.",
         worker: "",
     },
+    Revision {
+        number: ANSWER_FORMAT_REVISION,
+        thread: concat!(
+            "From now on, this replaces what your instructions say about how to write, about Details and about answering research yourself:",
+            voice_core!(),
+            thread_voice!(),
+            research_format!(),
+            research_report!(),
+            "\n- ",
+            details_rule!(),
+            "\n- ",
+            research_fan_out!()
+        ),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -912,8 +989,11 @@ pub(crate) fn revision_note(told: u32, worker: bool) -> Option<String> {
     (!lines.is_empty()).then(|| format!("[instructions] {}", lines.join("\n")))
 }
 
-/// A Chat's contract: its instructions didn't change with the thread's.
-const CHAT_CONTRACT: u32 = 1;
+/// A Chat's contract: its instructions didn't change with the thread's. Version 2 gives Chats and
+/// tab chats the thread's voice and the research answer's format (Q79).
+const CHAT_CONTRACT: u32 = 2;
+/// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
+const CHAT_VOICE_CONTRACT: u32 = 2;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -929,7 +1009,21 @@ const AUTHORITY: &str = "A note at the start of a message replaces what these in
 /// The same for a Chat.
 const CHAT_AUTHORITY: &str = "Brigadier tells you in a note at the start of a message when today's date ([today]) or what you know about the user ([settings]) changed after these instructions were written. Such a note replaces what these instructions say about it, from then on.";
 
+/// How a Chat writes, and lays out a research answer with its report (Q79).
+const CHAT_VOICE: &str = concat!(voice_core!(), research_format!(), research_report!());
+/// The same for a tab chat, which has no `save_report`.
+const TAB_CHAT_VOICE: &str = concat!(voice_core!(), research_format!());
+
+/// Tells a Chat or tab chat told an older contract how it writes now (Q79).
+fn chat_voice_note(reports: bool) -> String {
+    format!(
+        "[instructions] From now on, this replaces what your instructions say about how to write:{}",
+        if reports { CHAT_VOICE } else { TAB_CHAT_VOICE }
+    )
+}
+
 const CONTRACT_LABEL: &str = "notes replace instructions";
+const CHAT_VOICE_LABEL: &str = "voice and answer format";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
@@ -1069,6 +1163,9 @@ pub(crate) struct Current {
     pub due: Vec<FirstUse>,
     /// The thread's CLI, which names Brigadier's tools in those rules.
     pub provider: ProviderKind,
+    /// Whether it has `save_report` (a thread or a Chat; a tab chat hasn't): what its notes say
+    /// about a research answer's report.
+    pub reports: bool,
 }
 
 /// Rules the thread's instructions leave out until they apply, sent in a note with the first
@@ -1269,6 +1366,9 @@ pub(crate) const SESSIONS_REVISION: u32 = 104;
 /// A message the user sends while the thread works joins the running turn at once as the
 /// user's message: no follow-up block, nothing waits to be judged (user, 10-18).
 pub(crate) const MESSAGES_JOIN_REVISION: u32 = 105;
+/// The 10-04 voice restored, research answers laid out recommendation first with folded sources
+/// and a saved report, Details only when code changed, and research fanned out (Q79).
+pub(crate) const ANSWER_FORMAT_REVISION: u32 = 106;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1324,6 +1424,15 @@ impl Current {
             workspace,
             due: Vec::new(),
             provider: ProviderKind::Claude,
+            reports: true,
+        }
+    }
+
+    /// A tab chat's: a Chat's with no memories and no `save_report`.
+    pub(crate) fn tab_chat() -> Self {
+        Self {
+            reports: false,
+            ..Self::chat(Vec::new())
         }
     }
 
@@ -1346,6 +1455,7 @@ impl Current {
             workspace: None,
             due: Vec::new(),
             provider: ProviderKind::Claude,
+            reports: true,
         }
     }
 
@@ -1418,6 +1528,16 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             label: CONTRACT_LABEL,
             told: Told {
                 contract: Some(NOTES_CONTRACT),
+                ..Told::default()
+            },
+        });
+    }
+    if now.chat && told.contract.unwrap_or(0) < CHAT_VOICE_CONTRACT {
+        notes.push(Note {
+            text: chat_voice_note(now.reports),
+            label: CHAT_VOICE_LABEL,
+            told: Told {
+                contract: Some(CHAT_VOICE_CONTRACT),
                 ..Told::default()
             },
         });
@@ -1890,7 +2010,7 @@ Rules:
 - Push, publish, deploy or open pull requests when your task asks for it. git and gh on the sign-in the user set up are fine. Never spend money, handle credentials yourself (a token, a password, the keychain directly), or delete anything outside your own work: list such steps under needs user instead.
 - If you start subagents, never use a Fable model, and never raise reasoning effort above high.
 - Files meant for the thread or the user (full findings, logs worth keeping, documents, generated images) go in your outputs folder. Brigadier attaches them to your report and the user saves them from the task card. Your scratch folder goes when the task ends: never link its path; name the output file (outputs/notes.md). Never write files to /tmp or anywhere else outside your worktree, scratch folder and test data folder, even if the task names such a place: nobody could read them, and they would be left behind. Save them in your outputs folder and say so in the report.
-- The thread reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, learned (what the next worker in this area should know that the code doesn't say plainly; each is kept in the project's Brain, with its evidence where you have it: [evidence: path:12-14 `the exact words there`] or [evidence: out-… `the words of that check's output`]), verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{VOICE}{WORKER_VOICE}{instructions}"#
+- The thread reads only your submit_report, never your messages: don't write your findings as a message, and never say in the report that they are below or in a message. When done (or when you cannot continue), call submit_report exactly once: summary, changes, decisions, learned (what the next worker in this area should know that the code doesn't say plainly; each is kept in the project's Brain, with its evidence where you have it: [evidence: path:12-14 `the exact words there`] or [evidence: out-… `the words of that check's output`]), verification (exactly what you ran and what you saw), done when, open questions, risks, needs user. Keep it short (about 800 tokens at most); anything longer goes in a file in your outputs folder, named under `artifacts` with a short title.{WORKER_CODE_TOOLS}{WORKER_CHECKS}{WORKER_WRITING}{WORKER_VOICE}{instructions}"#
     )
 }
 
@@ -2175,14 +2295,14 @@ pub(crate) fn tab_chat(target: &crate::model::TabTarget, checkout: &str) -> Stri
         }
     };
     format!(
-        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You are a chat beside {about}. It sits in a session whose checkout is {checkout}: you may read and search its files, but not change them, and you run no commands that change anything. Answer about what is beside you; keep replies short.\n{CHAT_AUTHORITY}",
+        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You are a chat beside {about}. It sits in a session whose checkout is {checkout}: you may read and search its files, but not change them, and you run no commands that change anything. Answer about what is beside you; keep replies short.\n{CHAT_AUTHORITY}{TAB_CHAT_VOICE}",
         today()
     )
 }
 
 pub(crate) fn chat(memories: &[String]) -> String {
     let mut text = format!(
-        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You are in a plain chat: there is no repository and you cannot edit code. You may search the web when current information helps; say where facts came from.\nWhen the user tells you something about themselves that will matter in later conversations (a preference, their role, what they work on), keep it with the save_memory tool, one short sentence, without announcing it: the user sees what you saved and can remove it.\n{CHAT_AUTHORITY}",
+        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You are in a plain chat: there is no repository and you cannot edit code. You may search the web when current information helps; say where facts came from.\nWhen the user tells you something about themselves that will matter in later conversations (a preference, their role, what they work on), keep it with the save_memory tool, one short sentence, without announcing it: the user sees what you saved and can remove it.\n{CHAT_AUTHORITY}{CHAT_VOICE}",
         today()
     );
     if !memories.is_empty() {
@@ -3559,8 +3679,10 @@ mod environment_tests {
         // apply, and how to brief, preview and fix CI is in their tools (BUILD-PLAN C1).
         // Raised from 11,500 by the bytes Q61's lines need (git is the thread's call, the full
         // checks its to judge), then to 11,700 for git and gh on the user's sign-in needing no
-        // approval: tokens are a tripwire, not a gate (Q58), so no trimming.
-        assert!(codex.len() < 11_700, "{}", codex.len());
+        // approval: tokens are a tripwire, not a gate (Q58), so no trimming. Then to 13,100 for
+        // the restored voice, the research answer's layout and report, and the research fan-out
+        // (Q79).
+        assert!(codex.len() < 13_100, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -3721,9 +3843,9 @@ mod environment_tests {
             };
             assert!(role_outdated(&told), "{contract:?}");
         }
-        // A Chat's instructions didn't change: it keeps resuming without a note.
+        // A Chat's instructions change by contract, through a note: it keeps resuming.
         let chat = Current::chat(Vec::new());
-        assert_eq!(chat.told().contract, Some(1));
+        assert_eq!(chat.told().contract, Some(CHAT_CONTRACT));
         assert!(notes(&chat.told(), &chat).is_empty());
     }
 
@@ -4297,8 +4419,11 @@ mod environment_tests {
         chat.today = "2026-10-04".into();
         let (told, _) = told_from_log([(1_791_108_000_000, &entry(ROLE_INSTRUCTIONS, None))]);
         let sent = notes(&told, &chat);
-        // It can't know the memories it started with: they go once.
-        assert_eq!(labels(&sent), vec![CONTRACT_LABEL, PREFERENCES_LABEL]);
+        // It can't know the memories it started with: they go once. The voice comes with them.
+        assert_eq!(
+            labels(&sent),
+            vec![CONTRACT_LABEL, CHAT_VOICE_LABEL, PREFERENCES_LABEL]
+        );
         assert_eq!(sent[0].text, format!("[instructions] {CHAT_AUTHORITY}"));
         let mut told = told;
         took(&mut told, &sent);
@@ -4565,6 +4690,132 @@ mod environment_tests {
         }
     }
 
+    /// The 10-04 voice's sentences, each restored in every thread, Chat and tab chat (Q79).
+    const RESTORED_VOICE: &[&str] = &[
+        "Most answers fit in a few lines; give full detail when the facts need it or the reader asks.",
+        "no greetings, praise, apologies, filler, restating the question, recaps or closing offers. Say each fact once.",
+        "Write whole, plain sentences in the active voice, with their articles and verbs. Use plain words, not jargon.",
+        "and headings only in long answers. No bold labels",
+        "negation (\"not\", \"only\", \"except\") and condition exact. If you don't know something, say so once.",
+        "Security, irreversible actions and steps whose order matters get full, careful sentences.",
+    ];
+
+    /// The research answer's layout (Q79), in every thread, Chat and tab chat.
+    const RESEARCH_RULES: &[&str] = &[
+        "Your recommendation first, in 3 to 5 lines",
+        "Then a short breakdown: only what changes the choice.",
+        "Mark each fact from a source with its number, [1] or [2, 3]",
+        "End with one `### Sources` heading, in English whatever language you write in",
+        "Never list sources anywhere else",
+    ];
+
+    /// Q79: the 10-04 voice is back whole in every thread, Chat and tab chat, with the research
+    /// answer's layout; the report goes to save_report where there is one, and a worker gets the
+    /// voice without the layout.
+    #[test]
+    fn every_thread_and_chat_writes_in_the_restored_voice_and_lays_out_research_answers() {
+        let threads = [
+            thread(
+                &session("fullAccess"),
+                None,
+                &[],
+                None,
+                None,
+                ProviderKind::Codex,
+                true,
+            ),
+            thread(
+                &session("fullAccess"),
+                None,
+                &[],
+                None,
+                None,
+                ProviderKind::Claude,
+                true,
+            ),
+        ];
+        let page = tab_chat(
+            &crate::model::TabTarget::Page {
+                page_id: "p1".into(),
+            },
+            "/repo",
+        );
+        let browser = tab_chat(&crate::model::TabTarget::Browser, "/repo");
+        let chat = chat(&[]);
+        for text in threads.iter().chain([&chat, &page, &browser]) {
+            for words in RESTORED_VOICE.iter().chain(RESEARCH_RULES) {
+                assert!(text.contains(words), "{words}");
+            }
+            assert!(!text.contains("besides `### Details`"));
+        }
+        // The report goes to a page where save_report is there to make one.
+        for text in threads.iter().chain([&chat]) {
+            assert!(
+                text.contains("save it with save_report")
+                    || text.contains("save it with mcp__brigadier__save_report")
+            );
+            assert!(text.contains("Never paste the report into the chat."));
+        }
+        for text in [&page, &browser] {
+            assert!(!text.contains("save_report"));
+        }
+        // The thread: Details only when code changed, and research fanned out when it warrants.
+        for text in &threads {
+            assert!(text.contains(
+                "When this request changed code, a last heading `### Details`, shown folded"
+            ));
+            assert!(text.contains("An answer that changed no code (a question, research, an explained error) has no Details."));
+            assert!(!text.contains("which always holds three labelled lines"));
+            assert!(text.contains("split it across 2 to 4 research workers"));
+            assert!(text.contains("A quick fact you look up yourself."));
+        }
+        assert!(WORKER_WRITING.contains(RESTORED_VOICE[2]));
+        assert!(!WORKER_WRITING.contains("save_report") && !WORKER_WRITING.contains("### Sources"));
+    }
+
+    /// Q79: an open thread hears the restored voice, the research layout, the Details rule and
+    /// the fan-out once, as one revision; a worker hears nothing.
+    #[test]
+    fn open_threads_hear_the_restored_voice_and_the_answer_format_once() {
+        let added = REVISIONS
+            .iter()
+            .find(|revision| revision.number == ANSWER_FORMAT_REVISION)
+            .unwrap();
+        assert!(added.worker.is_empty());
+        assert_eq!(revision(), ANSWER_FORMAT_REVISION);
+        let note = revision_note(ANSWER_FORMAT_REVISION - 1, false).unwrap();
+        for words in RESTORED_VOICE.iter().chain(RESEARCH_RULES) {
+            assert!(note.contains(words), "{words}");
+        }
+        assert!(note.contains("save it with save_report"));
+        assert!(note.contains("An answer that changed no code (a question, research, an explained error) has no Details."));
+        assert!(note.contains("split it across 2 to 4 research workers"));
+        assert!(revision_note(ANSWER_FORMAT_REVISION, false).is_none());
+        assert!(revision_note(ANSWER_FORMAT_REVISION - 1, true).is_none());
+    }
+
+    /// Q79: a Chat or tab chat told the contract before hears the voice once, the report only
+    /// where it has save_report; a new one hears nothing.
+    #[test]
+    fn open_chats_hear_the_voice_once_and_only_chats_with_save_report_hear_of_reports() {
+        for (now, reports) in [
+            (Current::chat(Vec::new()), true),
+            (Current::tab_chat(), false),
+        ] {
+            let mut told = now.told();
+            assert!(notes(&told, &now).is_empty());
+            told.contract = Some(1);
+            let sent = notes(&told, &now);
+            assert_eq!(labels(&sent), vec![CHAT_VOICE_LABEL]);
+            for words in RESTORED_VOICE.iter().chain(RESEARCH_RULES) {
+                assert!(sent[0].text.contains(words), "{words}");
+            }
+            assert_eq!(sent[0].text.contains("save_report"), reports);
+            took(&mut told, &sent);
+            assert!(notes(&told, &now).is_empty());
+        }
+    }
+
     /// A message sent while the thread works reaches it at once: open threads hear so once,
     /// with what to do about one that is a task of its own or another session's; workers
     /// hear nothing.
@@ -4575,7 +4826,7 @@ mod environment_tests {
             .find(|revision| revision.number == MESSAGES_JOIN_REVISION)
             .unwrap();
         assert!(added.worker.is_empty());
-        assert_eq!(revision(), MESSAGES_JOIN_REVISION);
+        assert!(revision() >= MESSAGES_JOIN_REVISION);
         let note = revision_note(MESSAGES_JOIN_REVISION - 1, false).unwrap();
         for words in [
             "reaches you at once as the user's message",

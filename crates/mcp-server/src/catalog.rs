@@ -10,9 +10,10 @@ use brigadier_core::tools::{
     PreviewLog, ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession,
     RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, ReviewCandidate,
     ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory,
-    SearchTranscript, SettleStep, SettleWait, StartPreview, StartVerifier, StopMerge, StopPreview,
-    StopWorker, StoreOutput, SubmitOutline, SubmitReport, SuggestFullAccess, TabChatCall, TabTools,
-    ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
+    SaveReport, SearchTranscript, SettleStep, SettleWait, StartPreview, StartVerifier, StopMerge,
+    StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport, SuggestFullAccess,
+    TabChatCall, TabTools, ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage,
+    WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -451,6 +452,11 @@ often as you like; a node with the same kind and path replaces the earlier one. 
 replaces one under another title or kind (a stale convention, reworded) names its key in \
 `replaces`; the old one is kept as history.";
 
+const SAVE_REPORT: &str = "Keep a research answer's full report as a page of the user's: \
+everything the short answer leaves out, in Markdown, with its sources. The reply gives the link \
+to put in your answer ([Full report](brigadier-page:<id>)); one click opens it. Never paste the \
+report into the chat.";
+
 const SAVE_MEMORY: &str = "Save something about the user that will help in later \
 conversations (a preference, their role, what they work on), as one short sentence. Only when \
 they state it or clearly imply it holds beyond this chat; never secrets or passing details. The \
@@ -659,6 +665,7 @@ fn orchestrator_tools() -> Vec<Tool> {
         tool("review_plan", REVIEW_PLAN, input_schema::<ReviewPlan>()),
         tool("read_page", READ_PAGE, input_schema::<ReadPage>()),
         tool("write_page", WRITE_PAGE, input_schema::<WritePage>()),
+        tool("save_report", SAVE_REPORT, input_schema::<SaveReport>()),
         tool(
             "start_preview",
             START_PREVIEW,
@@ -738,11 +745,10 @@ fn job_tools() -> Vec<Tool> {
 }
 
 fn chat_tools() -> Vec<Tool> {
-    vec![tool(
-        "save_memory",
-        SAVE_MEMORY,
-        input_schema::<SaveMemory>(),
-    )]
+    vec![
+        tool("save_memory", SAVE_MEMORY, input_schema::<SaveMemory>()),
+        tool("save_report", SAVE_REPORT, input_schema::<SaveReport>()),
+    ]
 }
 
 /// The thread's everyday tools, in the model's list from the start (Q40, BUILD-PLAN C2): a
@@ -772,6 +778,7 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
         "corrected file, fixed deliverable, worker output, Save",
     ),
     ("run", "shell command, long output, background"),
+    ("save_report", "full report, research, long findings, page"),
     (
         "offer_feedback",
         "user annoyed, frustrated, complaint, bug report, feedback",
@@ -975,6 +982,7 @@ pub fn parse_call(
                 "review_plan" => OrchestratorCall::ReviewPlan(args(name, arguments)?),
                 "read_page" => OrchestratorCall::ReadPage(args(name, arguments)?),
                 "write_page" => OrchestratorCall::WritePage(args(name, arguments)?),
+                "save_report" => OrchestratorCall::SaveReport(args(name, arguments)?),
                 "start_preview" => OrchestratorCall::StartPreview(args(name, arguments)?),
                 "stop_preview" => OrchestratorCall::StopPreview(args(name, arguments)?),
                 "preview_log" => OrchestratorCall::PreviewLog(args(name, arguments)?),
@@ -1027,6 +1035,9 @@ pub fn parse_call(
         }
         Role::Chat { .. } => match name {
             "save_memory" => Ok(ToolCall::Chat(ChatCall::SaveMemory(args::<SaveMemory>(
+                name, arguments,
+            )?))),
+            "save_report" => Ok(ToolCall::Chat(ChatCall::SaveReport(args::<SaveReport>(
                 name, arguments,
             )?))),
             _ => Err(unknown()),

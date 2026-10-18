@@ -11,7 +11,7 @@
 use super::SessionManager;
 use crate::model::{ConversationId, Mention, MessageRole, TabChat, TabTarget};
 use crate::pages::{PageContent, PageWriteOutcome, Pages};
-use crate::tools::{ReadPage, TabChatCall, ToolReply, WritePage, WriteTabFile};
+use crate::tools::{ReadPage, SaveReport, TabChatCall, ToolReply, WritePage, WriteTabFile};
 use crate::work::WorkspaceTarget;
 use crate::{Error, Result};
 use std::sync::Arc;
@@ -146,6 +146,47 @@ impl SessionManager {
                 base, current.revision
             ))),
         }
+    }
+}
+
+impl SessionManager {
+    /// `save_report`: a research answer's full report as a new page of the user's, and the link
+    /// its answer gives (Q79). Any thread or Chat may make one; it reads and changes no other page.
+    pub(super) async fn save_report(&self, args: SaveReport) -> Result<String> {
+        let title = args.title.replace('\n', " ").trim().to_owned();
+        if title.is_empty() || args.markdown.trim().is_empty() {
+            return Err(Error::Invalid(
+                "give the report a `title` and its text in `markdown`".into(),
+            ));
+        }
+        let pages = self
+            .pages
+            .get()
+            .cloned()
+            .ok_or_else(|| Error::Invalid("pages aren't available".into()))?;
+        let page = super::blocking(move || {
+            let page = pages
+                .create()
+                .map_err(|err| Error::Invalid(err.to_string()))?;
+            let content = PageContent {
+                title,
+                emoji: None,
+                body: args.markdown,
+            };
+            match pages
+                .write(&page.id, &content, &page.revision)
+                .map_err(|err| Error::Invalid(err.to_string()))?
+            {
+                PageWriteOutcome::Saved { .. } => Ok(page.id),
+                PageWriteOutcome::Conflict { .. } => Err(Error::Invalid(
+                    "the new page changed before the report was saved; save it again".into(),
+                )),
+            }
+        })
+        .await?;
+        Ok(format!(
+            "Saved as a page. Link it in your answer as [Full report](brigadier-page:{page}): one click opens it."
+        ))
     }
 }
 

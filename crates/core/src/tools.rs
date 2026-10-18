@@ -926,6 +926,18 @@ pub struct WritePage {
     pub base_revision: String,
 }
 
+/// `save_report`: keep a research answer's full report as a page of the user's, linked from the
+/// answer (Q79).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SaveReport {
+    /// The report's title, a few words ("AI models for 3D printing").
+    pub title: String,
+    /// The whole report, in Markdown (without its title): everything the short answer leaves
+    /// out, with its sources.
+    pub markdown: String,
+}
+
 /// `read_tab_file`: the file beside the chat, as it is now.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1270,6 +1282,7 @@ pub enum OrchestratorCall {
     ReviewPlan(ReviewPlan),
     ReadPage(ReadPage),
     WritePage(WritePage),
+    SaveReport(SaveReport),
     Run(RunCommand),
     RunUnsandboxed(RunUnsandboxed),
     RunCheck(ThreadRunCheck),
@@ -1327,6 +1340,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "review_plan",
     "read_page",
     "write_page",
+    "save_report",
     "run",
     "run_unsandboxed",
     "run_check",
@@ -1385,6 +1399,7 @@ impl OrchestratorCall {
             Self::ReviewPlan(_) => "review_plan",
             Self::ReadPage(_) => "read_page",
             Self::WritePage(_) => "write_page",
+            Self::SaveReport(_) => "save_report",
             Self::Run(_) => "run",
             Self::RunUnsandboxed(_) => "run_unsandboxed",
             Self::RunCheck(_) => "run_check",
@@ -1736,6 +1751,7 @@ impl JobCall {
 #[derive(Debug, Clone)]
 pub enum ChatCall {
     SaveMemory(SaveMemory),
+    SaveReport(SaveReport),
 }
 
 /// A tab chat's call.

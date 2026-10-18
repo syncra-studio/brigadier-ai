@@ -1108,6 +1108,7 @@ impl SessionManager {
     pub(super) async fn chat_call(&self, id: ConversationId, call: ChatCall) -> ToolReply {
         let result = match call {
             ChatCall::SaveMemory(args) => self.save_memory(&id, args).await,
+            ChatCall::SaveReport(args) => self.save_report(args).await,
         };
         match result {
             Ok(text) => ToolReply::ok(text),

@@ -645,6 +645,7 @@ impl SessionManager {
                 crate::heap(|| self.check_plan_mode(id)).await?;
                 crate::heap(|| self.write_page(id, args)).await
             }
+            OrchestratorCall::SaveReport(args) => crate::heap(|| self.save_report(args)).await,
             OrchestratorCall::Run(args) => {
                 crate::heap(|| {
                     self.run_tool(

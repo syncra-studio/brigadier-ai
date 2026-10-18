@@ -372,6 +372,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "review_plan" => ToolCall::Orchestrator(O::ReviewPlan(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
         "write_page" => ToolCall::Orchestrator(O::WritePage(arg(name, args))),
+        "save_report" => ToolCall::Orchestrator(O::SaveReport(arg(name, args))),
         "read_artifact" => ToolCall::Orchestrator(O::ReadArtifact(arg(name, args))),
         "run" => ToolCall::Orchestrator(O::Run(arg(name, args))),
         "run_unsandboxed" => ToolCall::Orchestrator(O::RunUnsandboxed(arg(name, args))),
