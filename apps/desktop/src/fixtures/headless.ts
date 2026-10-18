@@ -317,10 +317,22 @@ export async function renderFixtureLive(t: TestContext, page: string, resultId: 
           return call("Emulation.setDeviceMetricsOverride", { width: asked.width, height: asked.height, deviceScaleFactor: 1, mobile: false });
         case "key": {
           const key = keyEvent(asked.key);
+          const held = asked.modifiers ?? [];
+          const modifiers = held.reduce((bits, name) => bits | { Alt: 1, Control: 2, Meta: 4, Shift: 8 }[name], 0);
+          // With ⌘ or Ctrl held a letter types nothing.
+          const text = held.includes("Meta") || held.includes("Control") ? undefined : key.text;
           // A key that types (Enter's "\r", a digit) is a keyDown with its text, as a keyboard's.
-          await call("Input.dispatchKeyEvent", { ...key, type: key.text ? "keyDown" : "rawKeyDown" });
-          return call("Input.dispatchKeyEvent", { ...key, type: "keyUp", text: undefined });
+          await call("Input.dispatchKeyEvent", { ...key, text, modifiers, type: text ? "keyDown" : "rawKeyDown" });
+          return call("Input.dispatchKeyEvent", { ...key, modifiers, type: "keyUp", text: undefined });
         }
+        case "type":
+          // Each character as the keyboard sends it: a key down carrying its text, then up.
+          for (const char of asked.text) {
+            const code = /^[a-z]$/i.test(char) ? `Key${char.toUpperCase()}` : /^[0-9]$/.test(char) ? `Digit${char}` : "";
+            await call("Input.dispatchKeyEvent", { type: "keyDown", key: char, code, text: char, unmodifiedText: char });
+            await call("Input.dispatchKeyEvent", { type: "keyUp", key: char, code });
+          }
+          return undefined;
         case "click":
           await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: asked.x, y: asked.y });
           await call("Input.dispatchMouseEvent", { type: "mousePressed", x: asked.x, y: asked.y, button: "left", buttons: 1, clickCount: 1 });

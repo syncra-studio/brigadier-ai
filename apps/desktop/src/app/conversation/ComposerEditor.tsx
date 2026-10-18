@@ -64,6 +64,8 @@ import {
   pastedTextFile,
 } from "@/components/assistant-ui/elements/attachment-tile";
 import {
+  ALL_CHIPS,
+  type ChipKinds,
   ChipComposerInput,
   chipFormatter,
   imageChip,
@@ -77,6 +79,7 @@ import {
   stopDictation,
   useDictation,
 } from "@/state/dictation";
+import { useRichComposer } from "@/state/composerMode";
 import { NEW_CHAT_SCOPE } from "@/state/drafts";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
@@ -86,10 +89,14 @@ export type ComposerInputProps = {
   autoFocus: boolean;
 };
 
+/** The rich field's chips: code is a mark there, not a chip. */
+const RICH_CHIPS: ChipKinds = { code: false, links: true };
+
 /**
  * The text field (assistant-ui's Lexical input): grows with its text up to a quarter of the
- * window, then scrolls, the top line fading under the edge once scrolled. Mentions, inline
- * code and links show as chips while the text stays plain.
+ * window, then scrolls, the top line fading under the edge once scrolled. Mentions, links and
+ * pasted images show as chips. The rich field shows Markdown as formatting and keeps its text
+ * as Markdown; the plain one keeps it as typed, inline code a chip too.
  */
 export default function ComposerEditor({
   placeholder,
@@ -105,10 +112,12 @@ export default function ComposerEditor({
   const memory = target?.mentions ?? null;
   const targets = target?.targets;
   useEffect(() => memory?.setWorkers(targets ?? []), [memory, targets]);
+  const rich = useRichComposer();
+  const kinds = rich ? RICH_CHIPS : ALL_CHIPS;
   // One formatter per memory: a new one would rebuild every chip.
   const formatter = useMemo(
-    () => chipFormatter((text, at) => memory?.match(text, at) ?? null, imageMarkerAt),
-    [memory],
+    () => chipFormatter((text, at) => memory?.match(text, at) ?? null, imageMarkerAt, kinds),
+    [memory, kinds],
   );
   // Images whose chip was deleted, by number, for undo to bring back.
   const deleted = useMemo(() => new Map<number, File | CreateAttachment>(), []);
@@ -121,6 +130,10 @@ export default function ComposerEditor({
   );
   return (
     <ChipComposerInput
+      // The other field, on a switch, reads the same text afresh.
+      key={rich ? "rich" : "plain"}
+      rich={rich}
+      kinds={kinds}
       formatter={formatter}
       mentionLook={mentionLook}
       onMention={onMention}

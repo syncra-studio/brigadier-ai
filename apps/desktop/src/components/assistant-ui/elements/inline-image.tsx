@@ -12,7 +12,10 @@ import {
 } from "@/components/assistant-ui/elements/attachment-tile";
 import { ImageContextMenu, ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import type { AttachmentRef } from "@/ipc/generated";
+import { inlineImageLabel } from "@/components/assistant-ui/elements/chipText";
 import { cn } from "@/lib/utils";
+
+export { inlineImageLabel };
 
 /**
  * The `[Image #n]` number of a composer attachment pasted into the text, or null for one in
@@ -27,10 +30,6 @@ export function composerInlineNumber(
     : (reader?.composerRef(attachment.id)?.inline ?? null);
 }
 
-/** What a pasted image is called where it sits in the text. */
-export function inlineImageLabel(n: number): string {
-  return `Image #${n}`;
-}
 
 /**
  * An image pasted into the text, where it was pasted: a chip with its thumbnail and

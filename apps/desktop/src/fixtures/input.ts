@@ -2,8 +2,13 @@
 export type FixtureInput =
   | { type: "wheel"; x: number; y: number; deltaX?: number; deltaY?: number }
   | { type: "viewport"; width: number; height: number }
-  /** A real key press (down, then up) to whatever has focus, as the keyboard sends it. */
-  | { type: "key"; key: string }
+  /**
+   * A real key press (down, then up) to whatever has focus, as the keyboard sends it, with the
+   * modifiers held.
+   */
+  | { type: "key"; key: string; modifiers?: ("Alt" | "Control" | "Meta" | "Shift")[] }
+  /** Text typed a character at a time, as a keyboard's input method sends it. */
+  | { type: "type"; text: string }
   /** A real click (pointer down, then up) at a point in the page. */
   | { type: "click"; x: number; y: number }
   /** The pointer moved to a point, without a click. */

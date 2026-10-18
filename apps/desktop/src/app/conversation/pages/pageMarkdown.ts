@@ -52,7 +52,7 @@ export const PAGE_NODES: Klass<LexicalNode>[] = [
   TableNode, TableRowNode, TableCellNode, HorizontalRuleNode,
 ];
 
-const DIVIDER: ElementTransformer = {
+export const DIVIDER: ElementTransformer = {
   dependencies: [HorizontalRuleNode],
   export: (node) => ($isHorizontalRuleNode(node) ? "---" : null),
   regExp: /^(?:---|\*\*\*|___)\s?$/,

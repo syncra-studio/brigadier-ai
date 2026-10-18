@@ -1,8 +1,4 @@
-import type {
-  Unstable_DirectiveFormatter,
-  Unstable_DirectiveSegment,
-  Unstable_TriggerItem,
-} from "@assistant-ui/react";
+import type { Unstable_DirectiveFormatter, Unstable_TriggerItem } from "@assistant-ui/react";
 import {
   $createDirectiveNodeWithFormatter,
   $isDirectiveNode,
@@ -11,6 +7,7 @@ import {
   LexicalComposerInput,
   type LexicalComposerInputProps,
 } from "@assistant-ui/react-lexical";
+import { $isCodeNode } from "@lexical/code";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { mergeRegister } from "@lexical/utils";
 import { Globe } from "@openai/apps-sdk-ui/components/Icon";
@@ -47,145 +44,30 @@ import {
   useState,
 } from "react";
 
-import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
+import { RichComposerInput } from "@/components/assistant-ui/elements/rich-composer-input";
 import {
-  ComposerInlineImage,
-  inlineImageLabel,
-} from "@/components/assistant-ui/elements/inline-image";
+  ALL_CHIPS,
+  type ChipKinds,
+  CODE,
+  completedTokens,
+  IMAGE_CHIP,
+  SPACE,
+  URL_CHIP,
+} from "@/components/assistant-ui/elements/chipText";
+import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
+import { ComposerInlineImage } from "@/components/assistant-ui/elements/inline-image";
 import { cn } from "@/lib/utils";
 
-/** A mention the app knows at a place in the text: its label (after `@`), kind and id. */
-export type ChipMention = { label: string; type: string; id: string };
-
-/** The known mention whose `@label` starts at `at` in `text` (`at` is past the `@`), if any. */
-export type MentionMatcher = (text: string, at: number) => ChipMention | null;
-
-/** The `[Image #n]` starting at `at` in `text`, if one does: its number and length. */
-export type ImageMatcher = (text: string, at: number) => { n: number; length: number } | null;
-
-/** Inline code and links are chips too, next to the app's mentions, and pasted images. */
-const CODE = "code";
-const URL_CHIP = "url";
-const IMAGE_CHIP = "image";
-
-/** The chip for image `n` pasted into the text, which stands for `[Image #n]`. */
-export function imageChip(n: number): Unstable_TriggerItem {
-  return { id: `${IMAGE_CHIP}:${n}`, type: IMAGE_CHIP, label: inlineImageLabel(n) };
-}
-
-const CODE_TOKEN = /(?<!`)`([^`\n]+)`(?!`)/y;
-const URL_TOKEN = /https?:\/\/[^\s<>"'`]+/y;
-/** Punctuation that ends a sentence after a link rather than belonging to it. */
-const URL_TAIL = /[.,;:!?)\]}]+$/;
-const SPACE = /\s/;
-/** A character that would make `@label` part of a longer word or path. */
-const WORD = /[\p{L}\p{N}_\-./]/u;
-
-type Token = { start: number; end: number; segment: Unstable_DirectiveSegment };
-
-const noMentions: MentionMatcher = () => null;
-const noImages: ImageMatcher = () => null;
-
-/** The chip token starting at `at` in `text`, if one does. */
-function tokenAt(
-  text: string,
-  at: number,
-  mention: MentionMatcher,
-  image: ImageMatcher = noImages,
-): Token | null {
-  const char = text[at];
-  const afterSpace = at === 0 || SPACE.test(text[at - 1] ?? "");
-  if (char === "[") {
-    const marker = image(text, at);
-    if (marker) {
-      return {
-        start: at,
-        end: at + marker.length,
-        segment: { kind: "mention", ...imageChip(marker.n) },
-      };
-    }
-  }
-  if (char === "`") {
-    CODE_TOKEN.lastIndex = at;
-    const code = CODE_TOKEN.exec(text);
-    if (code?.[1]) {
-      const label = code[1];
-      return {
-        start: at,
-        end: at + code[0].length,
-        segment: { kind: "mention", type: CODE, label, id: `${CODE}:${label}` },
-      };
-    }
-  }
-  if (char === "h" && afterSpace) {
-    URL_TOKEN.lastIndex = at;
-    const url = URL_TOKEN.exec(text)?.[0].replace(URL_TAIL, "");
-    if (url && url.length > "https://".length) {
-      return {
-        start: at,
-        end: at + url.length,
-        segment: { kind: "mention", type: URL_CHIP, label: url, id: `${URL_CHIP}:${url}` },
-      };
-    }
-  }
-  if (char === "@" && afterSpace) {
-    const known = mention(text, at + 1);
-    const end = known ? at + 1 + known.label.length : -1;
-    if (known && !WORD.test(text[end] ?? "")) {
-      return { start: at, end, segment: { kind: "mention", ...known } };
-    }
-  }
-  return null;
-}
-
-/**
- * Text to segments: plain text, and the chips in it (the app's `@` mentions, `` `code` ``,
- * links and pasted images). The one parse behind a draft, a recalled prompt and a pulled queue
- * message.
- */
-export function parseChips(
-  text: string,
-  mention: MentionMatcher,
-  image: ImageMatcher = noImages,
-): Unstable_DirectiveSegment[] {
-  const segments: Unstable_DirectiveSegment[] = [];
-  let plain = 0;
-  let at = 0;
-  while (at < text.length) {
-    const token = tokenAt(text, at, mention, image);
-    if (!token) {
-      at += 1;
-      continue;
-    }
-    if (token.start > plain) segments.push({ kind: "text", text: text.slice(plain, token.start) });
-    segments.push(token.segment);
-    at = token.end;
-    plain = at;
-  }
-  if (plain < text.length) segments.push({ kind: "text", text: text.slice(plain) });
-  return segments;
-}
-
-/**
- * The composer's directive formatter: a chip's text is what it stands for (`@label`,
- * `` `code` ``, the link, `[Image #n]`), so the message itself stays plain text.
- */
-export function chipFormatter(
-  mention: MentionMatcher,
-  image: ImageMatcher = noImages,
-): Unstable_DirectiveFormatter {
-  return {
-    serialize: (item) =>
-      item.type === CODE
-        ? `\`${item.label}\``
-        : item.type === URL_CHIP
-          ? item.label
-          : item.type === IMAGE_CHIP
-            ? `[${item.label}]`
-            : `@${item.label}`,
-    parse: (text) => parseChips(text, mention, image),
-  };
-}
+export {
+  ALL_CHIPS,
+  type ChipKinds,
+  type ChipMention,
+  chipFormatter,
+  imageChip,
+  type ImageMatcher,
+  type MentionMatcher,
+  parseChips,
+} from "@/components/assistant-ui/elements/chipText";
 
 /** The app's icon and name for a mention chip of `type` (a worker's glyph and name, a chat's title). */
 export type MentionLook = (chip: DirectiveChipProps) => { icon: ReactNode; name: ReactNode } | null;
@@ -308,34 +190,6 @@ function $unwrapChipBeforeCaret(): boolean {
 }
 
 
-/**
- * The code and link tokens in `text` that are complete: a closed `` `…` ``, a link with a space
- * after it (or, pasted, at the end). With `caret`, only the one whose last character was just
- * typed there.
- */
-function completedTokens(text: string, caret: number | null): Token[] {
-  const tokens: Token[] = [];
-  for (let at = 0; at < text.length; at += 1) {
-    const token = tokenAt(text, at, noMentions);
-    if (!token || token.segment.kind !== "mention") continue;
-    // A link is complete once a space follows it (after any closing punctuation).
-    let completedAt = token.end;
-    if (token.segment.type === URL_CHIP) {
-      URL_TOKEN.lastIndex = at;
-      const rawEnd = at + (URL_TOKEN.exec(text)?.[0].length ?? 0);
-      completedAt =
-        caret === null && rawEnd === text.length
-          ? rawEnd
-          : SPACE.test(text[rawEnd] ?? "")
-            ? rawEnd + 1
-            : -1;
-    }
-    if (completedAt >= 0 && (caret === null || completedAt === caret)) tokens.push(token);
-    at = token.end - 1;
-  }
-  return tokens;
-}
-
 /** What turns off the webview's text checking (smart quotes and dashes, auto-correct, capitals). */
 const PLAIN_TYPING = { spellcheck: "false", autocorrect: "off", autocapitalize: "off" };
 
@@ -372,9 +226,11 @@ function keepDoubleSpace(event: InputEvent) {
  */
 function ChipsPlugin({
   formatter,
+  kinds,
   editorRef,
 }: {
   formatter: Unstable_DirectiveFormatter;
+  kinds: ChipKinds;
   /** Where the input keeps the editor, for work after a menu pick. */
   editorRef: RefObject<LexicalEditor | null>;
 }) {
@@ -404,7 +260,8 @@ function ChipsPlugin({
         editor.getRootElement()?.removeEventListener("beforeinput", keepDoubleSpace, true);
       },
       editor.registerNodeTransform(TextNode, (node) => {
-        if (editor.isComposing() || !node.isSimpleText()) return;
+        if (editor.isComposing() || !node.isSimpleText() || node.hasFormat("code")) return;
+        if ($isCodeNode(node.getParent())) return;
         const selection = $getSelection();
         const caret =
           $isRangeSelection(selection) &&
@@ -415,7 +272,7 @@ function ChipsPlugin({
         const pasted = $hasUpdateTag(PASTE_TAG);
         if (!pasted && caret < 0) return;
         // One chip per pass: the rest of the text is transformed again.
-        const token = completedTokens(node.getTextContent(), pasted ? null : caret)[0];
+        const token = completedTokens(node.getTextContent(), pasted ? null : caret, kinds)[0];
         if (!token || token.segment.kind !== "mention") return;
         const { type, label, id } = token.segment;
         const parts = node.splitText(token.start, token.end);
@@ -459,15 +316,17 @@ function ChipsPlugin({
         COMMAND_PRIORITY_NORMAL,
       ),
     );
-  }, [editor, formatter]);
+  }, [editor, formatter, kinds]);
   return null;
 }
 
 /**
  * assistant-ui's Lexical composer input with inline chips: a mention shows its icon
  * and blue name, `` `code` `` a mono pill, a link a globe and blue text, while the composer's
- * text stays plain. It grows with its text up to `max-h-composer-max`, then scrolls, the top
- * line fading under the edge. `children` are further Lexical plugins.
+ * text stays plain. `rich`, it is the rich field instead (rich-composer-input), whose text is
+ * Markdown and whose code is a mark, not a chip. It grows with its text up to
+ * `max-h-composer-max`, then scrolls, the top line fading under the edge. `children` are
+ * further Lexical plugins.
  */
 export const ChipComposerInput: FC<
   Omit<LexicalComposerInputProps, "formatter" | "directiveChip" | "directivePluginProps"> & {
@@ -477,8 +336,12 @@ export const ChipComposerInput: FC<
     onMention?: (item: Unstable_TriggerItem) => void;
     /** One line (under an action card): it doesn't grow, it scrolls. */
     line?: boolean;
+    /** The rich field, whose text is Markdown. */
+    rich?: boolean;
+    /** The chips its text makes (all of them by default). */
+    kinds?: ChipKinds;
   }
-> = ({ formatter, mentionLook, onMention, line = false, className, children, ...props }) => {
+> = ({ formatter, mentionLook, onMention, line = false, rich = false, kinds = ALL_CHIPS, className, children, ...props }) => {
   const [scrolled, setScrolled] = useState(false);
   const editor = useRef<LexicalEditor | null>(null);
   const directivePluginProps = useMemo(
@@ -502,10 +365,14 @@ export const ChipComposerInput: FC<
     }),
     [onMention],
   );
+  const { submitMode, cancelOnEscape, ...shared } = props;
+  const Input = rich ? RichComposerInput : LexicalComposerInput;
+  const plainOnly = rich ? {} : { submitMode, cancelOnEscape };
   return (
     <MentionLookContext.Provider value={mentionLook ?? null}>
-      <LexicalComposerInput
-        {...props}
+      <Input
+        {...shared}
+        {...plainOnly}
         directivePluginProps={directivePluginProps}
         formatter={formatter}
         directiveChip={ComposerChip}
@@ -522,9 +389,9 @@ export const ChipComposerInput: FC<
           className,
         )}
       >
-        <ChipsPlugin formatter={formatter} editorRef={editor} />
+        <ChipsPlugin formatter={formatter} kinds={kinds} editorRef={editor} />
         {children}
-      </LexicalComposerInput>
+      </Input>
     </MentionLookContext.Provider>
   );
 };
