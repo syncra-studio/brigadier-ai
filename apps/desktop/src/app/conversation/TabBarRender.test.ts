@@ -73,3 +73,19 @@ for (const reduced of [false, true]) {
     assert.match(style.shadow, /\/ 0\.082\)/, "active hairline is 8.2%");
   });
 }
+
+test("in a workspace the strip shows its task tabs with their states, then the open tab's own; ⌘T opens a task tab and ⌘1–9 count across", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "tabbar.html?workspace=1", "tabbar-result", 60000)) as Record<string, unknown>;
+  if (process.env.TABBAR_SEEN) console.log(JSON.stringify(seen, null, 2));
+  assert.deepEqual(seen.labels, ["Write the intro", "Tidy the release notes", "Fix the links"], "the task tabs, oldest first, this one among them");
+  assert.deepEqual(seen.states, [["task:sib-1", "ready"], ["task:sib-2", "working"]], "each task tab shows its state; this one has none");
+  assert.deepEqual(seen.group, ["task:sib-1", "chat", "task:sib-2", "+task", "|"], "the task group, its +, then the divider before the open tab's own tabs");
+  assert.equal(seen.taskScroller, "auto", "the task tabs scroll once they fill their room");
+  assert.deepEqual(seen.first, { type: "conversation", id: "sib-1" }, "⌘1 opens the first task tab");
+  assert.equal(seen.fourth, true, "⌘4 is the first of the open tab's own tabs, after three task tabs");
+  assert.equal(seen.second, "chat", "⌘2 is this task tab: its chat");
+  assert.deepEqual(seen.created, { method: "createTab", workspaceId: "ws-fixture", setup: null }, "⌘T opens a task tab in the workspace");
+  assert.equal(seen.openedNew, true, "and shows it");
+  assert.deepEqual(seen.afterNew, ["Write the intro", "Tidy the release notes", "Fix the links", "New tab", "New browser"]);
+  assert.deepEqual(seen.archived, { method: "archive", ids: ["sib-2"] }, "a sibling's × archives it");
+});

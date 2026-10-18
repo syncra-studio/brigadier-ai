@@ -60,7 +60,7 @@ function workingDirectory(conversation: Conversation): string | null {
   return (setup.environment.type === "newWorktree" && setup.environment.path) || setup.repo;
 }
 
-/** A worktree session's own workspace: what "Close workspace" removes, and where it merges. */
+/** A worktree session's own worktree: what "Remove worktree" removes, and where it merges. */
 interface SessionWorkspace {
   path: string;
   branch: string;
@@ -102,7 +102,7 @@ async function copy(text: string, done: string) {
 
 /**
  * The header's ⋯ "Chat actions": Rename ⌥⌘R, Pin ⌥⌘P, Archive ⇧⌘A; a session's New session (in
- * its project) and, with a worktree of its own, Close workspace…; Copy › (working directory,
+ * its project) and, with a worktree of its own, Remove worktree…; Copy › (working directory,
  * Markdown); Fork ›; Open in › (a session's working directory). Share, side chats, scheduled
  * tasks and new windows need what Brigadier doesn't have, so they are not offered.
  */
@@ -198,7 +198,7 @@ export const ChatActions: FC<{
               {workspace && (
                 <DropdownMenuItem onSelect={() => setClosing(true)}>
                   <Trash />
-                  Close workspace…
+                  Remove worktree…
                 </DropdownMenuItem>
               )}
               {(projectId || workspace) && <DropdownMenuSeparator />}
@@ -290,7 +290,7 @@ export const ChatActions: FC<{
   );
 };
 
-/** The confirm before "Close workspace": it names the folder that goes and the branch that stays. */
+/** The confirm before "Remove worktree": it names the folder that goes and the branch that stays. */
 const CloseWorkspaceDialog: FC<{
   conversationId: string;
   workspace: SessionWorkspace;
@@ -302,12 +302,12 @@ const CloseWorkspaceDialog: FC<{
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Close workspace?</DialogTitle>
+          <DialogTitle>Remove worktree?</DialogTitle>
           <DialogDescription>
             This removes the folder <code className="break-all">{workspace.path}</code>. Uncommitted
             changes are kept as a commit on <code>{workspace.branch}</code>, and the branch stays
             unless all of its work is already on <code>{workspace.base}</code>. The session&apos;s
-            next change makes a fresh workspace in the same folder.
+            next change makes a fresh worktree in the same folder.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -326,13 +326,13 @@ const CloseWorkspaceDialog: FC<{
                   onOpenChange(false);
                 })
                 .catch((error: unknown) =>
-                  toast(`Couldn't close the workspace: ${error instanceof Error ? error.message : String(error)}`, { tone: "error" }),
+                  toast(`Couldn't remove the worktree: ${error instanceof Error ? error.message : String(error)}`, { tone: "error" }),
                 )
                 .finally(() => setBusy(false));
             }}
           >
             {busy && <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" />}
-            Close workspace
+            Remove worktree
           </Button>
         </DialogFooter>
       </DialogContent>

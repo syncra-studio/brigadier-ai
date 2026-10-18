@@ -875,6 +875,22 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
     let head = git(&flow.repo, &["rev-parse", &branch]);
     assert_eq!(board.ready.values().next().unwrap().0, head);
     assert_eq!(state(&a).await, Some(crate::work::TabState::Ready));
+    let settled = |flow: &Flow| {
+        let manager = flow.manager.clone();
+        async move {
+            manager
+                .settled_tabs()
+                .await
+                .into_iter()
+                .map(|tab| (tab.conversation_id, tab.state))
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        settled(&flow).await,
+        [(a.clone(), crate::work::TabState::Ready)],
+        "the app reads the ready tab, not the untouched one"
+    );
     // Settles at once record it once.
     let request = board.ready.keys().next().unwrap().clone();
     let mut settles = tokio::task::JoinSet::new();
@@ -929,6 +945,10 @@ async fn a_settled_request_ahead_of_base_is_recorded_ready_once() {
     .await;
     flow.settled_in(&a).await;
     assert_eq!(state(&a).await, Some(crate::work::TabState::Merged));
+    assert_eq!(
+        settled(&flow).await,
+        [(a.clone(), crate::work::TabState::Merged)]
+    );
     assert_eq!(
         flow.core.board(&a).await.unwrap().ready.len(),
         1,

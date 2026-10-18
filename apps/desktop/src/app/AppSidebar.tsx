@@ -63,6 +63,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { openFolder } from "@/ipc/client";
 import type { Conversation, Project, SessionPhase } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
+import { workspacesOn } from "@/lib/workspaces";
 import {
   archive,
   archiveAll,
@@ -73,13 +74,14 @@ import {
   setProjectExpanded,
   stepHistory,
 } from "@/state/actions";
-import { useRowActivity } from "@/state/activity";
+import { rowActivity, useActivity, useRowActivity } from "@/state/activity";
 import { openAddProject } from "@/state/addProject";
 import { exportProjectConventions } from "@/state/brain";
 import { useCanStep } from "@/state/history";
 import { lastFinished, unread, useLastOpened } from "@/state/lastOpened";
 import { askDelete, clearPicked, pickClick, pickedIn, prunePicked, usePicked } from "@/state/picking";
 import { useApp } from "@/state/store";
+import { rowTabs, stateWords, strongestState, useTabStates } from "@/state/tabStates";
 
 // ----- titlebar --------------------------------------------------------------------------
 
@@ -137,6 +139,11 @@ type Sections = {
   chats: Conversation[];
   projects: Project[];
   sessions: Record<string, Conversation[]>;
+  /**
+   * With workspaces, a project lists one row per workspace (its tab touched last stands for
+   * it): each workspace's tabs, touched last first.
+   */
+  workspaceTabs: Record<string, string[]>;
 };
 
 /** What the rows can ask the sidebar to do. */
@@ -165,10 +172,15 @@ function useSections(): Sections {
       .filter((conversation) => conversation.pinnedAtMs === null)
       .toSorted((a, b) => b.updatedAtMs - a.updatedAtMs);
     const sessions: Record<string, Conversation[]> = {};
+    const workspaceTabs: Record<string, string[]> = {};
     const chats: Conversation[] = [];
     for (const conversation of recent) {
       if (conversation.kind === "chat" || !conversation.projectId) {
         chats.push(conversation);
+      } else if (workspacesOn() && conversation.workspaceId && !conversation.tabChat) {
+        const tabs = (workspaceTabs[conversation.workspaceId] ??= []);
+        if (tabs.length === 0) (sessions[conversation.projectId] ??= []).push(conversation);
+        tabs.push(conversation.id);
       } else {
         (sessions[conversation.projectId] ??= []).push(conversation);
       }
@@ -179,7 +191,7 @@ function useSections(): Sections {
     const sortedProjects = Object.values(projects).toSorted(
       (a, b) => lastActivity(b) - lastActivity(a),
     );
-    return { pinned, chats, projects: sortedProjects, sessions };
+    return { pinned, chats, projects: sortedProjects, sessions, workspaceTabs };
   }, [projects, conversations]);
 }
 
@@ -219,7 +231,7 @@ function useFoldedSections() {
  * are any), Projects with their sessions, and Chats. Each section folds away from its title.
  */
 export function AppSidebar() {
-  const { pinned, chats, projects, sessions } = useSections();
+  const { pinned, chats, projects, sessions, workspaceTabs } = useSections();
   const activeId = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : null));
   const draftProjectId = useApp((s) =>
     s.selection.type === "draft" && s.selection.kind === "session" ? s.selection.projectId : null,
@@ -359,6 +371,7 @@ export function AppSidebar() {
                 key={project.id}
                 project={project}
                 sessions={sessions[project.id] ?? NO_SESSIONS}
+                workspaceTabs={workspaceTabs}
                 activeId={activeId}
                 drafting={draftProjectId === project.id}
                 actions={actions}
@@ -711,6 +724,7 @@ const hideOnRowHover =
 const ProjectRow = memo(function ProjectRow({
   project,
   sessions,
+  workspaceTabs,
   activeId,
   drafting,
   actions,
@@ -719,6 +733,7 @@ const ProjectRow = memo(function ProjectRow({
 }: {
   project: Project;
   sessions: Conversation[];
+  workspaceTabs: Record<string, string[]>;
   activeId: string | null;
   drafting: boolean;
   actions: RowActions;
@@ -808,15 +823,19 @@ const ProjectRow = memo(function ProjectRow({
       </div>
       <NavFold open={expanded}>
         <NavList className="pt-px pb-2">
-          {sessions.map((conversation) => (
-            <ConversationRow
-              key={conversation.id}
-              conversation={conversation}
-              active={conversation.id === activeId}
-              actions={actions}
-              nested
-            />
-          ))}
+          {sessions.map((conversation) => {
+            const tabs = conversation.workspaceId ? workspaceTabs[conversation.workspaceId] : undefined;
+            return (
+              <ConversationRow
+                key={conversation.id}
+                conversation={conversation}
+                active={activeId !== null && (tabs ?? [conversation.id]).includes(activeId)}
+                actions={actions}
+                tabs={tabs}
+                nested
+              />
+            );
+          })}
           {sessions.length === 0 && <NavEmpty className="ps-8">No sessions yet</NavEmpty>}
         </NavList>
       </NavFold>
@@ -896,6 +915,59 @@ function RowStatus({ conversationId }: { conversationId: string }) {
 }
 
 /**
+ * At the end of a workspace's row: the strongest state of its tabs, with how many share it
+ * ("2 working"). A lone tab working or waiting on a card shows as its own row would (named by
+ * its phase, "Awaiting approval"); with no state the row shows its unread dot.
+ */
+function WorkspaceStatus({ tabs }: { tabs: readonly string[] }) {
+  const states = useTabStates(tabs);
+  const strongest = strongestState(states);
+  const lone = strongest?.count === 1 ? tabs[states.indexOf(strongest.state)] : undefined;
+  const awaiting = useActivity((s) => (lone ? rowActivity(s.byConversation[lone]).awaiting !== null : false));
+  if (!strongest) return <RowStatus conversationId={tabs[0]!} />;
+  if (lone && (strongest.state === "working" || (strongest.state === "needsYou" && awaiting))) {
+    return <RowStatus conversationId={lone} />;
+  }
+  const words = stateWords(strongest);
+  if (strongest.state === "needsYou") {
+    return (
+      <span
+        data-slot="row-status"
+        data-status={strongest.state}
+        className={cn(
+          "bg-success/15 text-success rounded-capsule h-pill px-pill flex shrink-0 items-center text-2xs whitespace-nowrap",
+          hideOnRowHover,
+        )}
+      >
+        {words}
+      </span>
+    );
+  }
+  return (
+    <span
+      data-slot="row-status"
+      data-status={strongest.state}
+      className={cn(
+        "flex shrink-0 items-center gap-1 text-2xs whitespace-nowrap",
+        strongest.state === "ready" ? "text-link" : "text-muted-foreground",
+        hideOnRowHover,
+      )}
+    >
+      {strongest.state === "working" && (
+        <Spinner className="size-icon-sm shrink-0 animate-spin motion-reduce:animate-none" />
+      )}
+      {words}
+    </span>
+  );
+}
+
+/** Of `tabs`, the one the user had open last (else the first, touched last). */
+function lastOpenedOf(tabs: readonly string[]): string {
+  const at = useLastOpened.getState().at;
+  return tabs.reduce((best, id) => ((at[id] ?? 0) > (at[best] ?? 0) ? id : best), tabs[0]!);
+}
+
+/**
  * A chat or session: its title, its state at the end, and on hover Pin and Archive. A
  * right-click opens its menu (Pin, Rename…, Archive, Delete…), or on one of several picked
  * rows the menu for all of them (Archive (N), Delete (N)…). ⌘-click (Ctrl-click off macOS)
@@ -905,21 +977,37 @@ const ConversationRow = memo(function ConversationRow({
   conversation,
   active,
   actions,
+  tabs,
   nested = false,
 }: {
   conversation: Conversation;
   active: boolean;
   actions: RowActions;
+  /**
+   * Its workspace's tabs, with workspaces: the row stands for the workspace, opens the tab had
+   * open last, archives and deletes them all, and with several tabs carries the workspace's
+   * title.
+   */
+  tabs?: readonly string[] | undefined;
   nested?: boolean;
 }) {
+  const workspaceTitle = useApp((s) =>
+    tabs && tabs.length > 1 && conversation.workspaceId ? s.workspaces[conversation.workspaceId]?.title : undefined,
+  );
+  const title = workspaceTitle || conversation.title;
+  const ownTabs = tabs ?? [conversation.id];
   const pinned = conversation.pinnedAtMs !== null;
   const noun = conversation.kind === "chat" ? "chat" : "session";
+  // Archive and Delete take every tab of a workspace's row.
+  const whole = ownTabs.length > 1 ? "workspace" : noun;
   const togglePin = () =>
     void setPinned(conversation.id, !pinned).catch((error: unknown) =>
       actions.onError(errorText(error)),
     );
   const archiveIt = () =>
-    void archive(conversation.id).catch((error: unknown) => actions.onError(errorText(error)));
+    void (ownTabs.length > 1 ? archiveAll([...ownTabs]) : archive(conversation.id)).catch((error: unknown) =>
+      actions.onError(errorText(error)),
+    );
   const picked = usePicked((s) => s.list === "sidebar" && s.ids.includes(conversation.id));
   // What a right-click acts on: every picked row when this is one of several.
   const [targets, setTargets] = useState<string[]>([]);
@@ -952,13 +1040,13 @@ const ConversationRow = memo(function ConversationRow({
               nested && "ps-8",
             )}
             onClick={(event) => {
-              if (!actions.onPick(conversation.id, event)) openConversation(conversation.id);
+              if (!actions.onPick(conversation.id, event)) openConversation(lastOpenedOf(ownTabs));
             }}
           >
             <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
-              {conversation.title}
+              {title}
             </span>
-            <RowStatus conversationId={conversation.id} />
+            {tabs ? <WorkspaceStatus tabs={tabs} /> : <RowStatus conversationId={conversation.id} />}
           </button>
         </ContextMenuTrigger>
         {targets.length > 1 ? (
@@ -966,14 +1054,14 @@ const ConversationRow = memo(function ConversationRow({
             <ContextMenuItem
               onSelect={() => {
                 clearPicked();
-                void archiveAll(targets);
+                void archiveAll(rowTabs(useApp.getState().conversations, targets));
               }}
             >
               <Archive />
               Archive ({targets.length})
             </ContextMenuItem>
             <ContextMenuSeparator />
-            <ContextMenuItem variant="destructive" onSelect={() => askDelete(targets)}>
+            <ContextMenuItem variant="destructive" onSelect={() => askDelete(rowTabs(useApp.getState().conversations, targets))}>
               <Trash />
               Delete ({targets.length})…
             </ContextMenuItem>
@@ -990,12 +1078,12 @@ const ConversationRow = memo(function ConversationRow({
             </ContextMenuItem>
             <ContextMenuItem onSelect={archiveIt}>
               <Archive />
-              Archive {noun}
+              Archive {whole}
             </ContextMenuItem>
             <ContextMenuSeparator />
-            <ContextMenuItem variant="destructive" onSelect={() => askDelete([conversation.id])}>
+            <ContextMenuItem variant="destructive" onSelect={() => askDelete([...ownTabs])}>
               <Trash />
-              Delete {noun}…
+              Delete {whole}…
             </ContextMenuItem>
           </ContextMenuContent>
         )}
@@ -1005,7 +1093,7 @@ const ConversationRow = memo(function ConversationRow({
           <TooltipTrigger asChild>
             <button
               type="button"
-              aria-label={`${pinned ? "Unpin" : "Pin"} ${conversation.title}`}
+              aria-label={`${pinned ? "Unpin" : "Pin"} ${title}`}
               className={rowAction}
               onClick={togglePin}
             >
@@ -1018,14 +1106,14 @@ const ConversationRow = memo(function ConversationRow({
           <TooltipTrigger asChild>
             <button
               type="button"
-              aria-label={`Archive ${conversation.title}`}
+              aria-label={`Archive ${title}`}
               className={rowAction}
               onClick={archiveIt}
             >
               <Archive />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Archive {noun}</TooltipContent>
+          <TooltipContent side="bottom">Archive {whole}</TooltipContent>
         </Tooltip>
       </RowActionsSlot>
     </li>

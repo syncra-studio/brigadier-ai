@@ -301,6 +301,12 @@ impl Board {
         {
             return Some(TabState::Working);
         }
+        self.settled_state(ahead)
+    }
+
+    /// The tab's state with nothing running or waiting: ready, merged or none, as
+    /// [`Self::tab_state`] reads `ahead` and the records.
+    pub(crate) fn settled_state(&self, ahead: Option<u32>) -> Option<TabState> {
         let merged = self
             .orchestrator_steps
             .iter()

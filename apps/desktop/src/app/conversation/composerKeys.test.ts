@@ -32,6 +32,22 @@ test("with ⌘Enter chosen, Enter starts a new line and ⇧⌘Enter sends the ot
   assert.equal(enterAction(enter({ ctrl: true, shift: true }), false, "modEnter"), "other");
 });
 
+test("in a task tab ⌘Enter starts a background tab and ⌥Enter sends the other way", () => {
+  assert.equal(enterAction(enter(), true, "enter", true), "send");
+  assert.equal(enterAction(enter({ cmd: true }), true, "enter", true), "background");
+  assert.equal(enterAction(enter({ alt: true }), true, "enter", true), "other");
+  assert.equal(enterAction(enter({ shift: true }), true, "enter", true), null);
+  assert.equal(enterAction(enter({ alt: true, shift: true }), true, "enter", true), null);
+  assert.equal(enterAction(enter({ ctrl: true }), false, "enter", true), "background");
+  assert.equal(enterAction(enter({ alt: true }), false, "enter", true), "other");
+  // With ⌘Enter sending: ⇧⌘Enter is the background tab, ⌥⌘Enter the other way.
+  assert.equal(enterAction(enter({ cmd: true }), true, "modEnter", true), "send");
+  assert.equal(enterAction(enter({ cmd: true, shift: true }), true, "modEnter", true), "background");
+  assert.equal(enterAction(enter({ cmd: true, alt: true }), true, "modEnter", true), "other");
+  assert.equal(enterAction(enter({ alt: true }), true, "modEnter", true), null);
+  assert.equal(enterAction(enter({ ctrl: true, alt: true }), false, "modEnter", true), "other");
+});
+
 test("a message sent while an answer works goes the default way unless the other key says", () => {
   const free = { pulled: false };
   assert.equal(sendLane("followUp", { ...free, followUp: "queue" }), "auto");
@@ -46,31 +62,36 @@ test("a message sent while an answer works goes the default way unless the other
 });
 
 test("the shortcuts page shows the composer keys the composer acts on, on both platforms", () => {
-  const actions = { send: "send", "follow-up-other": "other" } as const;
-  for (const mac of [true, false]) {
-    for (const sendShortcut of ["enter", "modEnter"] as SendShortcut[]) {
-      for (const followUp of ["queue", "steer"] as FollowUp[]) {
-        const shortcuts = shortcutsFor(mac, true, { sendShortcut, followUp });
-        const keysOf = (id: string) => shortcuts.find((s) => s.id === id)?.keys ?? [];
-        const pressOf = (chip: string) => {
-          const stroke = parseStroke(chip);
-          return enter({
-            shift: stroke.shift,
-            alt: stroke.alt,
-            ctrl: stroke.ctrl || (!mac && stroke.cmd),
-            cmd: mac && stroke.cmd,
-          });
-        };
-        const where = `${sendShortcut}, ${followUp}, ${mac ? "macOS" : "other"}`;
-        for (const [id, action] of Object.entries(actions)) {
-          const [chip = ""] = keysOf(id);
-          assert.equal(enterAction(pressOf(chip), mac, sendShortcut), action, `${id}: ${where}`);
+  for (const workspaces of [false, true]) {
+    const actions = workspaces
+      ? ({ send: "send", "follow-up-other": "other", "start-in-tab": "background" } as const)
+      : ({ send: "send", "follow-up-other": "other" } as const);
+    for (const mac of [true, false]) {
+      for (const sendShortcut of ["enter", "modEnter"] as SendShortcut[]) {
+        for (const followUp of ["queue", "steer"] as FollowUp[]) {
+          const shortcuts = shortcutsFor(mac, true, { sendShortcut, followUp }, workspaces);
+          const keysOf = (id: string) => shortcuts.find((s) => s.id === id)?.keys ?? [];
+          const pressOf = (chip: string) => {
+            const stroke = parseStroke(chip);
+            return enter({
+              shift: stroke.shift,
+              alt: stroke.alt,
+              ctrl: stroke.ctrl || (!mac && stroke.cmd),
+              cmd: mac && stroke.cmd,
+            });
+          };
+          const where = `${sendShortcut}, ${followUp}, ${mac ? "macOS" : "other"}, workspaces ${workspaces}`;
+          for (const [id, action] of Object.entries(actions)) {
+            const [chip = ""] = keysOf(id);
+            assert.equal(enterAction(pressOf(chip), mac, sendShortcut, workspaces), action, `${id}: ${where}`);
+          }
+          for (const chip of keysOf("new-line")) {
+            assert.equal(enterAction(pressOf(chip), mac, sendShortcut, workspaces), null, `new line ${chip}: ${where}`);
+          }
+          const other = shortcuts.find((s) => s.id === "follow-up-other");
+          assert.equal(other?.name, followUp === "queue" ? "Steer" : "Queue", where);
+          assert.equal(keysOf("start-in-tab").length > 0, workspaces, where);
         }
-        for (const chip of keysOf("new-line")) {
-          assert.equal(enterAction(pressOf(chip), mac, sendShortcut), null, `new line ${chip}: ${where}`);
-        }
-        const other = shortcuts.find((s) => s.id === "follow-up-other");
-        assert.equal(other?.name, followUp === "queue" ? "Steer" : "Queue", where);
       }
     }
   }

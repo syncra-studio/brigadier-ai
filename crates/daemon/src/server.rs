@@ -1328,6 +1328,9 @@ async fn open_tab(sessions: &SessionManager, request: Request) -> Result<Respons
                 .await?;
             Response::SettleMoved
         }
+        Request::GetSettledTabs => Response::GetSettledTabs {
+            tabs: sessions.settled_tabs().await,
+        },
         _ => unreachable!("only tab requests come here"),
     })
 }
@@ -1388,7 +1391,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         },
         request @ (Request::CreateTab { .. }
         | Request::StartTab { .. }
-        | Request::SettleMoved { .. }) => heap(|| open_tab(sessions, request)).await?,
+        | Request::SettleMoved { .. }
+        | Request::GetSettledTabs) => heap(|| open_tab(sessions, request)).await?,
         Request::ForkConversation {
             conversation_id,
             message_id,

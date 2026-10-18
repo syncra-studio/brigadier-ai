@@ -22,7 +22,7 @@ use brigadier_core::{
     OvernightRun, OvernightRunId, PendingChanges, ProbeBurst, Project, ProjectCandidate, ProjectId,
     ProjectPatch, ProposedPlan, ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals,
     RawPage, RawSession, RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RestoreOutcome,
-    ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, Setup,
+    ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup,
     SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState,
     StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget,
     UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceId,
@@ -193,6 +193,8 @@ pub enum Request {
     GetCatalog,
     /// Which conversations run and which wait for the user (the sidebar's spinner and pills).
     GetActivity,
+    /// The open tabs that are ready or merged (their tab and workspace row states).
+    GetSettledTabs,
     /// Creates a project. With `repo` (a repository's top-level folder, from the native
     /// picker or typed), an empty `name` names it after the folder.
     CreateProject {
@@ -1360,6 +1362,9 @@ pub enum Response {
     },
     GetActivity {
         activity: Vec<ConversationActivity>,
+    },
+    GetSettledTabs {
+        tabs: Vec<SettledTab>,
     },
     CreateProject {
         project: Box<Project>,

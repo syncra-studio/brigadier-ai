@@ -1892,6 +1892,15 @@ pub enum TabState {
     Merged,
 }
 
+/// A tab that is ready or merged, whatever runs in it now: the part of its state the app can't
+/// fold from events alone (it needs git), read once at connect.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SettledTab {
+    pub conversation_id: ConversationId,
+    pub state: TabState,
+}
+
 impl TabState {
     /// The state in the thread's words (the board, a [follow-up …] block).
     pub fn words(self) -> &'static str {

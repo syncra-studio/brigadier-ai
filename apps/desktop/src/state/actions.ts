@@ -106,7 +106,7 @@ function reopenLastSelection(): void {
 
 export async function loadCatalog(): Promise<void> {
   const { catalog } = await request({ method: "getCatalog" });
-  replaceCatalog(catalog.projects, catalog.conversations, catalog.settings);
+  replaceCatalog(catalog.projects, catalog.conversations, catalog.settings, catalog.workspaces);
   reopenLastSelection();
   pruneRightSidebarTabs(catalog.conversations.map((conversation) => conversation.id));
   pruneSideChats(catalog.conversations);
@@ -839,32 +839,59 @@ export async function openQueuedAsTab(conversationId: string, item: QueuedMessag
     await loadConversation(conversationId).catch(() => {});
     return false;
   }
-  const setup = source.setup?.type === "session"
-    ? {
-      type: "session" as const,
-      repo: source.setup.repo,
-      // A tab always starts from its workspace's base.
-      environment: { type: "newWorktree" as const, base: "", branch: null },
-      permission: source.setup.permission,
-      orchestrator: source.setup.orchestrator,
-      planMode: false,
-    }
-    : null;
   try {
-    const { conversation } = await request({
-      method: "startTab",
-      workspaceId: source.workspaceId,
-      setup,
-      text: item.text,
-      attachments: item.attachments,
-      mentions: item.mentions.filter((mention) => mention.type !== "task"),
-    });
-    storeConversation(conversation);
+    await startTabFrom(source, item);
     return true;
   } catch (error) {
     await restoreQueued(conversationId, item, index);
     throw error;
   }
+}
+
+/** A new tab's setup: `source` tab's model and permission, on a worktree of its workspace's base. */
+function tabSetupFrom(source: Conversation): SetupRequest | null {
+  return source.setup?.type === "session"
+    ? {
+      type: "session",
+      repo: source.setup.repo,
+      // A tab always starts from its workspace's base.
+      environment: { type: "newWorktree", base: "", branch: null },
+      permission: source.setup.permission,
+      orchestrator: source.setup.orchestrator,
+      planMode: false,
+    }
+    : null;
+}
+
+/**
+ * Starts `outgoing` as a new task in a background tab of `source`'s workspace (⌘⏎, "Open as a
+ * new tab"); the user stays where they are. Its task mentions stay behind: they name `source`'s
+ * workers.
+ */
+export async function startTabFrom(source: Conversation, outgoing: Outgoing): Promise<Conversation> {
+  if (!source.workspaceId) throw new Error("This conversation has no workspace.");
+  const { conversation } = await request({
+    method: "startTab",
+    workspaceId: source.workspaceId,
+    setup: tabSetupFrom(source),
+    text: outgoing.text,
+    attachments: outgoing.attachments,
+    mentions: outgoing.mentions.filter((mention) => mention.type !== "task"),
+  });
+  storeConversation(conversation);
+  return conversation;
+}
+
+/** Opens an empty task tab in `source`'s workspace (⌘T), on a worktree of its own. */
+export async function openNewTaskTab(source: Conversation): Promise<void> {
+  if (!source.workspaceId) return;
+  const { conversation } = await request({
+    method: "createTab",
+    workspaceId: source.workspaceId,
+    setup: tabSetupFrom(source),
+  });
+  storeConversation(conversation);
+  openConversation(conversation.id);
 }
 
 /** The notice of a message the thread sent on to another tab: Undo takes it back here, else it goes. */

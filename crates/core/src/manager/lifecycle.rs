@@ -752,7 +752,7 @@ impl SessionManager {
                     &conversation.id,
                     brigadier_providers::NoticeLevel::Warning,
                     &format!(
-                        "Closing this session's workspace didn't finish, so its folder {path} stays and the session keeps working there. Close the workspace again to remove it."
+                        "Removing this session's worktree didn't finish, so its folder {path} stays and the session keeps working there. Remove the worktree again to finish."
                     ),
                 )
                 .await;
@@ -820,7 +820,7 @@ impl SessionManager {
         let conversation = self.core.conversation(id)?;
         if conversation.deleting || conversation.lifecycle == Lifecycle::Archived {
             return Err(Error::Invalid(
-                "This session is closed already: its workspace went with it.".into(),
+                "This session is closed already: its worktree went with it.".into(),
             ));
         }
         let Some(Setup::Session {
@@ -835,7 +835,7 @@ impl SessionManager {
         }) = conversation.setup.clone()
         else {
             return Err(Error::Invalid(
-                "This session has no workspace of its own to close.".into(),
+                "This session has no worktree of its own to remove.".into(),
             ));
         };
         if self.overnight.active.get(id).is_some() {
@@ -853,7 +853,7 @@ impl SessionManager {
             .await
         {
             return Err(Error::Invalid(
-                "The session is working: stop it first, then close its workspace.".into(),
+                "The session is working: stop it first, then remove its worktree.".into(),
             ));
         }
         let closed = self
@@ -879,7 +879,7 @@ impl SessionManager {
         self.quiet_for_close(id).await?;
         // What runs in the folder stops before it goes; a request a background run kept
         // working ends with it.
-        let _ = self.stop_previews(id, "the workspace closed").await;
+        let _ = self.stop_previews(id, "its worktree was removed").await;
         self.stop_background_runs(id);
         self.drop_check_checkout(id).await;
         // A request that just ended takes its last snapshot of the folder right after: it
@@ -896,7 +896,7 @@ impl SessionManager {
         // sweep let through can't leave changes behind unkept.
         if !self.keep_session_changes(conversation).await {
             return Err(Error::Invalid(
-                "Its uncommitted changes couldn't be kept, so the workspace stays.".into(),
+                "Its uncommitted changes couldn't be kept, so the worktree stays.".into(),
             ));
         }
         let leftovers = self
@@ -906,7 +906,7 @@ impl SessionManager {
             .await;
         if !leftovers.is_clean() {
             return Err(Error::Invalid(format!(
-                "The workspace couldn't be removed: {}",
+                "The worktree couldn't be removed: {}",
                 leftovers.failures.join("; ")
             )));
         }
@@ -919,10 +919,10 @@ impl SessionManager {
         conv.workspace_closed
             .store(true, std::sync::atomic::Ordering::SeqCst);
         conv.note(format!(
-            "[workspace closed] The user closed this session's workspace: its folder {path} is removed. {branch_line} The next change makes a fresh worktree in the same folder."
+            "[worktree removed] The user removed this session's worktree: its folder {path} is gone. {branch_line} The next change makes a fresh worktree in the same folder."
         ))
         .await;
-        Ok(format!("Closed the workspace. {branch_line}"))
+        Ok(format!("Removed the worktree. {branch_line}"))
     }
 
     /// Whether every request of the session that isn't waiting ended and took its last
@@ -967,7 +967,7 @@ impl SessionManager {
                 | crate::work::RunState::Failed
         ) {
             return Err(Error::Invalid(
-                "The session is working: stop it first, then close its workspace.".into(),
+                "The session is working: stop it first, then remove its worktree.".into(),
             ));
         }
         let running: Vec<String> = self

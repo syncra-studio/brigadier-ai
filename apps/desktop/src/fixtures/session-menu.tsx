@@ -1,6 +1,6 @@
 /**
  * The session tab's ⋯ "Chat actions" (issue 213): "New session" for a session in a project,
- * "Close workspace…" only for a session with a worktree of its own, and its dialog's confirm
+ * "Remove worktree…" only for a session with a worktree of its own, and its dialog's confirm
  * sends `closeWorkspace`. Driven with the browser's real clicks; IPC is mocked and
  * records the calls, no daemon.
  */
@@ -40,7 +40,7 @@ mockIPC((command, payload) => {
   const req = (payload as { request: Request }).request;
   if (req.method === "closeWorkspace") {
     calls.push({ method: req.method, conversationId: req.conversationId });
-    return { method: req.method, text: "Closed the workspace" };
+    return { method: req.method, text: "Removed the worktree" };
   }
   return { method: req.method };
 });
@@ -99,10 +99,10 @@ try {
   for (const conversation of conversations) menus[conversation.id] = await menu(conversation);
   seen.menus = menus;
   await menu(conversations[0]!);
-  await fixtureClick(items().find((item) => item.textContent?.trim() === "Close workspace…")!);
+  await fixtureClick(items().find((item) => item.textContent?.trim() === "Remove worktree…")!);
   await until("the dialog", () => document.querySelector("[role=dialog]") !== null);
   seen.dialog = document.querySelector("[role=dialog] h2")?.textContent;
-  const confirm = [...document.querySelectorAll("[role=dialog] button")].find((button) => button.textContent?.trim() === "Close workspace")!;
+  const confirm = [...document.querySelectorAll("[role=dialog] button")].find((button) => button.textContent?.trim() === "Remove worktree")!;
   await fixtureClick(confirm);
   await until("the close", () => calls.length > 0);
   await until("the dialog to close", () => document.querySelector("[role=dialog]") === null);

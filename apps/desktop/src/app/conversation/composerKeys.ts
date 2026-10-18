@@ -7,23 +7,29 @@ type EnterPress = Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey" | "altK
 /**
  * What Enter does in the composer with the send shortcut chosen (Settings › General ›
  * Composer): send the message, send it the follow-up's other way (steer instead of queue, or
- * the reverse), or nothing of ours (the editor starts a new line). ⌘ is Ctrl off macOS.
+ * the reverse), start it in a new background tab, or nothing of ours (the editor starts a new
+ * line). ⌘ is Ctrl off macOS. In a task tab (`tabs`), ⌘⏎ starts a background tab and ⌥⏎ is the
+ * other way; with Send on ⌘⏎ they are ⇧⌘⏎ and ⌥⌘⏎. Elsewhere ⌘⏎ (⇧⌘⏎) is the other way.
  */
 export function enterAction(
   event: EnterPress,
   mac: boolean,
   sendShortcut: ComposerKeys["sendShortcut"],
-): "send" | "other" | null {
+  tabs = false,
+): "send" | "other" | "background" | null {
   const mod = mac ? event.metaKey : event.ctrlKey;
-  // The other platform modifier (Ctrl on macOS, the Windows key elsewhere) and Alt aren't ours.
-  const stray = event.altKey || (mac ? event.ctrlKey : event.metaKey);
-  if (stray) return null;
+  // The other platform modifier (Ctrl on macOS, the Windows key elsewhere) isn't ours, nor Alt
+  // outside a task tab.
+  if (mac ? event.ctrlKey : event.metaKey) return null;
+  if (event.altKey && (!tabs || event.shiftKey)) return null;
   if (sendShortcut === "enter") {
     if (event.shiftKey) return null;
-    return mod ? "other" : "send";
+    if (event.altKey) return mod ? null : "other";
+    return mod ? (tabs ? "background" : "other") : "send";
   }
   if (!mod) return null;
-  return event.shiftKey ? "other" : "send";
+  if (event.altKey) return "other";
+  return event.shiftKey ? (tabs ? "background" : "other") : "send";
 }
 
 /**

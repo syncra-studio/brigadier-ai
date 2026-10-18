@@ -3,6 +3,7 @@ import { subscribe } from "@/ipc/client";
 import type { BridgeEvent, EventEnvelope } from "@/ipc/generated";
 import { markApplied, noteFlush, setSamplingPaused } from "@/lib/perf";
 import { markStartup } from "@/lib/startup";
+import { workspacesOn } from "@/lib/workspaces";
 import {
   loadCatalog,
   loadConversation,
@@ -12,6 +13,7 @@ import {
   toggleSettings,
 } from "@/state/actions";
 import { applyActivityEvents, loadActivity } from "@/state/activity";
+import { applySettledTabEvents, loadSettledTabs } from "@/state/tabStates";
 import { openFolderPicker, takeFolders } from "@/state/addProject";
 import { applyBoardEvents, sideBoardIds, useBoard } from "@/state/board";
 import { applyBrainEvents, reloadSessionTasks } from "@/state/brain";
@@ -45,6 +47,7 @@ function flush() {
   revealNewPreviews(batch);
   applyBoardEvents(batch);
   applyActivityEvents(batch);
+  applySettledTabEvents(batch);
   applyBrainEvents(batch);
   applyUsageEvents(batch);
   applyUpdateEvents(batch);
@@ -68,6 +71,8 @@ async function resync() {
       shown.flatMap((id) => (threads[id] ? [[id, threads[id]] as const] : [])),
     ),
   });
+  // Ready and merged count commits in each tab's worktree: they come when they come.
+  if (workspacesOn()) void loadSettledTabs().catch(() => {});
   await Promise.all([loadCatalog(), loadActivity(), loadUpdates()]);
   const log = useBoard.getState().orchestrator;
   if (log) void openOrchestratorLog(log.conversationId);

@@ -798,7 +798,7 @@ async fn a_failed_close_workspace_says_so_at_the_next_start() {
             .notices
             .iter()
             .any(|notice| notice.text.contains(&format!(
-                "Closing this session's workspace didn't finish, so its folder {} stays",
+                "Removing this session's worktree didn't finish, so its folder {} stays",
                 path.display()
             ))),
         "{:#?}",
@@ -968,7 +968,7 @@ async fn close_workspace_removes_it_only_when_asked() {
         logged(&log, "worked in: "),
         [format!("worked in: {}", path.display())]
     );
-    assert!(logged(&log, "[workspace closed]").len() == 1);
+    assert!(logged(&log, "[worktree removed]").len() == 1);
     assert!(
         path.join("DRAFT.md").exists(),
         "the fresh worktree is on the same branch"
@@ -1005,7 +1005,7 @@ async fn close_workspace_after_a_merge_tells_the_thread_once() {
         [format!("worked in: {}", path.display())]
     );
     let input = logged(&log, "Add more notes.").pop().unwrap();
-    assert!(input.contains("[workspace closed]"), "{input}");
+    assert!(input.contains("[worktree removed]"), "{input}");
     assert!(!input.contains("[workspace] A fresh branch"), "{input}");
     flow.stop().await;
 }

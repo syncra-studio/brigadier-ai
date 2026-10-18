@@ -19,6 +19,7 @@ import type {
   RawEntry,
   RawSession,
   Settings,
+  Workspace,
 } from "@/ipc/generated";
 import { applyDensity, cachedDensity } from "@/lib/density";
 import { cachedPinnedSummary } from "@/lib/pinnedSummary";
@@ -164,6 +165,8 @@ export type AppState = {
   connection: ConnectionState;
   catalogLoaded: boolean;
   projects: Record<string, Project>;
+  /** Every project's workspaces, an older session's one-tab one included. */
+  workspaces: Record<string, Workspace>;
   conversations: Record<string, Conversation>;
   settings: Settings;
   threads: Record<string, Thread>;
@@ -195,6 +198,7 @@ export const useApp = create<AppState>()(() => ({
   connection: { status: "connecting", daemon: null, reason: null },
   catalogLoaded: false,
   projects: {},
+  workspaces: {},
   conversations: {},
   settings: {
     density: cachedDensity(),
@@ -337,10 +341,12 @@ export function replaceCatalog(
   projects: readonly Project[],
   conversations: readonly Conversation[],
   settings: Settings,
+  workspaces: readonly Workspace[] = [],
 ): void {
   useApp.setState({
     catalogLoaded: true,
     projects: byId(projects),
+    workspaces: byId(workspaces),
     conversations: byId(conversations),
     settings: confirmSettings(settings),
   });
@@ -364,12 +370,13 @@ export function mergeMessages(
 export function applyEvents(envelopes: readonly EventEnvelope[]): void {
   if (envelopes.length === 0) return;
   useApp.setState((state) => {
-    let { projects, conversations, threads, pending, settings, providers, accounts, rankingsRevision } =
+    let { projects, workspaces, conversations, threads, pending, settings, providers, accounts, rankingsRevision } =
       state;
     for (const envelope of envelopes) {
-      ({ projects, conversations, threads, pending, settings, providers, accounts, rankingsRevision } =
+      ({ projects, workspaces, conversations, threads, pending, settings, providers, accounts, rankingsRevision } =
         applyEvent(envelope, {
           projects,
+          workspaces,
           conversations,
           threads,
           pending,
@@ -386,6 +393,7 @@ export function applyEvents(envelopes: readonly EventEnvelope[]): void {
     );
     return {
       projects,
+      workspaces,
       conversations,
       threads,
       pending,
@@ -401,6 +409,7 @@ export function applyEvents(envelopes: readonly EventEnvelope[]): void {
 type Slice = Pick<
   AppState,
   | "projects"
+  | "workspaces"
   | "conversations"
   | "threads"
   | "pending"
@@ -608,7 +617,28 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "projectRemoved": {
       if (!slice.projects[event.id]) return slice;
       const { [event.id]: _removed, ...projects } = slice.projects;
-      return { ...slice, projects };
+      const workspaces = Object.fromEntries(
+        Object.entries(slice.workspaces).filter(([, workspace]) => workspace.projectId !== event.id),
+      );
+      return { ...slice, projects, workspaces };
+    }
+    case "workspaceCreated":
+      return {
+        ...slice,
+        workspaces: { ...slice.workspaces, [event.workspace.id]: event.workspace },
+      };
+    case "workspaceRenamed":
+    case "workspacePinned":
+    case "workspaceArchived": {
+      const workspace = slice.workspaces[event.id];
+      if (!workspace) return slice;
+      const next =
+        event.type === "workspaceRenamed"
+          ? { ...workspace, title: event.title }
+          : event.type === "workspacePinned"
+            ? { ...workspace, pinnedAtMs: event.pinnedAtMs }
+            : { ...workspace, lifecycle: event.archived ? ("archived" as const) : ("active" as const) };
+      return { ...slice, workspaces: { ...slice.workspaces, [event.id]: next } };
     }
     case "settingsChanged":
       return { ...slice, settings: confirmSettings(event.settings) };
@@ -707,11 +737,6 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "updatesChanged":
     // Its desktop notification is the shell's; the Usage menu reads `accounts.warnings`.
     case "quotaWillBeLost":
-    // Workspaces aren't shown yet (BRIGADIER_WORKSPACES).
-    case "workspaceCreated":
-    case "workspaceRenamed":
-    case "workspacePinned":
-    case "workspaceArchived":
       return slice;
   }
 }

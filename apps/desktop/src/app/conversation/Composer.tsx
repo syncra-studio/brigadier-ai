@@ -789,7 +789,8 @@ function ComposerHint({ target }: { target: ComposerTarget }) {
       </p>
     );
   }
-  const dirty = environment === "localCheckout" && repo.info?.dirty;
+  // A new worktree starts from its base's last commit: what isn't committed stays out of it.
+  const dirty = repo.info?.dirty && (environment === "localCheckout" || environment === "newWorktree");
   if (resolved.kind !== "session" || (permission !== "fullAccess" && !dirty)) return null;
   return (
     <p className="text-muted-foreground px-2 text-xs">
@@ -798,9 +799,10 @@ function ComposerHint({ target }: { target: ComposerTarget }) {
           Full access: workers run without the OS sandbox.{" "}
         </span>
       )}
-      {environment === "localCheckout" &&
-        repo.info?.dirty &&
-        "Your checkout has uncommitted changes; Brigadier will ask whether workers should see them."}
+      {dirty &&
+        (environment === "localCheckout"
+          ? "Your checkout has uncommitted changes; Brigadier will ask whether workers should see them."
+          : "Every tab starts clean on a worktree of its own: your checkout's uncommitted changes stay in your checkout.")}
     </p>
   );
 }

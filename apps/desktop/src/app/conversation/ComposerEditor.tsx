@@ -37,6 +37,9 @@ import { WorkerGlyph, useWorkerName } from "@/app/conversation/WorkerChip";
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { usePromptHistory } from "@/app/conversation/composerDraft";
 import { enterAction } from "@/app/conversation/composerKeys";
+import { workspacesOn } from "@/lib/workspaces";
+import { clearBackgroundSend, markBackgroundSend } from "@/state/backgroundSend";
+import { isTaskTab } from "@/state/tabStates";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { useImagesBlocked } from "@/app/conversation/imageInput";
 import { SuggestionContext } from "@/app/conversation/suggestion";
@@ -206,6 +209,8 @@ function ComposerKeys({
   );
   const adapter = target?.queue.attachments ?? null;
   const owner = target?.conversation?.id ?? NEW_CHAT_SCOPE;
+  // A task tab of a workspace: ⌘⏎ starts a new one in the background.
+  const taskTab = workspacesOn() && target?.conversation && isTaskTab(target.conversation) ? target.conversation.id : null;
   const privateLogs = Boolean(target?.conversation?.tabChat);
   const dictation = useDictation(owner);
   // Dictated text lands at the caret (or at the end, if the field never had one), spaced
@@ -281,16 +286,22 @@ function ComposerKeys({
         KEY_ENTER_COMMAND,
         (event) => {
           if (!event || event.isComposing) return false;
-          const action = enterAction(event, mac, sendShortcut);
+          const action = enterAction(event, mac, sendShortcut, taskTab !== null);
           if (!action) return false;
           event.preventDefault();
+          // A ⌘⏎ whose send never came is not this send's.
+          if (taskTab) clearBackgroundSend(taskTab);
           const thread = aui.thread().getState();
-          if (thread.isRunning && !thread.capabilities.queue) return true;
-          // Images for a model that takes none: the message waits, as the send button says.
-          if (imagesBlocked.current) {
-            toast(IMAGES_BLOCKED, { tone: "error" });
+          if (action === "background" && taskTab) {
+            // Not this conversation's send: it goes to a new tab (on the same model), running
+            // or not.
+            if (aui.composer().getState().isEmpty || refuseBlockedImages(imagesBlocked)) return true;
+            markBackgroundSend(taskTab);
+            aui.composer().send();
             return true;
           }
+          if (thread.isRunning && !thread.capabilities.queue) return true;
+          if (refuseBlockedImages(imagesBlocked)) return true;
           aui.composer().send(
             action === "other" && thread.isRunning ? { steer: followUp === "queue" } : undefined,
           );
@@ -356,6 +367,7 @@ function ComposerKeys({
     mac,
     sendShortcut,
     followUp,
+    taskTab,
   ]);
   return null;
 }
@@ -410,6 +422,13 @@ type PasteContext = {
   adapter: BlobAttachmentAdapter | null;
   deleted: DeletedImages;
 };
+
+/** Images for a model that takes none: the message waits, as the send button says. */
+function refuseBlockedImages(blocked: { current: boolean }): boolean {
+  if (!blocked.current) return false;
+  toast(IMAGES_BLOCKED, { tone: "error" });
+  return true;
+}
 
 /** Merges of pasted images, one after another: each sees the composer as the last left it. */
 let merging = Promise.resolve();
