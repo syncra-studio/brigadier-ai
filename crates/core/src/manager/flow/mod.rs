@@ -2011,6 +2011,8 @@ mod mention_tests;
 #[cfg(test)]
 mod merge_by_user_tests;
 #[cfg(test)]
+mod merge_queue_tests;
+#[cfg(test)]
 mod mockup_tests;
 #[cfg(test)]
 mod near_limit_tests;

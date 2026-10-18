@@ -5,12 +5,14 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
 use brigadier_git::Oid;
 
+use super::conversation::ConvLive;
 use super::{SessionManager, blocking, git_error};
 use crate::Result;
 use crate::model::ConversationId;
@@ -34,6 +36,9 @@ struct GhPullRequest {
     base_ref_name: Option<String>,
     #[serde(default)]
     merge_commit: Option<GhCommit>,
+    /// Set while GitHub's auto-merge waits to merge it (`gh pr merge --auto`).
+    #[serde(default)]
+    auto_merge_request: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -49,6 +54,8 @@ struct FoundPr {
     base: Option<String>,
     head: Option<String>,
     merge_commit: Option<String>,
+    /// GitHub's auto-merge is on for it.
+    auto_merge: bool,
 }
 
 impl SessionManager {
@@ -81,26 +88,37 @@ impl SessionManager {
     }
 }
 
+/// A session's worktree and the pull request of its pushed branch.
+struct SessionPr {
+    found: FoundPr,
+    repo: String,
+    base: String,
+    branch: String,
+    worktree: String,
+}
+
+/// How often a pull request left open with the session's work ready is looked at: soon while
+/// GitHub's auto-merge is on for it, or in the first half hour (a merge queue takes it at once,
+/// and `gh` doesn't show it in one), else later; for a day at most.
+#[cfg(not(test))]
+const PR_WATCH: [Duration; 3] = [
+    Duration::from_secs(30),
+    Duration::from_secs(120),
+    Duration::from_secs(24 * 60 * 60),
+];
+#[cfg(test)]
+const PR_WATCH: [Duration; 3] = [
+    Duration::from_millis(100),
+    Duration::from_millis(100),
+    Duration::from_secs(120),
+];
+const PR_WATCH_SOON_FOR: Duration = Duration::from_secs(30 * 60);
+
 impl SessionManager {
-    /// A request of `id` ended: when its session branch's pull request was merged on GitHub
-    /// (by the thread's `gh pr merge` or the user), the merge is recorded once, as the local
-    /// path records it, with the head it merged and the commit it made on the base, and the
-    /// session branch moves onto the new base, so the next request starts from it rather than
-    /// from commits a squash or rebase merge rewrote. A branch with changes or commits since
-    /// the merged head stays where it is: the thread sees it ahead of the base. A pull request
-    /// into another branch than the session's base isn't its merge, and one whose merge commit
-    /// can't be fetched yet is left for a later request's end. `request`: the one ending, whose
-    /// turn may have merged it; none when a new request is about to start (the user merged it
-    /// on GitHub while the tab was idle), so that one starts from the new base too. Sibling tabs
-    /// hear of the merge as of a local one, and the thread that its remote branch may still
-    /// hold the commits the merge rewrote.
-    pub(super) async fn reconcile_pr_merge(&self, id: &ConversationId, request: Option<&str>) {
-        if self.overnight.active.get(id).is_some() {
-            return;
-        }
-        let Ok(conversation) = self.core.conversation(id) else {
-            return;
-        };
+    /// The pull request of `id`'s session branch, when it has a worktree whose branch was
+    /// pushed and `gh` finds one.
+    async fn session_pr(&self, id: &ConversationId) -> Option<SessionPr> {
+        let conversation = self.core.conversation(id).ok()?;
         let Some(crate::model::Setup::Session {
             repo,
             environment:
@@ -113,15 +131,9 @@ impl SessionManager {
             ..
         }) = conversation.setup
         else {
-            return;
+            return None;
         };
-        let Some(gh) = self.gh() else {
-            return;
-        };
-        let Ok(conv) = self.conv(id) else {
-            return;
-        };
-        let _once = conv.pr_merge.lock().await;
+        let gh = self.gh()?;
         let (git, checkout, name) = (self.git.clone(), PathBuf::from(&worktree), branch.clone());
         // Only a branch that was pushed can have a pull request: no `gh` call otherwise. A push
         // without `-u` leaves no upstream, but its remote-tracking branch; a clone that fetches
@@ -144,7 +156,121 @@ impl SessionManager {
         })
         .await
         .ok()
-        .flatten();
+        .flatten()?;
+        Some(SessionPr {
+            found,
+            repo,
+            base,
+            branch,
+            worktree,
+        })
+    }
+
+    /// Watches the session's open pull request while its work waits ready to merge: once
+    /// GitHub merged it (a merge queue, auto-merge after its checks, or the user), the merge
+    /// is recorded at the session's next idle moment ([`ConvLive::pr_merge_due`]): never
+    /// under a running request, whose end records it itself. One watch per session.
+    fn watch_pr(&self, id: &ConversationId) {
+        let Ok(conv) = self.conv(id) else {
+            return;
+        };
+        if conv
+            .pr_watch
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let manager = self.arc();
+        self.spawn(async move {
+            manager.watching_pr(&conv).await;
+            conv.pr_watch
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+
+    async fn watching_pr(&self, conv: &Arc<ConvLive>) {
+        let [soon, later, longest] = PR_WATCH;
+        let start = Instant::now();
+        let mut wait = soon;
+        loop {
+            tokio::time::sleep(wait).await;
+            if self.admit().is_err() || !self.is_attached(conv) || start.elapsed() >= longest {
+                return;
+            }
+            // Recorded or merged here meanwhile: nothing left to watch for.
+            let ready = self
+                .core
+                .board(&conv.id)
+                .await
+                .is_ok_and(|board| !board.unmerged_ready().is_empty());
+            if !ready {
+                return;
+            }
+            let Some(SessionPr { found, base, .. }) = self.session_pr(&conv.id).await else {
+                // `gh` failed this time, or the branch has no pull request (any more).
+                wait = later;
+                continue;
+            };
+            if found.base.as_deref() != Some(&base) {
+                return;
+            }
+            match found.pr.state {
+                PullRequestState::Merged => {
+                    conv.pr_merge_due
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    self.kick(conv);
+                    return;
+                }
+                PullRequestState::Open | PullRequestState::Draft => {
+                    wait = if found.auto_merge || start.elapsed() < PR_WATCH_SOON_FOR {
+                        soon
+                    } else {
+                        later
+                    };
+                }
+                PullRequestState::Closed => return,
+            }
+        }
+    }
+}
+
+impl SessionManager {
+    /// A request of `id` ended: when its session branch's pull request was merged on GitHub
+    /// (by the thread's `gh pr merge` or the user), the merge is recorded once, as the local
+    /// path records it, with the head it merged and the commit it made on the base, and the
+    /// session branch moves onto the new base, so the next request starts from it rather than
+    /// from commits a squash or rebase merge rewrote. A branch with changes or commits since
+    /// the merged head stays where it is: the thread sees it ahead of the base. A pull request
+    /// into another branch than the session's base isn't its merge, and one whose merge commit
+    /// can't be fetched yet is left for a later request's end. `request`: the one ending, whose
+    /// turn may have merged it; none when a new request is about to start (the user merged it
+    /// on GitHub while the tab was idle), so that one starts from the new base too. Sibling tabs
+    /// hear of the merge as of a local one, and the thread that its remote branch may still
+    /// hold the commits the merge rewrote.
+    pub(super) async fn reconcile_pr_merge(&self, id: &ConversationId, request: Option<&str>) {
+        if self.overnight.active.get(id).is_some() {
+            return;
+        }
+        let Ok(conv) = self.conv(id) else {
+            return;
+        };
+        let _once = conv.pr_merge.lock().await;
+        let Some(SessionPr {
+            found,
+            repo,
+            base,
+            branch,
+            worktree,
+        }) = self.session_pr(id).await
+        else {
+            return;
+        };
+        // Left open (queued, or waiting for its checks with auto-merge on): watched, so its
+        // merge is recorded when GitHub lands it, not only at the next request.
+        if found.pr.state == PullRequestState::Open && found.base.as_deref() == Some(&base) {
+            self.watch_pr(id);
+        }
+        let found = Some(found);
         let Some(FoundPr {
             pr,
             head: Some(head),
@@ -272,7 +398,7 @@ fn run_gh(
             "--limit",
             "1",
             "--json",
-            "number,title,url,state,isDraft,headRefOid,baseRefName,mergeCommit",
+            "number,title,url,state,isDraft,headRefOid,baseRefName,mergeCommit,autoMergeRequest",
         ])
         .current_dir(checkout)
         .env_clear()
@@ -314,6 +440,9 @@ fn run_gh(
         base: pr.base_ref_name,
         head: pr.head_ref_oid,
         merge_commit: pr.merge_commit.map(|commit| commit.oid),
+        auto_merge: pr
+            .auto_merge_request
+            .is_some_and(|request| !request.is_null()),
         pr: PullRequest {
             number: pr.number,
             title: pr.title,

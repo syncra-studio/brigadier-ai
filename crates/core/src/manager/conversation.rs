@@ -650,6 +650,10 @@ pub(crate) struct ConvLive {
     /// Held while a merged pull request is looked up and recorded, so two request ends
     /// settling at once record it once.
     pub(super) pr_merge: tokio::sync::Mutex<()>,
+    /// A watch of the session's open pull request runs (`SessionManager::watch_pr`).
+    pub(super) pr_watch: std::sync::atomic::AtomicBool,
+    /// The watch saw the pull request merged on GitHub: recorded at the next idle moment.
+    pub(super) pr_merge_due: std::sync::atomic::AtomicBool,
     /// What the thread was last told of the held merge (its consent's `asked_in`, and
     /// "due" or "waiting"), so each is said once.
     pub(super) merge_told: std::sync::Mutex<Option<(String, &'static str)>>,
@@ -724,6 +728,8 @@ impl ConvLive {
             feedback_offer: tokio::sync::Mutex::new(()),
             merge_lock: tokio::sync::Mutex::new(()),
             pr_merge: tokio::sync::Mutex::new(()),
+            pr_watch: std::sync::atomic::AtomicBool::new(false),
+            pr_merge_due: std::sync::atomic::AtomicBool::new(false),
             merge_told: std::sync::Mutex::new(None),
             reviews_due: std::sync::atomic::AtomicUsize::new(0),
             workspace_closed: std::sync::atomic::AtomicBool::new(false),
@@ -3017,6 +3023,15 @@ impl SessionManager {
                     sent_queued = true;
                     continue;
                 }
+                // A pull request GitHub merged while the session was busy or idle is
+                // recorded now, between requests (the start of one waits for it).
+                if session
+                    && conv
+                        .pr_merge_due
+                        .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    Box::pin(self.reconcile_pr_merge(&conv.id, None)).await;
+                }
                 // A held merge that waited on a message the user wrote looks again once the
                 // thread has read it (SESSION-FIXES-PLAN.md Q3).
                 if session {
@@ -3345,7 +3360,7 @@ impl SessionManager {
 
     /// Whether `conv` is still the conversation's live state: an archive or delete lets go of
     /// it.
-    fn is_attached(&self, conv: &Arc<ConvLive>) -> bool {
+    pub(super) fn is_attached(&self, conv: &Arc<ConvLive>) -> bool {
         self.convs_lock()
             .get(&conv.id)
             .is_some_and(|live| Arc::ptr_eq(live, conv))

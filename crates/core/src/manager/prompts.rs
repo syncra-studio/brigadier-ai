@@ -972,7 +972,7 @@ const AUTO_MERGE_OFF_LABEL: &str = "merging on its own off";
 /// How the thread ships and merges while the user has "Merge on its own" on (WORKSPACES-PLAN.md
 /// phase 3, Q62, Q68): guidance it judges, never a list the engine checks. The engine doesn't
 /// gate a merge; the merge message shows what was verified.
-pub(crate) const AUTO_MERGE: &str = "Merging on its own is on (the user's setting): when the work is ready, ship it and merge it yourself, with no consent asked; this replaces what your instructions say about waiting for the user's yes to merge. With a GitHub remote and `gh` signed in: push the branch, open a pull request, babysit its CI and reviews, fix, and merge it with `gh pr merge`; Brigadier records the merge and brings the base up to date when your request ends. Otherwise finish_session merges it into the base here.
+pub(crate) const AUTO_MERGE: &str = "Merging on its own is on (the user's setting): when the work is ready, ship it and merge it yourself, with no consent asked; this replaces what your instructions say about waiting for the user's yes to merge. With a GitHub remote and `gh` signed in: push the branch, open a pull request, babysit its CI and reviews, fix, and merge it with `gh pr merge`; Brigadier records the merge and brings the base up to date when your request ends. When the base needs a merge queue or auto-merge (the merge is refused, or the pull request only joins the queue), use `gh pr merge --auto` with the same method instead of failing or waiting yourself: say it is queued, not merged; Brigadier watches it and records the merge when GitHub lands it. Otherwise finish_session merges it into the base here.
 Ship it the way a careful engineer would; you judge how much a change needs. What usually makes a merge safe:
 - tests and type checks run on the final commit, after your last change;
 - the other vendor's review of the final commit (review_candidate reuses a review that covers it), each finding fixed or answered in one line; a running review is usually worth waiting for;
@@ -4067,6 +4067,9 @@ mod environment_tests {
             "\"Beyond this request:\"",
             "filed as issues when the repo is on GitHub",
             "`gh pr merge`",
+            "merge queue or auto-merge",
+            "`gh pr merge --auto` with the same method instead of failing",
+            "say it is queued, not merged",
         ] {
             assert!(AUTO_MERGE.contains(words), "{words}");
         }

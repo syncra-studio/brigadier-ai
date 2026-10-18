@@ -14,7 +14,7 @@ use crate::manager::ci::Gh;
 use crate::manager::prompts::AUTO_MERGE;
 use crate::work::{OrchestratorStepKind, TabState};
 
-fn script<F, Fut>(f: F) -> Script
+pub(super) fn script<F, Fut>(f: F) -> Script
 where
     F: Fn(Turn) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Reply> + Send + 'static,
@@ -32,7 +32,7 @@ case "$1 $2" in
 esac
 "#;
 
-fn stub_gh(dir: &Path) -> Gh {
+pub(super) fn stub_gh(dir: &Path) -> Gh {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir).unwrap();
     let program = dir.join("gh");
@@ -46,7 +46,7 @@ fn stub_gh(dir: &Path) -> Gh {
 
 /// Squash-merges `branch` of the bare `origin` into its main, as GitHub's "Squash and merge"
 /// does, from a clone in `scratch`. Returns the squash commit.
-fn squash_merge(origin: &Path, scratch: &Path, branch: &str) -> String {
+pub(super) fn squash_merge(origin: &Path, scratch: &Path, branch: &str) -> String {
     let clone = scratch.join("squash");
     git(
         scratch,
