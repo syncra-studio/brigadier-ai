@@ -165,9 +165,28 @@ impl Turn {
         }
     }
 
+    /// The Chat whose CLI takes this turn (`None` for a session's thread, a worker or a
+    /// review).
+    pub fn chat(&self) -> Option<ConversationId> {
+        match self.host.grants().resolve(&self.grant)? {
+            crate::tools::Role::Chat { conversation_id } => Some(conversation_id),
+            _ => None,
+        }
+    }
+
     /// Calls a Brigadier tool as the session's model would.
     pub async fn call(&self, name: &str, args: Value) -> ToolReply {
-        let call = tool_call(name, args, self.is_orchestrator());
+        let call = match name {
+            "save_memory" => ToolCall::Chat(crate::tools::ChatCall::SaveMemory(
+                serde_json::from_value(args).expect("save_memory arguments"),
+            )),
+            "save_report" if self.chat().is_some() => {
+                ToolCall::Chat(crate::tools::ChatCall::SaveReport(
+                    serde_json::from_value(args).expect("save_report arguments"),
+                ))
+            }
+            _ => tool_call(name, args, self.is_orchestrator()),
+        };
         let reply = ToolHost::call(&*self.host, &self.grant, call).await;
         transcribe(&self.transcript, false, &reply.text);
         reply
@@ -1990,6 +2009,8 @@ mod browser_switch_tests;
 mod browser_tool_tests;
 #[cfg(test)]
 mod card_tests;
+#[cfg(test)]
+mod chat_thread_tests;
 #[cfg(test)]
 mod checks_tests;
 #[cfg(test)]

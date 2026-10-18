@@ -968,6 +968,14 @@ impl ToolHost for SessionManager {
                 (Role::Chat { conversation_id }, ToolCall::Chat(call)) => {
                     manager.chat_call(conversation_id, call).await
                 }
+                (Role::Chat { conversation_id }, ToolCall::Orchestrator(call))
+                    if call.in_chat() =>
+                {
+                    manager.orchestrator_call(conversation_id, call).await
+                }
+                (Role::Chat { conversation_id }, ToolCall::Browser(call)) => {
+                    crate::heap(|| manager.browser_tool(conversation_id, None, call)).await
+                }
                 (
                     Role::TabChat {
                         conversation_id, ..

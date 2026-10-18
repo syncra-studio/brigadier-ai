@@ -1370,7 +1370,25 @@ pub const THREAD_TOOLS: &[&str] = &[
     "settle_wait",
 ];
 
+/// The thread's tools a Chat has too (Q76): a Chat is a thread without a project, so it runs
+/// workers and asks on cards, and has nothing of git, checks, landing or other sessions.
+pub const CHAT_THREAD_TOOLS: &[&str] = &[
+    "delegate_task",
+    "message_worker",
+    "answer_worker",
+    "stop_worker",
+    "ask_user",
+    "read_report",
+    "read_artifact",
+    "store_output",
+];
+
 impl OrchestratorCall {
+    /// Whether a Chat may make this call ([`CHAT_THREAD_TOOLS`]).
+    pub fn in_chat(&self) -> bool {
+        CHAT_THREAD_TOOLS.contains(&self.name())
+    }
+
     /// The MCP tool name.
     pub fn name(&self) -> &'static str {
         match self {

@@ -55,7 +55,8 @@ use super::{
     warm,
 };
 use crate::model::{
-    ConversationId, DomainEvent, Environment, ModelChoice, PermissionLevel, Setup, streams,
+    Conversation, ConversationId, ConversationKind, DomainEvent, Environment, ModelChoice,
+    PermissionLevel, Setup, streams,
 };
 use crate::routing::{TokenMeter, WriteCause};
 use crate::runtime::{is_delta, merge_delta};
@@ -1077,10 +1078,22 @@ impl SessionManager {
         self.admit()?;
         let fence = self.enter(conversation_id)?;
         let conversation = self.core.conversation(conversation_id)?;
-        if !matches!(conversation.setup, Some(Setup::Session { .. })) {
-            return Err(Error::Invalid("tasks belong to a session".into()));
-        }
         let permission = self.permission(conversation_id);
+        match &conversation.setup {
+            Some(Setup::Session { .. }) => {}
+            // A Chat is a thread without a project (Q76): its workers look things up and
+            // operate apps, and never touch a repository.
+            Some(Setup::Chat { .. })
+                if conversation.kind == ConversationKind::Chat
+                    && conversation.tab_chat.is_none()
+                    && access_for(kind, permission).repo == RepoAccess::None => {}
+            Some(Setup::Chat { .. }) => {
+                return Err(Error::Invalid(
+                    "A Chat has no project or repository: its workers only research or operate apps (kind research or operate).".into(),
+                ));
+            }
+            None => return Err(Error::Invalid("tasks belong to a session".into())),
+        }
         let active_run = self.overnight.active.get(conversation_id);
         // Work filed under an overnight run that has ended starts nothing: read from the board,
         // so this holds after a restart and once the run's in-memory state is gone.
@@ -1603,11 +1616,8 @@ impl SessionManager {
             .clone()
             .ok_or_else(|| Error::Invalid("the task has no workspace".into()))?;
         let conversation = self.core.conversation(&conversation_id)?;
-        let Some(Setup::Session { repo, .. }) = &conversation.setup else {
-            return Err(Error::Invalid("tasks belong to a session".into()));
-        };
         let workspace = Workspace {
-            repo: PathBuf::from(repo),
+            repo: self.tasks_repo(&conversation, task)?,
             worktree: recorded.worktree.map(PathBuf::from),
             branch: recorded.branch,
             base: recorded.base.map(Oid),
@@ -1644,6 +1654,8 @@ impl SessionManager {
                 secrets::copy_secrets(self, &owner, &workspace.repo, worktree, &secret_files)
                     .await?
             }
+            // A Chat's task has no repository, so no env files either.
+            _ if conversation.kind == ConversationKind::Chat => Vec::new(),
             _ => secrets::values(&self.git, &workspace.repo, &secret_files).await,
         };
 
@@ -2308,6 +2320,18 @@ impl SessionManager {
         Ok(home)
     }
 
+    /// The repository `task` of `conversation` works on: its session's. A Chat has none (Q76):
+    /// its tasks, which never get a checkout, stand on the Chat's own folder.
+    fn tasks_repo(&self, conversation: &Conversation, task: &Task) -> Result<PathBuf> {
+        match &conversation.setup {
+            Some(Setup::Session { repo, .. }) => Ok(PathBuf::from(repo)),
+            Some(Setup::Chat { .. }) if task.access.repo == RepoAccess::None => {
+                Ok(self.owned_dir("chat", &conversation.id.0))
+            }
+            _ => Err(Error::Invalid("tasks belong to a session".into())),
+        }
+    }
+
     /// Creates the task's scratch folder and worktree, recorded in the ledger first.
     async fn prepare_workspace(
         &self,
@@ -2316,15 +2340,9 @@ impl SessionManager {
         subject: Option<&Task>,
     ) -> Result<Workspace> {
         let conversation = self.core.conversation(&task.conversation_id)?;
-        let Some(Setup::Session {
-            repo, environment, ..
-        }) = &conversation.setup
-        else {
-            return Err(Error::Invalid("tasks belong to a session".into()));
-        };
+        let repo = self.tasks_repo(&conversation, task)?;
         let scratch = self.owned_dir("scratch", &task.id.0);
         self.prepare_owned_dir(owner, &scratch).await?;
-        let repo = PathBuf::from(repo);
         if task.access.repo == RepoAccess::None {
             return Ok(Workspace {
                 repo,
@@ -2343,6 +2361,9 @@ impl SessionManager {
         let run_branch = match &task.run {
             Some(run) => Some(self.run_target(&task.conversation_id, run).await?),
             None => None,
+        };
+        let Some(Setup::Session { environment, .. }) = &conversation.setup else {
+            return Err(Error::Invalid("a Chat's tasks have no repository".into()));
         };
         let target = match &run_branch {
             Some(branch) => branch.clone(),

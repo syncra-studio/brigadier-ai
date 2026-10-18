@@ -4160,7 +4160,7 @@ impl SessionManager {
         watchdog_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut deltas: Vec<ProviderEvent> = Vec::new();
         let mut deadline: Option<tokio::time::Instant> = None;
-        let mut quiet = Quiet::new(conv.kind == ConversationKind::Session);
+        let mut quiet = Quiet::default();
         loop {
             let flush_at = async {
                 match deadline {
@@ -4531,11 +4531,7 @@ impl SessionManager {
                         .or_else(|| state.request.clone());
                     (request, state.answers.remove(item_id))
                 };
-                let shown = if conv.kind == ConversationKind::Session {
-                    without_quiet(text)
-                } else {
-                    Some(text.as_str())
-                };
+                let shown = without_quiet(text);
                 if let Some(text) = shown {
                     if let Some(request) = &request {
                         conv.status.lock().unwrap().shown(request, now_ms());
@@ -6678,9 +6674,9 @@ impl NativeIds {
 }
 
 /// Holds back an orchestrator reply's streamed text while it may still be [`prompts::QUIET`],
-/// so the user never sees it appear.
+/// so the user never sees it appear. A Chat's too: it is a thread without a project (Q76).
+#[derive(Default)]
 struct Quiet {
-    enabled: bool,
     /// Text streamed so far per reply still held back, and what its CLI said it is; released
     /// replies are absent.
     held: HashMap<String, (String, Option<TextPhase>)>,
@@ -6688,20 +6684,9 @@ struct Quiet {
 }
 
 impl Quiet {
-    fn new(enabled: bool) -> Self {
-        Self {
-            enabled,
-            held: HashMap::new(),
-            released: HashSet::new(),
-        }
-    }
-
     /// The deltas the user may see: a reply's text is released, whole, once it can no longer
     /// be [`prompts::QUIET`].
     fn pass(&mut self, deltas: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
-        if !self.enabled {
-            return deltas;
-        }
         deltas
             .into_iter()
             .filter_map(|event| match event {
