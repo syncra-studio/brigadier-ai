@@ -13,14 +13,15 @@ test("the trust question shows when an unanswered project is entered, once", { t
   // A plain chat and an answered project ask nothing, though two projects have no answer.
   assert.equal(seen.chat, null);
   assert.equal(seen.answered, null);
-  // A chat in an unanswered project asks: a rounder, wider card with pill buttons, Trust first.
+  // A chat in an unanswered project asks: the design's 420-wide card, pill buttons, Trust on the
+  // right; the card has the focus, so Enter answers nothing.
   assert.deepEqual(seen.session, {
     title: "Trust this folder?",
     path: "/Users/you/Development/invoice-service",
-    buttons: ["Trust folder", "Don't trust"],
-    focused: "Trust folder",
-    width: 400,
-    radius: 20,
+    buttons: ["Don't trust", "Trust folder"],
+    focused: "trust-dialog",
+    width: 420,
+    radius: 14,
     pill: true,
   });
   assert.equal(seen.afterTrust, null);

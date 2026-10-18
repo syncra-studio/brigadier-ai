@@ -1,6 +1,6 @@
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
-import { Button } from "@/components/ui/button";
+import { DialogPill } from "@/app/dialogs/pills";
 import {
   Dialog,
   DialogContent,
@@ -34,9 +34,14 @@ export function TrustDialog() {
       <DialogContent
         data-testid="trust-dialog"
         showCloseButton={false}
-        className="rounded-question max-w-question shadow-menu p-5"
+        className="bg-settings-surface border-settings-border rounded-design-dialog max-w-trust shadow-design-dialog text-settings-text gap-0 border p-0 ring-0"
         onInteractOutside={(event) => event.preventDefault()}
         onEscapeKeyDown={(event) => event.preventDefault()}
+        // The card itself takes focus, not an answer: Enter never trusts a folder by accident.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          (event.currentTarget as HTMLElement).focus();
+        }}
       >
         {open && project && folder && (
           <TrustForm key={`${project.id}\n${folder}`} project={project} folder={folder} />
@@ -46,47 +51,41 @@ export function TrustDialog() {
   );
 }
 
+/** The folder's path split at its last part: where it lives, and the folder's own name. */
+export function splitFolder(path: string): { parent: string; name: string } {
+  const trimmed = path.length > 1 ? path.replace(/\/+$/, "") : path;
+  const cut = trimmed.lastIndexOf("/") + 1;
+  return { parent: trimmed.slice(0, cut), name: trimmed.slice(cut) };
+}
+
 /** The question for one project's folder, and its two answers. */
 export function TrustForm({ project, folder }: { project: Project; folder: string }) {
   const action = useAction();
   const answer = (trusted: boolean) => action.run(() => setFolderTrust(project.id, folder, trusted));
+  const { parent, name } = splitFolder(folder);
   return (
-    <div className="grid gap-4 text-center">
-      <DialogHeader className="gap-4">
-        <DialogTitle className="text-xl leading-snug font-semibold">Trust this folder?</DialogTitle>
-        <p className="text-muted-foreground break-all select-text">{folder}</p>
-        <DialogDescription>
-          Agents can read, edit and run the files here, and the folder's own settings can run code
-          without being asked. Continue only if you trust these files.
+    <div className="flex flex-col">
+      <div className="flex flex-col gap-3 px-6 pt-6">
+        <DialogHeader className="gap-1.5">
+          <DialogTitle className="text-dialog-title text-settings-text font-medium">Trust this folder?</DialogTitle>
+          <p data-slot="trust-path" className="flex min-w-0 font-mono text-settings-meta">
+            <span className="text-settings-text-tertiary">{parent}</span>
+            <span className="text-settings-text-secondary">{name}</span>
+          </p>
+        </DialogHeader>
+        <DialogDescription className="text-settings-text-secondary text-settings-small leading-[1.5]">
+          Agents can edit and run files here without asking, and the folder's own settings can run code.
         </DialogDescription>
-      </DialogHeader>
-      <ErrorLine error={action.error} />
-      <div className="grid gap-3 pt-3">
-        <Button
-          type="button"
-          size="lg"
-          className="rounded-capsule w-full"
-          autoFocus
-          disabled={action.busy}
-          onClick={() => answer(true)}
-        >
-          Trust folder
-        </Button>
-        <Button
-          type="button"
-          size="lg"
-          variant="ghost"
-          className="rounded-capsule ring-foreground/10 w-full ring-1"
-          disabled={action.busy}
-          onClick={() => answer(false)}
-        >
-          Don't trust
-        </Button>
+        <ErrorLine error={action.error} />
       </div>
-      <p className="text-muted-foreground text-xs">
-        If you don't trust it, every session here asks before it does anything. You can change this
-        in the project's settings.
-      </p>
+      <div className="flex items-center justify-end gap-2 px-6 pt-6 pb-5">
+        <DialogPill look="secondary" disabled={action.busy} onClick={() => answer(false)}>
+          Don't trust
+        </DialogPill>
+        <DialogPill look="primary" disabled={action.busy} onClick={() => answer(true)}>
+          Trust folder
+        </DialogPill>
+      </div>
     </div>
   );
 }

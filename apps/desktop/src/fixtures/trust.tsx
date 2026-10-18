@@ -74,7 +74,7 @@ function dialog() {
     title: card.querySelector("h2")?.textContent,
     path: card.querySelector("h2 + p")?.textContent,
     buttons: [...card.querySelectorAll("button")].map((button) => button.textContent),
-    focused: document.activeElement?.textContent,
+    focused: (document.activeElement as HTMLElement | null)?.dataset.testid ?? document.activeElement?.textContent,
     width: card.getBoundingClientRect().width,
     radius: parseFloat(getComputedStyle(card).borderRadius),
     // A pill: its corners round off its whole height.
