@@ -390,11 +390,18 @@ fn assessed<'q>(query: &'q Query) -> Assessed<'q> {
     let mut notes: Vec<String> = Vec::new();
     let mut cross_vendor = None;
     if let Some(author) = &query.avoid {
-        // Only while a model of the order can take it; otherwise routing scores, adversarially.
+        let is_author = |c: &Candidate| {
+            author
+                .model
+                .as_deref()
+                .is_some_and(|model| is_model(&c.model, query.registry, model))
+        };
+        // Only while a model of the order other than the author's own can take it; otherwise
+        // routing scores, adversarially.
         let ordered = ranking.is_some()
             && candidates
                 .iter()
-                .any(|c| c.eligible() && c.listed.is_some());
+                .any(|c| c.eligible() && c.listed.is_some() && !is_author(c));
         let other_vendor = !ordered
             && candidates
                 .iter()
@@ -411,12 +418,6 @@ fn assessed<'q>(query: &'q Query) -> Assessed<'q> {
             }
         } else if candidates.iter().any(|c| c.eligible()) {
             cross_vendor = Some(false);
-            let is_author = |c: &Candidate| {
-                author
-                    .model
-                    .as_deref()
-                    .is_some_and(|model| is_model(&c.model, query.registry, model))
-            };
             let others = candidates.iter().any(|c| c.eligible() && !is_author(c));
             if others {
                 for candidate in &mut candidates {
@@ -3457,6 +3458,60 @@ mod tests {
             model: None,
         });
         assert_eq!(routed(&q).provider, ProviderKind::Codex);
+    }
+
+    #[test]
+    fn an_order_of_only_the_authors_model_still_sends_the_review_to_the_other_vendor() {
+        let registry = Registry::bundled();
+        // Two Claude frontier models: plain scoring would hand the review to the author's other one.
+        let claude = [
+            info("opus[1m]", "Opus 5.5", Some("claude-opus-5-5[1m]")),
+            info("claude-opus-5-5", "Opus 5.5", None),
+        ];
+        let codex = [info("gpt-6-astra", "GPT-6-Astra", None)];
+        let models = crate::merge(
+            &registry,
+            &[
+                (ProviderKind::Claude, claude.as_slice()),
+                (ProviderKind::Codex, codex.as_slice()),
+            ],
+            &[],
+            &[],
+        );
+        // A score tie, and Claude has more quota left.
+        let providers = [
+            quota(ProviderKind::Claude, 10.0),
+            quota(ProviderKind::Codex, 80.0),
+        ];
+        let mut q = query(&registry, &models, &providers);
+        q.category = TaskCategory::Review;
+        q.floor = default_floor(TaskCategory::Review);
+        let author = "opus[1m]".to_owned();
+        q.avoid = Some(Author {
+            provider: ProviderKind::Claude,
+            model: Some(author.clone()),
+        });
+        // The order lists only the author's own model, which can never review its change.
+        let rankings = [Ranking {
+            id: "review".into(),
+            category: TaskCategory::Review,
+            areas: vec![],
+            project_id: None,
+            manual: true,
+            only: false,
+            updated_at_ms: 0,
+            entries: vec![crate::RankedEntry {
+                target: OverrideTarget::Model {
+                    provider: ProviderKind::Claude,
+                    id: author.clone(),
+                },
+                effort: None,
+            }],
+        }];
+        q.rankings = &rankings;
+        let routed = routed(&q);
+        assert_eq!(routed.provider, ProviderKind::Codex, "{routed:?}");
+        assert_eq!(routed.cross_vendor, Some(true));
     }
 
     fn routed(query: &Query<'_>) -> Routed {
