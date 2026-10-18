@@ -1,12 +1,17 @@
 # docs
 
-User guides:
+User guides, in [user/](user/):
 
-- [INSTALL-ALPHA.md](INSTALL-ALPHA.md): installing the unsigned alpha build on macOS.
-- [ACCOUNTS.md](ACCOUNTS.md): several Claude Code or Codex accounts per agent.
+- [Install](user/install.md)
+- [Your first task](user/first-task.md)
+- [Accounts](user/accounts.md)
+- [Sessions and tabs](user/sessions-and-tabs.md)
+- [Auto-merge and Revert](user/auto-merge-and-revert.md)
+- [Privacy](user/privacy.md)
 
 For contributors:
 
+- [ACCOUNTS.md](ACCOUNTS.md): how several Claude Code or Codex accounts per agent work inside.
 - [DEVELOPMENT.md](DEVELOPMENT.md): building from source, the checks, the layout, dependency notes.
 - [helpers/computer-use/README.md](../helpers/computer-use/README.md): the computer-use helper,
   its vendored upstream driver and what Brigadier changed.

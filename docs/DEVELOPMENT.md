@@ -24,7 +24,7 @@ crates/        Rust workspace
 apps/desktop/  Tauri 2 shell (src-tauri/) and the React UI (src/)
 helpers/computer-use/  the computer-use helper app, its own Cargo workspace (macOS; see its README)
 registry/      the curated model registry, published from this repository
-scripts/       install.sh (the alpha installer), uninstall.sh
+scripts/       install.sh (the one-command installer), uninstall.sh
 tools/         full-checks.sh, the live smoke, dev-app helpers, the A/B harness
 docs/          design plans and evidence (see docs/README.md)
 ```
@@ -266,6 +266,15 @@ notarization are configured only through environment variables and are skipped w
 CI reads the same names from repository secrets. An unsigned or ad-hoc-signed build runs, but
 computer use needs a signed build to keep its macOS permissions across rebuilds
 ([helpers/computer-use/README.md](../helpers/computer-use/README.md)).
+
+Releases come from `.github/workflows/nightly.yml`. Every night it signs, notarizes and publishes
+main as the `nightly` prerelease, which installed nightly builds update from. A `v*` tag whose
+version matches `tauri.conf.json` (`v0.1.0-alpha` for `0.1.0`) builds the universal app the same
+way and publishes that tag's release, marked latest, with the DMG, the updater archive, its feed
+(`latest.json`) and `SHA256SUMS`; installed release builds update from it. A released tag is never
+moved: a fix ships as the next version. Then bump the cask in
+[syncra-studio/homebrew-tap](https://github.com/syncra-studio/homebrew-tap) (`version` and the
+DMG's `sha256`) and the version in `scripts/install.sh`.
 
 ## The uninstall script
 

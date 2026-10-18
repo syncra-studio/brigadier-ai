@@ -27,40 +27,64 @@ your own logins. It holds no API keys and never reads your credentials.
 
 ## Install
 
-Once the `v0.1.0-alpha` release is published, install it with one command; see
-[docs/INSTALL-ALPHA.md](docs/INSTALL-ALPHA.md), which also covers the manual install of the
-unsigned build. Until then, build it from source on macOS 14 or later:
+macOS 14 or later, Apple silicon or Intel. Signed and notarized.
 
-1. Install [Rust](https://rustup.rs) (the pinned toolchain installs itself), Node 24+, pnpm 12,
-   CMake, and the Xcode Command Line Tools (`xcode-select --install`).
-2. Build the app:
+```sh
+brew install --cask syncra-studio/tap/brigadier
+```
 
-   ```sh
-   git clone https://github.com/syncra-studio/brigadier-ai.git
-   cd brigadier-ai
-   pnpm install
-   pnpm tauri build --bundles app
-   ```
-
-3. Move `target/release/bundle/macos/Brigadier.app` to `/Applications` and open it.
+Or download `Brigadier-0.1.0-alpha-universal.dmg` from the
+[latest release](https://github.com/syncra-studio/brigadier-ai/releases/latest) and drag
+Brigadier to Applications. It updates itself. More ways, and how to uninstall:
+[docs/user/install.md](docs/user/install.md).
 
 You also need at least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
-[Codex](https://github.com/openai/codex), installed and signed in. Having both is better: cross-vendor
-review needs both. Windows and Linux builds: see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+[Codex](https://github.com/openai/codex); Brigadier's first screen can install them. Both is
+better: each reviews the other's work. To build from source (or for Windows and Linux), see
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Quick start
 
-1. Open Brigadier. First-run setup finds `claude` and `codex` on your login shell's `PATH` and can
-   start their install or sign-in for you.
-2. **Add a project** in the sidebar: a folder with a git repository (Brigadier can create one for
-   a folder that has none, or clone one).
-3. Say what you want in the composer, in plain words. Fresh installs start in Approve for me,
-   where Brigadier reviews approvals for you and keeps the CLI sandbox enabled. You can change
-   the level in the composer; read [Permission levels](#permission-levels) first.
-4. Watch the thread plan it and start workers. Each worker's progress shows in the thread. Work
-   lands on your branch, or on a session branch that merges into its base when you ask.
+1. Open Brigadier. Its first screen connects your agents: it finds `claude` and `codex`, and can
+   install them or sign them in for you.
+2. Pick a project: one it suggests from your recent Claude Code and Codex work, or any git
+   repository (**+** next to **Projects**). It can also clone one, or start git in a folder.
+3. Press **New chat** on the project and say what you want in plain words.
+4. The session works on its own branch, in its own worktree: it plans, changes the code, runs your
+   checks and has the other vendor review it. Then it merges the work, and a **Revert** button sits
+   under the merge message.
 
-For a plain conversation with one model, start a **Chat** instead of a session.
+Step by step: [docs/user/first-task.md](docs/user/first-task.md).
+
+## Sessions
+
+One session is one task: a chat with an agent, on its own branch and worktree. The sidebar lists
+each project's sessions with what each is doing (Working, Needs you, Ready, Merged). For a second
+task at the same time, start another session: **New chat** on the project, or **⌘Enter** in the
+composer to start it in the background. The tab bar holds the open session's chat and its own
+terminals, browser pages and files. More: [docs/user/sessions-and-tabs.md](docs/user/sessions-and-tabs.md).
+
+## Auto-merge and Revert
+
+Finished work merges on its own: through a pull request when the project is on GitHub and `gh` is
+signed in, otherwise into the base branch on your Mac. Each merge message has a **Revert** button.
+Turn it off in Settings › Git. More: [docs/user/auto-merge-and-revert.md](docs/user/auto-merge-and-revert.md).
+
+## Accounts
+
+Brigadier uses the logins your CLIs already have; there is no Brigadier account. Add more Claude
+Code or Codex accounts in Settings › Providers; when one runs out, work moves to another.
+More: [docs/user/accounts.md](docs/user/accounts.md).
+
+## Privacy
+
+- Runs your own `claude` and `codex`, unmodified, under your own logins.
+- Never reads your login tokens or API keys, and holds none.
+- No account, no server, no telemetry. Your sessions and settings stay in
+  `~/Library/Application Support/Brigadier`.
+
+What it does fetch (updates, the model list, two small local models):
+[docs/user/privacy.md](docs/user/privacy.md).
 
 ## Status and roadmap
 
@@ -76,9 +100,9 @@ rough edges.
 
 ## What's in it
 
-- **Sessions.** One thread per piece of work. It reads and runs things, makes small changes
-  itself, and starts workers for the rest. It works on your checked-out branch, or on a new
-  worktree and branch that merges into its base when you ask.
+- **Sessions.** One thread per task, on its own branch and worktree. It reads and runs things,
+  makes small changes itself, starts workers for the rest, and merges the result when it's
+  checked and reviewed (with a Revert button).
 - **Overnight runs.** Type `/overnight` with a plan and when it should be ready. The session works
   through the plan phase by phase until it's done or the deadline comes, then leaves a morning
   report and a notification.
@@ -94,8 +118,8 @@ rough edges.
 - **Several accounts per agent.** Sign in to more than one Claude Code or Codex account and pick
   which one new conversations use (Settings › Providers). When one runs out, Brigadier switches
   to another (a setting, on by default).
-- **Usage and fallback.** The Usage page shows each agent's usage windows and where they are
-  heading. A worker whose provider hits its limit hands its task to the best other model, in the
+- **Usage and fallback.** The sidebar's usage button and Settings › Providers show each
+  agent's usage windows and where they are heading. A worker whose provider hits its limit hands its task to the best other model, in the
   same worktree. A conversation continues on the other vendor and goes back after the reset.
 - **Built-in browser** (macOS, Windows). Opens the pages agents and you work on, with history and
   downloads. On macOS it also has per-site camera and microphone choices, and can import cookies
@@ -151,9 +175,11 @@ A worker reports when it's done. Its commits then **land**:
   thread fixes them or says why not. Settings › Configuration › "Review the work" turns reviews
   off (they're on by default).
 
-A new-worktree session merges into its base only when you say so: on the merge card the thread
-offers, or by asking in plain words. The merge then waits until the reviews of the work have
-ended and the thread has recorded each finding as fixed or dismissed; an open finding stops it.
+When the session's work is done, checked and reviewed, the thread merges it into its base: through
+a pull request when the project is on GitHub and `gh` is signed in, otherwise on your Mac. The
+merge message has a Revert button that asks the thread to undo it the way it went in. With
+Settings › Git › "Merge on its own when the work is ready" off, the thread tells you the work is
+ready and merges when you ask.
 
 Archiving a session removes its worktrees, scratch folders, CLI session files and processes,
 including detached children. Unfinished work is kept as a WIP commit on its task
@@ -249,9 +275,9 @@ Brigadier picks each worker's model and says why on the worker's card.
   takes one only if it stays within fixed bounds and has a higher revision.
 - **Outcomes.** Every model's run of a task is recorded per project (result, review findings,
   rework, time, tokens), and nudges that model's score for that kind of work in that project.
-- **Your choices.** Settings › Providers has one "Use this model" switch per model, and "Who does
-  what" to pick a model per kind of work or leave it on Automatic. Ordering, rules and
-  per-project overrides are under Advanced.
+- **Your choices.** Each agent's page in Settings › Providers turns its models on or off.
+  Settings › Routing says who does what: a model per kind of work, or Automatic, plus rules
+  with a live preview.
 - **Quota.** Brigadier reads Claude's and Codex's usage windows, projects each one to its reset,
   and shifts new work away from a provider that's running hot.
 - **Fewer tokens, built in.** Nothing to turn on. A thread idle past its prompt cache restarts
@@ -262,10 +288,10 @@ Brigadier picks each worker's model and says why on the worker's card.
 ### Settings
 
 Settings is grouped into Personal (General, Voice, Configuration, Keyboard shortcuts), Agents
-(Providers, Usage, Git, Computer use), Browser & Data (Browser, Import Browser Data) and System
+(Providers, Routing, Git, Computer use), Browser & Data (Browser, Import Browser Data) and System
 (Storage, Inspector), with Archived chats at the end. Settings › Computer use (macOS) turns it
 on or off and walks through its Accessibility and Screen Recording permissions. Accounts:
-[docs/ACCOUNTS.md](docs/ACCOUNTS.md).
+[docs/user/accounts.md](docs/user/accounts.md).
 
 ## Uninstall
 
