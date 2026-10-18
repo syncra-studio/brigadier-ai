@@ -32,5 +32,6 @@ Your terminal's login can't be removed here.
 
 ## Usage
 
-The usage button at the bottom of the sidebar shows each agent's limits: how much is used and
-when each window resets. **Settings › Providers** has the details.
+The usage button at the bottom of the sidebar lists your agents, the most used first, each with
+its tightest limit: how much is used and when it resets (amber past 75%). Click an agent to see
+every limit it has. **Providers ›** opens **Settings › Providers**.

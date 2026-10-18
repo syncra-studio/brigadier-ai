@@ -20,26 +20,10 @@ import { useApp } from "@/state/store";
  * the list, and has one fail to start, writing what it saw to #updates-result
  * (SidebarUpdatesRender.test.ts reads it). ?narrow=1 narrows the sidebar as far as it goes, with
  * the two updates and a nightly update waiting, and writes whether "Restart to update" shortens its
- * words inside it, clear of the updates pill. ?usage=1 opens the usage menu with a weekly quota
- * about to be lost and follows its link, writing the warning's line, the link's words and where it
- * led. Without any, the page shows two updates, for screenshots.
+ * words inside it, clear of the updates pill. Without any, the page shows two updates, for
+ * screenshots.
  */
 const params = new URLSearchParams(location.search);
-
-/** ?usage=1: a weekly quota about to be lost, and one whose reset passed. */
-const usageAccounts: AccountsView = {
-  accounts: [],
-  warnings: [
-    {
-      account: { provider: "claude", account: "work" },
-      who: "Work (Claude Code)",
-      window: "seven_day",
-      leftPercent: 35.2,
-      resetsAtMs: Date.now() + 9 * 3_600_000 - 30_000,
-    },
-    { account: { provider: "codex" }, who: "Codex", window: "secondary", leftPercent: 50, resetsAtMs: Date.now() - 1000 },
-  ],
-};
 
 const calls: Request[] = [];
 let failNext = false;
@@ -47,7 +31,7 @@ mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   calls.push(req);
-  if (req.method === "getAccounts") return { method: req.method, accounts: usageAccounts };
+  if (req.method === "getAccounts") return { method: req.method, accounts: { accounts: [], warnings: [] } satisfies AccountsView };
   if (req.method === "runUpdate" && failNext) {
     failNext = false;
     throw new Error("Couldn't reach npm");
@@ -128,21 +112,6 @@ function Fixture() {
       );
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, []);
-  useEffect(() => {
-    if (!params.has("usage")) return;
-    useApp.setState({ accounts: usageAccounts });
-    void (async () => {
-      await wait(300);
-      q('button[aria-label="Usage"]')?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
-      await wait(300);
-      const warnings = all('[data-slot="quota-warning"]').map(text);
-      const link = all('[role="menuitem"]').at(-1);
-      const words = text(link);
-      link?.click();
-      await wait(300);
-      setResult(JSON.stringify({ warnings, link: words, selection: useApp.getState().selection }));
-    })();
   }, []);
   useEffect(() => {
     if (!params.has("drive")) return;

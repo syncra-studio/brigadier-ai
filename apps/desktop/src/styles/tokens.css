@@ -576,6 +576,8 @@
   --shadow-storage-box: inset 0 0 0 1.5px var(--color-storage-box);
   --shadow-tooltip: 0 8px 18px oklch(0 0 0 / 25%);
   --shadow-menu: 0 12px 32px oklch(0 0 0 / 35%);
+  /* The sidebar foot's usage list and help menu (the user's design). */
+  --shadow-foot-popover: 0 16px 40px oklch(0 0 0 / 50%);
   --shadow-summary: 0 0 0 0.5px oklch(1 0 0 / 16%), 0 3px 7.5px oklch(0 0 0 / 4%), 0 0 20px oklch(0 0 0 / 5%);
   /* A switch's thumb; the page surface's hairline edge and soft drop. */
   --shadow-thumb: 0 1px 2px oklch(0 0 0 / 20%);
@@ -679,6 +681,9 @@
   --radius-design-badge: 0.375rem;
   /* Send feedback's chips (the user's design). */
   --color-feedback-chip: #262626;
+  /* The usage list's bars, and the help menu's words (the user's design). */
+  --color-usage-bar: #d4d4d4;
+  --color-menu-label: #c9c9c9;
 }
 
 @theme inline {

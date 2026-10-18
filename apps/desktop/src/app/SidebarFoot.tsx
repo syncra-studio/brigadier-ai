@@ -1,26 +1,31 @@
-import { Settings } from "@openai/apps-sdk-ui/components/Icon";
-import type { ReactNode } from "react";
+import { Comment, Keyboard, QuestionMarkCircle, Settings } from "@openai/apps-sdk-ui/components/Icon";
+import { type ReactNode, useRef } from "react";
 
 import { KeepAwakeMenu, UsageMenu } from "@/app/BarStatus";
 import { useShortcuts } from "@/app/shortcuts";
 import { preloadSettings } from "@/app/settings/lazy";
-import { FootButton } from "@/app/sidebar/nav";
+import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
 import { RestartToUpdate } from "@/app/RestartToUpdate";
 import { UpdatesRow } from "@/app/UpdatesRow";
-import { FeedbackGlyph } from "@/components/glyphs/feedback-glyph";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useSidebar } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
-import { toggleSettings } from "@/state/actions";
+import { openSettings, toggleSettings } from "@/state/actions";
 import { openFeedback } from "@/state/feedback";
 
 /**
- * The icons at the sidebar's foot, outside Settings: sending feedback, keeping awake, the agents'
- * usage, updates while there are any, "Restart to update" while a nightly update waits, and
- * Settings. Expanded,
- * they make one row along the bottom, Settings first; collapsed, they stack in the strip, Settings
- * last. Settings stays in the corner either way, and the others fade in where they move to, so the
- * foot doesn't jump as the sidebar collapses or expands. In a narrow row "Restart to update"
- * shortens its words, and a row too narrow for every icon goes on to a second line.
+ * The icons at the sidebar's foot, outside Settings: keeping awake, the agents' usage, updates
+ * while there are any, "Restart to update" while a nightly update waits, Help, and Settings.
+ * Expanded, they make one row along the bottom, Settings first and Help flush at its far right;
+ * collapsed, they stack in the strip, Settings last. Settings stays in the corner either way, and
+ * the others fade in where they move to, so the foot doesn't jump as the sidebar collapses or
+ * expands. In a narrow row "Restart to update" shortens its words, and a row too narrow for every
+ * icon goes on to a second line.
  */
 export function SidebarFoot() {
   const shortcuts = useShortcuts();
@@ -46,9 +51,6 @@ export function SidebarFoot() {
     >
       {open && settings}
       <Moving open={open}>
-        <FootButton tip="Send feedback" icon={<FeedbackGlyph />} onClick={() => openFeedback()} />
-      </Moving>
-      <Moving open={open}>
         <KeepAwakeMenu />
       </Moving>
       <Moving open={open}>
@@ -60,17 +62,32 @@ export function SidebarFoot() {
       <Moving open={open} shrink>
         <RestartToUpdate />
       </Moving>
+      <Moving open={open} end>
+        <HelpMenu />
+      </Moving>
       {!open && settings}
     </div>
   );
 }
 
 /** A foot icon that moves between the row and the stack: it fades in where it lands. */
-function Moving({ open, shrink = false, children }: { open: boolean; shrink?: boolean; children: ReactNode }) {
+function Moving({
+  open,
+  shrink = false,
+  end = false,
+  children,
+}: {
+  open: boolean;
+  shrink?: boolean;
+  /** Flush at the row's far right. */
+  end?: boolean;
+  children: ReactNode;
+}) {
   return (
     <div
       className={cn(
         "flex motion-reduce:animate-none",
+        open && end && "ms-auto",
         // Takes what the row has left: it wraps only when its icon wouldn't fit, not its words.
         shrink && (open ? "has-[button]:min-w-strip-button min-w-0 grow basis-0" : "min-w-0"),
         // Two names for one fade, so it starts again on each turn.
@@ -79,5 +96,48 @@ function Moving({ open, shrink = false, children }: { open: boolean; shrink?: bo
     >
       {children}
     </div>
+  );
+}
+
+/** A help menu row: the design's light words, filled while pointed at. */
+const helpItem =
+  "h-8.5 gap-2.5 px-3.5 text-settings-body text-menu-label focus:bg-settings-ring focus:text-settings-text [&_svg]:size-3.75 [&_svg]:text-settings-text-secondary focus:[&_svg]:text-settings-text";
+
+/** Help at the sidebar's foot: a question mark that opens Send feedback… and Keyboard shortcuts. */
+function HelpMenu() {
+  const { open } = useSidebar();
+  // Send feedback opens once the menu has closed, so its note keeps the keyboard rather than the
+  // closing menu handing it back to Help.
+  const toFeedback = useRef(false);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <FootButton tip="Help" icon={<QuestionMarkCircle />} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        {...(open ? ({ side: "top", align: "end" } as const) : footMenuPlacement(false))}
+        className="bg-settings-raised border-settings-ring shadow-foot-popover flex w-60 flex-col gap-0.5 border p-1.5 ring-0"
+        onCloseAutoFocus={(event) => {
+          if (!toFeedback.current) return;
+          toFeedback.current = false;
+          event.preventDefault();
+          openFeedback();
+        }}
+      >
+        <DropdownMenuItem
+          className={helpItem}
+          onSelect={() => {
+            toFeedback.current = true;
+          }}
+        >
+          <Comment />
+          Send feedback…
+        </DropdownMenuItem>
+        <DropdownMenuItem className={helpItem} onSelect={() => openSettings("shortcuts")}>
+          <Keyboard />
+          Keyboard shortcuts
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

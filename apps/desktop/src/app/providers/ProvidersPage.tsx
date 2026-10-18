@@ -12,6 +12,7 @@ import type { ProviderKind } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";
 import { PROVIDERS } from "@/lib/routing";
 import { refreshProviders } from "@/state/actions";
+import { useAgentPageAsk } from "@/state/agentPage";
 import { accountsOf, loadAccounts, refreshAccounts } from "@/state/accounts";
 import { useApp } from "@/state/store";
 import { useUsage, useUsageRefresh } from "@/state/usage";
@@ -72,6 +73,17 @@ export function ProvidersPage() {
   useEffect(() => {
     loadAccounts().catch((error: unknown) => console.error("reading the accounts failed", error));
   }, []);
+  // An agent's page asked for from elsewhere (the usage list's Sign in) opens once, then the
+  // ask is cleared.
+  const ask = useAgentPageAsk((s) => s.ask);
+  const [taken, setTaken] = useState<typeof ask>(null);
+  if (ask && ask !== taken) {
+    setTaken(ask);
+    setOpen(ask);
+  }
+  useEffect(() => {
+    if (ask) useAgentPageAsk.setState({ ask: null });
+  }, [ask]);
   // A search row on an agent's page opens it: a model's, its agent's; Installation, Accounts or
   // Models, the open one's, else the first agent installed. One on the overview goes back to it.
   const revealing = useReveal((s) => s.label);

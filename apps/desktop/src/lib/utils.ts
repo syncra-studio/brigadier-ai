@@ -97,7 +97,7 @@ const twMerge = extendTailwindMerge({
         "design-mark",
         "design-badge",
       ],
-      shadow: ["hairline", "menu", "tooltip", "summary", "thumb", "page", "design-dialog", "design-tooltip"],
+      shadow: ["hairline", "menu", "tooltip", "summary", "thumb", "page", "design-dialog", "design-tooltip", "foot-popover"],
       text: [
         "code",
         "code-inline",

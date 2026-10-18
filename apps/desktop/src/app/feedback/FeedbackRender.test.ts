@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { renderFixturePage } from "@/fixtures/headless";
 
-// The sidebar's foot opens Send feedback; a bug written there opens GitHub's bug form, filled in,
+// The sidebar foot's Help menu opens Send feedback; a bug written there opens GitHub's bug form, filled in,
 // and the dialog closes.
 test("send feedback opens a filled-in GitHub issue", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "feedback.html?drive=1", "feedback-result", 10000)) as Record<

@@ -101,12 +101,6 @@ export function leftTone(
   return usageTone(100 - share, options);
 }
 
-/** How full a window looks: its text and bar colours. */
-export function tone(percent: number): { text: string; fill: string } {
-  const { text, fill } = usageTone(percent);
-  return { text, fill };
-}
-
 /** Share left of the fullest window worth a glance, or null without a reading. */
 export function percentLeft(quota: QuotaSnapshot | null): number | null {
   if (!quota || quota.windows.length === 0) return null;

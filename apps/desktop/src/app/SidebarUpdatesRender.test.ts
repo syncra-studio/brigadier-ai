@@ -34,14 +34,3 @@ test("sidebar: Restart to update fits a narrow sidebar", { timeout: 60000 }, asy
   const seen = JSON.parse(await renderFixtureLive(t, "updates.html?narrow=1", "updates-result")) as Record<string, unknown>;
   assert.deepEqual(seen, { open: "expanded", inside: true, apart: true, shortened: true });
 });
-
-// The usage menu says once, in a line, which weekly quota is about to be lost (one whose reset
-// passed is gone), and its link names the page it opens: Settings > Providers.
-test("sidebar: the usage menu warns of quota about to be lost and opens the Providers page", { timeout: 60000 }, async (t) => {
-  const seen = JSON.parse(await renderFixturePage(t, "updates.html?usage=1", "updates-result", 10000)) as Record<string, unknown>;
-  assert.deepEqual(seen, {
-    warnings: ["Work (Claude Code) has 35% of its weekly quota left; it resets in 9h"],
-    link: "Open the Providers page",
-    selection: { type: "settings", page: "providers" },
-  });
-});

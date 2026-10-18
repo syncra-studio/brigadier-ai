@@ -1,0 +1,216 @@
+/**
+ * The sidebar's foot over a faked daemon: the usage list, a provider's limits opened in it, and
+ * the help menu. ?drive=1 checks the foot row (Help last, flush right, no feedback icon), the
+ * list (most used first, the tightest limit, amber past 75%), opening one provider at a time,
+ * Providers ›, a provider that needs signing in, and the help menu's two rows, writing what it
+ * saw to #popovers-result (SidebarPopoversRender.test.ts reads it). ?show=usage, ?show=details
+ * or ?show=help leaves that one open, for screenshots.
+ */
+import { mockIPC } from "@tauri-apps/api/mocks";
+import { useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+
+import { AppSidebar, AppStrip } from "@/app/AppSidebar";
+import { FeedbackDialog } from "@/app/feedback/FeedbackDialog";
+import { SidebarFoot } from "@/app/SidebarFoot";
+import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { AccountsView, ProviderKind, ProviderOverview, QuotaWindow, Request } from "@/ipc/generated";
+import { useAgentPageAsk } from "@/state/agentPage";
+import { useFeedbackUi } from "@/state/feedback";
+import { useApp } from "@/state/store";
+
+const params = new URLSearchParams(location.search);
+// Driven, nothing animates (see the archived chats fixture).
+if (params.has("drive")) {
+  const still = document.createElement("style");
+  still.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; }";
+  document.head.append(still);
+}
+
+mockIPC((command, payload) => {
+  if (command !== "ipc_request") return null;
+  const req = (payload as { request: Request }).request;
+  if (req.method === "getAccounts") return { method: req.method, accounts: { accounts: [], warnings: [] } satisfies AccountsView };
+  return { method: req.method };
+});
+
+const HOUR = 3_600_000;
+const start = Date.now();
+const limit = (id: string, label: string, usedPercent: number, minutes: number | null, resetsInMs: number): QuotaWindow => ({
+  id,
+  label,
+  usedPercent,
+  resetsAtMs: start + resetsInMs,
+  windowMinutes: minutes,
+  bucket: null,
+  model: null,
+});
+
+function overview(provider: ProviderKind, loggedIn: boolean, windows: QuotaWindow[]): ProviderOverview {
+  return {
+    provider,
+    status: {
+      provider,
+      path: `/usr/local/bin/${provider}`,
+      version: "1.0.0",
+      loggedIn,
+      authMethod: null,
+      plan: null,
+      guidance: null,
+      compacts: true,
+    },
+    models: null,
+    quota: { provider, windows, limit: null, observedAtMs: start, source: "read" },
+    usage: null,
+    error: null,
+    checkedAtMs: start,
+  };
+}
+
+const claude = overview("claude", true, [
+  limit("five_hour", "5-hour", 47, 300, 2 * HOUR + 51 * 60_000),
+  limit("seven_day", "Weekly", 61, 10_080, 32 * HOUR),
+  limit("seven_day_fable", "Weekly (Fable)", 0, 10_080, 32 * HOUR),
+]);
+const codex = (loggedIn: boolean) =>
+  overview("codex", loggedIn, [
+    limit("primary", "5-hour", 82, 300, 3 * HOUR),
+    limit("secondary", "Weekly", 13, 10_080, 148 * HOUR),
+  ]);
+const publish = (providers: ProviderOverview[]) =>
+  useApp.setState((state) => ({
+    providers: { ...state.providers, view: { providers, sessions: [], fixtures: [] } },
+  }));
+
+useApp.setState({ catalogLoaded: true, connection: { status: "connected", daemon: null, reason: null } });
+publish([claude, codex(true)]);
+
+const q = <E extends Element = HTMLElement>(selector: string, root: ParentNode = document) =>
+  root.querySelector<E & HTMLElement>(selector);
+const all = <E extends Element = HTMLElement>(selector: string, root: ParentNode = document) =>
+  [...root.querySelectorAll<E & HTMLElement>(selector)];
+const text = (element: Element | null | undefined) => element?.textContent?.trim() ?? "";
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Waits for `find` to find something (up to five seconds). */
+async function until<T>(find: () => T | null | undefined): Promise<T | null> {
+  for (let tries = 0; tries < 100; tries++) {
+    const found = find();
+    if (found) return found;
+    await wait(50);
+  }
+  return null;
+}
+const press = (element: Element | null | undefined) =>
+  element?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+const usageButton = () => q<HTMLButtonElement>('button[aria-label^="Usage"]');
+const helpButton = () => q<HTMLButtonElement>('button[aria-label="Help"]');
+/** Each row of the usage list: its words, part by part, and whether its share is amber. */
+const usageRows = () =>
+  all('[data-slot="usage-row"]').map((row) => ({
+    words: [...row.children].map(text).filter(Boolean),
+    amber: Boolean(q('[data-slot="usage-value"].text-settings-warning', row)),
+  }));
+const limits = () => all('[data-slot="usage-limit"]').map((row) => [...row.children].map(text).filter(Boolean));
+const rowNamed = (name: string) =>
+  all<HTMLButtonElement>('[data-slot="usage-row"]').find((row) => text(row).startsWith(name));
+
+function Fixture() {
+  const [result, setResult] = useState("");
+  useEffect(() => {
+    const show = params.get("show");
+    if (!show) return;
+    void (async () => {
+      await until(helpButton);
+      await wait(300);
+      if (show === "help") {
+        press(helpButton());
+        return;
+      }
+      usageButton()?.click();
+      if (show === "details") {
+        await wait(200);
+        rowNamed("Claude Code")?.click();
+      }
+    })();
+  }, []);
+  useEffect(() => {
+    if (!params.has("drive")) return;
+    let stopped = false;
+    void (async () => {
+      const seen: Record<string, unknown> = {};
+      await until(helpButton);
+      await wait(300);
+      const foot = helpButton()?.closest<HTMLElement>(".flex-wrap");
+      const buttons = foot ? all<HTMLButtonElement>("button[aria-label]", foot) : [];
+      const help = helpButton()?.getBoundingClientRect();
+      const row = foot?.getBoundingClientRect();
+      const inset = foot ? Number.parseFloat(getComputedStyle(foot).paddingRight) : 0;
+      seen.foot = {
+        last: buttons.at(-1)?.getAttribute("aria-label"),
+        flushRight: Boolean(help && row && Math.abs(row.right - inset - help.right) < 1),
+        feedbackIcon: buttons.some((button) => button.getAttribute("aria-label") === "Send feedback"),
+      };
+
+      usageButton()?.click();
+      await wait(200);
+      seen.header = text(q('[data-slot="usage-popover"] > div'));
+      seen.rows = usageRows();
+      rowNamed("Claude Code")?.click();
+      await wait(100);
+      seen.claudeOpen = { rows: usageRows().map((entry) => entry.words), limits: limits() };
+      rowNamed("Codex")?.click();
+      await wait(100);
+      seen.codexOpen = {
+        expanded: all('[data-slot="usage-row"][aria-expanded="true"]').map((entry) => text(entry.children[1])),
+        limits: limits(),
+      };
+      all<HTMLButtonElement>('[data-slot="usage-popover"] button').find((button) => text(button) === "Providers")?.click();
+      await wait(200);
+      seen.providers = { selection: useApp.getState().selection, closed: !q('[data-slot="usage-popover"]') };
+
+      publish([claude, codex(false)]);
+      usageButton()?.click();
+      await wait(200);
+      seen.signInRows = usageRows().map((entry) => entry.words);
+      all<HTMLButtonElement>('[data-slot="usage-popover"] button').find((button) => text(button) === "Sign in")?.click();
+      await wait(200);
+      seen.signIn = { ask: useAgentPageAsk.getState().ask, closed: !q('[data-slot="usage-popover"]') };
+
+      press(helpButton());
+      await wait(200);
+      seen.help = all('[role="menuitem"]').map(text);
+      all('[role="menuitem"]').find((item) => text(item) === "Keyboard shortcuts")?.click();
+      await wait(200);
+      seen.shortcuts = useApp.getState().selection;
+      press(helpButton());
+      await wait(200);
+      all('[role="menuitem"]').find((item) => text(item) === "Send feedback…")?.click();
+      await wait(300);
+      seen.feedback = useFeedbackUi.getState().open;
+      if (!stopped) setResult(JSON.stringify(seen));
+    })();
+    return () => {
+      stopped = true;
+    };
+  }, []);
+  return (
+    <TooltipProvider>
+      <div className="bg-chrome flex h-screen flex-col">
+        <SidebarProvider className="relative min-h-0 flex-1 flex-col" defaultOpen>
+          <div className="relative flex min-h-0 min-w-0 flex-1">
+            <SidebarPanel strip={<AppStrip />} foot={<SidebarFoot />}>
+              <AppSidebar />
+            </SidebarPanel>
+            <main className="bg-background flex-1" />
+          </div>
+        </SidebarProvider>
+        <FeedbackDialog />
+      </div>
+      {result && <pre id="popovers-result">{result}</pre>}
+    </TooltipProvider>
+  );
+}
+
+const root = document.getElementById("root");
+if (root) createRoot(root).render(<Fixture />);

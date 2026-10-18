@@ -1,6 +1,6 @@
 /**
  * Send feedback over a faked app: the sidebar's foot and the dialog. ?drive=1 opens it from the
- * foot's icon, writes a bug, looks at the idea form, sends it (which closes it), opens a draft and writes
+ * foot's Help menu, writes a bug, looks at the idea form, sends it (which closes it), opens a draft and writes
  * what it saw (and the link opened) to #feedback-result (FeedbackRender.test.ts reads it).
  * Without it, the dialog stays open, filled in, for screenshots.
  */
@@ -85,8 +85,11 @@ function Fixture() {
     let stopped = false;
     void (async () => {
       const seen: Record<string, unknown> = {};
+      for (let tries = 0; tries < 100 && !button("Help"); tries++) await wait(50);
       await wait(200);
-      button("Send feedback")?.click();
+      button("Help")?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+      await wait(200);
+      [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => text(item) === "Send feedback…")?.click();
       await wait(300);
       const open = dialog();
       const area = open?.querySelector("textarea");
