@@ -2,12 +2,12 @@
 //! live feed, the app runs it on the tab's page and answers it with its id. A call nobody
 //! answers in time, or made with no window open, fails in plain words; a call dropped (the
 //! agent stopped, its request ended) is forgotten, and a late answer to it goes nowhere.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{Notify, broadcast, oneshot};
 
 use base64::Engine as _;
 
@@ -22,11 +22,19 @@ use crate::{ConversationId, TaskId};
 /// How long the app may take over a call: a page load it waits for, at most.
 pub(crate) const CALL_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// How long a call on a tab the user took over waits for their Continue before the agent
+/// hears it is still paused.
+pub(crate) const PAUSE_WAIT: Duration = Duration::from_secs(50);
+
 /// Calls waiting for the app's answer, and the feed the app's windows hear them on.
 pub(crate) struct BrowserHub {
     calls: broadcast::Sender<BrowserCall>,
     pending: Mutex<HashMap<String, oneshot::Sender<BrowserResult>>>,
     next: AtomicU64,
+    /// The tabs the user took over, by session: calls on them wait for Continue.
+    paused: Mutex<HashSet<(ConversationId, String)>>,
+    /// Told whenever a tab is paused or goes on.
+    pause_changed: Notify,
 }
 
 impl Default for BrowserHub {
@@ -35,6 +43,8 @@ impl Default for BrowserHub {
             calls: broadcast::channel(64).0,
             pending: Mutex::default(),
             next: AtomicU64::new(1),
+            paused: Mutex::default(),
+            pause_changed: Notify::new(),
         }
     }
 }
@@ -58,6 +68,84 @@ impl BrowserHub {
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn paused(&self) -> std::sync::MutexGuard<'_, HashSet<(ConversationId, String)>> {
+        self.paused
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn is_paused(&self, conversation_id: &ConversationId, tab: &str) -> bool {
+        self.paused()
+            .contains(&(conversation_id.clone(), tab.to_owned()))
+    }
+
+    /// The user took tab `tab` over (`paused`), or handed it back with Continue or closed it.
+    pub(crate) fn set_paused(&self, conversation_id: &ConversationId, tab: &str, paused: bool) {
+        let key = (conversation_id.clone(), tab.to_owned());
+        let changed = if paused {
+            self.paused().insert(key)
+        } else {
+            self.paused().remove(&key)
+        };
+        if changed {
+            self.pause_changed.notify_waiters();
+        }
+    }
+
+    /// Waits until `tab` isn't paused, `until` at the latest; false when it still is then.
+    async fn unpaused(
+        &self,
+        conversation_id: &ConversationId,
+        tab: &str,
+        until: tokio::time::Instant,
+    ) -> bool {
+        loop {
+            let changed = self.pause_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if !self.is_paused(conversation_id, tab) {
+                return true;
+            }
+            if tokio::time::timeout_at(until, changed).await.is_err() {
+                return !self.is_paused(conversation_id, tab);
+            }
+        }
+    }
+
+    /// Runs `op` like [`Self::call`], except on a tab the user took over: it waits for their
+    /// Continue, `pause_wait` at most, and then hears `Paused`. A call dropped meanwhile (the
+    /// agent stopped) never reaches the tab.
+    pub(crate) async fn run(
+        &self,
+        conversation_id: &ConversationId,
+        task_id: Option<&TaskId>,
+        label: &str,
+        op: BrowserOp,
+        pause_wait: Duration,
+    ) -> BrowserResult {
+        let until = tokio::time::Instant::now() + pause_wait;
+        loop {
+            if let Some(tab) = op.tab()
+                && !self.unpaused(conversation_id, tab, until).await
+            {
+                return BrowserResult::Paused {
+                    tab: tab.to_owned(),
+                };
+            }
+            let result = self
+                .call(conversation_id, task_id, label, op.clone(), CALL_TIMEOUT)
+                .await;
+            // The user took the tab over as the call reached it: wait as for any pause.
+            if let BrowserResult::Paused { tab } = &result
+                && tokio::time::Instant::now() < until
+            {
+                self.set_paused(conversation_id, tab, true);
+                continue;
+            }
+            return result;
+        }
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<BrowserCall> {
@@ -110,6 +198,9 @@ impl BrowserHub {
     pub(crate) fn window_gone(&self) {
         if self.calls.receiver_count() == 0 {
             self.pending().clear();
+            // Its tabs' pauses went with it.
+            self.paused().clear();
+            self.pause_changed.notify_waiters();
         }
     }
 }
@@ -241,7 +332,7 @@ impl SessionManager {
         let label = self.browser_label(&conversation_id, task_id.as_ref()).await;
         let result = self
             .browser
-            .call(&conversation_id, task_id.as_ref(), &label, op, CALL_TIMEOUT)
+            .run(&conversation_id, task_id.as_ref(), &label, op, PAUSE_WAIT)
             .await;
         self.browser_reply(&conversation_id, result)
     }
@@ -297,7 +388,7 @@ impl SessionManager {
             }
             BrowserResult::Closed { tab } => ToolReply::ok(format!("Closed {tab}.")),
             BrowserResult::Paused { tab } => ToolReply::error(format!(
-                "Still paused: the user is using {tab}. Nothing was done; try again once they press Continue."
+                "Still paused: the user is using {tab}, so nothing was done. The tab goes on when they press Continue; try again then, or do something else meanwhile."
             )),
             BrowserResult::NeedsApproval {
                 tab,
@@ -316,6 +407,11 @@ impl SessionManager {
     /// The agents' browser calls, for an app window to run.
     pub fn subscribe_browser(&self) -> broadcast::Receiver<BrowserCall> {
         self.browser.subscribe()
+    }
+
+    /// The user took an agent's Browser tab over (`paused`), or handed it back or closed it.
+    pub fn browser_paused(&self, conversation_id: &ConversationId, tab: &str, paused: bool) {
+        self.browser.set_paused(conversation_id, tab, paused);
     }
 
     /// The app's answer to a browser call; false when nothing waits for it any more.
@@ -429,6 +525,96 @@ mod tests {
         let (result, ()) =
             tokio::join!(hub.call(&c, None, "t", read("t2"), CALL_TIMEOUT), answering);
         assert_eq!(result, page("t2"));
+    }
+
+    /// A window that answers every call with a page, and keeps what it heard.
+    fn answering(hub: &std::sync::Arc<BrowserHub>) -> std::sync::Arc<Mutex<Vec<BrowserOp>>> {
+        let heard: std::sync::Arc<Mutex<Vec<BrowserOp>>> = std::sync::Arc::default();
+        let mut window = hub.subscribe();
+        let (hub, log) = (hub.clone(), heard.clone());
+        tokio::spawn(async move {
+            while let Ok(call) = window.recv().await {
+                log.lock().unwrap().push(call.op.clone());
+                hub.answer(&call.id, page(call.op.tab().unwrap_or_default()));
+            }
+        });
+        heard
+    }
+
+    #[tokio::test]
+    async fn a_call_on_a_tab_the_user_took_over_waits_for_continue() {
+        let c = conversation();
+        let hub = std::sync::Arc::new(BrowserHub::default());
+        let heard = answering(&hub);
+        hub.set_paused(&c, "t1", true);
+        let call = hub.run(&c, None, "t", read("t1"), PAUSE_WAIT);
+        let continuing = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(heard.lock().unwrap().is_empty(), "a paused tab was worked");
+            // Another tab's pause, or another session's, changes nothing.
+            hub.set_paused(&ConversationId("c2".into()), "t1", false);
+            hub.set_paused(&c, "t1", false);
+        };
+        let (result, ()) = tokio::join!(call, continuing);
+        assert_eq!(result, page("t1"));
+        assert_eq!(*heard.lock().unwrap(), [read("t1")]);
+    }
+
+    #[tokio::test]
+    async fn a_pause_nobody_ends_is_heard_as_paused_and_other_tabs_go_on() {
+        let c = conversation();
+        let hub = std::sync::Arc::new(BrowserHub::default());
+        let heard = answering(&hub);
+        hub.set_paused(&c, "t1", true);
+        let result = hub
+            .run(&c, None, "t", read("t1"), Duration::from_millis(100))
+            .await;
+        assert_eq!(result, BrowserResult::Paused { tab: "t1".into() });
+        let other = hub.run(&c, None, "t", read("t2"), PAUSE_WAIT).await;
+        assert_eq!(other, page("t2"));
+        assert_eq!(*heard.lock().unwrap(), [read("t2")]);
+    }
+
+    #[tokio::test]
+    async fn stop_before_continue_does_nothing_on_the_tab() {
+        let c = conversation();
+        let hub = std::sync::Arc::new(BrowserHub::default());
+        let heard = answering(&hub);
+        hub.set_paused(&c, "t1", true);
+        {
+            let call = hub.run(&c, None, "t", read("t1"), PAUSE_WAIT);
+            tokio::pin!(call);
+            // Waiting, then dropped: the agent was stopped.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), &mut call)
+                    .await
+                    .is_err()
+            );
+        }
+        hub.set_paused(&c, "t1", false);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            heard.lock().unwrap().is_empty(),
+            "a stopped call reached the tab"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tab_taken_over_as_a_call_reaches_it_waits_like_any_pause() {
+        let c = conversation();
+        let hub = std::sync::Arc::new(BrowserHub::default());
+        let mut window = hub.subscribe();
+        let app = async {
+            let first = window.recv().await.unwrap();
+            hub.answer(&first.id, BrowserResult::Paused { tab: "t1".into() });
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            assert!(window.try_recv().is_err(), "asked again before Continue");
+            hub.set_paused(&c, "t1", false);
+            let again = window.recv().await.unwrap();
+            hub.answer(&again.id, page("t1"));
+        };
+        let (result, ()) = tokio::join!(hub.run(&c, None, "t", read("t1"), PAUSE_WAIT), app);
+        assert_eq!(result, page("t1"));
     }
 
     #[tokio::test]

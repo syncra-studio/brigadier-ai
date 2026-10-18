@@ -2207,6 +2207,14 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             sessions.browser_answer(&id, result);
             Response::BrowserAnswer
         }
+        Request::BrowserPaused {
+            conversation_id,
+            tab,
+            paused,
+        } => {
+            sessions.browser_paused(&conversation_id, &tab, paused);
+            Response::BrowserPaused
+        }
         Request::AckOvernightNotification {
             conversation_id,
             run_id,

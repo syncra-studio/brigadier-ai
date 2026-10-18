@@ -278,6 +278,11 @@ const PAGE_KEYS: &str = r#"(() => {
   }, true);
 })();"#;
 
+/// The user's own input in any frame of the native page (never a script's): a tab an agent works
+/// pauses on it. At most one message a second, and nothing else in it.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const USER_INPUT: &str = include_str!("browser_user_input.js");
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn favicon_data(value: &str) -> bool {
     value.len() <= 16 * 1024
@@ -471,8 +476,8 @@ pub(crate) mod embedded {
     use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder};
 
     use super::{
-        FAVICON, FaviconLimit, FaviconStep, NO_CAPTURE, PAGE_KEYS, Visit, allowed, failed,
-        favicon_data, web_page,
+        FAVICON, FaviconLimit, FaviconStep, NO_CAPTURE, PAGE_KEYS, USER_INPUT, Visit, allowed,
+        failed, favicon_data, web_page,
     };
     use crate::shell::MAIN_WINDOW;
 
@@ -746,6 +751,7 @@ pub(crate) mod embedded {
             .with_initialization_script_for_main_only(NO_CAPTURE, false)
             .with_initialization_script_for_main_only(FAVICON, true)
             .with_initialization_script_for_main_only(PAGE_KEYS, false)
+            .with_initialization_script_for_main_only(USER_INPUT, false)
             .with_ipc_handler(move |request| {
                 let url = request.uri().to_string();
                 let data_url = request.into_body();
@@ -755,6 +761,10 @@ pub(crate) mod embedded {
                 }
                 if data_url == "browser:zoom-in" {
                     on_key.send(BrowserEvent::ZoomIn);
+                    return;
+                }
+                if data_url == "browser:user-input" {
+                    on_key.send(BrowserEvent::UserInput);
                     return;
                 }
                 if !web_page(&url) || !favicon_data(&data_url) {

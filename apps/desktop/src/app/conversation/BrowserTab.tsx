@@ -45,9 +45,10 @@ import {
   zoomPage,
 } from "@/state/browsers";
 import { openSettings } from "@/state/actions";
+import { handBack, useAgentPause, userUsed } from "@/state/agentPause";
 import { openBrowserSettings } from "@/state/browserSettings";
 import { useBrowserOn } from "@/state/links";
-import { selectTab, sessionWith } from "@/state/sessionTabs";
+import { selectTab, sessionWith, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { cn } from "@/lib/utils";
 import { toast } from "@/state/toasts";
@@ -366,6 +367,15 @@ async function focusApp(): Promise<void> {
   if (!document.hasFocus()) await browserFocus(null).catch(() => {});
 }
 
+/** The agent working Browser tab `id`, as the user knows it; null for the user's own tabs. */
+function driverLabel(sessions: ReturnType<typeof useSessionTabs.getState>["sessions"], id: string): string | null {
+  for (const session of Object.values(sessions)) {
+    const tab = session.tabs.find((each) => each.id === id);
+    if (tab) return tab.kind === "browser" && tab.driver ? tab.driver.label : null;
+  }
+  return null;
+}
+
 export function BrowserTab({
   conversationId,
   initialUrl,
@@ -383,6 +393,8 @@ export function BrowserTab({
   onNavigate?: ((url: string) => void) | undefined;
 }) {
   const page = useBrowsers((s) => s.pages[conversationId]);
+  const paused = useAgentPause((s) => conversationId in s.paused);
+  const driver = useSessionTabs((s) => driverLabel(s.sessions, conversationId));
   const embedded = useApp((s) => s.info?.platform !== "linux");
   const mac = useApp((s) => s.info?.platform === "macos");
   /** The page lies beneath the app, which draws above it (see `browserLayer`). */
@@ -471,6 +483,7 @@ export function BrowserTab({
   const native = mac && page?.ready === true;
 
   const act = (action: Parameters<typeof browserGo>[1]) => {
+    userUsed(conversationId);
     browserGo(conversationId, action).catch(failed);
   };
 
@@ -587,6 +600,7 @@ export function BrowserTab({
   const go = (text: string) => {
     const to = browserAddress(text);
     if (!to) return;
+    userUsed(conversationId);
     setTyped(null);
     field.current?.blur();
     if (!embedded) {
@@ -762,6 +776,24 @@ export function BrowserTab({
         <TabChatToolbarButton />
       </div>
       {finding && native && <FindBar id={conversationId} input={findInput} onClose={hideFind} />}
+      {paused && driver !== null && (
+        <div
+          role="status"
+          data-slot="browser-paused"
+          className="border-border bg-muted/40 flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm"
+        >
+          <span className="min-w-0 flex-1 truncate">
+            You're using this page, so <span className="font-medium">{driver}</span> is waiting.
+          </span>
+          <button
+            type="button"
+            onClick={() => handBack(conversationId)}
+            className="bg-foreground text-background hover:bg-foreground/90 rounded-control h-control-sm shrink-0 px-3 font-medium transition-colors"
+          >
+            Continue
+          </button>
+        </div>
+      )}
       {page?.blocked && (
         <div
           role="status"

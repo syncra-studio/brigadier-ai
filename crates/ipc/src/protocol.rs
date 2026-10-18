@@ -929,6 +929,13 @@ pub enum Request {
         id: String,
         result: BrowserResult,
     },
+    /// The user took an agent's Browser tab over (`paused`): its calls wait. Continue, or the
+    /// tab closing, hands it back.
+    BrowserPaused {
+        conversation_id: ConversationId,
+        tab: String,
+        paused: bool,
+    },
     /// The app successfully submitted a run's notification to the OS.
     AckOvernightNotification {
         conversation_id: ConversationId,
@@ -1701,6 +1708,7 @@ pub enum Response {
         notifications: Vec<PendingRunNotification>,
     },
     BrowserAnswer,
+    BrowserPaused,
     AckOvernightNotification,
     FailOvernightNotification,
     StopTask,
@@ -2377,5 +2385,9 @@ mod browser_tests {
             "result": {"result": "paused", "tab": "browser:agent-1"}});
         let request: Request = serde_json::from_value(answer.clone()).unwrap();
         assert_eq!(serde_json::to_value(request).unwrap(), answer);
+        let paused = serde_json::json!({"method": "browserPaused", "conversationId": "c",
+            "tab": "browser:agent-1", "paused": true});
+        let request: Request = serde_json::from_value(paused.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), paused);
     }
 }

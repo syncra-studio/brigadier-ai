@@ -125,6 +125,9 @@ pub enum BrowserEvent {
     Escape,
     /// The shifted + key zooms the sender's page in, like the = menu accelerator.
     ZoomIn,
+    /// The user clicked, typed or scrolled in the page (never its scripts): a tab an agent
+    /// works pauses.
+    UserInput,
     /// The page opened a popup (`window.open`, `target=_blank`): its page waits, as tab `id`,
     /// for a tab to the right of this one; `url` is where it goes ("" or `about:blank` when the
     /// page writes it itself).

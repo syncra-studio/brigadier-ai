@@ -14,6 +14,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage, crypto: globalThis.crypto, innerWidth: 1200, innerHeight: 800 } });
 const { base64, runBrowserCall } = await import("./agentBrowser");
+const { handBack, isPaused, userUsed } = await import("./agentPause");
 const { useBrowsers } = await import("./browsers");
 const { CHAT_TAB, selectTab, sessionTabs } = await import("./sessionTabs");
 const { useApp } = await import("./store");
@@ -30,6 +31,7 @@ function fakeShell(answer: (op: Record<string, unknown>) => unknown) {
   const scripts: { id: string; op: Record<string, unknown> }[] = [];
   const answers: { id: string; result: BrowserResult }[] = [];
   const loads: string[] = [];
+  const paused: { tab: string; paused: boolean }[] = [];
   const load = (id: string, url: string) => {
     const events = channels.get(id)!;
     events.onmessage({ type: "load", url, loading: true });
@@ -61,13 +63,15 @@ function fakeShell(answer: (op: Record<string, unknown>) => unknown) {
       case "ipc_request": {
         const sent = args.request as Extract<Request, { method: "browserAnswer" }>;
         if (sent.method === "browserAnswer") answers.push({ id: sent.id, result: sent.result });
+        const told = args.request as Request;
+        if (told.method === "browserPaused") paused.push({ tab: told.tab, paused: told.paused });
         return { method: sent.method };
       }
       default:
         return null;
     }
   });
-  return { opened, shown, scripts, answers, loads };
+  return { opened, shown, scripts, answers, loads, paused, channels };
 }
 
 const reads = (op: Record<string, unknown>) =>
@@ -146,6 +150,49 @@ test("an action that asks first does nothing, and a yes holds only on the page i
   assert.equal(again.result, "needsApproval");
   assert.equal(shell.scripts.at(-1)!.op.approved, null);
   selectTab(SESSION, CHAT_TAB);
+});
+
+test("the user's input in an agent's tab pauses it until Continue, and closing the tab hands it back", async () => {
+  useApp.setState((state) => ({ settings: { ...state.settings, browserEnabled: true } }));
+  const shell = fakeShell(reads);
+  const tab = tabOf(await answered(shell, { op: "open", url: "http://127.0.0.1:4000/" }));
+  const click: BrowserOp = { op: "click", tab, target: "e1", guard: { declared: null, approved: null } };
+
+  // A click in its page, as the page's input script tells it.
+  shell.channels.get(tab)!.onmessage({ type: "userInput" });
+  assert.equal(isPaused(tab), true);
+  assert.deepEqual(shell.paused, [{ tab, paused: true }], "the daemon holds the agent's calls");
+  const before = shell.scripts.length;
+  assert.deepEqual(await answered(shell, click), { result: "paused", tab });
+  assert.equal(shell.scripts.length, before, "nothing was done on the page");
+
+  // More input, and the page loading again, change nothing; Continue hands it back.
+  userUsed(tab);
+  shell.channels.get(tab)!.onmessage({ type: "load", url: "http://127.0.0.1:4000/next", loading: true });
+  shell.channels.get(tab)!.onmessage({ type: "load", url: "http://127.0.0.1:4000/next", loading: false });
+  assert.equal(isPaused(tab), true, "the pause lives outside the page");
+  handBack(tab);
+  assert.deepEqual(shell.paused, [{ tab, paused: true }, { tab, paused: false }]);
+  assert.equal((await answered(shell, click)).result, "page");
+
+  // Paused again, then closed: the agent's calls on it go on (and hear it is gone).
+  userUsed(tab);
+  assert.deepEqual(await answered(shell, { op: "close", tab }), { result: "paused", tab }, "not even the agent closes it while paused");
+  handBack(tab);
+  userUsed(tab);
+  const { closeTab } = await import("./sessionTabs");
+  closeTab(SESSION, tab);
+  assert.equal(isPaused(tab), false);
+  assert.deepEqual(shell.paused.slice(-2), [{ tab, paused: true }, { tab, paused: false }]);
+});
+
+test("the user's own Browser tabs never pause anything", async () => {
+  const shell = fakeShell(reads);
+  const { openBrowserTab } = await import("./sessionTabs");
+  const id = openBrowserTab(SESSION, "http://127.0.0.1:4000/");
+  userUsed(id);
+  assert.equal(isPaused(id), false);
+  assert.deepEqual(shell.paused, []);
 });
 
 test("calls on a tab that isn't an agent's, or with the browser off, fail in plain words", async () => {

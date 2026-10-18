@@ -1,5 +1,6 @@
 import { request } from "@/ipc/client";
 import type { Conversation, TerminalInfo } from "@/ipc/generated";
+import { handBack } from "@/state/agentPause";
 import { closePage, useBrowsers } from "@/state/browsers";
 import { forgetDraft } from "@/state/drafts";
 import { changeSessionTab, discardTab, dropBrowserTabs, onDiscardTab, sessionTabs, useSessionTabs, withoutChat } from "@/state/sessionTabs";
@@ -66,7 +67,10 @@ useSessionTabs.subscribe((state, before) => {
     const kept = state.sessions[id]?.tabs ?? [];
     for (const tab of previous.tabs) if (!kept.some((current) => current.id === tab.id)) {
       if (tab.kind === "terminal") closeShell(tab.id);
-      if (tab.kind === "browser") closePage(tab.id);
+      if (tab.kind === "browser") {
+        closePage(tab.id);
+        handBack(tab.id);
+      }
     }
   }
 });

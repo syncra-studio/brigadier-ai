@@ -6,6 +6,7 @@ import {
   request,
 } from "@/ipc/client";
 import type { BrowserBounds, BrowserCall, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult, BrowserSensitive } from "@/ipc/generated";
+import { isPaused } from "@/state/agentPause";
 import { openPage, useBrowsers } from "@/state/browsers";
 import { type BrowserTabState, closeTab, openAgentTab, sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -94,6 +95,8 @@ async function perform(call: BrowserCall, hands: PageHands): Promise<BrowserResu
   }
   const tab = agentTab(conversationId, op.tab);
   if (!tab) return failed(`There is no tab ${op.tab} of yours in this session now: open one with browser_open.`);
+  // The user took it over: nothing is done until they press Continue.
+  if (isPaused(tab.id)) return { result: "paused", tab: tab.id };
   // Its page goes with a restart: it loads again where it was.
   if (!useBrowsers.getState().pages[tab.id]) {
     await hands.open(tab.id, tab.url || "about:blank", backgroundBounds());
