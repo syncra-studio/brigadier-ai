@@ -415,6 +415,35 @@ impl Runtime {
         )
     }
 
+    /// The signed-in accounts new work of `provider` can go to (only the default one with
+    /// switching off), and the soonest one of them can take work for `model` again, when known.
+    pub fn provider_back_at(
+        &self,
+        provider: ProviderKind,
+        model: Option<&str>,
+    ) -> (usize, Option<i64>) {
+        let settings = self.core.settings();
+        let default = settings
+            .default_account(provider)
+            .map(|account| account.id.clone());
+        let usable: Vec<_> = self
+            .account_candidates(provider)
+            .into_iter()
+            .filter(|candidate| {
+                candidate.logged_in
+                    && (settings.switch_accounts || candidate.account.account == default)
+            })
+            .collect();
+        let back = usable
+            .iter()
+            .filter_map(|candidate| {
+                let quota = candidate.quota.as_ref()?;
+                crate::accounts::ready_again_at(quota, model)
+            })
+            .min();
+        (usable.len(), back)
+    }
+
     /// Chooses each provider's lead account again; a provider whose lead changed has its
     /// overview recorded again (its quota is the new lead's).
     pub(super) async fn update_leads(&self) {

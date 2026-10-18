@@ -196,6 +196,26 @@ impl Envelope {
     }
 }
 
+/// A reset time as a notice names it: "21:10" today, "Mon 21:10" within the week, else
+/// "Oct 24 21:10", in the computer's time zone.
+pub(super) fn reset_clock(at_ms: i64, now_ms: i64) -> String {
+    let zone = jiff::tz::TimeZone::system();
+    let (Ok(at), Ok(now)) = (
+        jiff::Timestamp::from_millisecond(at_ms),
+        jiff::Timestamp::from_millisecond(now_ms),
+    ) else {
+        return "?".into();
+    };
+    let (at, now) = (at.to_zoned(zone.clone()), now.to_zoned(zone));
+    let days = (at.date() - now.date()).get_days();
+    let format = match days {
+        0 => "%H:%M",
+        1..=6 => "%a %H:%M",
+        _ => "%b %-d %H:%M",
+    };
+    at.strftime(format).to_string()
+}
+
 /// Another session's message held for the running turn until no command of it runs
 /// ([`ConvState::held_peers`]): what [`SessionManager::steer_peer`] steers in then.
 #[derive(Debug, Clone)]
@@ -5814,11 +5834,25 @@ impl SessionManager {
             Err(_) => from.clone(),
         };
         let stand_in = format!("{} {}", next.provider.label(), next.model);
-        let reason = format!("{} hit its usage limit", from.provider.label());
+        let vendor = from.provider.label();
+        // Back when the soonest of the provider's accounts can take work again.
+        let (accounts, back) = self
+            .runtime
+            .provider_back_at(from.provider, from.model.as_deref());
+        let until_ms = back.or(until_ms);
+        let reason = if accounts > 1 {
+            format!("Every {vendor} account hit its usage limit")
+        } else {
+            format!("{vendor} hit its usage limit")
+        };
+        let until = match until_ms {
+            Some(at) => format!("until {}", reset_clock(at, now_ms())),
+            None => "until its limit resets".into(),
+        };
         self.notice(
             &conv.id,
             brigadier_providers::NoticeLevel::Info,
-            &format!("{reason}; continuing with {stand_in}."),
+            &format!("{reason}; continuing on {stand_in} {until}, then back on {vendor}."),
         )
         .await;
         conv.restarting(WriteCause::Reroute).await;
@@ -6113,7 +6147,8 @@ impl SessionManager {
                 Ok(next) => {
                     self.stop_waiting(conv).await;
                     // Its messages are in `pending` already.
-                    self.stand_in(conv, &from, next, None, Vec::new()).await;
+                    self.stand_in(conv, &from, next, known_reset, Vec::new())
+                        .await;
                 }
                 Err(Some(mut waiting)) => {
                     // A reset still ahead (its own model's, from its limit) frees it too.

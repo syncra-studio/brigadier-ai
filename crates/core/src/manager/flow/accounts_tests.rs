@@ -222,6 +222,62 @@ async fn with_every_account_at_its_limit_the_chat_falls_back_to_the_other_provid
     flow.stop().await;
 }
 
+/// The stand-in says so in the thread: every account is at its limit, the work goes on on
+/// Codex until the soonest of their resets, then back on Claude.
+#[tokio::test]
+async fn the_stand_in_names_codex_and_the_soonest_reset_of_every_account() {
+    let log = Log::default();
+    let soon = crate::now_ms() + 60 * 60 * 1000;
+    let flow = Flow::start(
+        "accounts-stand-in-notice",
+        Options::default(),
+        logging(&log, move |turn| match turn.provider {
+            ProviderKind::Claude => {
+                let mut reply = Reply::limited();
+                // The computer's login resets first, though the other account hit its limit last.
+                if let Some(limit) = &mut reply.limit {
+                    limit.resets_at_ms = Some(match turn.account {
+                        None => soon,
+                        Some(_) => soon + 2 * 60 * 60 * 1000,
+                    });
+                }
+                reply
+            }
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    flow.say("Do the thing.").await;
+    flow.until("a Codex turn", |_| {
+        seen(&log)
+            .iter()
+            .any(|turn| turn.provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    let fallback = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .fallback
+        .expect("Codex stands in");
+    assert_eq!(fallback.until_ms, Some(soon));
+    let clock = super::super::conversation::reset_clock(soon, crate::now_ms());
+    let notices = notices(&flow).await;
+    let said = notices
+        .iter()
+        .find(|text| text.starts_with("Every Claude Code account hit its usage limit;"))
+        .unwrap_or_else(|| panic!("{notices:#?}"));
+    assert!(said.contains("; continuing on Codex "), "{said}");
+    assert!(
+        said.ends_with(&format!(" until {clock}, then back on Claude Code.")),
+        "{said}"
+    );
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn with_switching_off_a_limit_falls_back_to_the_other_provider_at_once() {
     let log = Log::default();

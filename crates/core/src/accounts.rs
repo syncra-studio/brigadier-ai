@@ -196,6 +196,25 @@ fn weekly_reset(quota: &QuotaSnapshot, model: Option<&str>) -> Option<i64> {
         .min()
 }
 
+/// When an account that can't take work for `model` now can again: once the limit it hit and
+/// every used-up window that applies have reset. `None` when one of those resets isn't known,
+/// or nothing stops it.
+pub fn ready_again_at(quota: &QuotaSnapshot, model: Option<&str>) -> Option<i64> {
+    quota
+        .windows
+        .iter()
+        .filter(|window| {
+            applies(window, model)
+                && window.used_percent >= brigadier_router::forecast::LIMITED_USED
+        })
+        .map(|window| window.resets_at_ms)
+        .chain(quota.limit.as_ref().map(|limit| limit.resets_at_ms))
+        .try_fold(None, |latest: Option<i64>, at| {
+            at.map(|at| Some(latest.map_or(at, |latest| latest.max(at))))
+        })
+        .flatten()
+}
+
 /// How much is left (percent) in the tightest window that applies to `model`, `None` when the
 /// account can't take work now (a limit, or such a window used up).
 pub fn headroom(quota: &QuotaSnapshot, model: Option<&str>) -> Option<f64> {
@@ -524,6 +543,32 @@ mod tests {
         assert_eq!(after.accounts[1].provider, ProviderKind::Claude);
         incoming.accounts.clear();
         assert_eq!(edited(&current, incoming).accounts.len(), 2);
+    }
+
+    #[test]
+    fn a_capped_account_is_ready_again_once_everything_that_stops_it_reset() {
+        let mut capped = quota(100.0, true);
+        assert_eq!(ready_again_at(&capped, None), None, "no reset known");
+        capped.windows[0].resets_at_ms = Some(1_000);
+        capped.limit.as_mut().unwrap().resets_at_ms = Some(1_000);
+        capped.windows.push(QuotaWindow {
+            id: "seven_day".into(),
+            label: "Weekly".into(),
+            used_percent: 100.0,
+            resets_at_ms: Some(9_000),
+            window_minutes: None,
+            bucket: None,
+            model: None,
+        });
+        // The week is used up too: only its reset frees the account.
+        assert_eq!(ready_again_at(&capped, None), Some(9_000));
+        capped.windows[1].used_percent = 40.0;
+        assert_eq!(ready_again_at(&capped, None), Some(1_000));
+        assert_eq!(
+            ready_again_at(&quota(20.0, false), None),
+            None,
+            "nothing stops it"
+        );
     }
 
     #[test]
