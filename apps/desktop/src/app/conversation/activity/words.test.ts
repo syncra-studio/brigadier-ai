@@ -6,6 +6,7 @@ import {
   deniedCall,
   editHunks,
   fileDiffs,
+  foldRepeats,
   hunkDiff,
   isPlumbing,
   itemCall,
@@ -286,4 +287,18 @@ test("edits that name their files sum up by files, not by calls", () => {
   assert.equal(summarize([edit(["/r/a.ts", "/r/b.ts"])]), "Edited files");
   // Without their files, each call counts.
   assert.equal(summarize([stepWords({ name: "Edit", detail: "/r/a.ts", status: "completed" })]), "Edited a file");
+});
+
+const said = (name: string, detail = "x") => stepWords({ name, detail, status: "completed" });
+
+test("three or more back-to-back calls of a tool with no words of its own fold; two, or tools with words, never do (issue 101)", () => {
+  const search = said("mcp__linear__search_issues");
+  const get = said("mcp__linear__get_issue");
+  const read = said("Read", "/a.ts");
+  assert.deepEqual(foldRepeats([read, search, search, search, get, get, read, read, read]), [[0], [1, 2, 3], [4], [5], [6], [7], [8]]);
+  assert.equal(summarize([search, search, search, get, get, read]), "Read files, used search issues 3 times, used get issue 2 times");
+  // A tool Brigadier has words for keeps them: no fold, no count.
+  const searched = said("search_transcript");
+  assert.deepEqual(foldRepeats([searched, searched, searched]), [[0], [1], [2]]);
+  assert.equal(summarize([searched, searched]), "Searched earlier messages");
 });

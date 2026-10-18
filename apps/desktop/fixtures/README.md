@@ -194,3 +194,12 @@ steps. Its opened work shows the first group, a centred time line at the moment 
 above a user's message sent after an hour or more), then the second group. It writes what it saw as
 JSON into `#thread-gaps-result`; `ThreadGapsRender.test.ts` checks it. `stop=1` holds the page for a
 screenshot. This entry is absent from the production build.
+
+# One tool's repeats
+
+`/fixtures/thread-repeats.html` is a session whose finished turn called a tool Brigadier has no words
+for six times in a row. The group's summary counts them ("used search issues 6 times"); opened, the six
+are one row with their count and time, which opens to each call with what it was given; two calls of
+another tool stay two rows. It writes what it saw as JSON into `#thread-repeats-result`;
+`ThreadRepeatsRender.test.ts` checks it. `stop=1` holds the page for a screenshot. This entry is absent
+from the production build.

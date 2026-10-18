@@ -33,6 +33,10 @@ export type StepWords = {
   list?: boolean;
   /** The files an edit changed, when known: a summary counts files, not calls ("Edited files"). */
   paths?: readonly string[];
+  /** A tool Brigadier has no words of its own for ("Used search issues"): its repeats fold into one row (#101). */
+  unnamed?: boolean;
+  /** For `unnamed`: what it was given (its detail), said on its row inside that fold ("checkout tax"). */
+  given?: string;
 };
 
 export type ToolStep = Extract<OrchestratorStepKind, { type: "tool" }>;
@@ -236,7 +240,7 @@ function hostOf(url: string): string {
 }
 
 /** A tool's own words for `other`: what Brigadier calls it, else "Used {name}". */
-function otherWords(short: string): StepWords {
+function otherWords(short: string, detail: string | null = null): StepWords {
   const known = OTHER[short];
   if (known) return { kind: "other", doing: known[0], done: known[1], phrase: known[1] };
   const action = short
@@ -245,7 +249,7 @@ function otherWords(short: string): StepWords {
     .toLowerCase()
     .trim();
   const name = action && action !== "tool" ? action : "a tool";
-  return { kind: "other", doing: `Using ${name}`, done: `Used ${name}`, phrase: `Used ${name}` };
+  return { kind: "other", doing: `Using ${name}`, done: `Used ${name}`, phrase: `Used ${name}`, unnamed: true, ...(detail && { given: detail }) };
 }
 
 /**
@@ -284,7 +288,7 @@ export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> 
   }
   const preview = PREVIEWS[short];
   if (preview) return { kind: "preview", doing: preview[0], done: preview[1] };
-  return otherWords(short);
+  return otherWords(short, detail);
 }
 
 /**
@@ -531,11 +535,14 @@ function summaryRank(key: string): number {
 /**
  * A run of steps in one sentence, comma-joined: edits, then what it read, searched or listed,
  * then commands and the web, then the rest in the order they first came ("Edited a file, read
- * files, ran commands"). Each `other` tool counts as a kind of its own.
+ * files, ran commands"). Each `other` tool counts as a kind of its own; one Brigadier has no
+ * words for says how often it was used ("used search issues 6 times").
  */
 export function summarize(steps: readonly StepWords[]): string {
   const parts = segments(steps).map(([key, { words, count }]) =>
-      words.kind === "other" ? (words.phrase ?? words.done) : LEADING[key as keyof typeof LEADING][count === 1 ? 0 : 1],
+      words.kind === "other"
+        ? `${words.phrase ?? words.done}${words.unnamed && count > 1 ? ` ${timesWord(count)}` : ""}`
+        : LEADING[key as keyof typeof LEADING][count === 1 ? 0 : 1],
     );
   return parts.map((part, index) => (index === 0 ? part : part.charAt(0).toLowerCase() + part.slice(1))).join(", ");
 }
@@ -562,6 +569,30 @@ function segments(steps: readonly StepWords[]): [string, { words: StepWords; cou
     counts.set(key, { words: known?.words ?? words, count });
   }
   return [...counts.entries()].toSorted(([a], [b]) => summaryRank(a) - summaryRank(b));
+}
+
+/** "2 times", "6 times". */
+export function timesWord(count: number): string {
+  return `${count} times`;
+}
+
+/** Back-to-back calls of one tool Brigadier has no words for fold into one row from this many on (#101). */
+export const FOLD_REPEATS_AT = 3;
+
+/**
+ * A group's steps as its opened list shows them (#101): each step on its own (`[index]`), except
+ * `FOLD_REPEATS_AT` or more back-to-back calls of one tool Brigadier has no words for, which
+ * make one run (`[first, …, last]`).
+ */
+export function foldRepeats(steps: readonly StepWords[]): number[][] {
+  const runs: number[][] = [];
+  steps.forEach((words, index) => {
+    const run = runs.at(-1);
+    const previous = run === undefined ? undefined : steps[run[0] ?? -1];
+    if (run && words.unnamed && previous?.unnamed && previous.done === words.done) run.push(index);
+    else runs.push([index]);
+  });
+  return runs.flatMap((run) => (run.length >= FOLD_REPEATS_AT ? [run] : run.map((index) => [index])));
 }
 
 /** The step whose icon a summary row shows: the first of the summary's first segment ("Ran commands, …" → a terminal). */

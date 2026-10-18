@@ -5,7 +5,7 @@ import type { GroupItem } from "@/app/conversation/activity/group";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { useCalmLabel } from "@/app/conversation/activity/calmLabel";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
-import { labelParts, stepLabel, type StepWords, summarize, summaryLead } from "@/app/conversation/activity/words";
+import { foldRepeats, labelParts, stepLabel, type StepWords, summarize, summaryLead, timesWord } from "@/app/conversation/activity/words";
 import { CHEVRON, LIST_ICON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
 import { GROUP_LIST, RowOpens, ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -29,6 +29,9 @@ export const STEP_LINGERS_MS = 1000;
 
 /** A row inside an opened group: a running command there reads "Running command for 12s". */
 const InGroup = createContext(false);
+
+/** A row inside a fold of one tool's repeats: it says what the call was given ("Used search issues checkout tax"). */
+const InFold = createContext(false);
 
 /** Which icon a step's row has, by name (the name is also on the row, for tests). */
 export function stepIconName(words: StepWords, stopped = false): string {
@@ -79,7 +82,7 @@ export function stoppedLabel(words: StepWords, startedAtMs: number | undefined, 
  * One step as a row: "Read RequestBlock.tsx", "Ran pnpm test" ("in 41s" inside an opened group); the verb shimmers while it
  * runs. It opens to `detail` when there is one, also while it runs.
  */
-export function StepRow({ words, status, exit = null, startedAtMs, endedAtMs, stopped: stoppedCall = false, detail, suffix, slot, objectNode, trail }: Described & {
+export function StepRow({ words: said, status, exit = null, startedAtMs, endedAtMs, stopped: stoppedCall = false, detail, suffix, slot, objectNode, trail }: Described & {
   detail?: ReactNode;
   /** After the words: "in 41s". */
   suffix?: ReactNode;
@@ -90,6 +93,9 @@ export function StepRow({ words, status, exit = null, startedAtMs, endedAtMs, st
   trail?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  // In a fold of its repeats, a call names what it was given: the fold's row already says the tool.
+  const given = useContext(InFold) ? said.given : undefined;
+  const words = given ? { ...said, doing: `${said.doing} ${given}`, done: `${said.done} ${given}`, object: given } : said;
   // An edit opened to its diff, whose card says its counts: the row keeps the file's name, so it
   // still says which file once the card has scrolled away or several are open (#175).
   const opened = open && words.kind === "edit" && status === "completed" && words.object;
@@ -128,6 +134,29 @@ export function StepRow({ words, status, exit = null, startedAtMs, endedAtMs, st
       {suffix && inGroup && <span className="shrink-0 tabular-nums">{suffix}</span>}
       {/* Opened, an edit's diff card says its counts: the row reads "Edited math.js" alone. */}
       {!opened && trail}
+    </ThreadActivity>
+  );
+}
+
+/**
+ * Back-to-back calls of one tool Brigadier has no words for, as one row of an opened group:
+ * "Used search issues 6 times in 12s". It opens to each call, indented, saying what it was given (#101).
+ */
+function RepeatsRow({ described, children }: { described: readonly Described[]; children: ReactNode }) {
+  const [first] = described;
+  if (!first) return null;
+  const running = described.some((step) => step.status === "inProgress");
+  const took = described.map((step) => (step.startedAtMs !== undefined && step.endedAtMs !== undefined ? step.endedAtMs - step.startedAtMs : undefined));
+  const ms = took.every((each) => each !== undefined) ? took.reduce((sum, each) => sum + each, 0) : 0;
+  return (
+    <ThreadActivity
+      data-slot="repeats"
+      detail={<InFold.Provider value>{children}</InFold.Provider>}
+      detailClassName={cn(ROW_DETAIL, "gap-activity-row-gap max-h-none overflow-visible")}
+    >
+      <StepIcon words={first.words} />
+      <span className={cn("min-w-0 truncate", running && "shimmer")}>{`${running ? first.words.doing : first.words.done} ${timesWord(described.length)}`}</span>
+      {!running && ms >= 1000 && <span className="shrink-0 tabular-nums">{`in ${formatDuration(ms)}`}</span>}
     </ThreadActivity>
   );
 }
@@ -242,7 +271,19 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
             Its rows keep their height: an opened Shell box scrolls with them, never squeezed. */}
         <div data-slot={GROUP_LIST} className="max-h-group-list scroll-edge-fade gap-activity-row-gap flex min-w-0 flex-col overflow-y-auto *:shrink-0 pt-1 [--spacing-scroll-fade-bottom:var(--spacing-group-fade)] [--spacing-scroll-fade-top:var(--spacing-group-fade)] [--diff-header-top:var(--spacing-group-fade)]">
           <InGroup.Provider value>
-            {items.map((item, index) => (described[index] && exploring(described[index]) ? null : renderStep(item.step, item.key)))}
+            {foldRepeats(described.map((step) => step.words)).map((run) => {
+              const [index = 0] = run;
+              const item = items[index];
+              if (!item) return null;
+              if (run.length > 1) {
+                return (
+                  <RepeatsRow key={`repeats:${item.key}`} described={run.flatMap((at) => described[at] ?? [])}>
+                    {run.map((at) => items[at] && renderStep(items[at].step, items[at].key))}
+                  </RepeatsRow>
+                );
+              }
+              return described[index] && exploring(described[index]) ? null : renderStep(item.step, item.key);
+            })}
           </InGroup.Provider>
         </div>
       </CollapsibleContent>
