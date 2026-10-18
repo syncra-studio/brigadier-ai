@@ -18,6 +18,10 @@
 //!   terminal does; it is set either way.
 //! - Each sign-in (`claude auth login`, `codex login`) opens the browser and waits, with no
 //!   terminal; Claude Code's also offers to read a pasted code, which nobody types here.
+//!   Whatever opens the browser hands it its own environment, home included (`open` and
+//!   LaunchServices alike). So the sign-in gets a `BROWSER` that only passes the link back,
+//!   and Brigadier opens it with the account's own home. Claude Code uses it; Codex ignores
+//!   it on macOS and opens the page itself.
 //! - `curl … | sh` runs with `pipefail`, so a download that fails fails the install instead of
 //!   piping an empty script into a shell that succeeds. Either installer offline exits non-zero
 //!   with curl's error on stderr (7: can't connect).
@@ -52,6 +56,8 @@ const POLL_EVERY: Duration = Duration::from_secs(3);
 const STOP_GRACE: Duration = Duration::from_secs(2);
 /// The installer's last lines kept for the log.
 const TAIL_LINES: usize = 30;
+/// How often the sign-in is checked for the link it wants opened.
+const LINK_EVERY: Duration = Duration::from_millis(200);
 
 /// Every agent's Connect: how it goes, and how to stop the one running.
 #[derive(Default)]
@@ -210,6 +216,8 @@ struct Ops {
     install_timeout: Duration,
     sign_in_timeout: Duration,
     poll: Duration,
+    /// Opens the vendor's sign-in page in the browser.
+    open_link: Arc<dyn Fn(&str) + Send + Sync>,
 }
 
 impl Ops {
@@ -226,7 +234,81 @@ impl Ops {
             install_timeout: INSTALL_TIMEOUT,
             sign_in_timeout: SIGN_IN_TIMEOUT,
             poll: POLL_EVERY,
+            open_link: Arc::new(open_in_browser),
         }
+    }
+}
+
+/// Opens `link` in the user's browser with their account's home, whatever `HOME` Brigadier
+/// itself runs with: a browser started with another home can't find its keychain.
+fn open_in_browser(link: &str) {
+    let opener = if cfg!(target_os = "macos") {
+        "/usr/bin/open"
+    } else {
+        "xdg-open"
+    };
+    let mut command = std::process::Command::new(opener);
+    command
+        .arg(link)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    if let Ok(Some(user)) = nix::unistd::User::from_uid(nix::unistd::getuid()) {
+        command.env("HOME", user.dir);
+    }
+    match command.spawn() {
+        // Reaped off the runtime; it ends as soon as the browser has the link.
+        Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+        Err(error) => tracing::warn!(%error, "the sign-in page didn't open"),
+    }
+}
+
+/// A `BROWSER` for the sign-in that only passes the link back: the script, and the file the
+/// link lands in. Removed when dropped.
+#[cfg(unix)]
+struct LinkCatcher {
+    dir: PathBuf,
+}
+
+#[cfg(unix)]
+impl LinkCatcher {
+    fn new() -> Option<Self> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("brigadier-sign-in-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).ok()?;
+        let catcher = Self { dir };
+        let script = catcher.script();
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\n",
+                catcher.dir.join("link").display()
+            ),
+        )
+        .ok()?;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).ok()?;
+        Some(catcher)
+    }
+
+    fn script(&self) -> PathBuf {
+        self.dir.join("browser")
+    }
+
+    /// The first link the sign-in asked to open, once it has.
+    fn link(&self) -> Option<String> {
+        let text = std::fs::read_to_string(self.dir.join("link")).ok()?;
+        text.lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("https://") || line.starts_with("http://"))
+            .map(str::to_owned)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for LinkCatcher {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -409,6 +491,12 @@ async fn sign_in(
         .map(Into::into)
         .collect();
     spec.cwd = ops.env.home();
+    #[cfg(unix)]
+    let catcher = LinkCatcher::new();
+    #[cfg(unix)]
+    if let Some(catcher) = &catcher {
+        spec = spec.env("BROWSER", catcher.script());
+    }
     tracing::info!(%provider, "opening the agent's own sign-in");
     let spawned = match process::spawn(ops.platform.clone(), &spec, process::Options::default()) {
         Ok(spawned) => spawned,
@@ -421,6 +509,22 @@ async fn sign_in(
     // Its lines (the link it opened) aren't shown; read so it never blocks on them.
     let mut lines = spawned.stdout;
     let drain = tokio::spawn(async move { while lines.recv().await.is_some() {} });
+    // The link it wants opened, opened by Brigadier the moment it arrives.
+    #[cfg(unix)]
+    let opener = tokio::spawn({
+        let open_link = ops.open_link.clone();
+        async move {
+            let Some(catcher) = catcher else { return };
+            loop {
+                if let Some(link) = catcher.link() {
+                    tracing::info!(%provider, "opening the sign-in page");
+                    open_link(&link);
+                    return;
+                }
+                tokio::time::sleep(LINK_EVERY).await;
+            }
+        }
+    });
     let given_up = tokio::time::sleep(ops.sign_in_timeout);
     tokio::pin!(given_up);
     let outcome = loop {
@@ -448,6 +552,8 @@ async fn sign_in(
         child.shutdown(STOP_GRACE).await;
     }
     drain.abort();
+    #[cfg(unix)]
+    opener.abort();
     outcome
 }
 
@@ -511,8 +617,13 @@ case "$1 $2" in
   "auth login")
     echo "Opening browser to sign in…"
     touch "$home/login-started"
+    if [ -n "$BROWSER" ]; then
+      "$BROWSER" "https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A5512%2Fcallback"
+    else
+      touch "$home/opened-itself"
+    fi
     case "$(cat "$home/login-mode" 2>/dev/null)" in
-      finish) sleep 0.3; touch "$home/signed-in" ;;
+      finish) sleep 1; touch "$home/signed-in" ;;
       stay) touch "$home/signed-in"; sleep 60 ;;
       quit) exit 1 ;;
       *) sleep 60 ;;
@@ -560,6 +671,7 @@ echo "Claude Code successfully installed!"
         ]));
         let claude = Arc::new(Claude::new(platform.clone(), env.clone()));
         let line = installer(home);
+        let opened = home.0.clone();
         Ops {
             platform,
             env,
@@ -571,6 +683,9 @@ echo "Claude Code successfully installed!"
             install_timeout: Duration::from_secs(20),
             sign_in_timeout: Duration::from_secs(20),
             poll: Duration::from_millis(100),
+            open_link: Arc::new(move |link| {
+                std::fs::write(opened.join("opened"), link).unwrap();
+            }),
         }
     }
 
@@ -628,6 +743,12 @@ echo "Claude Code successfully installed!"
         );
         assert!(status.logged_in);
         assert_eq!(tries(&home), 1);
+        // Brigadier opened the page the sign-in passed it; the sign-in opened nothing itself.
+        assert_eq!(
+            std::fs::read_to_string(home.0.join("opened")).unwrap(),
+            "https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A5512%2Fcallback"
+        );
+        assert!(!home.has("opened-itself"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
