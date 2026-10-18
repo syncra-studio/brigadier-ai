@@ -192,8 +192,9 @@ last row, closes it with × and writes JSON into `#full-access-notice-result`;
 `/fixtures/thread-gaps.html` is a session whose one finished turn paused for over two hours between its
 steps. Its opened work shows the first group, a centred time line at the moment the work went on (as
 above a user's message sent after an hour or more), then the second group. It writes what it saw as
-JSON into `#thread-gaps-result`; `ThreadGapsRender.test.ts` checks it. `stop=1` holds the page for a
-screenshot. This entry is absent from the production build.
+JSON into `#thread-gaps-result`; `ThreadGapsRender.test.ts` checks it. `scene=quota` makes the pause
+a usage limit that reset: a divider, "Claude usage limit reset · 9:39 PM", stands there instead of the
+time line. `stop=1` holds the page for a screenshot. This entry is absent from the production build.
 
 # One tool's repeats
 

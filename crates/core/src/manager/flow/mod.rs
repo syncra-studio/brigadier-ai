@@ -2027,6 +2027,8 @@ mod preview_tests;
 #[cfg(test)]
 mod quiet_wake_tests;
 #[cfg(test)]
+mod quota_resume_tests;
+#[cfg(test)]
 mod reads_tests;
 #[cfg(test)]
 mod rebirth_words_tests;

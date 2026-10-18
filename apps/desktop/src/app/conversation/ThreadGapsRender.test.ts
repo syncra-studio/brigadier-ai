@@ -8,3 +8,9 @@ test("a turn that paused for more than an hour shows a time line where its work 
   assert.equal(seen.error, undefined, String(seen.error));
   assert.deepEqual(seen.work, ["group: Edited a file, read files", `line: ${seen.expected}`, "group: Edited a file, ran a command"]);
 });
+
+test("a turn that waited for a usage limit shows where it reset instead of a time line, between two groups (issue 128)", { timeout: 120000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-gaps.html?scene=quota", "thread-gaps-result", 90000)) as { error?: string; work: string[]; expected: string };
+  assert.equal(seen.error, undefined, String(seen.error));
+  assert.deepEqual(seen.work, ["group: Edited a file, read files", `divider: Claude usage limit reset · ${seen.expected}`, "group: Edited a file, ran a command"]);
+});

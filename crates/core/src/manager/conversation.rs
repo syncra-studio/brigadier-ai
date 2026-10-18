@@ -446,6 +446,8 @@ struct ConvState {
     wait_timer: u64,
     /// The model the waiting messages were for (it hit its limit).
     waited_model: Option<ModelChoice>,
+    /// The request whose turn waited for quota, where its reset shows (#128).
+    waited_request: Option<String>,
     /// The orchestrator's last model request, for knowing when its prompt cache expires
     /// (recovered from the orchestrator log when absent, as after a restart).
     cache: Option<CacheMark>,
@@ -5716,6 +5718,9 @@ impl SessionManager {
                 return false;
             }
             state.waited_model = Some(from.clone());
+            if served.is_some() {
+                state.waited_request = served.clone();
+            }
             let mut pending = carried;
             pending.append(&mut state.pending);
             state.pending = pending;
@@ -5754,14 +5759,19 @@ impl SessionManager {
             .conversation(&conv.id)
             .ok()
             .and_then(|conversation| conversation.quota_wait);
-        let messages = conv
-            .state
-            .lock()
-            .await
-            .pending
-            .iter()
-            .map(|message| message.id.clone())
-            .collect();
+        let (messages, model, request) = {
+            let state = conv.state.lock().await;
+            let messages = state
+                .pending
+                .iter()
+                .map(|message| message.id.clone())
+                .collect();
+            (
+                messages,
+                state.waited_model.clone(),
+                state.waited_request.clone(),
+            )
+        };
         let wait = QuotaWait {
             reason: waiting.reason,
             resets_at_ms: waiting.resets_at_ms,
@@ -5769,6 +5779,12 @@ impl SessionManager {
             ranking: waiting.ranking,
             since_ms: known.as_ref().map_or_else(now_ms, |known| known.since_ms),
             messages,
+            model: model.or_else(|| known.as_ref().and_then(|known| known.model.clone())),
+            request: request.or_else(|| known.as_ref().and_then(|known| known.request.clone())),
+            first_reset_ms: known
+                .as_ref()
+                .and_then(|known| known.first_reset_ms)
+                .or(waiting.resets_at_ms),
         };
         let unchanged = known.as_ref() == Some(&wait);
         if !unchanged
@@ -5805,12 +5821,12 @@ impl SessionManager {
         Box::pin(async move {
             // One retry at a time: a second one would close the model the first just started.
             let _retrying = conv.retry.lock().await;
-            let waited = {
+            let (waited, waited_request) = {
                 let state = conv.state.lock().await;
                 if !state.waiting {
                     return;
                 }
-                state.waited_model.clone()
+                (state.waited_model.clone(), state.waited_request.clone())
             };
             // An archived (or deleted) conversation's messages never go.
             let attached = self.is_attached(conv);
@@ -5826,9 +5842,23 @@ impl SessionManager {
                 .as_ref()
                 .map(|fallback| fallback.choice.clone())
                 .or_else(|| setup_choice(&conversation))
-                .or(waited)
+                .or_else(|| waited.clone())
                 .unwrap_or_else(|| self.default_chat_choice());
             if self.choice_available(&from).await {
+                // The limit it waited for reset (its reset time passed: not another account
+                // that took over first, nor another model the user picked meanwhile, of the
+                // same provider or not): the turn that waited says so where it goes on (#128).
+                let reset = conversation
+                    .quota_wait
+                    .as_ref()
+                    .and_then(|wait| wait.first_reset_ms)
+                    .is_some_and(|at| at <= now_ms())
+                    && waited.as_ref().is_some_and(|model| {
+                        model.provider == from.provider && model.model == from.model
+                    });
+                if reset && let Some(request) = waited_request {
+                    self.quota_resumed(conv, request, from.provider).await;
+                }
                 self.stop_waiting(conv).await;
                 self.kick(conv);
                 return;
@@ -5891,12 +5921,23 @@ impl SessionManager {
             })
     }
 
+    /// Files "‹provider› usage limit reset" under the request that waited for it.
+    async fn quota_resumed(&self, conv: &Arc<ConvLive>, request: String, provider: ProviderKind) {
+        self.orchestrator_step_in(
+            &conv.id,
+            Some(request),
+            OrchestratorStepKind::QuotaResumed { provider },
+        )
+        .await;
+    }
+
     /// The conversation no longer waits for quota.
     async fn stop_waiting(&self, conv: &Arc<ConvLive>) {
         {
             let mut state = conv.state.lock().await;
             state.waiting = false;
             state.waited_model = None;
+            state.waited_request = None;
             // Any timer still set has nothing to do.
             state.wait_timer += 1;
         }
@@ -5967,6 +6008,8 @@ impl SessionManager {
             let mut state = conv.state.lock().await;
             state.pending = unanswered;
             state.waiting = true;
+            state.waited_model = wait.model.clone();
+            state.waited_request = wait.request.clone();
         }
         let waiting = brigadier_router::Waiting {
             reason: wait.reason,

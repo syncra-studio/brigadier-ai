@@ -6,6 +6,8 @@
  *
  * - The pause: a "time passed" line inside the turn, at the time the work went on (#130), and the
  *   work around it in two groups.
+ * - `scene=quota`: the pause was a usage limit that reset; a divider, "Claude usage limit reset ·
+ *   9:39 PM", stands there instead of the time line (#128).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -14,11 +16,12 @@ import { ConversationView } from "@/app/ConversationView";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, ConversationView as View, Message, OrchestratorStep, Request, UserRequest } from "@/ipc/generated";
-import { formatDaySeparator } from "@/lib/format";
+import { formatDaySeparator, formatTime } from "@/lib/format";
 import { select } from "@/state/actions";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
+const quota = query.get("scene") === "quota";
 const id = "thread-gaps";
 const MINUTE = 60_000;
 const start = Date.now() - 5 * 60 * MINUTE;
@@ -49,9 +52,11 @@ const steps: OrchestratorStep[] = [
   call(2, "Read", "/repo/src/cart/tax.ts", start + 5000),
   call(3, "Grep", "applyTax", start + 9000),
   call(4, "Edit", "/repo/src/cart/rules.ts", start + 20_000),
+  // The limit it waited for reset.
+  ...(quota ? [{ requestId: "r1", atMs: back - 5000, position: 5, kind: { type: "quotaResumed", provider: "claude" } } as OrchestratorStep] : []),
   // After the pause.
-  call(5, "Edit", "/repo/src/cart/checkout.ts", back),
-  call(6, "Bash", "pnpm test cart", back + 20_000),
+  call(6, "Edit", "/repo/src/cart/checkout.ts", back),
+  call(7, "Bash", "pnpm test cart", back + 20_000),
 ];
 const request = {
   id: "r1", conversationId: id, preview: "Move the tax rules", state: { type: "done" }, startedAtMs: start, endedAtMs: back + 42_000,
@@ -95,12 +100,14 @@ async function drive() {
     const header = await until("the work header", () => turn.querySelector<HTMLElement>("[data-slot=request-work-header]"));
     if (header.getAttribute("aria-expanded") === "false") header.click();
     const work = await until("the opened work", () => turn.querySelector<HTMLElement>("[data-slot=request-work]"));
-    await until("the line", () => work.querySelector("[data-slot=time-separator]"));
+    await until("the line", () => work.querySelector("[data-slot=time-separator], [data-slot=quota-resumed]"));
     // What the opened work shows, in order: its groups by their summary, and the line.
-    seen.work = [...work.querySelectorAll<HTMLElement>("[data-slot=work-group] > button, [data-slot=time-separator]")].map((element) =>
-      element.dataset.slot === "time-separator" ? `line: ${element.textContent}` : `group: ${element.textContent}`,
+    seen.work = [...work.querySelectorAll<HTMLElement>("[data-slot=work-group] > button, [data-slot=time-separator], [data-slot=quota-resumed]")].map((element) =>
+      element.dataset.slot === "time-separator" ? `line: ${element.textContent}`
+        : element.dataset.slot === "quota-resumed" ? `divider: ${element.textContent}`
+          : `group: ${element.textContent}`,
     );
-    seen.expected = formatDaySeparator(back, Date.now());
+    seen.expected = quota ? formatTime(back - 5000) : formatDaySeparator(back, Date.now());
   } catch (error) {
     seen.error = String(error);
   }

@@ -9,6 +9,9 @@ import { SandboxLimitNotice } from "@/app/conversation/SandboxLimitNotice";
 import { WorkerLine } from "@/app/conversation/WorkerChip";
 import { ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
+import type { ProviderKind } from "@/ipc/generated";
+import { formatTime } from "@/lib/format";
+import { VENDOR_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 
@@ -71,9 +74,24 @@ const DecidedRow: FC<{ kind: DecidedStep }> = ({ kind }) => (
  * A step of the lead that isn't work of its own: a team row, or a notice. Plumbing and what a
  * team sentence already says (a worker created, a report read) show nothing.
  */
+/**
+ * Where a usage limit the turn waited for reset and its work went on (#128): a hairline across
+ * the column with "Claude usage limit reset · 9:39 PM" in the middle. It takes the place of the
+ * "time passed" line there.
+ */
+const QuotaResumed: FC<{ provider: ProviderKind; atMs: number | undefined }> = ({ provider, atMs }) => (
+  <p
+    data-slot="quota-resumed"
+    className="text-muted-foreground before:bg-work-rule after:bg-work-rule flex items-center gap-3 self-stretch py-2 text-sm before:h-px before:flex-1 after:h-px after:flex-1"
+  >
+    {`${VENDOR_LABELS[provider]} usage limit reset${atMs === undefined ? "" : ` · ${formatTime(atMs)}`}`}
+  </p>
+);
+
 export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   const { kind } = step;
   if (kind.type === "machine") return <MachineRow kind={kind} />;
+  if (kind.type === "quotaResumed") return <QuotaResumed provider={kind.provider} atMs={step.atMs} />;
   if (kind.type === "decided") return <DecidedRow kind={kind} />;
   if (isTeamStep(kind)) return <TeamStep kind={kind} atMs={step.atMs} />;
   if (kind.type === "fullAccessSuggested") return <SandboxLimitNotice reason={kind.reason} />;

@@ -687,6 +687,12 @@ test("an overnight run's refused message keeps its row, as its sent ones do", ()
   assert.deepEqual(steps, ["messageRefused", "m1"]);
 });
 
+test("an overnight run's usage limit reset keeps its divider (issue 128)", () => {
+  const resumed: OrchestratorStep = { requestId: "run-1", atMs: 3000, position: 3, kind: { type: "quotaResumed", provider: "claude" } };
+  const blocks = buildBlocks([said("run-1-said", 2, "assistant", "run-1"), said("run-1-done", 5, "assistant", "run-1")], {}, false, peerDigest([peerRequest("run-1", 1)], [], [resumed]), []);
+  assert.deepEqual(keyed(blocks, "run-1").orchestratorSteps.map((step) => step.kind.type), ["quotaResumed"]);
+});
+
 test("another session's message opens its request's turn where the user's message would stand", () => {
   const blocks = buildBlocks([fromPeer("m1", 1, "m1"), said("m1-answer", 3, "assistant", "m1")], {}, false, peerDigest([peerRequest("m1", 1, { fromPeer: "api" })]), []);
   const block = keyed(blocks, "m1");
@@ -898,4 +904,12 @@ test("more than an hour between two things a turn did puts a time line between t
   assert.deepEqual(gapKinds([call(1, 0, 1000), call(2, HOUR, HOUR + 1000)], []), ["orchestrator", "orchestrator"]);
   // The answer written long after the work: the line comes before it.
   assert.deepEqual(gapKinds([call(1, 0, 1000)], [{ position: 2, atMs: 3 * HOUR }]), ["orchestrator", `gap@${3 * HOUR}`, "text"]);
+});
+
+test("where a usage limit reset, its divider stands in for the time line, never both (issue 128)", () => {
+  const HOUR = 3_600_000;
+  const resumed = { position: 2, atMs: 2 * HOUR, kind: { type: "quotaResumed" as const, provider: "claude" as const } };
+  const kinds = blockSequence({ texts: [], cards: [], steers: [], compactions: [], orchestratorSteps: [gapCall(1, 0, 1000), resumed, gapCall(3, 2 * HOUR + 1000, 2 * HOUR + 2000)], rows: [] })
+    .map((entry) => (entry.kind === "orchestrator" ? (entry.steps[0]?.kind.type ?? "") : entry.kind));
+  assert.deepEqual(kinds, ["tool", "quotaResumed", "tool"]);
 });

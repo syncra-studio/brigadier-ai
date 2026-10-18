@@ -956,6 +956,9 @@ mod tests {
                 ranking: None,
                 since_ms: 0,
                 messages: Vec::new(),
+                model: None,
+                request: None,
+                first_reset_ms: None,
             });
             board.tasks.insert(task.id.clone(), task);
             wait(&board, "r1")

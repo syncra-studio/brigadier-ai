@@ -1200,6 +1200,9 @@ impl SessionManager {
                     ranking: waiting.ranking,
                     since_ms: now,
                     messages: Vec::new(),
+                    model: None,
+                    request: None,
+                    first_reset_ms: None,
                 };
                 (route, Some(wait))
             }

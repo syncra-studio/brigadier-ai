@@ -518,8 +518,9 @@ export function buildBlocks(
     }
     // Plumbing shows by what came of it: a worker's sentence, a card, the merge.
     if (step.kind.type === "tool" && isPlumbing(step.kind.name)) continue;
-    // A run's own steps show as its phases, but a refused message has no other trace.
-    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool" && step.kind.type !== "messageRefused")) continue;
+    // A run's own steps show as its phases, but a refused message and a usage limit's reset
+    // have no other trace.
+    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool" && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed")) continue;
     if (step.kind.type === "tool" && toolHasOwnResult(step.kind, authoredResults, step.requestId, step.position)) continue;
     placed.push({
       kind: "orchestrator",
@@ -1095,6 +1096,12 @@ function gaps(entries: SequenceEntry[], texts: SequenceSource["texts"]): Sequenc
   let reached: number | undefined;
   for (const entry of entries) {
     const { from, to } = entryTimes(entry, texts);
+    // Where a usage limit reset, its own divider says when the work went on, not a time line (#128).
+    if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "quotaResumed")) {
+      if (from !== undefined) reached = Math.max(reached ?? from, from);
+      out.push(entry);
+      continue;
+    }
     if (from !== undefined && reached !== undefined && from - reached > SEPARATOR_GAP_MS) {
       out.push({ kind: "gap", atMs: from, position: entry.position });
     }

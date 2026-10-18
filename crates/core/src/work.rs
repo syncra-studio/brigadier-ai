@@ -203,6 +203,21 @@ pub struct QuotaWait {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(skip)]
     pub messages: Vec<String>,
+    /// The model a conversation's wait is for (it hit its limit), so only that model running
+    /// again counts as its limit reset (#128), after a restart too. A task's wait has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub model: Option<ModelChoice>,
+    /// The request whose turn waited, where its reset shows (#128). A task's wait has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub request: Option<String>,
+    /// The reset first named for a conversation's wait, kept when a later look names another
+    /// or none (another window still blocks it): once it passed, the model running again is
+    /// its limit reset, not another account taking over first (#128). A task's wait has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub first_reset_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -2115,6 +2130,9 @@ pub enum OrchestratorStepKind {
         /// Why, in the words the thread heard.
         reason: String,
     },
+    /// The usage limit a turn waited for reset and the turn went on (#128): a divider across
+    /// the thread where its work went on, "Claude usage limit reset · 9:39 PM".
+    QuotaResumed { provider: ProviderKind },
 }
 
 impl OrchestratorStepKind {

@@ -8,6 +8,7 @@ import type { FileStat } from "./FileStat";
 import type { ItemStatus } from "./ItemStatus";
 import type { MergeCondition } from "./MergeCondition";
 import type { MergedUpstream } from "./MergedUpstream";
+import type { ProviderKind } from "./ProviderKind";
 import type { TaskId } from "./TaskId";
 import type { ThreadItemKind } from "./ThreadItemKind";
 
@@ -124,4 +125,4 @@ title?: string,
 /**
  * Why, in the words the thread heard.
  */
-reason: string, };
+reason: string, } | { "type": "quotaResumed", provider: ProviderKind, };

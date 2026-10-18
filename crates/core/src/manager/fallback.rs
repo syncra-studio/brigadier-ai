@@ -441,6 +441,9 @@ impl SessionManager {
                 .as_ref()
                 .map_or_else(now_ms, |known| known.since_ms),
             messages: Vec::new(),
+            model: None,
+            request: None,
+            first_reset_ms: None,
         };
         // Waiting as before for the same reason: nothing to record again.
         let unchanged = task.state == TaskState::Paused
