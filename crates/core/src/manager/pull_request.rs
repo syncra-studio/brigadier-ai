@@ -379,11 +379,11 @@ impl SessionManager {
             // Not fetched (the fetch failed): nothing moves or is recorded until it is.
             let onto = repo.resolve(&merged).map_err(git_error)?;
             // Counted from where the base was before the merge: a merge commit's own head is
-            // already in it.
+            // already in it. A squash put one commit on the base, however many the branch had.
             let commits = repo
                 .resolve(&format!("{}^1", onto.0))
                 .and_then(|before| repo.merge_base(&head_oid, &before))
-                .and_then(|from| repo.count_commits(&from, &head_oid))
+                .and_then(|from| repo.merged_commits(&onto, &from, &head_oid))
                 .unwrap_or(0);
             // The requests whose ready head it merged.
             let covered: Vec<String> = ready

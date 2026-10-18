@@ -1022,6 +1022,29 @@ impl Repo {
         .map_err(|_| Error::Parse("invalid commit count".into()))
     }
 
+    /// How many commits a merge that made `merge_commit` put on the base, for a branch that
+    /// went from `from` to `head`: a merge commit or a fast-forward brings the branch's own; a
+    /// rebase merge puts a copy of each on the base (`git cherry` finds them), a squash merge
+    /// one for them all.
+    pub fn merged_commits(&self, merge_commit: &Oid, from: &Oid, head: &Oid) -> Result<u32> {
+        valid_oid(merge_commit)?;
+        let commits = self.count_commits(from, head)?;
+        let merge_parent = format!("{}^2", merge_commit.0);
+        // A merge commit, or a fast-forward: the branch's own commits are on the base.
+        if commits <= 1
+            || self.resolve(&merge_parent).is_ok()
+            || self.merge_base(head, merge_commit)? == *head
+        {
+            return Ok(commits);
+        }
+        let cherry = self.cmd(&["cherry", &merge_commit.0, &head.0, &from.0], true)?;
+        let copies = String::from_utf8_lossy(&cherry)
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .count();
+        Ok(u32::try_from(copies).unwrap_or(u32::MAX).max(1))
+    }
+
     /// Whether a merge's work is reverted on local branch `base` (or its upstream) now: the
     /// newest commit there since `merge_commit` that reverts one of the merge's commits, or
     /// reverts such a revert, and so on ("This reverts commit <sha>"), is a revert of the work
@@ -2433,6 +2456,65 @@ pub(crate) mod tests {
         assert!(!repo.merge_reverted(&squash, 1, "main").unwrap());
         run(&["revert", "--no-edit", &squash.0]);
         assert!(repo.merge_reverted(&squash, 1, "main").unwrap());
+    }
+
+    /// A squash merge of a branch with two commits puts one on the base, a rebase merge a
+    /// copy of each and a merge commit brings both; so a revert of the base's commit before a
+    /// squash doesn't read as a revert of the merge.
+    #[test]
+    fn a_merge_counts_the_commits_it_put_on_the_base() {
+        let (dir, git) = test_git("merged-commits");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        let run = |args: &[&str]| repo.cmd(args, false).expect("git");
+        run(&["checkout", "-q", "-b", "main"]);
+        fs::write(root.join("a.txt"), "a\n").unwrap();
+        let start = repo.commit_changes("Start", true).unwrap();
+        run(&["checkout", "-q", "-b", "work"]);
+        fs::write(root.join("b.txt"), "b\n").unwrap();
+        repo.commit_changes("Add b", true).unwrap();
+        fs::write(root.join("c.txt"), "c\n").unwrap();
+        let head = repo.commit_changes("Add c", true).unwrap();
+        run(&["checkout", "-q", "main"]);
+        fs::write(root.join("d.txt"), "d\n").unwrap();
+        let before = repo.commit_changes("Unrelated", true).unwrap();
+
+        run(&["merge", "-q", "--squash", "work"]);
+        let squash = repo.commit_changes("Work (#7)", true).unwrap();
+        assert_eq!(
+            repo.merged_commits(&squash, &start, &head).unwrap(),
+            1,
+            "a squash"
+        );
+        run(&["revert", "--no-edit", &before.0]);
+        assert!(
+            !repo.merge_reverted(&squash, 1, "main").unwrap(),
+            "the commit before the squash is no part of it"
+        );
+
+        run(&["reset", "-q", "--hard", &before.0]);
+        run(&["cherry-pick", &format!("{}..{}", start.0, head.0)]);
+        let rebased = repo.resolve("HEAD").unwrap();
+        assert_eq!(
+            repo.merged_commits(&rebased, &start, &head).unwrap(),
+            2,
+            "a rebase"
+        );
+
+        run(&["reset", "-q", "--hard", &before.0]);
+        run(&["merge", "-q", "--no-ff", "-m", "Merge work", "work"]);
+        let merge = repo.resolve("HEAD").unwrap();
+        assert_eq!(
+            repo.merged_commits(&merge, &start, &head).unwrap(),
+            2,
+            "a merge commit"
+        );
+        assert_eq!(
+            repo.merged_commits(&head, &start, &head).unwrap(),
+            2,
+            "a fast-forward"
+        );
     }
 
     #[test]
