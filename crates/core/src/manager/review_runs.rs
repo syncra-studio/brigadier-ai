@@ -343,6 +343,104 @@ fn record_line(items: &[Finding]) -> String {
 }
 
 /// One line per finding, with its id, for the thread to record each by.
+/// A review_candidate call's claim on a review's outcome ([`SessionManager::review_replies`]):
+/// dropped while still armed (the call ends without saying it, or is cancelled), the review's
+/// message is delivered as usual again.
+struct ReplyWait<'a> {
+    manager: &'a SessionManager,
+    key: (ConversationId, String, String),
+    armed: bool,
+}
+
+impl<'a> ReplyWait<'a> {
+    fn new(manager: &'a SessionManager, key: (ConversationId, String, String)) -> Self {
+        manager
+            .review_replies
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(key.clone());
+        Self {
+            manager,
+            key,
+            armed: true,
+        }
+    }
+
+    /// The reply says the outcome: its message stays undelivered.
+    fn said(mut self) {
+        self.armed = false;
+    }
+
+    /// Gives the claim back; whether it was still there: false when the review's end already
+    /// stood aside for this call.
+    fn release(mut self) -> bool {
+        self.armed = false;
+        self.manager
+            .review_replies
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.key)
+    }
+}
+
+impl Drop for ReplyWait<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.manager
+                .review_replies
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&self.key);
+        }
+    }
+}
+
+/// Where `start..commit` is reviewed up to: following a chain of reviews from `start`, each
+/// starting where the last ended (or before it) and ending on the way to `commit`; with the
+/// last of them.
+fn covered_upto(
+    repo: &brigadier_git::Repo,
+    reviews: &[ReviewRun],
+    start: &Oid,
+    commit: &Oid,
+) -> (Oid, Option<ReviewRun>) {
+    // A review of a snapshot with the candidate's very files (an uncommitted change it read
+    // before the thread committed it) covers the candidate.
+    let tree = repo.tree_of(&commit.0).ok();
+    if let Some(same) = reviews
+        .iter()
+        .filter(|review| tree.is_some() && repo.tree_of(&review.tip).ok() == tree)
+        .max_by_key(|review| (review.started_at_ms, review.number))
+    {
+        return (commit.clone(), Some(same.clone()));
+    }
+    let mut from = start.clone();
+    let mut last: Option<ReviewRun> = None;
+    loop {
+        let on_the_way = |tip: &str| {
+            let tip = Oid(tip.to_owned());
+            tip != from
+                && repo.ancestor(&from, &tip).unwrap_or(false)
+                && repo.ancestor(&tip, commit).unwrap_or(false)
+        };
+        let next = reviews
+            .iter()
+            .filter(|review| {
+                let base = Oid(review.base.clone());
+                (base == from || repo.ancestor(&base, &from).unwrap_or(false))
+                    && on_the_way(&review.tip)
+            })
+            .max_by_key(|review| (review.started_at_ms, review.number));
+        match next {
+            Some(review) => {
+                from = Oid(review.tip.clone());
+                last = Some(review.clone());
+            }
+            None => return (from, last),
+        }
+    }
+}
+
 fn listed(items: &[Finding]) -> String {
     items
         .iter()
@@ -771,6 +869,176 @@ impl SessionManager {
             Err(err) => {
                 tracing::warn!(conversation = %conversation_id, error = %err, "the thread's commits could not be reviewed");
             }
+        }
+    }
+
+    /// `review_candidate`: the other vendor's review of the thread's candidate commit, small
+    /// changes too. What reviews already cover is reused: the range starts where a chain of
+    /// earlier reviews from the merge base ends, and after findings it re-checks their fix
+    /// alone (#138). It waits up to `wait_seconds` for the findings and returns them in its
+    /// reply instead of a message (#137). No reviewer, or reviews off, is a fact it states.
+    pub(crate) async fn review_candidate(
+        &self,
+        id: &ConversationId,
+        args: crate::tools::ReviewCandidate,
+    ) -> Result<String> {
+        // What the thread committed joins its unreviewed range first, so the range this review
+        // covers isn't reviewed again by itself.
+        self.scan_thread_commits(id, true).await;
+        let (checkout, base) = self.own_checkout(id).await?;
+        let (git, path, wanted) = (self.git.clone(), checkout.clone(), args.commit.clone());
+        let board = self.core.board(id).await?;
+        let reviews: Vec<ReviewRun> = board
+            .reviews
+            .values()
+            .filter(|review| {
+                review.kind == ReviewKind::Code
+                    && !matches!(review.state, ReviewState::Failed { .. })
+            })
+            .cloned()
+            .collect();
+        let (commit, from, last) = blocking(move || {
+            let repo = git.open(Path::new(&path)).map_err(git_error)?;
+            let (commit, merge_base) =
+                super::phases::candidate_at(&repo, wanted.as_deref(), base.as_deref())
+                    .map_err(git_error)?;
+            let start = match merge_base {
+                Some(merge_base) => merge_base,
+                None => repo.resolve(&format!("{}^", commit.0)).map_err(git_error)?,
+            };
+            let (from, last) = covered_upto(&repo, &reviews, &start, &commit);
+            Ok((commit, from, last))
+        })
+        .await?;
+        let short = &commit.0[..commit.0.len().min(12)];
+        if from == commit {
+            // Reviewed already, to this very commit: its outcome, or a wait for it.
+            if let Some(last) = last {
+                return self.reply_for(id, last, None, args.wait_seconds).await;
+            }
+        }
+        if !self.reviews_on() {
+            return Ok("Reviews are off (the user's setting): no review ran. If you merge, say in the merge message that it wasn't reviewed.".into());
+        }
+        // After findings, the commits since are their fix: the review re-checks those.
+        let recheck = last
+            .as_ref()
+            .filter(|last| matches!(last.state, ReviewState::Findings { .. }))
+            .map(|last| {
+                let open: Vec<Finding> = last
+                    .items
+                    .iter()
+                    .filter(|item| !matches!(item.status, FindingStatus::Dismissed { .. }))
+                    .cloned()
+                    .collect();
+                listed(&open)
+            })
+            .filter(|listed| !listed.is_empty());
+        let claim = ReplyWait::new(self, (id.clone(), from.0.clone(), commit.0.clone()));
+        let author = self.thread_author(id).await;
+        let started = self
+            .start_review(NewReview {
+                conversation_id: id.clone(),
+                request_id: self.request_for(id, None).await,
+                task_id: None,
+                kind: ReviewKind::Code,
+                base: from.clone(),
+                tip: commit.clone(),
+                author,
+                notify: ReviewFor::Orchestrator,
+                repo: PathBuf::from(&checkout),
+                plan: None,
+                recheck,
+            })
+            .await;
+        let review = match started {
+            Ok(Some((review, _))) => review,
+            Ok(None) => {
+                return Ok("Reviews are off (the user's setting): no review ran. If you merge, say in the merge message that it wasn't reviewed.".into());
+            }
+            Err(err) => return Err(err),
+        };
+        self.mark_reviewed_to(id, &commit).await;
+        if let ReviewState::Failed { reason } = &review.state {
+            return Ok(format!(
+                "No other-vendor review could run for {short}: {reason}. Whether to merge without it or wait is yours; if you merge, say so in the merge message."
+            ));
+        }
+        self.reply_for(id, review, Some(claim), args.wait_seconds)
+            .await
+    }
+
+    /// Waits up to `wait_seconds` (default 600, at most 1700) for `review` to end while the
+    /// thread's turn runs, and returns its outcome; its message then stays undelivered. One
+    /// still running then is said so, and its message comes later as usual.
+    async fn reply_for(
+        &self,
+        id: &ConversationId,
+        review: ReviewRun,
+        claim: Option<ReplyWait<'_>>,
+        wait_seconds: Option<u64>,
+    ) -> Result<String> {
+        // Ended before this call: its message, if any, went out already.
+        let claim = match (claim, review.state == ReviewState::Running) {
+            (Some(claim), true) => Some(claim),
+            (None, true) => Some(ReplyWait::new(
+                self,
+                (id.clone(), review.base.clone(), review.tip.clone()),
+            )),
+            (_, false) => None,
+        };
+        let wait = Duration::from_secs(wait_seconds.unwrap_or(600).min(1700));
+        let deadline = tokio::time::Instant::now() + wait;
+        let ended = |board: &crate::board::Board| {
+            board
+                .reviews
+                .get(&review.id)
+                .filter(|now| now.state != ReviewState::Running)
+                .cloned()
+        };
+        loop {
+            if let Some(now) = ended(&self.core.board(id).await?) {
+                if let Some(claim) = claim {
+                    claim.said();
+                }
+                return Ok(self.review_reply(&now).await);
+            }
+            if tokio::time::Instant::now() >= deadline || !self.thread_turn_running(id).await {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        // Still running: its message is delivered when it ends, clean too, unless it ended
+        // just now and its delivery already stood aside for this reply.
+        let delivers = claim.is_none_or(ReplyWait::release);
+        if !delivers && let Some(now) = ended(&self.core.board(id).await?) {
+            return Ok(self.review_reply(&now).await);
+        }
+        self.await_review(id, &review.id).await;
+        Ok(format!(
+            "{} still reviews {}..{}: its findings arrive as a message.",
+            review.reviewer.label(),
+            short(&review.base),
+            short(&review.tip)
+        ))
+    }
+
+    /// An ended review of the thread's candidate, as review_candidate's reply.
+    async fn review_reply(&self, review: &ReviewRun) -> String {
+        let reviewer = review.reviewer.label();
+        let range = format!("{}..{}", short(&review.base), short(&review.tip));
+        match &review.state {
+            ReviewState::Findings { count } => format!(
+                "[review of your commits · {reviewer} found {count} in {range}]\n{}\n[/review]\nFix each one you agree with, or answer it in one line; the merge message says how each was settled.\n{}",
+                clipped(&self.review_text(review).await.unwrap_or_default()),
+                record_line(&review.items)
+            ),
+            ReviewState::Failed { reason } => format!(
+                "No other-vendor review could run for {range}: {reason}. Whether to merge without it or wait is yours; if you merge, say so in the merge message."
+            ),
+            _ => format!(
+                "[review of your commits · {reviewer} found nothing in {range}] The review of your candidate found nothing."
+            ),
         }
     }
 
@@ -1628,6 +1896,20 @@ impl SessionManager {
     }
 
     async fn tell_review_now(&self, review: &ReviewRun, text: Option<&str>, filed: Option<String>) {
+        // A review_candidate call that waited on it said its outcome in its reply.
+        if review.notify == ReviewFor::Orchestrator
+            && self
+                .review_replies
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&(
+                    review.conversation_id.clone(),
+                    review.base.clone(),
+                    review.tip.clone(),
+                ))
+        {
+            return;
+        }
         let review_text = text;
         let reviewer = review.reviewer.label();
         if let ReviewFor::Worker { task_id } = &review.notify

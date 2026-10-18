@@ -349,6 +349,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "plan_phases" => ToolCall::Orchestrator(O::PlanPhases(arg(name, args))),
         "approve_outline" => ToolCall::Orchestrator(O::ApproveOutline(arg(name, args))),
         "start_verifier" => ToolCall::Orchestrator(O::StartVerifier(arg(name, args))),
+        "review_candidate" => ToolCall::Orchestrator(O::ReviewCandidate(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
         "finish_session" => ToolCall::Orchestrator(O::FinishSession(arg(name, args))),

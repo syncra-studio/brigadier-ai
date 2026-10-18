@@ -8,11 +8,11 @@ use brigadier_core::tools::{
     DelegateTask, EndRun, FinishSession, JobCall, LandPhase, ListSessions, MessageSession,
     MessageWorker, NoteForUser, OfferFeedback, OrchestratorCall, PlanPhases, PreviewLog,
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, RecordFindings,
-    RecordNodes, Remember, ReportRef, RequestApproval, ReviewPlan, Role, RouteFollowUp, RunCheck,
-    RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript, SettleStep, SettleWait,
-    StartPreview, StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline,
-    SubmitReport, SuggestFullAccess, TabChatCall, TabTools, ThreadRunCheck, ToolCall,
-    WaitForReplies, WorkerCall, WritePage, WriteTabFile,
+    RecordNodes, Remember, ReportRef, RequestApproval, ReviewCandidate, ReviewPlan, Role,
+    RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory, SearchTranscript,
+    SettleStep, SettleWait, StartPreview, StartVerifier, StopMerge, StopPreview, StopWorker,
+    StoreOutput, SubmitOutline, SubmitReport, SuggestFullAccess, TabChatCall, TabTools,
+    ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -172,6 +172,12 @@ review's findings and reports. Land the verifier's task then (its commits hold t
 the lead's. Small work needs none: land the lead. With fresh: true it gets only the original \
 request, the user's constraints, done_when and the candidate commit (a task's, or commit for your \
 own work) and tries to break it. Returns at once.";
+
+const REVIEW_CANDIDATE: &str = "Ask the other vendor to review your candidate commit (your \
+checkout's HEAD by default), small changes too. What earlier reviews already cover isn't \
+reviewed again: only what came after, and after findings their fix is re-checked. It waits \
+for the findings (wait_seconds) and returns them in its reply; one still running then \
+arrives as a message. With no other-vendor reviewer, or reviews off, it says so.";
 
 const SETTLE_STEP: &str = "Only during an overnight run: settle a step of the run's plan, by \
 its number, once you have judged its whole scope and every \"done when\" (your own edits \
@@ -587,6 +593,11 @@ fn orchestrator_tools() -> Vec<Tool> {
             input_schema::<StartVerifier>(),
         ),
         tool(
+            "review_candidate",
+            REVIEW_CANDIDATE,
+            input_schema::<ReviewCandidate>(),
+        ),
+        tool(
             "propose_overnight",
             "Fill the user's unstarted overnight proposal from their brief or source files. Keep source phase numbers, dependencies, done-when and Rules verbatim; no invented scope. Include every phase the user's words select, also those after a \"stop after\" or a skip: Brigadier enforces those itself and keeps the rest for Continue. A bare goal keeps empty phases: the thread plans it once the run starts. Does not start, review or implement anything: only the user's Start does that. Use the run_id and revision from the proposal briefing.",
             input_schema::<ProposeOvernight>(),
@@ -925,6 +936,7 @@ pub fn parse_call(
                 "propose_plan" => OrchestratorCall::ProposePlan(args(name, arguments)?),
                 "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
                 "start_verifier" => OrchestratorCall::StartVerifier(args(name, arguments)?),
+                "review_candidate" => OrchestratorCall::ReviewCandidate(args(name, arguments)?),
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
                 "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
                 "finish_session" => OrchestratorCall::FinishSession(args(name, arguments)?),

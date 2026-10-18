@@ -857,6 +857,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, start_verifier takes fresh: true for a verifier that never saw the build: it gets only the original request, the user's constraints, the done_when you pass and the candidate commit (a task's last commit, or with no task your own at commit, your checkout's HEAD by default), no outline, report or context, and tries to break it. Without fresh it works as before. When one is worth it is yours to judge.",
         worker: "",
     },
+    Revision {
+        number: REVIEW_CANDIDATE_REVISION,
+        thread: "From now on, review_candidate asks the other vendor to review a candidate commit of yours (your checkout's HEAD by default), small changes too. What earlier reviews cover isn't reviewed again; after findings it re-checks only their fix. It waits for the findings and returns them in its reply (wait_seconds; one still running arrives as a message later). With no other-vendor reviewer or reviews off it says so as a fact. When to ask for one is yours to judge.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1182,6 +1187,10 @@ pub(crate) const WORKSPACE_ROUTES_REVISION: u32 = 98;
 /// request, the constraints, the criteria and the candidate commit, of a task or the thread's
 /// own work.
 pub(crate) const FRESH_VERIFIER_REVISION: u32 = 99;
+/// review_candidate (WORKSPACES-PLAN.md phase 3): the thread asks the other vendor to review
+/// any candidate of its own; covered ranges are reused, fixes re-checked alone, and the
+/// findings come back in the call's reply (#137, #138).
+pub(crate) const REVIEW_CANDIDATE_REVISION: u32 = 100;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -4326,6 +4335,27 @@ mod environment_tests {
         assert!(block.ends_with(&format!(
             "If you have nothing to say now, reply with exactly {QUIET}."
         )));
+    }
+
+    /// review_candidate: open threads hear of it once, as their call.
+    #[test]
+    fn review_candidate_reaches_an_open_thread_as_its_call() {
+        let added = REVISIONS
+            .iter()
+            .find(|revision| revision.number == REVIEW_CANDIDATE_REVISION)
+            .unwrap();
+        assert!(added.worker.is_empty());
+        let note = revision_note(REVIEW_CANDIDATE_REVISION - 1, false).unwrap();
+        for words in [
+            "review_candidate",
+            "small changes too",
+            "isn't reviewed again",
+            "returns them in its reply",
+            "says so as a fact",
+            "yours to judge",
+        ] {
+            assert!(note.contains(words), "{words}: {note}");
+        }
     }
 
     /// The fresh verifier: open threads hear of start_verifier's fresh form once, as their

@@ -452,6 +452,25 @@ impl SessionManager {
         self.review_range_if_due(id, repo, range).await;
     }
 
+    /// `review_candidate` reviews up to `tip`: the thread's unreviewed range up to there is
+    /// covered, and starts again after it.
+    pub(crate) async fn mark_reviewed_to(&self, id: &ConversationId, tip: &Oid) {
+        let Some(mut range) = self
+            .core
+            .board(id)
+            .await
+            .ok()
+            .and_then(|board| board.unreviewed)
+            .map(|range| *range)
+            .filter(|range| !range.local && range.tip == tip.0)
+        else {
+            return;
+        };
+        range.base = tip.0.clone();
+        range.risky = None;
+        self.store_unreviewed(id, Some(range)).await;
+    }
+
     /// `branch` moved to `tip` past what the thread made (a landing, the user's own commits, a
     /// rewritten history) or past its fixes of findings: its range goes on from there. Fixes
     /// right after the last review stay out of it; following unreviewed work, they join it.

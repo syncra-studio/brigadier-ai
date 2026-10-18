@@ -64,6 +64,8 @@ const PLUMBING = new Set([
   "finish_session",
   "note_for_user",
   "remember",
+  // Its review shows as the review's own row.
+  "review_candidate",
   "route_follow_up",
   "list_tasks",
   "land_phase",

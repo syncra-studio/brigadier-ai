@@ -311,6 +311,20 @@ pub struct TaskRef {
     pub task: String,
 }
 
+/// `review_candidate`: the other vendor's review of the thread's candidate commit, reusing
+/// what earlier reviews already cover.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewCandidate {
+    /// The candidate commit; your checkout's HEAD when absent.
+    #[serde(default)]
+    pub commit: Option<String>,
+    /// How long to wait for the findings, in seconds, so they come back in this reply
+    /// (default 600, at most 1700; 0 returns at once and they arrive as a message).
+    #[serde(default)]
+    pub wait_seconds: Option<u64>,
+}
+
 /// `start_verifier`: a verifier of a reported implement task, or with `fresh` one that gets
 /// only the request, the constraints, the criteria and the candidate commit.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -1205,6 +1219,7 @@ pub enum OrchestratorCall {
     ProposePlan(ProposePlan),
     ApproveOutline(ApproveOutline),
     StartVerifier(StartVerifier),
+    ReviewCandidate(ReviewCandidate),
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
     FinishSession(FinishSession),
@@ -1259,6 +1274,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "propose_plan",
     "approve_outline",
     "start_verifier",
+    "review_candidate",
     "request_approval",
     "land_phase",
     "finish_session",
@@ -1314,6 +1330,7 @@ impl OrchestratorCall {
             Self::ProposePlan(_) => "propose_plan",
             Self::ApproveOutline(_) => "approve_outline",
             Self::StartVerifier(_) => "start_verifier",
+            Self::ReviewCandidate(_) => "review_candidate",
             Self::RequestApproval(_) => "request_approval",
             Self::LandPhase(_) => "land_phase",
             Self::FinishSession(_) => "finish_session",

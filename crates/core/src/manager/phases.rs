@@ -890,10 +890,6 @@ impl SessionManager {
         lead: Option<Task>,
         args: StartVerifier,
     ) -> Result<String> {
-        let conversation = self.core.conversation(id)?;
-        let Some(crate::model::Setup::Session { environment, .. }) = &conversation.setup else {
-            return Err(Error::Invalid("a verifier belongs to a session".into()));
-        };
         // The candidate: a task's last commit in its worktree, else the thread's own at
         // `commit`, in its effective workspace (an overnight run's worktree while one runs).
         let (checkout, wanted, base) = match &lead {
@@ -908,20 +904,8 @@ impl SessionManager {
                 (worktree, None, workspace.and_then(|w| w.base.clone()))
             }
             None => {
-                let Some(workspace) = self.effective_workspace(id).await? else {
-                    return Err(Error::Invalid("a verifier belongs to a session".into()));
-                };
-                let base = match environment {
-                    crate::model::Environment::NewWorktree { base, .. } => base.clone(),
-                    crate::model::Environment::LocalCheckout { branch } => {
-                        format!("{branch}@{{upstream}}")
-                    }
-                };
-                (
-                    workspace.path.to_string_lossy().into_owned(),
-                    args.commit.clone(),
-                    Some(base),
-                )
+                let (checkout, base) = self.own_checkout(id).await?;
+                (checkout, args.commit.clone(), base)
             }
         };
         let git = self.git.clone();
@@ -929,14 +913,8 @@ impl SessionManager {
             let repo = git
                 .open(std::path::Path::new(&checkout))
                 .map_err(super::git_error)?;
-            let commit = repo
-                .resolve(wanted.as_deref().unwrap_or("HEAD"))
+            let (commit, merge_base) = candidate_at(&repo, wanted.as_deref(), base.as_deref())
                 .map_err(super::git_error)?;
-            // No base found (a branch without an upstream): no range is claimed.
-            let merge_base = base
-                .and_then(|base| repo.resolve(&base).ok())
-                .and_then(|base| repo.merge_base(&commit, &base).ok())
-                .filter(|merge_base| merge_base != &commit);
             let stat = merge_base
                 .as_ref()
                 .and_then(|merge_base| repo.diff_stat(merge_base, &commit).ok());
@@ -1046,6 +1024,27 @@ impl SessionManager {
         ))
     }
 
+    /// Where the thread's own candidate is read, and the base its range starts from: its
+    /// effective workspace (an overnight run's worktree while one runs) and the session's
+    /// base branch, or a local checkout's upstream.
+    pub(crate) async fn own_checkout(
+        &self,
+        id: &ConversationId,
+    ) -> Result<(String, Option<String>)> {
+        let conversation = self.core.conversation(id)?;
+        let Some(crate::model::Setup::Session { environment, .. }) = &conversation.setup else {
+            return Err(Error::Invalid("this belongs to a session".into()));
+        };
+        let Some(workspace) = self.effective_workspace(id).await? else {
+            return Err(Error::Invalid("this belongs to a session".into()));
+        };
+        let base = match environment {
+            crate::model::Environment::NewWorktree { base, .. } => base.clone(),
+            crate::model::Environment::LocalCheckout { branch } => format!("{branch}@{{upstream}}"),
+        };
+        Ok((workspace.path.to_string_lossy().into_owned(), Some(base)))
+    }
+
     /// Starts a fresh verifier of `lead`'s phase: its own worktree on a branch from the lead's
     /// last commit, the phase's brief, outline and the lead's report. It asks for one review
     /// by the other vendor (`review_code`, unless the user has reviews off), checks every "done when" for real while it runs,
@@ -1146,6 +1145,21 @@ impl SessionManager {
         task.state == TaskState::Blocked
             && task.blocked_reason.as_deref() == Some(WAITING_FOR_GO_AHEAD)
     }
+}
+
+/// The candidate commit in `repo` (`wanted`, else HEAD) and its merge base with `base`; no
+/// merge base when `base` can't be found (a branch without an upstream): no range is claimed.
+pub(crate) fn candidate_at(
+    repo: &brigadier_git::Repo,
+    wanted: Option<&str>,
+    base: Option<&str>,
+) -> brigadier_git::Result<(brigadier_git::Oid, Option<brigadier_git::Oid>)> {
+    let commit = repo.resolve(wanted.unwrap_or("HEAD"))?;
+    let merge_base = base
+        .and_then(|base| repo.resolve(base).ok())
+        .and_then(|base| repo.merge_base(&commit, &base).ok())
+        .filter(|merge_base| merge_base != &commit);
+    Ok((commit, merge_base))
 }
 
 fn outline_block(lead: &Task, outline: &str) -> String {

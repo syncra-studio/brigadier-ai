@@ -213,6 +213,9 @@ pub struct SessionManager {
     /// The one-shot reviews running now, by id: their conversation, and what ends one when
     /// its conversation closes.
     running_reviews: Mutex<HashMap<String, (ConversationId, tokio_util::sync::CancellationToken)>>,
+    /// The reviews a `review_candidate` call waits on, by session and range: the call's reply
+    /// carries their outcome, so no message of it is delivered (#137).
+    review_replies: Mutex<HashSet<(ConversationId, String, String)>>,
     /// Held while a task is read, changed and recorded (`update_task`), so two writers can't
     /// each write back a copy that lacks the other's change.
     task_writes: tokio::sync::Mutex<()>,
@@ -386,6 +389,7 @@ impl SessionManager {
             background_runs: background_runs::BackgroundRuns::default(),
             previews: preview::Previews::default(),
             running_reviews: Mutex::default(),
+            review_replies: Mutex::default(),
             task_writes: tokio::sync::Mutex::new(()),
             waiting: tokio::sync::Mutex::new(()),
             stopping: Mutex::new(HashSet::new()),

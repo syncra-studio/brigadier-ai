@@ -1028,3 +1028,145 @@ async fn the_review_line_is_150_lines_or_more_than_five_files_of_code() {
     assert_eq!(board.reviews.len(), 1, "{:#?}", board.reviews);
     flow.stop().await;
 }
+
+/// What review_candidate answered, and what the thread heard besides.
+#[derive(Default)]
+struct Candidate {
+    commits: Vec<String>,
+    replies: Vec<String>,
+    inputs: Vec<String>,
+}
+
+/// review_candidate on a 10-line change of the thread's own: the other vendor reviews it, and
+/// its finding comes back in the call's reply, never as a message. Asked again on the same
+/// commit, the review that covers it answers and nothing new starts. After the fix, only the
+/// fix's range is reviewed, as a re-check, and it comes back clean.
+#[tokio::test]
+async fn review_candidate_reviews_a_small_change_reuses_coverage_and_rechecks_only_the_fix() {
+    let log: Arc<Mutex<Candidate>> = Arc::default();
+    let seen = log.clone();
+    let flow = Flow::start(
+        "review-candidate",
+        Options {
+            reviews: Some(script(|turn| async move {
+                let text = std::fs::read_to_string(turn.cwd.join("a.txt"))
+                    .expect("the reviewer's checkout holds the candidate");
+                if text.contains("fixed") {
+                    Reply::text("No findings.")
+                } else {
+                    Reply::text("- [P2] a.txt never says it is fixed — a.txt:1\n  Say so.")
+                }
+            })),
+            ..Options::default()
+        },
+        script(move |turn| {
+            let seen = seen.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("");
+                }
+                seen.lock().unwrap().inputs.push(turn.input.clone());
+                if !turn.input.starts_with("Build the feature") {
+                    return Reply::text("[quiet]");
+                }
+                let one = commit(&turn, "a.txt", &lines("a", 10), "Ten lines");
+                let first = turn.call("review_candidate", json!({})).await;
+                assert!(!first.is_error, "{}", first.text);
+                let again = turn.call("review_candidate", json!({"commit": one})).await;
+                assert!(!again.is_error, "{}", again.text);
+                let two = commit(&turn, "a.txt", "fixed\n", "Say it is fixed");
+                let fix = turn.call("review_candidate", json!({})).await;
+                assert!(!fix.is_error, "{}", fix.text);
+                let mut seen = seen.lock().unwrap();
+                seen.commits.extend([one, two]);
+                seen.replies.extend([first.text, again.text, fix.text]);
+                Reply::text("Built it, reviewed, fixed.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Build the feature.").await;
+    let board = flow.settled().await;
+    let log = std::mem::take(&mut *log.lock().unwrap());
+    // The finding in the first reply, the same review's outcome in the second.
+    assert!(log.replies[0].contains("found 1"), "{}", log.replies[0]);
+    assert!(
+        log.replies[0].contains("a.txt never says it is fixed"),
+        "{}",
+        log.replies[0]
+    );
+    assert!(log.replies[1].contains("found 1"), "{}", log.replies[1]);
+    assert!(
+        log.replies[2].contains("found nothing"),
+        "{}",
+        log.replies[2]
+    );
+    let mut reviews: Vec<_> = board.reviews.values().collect();
+    reviews.sort_by_key(|review| review.number);
+    assert_eq!(reviews.len(), 2, "{reviews:#?}");
+    assert!(matches!(
+        reviews[0].state,
+        ReviewState::Findings { count: 1 }
+    ));
+    assert_eq!(reviews[0].tip, log.commits[0]);
+    // The re-check reads the fix alone.
+    assert_eq!(
+        (reviews[1].base.as_str(), reviews[1].tip.as_str()),
+        (log.commits[0].as_str(), log.commits[1].as_str())
+    );
+    assert_eq!(reviews[1].state, ReviewState::Clean);
+    // Nothing came as a message besides.
+    assert!(
+        !log.inputs.iter().any(|input| input.contains("[review of")),
+        "{:#?}",
+        log.inputs
+    );
+    flow.stop().await;
+}
+
+/// With no other-vendor reviewer, and with reviews off, review_candidate says so as a fact:
+/// the thread decides what to do.
+#[tokio::test]
+async fn review_candidate_says_when_no_reviewer_can_take_it_or_reviews_are_off() {
+    let log: Arc<Mutex<Candidate>> = Arc::default();
+    let seen = log.clone();
+    let flow = Flow::start(
+        "review-candidate-none",
+        Options::default(),
+        script(move |turn| {
+            let seen = seen.clone();
+            async move {
+                if !turn.is_orchestrator()
+                    || !(turn.input.contains("Change one.") || turn.input.contains("Change two."))
+                {
+                    return Reply::text("[quiet]");
+                }
+                commit(&turn, "a.txt", &lines(&turn.input, 3), "Three lines");
+                let reply = turn.call("review_candidate", json!({})).await;
+                assert!(!reply.is_error, "{}", reply.text);
+                seen.lock().unwrap().replies.push(reply.text);
+                Reply::text("Changed it.")
+            }
+        }),
+    )
+    .await;
+    let mut settings = flow.core.settings();
+    settings
+        .disabled_providers
+        .push(brigadier_providers::ProviderKind::Codex);
+    flow.core.update_settings(settings).await.unwrap();
+    flow.say("Change one.").await;
+    flow.settled().await;
+    set_reviews(&flow, false).await;
+    flow.say("Change two.").await;
+    flow.settled().await;
+    let replies = std::mem::take(&mut log.lock().unwrap().replies);
+    assert!(
+        replies[0].contains("No other-vendor review could run"),
+        "{}",
+        replies[0]
+    );
+    assert!(replies[0].contains("yours"), "{}", replies[0]);
+    assert!(replies[1].contains("Reviews are off"), "{}", replies[1]);
+    flow.stop().await;
+}

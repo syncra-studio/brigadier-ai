@@ -547,6 +547,9 @@ impl SessionManager {
                 crate::heap(|| self.check_plan_mode(id)).await?;
                 crate::heap(|| self.verify_task(id, args)).await
             }
+            OrchestratorCall::ReviewCandidate(args) => {
+                crate::heap(|| self.review_candidate(id, args)).await
+            }
             OrchestratorCall::RequestApproval(args) => {
                 crate::heap(|| {
                     self.open_approval(
