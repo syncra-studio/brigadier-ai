@@ -1723,6 +1723,7 @@ impl SessionManager {
         self.tell_merged(id, &base, &new_tip.0).await;
         *conv.merge_told.lock().unwrap() = None;
         drop(landing_lock);
+        let previews = self.stop_merged_previews(id).await;
         // The session's work is merged. Its worktree and branch stay with the session (BUILD-PLAN
         // A3): the branch moves on to the merge, and the next change starts from there.
         // The landed workers kept for their reviews' findings are done with, and the checkout
@@ -1733,7 +1734,7 @@ impl SessionManager {
             .follow_merge(&repo, &branch, &base, session_tip, new_tip.clone())
             .await;
         Ok(format!(
-            "[finished] {}: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{pushed}{running}{moved}{checks}{reviews}{released}{since}",
+            "[finished] {}: `{branch}` ({commits} commit{}) is merged into `{base}` at {}.{pushed}{running}{moved}{checks}{reviews}{released}{previews}{since}",
             if auto {
                 "On its own, as the user's setting has it"
             } else {

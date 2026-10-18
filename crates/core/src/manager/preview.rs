@@ -10,8 +10,8 @@
 //!   owner (see [`super::thread`]).
 //! - It runs in the thread's effective workspace (a folder inside it), and belongs to that
 //!   workspace: when the workspace changes (an overnight run starts or ends) it stops.
-//! - It stops on `stop_preview`, the user's Stop, the merge of the session branch, archive and
-//!   delete (before the `session:<id>` owner's worktree goes) and Brigadier's quit; the launch
+//! - It stops on `stop_preview`, the user's Stop, the merge of the session's work (a thread's
+//!   preview: it showed the work the merge took, #289), archive and delete (before the `session:<id>` owner's worktree goes) and Brigadier's quit; the launch
 //!   sweep ends any a crash left running, and its record reads as stopped.
 //! - Stopping it is SIGTERM to its process group, then, after [`STOP_GRACE`], SIGKILL to it
 //!   and everything it started. The grace is for all of them, not only the leader: one that
@@ -53,6 +53,8 @@ use crate::{Error, Result, now_ms};
 /// How long a stopped preview has to exit after SIGTERM before it is killed.
 /// Why a preview the user stopped ended: their Stop on its chip, or on the conversation.
 pub(crate) const USER_STOP: &str = "stopped by the user";
+/// Why a thread's preview ended at a merge: the work it showed is merged (#289).
+pub(crate) const MERGED_STOP: &str = "the work it showed is merged";
 const STOP_GRACE: Duration = Duration::from_secs(5);
 /// How often a stop looks whether what the leader left has quit.
 const STOP_POLL: Duration = Duration::from_millis(20);
@@ -1715,6 +1717,29 @@ impl SessionManager {
             .collect();
         stop_all(&moved, "the thread's workspace changed").await;
         stop_all(&gone, "its worker's folder was removed").await;
+    }
+
+    /// The session's work merged: the thread's previews showed it, so they stop (#289). A
+    /// worker's runs on with the worker, in its own folder. Returns what the merge's result
+    /// says of them (nothing when none ran).
+    pub(crate) async fn stop_merged_previews(&self, id: &ConversationId) -> String {
+        drop(self.previews.starting.lock().await);
+        let live: Vec<_> = self
+            .previews
+            .of(id)
+            .into_iter()
+            .filter(|live| live.task.is_none())
+            .collect();
+        stop_all(&live, MERGED_STOP).await;
+        let ids: Vec<_> = live.iter().map(|live| live.id.clone()).collect();
+        match ids.as_slice() {
+            [] => String::new(),
+            [one] => format!(" Your preview {one} stopped, as the work it showed is merged."),
+            many => format!(
+                " Your previews {} stopped, as the work they showed is merged.",
+                many.join(", ")
+            ),
+        }
     }
 
     /// A task ends and its folder goes: its worker's previews stop first, and a start of its

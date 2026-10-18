@@ -447,6 +447,13 @@ impl SessionManager {
         )
         .await;
         self.tell_merged(id, &onto_base, &onto.0).await;
+        let previews = self.stop_merged_previews(id).await;
+        if !previews.is_empty()
+            && let Ok(conv) = self.conv(id)
+        {
+            conv.hold_fact(format!("[preview] PR #{} merged.{previews}", pr.number))
+                .await;
+        }
         // GitHub may keep the pull request's branch: a push of the moved branch to it is no
         // fast-forward then. A fact for the thread to judge.
         if moved && let Ok(conv) = self.conv(id) {

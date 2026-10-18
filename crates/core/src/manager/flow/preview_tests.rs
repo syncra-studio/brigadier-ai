@@ -402,10 +402,11 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
     flow.stop().await;
 }
 
-/// The user's Stop and a change of the thread's workspace each stop the running previews; the
-/// merge of the session branch doesn't, as the workspace stays.
+/// The user's Stop, a change of the thread's workspace and the merge of the session's work each
+/// stop the running previews: the merge's because they showed the work it took (#289), though
+/// the workspace stays; its result tells the thread.
 #[tokio::test]
-async fn the_users_stop_and_a_workspace_change_stop_previews_and_a_merge_doesnt() {
+async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
     let replies: Replies = Arc::default();
     let flow = Flow::start("preview-stops", Options::default(), thread(replies.clone())).await;
     let tmp = scratch("stops");
@@ -492,7 +493,6 @@ async fn the_users_stop_and_a_workspace_change_stop_previews_and_a_merge_doesnt(
     super::git(&worktree, &["add", "page.html"]);
     super::git(&worktree, &["commit", "-q", "-m", "Add the page"]);
     flow.say("Please merge.").await;
-    // The merge keeps the workspace (BUILD-PLAN A3), so what runs in it keeps running.
     flow.until("the merge", |board| {
         board
             .orchestrator_steps
@@ -501,8 +501,23 @@ async fn the_users_stop_and_a_workspace_change_stop_previews_and_a_merge_doesnt(
     })
     .await;
     let board = flow.settled().await;
-    assert!(board.previews[&preview.id].state.is_running());
-    assert!(alive(&flow, child), "the preview's child still runs");
+    gone(&flow, preview.pid.unwrap()).await;
+    gone(&flow, child).await;
+    assert_eq!(
+        board.previews[&preview.id].state,
+        PreviewState::Stopped {
+            reason: "the work it showed is merged".into()
+        }
+    );
+    let (tool, reply) = replies.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(tool, "finish_session");
+    assert!(
+        reply.contains(&format!(
+            "Your preview {} stopped, as the work it showed is merged.",
+            preview.id
+        )),
+        "{reply}"
+    );
     flow.stop().await;
 }
 
