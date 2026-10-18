@@ -1,11 +1,9 @@
-import { useAui } from "@assistant-ui/react";
 import {
   Branch,
   BranchAlt,
   Check,
   ChevronDown,
   ChevronRight,
-  Desktop,
   Folder,
   MagnifyingGlassSearch,
   Plus,
@@ -13,7 +11,6 @@ import {
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
-  type FormEvent,
   forwardRef,
   type KeyboardEvent,
   type ReactNode,
@@ -25,23 +22,12 @@ import {
 
 import { type ResolvedDraft, updateDraft } from "@/app/conversation/draftSetup";
 import { resetsAt, windowName } from "@/app/conversation/StatusCard";
-import { NameDialog } from "@/app/NameDialog";
 import { composerPill } from "@/components/assistant-ui/elements/surfaces";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import type { EnvironmentKind, Project, QuotaWindow, RepoInfo } from "@/ipc/generated";
+import type { Project, QuotaWindow } from "@/ipc/generated";
 import { usageTone } from "@/lib/quota";
-import { branchNameProblem } from "@/lib/refname";
 import { cn } from "@/lib/utils";
-import { loadProviders, select, updateProject } from "@/state/actions";
+import { loadProviders, select } from "@/state/actions";
 import { openAddProject } from "@/state/addProject";
 import { useApp } from "@/state/store";
 
@@ -285,11 +271,6 @@ export function ProjectCombobox({
 
 // ----- where the session works -----------------------------------------------------------
 
-const PLACES: Record<EnvironmentKind, { label: string; icon: ReactNode }> = {
-  localCheckout: { label: "Local checkout", icon: <Desktop /> },
-  newWorktree: { label: "New worktree", icon: <BranchAlt /> },
-};
-
 /** A usage window's name: "Weekly", "5h". */
 function usageName(window: QuotaWindow): string {
   return window.windowMinutes === 10080 ? "Weekly" : windowName(window);
@@ -338,43 +319,28 @@ function UsageRemaining({ provider }: { provider: string }) {
   );
 }
 
-/** The "Work in" menu: the local checkout or a new worktree, and the usage left. */
+/**
+ * The "Work in" menu: where the session works, always a new worktree of its own (only migrated
+ * sessions work in the local checkout), and the usage left.
+ */
 export function WorkInMenu({ resolved }: { resolved: ResolvedDraft }) {
   const [open, setOpen] = useState(false);
-  const projectId = resolved.project?.id ?? null;
   const repoName = resolved.repo.info?.name ?? resolved.project?.name ?? "the repository";
-  const place = PLACES[resolved.environment];
-  const tips: Record<EnvironmentKind, string> = {
-    localCheckout: `Work lands on ${resolved.branch ?? "the branch you pick"}`,
-    newWorktree: `Create a copy of ${repoName} to work in parallel.`,
-  };
+  const tip = `Every tab starts clean on a copy of ${repoName} of its own, to work in parallel.`;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <RailPill icon={place.icon} label="Work in" title={tips[resolved.environment]}>
-          {place.label}
+        <RailPill icon={<BranchAlt />} label="Work in" title={tip}>
+          New worktree
         </RailPill>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" className={cn(MENU, "w-2xs")}>
         <p className="text-muted-foreground px-2 py-1 text-sm">Work in</p>
-        {(Object.keys(PLACES) as EnvironmentKind[]).map((kind) => (
-          <button
-            key={kind}
-            type="button"
-            role="menuitemradio"
-            aria-checked={resolved.environment === kind}
-            title={tips[kind]}
-            onClick={() => {
-              updateDraft(projectId, { environment: kind });
-              setOpen(false);
-            }}
-            className={cn(ROW, "hover:bg-foreground/8")}
-          >
-            {PLACES[kind].icon}
-            <span className="flex-1">{PLACES[kind].label}</span>
-            {resolved.environment === kind && <Check />}
-          </button>
-        ))}
+        <p title={tip} className={ROW}>
+          <BranchAlt />
+          <span className="flex-1">New worktree</span>
+          <Check />
+        </p>
         <div className="border-foreground/10 mt-1 border-t pt-1">
           <UsageRemaining provider={resolved.model.provider} />
         </div>
@@ -385,146 +351,17 @@ export function WorkInMenu({ resolved }: { resolved: ResolvedDraft }) {
 
 // ----- branch ----------------------------------------------------------------------------
 
-/** Why `name` can't be a new branch, in git's terms, or `null`. */
-function branchProblem(name: string, info: RepoInfo | null): string | null {
-  if (!name) return "Enter a branch name.";
-  const problem = branchNameProblem(name);
-  if (problem) return problem;
-  if (info?.branches.some((branch) => branch.name === name)) return "A branch with this name already exists.";
-  return null;
-}
-
-/** Words of the message being typed, as a branch name ("fix the login bug" → "fix-the-login-bug"). */
-function slug(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .split("-")
-    .slice(0, 5)
-    .join("-");
-}
-
 /**
- * "Create branch for this session": the create dialog, saying what Brigadier does. The
- * branch is created from the picked one when the session starts; the user's checkout stays
- * on its branch.
- */
-type CreateBranchProps = {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  resolved: ResolvedDraft;
-  from: string;
-};
-
-function CreateBranchDialog(props: CreateBranchProps) {
-  // Remounted per opening, so the name is suggested afresh.
-  return props.open ? <CreateBranchForm {...props} /> : null;
-}
-
-function CreateBranchForm({ open, onOpenChange, resolved, from }: CreateBranchProps) {
-  const aui = useAui();
-  const project = resolved.project;
-  const globalPrefix = useApp((s) => s.settings.branchPrefix);
-  const prefix = project?.prefs.branchPrefix ?? globalPrefix;
-  const [name, setName] = useState(
-    () => resolved.draft.newBranch ?? `${prefix}${slug(aui.composer().getState().text)}`,
-  );
-  const [editingPrefix, setEditingPrefix] = useState(false);
-  const problem = branchProblem(name.trim(), resolved.repo.info);
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (problem) return;
-    updateDraft(project?.id ?? null, { branch: from, newBranch: name.trim() });
-    onOpenChange(false);
-  };
-  return (
-    <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-sm">
-          <form onSubmit={submit} className="grid gap-4">
-            <DialogHeader>
-              <DialogTitle>Create branch for this session</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-1.5">
-              <div className="flex items-center justify-between text-sm">
-                <label htmlFor="new-branch-name">Branch name</label>
-                {project && (
-                  <button
-                    type="button"
-                    onClick={() => setEditingPrefix(true)}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    Set prefix
-                  </button>
-                )}
-              </div>
-              <Input
-                id="new-branch-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                className="font-mono"
-              />
-              {name && problem ? (
-                <p role="alert" className="text-destructive text-xs">
-                  {problem}
-                </p>
-              ) : (
-                <p className="text-muted-foreground text-xs">
-                  Created from {from} when the session starts; work lands on it. Your checkout
-                  stays on its branch.
-                </p>
-              )}
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-                Close
-              </Button>
-              <Button type="submit" disabled={problem !== null}>
-                Create branch
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-      {project && (
-        <NameDialog
-          open={editingPrefix}
-          onOpenChange={setEditingPrefix}
-          title="Branch prefix"
-          description={`Put before the names of ${project.name}'s new branches, instead of the prefix in Settings › Git.`}
-          label="Prefix"
-          initialValue={prefix}
-          confirmLabel="Save"
-          onSubmit={async (value) => {
-            await updateProject(project.id, {
-              name: null,
-              repos: null,
-              prefs: { ...project.prefs, branchPrefix: value },
-            });
-            setName((current) => `${value}${current.startsWith(prefix) ? current.slice(prefix.length) : current}`);
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-/**
- * The branch popover: a search (not focused on open), the branches (default and checked-out
- * first, ✓ on the pick) in a fixed-height list, then "Create branch for this session…". In a
- * new worktree it picks the branch the session starts from.
+ * The base branch popover: a search (not focused on open), the branches (checked-out first, ✓
+ * on the pick) in a fixed-height list. The session's worktree starts from the pick.
  */
 export function BranchPopover({ resolved }: { resolved: ResolvedDraft }) {
   const [open, setOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
   const listId = useId();
   const projectId = resolved.project?.id ?? null;
   const { info, error, loading } = resolved.repo;
-  const local = resolved.environment === "localCheckout";
-  const picked = local ? (resolved.draft.branch ?? info?.currentBranch ?? null) : resolved.base;
-  const shown = local ? (resolved.draft.newBranch ?? picked) : picked;
+  const picked = resolved.base;
   const repoName = info?.name ?? resolved.project?.name ?? "";
 
   const branches = useMemo(() => {
@@ -538,120 +375,80 @@ export function BranchPopover({ resolved }: { resolved: ResolvedDraft }) {
   const needle = query.trim().toLowerCase();
   const matches = branches.filter((name) => name.toLowerCase().includes(needle));
   const pick = (name: string) => {
-    updateDraft(projectId, local ? { branch: name, newBranch: null } : { base: name });
+    updateDraft(projectId, { base: name });
     setOpen(false);
   };
   const { index, setIndex, onKeyDown } = useHighlight(matches.length, needle);
 
   return (
-    <>
-      <Popover
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next);
-          if (!next) setQuery("");
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQuery("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <RailPill
+          icon={<Branch />}
+          label="Base branch"
+          title="What branch should this session start from?"
+        >
+          {picked ?? (loading ? "…" : "Pick a branch")}
+        </RailPill>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        className={cn(MENU, "w-xs")}
+        // Leaves the search unfocused: focus stays on the menu, where ↑/↓ still move.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          (event.currentTarget as HTMLElement | null)?.focus();
+        }}
+        onKeyDown={(event) => {
+          // From the menu itself or its search; a focused row's own Enter stays its own.
+          if (event.target !== event.currentTarget && !(event.target instanceof HTMLInputElement)) return;
+          onKeyDown(event, (at) => matches[at] && pick(matches[at]));
         }}
       >
-        <PopoverTrigger asChild>
-          <RailPill
-            icon={<Branch />}
-            label={local ? "Branch" : "Base branch"}
-            title={local ? "The branch work lands on" : "What branch should this session start from?"}
-          >
-            {shown ?? (loading ? "…" : "Pick a branch")}
-          </RailPill>
-        </PopoverTrigger>
-        <PopoverContent
-          side="top"
-          align="start"
-          className={cn(MENU, "w-xs")}
-          // Leaves the search unfocused: focus stays on the menu, where ↑/↓ still move.
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            (event.currentTarget as HTMLElement | null)?.focus();
-          }}
-          onKeyDown={(event) => {
-            // From the menu itself or its search; a focused row's own Enter stays its own.
-            if (event.target !== event.currentTarget && !(event.target instanceof HTMLInputElement)) return;
-            onKeyDown(event, (at) => matches[at] && pick(matches[at]));
-          }}
-        >
-          <SearchField
-            controls={listId}
-            value={query}
-            onChange={setQuery}
-            placeholder={`Search ${repoName} branches`}
-            autoFocus={false}
-          />
-          <p className="text-muted-foreground px-2 py-1 text-sm">
-            {local ? "Branches" : "Local branches"}
-          </p>
-          <div id={listId} role="listbox" aria-label="Branches" className="h-command-list overflow-y-auto">
-            {error && (
-              <p role="alert" className="text-destructive px-2 py-1 text-xs">
-                Branches unavailable: {error}
-              </p>
-            )}
-            {!info && loading && (
-              <p className="text-muted-foreground px-2 py-1 text-sm">Reading the repository…</p>
-            )}
-            {info && matches.length === 0 && (
-              <p className="text-muted-foreground px-2 py-1 text-sm">No branches found</p>
-            )}
-            {matches.map((name, at) => (
-              <button
-                key={name}
-                type="button"
-                role="option"
-                aria-selected={name === picked}
-                onPointerMove={() => setIndex(at)}
-                onClick={() => pick(name)}
-                className={cn(ROW, at === index && ROW_ACTIVE)}
-              >
-                <Branch className="text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{name}</span>
-                {name === picked && !(local && resolved.draft.newBranch) && <Check />}
-              </button>
-            ))}
-          </div>
-          {local && (
-            <div className="border-foreground/10 mt-1 border-t pt-1">
-              {resolved.draft.newBranch && (
-                <button
-                  type="button"
-                  onClick={() => updateDraft(projectId, { newBranch: null })}
-                  className={cn(ROW, "hover:bg-foreground/8")}
-                >
-                  <X />
-                  <span className="min-w-0 flex-1 truncate">
-                    Don't create {resolved.draft.newBranch}
-                  </span>
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={!picked}
-                onClick={() => {
-                  setOpen(false);
-                  setCreating(true);
-                }}
-                className={cn(ROW, "hover:bg-foreground/10 disabled:opacity-50")}
-              >
-                <Plus />
-                Create branch for this session…
-              </button>
-            </div>
-          )}
-        </PopoverContent>
-      </Popover>
-      {picked && (
-        <CreateBranchDialog
-          open={creating}
-          onOpenChange={setCreating}
-          resolved={resolved}
-          from={picked}
+        <SearchField
+          controls={listId}
+          value={query}
+          onChange={setQuery}
+          placeholder={`Search ${repoName} branches`}
+          autoFocus={false}
         />
-      )}
-    </>
+        <p className="text-muted-foreground px-2 py-1 text-sm">Local branches</p>
+        <div id={listId} role="listbox" aria-label="Branches" className="h-command-list overflow-y-auto">
+          {error && (
+            <p role="alert" className="text-destructive px-2 py-1 text-xs">
+              Branches unavailable: {error}
+            </p>
+          )}
+          {!info && loading && (
+            <p className="text-muted-foreground px-2 py-1 text-sm">Reading the repository…</p>
+          )}
+          {info && matches.length === 0 && (
+            <p className="text-muted-foreground px-2 py-1 text-sm">No branches found</p>
+          )}
+          {matches.map((name, at) => (
+            <button
+              key={name}
+              type="button"
+              role="option"
+              aria-selected={name === picked}
+              onPointerMove={() => setIndex(at)}
+              onClick={() => pick(name)}
+              className={cn(ROW, at === index && ROW_ACTIVE)}
+            >
+              <Branch className="text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate">{name}</span>
+              {name === picked && <Check />}
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

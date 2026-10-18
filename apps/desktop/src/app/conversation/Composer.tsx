@@ -776,7 +776,7 @@ function DictationBar({ owner }: { owner: string }) {
 function ComposerHint({ target }: { target: ComposerTarget }) {
   const { conversation, resolved } = target;
   if (conversation) return null;
-  const { project, problem, repo, environment, permission } = resolved;
+  const { project, problem, repo, permission } = resolved;
   if (problem) {
     return (
       <p className="text-muted-foreground flex items-center gap-2 px-2 text-xs">
@@ -790,7 +790,7 @@ function ComposerHint({ target }: { target: ComposerTarget }) {
     );
   }
   // A new worktree starts from its base's last commit: what isn't committed stays out of it.
-  const dirty = repo.info?.dirty && (environment === "localCheckout" || environment === "newWorktree");
+  const dirty = repo.info?.dirty;
   if (resolved.kind !== "session" || (permission !== "fullAccess" && !dirty)) return null;
   return (
     <p className="text-muted-foreground px-2 text-xs">
@@ -800,9 +800,7 @@ function ComposerHint({ target }: { target: ComposerTarget }) {
         </span>
       )}
       {dirty &&
-        (environment === "localCheckout"
-          ? "Your checkout has uncommitted changes; Brigadier will ask whether workers should see them."
-          : "Every tab starts clean on a worktree of its own: your checkout's uncommitted changes stay in your checkout.")}
+        "Every tab starts clean on a worktree of its own: your checkout's uncommitted changes stay in your checkout."}
     </p>
   );
 }

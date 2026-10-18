@@ -3,8 +3,6 @@ import { useShallow } from "zustand/react/shallow";
 
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import type {
-  EnvironmentKind,
-  EnvironmentRequest,
   ModelChoice,
   PermissionLevel,
   Project,
@@ -87,10 +85,7 @@ export type ResolvedDraft = {
   repoPath: string | null;
   repo: RepoState & { reload: () => void };
   draft: DraftSetup;
-  environment: EnvironmentKind;
-  /** Local checkout: the branch commits land on (after "New branch…", the new one). */
-  branch: string | null;
-  /** New worktree: the base branch. */
+  /** The base branch: the session works on a new worktree of it, as every new tab does. */
   base: string | null;
   permission: PermissionLevel;
   model: ModelChoice;
@@ -103,11 +98,6 @@ export type ResolvedDraft = {
   /** No model is available: every agent is off or all its models are hidden on Providers. */
   noModel: boolean;
 };
-
-/** Where a draft session will work: the composer's choice, then the project's last one. */
-export function draftEnvironment(draft: DraftSetup, project: Project | null): EnvironmentKind {
-  return draft.environment ?? project?.prefs.environment ?? "localCheckout";
-}
 
 /** Resolves a draft's setup: the composer's choices, then the project's, then the defaults. */
 export function useResolvedDraft(selection: Selection): ResolvedDraft {
@@ -126,11 +116,7 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
   const model = resolveModel(draft.model, kind, project, settings, groups);
   const defaultModel = resolveModel(null, kind, project, settings, groups);
   const permission = resolvePermission(draft.permission, settings);
-  const environment = draftEnvironment(draft, project);
-  const current = repo.info?.currentBranch ?? null;
-  const picked = draft.branch ?? current;
-  const branch = draft.newBranch ?? picked;
-  const base = draft.base ?? current;
+  const base = draft.base ?? repo.info?.currentBranch ?? null;
 
   let problem: string | null = null;
   let target: DraftTarget | null = null;
@@ -140,32 +126,20 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
     target = { kind: "chat", setup: { type: "chat", model } };
   } else if (!project || !repoPath) {
     problem = "This project has no repository yet. Add one in its settings.";
+  } else if (!base) {
+    problem = repo.loading ? "Reading the repository…" : "Pick the base branch.";
   } else {
-    let request: EnvironmentRequest | null = null;
-    if (environment === "localCheckout") {
-      if (!picked) {
-        problem = repo.loading ? "Reading the repository…" : "Pick the branch commits land on.";
-      } else {
-        request = draft.newBranch
-          ? { type: "localCheckout", branch: draft.newBranch, createFrom: picked }
-          : { type: "localCheckout", branch: picked, createFrom: null };
-      }
-    } else if (!base) {
-      problem = repo.loading ? "Reading the repository…" : "Pick the base branch.";
-    } else {
-      request = { type: "newWorktree", base, branch: draft.sessionBranch.trim() || null };
-    }
-    if (request) {
-      const setup: SetupRequest = {
-        type: "session",
-        repo: repoPath,
-        environment: request,
-        permission,
-        orchestrator: model,
-        planMode: draft.planMode,
-      };
-      target = { kind: "session", projectId: project.id, setup };
-    }
+    // A new workspace's first tab gets its own worktree too; only migrated sessions keep
+    // working in the local checkout.
+    const setup: SetupRequest = {
+      type: "session",
+      repo: repoPath,
+      environment: { type: "newWorktree", base, branch: draft.sessionBranch.trim() || null },
+      permission,
+      orchestrator: model,
+      planMode: draft.planMode,
+    };
+    target = { kind: "session", projectId: project.id, setup };
   }
 
   return {
@@ -174,8 +148,6 @@ export function useResolvedDraft(selection: Selection): ResolvedDraft {
     repoPath,
     repo,
     draft,
-    environment,
-    branch,
     base,
     permission,
     model,

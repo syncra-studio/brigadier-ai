@@ -7,7 +7,6 @@ import { createRoot } from "react-dom/client";
 
 import { type ComposerTarget, ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { ConversationToolbar } from "@/app/conversation/ConversationToolbar";
-import { updateDraft } from "@/app/conversation/draftSetup";
 import { MentionMemory } from "@/app/conversation/Mentions";
 import { NewTabTools } from "@/app/conversation/NewTabTools";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
@@ -272,16 +271,9 @@ function Fixture() {
     at(8200, () => {
       seen.draftSource = buttons('[data-slot="source-panel"]'); seen.draftCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       seen.draftNote = !!document.querySelector('[data-slot="own-copy-note"]');
-      const box = document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')!;
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, "Unsent message");
-      box.dispatchEvent(new Event("input", { bubbles: true }));
       click("Right sidebar");
     });
     at(8400, () => { seen.closedSource = pane(); click("Right sidebar"); });
-    at(8600, () => {
-      seen.keptMessage = document.querySelector<HTMLTextAreaElement>('[aria-label="Commit message"]')?.value;
-      updateDraft("project", { environment: "newWorktree" });
-    });
     at(8900, () => {
       seen.worktreeSource = buttons('[data-slot="source-panel"]'); seen.worktreeCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       seen.worktreeNote = document.querySelector('[data-slot="own-copy-note"]')?.textContent;

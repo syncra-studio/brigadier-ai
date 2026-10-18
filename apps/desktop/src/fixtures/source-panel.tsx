@@ -113,6 +113,7 @@ const closeMenus = () => document.activeElement?.dispatchEvent(new KeyboardEvent
 
 function Fixture() {
   const [result, setResult] = useState("");
+  const [shown, setShown] = useState(true);
   useEffect(() => {
     const seen: Record<string, unknown> = {};
     void (async () => {
@@ -186,13 +187,22 @@ function Fixture() {
       emitWorkspaceChanged({ type: "conversation", conversationId: id });
       await until(() => text(commitButton()) === "Commit");
       seen.afterAbort = box().value;
+
+      // Closing the panel keeps the unsent commit message for when it opens again.
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), "Unsent message");
+      box().dispatchEvent(new Event("input", { bubbles: true }));
+      setShown(false);
+      await until(() => !document.querySelector('[aria-label="Commit message"]'));
+      setShown(true);
+      await until(() => !!document.querySelector('[aria-label="Commit message"]'));
+      seen.keptMessage = box().value;
       setResult(JSON.stringify(seen));
     })().catch((error: unknown) => setResult(JSON.stringify({ error: String(error), seen, body: document.body.textContent?.slice(0, 2000) })));
   }, []);
   return (
     <TooltipProvider>
       <div className="bg-background text-foreground flex h-screen w-80 flex-col">
-        <SourcePanel target={{ type: "conversation", conversationId: id }} />
+        {shown && <SourcePanel target={{ type: "conversation", conversationId: id }} />}
         {result && <pre id="source-panel-result">{result}</pre>}
       </div>
     </TooltipProvider>
