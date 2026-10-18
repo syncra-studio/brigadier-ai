@@ -1763,11 +1763,121 @@ pub enum TabChatCall {
     WriteFile(WriteTabFile),
 }
 
+/// What an action in a Browser tab does that asks the user first (Q67).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserAsks {
+    /// Pays or commits money (buy, order, subscribe, donate, transfer).
+    Pay,
+    /// Sends something in the user's name to someone else (a message, email, post, comment,
+    /// review, invitation, form).
+    Send,
+    /// Signs in as the user.
+    SignIn,
+}
+
+/// `browser_open`: a new Browser tab in the session, showing `url`.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserOpen {
+    /// A web address (http or https).
+    pub url: String,
+}
+
+/// `browser_read`, `browser_screenshot`, `browser_close`: one of your tabs.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserTabRef {
+    /// The tab, as browser_open gave it ("browser:agent-…").
+    pub tab: String,
+}
+
+/// Where `browser_navigate` goes from the page it is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserStep {
+    Back,
+    Forward,
+    Reload,
+}
+
+/// `browser_navigate`: the tab goes to `url`, or back, forward or reloads.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserNavigate {
+    pub tab: String,
+    /// A web address (http or https); leave out with `go`.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Back, forward or reload instead of an address.
+    #[serde(default)]
+    pub go: Option<BrowserStep>,
+}
+
+/// `browser_click`: clicks a control of the page by its ref.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserClick {
+    pub tab: String,
+    /// The control's ref from the last read ("e12").
+    pub target: String,
+    /// Set when the click pays, sends something in the user's name or signs in: the user is
+    /// asked first.
+    #[serde(default)]
+    pub asks: Option<BrowserAsks>,
+}
+
+/// `browser_type`: replaces a field's text, and presses Enter with `submit`.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserType {
+    pub tab: String,
+    /// The field's ref from the last read ("e7"); a select takes an option's text.
+    pub target: String,
+    pub text: String,
+    /// Press Enter after typing (sends a search, a form or a chat message).
+    #[serde(default)]
+    pub submit: bool,
+    /// Set when typing or submitting pays, sends something in the user's name or signs in:
+    /// the user is asked first.
+    #[serde(default)]
+    pub asks: Option<BrowserAsks>,
+}
+
+/// A browser tool call, from the thread or a worker.
+#[derive(Debug, Clone)]
+pub enum BrowserToolCall {
+    Open(BrowserOpen),
+    Navigate(BrowserNavigate),
+    Read(BrowserTabRef),
+    Click(BrowserClick),
+    Type(BrowserType),
+    Screenshot(BrowserTabRef),
+    Close(BrowserTabRef),
+}
+
+impl BrowserToolCall {
+    /// The MCP tool name.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Open(_) => "browser_open",
+            Self::Navigate(_) => "browser_navigate",
+            Self::Read(_) => "browser_read",
+            Self::Click(_) => "browser_click",
+            Self::Type(_) => "browser_type",
+            Self::Screenshot(_) => "browser_screenshot",
+            Self::Close(_) => "browser_close",
+        }
+    }
+}
+
 /// A tool call, for any role.
 #[derive(Debug, Clone)]
 pub enum ToolCall {
     Orchestrator(OrchestratorCall),
     Worker(WorkerCall),
+    /// The browser tools, the thread's and its workers' alike.
+    Browser(BrowserToolCall),
     Job(JobCall),
     Chat(ChatCall),
     TabChat(TabChatCall),
@@ -1820,6 +1930,12 @@ impl ToolReply {
 pub trait ToolHost: Send + Sync {
     /// The role of a live grant; `None` for an unknown or revoked grant.
     fn role(&self, grant: &str) -> Option<Role>;
+
+    /// Whether the thread and its workers get the browser tools: the built-in browser is on and
+    /// agents can use it on this platform. Asked when a connection opens.
+    fn browser_tools(&self) -> bool {
+        false
+    }
 
     /// Runs a tool call. The host re-checks the grant and that its role may make this call.
     fn call(&self, grant: &str, call: ToolCall) -> BoxFuture<'_, ToolReply>;

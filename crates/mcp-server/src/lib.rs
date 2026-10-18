@@ -172,11 +172,14 @@ impl ServerHandler for BrigadierServer {
         // Protocol 2026-07-28 requires both cache fields: Claude Code rejects the whole list
         // without them, and the session starts with no Brigadier tools. A role's tools never
         // change while its grant lives, and they are the grant's own.
-        Ok(
-            ListToolsResult::with_all_items(tools_for(self.role()?).to_vec())
-                .with_ttl_ms(TOOLS_TTL_MS)
-                .with_cache_scope(CacheScope::Private),
-        )
+        let role = self.role()?;
+        let mut tools = tools_for(role).to_vec();
+        if catalog::has_browser_tools(role) && self.host.browser_tools() {
+            tools.extend_from_slice(catalog::browser_tools());
+        }
+        Ok(ListToolsResult::with_all_items(tools)
+            .with_ttl_ms(TOOLS_TTL_MS)
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn call_tool(

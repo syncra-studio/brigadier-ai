@@ -2,9 +2,6 @@
 //! live feed, the app runs it on the tab's page and answers it with its id. A call nobody
 //! answers in time, or made with no window open, fails in plain words; a call dropped (the
 //! agent stopped, its request ended) is forgotten, and a late answer to it goes nowhere.
-// No tool makes calls yet: they are wired once the takeover and the guards are in.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,8 +9,14 @@ use std::time::Duration;
 
 use tokio::sync::{broadcast, oneshot};
 
+use base64::Engine as _;
+
 use super::SessionManager;
-use crate::browser::{BrowserCall, BrowserOp, BrowserResult};
+use crate::browser::{
+    BrowserCall, BrowserGo, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult,
+    BrowserSensitive,
+};
+use crate::tools::{BrowserAsks, BrowserStep, BrowserToolCall, ToolReply};
 use crate::{ConversationId, TaskId};
 
 /// How long the app may take over a call: a page load it waits for, at most.
@@ -111,6 +114,98 @@ impl BrowserHub {
     }
 }
 
+/// The op a tool call asks of the app; a call that says too little or too much is refused.
+fn browser_op(call: BrowserToolCall) -> Result<BrowserOp, String> {
+    Ok(match call {
+        BrowserToolCall::Open(open) => BrowserOp::Open {
+            url: web_address(&open.url)?,
+        },
+        BrowserToolCall::Navigate(navigate) => match (navigate.url, navigate.go) {
+            (Some(url), None) => BrowserOp::Navigate {
+                tab: navigate.tab,
+                url: web_address(&url)?,
+            },
+            (None, Some(step)) => BrowserOp::Go {
+                tab: navigate.tab,
+                action: match step {
+                    BrowserStep::Back => BrowserGo::Back,
+                    BrowserStep::Forward => BrowserGo::Forward,
+                    BrowserStep::Reload => BrowserGo::Reload,
+                },
+            },
+            _ => return Err("browser_navigate takes either `url` or `go`, one of them.".to_owned()),
+        },
+        BrowserToolCall::Read(tab) => BrowserOp::Read { tab: tab.tab },
+        BrowserToolCall::Click(click) => BrowserOp::Click {
+            tab: click.tab,
+            target: click.target,
+            guard: declared(click.asks),
+        },
+        BrowserToolCall::Type(typing) => BrowserOp::Type {
+            tab: typing.tab,
+            target: typing.target,
+            text: typing.text,
+            submit: typing.submit,
+            guard: declared(typing.asks),
+        },
+        BrowserToolCall::Screenshot(tab) => BrowserOp::Screenshot { tab: tab.tab },
+        BrowserToolCall::Close(tab) => BrowserOp::Close { tab: tab.tab },
+    })
+}
+
+/// `url` when it is a web address the tab may load.
+fn web_address(url: &str) -> Result<String, String> {
+    let url = url.trim();
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        Ok(url.to_owned())
+    } else {
+        Err(format!(
+            "{url} isn't a web address: the browser tools open http and https pages only."
+        ))
+    }
+}
+
+fn declared(asks: Option<BrowserAsks>) -> BrowserGuard {
+    BrowserGuard {
+        declared: asks.map(|asks| match asks {
+            BrowserAsks::Pay => BrowserSensitive::Pay,
+            BrowserAsks::Send => BrowserSensitive::Send,
+            BrowserAsks::SignIn => BrowserSensitive::SignIn,
+        }),
+        approved: None,
+    }
+}
+
+/// A read page as the agent gets it.
+fn page_text(tab: &str, page: &BrowserPageRead) -> String {
+    let title = if page.title.trim().is_empty() {
+        "(no title)"
+    } else {
+        page.title.trim()
+    };
+    let loading = if page.loading { " (loading)" } else { "" };
+    format!("{tab} · {title} — {}{loading}\n\n{}", page.url, page.text)
+}
+
+/// What an action that asks first does, in plain words.
+pub(crate) fn needs(sensitive: BrowserSensitive, what: &str) -> String {
+    let doing = match sensitive {
+        BrowserSensitive::Pay => "Paying",
+        BrowserSensitive::Send => "Sending in the user's name",
+        BrowserSensitive::SignIn => "Signing in",
+        BrowserSensitive::Credentials => "Entering a password",
+        BrowserSensitive::Card => "Entering a payment card",
+        BrowserSensitive::OneTimeCode => "Entering a one-time code",
+    };
+    let what = what.trim();
+    if what.is_empty() {
+        doing.to_owned()
+    } else {
+        format!("{doing} (\"{what}\")")
+    }
+}
+
 fn failed(message: &str) -> BrowserResult {
     BrowserResult::Failed {
         message: message.to_owned(),
@@ -118,6 +213,106 @@ fn failed(message: &str) -> BrowserResult {
 }
 
 impl SessionManager {
+    /// Whether the thread and its workers get the browser tools: the built-in browser is on,
+    /// and agents can drive it on this platform (macOS for now).
+    pub(crate) fn browser_tools_on(&self) -> bool {
+        // Kept to development runs until the takeover and the guards are in.
+        cfg!(target_os = "macos")
+            && std::env::var_os("BRIGADIER_BROWSER_TOOL").is_some()
+            && self.core.settings().browser_enabled
+    }
+
+    /// A browser tool's call from the thread (`task_id` none) or one of its workers.
+    pub(crate) async fn browser_tool(
+        &self,
+        conversation_id: ConversationId,
+        task_id: Option<TaskId>,
+        call: BrowserToolCall,
+    ) -> ToolReply {
+        if !self.core.settings().browser_enabled {
+            return ToolReply::error(
+                "The built-in browser is off (Settings › Browser), so its tabs can't be used.",
+            );
+        }
+        let op = match browser_op(call) {
+            Ok(op) => op,
+            Err(message) => return ToolReply::error(message),
+        };
+        let label = self.browser_label(&conversation_id, task_id.as_ref()).await;
+        let result = self
+            .browser
+            .call(&conversation_id, task_id.as_ref(), &label, op, CALL_TIMEOUT)
+            .await;
+        self.browser_reply(&conversation_id, result)
+    }
+
+    /// The agent as the user knows it: its task's or thread's title.
+    async fn browser_label(
+        &self,
+        conversation_id: &ConversationId,
+        task: Option<&TaskId>,
+    ) -> String {
+        if let Some(task) = task {
+            return self
+                .task_by_id(conversation_id, task)
+                .await
+                .map(|task| task.title)
+                .unwrap_or_else(|_| "A worker".to_owned());
+        }
+        match self.core.conversation(conversation_id) {
+            Ok(found) if !found.title.trim().is_empty() => found.title,
+            _ => "The thread".to_owned(),
+        }
+    }
+
+    /// What the agent hears of the app's answer.
+    fn browser_reply(&self, conversation_id: &ConversationId, result: BrowserResult) -> ToolReply {
+        match result {
+            BrowserResult::Page { tab, page } => ToolReply::ok(page_text(&tab, &page)),
+            BrowserResult::Shot { tab, url, png } => {
+                let bytes = match base64::engine::general_purpose::STANDARD.decode(png.as_bytes()) {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        return ToolReply::error(
+                            "The browser's picture of the page was unreadable.",
+                        );
+                    }
+                };
+                let dir = self.owned_dir("orch", &conversation_id.0).join("browser");
+                let path = dir.join(format!(
+                    "shot-{}-{}.png",
+                    crate::now_ms(),
+                    self.browser.next.fetch_add(1, Ordering::Relaxed)
+                ));
+                let saved =
+                    std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, &bytes));
+                let text = match saved {
+                    Ok(()) => format!(
+                        "{tab} — {url}\nSaved as {} (attach_proof takes this path).",
+                        path.display()
+                    ),
+                    Err(err) => format!("{tab} — {url}\nThe picture couldn't be saved: {err}."),
+                };
+                ToolReply::ok(text).with_image("image/png", bytes)
+            }
+            BrowserResult::Closed { tab } => ToolReply::ok(format!("Closed {tab}.")),
+            BrowserResult::Paused { tab } => ToolReply::error(format!(
+                "Still paused: the user is using {tab}. Nothing was done; try again once they press Continue."
+            )),
+            BrowserResult::NeedsApproval {
+                tab,
+                url,
+                sensitive,
+                what,
+                ..
+            } => ToolReply::error(format!(
+                "{} on {tab} ({url}) needs the user's yes first, and they can't be asked from here, so nothing was done.",
+                needs(sensitive, &what)
+            )),
+            BrowserResult::Failed { message } => ToolReply::error(message),
+        }
+    }
+
     /// The agents' browser calls, for an app window to run.
     pub fn subscribe_browser(&self) -> broadcast::Receiver<BrowserCall> {
         self.browser.subscribe()

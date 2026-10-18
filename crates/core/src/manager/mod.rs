@@ -911,6 +911,10 @@ impl ToolHost for SessionManager {
         self.grants.resolve(grant)
     }
 
+    fn browser_tools(&self) -> bool {
+        self.browser_tools_on()
+    }
+
     fn call(&self, grant: &str, call: ToolCall) -> BoxFuture<'_, ToolReply> {
         let role = self.grants.resolve(grant);
         let manager = self.arc();
@@ -933,6 +937,24 @@ impl ToolHost for SessionManager {
                     },
                     ToolCall::Worker(call),
                 ) => manager.worker_call(conversation_id, task_id, call).await,
+                (
+                    Role::Orchestrator {
+                        conversation_id, ..
+                    },
+                    ToolCall::Browser(call),
+                ) => manager.browser_tool(conversation_id, None, call).await,
+                (
+                    Role::Worker {
+                        conversation_id,
+                        task_id,
+                        ..
+                    },
+                    ToolCall::Browser(call),
+                ) => {
+                    manager
+                        .browser_tool(conversation_id, Some(task_id), call)
+                        .await
+                }
                 (Role::BrainJob { project_id, job_id }, ToolCall::Job(call)) => {
                     manager.job_call(project_id, job_id, call).await
                 }

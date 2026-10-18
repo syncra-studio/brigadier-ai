@@ -4,7 +4,8 @@
 use std::sync::{Arc, OnceLock};
 
 use brigadier_core::tools::{
-    AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, AttachProof, ChatCall, CiPush,
+    AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, AttachProof, BrowserClick,
+    BrowserNavigate, BrowserOpen, BrowserTabRef, BrowserToolCall, BrowserType, ChatCall, CiPush,
     CodeRefs, CodeSearch, DelegateTask, EndRun, FinishSession, JobCall, LandPhase, ListSessions,
     MessageSession, MessageWorker, NoteForUser, OfferFeedback, OrchestratorCall, PlanPhases,
     PreviewLog, ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession,
@@ -490,6 +491,109 @@ put long material (full findings, logs, command output, notes) in \
 files in your outputs folder, listed under `artifacts`. List every file you changed, created or \
 deleted under `changes`: new files that are not listed are not kept.";
 
+const BROWSER_OPEN: &str = "Open a web page in a new tab of Brigadier's built-in browser, \
+in this session: a normal Browser tab with the user's own sign-ins and history, opened behind the \
+tab they are on. They can switch to it and watch. Use these browser tools for anything on a web \
+page (a site, a web app, a preview's URL): reading, clicking, filling forms, checking a change, \
+a screenshot. They read and act on the page directly, much faster than computer use, which is \
+for everything outside the browser. A long browsing job (many pages, a shop's checkout, \
+research across sites) goes to a worker, which gets the same tools. Answers with the tab and \
+the page as text: each control as `[ref] role \"name\"`, which browser_click and browser_type \
+take. When the user clicks or types in your tab, it pauses: your calls on it wait until they \
+press Continue. Paying, entering a password, card or code, and sending anything in the \
+user's name always ask the user first, whoever asked you. Close your tabs when done unless \
+the user wants them.";
+
+const BROWSER_NAVIGATE: &str = "Go to `url` in one of your Browser tabs, or `go` back, \
+forward or reload. Answers with the page as text, once it has loaded (20 seconds at most; \
+`loading` says it is still going).";
+
+const BROWSER_READ: &str = "Read one of your Browser tabs: its address, title and the page's \
+text, with each control as `[ref] role \"name\"` (and its value, state or link). Refs hold \
+until the page loads again; read again after anything changes it.";
+
+const BROWSER_CLICK: &str = "Click a control in one of your Browser tabs by its ref from the \
+last read. Answers with the page as text afterwards. Set `asks` when the click pays or commits \
+money (\"pay\"), sends anything in the user's name to someone (\"send\": a message, email, post, \
+comment, review, invitation or form), or signs in (\"sign_in\"): the user is asked first and \
+nothing happens until they say yes. Clicking to submit a filled password, card or one-time \
+code asks too. On a yes, make the same call again; it holds only on that page.";
+
+const BROWSER_TYPE: &str = "Type into a field of one of your Browser tabs by its ref from \
+the last read: the text replaces the field's, and `submit` presses Enter afterwards (a search, \
+a form, a chat message). A select takes an option's text. Answers with the page as text \
+afterwards. Set `asks` as for browser_click when typing or submitting pays, sends something in \
+the user's name (\"send\": Enter in a chat or a mail field) or signs in. A password, card or \
+one-time-code field always asks first; give the password with `submit` so the user is asked \
+once. On a yes, make the same call again; it holds only on that page.";
+
+const BROWSER_SCREENSHOT: &str = "A picture of one of your Browser tabs' page as it shows, \
+returned to you and saved as a PNG whose path the answer gives: attach_proof takes it (the UI \
+proof of a change, on a preview's page).";
+
+const BROWSER_CLOSE: &str = "Close one of your Browser tabs.";
+
+/// The browser tools (Q74): the thread's and its workers' alike, while the host says they may
+/// use the built-in browser.
+pub fn browser_tools() -> &'static [Tool] {
+    static BROWSER: OnceLock<Vec<Tool>> = OnceLock::new();
+    BROWSER.get_or_init(|| {
+        vec![
+            tool("browser_open", BROWSER_OPEN, input_schema::<BrowserOpen>()),
+            tool(
+                "browser_navigate",
+                BROWSER_NAVIGATE,
+                input_schema::<BrowserNavigate>(),
+            ),
+            tool(
+                "browser_read",
+                BROWSER_READ,
+                input_schema::<BrowserTabRef>(),
+            ),
+            tool(
+                "browser_click",
+                BROWSER_CLICK,
+                input_schema::<BrowserClick>(),
+            ),
+            tool("browser_type", BROWSER_TYPE, input_schema::<BrowserType>()),
+            tool(
+                "browser_screenshot",
+                BROWSER_SCREENSHOT,
+                input_schema::<BrowserTabRef>(),
+            ),
+            tool(
+                "browser_close",
+                BROWSER_CLOSE,
+                input_schema::<BrowserTabRef>(),
+            ),
+        ]
+    })
+}
+
+/// Whether `role` gets the browser tools while the browser may be used: the thread (and its
+/// note fork, which lists what the thread does) and its workers.
+pub fn has_browser_tools(role: &Role) -> bool {
+    matches!(
+        role,
+        Role::Orchestrator { .. } | Role::NoteFork { .. } | Role::Worker { .. }
+    )
+}
+
+/// A browser tool's call, or `None` for any other tool.
+fn browser_call(name: &str, arguments: &Value) -> Option<Result<BrowserToolCall, ParseError>> {
+    let arguments = arguments.clone();
+    Some(match name {
+        "browser_open" => args(name, arguments).map(BrowserToolCall::Open),
+        "browser_navigate" => args(name, arguments).map(BrowserToolCall::Navigate),
+        "browser_read" => args(name, arguments).map(BrowserToolCall::Read),
+        "browser_click" => args(name, arguments).map(BrowserToolCall::Click),
+        "browser_type" => args(name, arguments).map(BrowserToolCall::Type),
+        "browser_screenshot" => args(name, arguments).map(BrowserToolCall::Screenshot),
+        "browser_close" => args(name, arguments).map(BrowserToolCall::Close),
+        _ => return None,
+    })
+}
+
 /// The tools `role` may call, in a stable order. The gate role gets none, and a worker that
 /// checks a change or plan no `ask_thread`.
 pub fn tools_for(role: &Role) -> &'static [Tool] {
@@ -934,6 +1038,11 @@ pub fn parse_call(
     arguments.retain(|_, value| !value.is_null());
     let arguments = Value::Object(arguments);
     let unknown = || ParseError::UnknownTool(name.to_owned());
+    if has_browser_tools(role)
+        && let Some(call) = browser_call(name, &arguments)
+    {
+        return call.map(ToolCall::Browser);
+    }
     match role {
         Role::Orchestrator { run, .. } | Role::NoteFork { run, .. } => {
             let call = match name {
@@ -1486,11 +1595,11 @@ mod tests {
         }
     }
 
-    /// Brigadier's built-in browser is the user's alone: no tool opens, reads or drives it, so
-    /// turning it off in Settings has no tool to take away. A tool that ever does must be
-    /// gated on the setting first.
+    /// The built-in browser's tools are only in `browser_tools()`, which the server adds while
+    /// the host says the browser may be used (the setting is on): no other list opens, reads or
+    /// drives it, so turning it off has nothing more to take away.
     #[test]
-    fn no_tool_reaches_the_built_in_browser() {
+    fn only_the_browser_tools_reach_the_built_in_browser() {
         let lists = [
             orchestrator_tools(),
             worker_tools(),
@@ -1514,6 +1623,63 @@ mod tests {
                 assert!(!text.contains(phrase), "{}: {phrase}", tool.name);
             }
         }
+        let names: Vec<_> = browser_tools()
+            .iter()
+            .map(|tool| tool.name.as_ref())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "browser_open",
+                "browser_navigate",
+                "browser_read",
+                "browser_click",
+                "browser_type",
+                "browser_screenshot",
+                "browser_close"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_thread_and_its_workers_make_browser_calls_and_no_one_else() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        let chat = Role::Chat {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+        };
+        let open = serde_json::json!({ "url": "https://example.com" });
+        for role in [&thread, &worker(false), &worker(true)] {
+            assert!(has_browser_tools(role));
+            assert!(matches!(
+                parse_call(role, "browser_open", open.as_object().cloned()),
+                Ok(ToolCall::Browser(BrowserToolCall::Open(BrowserOpen { url }))) if url == "https://example.com"
+            ));
+        }
+        let click = serde_json::json!({ "tab": "browser:agent-1", "target": "e3", "asks": "pay" });
+        assert!(matches!(
+            parse_call(&worker(false), "browser_click", click.as_object().cloned()),
+            Ok(ToolCall::Browser(BrowserToolCall::Click(BrowserClick {
+                asks: Some(brigadier_core::tools::BrowserAsks::Pay),
+                ..
+            })))
+        ));
+        let typing = serde_json::json!({ "tab": "browser:agent-1", "target": "e3", "text": "hi", "submit": true, "asks": "send" });
+        assert!(matches!(
+            parse_call(&thread, "browser_type", typing.as_object().cloned()),
+            Ok(ToolCall::Browser(BrowserToolCall::Type(BrowserType {
+                submit: true,
+                asks: Some(brigadier_core::tools::BrowserAsks::Send),
+                ..
+            })))
+        ));
+        assert!(!has_browser_tools(&chat));
+        assert!(matches!(
+            parse_call(&chat, "browser_open", open.as_object().cloned()),
+            Err(ParseError::UnknownTool(_))
+        ));
     }
 
     #[test]

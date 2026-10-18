@@ -16,6 +16,7 @@ brigadier-review.workspace = true
 brigadier-router.workspace = true
 brigadier-sandbox.workspace = true
 brigadier-store.workspace = true
+base64.workspace = true
 blake3.workspace = true
 globset = "0.4.20"
 ignore = "0.4.33"

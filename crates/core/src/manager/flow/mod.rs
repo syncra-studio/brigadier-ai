@@ -332,6 +332,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
     fn arg<T: serde::de::DeserializeOwned>(name: &str, args: Value) -> T {
         serde_json::from_value(args).unwrap_or_else(|err| panic!("{name} arguments: {err}"))
     }
+    use crate::tools::BrowserToolCall as B;
     use OrchestratorCall as O;
     use WorkerCall as W;
     match name {
@@ -393,6 +394,13 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "wait_for_replies" => ToolCall::Orchestrator(O::WaitForReplies(arg(name, args))),
         "read_session" => ToolCall::Orchestrator(O::ReadSession(arg(name, args))),
         "settle_wait" => ToolCall::Orchestrator(O::SettleWait(arg(name, args))),
+        "browser_open" => ToolCall::Browser(B::Open(arg(name, args))),
+        "browser_navigate" => ToolCall::Browser(B::Navigate(arg(name, args))),
+        "browser_read" => ToolCall::Browser(B::Read(arg(name, args))),
+        "browser_click" => ToolCall::Browser(B::Click(arg(name, args))),
+        "browser_type" => ToolCall::Browser(B::Type(arg(name, args))),
+        "browser_screenshot" => ToolCall::Browser(B::Screenshot(arg(name, args))),
+        "browser_close" => ToolCall::Browser(B::Close(arg(name, args))),
         other => panic!("the flow harness doesn't know the tool {other}"),
     }
 }
@@ -1953,6 +1961,8 @@ mod brain_first_tests;
 mod branch_prefix_tests;
 #[cfg(test)]
 mod browser_switch_tests;
+#[cfg(test)]
+mod browser_tool_tests;
 #[cfg(test)]
 mod card_tests;
 #[cfg(test)]
