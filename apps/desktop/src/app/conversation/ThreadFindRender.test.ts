@@ -109,7 +109,7 @@ test("Find in the chat counts, marks and goes to matches in what the thread show
   // A new query changes the marks in place: WebKit repaints only the ranges a set gains or loses.
   assert.equal(seen.many.sameMarks, true);
 
-  // A word only in a page never loaded: nothing.
+  // A word nowhere: nothing.
   assert.equal(seen.none.label, "0 results");
   assert.equal(seen.none.size, 0);
   assert.equal(seen.none.active, null);
@@ -186,4 +186,54 @@ test("Find leaves the other work folds closed, and closing it keeps the one it o
   assert.deepEqual(seen.closed, { wombat: "true", badger: "false", badgerFold: null });
   // Closed by hand afterwards, it animates down from its full height, never jumps, then holds nothing.
   assert.deepEqual(seen.shut, { full: true, midway: true, after: null });
+});
+
+test("Find counts a match only in a closed work group inside opened work, and Enter opens the group and goes to it", { timeout: 180000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-find.html?drive=groups", "thread-find-result", 150000)) as {
+    error?: string;
+    before: { work: string | null; group: string | null; rows: number };
+    typed: { label: string | null; active: string | null; group: string | null; height: number | null };
+    entered: { label: string | null; active: string | null; place: Place; group: string | null; work: string | null };
+    closed: { group: string | null; kept: boolean };
+  };
+  assert.equal(seen.error, undefined);
+  // The turn's work opened by hand, its group closed and showing no rows.
+  assert.deepEqual(seen.before, { work: "true", group: "false", rows: 0 });
+  // Typed: counted, the group left closed, its rows kept for Find with no height.
+  assert.deepEqual(seen.typed, { label: "1 / 1 result", active: "ocelot", group: "false", height: 0 });
+  // Enter: the group opens, and the match is marked and centred in view.
+  assert.equal(seen.entered.label, "1 / 1 result");
+  assert.equal(seen.entered.group, "true");
+  assert.equal(seen.entered.work, "true");
+  assert.equal(seen.entered.active, "ocelot");
+  shownCentred(seen.entered.place, "ocelot");
+  // Closed: the group gone to stays open, and nothing is kept for Find any more.
+  assert.deepEqual(seen.closed, { group: "true", kept: false });
+});
+
+test("Find counts matches in pages not loaded without loading them; a step to one loads down to it and goes there", { timeout: 180000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-find.html?drive=older", "thread-find-result", 150000)) as {
+    error?: string;
+    kiwi: { label: string | null; active: string | null; turn: number; loads: number };
+    back: { first: string | null; label: string | null; active: string | null; turn: number; place: Place; loads: number };
+    quokka: { first: string | null; label: string | null; active: string | null; shown: boolean; loads: number };
+    entered: { label: string | null; active: string | null; turn: number; place: Place; loads: number };
+  };
+  assert.equal(seen.error, undefined);
+  // One kiwi loaded, one in a page not loaded: both counted, the loaded one gone to, nothing loaded.
+  assert.deepEqual(seen.kiwi, { label: "2 / 2 results", active: "kiwi", turn: 46, loads: 0 });
+  // ⇧Enter: the page holding the other loads, and it is gone to, centred.
+  assert.equal(seen.back.label, "1 / 2 results");
+  assert.equal(seen.back.active, "kiwi");
+  assert.equal(seen.back.turn, 18);
+  assert.equal(seen.back.loads, 1);
+  shownCentred(seen.back.place, "older kiwi");
+  // A word only in the oldest page: counted, nothing loaded or marked while typing.
+  assert.deepEqual(seen.quokka, { first: seen.quokka.first, label: "1 / 1 result", active: null, shown: false, loads: 1 });
+  // Enter: the pages down to it load, and it is gone to, centred.
+  assert.equal(seen.entered.label, "1 / 1 result");
+  assert.equal(seen.entered.active, "quokka");
+  assert.equal(seen.entered.turn, 4);
+  assert.equal(seen.entered.loads, 4);
+  shownCentred(seen.entered.place, "quokka");
 });

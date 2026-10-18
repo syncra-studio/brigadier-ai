@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import type { ThreadScroller } from "@/components/assistant-ui/thread-scroll";
+import type { MessageMatches } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 
 /*
@@ -43,6 +44,10 @@ export type ThreadHistory = {
   failed: boolean;
   /** Loads the next older page; rejects when it fails. */
   loadOlder: () => Promise<void>;
+  /** The oldest message loaded, by `seq`: older ones wait in the database. */
+  oldest: number | null;
+  /** Where a text is, case aside, in the older messages of the branch shown; null with none. */
+  searchOlder: ((query: string, limit: number) => Promise<MessageMatches>) | null;
 };
 
 export const ThreadHistoryContext = createContext<ThreadHistory | null>(null);

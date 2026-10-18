@@ -4,6 +4,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, 
 import { ThreadHistoryContext } from "@/components/assistant-ui/message-rail";
 import type { ThreadOverlayProps } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import type { MessageMatch } from "@/ipc/generated";
 import { showHighlight } from "@/lib/highlightRules";
 import { useApp } from "@/state/store";
 
@@ -15,10 +16,11 @@ import { useApp } from "@/state/store";
  * one, ⇧Enter, ⇧⌘G and ‹ the one before, Esc closes.
  *
  * What it searches is what is mounted: turns folded behind "N earlier messages" are unfolded for
- * it, and a turn's closed work keeps its rows, hidden, while the bar has a text (`useFindSearching`):
- * going to a match there opens the work, typing never does. A closed work group inside the work
- * holds no rows until opened, and pages still in the database are not loaded for it. Diffs draw in
- * their own shadow tree and are not searched either.
+ * it, and a turn's closed work and the closed work groups in it keep their rows, hidden, while the
+ * bar has a text (`useFindSearching`): going to a match there opens the work or the group, typing
+ * never does. Pages still in the database are searched by the engine (`searchOlder`), which counts
+ * their matches ahead of the thread's own; going to one loads the pages down to it. Diffs draw in
+ * their own shadow tree and are not searched.
  */
 
 /** Counting stops here: "250+ results". */
@@ -32,6 +34,12 @@ export const FINDING = "data-thread-finding";
 export const ACTIVE_BUTTON = "data-thread-find-active";
 /** How soon after the thread changes the search runs again, while the bar is open. */
 const RERUN_MS = 150;
+/** How long typing rests before the pages not loaded are searched. */
+const OLDER_MS = 150;
+/** Pages loaded on the way to a match in one before the bar gives up. */
+const OLDER_PAGES = 50;
+/** A match in a page just loaded is gone to once it holds its place this many frames. */
+const STILL_FRAMES = 3;
 /** A match gone to clears the bar and the composer by this much. */
 const CLEAR_PX = 16;
 
@@ -71,6 +79,11 @@ function closedFold(range: Range): Element | null {
   return range.startContainer.parentElement?.closest('[data-slot="request-fold"][data-fold="closed"]') ?? null;
 }
 
+/** The closed work group holding `range` in the rows it keeps for Find, if one does. */
+function closedGroup(range: Range): Element | null {
+  return range.startContainer.parentElement?.closest('[data-slot="work-group-kept"]')?.closest('[data-slot="work-group"]') ?? null;
+}
+
 /** "2 / 7 results", "1 / 1 result", "3 / 250+ results", "0 results". */
 export function findLabel(active: number, count: number, more: boolean): string {
   if (count === 0) return "0 results";
@@ -100,6 +113,40 @@ function unseen(element: Element): boolean {
 export type FindResult = { ranges: Range[]; more: boolean };
 
 const NONE: FindResult = { ranges: [], more: false };
+
+/** The engine's matches of a text in the pages not loaded, as it last told them. */
+type Older = { query: string; matches: readonly MessageMatch[]; more: boolean };
+
+/**
+ * What the bar found: the matches in pages not loaded (`before` of them, oldest first) and then
+ * the thread's own `ranges`. A match's index counts from the first of the older ones.
+ */
+type Found = FindResult & { before: number; older: readonly MessageMatch[] };
+
+const NOTHING: Found = { ...NONE, before: 0, older: [] };
+
+/**
+ * `found`'s matches in the thread with those of `older` in pages older than `oldest` (the
+ * oldest message loaded) ahead of them, the newest of those kept when they all pass `MAX_RESULTS`.
+ */
+function withOlder(found: FindResult, older: Older | null, query: string, oldest: number | null): Found {
+  if (!older || older.query !== query || query === "") return { ...found, before: 0, older: [] };
+  const unloaded = older.matches.filter((match) => oldest === null || match.seq < oldest);
+  const all = unloaded.reduce((sum, match) => sum + match.count, 0);
+  const before = Math.max(0, Math.min(all, MAX_RESULTS - found.ranges.length));
+  return { ranges: found.ranges, more: found.more || older.more || before < all, before, older: unloaded };
+}
+
+/** The message in a page not loaded holding match `index` of `found` (one of its first `before`). */
+function olderAt(found: Found, index: number): MessageMatch | null {
+  // Counted from the newest: when they pass the limit, the oldest are the ones left out.
+  let left = found.before - 1 - index;
+  for (const match of found.older.toReversed()) {
+    if (left < match.count) return match;
+    left -= match.count;
+  }
+  return null;
+}
 
 /** The matches of `query` in the text `root` shows, top to bottom, the first `MAX_RESULTS` of them. */
 export function findIn(root: Element, query: string): FindResult {
@@ -267,7 +314,7 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   const history = useContext(ThreadHistoryContext);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [result, setResult] = useState<FindResult>(NONE);
+  const [result, setResult] = useState<Found>(NOTHING);
   const [active, setActive] = useState(-1);
   /** Bumped by each ⌘F: the field takes the focus with its text selected. */
   const [focusAsk, setFocusAsk] = useState(0);
@@ -281,10 +328,16 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   const expanded = useRef(new Set<Element>());
   const toggling = useRef(false);
   const closingAnchor = useRef<{ element: HTMLElement; top: number } | null>(null);
+  /** The engine's matches in the pages not loaded, for the text it was asked last. */
+  const older = useRef<Older | null>(null);
+  /** A step to match `index` loads pages: until the thread counts `all` matches again, the bar keeps what it shows. */
+  const loading = useRef<{ index: number; all: number } | null>(null);
 
   // What the listeners and reruns read: the newest, not what was there when they were made.
   const state = useRef({ open, query, result, active, history });
   const rerun = useRef<() => void>(() => {});
+  /** The search again, the match gone to kept: what a step reads after it opened or loaded something. */
+  const research = useRef<() => Found>(() => NOTHING);
   useLayoutEffect(() => {
     state.current = { open, query, result, active, history };
   });
@@ -304,12 +357,14 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   );
 
   /**
-   * Brings `range` into view, centred between the bar and the composer, unless it shows already.
-   * In a turn's closed work it opens the work first when `opens` (a step, never typing), else stays.
+   * Brings `range` (match `index`) into view, centred between the bar and the composer, unless it
+   * shows already. In a turn's closed work, or a closed group in it, it opens them first when
+   * `opens` (a step, never typing), else stays.
    */
   const reveal = useCallback(
-    async (range: Range, opens: boolean) => {
+    async (match: Range, index: number, opens: boolean) => {
       if (!viewport) return;
+      let range = match;
       const seq = ++reveals.current;
       const live = () => seq === reveals.current && viewport.isConnected && range.startContainer.isConnected;
       const fold = closedFold(range);
@@ -323,6 +378,25 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         // Its last resize is the thread's to keep its place by first, or that undoes the scroll.
         await nextFrame();
         if (!live()) return;
+      }
+      const group = closedGroup(range);
+      if (group) {
+        const trigger = group.querySelector<HTMLButtonElement>(':scope > [data-slot="collapsible-trigger"][aria-expanded="false"]');
+        if (!opens || !trigger) return;
+        // As the user's own click. Opened, the group draws its rows anew, so the match is found
+        // again: the same one, at the same index.
+        trigger.click();
+        const going = () => seq === reveals.current && viewport.isConnected && group.isConnected;
+        const content = () => group.querySelector(':scope > [data-slot="collapsible-content"][data-state="open"]');
+        const opened = () => !group.querySelector(':scope > [data-slot="work-group-kept"]') && content()?.getAnimations().every((each) => each.playState !== "running");
+        for (let frames = 0; frames < 60 && going() && !opened(); frames++) await nextFrame();
+        await nextFrame();
+        if (!going()) return;
+        const found = research.current();
+        const again = found.ranges[index - found.before];
+        if (!again || closedGroup(again)) return;
+        setActive(index);
+        range = again;
       }
       const more = clippedBy(range);
       if (more) {
@@ -366,47 +440,127 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     [viewport, scroller],
   );
 
-  const goTo = useCallback(
-    (index: number, ranges: readonly Range[], opens: boolean) => {
-      setActive(index);
-      const range = ranges[index];
-      if (range) void reveal(range, opens);
+  /**
+   * Goes to match `index` of `found`, one in a page not loaded: the pages down to its message
+   * load, and once the thread shows it, it is found there, at the same index, and gone to.
+   */
+  const loadTo = useCallback(
+    async (index: number, found: Found) => {
+      const target = olderAt(found, index);
+      if (!viewport || !target) return;
+      const seq = ++reveals.current;
+      const live = () => seq === reveals.current && viewport.isConnected;
+      const all = found.before + found.ranges.length;
+      const mine = { index, all };
+      loading.current = mine;
+      const going = () => {
+        const on = live();
+        if (!on && loading.current === mine) loading.current = null;
+        return on;
+      };
+      for (let page = 0; page < OLDER_PAGES; page++) {
+        const pages = state.current.history;
+        if (!pages?.hasMore || (pages.oldest !== null && pages.oldest <= target.seq)) break;
+        const loaded = await pages.loadOlder().then(
+          () => true,
+          () => false,
+        );
+        if (!loaded) {
+          if (loading.current === mine) loading.current = null;
+          return;
+        }
+        // The thread holds the page once its history says so.
+        for (let frames = 0; frames < 600 && live() && state.current.history?.oldest === pages.oldest; frames++) await nextFrame();
+        if (!going()) return;
+      }
+      // Shown once the thread counts as many matches as before, its own now, and holding its
+      // place: the thread keeps the reader's while the pages above it settle.
+      let last: number | null = null;
+      let still = 0;
+      for (let frames = 0; frames < 120 && going(); frames++) {
+        await nextFrame();
+        const now = research.current();
+        const range = index >= now.before ? now.ranges[index - now.before] : undefined;
+        if (!range || (now.before + now.ranges.length < all && frames < 119)) continue;
+        const top = range.getBoundingClientRect().top;
+        still = top === last ? still + 1 : 0;
+        last = top;
+        if (still < STILL_FRAMES && frames < 119) continue;
+        loading.current = null;
+        setActive(index);
+        void reveal(range, index, true);
+        return;
+      }
+      if (loading.current === mine) loading.current = null;
     },
-    [reveal],
+    [viewport, reveal],
+  );
+
+  /** Match `index` of `found` is the one gone to; `opens` (a step) goes there: opening, loading what it must. */
+  const goTo = useCallback(
+    (index: number, found: Found, opens: boolean) => {
+      setActive(index);
+      if (index < found.before) {
+        if (opens) void loadTo(index, found);
+        return;
+      }
+      const range = found.ranges[index - found.before];
+      if (range) void reveal(range, index, opens);
+    },
+    [reveal, loadTo],
   );
 
   /** The match after (`1`) or before (`-1`) the one gone to, round from the last to the first. */
   const step = useCallback(
     (by: 1 | -1) => {
       const { result: found, active: at, history: folds } = state.current;
-      const count = found.ranges.length;
+      const count = found.before + found.ranges.length;
       if (count === 0) return;
       const oldest = found.ranges[0];
-      if (by < 0 && at <= 0 && folds && folds.hidden > 0 && oldest) {
+      if (by < 0 && at <= found.before && folds && folds.hidden > 0 && oldest) {
         // The earlier turns are searched too: they open, and the match before this one is next.
         backFrom.current = oldest.cloneRange();
         folds.unfold();
         return;
       }
-      // The match typing went to is in a turn's closed work: this step opens it there first.
-      const current = found.ranges[at];
-      if (current && closedFold(current)) goTo(at, found.ranges, true);
-      else goTo((at + by + count) % count, found.ranges, true);
+      // The match typing went to is in a page not loaded, a turn's closed work or a closed group
+      // in it: this step goes there first.
+      const current = found.ranges[at - found.before];
+      if ((at >= 0 && at < found.before) || (current && (closedFold(current) || closedGroup(current)))) goTo(at, found, true);
+      else goTo((at + by + count) % count, found, true);
     },
     [goTo],
   );
 
-  /** Searches for `text`; `fresh` (the text changed) goes to the first match from the view's top. */
+  /**
+   * Searches for `text`; `fresh` (the text changed) goes to the first match in the thread from
+   * the view's top, or marks the newest one in the pages not loaded when the thread has none.
+   */
   const run = useCallback(
-    (text: string, fresh: boolean) => {
-      const { result: last, active: at } = state.current;
+    (text: string, fresh: boolean): Found => {
+      const { result: last, active: at, history: pages } = state.current;
       const column = viewport?.querySelector('[data-slot="aui_thread-column"]');
-      const found = column ? findIn(column, text) : NONE;
+      const found = withOlder(column ? findIn(column, text) : NONE, older.current, text, pages?.oldest ?? null);
+      const { ranges, before: ahead } = found;
+      const count = ahead + ranges.length;
+      if (fresh) {
+        // A new text: a step on its way to a match of the last one stops.
+        reveals.current++;
+        loading.current = null;
+      }
+      const load = loading.current;
+      // Pages loaded for a step are not drawn yet: the bar shows what it did until they are.
+      if (load && count < load.all) return found;
+      // What `state` reads until the next render.
+      state.current.result = found;
       setResult(found);
-      const { ranges } = found;
-      if (ranges.length === 0) {
+      if (load) {
+        setActive(Math.min(load.index, count - 1));
+        return found;
+      }
+      if (count === 0) {
         setActive(-1);
-        return;
+        return found;
       }
       const back = backFrom.current;
       if (back) {
@@ -414,32 +568,37 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
         const earlier = back.startContainer.isConnected
           ? ranges.findLastIndex((range) => range.compareBoundaryPoints(Range.START_TO_START, back) < 0)
           : -1;
-        goTo(earlier >= 0 ? earlier : ranges.length - 1, ranges, true);
-        return;
+        goTo(earlier >= 0 ? ahead + earlier : ahead > 0 ? ahead - 1 : count - 1, found, true);
+        return found;
       }
       if (fresh || at < 0) {
         const line = viewport ? viewport.getBoundingClientRect().top : 0;
         const first = ranges.findIndex((range) => range.getBoundingClientRect().bottom > line);
-        goTo(first >= 0 ? first : 0, ranges, false);
-        return;
+        if (ranges.length > 0) goTo(ahead + Math.max(0, first), found, false);
+        else setActive(ahead - 1);
+        return found;
       }
-      // The thread changed under the bar: the match gone to stays, where it still is.
-      const kept = last.ranges[at];
+      // The thread changed under the bar: the match gone to stays, where it still is. One in a
+      // page not loaded keeps its index: the pages loaded since bring the matches ahead of it.
+      const kept = last.ranges[at - last.before];
       const same = kept ? ranges.findIndex((range) => range.startContainer === kept.startContainer && range.startOffset === kept.startOffset) : -1;
-      setActive(same >= 0 ? same : Math.min(at, ranges.length - 1));
+      const index = same >= 0 ? ahead + same : at < last.before ? at : at - last.before + ahead;
+      setActive(Math.max(0, Math.min(index, count - 1)));
+      return found;
     },
     [viewport, goTo],
   );
 
   useLayoutEffect(() => {
-    rerun.current = () => run(state.current.query, false);
+    rerun.current = () => void run(state.current.query, false);
+    research.current = () => run(state.current.query, false);
   });
 
   const close = useCallback(() => {
     reveals.current++;
     backFrom.current = null;
     setOpen(false);
-    setResult(NONE);
+    setResult(NOTHING);
     setActive(-1);
     unpaint(viewport);
     if (viewport && expanded.current.size > 0) {
@@ -553,6 +712,31 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
     };
   }, [open, viewport]);
 
+  // A text in the bar, resting: the engine searches the pages not loaded, and the bar counts
+  // their matches with the thread's own.
+  const searchOlder = history?.searchOlder ?? null;
+  useEffect(() => {
+    if (!open || query === "" || !searchOlder) {
+      older.current = null;
+      return;
+    }
+    let current = true;
+    const timer = setTimeout(() => {
+      searchOlder(query, MAX_RESULTS).then(
+        (found) => {
+          if (!current) return;
+          older.current = { query, matches: found.matches, more: found.more };
+          rerun.current();
+        },
+        () => {},
+      );
+    }, OLDER_MS);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [open, query, searchOlder]);
+
   // A text in the bar: the turns' closed work mounts its rows, hidden, and is searched again then.
   const hasText = open && query !== "";
   useEffect(() => {
@@ -567,7 +751,7 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
   }, [hasText]);
 
   useLayoutEffect(() => {
-    if (open && viewport) paint(viewport, result.ranges, result.ranges[active] ?? null);
+    if (open && viewport) paint(viewport, result.ranges, result.ranges[active - result.before] ?? null);
   }, [open, viewport, result, active]);
 
   // Gone with the thread: so are its marks and references to messages it opened.
@@ -581,7 +765,7 @@ export const ThreadFind: FC<ThreadOverlayProps> = ({ viewport, scroller }) => {
 
   if (!open) return null;
 
-  const count = result.ranges.length;
+  const count = result.before + result.ranges.length;
   // Esc closes from the field or a button, and goes no further (the composer's Esc Esc stops a reply).
   const onEscape = (event: ReactKeyboardEvent) => {
     if (event.key !== "Escape" || event.nativeEvent.isComposing) return;

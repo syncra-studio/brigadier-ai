@@ -2345,6 +2345,14 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => Response::ListMessages {
             page: heap(|| core.list_messages(conversation_id, before, limit)).await?,
         },
+        Request::SearchMessages {
+            conversation_id,
+            leaf,
+            query,
+            limit,
+        } => Response::SearchMessages {
+            found: heap(|| core.search_messages(conversation_id, leaf, query, limit)).await?,
+        },
         Request::ReadBlobText { hash } => Response::ReadBlobText {
             text: heap(|| core.read_blob_text(hash)).await?,
         },

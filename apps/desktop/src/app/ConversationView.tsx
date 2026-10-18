@@ -49,6 +49,7 @@ import {
   type PeerOf,
   peerOf,
   SHOWN_TURNS,
+  shownBranch,
   type ThreadNode,
 } from "@/app/conversation/blocks";
 import { PeerUserMessage } from "@/app/conversation/PeerMessageBlock";
@@ -103,6 +104,7 @@ import {
   loadFullText,
   rateMessage,
   readAttachment,
+  searchEarlier,
   moveQueued,
   regenerate,
   restore,
@@ -533,6 +535,13 @@ export function ConversationView({
   // An older page that failed to load offers Try again, in the conversation it failed in.
   const [olderFailedIn, setOlderFailedIn] = useState<string | null>(null);
   const hasMore = thread.hasMore;
+  const oldest = thread.items[0]?.seq ?? null;
+  // Find's search of the older pages, from the oldest message of the branch shown.
+  const leaf = useMemo(() => (hasMore ? (shownBranch(thread.items, digest?.head ?? null, hasMore)[0]?.id ?? null) : null), [thread.items, digest?.head, hasMore]);
+  const searchOlder = useMemo(
+    () => (conversationId !== null && leaf !== null ? (query: string, limit: number) => searchEarlier(conversationId, leaf, query, limit) : null),
+    [conversationId, leaf],
+  );
   const earlier = useMemo<ThreadHistory>(
     () => ({
       hidden: folded.hidden,
@@ -553,8 +562,10 @@ export function ConversationView({
           throw cause;
         }
       },
+      oldest,
+      searchOlder,
     }),
-    [folded.hidden, foldedKey, conversationId, hasMore, olderFailedIn],
+    [folded.hidden, foldedKey, conversationId, hasMore, olderFailedIn, oldest, searchOlder],
   );
   // Open, what it finished is seen: the sidebar's dot clears, and stays clear.
   const finishedAtMs = lastFinished(conversation) ?? 0;

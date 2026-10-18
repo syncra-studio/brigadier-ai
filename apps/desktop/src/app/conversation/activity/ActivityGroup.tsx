@@ -5,6 +5,7 @@ import type { GroupItem } from "@/app/conversation/activity/group";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { useCalmLabel } from "@/app/conversation/activity/calmLabel";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
+import { useFindSearching } from "@/app/conversation/ThreadFind";
 import { foldRepeats, labelParts, stepLabel, type StepWords, summarize, summaryLead, timesWord } from "@/app/conversation/activity/words";
 import { CHEVRON, LIST_ICON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
 import { GROUP_LIST, RowOpens, ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
@@ -204,6 +205,8 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   reveal?: ((step: S) => boolean) | undefined;
 }) {
   const [open, setOpen] = useState(false);
+  // While Find searches, closed it keeps its rows, hidden, to be found.
+  const searched = useFindSearching();
   // A lone step's row the user opened: swapping it for the live line would close it.
   const [rowOpen, setRowOpen] = useState(false);
   // A jump to one of its steps opens it, once per jump.
@@ -239,6 +242,27 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
   if (items.length === 1 && (!line || rowOpen) && !summary) {
     return <RowOpens.Provider value={setRowOpen}>{renderStep(only.step, only.key)}</RowOpens.Provider>;
   }
+  // Up to 224px of rows 4px apart, then it scrolls, its edges fading while there is more.
+  // Its rows keep their height: an opened Shell box scrolls with them, never squeezed.
+  const list = (
+    <div data-slot={GROUP_LIST} className="max-h-group-list scroll-edge-fade gap-activity-row-gap flex min-w-0 flex-col overflow-y-auto *:shrink-0 pt-1 [--spacing-scroll-fade-bottom:var(--spacing-group-fade)] [--spacing-scroll-fade-top:var(--spacing-group-fade)] [--diff-header-top:var(--spacing-group-fade)]">
+      <InGroup.Provider value>
+        {foldRepeats(described.map((step) => step.words)).map((run) => {
+          const [index = 0] = run;
+          const item = items[index];
+          if (!item) return null;
+          if (run.length > 1) {
+            return (
+              <RepeatsRow key={`repeats:${item.key}`} described={run.flatMap((at) => described[at] ?? [])}>
+                {run.map((at) => items[at] && renderStep(items[at].step, items[at].key))}
+              </RepeatsRow>
+            );
+          }
+          return described[index] && exploring(described[index]) ? null : renderStep(item.step, item.key);
+        })}
+      </InGroup.Provider>
+    </div>
+  );
   return (
     <Collapsible data-slot="work-group" open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className={cn(ROW, ROW_TOGGLE)}>
@@ -266,27 +290,14 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
         </span>
         <ChevronRightAlt aria-hidden className={CHEVRON} />
       </CollapsibleTrigger>
-      <CollapsibleContent className={OPENS}>
-        {/* Up to 224px of rows 4px apart, then it scrolls, its edges fading while there is more.
-            Its rows keep their height: an opened Shell box scrolls with them, never squeezed. */}
-        <div data-slot={GROUP_LIST} className="max-h-group-list scroll-edge-fade gap-activity-row-gap flex min-w-0 flex-col overflow-y-auto *:shrink-0 pt-1 [--spacing-scroll-fade-bottom:var(--spacing-group-fade)] [--spacing-scroll-fade-top:var(--spacing-group-fade)] [--diff-header-top:var(--spacing-group-fade)]">
-          <InGroup.Provider value>
-            {foldRepeats(described.map((step) => step.words)).map((run) => {
-              const [index = 0] = run;
-              const item = items[index];
-              if (!item) return null;
-              if (run.length > 1) {
-                return (
-                  <RepeatsRow key={`repeats:${item.key}`} described={run.flatMap((at) => described[at] ?? [])}>
-                    {run.map((at) => items[at] && renderStep(items[at].step, items[at].key))}
-                  </RepeatsRow>
-                );
-              }
-              return described[index] && exploring(described[index]) ? null : renderStep(item.step, item.key);
-            })}
-          </InGroup.Provider>
+      <CollapsibleContent className={OPENS}>{list}</CollapsibleContent>
+      {/* Closed while Find searches: its rows kept, inert, with no height and nothing shown, so
+          Find counts them; going to one opens the group. */}
+      {!open && searched && (
+        <div data-slot="work-group-kept" inert className="invisible h-0 overflow-hidden">
+          {list}
         </div>
-      </CollapsibleContent>
+      )}
     </Collapsible>
   );
 }

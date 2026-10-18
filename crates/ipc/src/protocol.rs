@@ -19,15 +19,15 @@ use brigadier_core::{
     ComputerUseStatus, ConflictFile, ConnectView, ConventionsExport, Conversation,
     ConversationActivity, ConversationId, ConversationKind, ConversationStatus, ConversationView,
     DiffStat, FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message,
-    MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, PendingChanges,
-    ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView,
-    PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
-    ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope,
-    RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest,
-    SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy,
-    TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
-    UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
-    WorkspaceTree,
+    MessageMatches, MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId,
+    PendingChanges, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan,
+    ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession,
+    RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome,
+    ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup,
+    SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState,
+    StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget,
+    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -1104,6 +1104,14 @@ pub enum Request {
         before: Option<i64>,
         limit: u32,
     },
+    /// Where a text is, case aside, in the messages before `leaf` on its branch (the
+    /// thread's Find, in pages it hasn't loaded).
+    SearchMessages {
+        conversation_id: ConversationId,
+        leaf: String,
+        query: String,
+        limit: u32,
+    },
     ReadBlobText {
         hash: String,
     },
@@ -1796,6 +1804,9 @@ pub enum Response {
     },
     ListMessages {
         page: MessagePage,
+    },
+    SearchMessages {
+        found: MessageMatches,
     },
     ReadBlobText {
         text: String,

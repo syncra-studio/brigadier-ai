@@ -4,9 +4,12 @@
  * it brings the newest 40 (the older 10 of them folded behind "N earlier messages"); the oldest
  * 20 stay in the database. Requests are answered here and never reach a daemon. The words found:
  * - "solitary" once, "needle" in seven answers, "tick" seven times in every loaded answer (280);
- * - "zephyr" only in a folded turn, "quokka" only in a turn never loaded;
+ * - "zephyr" only in a folded turn, "quokka" only in a turn never loaded, "narwhal" nowhere;
  * - "marmalade" at the end of a long message of the user's, clipped behind "Show more".
  * With `?drive=folds`, turns 51 and 53 did work, folded away: "wombat" only in turn 51's.
+ * With `?drive=groups`, turn 51 did three steps, one group: "ocelot" only in its third.
+ * With `?drive=older`, the older pages load, five turns a page: "kiwi" in turn 18 (a page not
+ * loaded) and turn 46; "quokka" in turn 4, the oldest page. The engine's search is answered here.
  *
  * `?drive=1` runs the checks the find test reads and writes them to `<pre id="thread-find-result">`;
  * `window.threadFind` holds the steps for a browser probe.
@@ -22,7 +25,7 @@ import { TurnDiff } from "@/app/conversation/TurnDiff";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { Conversation, ConversationView as View, EventEnvelope, Message, OrchestratorStep, Request, UserRequest } from "@/ipc/generated";
+import type { Conversation, ConversationView as View, EventEnvelope, Message, MessageMatch, OrchestratorStep, Request, UserRequest } from "@/ipc/generated";
 import { revealApp } from "@/lib/splash";
 import { select } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
@@ -34,7 +37,15 @@ const SHORT = new URLSearchParams(location.search).get("drive") === "short";
 const LATE_EDITOR = new URLSearchParams(location.search).get("drive") === "late-editor";
 /** `?drive=folds`: two turns did work, folded away when they ended. */
 const FOLDS = new URLSearchParams(location.search).get("drive") === "folds";
-const WORK_TURNS = new Map([[50, ["Grep", "wombat"]], [52, ["Read", "/repo/src/badger.ts"]]] as const);
+/** `?drive=groups`: a turn did three steps, grouped in one row. */
+const GROUPS = new URLSearchParams(location.search).get("drive") === "groups";
+/** `?drive=older`: older pages load, `OLDER_PAGE` messages each. */
+const OLDER = new URLSearchParams(location.search).get("drive") === "older";
+const OLDER_PAGE = 10;
+type Work = readonly (readonly [string, string])[];
+const WORK_TURNS: ReadonlyMap<number, Work> = GROUPS
+  ? new Map([[50, [["Read", "/repo/src/alpha.ts"], ["Read", "/repo/src/beta.ts"], ["Grep", "ocelot"]]]])
+  : new Map([[50, [["Grep", "wombat"]]], [52, [["Read", "/repo/src/badger.ts"]]]]);
 if (LATE_EDITOR) document.documentElement.dataset["splash"] = "";
 const TURNS = SHORT ? 1 : 60;
 /** Turns the first load brings. */
@@ -61,6 +72,7 @@ function answerText(turn: number): string {
   if (turn === 45) words.push("A solitary word.");
   if (turn === 22) words.push("A zephyr in a folded turn.");
   if (turn === 3) words.push("A quokka in a page never loaded.");
+  if (turn === 17 || turn === 45) words.push("A kiwi here.");
   words.push(`Second paragraph of answer ${turn + 1}.`);
   return words.join("\n\n");
 }
@@ -86,20 +98,22 @@ const stored = messages();
 
 /** The work of `WORK_TURNS`: one tool call each, before the answer. */
 function work(): { requests: UserRequest[]; steps: OrchestratorStep[] } {
-  if (!FOLDS) return { requests: [], steps: [] };
+  if (!FOLDS && !GROUPS) return { requests: [], steps: [] };
   const requests: UserRequest[] = [];
   const steps: OrchestratorStep[] = [];
-  for (const [turn, [name, detail]] of WORK_TURNS) {
+  for (const [turn, calls] of WORK_TURNS) {
     const id = `long-r${turn}`;
     const at = start + turn * 60_000;
     requests.push({
       id, conversationId: "long", preview: `Question ${turn + 1}`, state: { type: "done" }, startedAtMs: at, endedAtMs: at + 30_000,
       steeredInto: null, steeredAfter: null, undo: null, worked: [{ fromMs: at, toMs: at + 30_000 }], quotaWait: false,
     } as unknown as UserRequest);
-    steps.push({
-      requestId: id, atMs: at + 5000, position: turn * 2 + 1,
-      kind: { type: "tool", itemId: `call-${turn}`, name, detail, status: "completed", throughPosition: turn * 2 + 1, endedAtMs: at + 7000 },
-    } as unknown as OrchestratorStep);
+    calls.forEach(([name, detail], index) => {
+      steps.push({
+        requestId: id, atMs: at + 5000 + index * 3000, position: turn * 2 + 1,
+        kind: { type: "tool", itemId: `call-${turn}-${index}`, name, detail, status: "completed", throughPosition: turn * 2 + 1, endedAtMs: at + 7000 + index * 3000 },
+      } as unknown as OrchestratorStep);
+    });
   }
   return { requests, steps };
 }
@@ -123,6 +137,8 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));
 let pending = 0;
 let sequence = 1000;
+/** Older pages asked for. */
+let loads = 0;
 
 mockIPC(async (command, payload) => {
   pending++;
@@ -140,9 +156,32 @@ async function answer(command: string, payload: unknown): Promise<unknown> {
     case "getConversation":
       await wait(LOAD_MS);
       return { method: req.method, view: view() };
-    case "listMessages":
-      // Older pages never come: what the database holds beyond the first load stays there.
-      throw new Error("Not loaded in this fixture.");
+    case "listMessages": {
+      // Older pages never come, but with `?drive=older`: what the database holds beyond the first load stays there.
+      if (!OLDER) throw new Error("Not loaded in this fixture.");
+      loads++;
+      await wait(LOAD_MS);
+      const older = stored.filter((message) => req.before === null || message.seq < req.before);
+      return { method: req.method, page: { messages: older.slice(-OLDER_PAGE), hasMore: older.length > OLDER_PAGE } };
+    }
+    case "searchMessages": {
+      // The engine's search: the messages before the leaf, their text case aside, newest first up to the limit.
+      const leaf = stored.find((message) => message.id === req.leaf);
+      const needle = req.query.toLowerCase();
+      const matches: MessageMatch[] = [];
+      let left = req.limit;
+      let more = false;
+      for (const message of stored.filter((each) => leaf && each.seq < leaf.seq).toReversed()) {
+        const count = needle === "" ? 0 : message.text.toLowerCase().split(needle).length - 1;
+        if (count === 0) continue;
+        if (count > left) more = true;
+        if (left === 0) break;
+        matches.unshift({ id: message.id, seq: message.seq, count: Math.min(count, left) });
+        left -= Math.min(count, left);
+        if (more) break;
+      }
+      return { method: req.method, found: { matches, more } };
+    }
     case "getPullRequest":
       return { method: req.method, pullRequest: null };
     case "getRunDiff":
@@ -340,6 +379,15 @@ const foldOf = (turn: number) => blockOf(turn)?.querySelector('[data-slot="reque
 /** Whether turn `turn`'s header says its work is open. */
 const headerOf = (turn: number) => blockOf(turn)?.querySelector('button[data-slot="request-work-header"]')?.getAttribute("aria-expanded") ?? null;
 
+/** Turn `turn`'s work group: whether it is open ("true", "false"), or null with none. */
+const groupOf = (turn: number) => blockOf(turn)?.querySelector('[data-slot="work-group"] > [data-slot="collapsible-trigger"]')?.getAttribute("aria-expanded") ?? null;
+
+/** The rows turn `turn`'s work group shows. */
+const groupRows = (turn: number) => blockOf(turn)?.querySelectorAll('[data-slot="work-group"] > [data-slot="collapsible-content"] [data-kind]').length ?? 0;
+
+/** The turn (counted from 1) whose answer holds the match gone to. */
+const activeTurn = () => Number(/Answer (\d+)\./.exec(activeMatch()?.startContainer.parentElement?.closest('[data-role="assistant"]')?.textContent ?? "")?.[1] ?? Number.NaN);
+
 /** The answers the thread shows: not those folded into a turn's closed work, kept hidden for Find. */
 const shownAnswers = () => [...document.querySelectorAll('[data-slot="aui_assistant-message-content"]')].filter((each) => !each.closest('[data-fold="closed"]'));
 
@@ -450,7 +498,7 @@ const steps = {
   },
   /** Nothing found: "0 results", the buttons off, no marks. */
   async none() {
-    const found = await find("quokka");
+    const found = await find("narwhal");
     return { ...found, previous: button("previous")?.disabled ?? null, next: button("next")?.disabled ?? null };
   },
   /** A word only in a turn that was folded away: the bar unfolded them, so it is found. */
@@ -657,6 +705,48 @@ async function drive(): Promise<void> {
       const midway = fold.getBoundingClientRect().height;
       await settle(100);
       result["shut"] = { full: full > 0, midway: midway > 0, after: foldOf(50) };
+    } else if (GROUPS) {
+      // A word only in a closed group inside opened work: counted, the group left closed while typing; Enter opens it and goes there.
+      select({ type: "conversation", id: "long" });
+      await settle(LOAD_MS + 400);
+      blockOf(50)!.querySelector<HTMLButtonElement>('button[data-slot="request-work-header"]')!.click();
+      await settle(100);
+      result["before"] = { work: headerOf(50), group: groupOf(50), rows: groupRows(50) };
+      press(document.body, "KeyF", { meta: true });
+      await until(() => bar() !== null);
+      const typed = await find("ocelot");
+      const kept = blockOf(50)?.querySelector('[data-slot="work-group-kept"]');
+      result["typed"] = { label: typed.label, active: typed.active, group: groupOf(50), height: kept?.getBoundingClientRect().height ?? null };
+      press(field()!, "Enter");
+      await until(() => groupOf(50) === "true" && activeMatch()?.toString() === "ocelot");
+      await settle(100);
+      result["entered"] = { label: label(), active: activeMatch()?.toString() ?? null, place: activePlace(), group: groupOf(50), work: headerOf(50) };
+      press(field()!, "Escape");
+      await until(() => bar() === null);
+      await settle(100);
+      result["closed"] = { group: groupOf(50), kept: blockOf(50)?.querySelector('[data-slot="work-group-kept"]') !== null };
+    } else if (OLDER) {
+      // Words in pages not loaded: counted with the thread's own without loading; a step to one loads down to it.
+      select({ type: "conversation", id: "long" });
+      await settle(LOAD_MS + 400);
+      press(document.body, "KeyF", { meta: true });
+      await until(() => bar() !== null);
+      const kiwi = await find("kiwi");
+      await until(() => label() === "2 / 2 results");
+      await settle(100);
+      result["kiwi"] = { label: label(), active: activeMatch()?.toString() ?? null, turn: activeTurn(), loads };
+      press(field()!, "Enter", { shift: true });
+      await until(() => activeTurn() === 18);
+      await settle(100);
+      result["back"] = { first: kiwi.label, label: label(), active: activeMatch()?.toString() ?? null, turn: activeTurn(), place: activePlace(), loads };
+      const quokka = await find("quokka");
+      await until(() => label() === "1 / 1 result");
+      await settle(100);
+      result["quokka"] = { first: quokka.label, label: label(), active: activeMatch()?.toString() ?? null, shown: textHolding("quokka") !== null, loads };
+      press(field()!, "Enter");
+      await until(() => activeMatch()?.toString() === "quokka");
+      await settle(100);
+      result["entered"] = { label: label(), active: activeMatch()?.toString() ?? null, turn: activeTurn(), place: activePlace(), loads };
     } else if (LATE_EDITOR) {
       // ⌘F while the plain field stands in for the editor; the editor then loads and mounts.
       select({ type: "conversation", id: "long" });

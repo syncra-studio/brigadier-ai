@@ -13,6 +13,7 @@ import type {
   DiffStat,
   ForkPlace,
   Mention,
+  MessageMatches,
   MessageQueue,
   OvernightRun,
   ProposedPlan,
@@ -192,6 +193,15 @@ export async function loadEarlier(id: string): Promise<void> {
     updateThread(id, (current) => ({ ...current, loading: false }));
     throw error;
   }
+}
+
+/**
+ * Where `query` is, case aside, in the messages before `leaf` on its branch, oldest first: with
+ * `leaf` the oldest message the thread shows, in the pages it hasn't loaded. At most `limit` matches.
+ */
+export async function searchEarlier(id: string, leaf: string, query: string, limit: number): Promise<MessageMatches> {
+  const { found } = await request({ method: "searchMessages", conversationId: id, leaf, query, limit });
+  return found;
 }
 
 /** Blob reads in flight, by conversation and message, so each full text is requested once. */

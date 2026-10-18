@@ -1185,6 +1185,24 @@ pub struct MessagePage {
     pub has_more: bool,
 }
 
+/// A message a search found its text in, and how many times.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageMatch {
+    pub id: String,
+    pub seq: i64,
+    pub count: u32,
+}
+
+/// The messages a search found its text in, oldest first.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageMatches {
+    pub matches: Vec<MessageMatch>,
+    /// It stopped counting at the limit: older messages may hold more.
+    pub more: bool,
+}
+
 /// Text an assistant is still writing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

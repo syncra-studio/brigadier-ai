@@ -12,9 +12,10 @@ use ts_rs::TS;
 use crate::board::{self, Board};
 use crate::model::{
     Catalog, ContextUsage, Conversation, ConversationId, ConversationKind, ConversationView,
-    DomainEvent, EnvironmentKind, ForkOrigin, Lifecycle, Message, MessagePage, MessageRole,
-    ModelChoice, OrchestratorLogEntry, OrchestratorPage, Project, ProjectId, ProjectPatch,
-    ProjectRepo, RawEntry, Settings, Setup, ThreadItem, WorkerPage, streams,
+    DomainEvent, EnvironmentKind, ForkOrigin, Lifecycle, Message, MessageMatch, MessageMatches,
+    MessagePage, MessageRole, ModelChoice, OrchestratorLogEntry, OrchestratorPage, Project,
+    ProjectId, ProjectPatch, ProjectRepo, RawEntry, Settings, Setup, ThreadItem, WorkerPage,
+    streams,
 };
 use crate::projection::Projection;
 
@@ -1126,6 +1127,58 @@ impl Core {
             })
             .collect::<Result<_>>()?;
         Ok(MessagePage { messages, has_more })
+    }
+
+    /// Where `query` is, case aside, in the messages before `leaf` on its branch: those the
+    /// thread hasn't loaded when `leaf` is the oldest one it shows. Counted from the newest,
+    /// up to `limit` matches in all.
+    pub async fn search_messages(
+        &self,
+        id: ConversationId,
+        leaf: String,
+        query: String,
+        limit: u32,
+    ) -> Result<MessageMatches> {
+        self.conversation(&id)?;
+        let mut found = MessageMatches::default();
+        let needle = fold_case(&query);
+        if needle.is_empty() {
+            return Ok(found);
+        }
+        let messages = self.all_messages(&id).await?;
+        let branch = branch_of(&messages, &leaf);
+        let mut left = limit;
+        for message in branch.iter().rev().skip(1) {
+            if message.role == MessageRole::System {
+                continue;
+            }
+            let full = match &message.blob {
+                Some(hash) => self.read_blob_text(hash.clone()).await.ok(),
+                None => None,
+            };
+            let text = full.as_deref().unwrap_or(&message.text);
+            let count = u32::try_from(fold_case(text).matches(&needle).count()).unwrap_or(u32::MAX);
+            if count == 0 {
+                continue;
+            }
+            if count > left {
+                found.more = true;
+                if left == 0 {
+                    break;
+                }
+            }
+            found.matches.push(MessageMatch {
+                id: message.id.clone(),
+                seq: message.seq,
+                count: count.min(left),
+            });
+            left -= count.min(left);
+            if found.more {
+                break;
+            }
+        }
+        found.matches.reverse();
+        Ok(found)
     }
 
     /// A page of a worker's transcript, oldest first.
@@ -2902,6 +2955,20 @@ pub(crate) fn branch_of(messages: &[Message], leaf: &str) -> Vec<Message> {
     path
 }
 
+/// `text` in lower case, character by character where lowering one would make it longer, as
+/// the thread's Find reads it.
+fn fold_case(text: &str) -> String {
+    text.chars()
+        .map(|char| {
+            let mut lower = char.to_lowercase();
+            match (lower.next(), lower.next()) {
+                (Some(one), None) => one,
+                _ => char,
+            }
+        })
+        .collect()
+}
+
 /// Adds `block` to `text` as a paragraph of its own.
 pub(crate) fn push_block(text: &mut String, block: &str) {
     if text.trim().is_empty() {
@@ -3031,6 +3098,112 @@ mod tests {
             "前[image][image][image:unknown][image:row][image:svg][Image:a][image:broken[image]後[image:unclosed"
         );
         assert_eq!(display_text(text, &[]), text);
+    }
+
+    /// Find in pages the thread hasn't loaded: the messages before the oldest one shown, on
+    /// its branch only, counted case aside, oldest first, up to the limit from the newest.
+    #[tokio::test]
+    async fn search_finds_text_in_the_branch_before_the_oldest_shown_message() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-search-{}", uuid::Uuid::now_v7())));
+        let store = Store::open(brigadier_store::StoreConfig {
+            db_path: dir.join("test.db"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .unwrap();
+        let core = Core::load(store).await.unwrap();
+        let id = core
+            .create_conversation(
+                ConversationId::generate(),
+                ConversationKind::Chat,
+                None,
+                None,
+                None,
+                Origin::default(),
+            )
+            .await
+            .unwrap()
+            .id;
+        let say = |text: &str| core.append_message(id.clone(), text.to_owned());
+        let answer = |text: &str| {
+            core.append_assistant_message(
+                id.clone(),
+                uuid::Uuid::now_v7().to_string(),
+                text.to_owned(),
+                None,
+                None,
+                None,
+            )
+        };
+        let first = say("A Quokka here.").await.unwrap();
+        let first_answer = answer("quokka, QUOKKA and quokkaquokka.").await.unwrap();
+        // An edit of the first message: a branch beside it, never searched from the other one.
+        core.append_user_message_under(
+            id.clone(),
+            "A quokka on the other branch.".into(),
+            Vec::new(),
+            Vec::new(),
+            Some(ROOT.to_owned()),
+        )
+        .await
+        .unwrap();
+        let second = core
+            .append_user_message_under(
+                id.clone(),
+                "No match here.".into(),
+                Vec::new(),
+                Vec::new(),
+                Some(first_answer.id.clone()),
+            )
+            .await
+            .unwrap();
+        let shown = answer("The oldest shown: a quokka.").await.unwrap();
+        let search = |leaf: &str, query: &str, limit: u32| {
+            core.search_messages(id.clone(), leaf.to_owned(), query.to_owned(), limit)
+        };
+        let found = search(&shown.id, "quokka", 250).await.unwrap();
+        assert_eq!(
+            found,
+            MessageMatches {
+                matches: vec![
+                    MessageMatch {
+                        id: first.id.clone(),
+                        seq: first.seq,
+                        count: 1
+                    },
+                    MessageMatch {
+                        id: first_answer.id.clone(),
+                        seq: first_answer.seq,
+                        count: 4
+                    },
+                ],
+                more: false,
+            }
+        );
+        assert_eq!(second.parent_id.as_deref(), Some(first_answer.id.as_str()));
+        // The limit counts from the newest: the newest message's matches, then as many as are left.
+        let found = search(&shown.id, "QUOKKA", 3).await.unwrap();
+        assert_eq!(
+            found
+                .matches
+                .iter()
+                .map(|each| each.count)
+                .collect::<Vec<_>>(),
+            [3]
+        );
+        assert!(found.more);
+        let found = search(&shown.id, "quokka", 4).await.unwrap();
+        assert_eq!(found.matches.len(), 1);
+        assert!(found.more);
+        assert_eq!(
+            search(&shown.id, "", 250).await.unwrap(),
+            MessageMatches::default()
+        );
+        assert_eq!(
+            search(&shown.id, "wombat", 250).await.unwrap(),
+            MessageMatches::default()
+        );
     }
 
     /// Events of a feature Brigadier no longer has (computer use's action log and its

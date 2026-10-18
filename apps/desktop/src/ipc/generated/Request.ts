@@ -124,7 +124,7 @@ deleteBranches: Array<BranchChoice>, keepBrain: boolean, } | { "method": "delete
 /**
  * Only messages with a smaller `seq` (for paging backwards).
  */
-before: number | null, limit: number, } | { "method": "readBlobText", hash: string, } | { "method": "updateSettings", settings: Settings, } | { "method": "subscribe", afterSeq: number, 
+before: number | null, limit: number, } | { "method": "searchMessages", conversationId: ConversationId, leaf: string, query: string, limit: number, } | { "method": "readBlobText", hash: string, } | { "method": "updateSettings", settings: Settings, } | { "method": "subscribe", afterSeq: number, 
 /**
  * Also stream daemon metrics once a second.
  */

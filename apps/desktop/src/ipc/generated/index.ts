@@ -226,6 +226,8 @@ export type { MergeVerifier } from "./MergeVerifier";
 export type { MergedModel } from "./MergedModel";
 export type { MergedUpstream } from "./MergedUpstream";
 export type { Message } from "./Message";
+export type { MessageMatch } from "./MessageMatch";
+export type { MessageMatches } from "./MessageMatches";
 export type { MessagePage } from "./MessagePage";
 export type { MessageQueue } from "./MessageQueue";
 export type { MessageRole } from "./MessageRole";
