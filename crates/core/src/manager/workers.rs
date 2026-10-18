@@ -1157,8 +1157,9 @@ impl SessionManager {
                 distinct_from,
                 exclude: &[],
                 project_id: conversation.project_id.as_ref(),
-                // Checks of another task's work never go to a model on trial.
-                trial: if gate_link.is_some() {
+                // Checks of another task's work never go to a model on trial, nor does a rerun
+                // one tier up.
+                trial: if gate_link.is_some() || extra.rerun.is_some() {
                     super::routing::Trial::Never
                 } else {
                     super::routing::Trial::Take
@@ -1208,6 +1209,16 @@ impl SessionManager {
             }
         };
         let waits = wait.is_some();
+        let mut route = route;
+        if let Some(rerun) = &extra.rerun {
+            route.reason = format!(
+                "Rerun one tier up from {} {}: {}",
+                rerun.provider.label(),
+                rerun.model,
+                route.reason
+            );
+            route.explanation.get_or_insert_default().rerun = Some(Box::new(rerun.clone()));
+        }
         // A fix of landed work resumes its worker's session: on the account it ran on, from
         // the instructions it last heard (SESSION-FIXES-PLAN.md Q6.1).
         let resumed = subject.as_ref().filter(|subject| {
@@ -1215,7 +1226,6 @@ impl SessionManager {
                 && subject.landed.is_some()
                 && subject.review_hold.is_some()
         });
-        let mut route = route;
         if let Some(subject) = resumed
             && route.choice.provider == subject.route.choice.provider
             && route.choice.model == subject.route.choice.model
@@ -1326,6 +1336,7 @@ impl SessionManager {
             resuming: false,
             takeover: None,
             trial_slot: waits && trial_slot,
+            rerun: extra.rerun,
             created_at_ms: now,
             updated_at_ms: now,
         };
@@ -3939,10 +3950,30 @@ impl SessionManager {
                 task.landing = None;
             }
         };
+        // A cheap scout or research task whose check failed reruns once, one tier up; the
+        // thread hears of it with the report.
+        let rerun = match super::reruns::failed_check(&report.done_when) {
+            Some(line) if !reviewing && Self::reruns_by_itself(&task) => {
+                let reason = format!("its check \"{line}\" failed");
+                match crate::heap(|| self.rerun(&task, &reason)).await {
+                    Ok(rerun) => Some(rerun),
+                    Err(why) => {
+                        tracing::info!(task = %task.id, why, "a cheap task's check failed; no rerun");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
         let settled = live.settle.lock().await;
         // Stopped while its report was being stored: the stop stands.
         let task = self.task_by_id(conversation_id, task_id).await?;
         if task.state.is_final() {
+            if let Some(rerun) = &rerun {
+                let _ = self
+                    .stop_worker(conversation_id, rerun, "Its task was stopped".into())
+                    .await;
+            }
             return Err(Error::Invalid("the task has already ended".into()));
         }
         // The report is in the orchestrator's inbox before the task counts as reported, so
@@ -3958,6 +3989,10 @@ impl SessionManager {
                     "\n[nothing to land task-{}] It changed no files, so it is done; there is nothing to land.",
                     task.number
                 ));
+            }
+            if let Some(rerun) = &rerun {
+                text.push('\n');
+                text.push_str(&super::reruns::rerun_note(&shown, rerun));
             }
             let envelope = Envelope {
                 kind: InjectionKind::Report,
@@ -5356,6 +5391,8 @@ pub(crate) struct TaskExtra {
     pub live_look: bool,
     /// A fresh verifier's candidate commit (`start_verifier` with `fresh`).
     pub fresh_commit: Option<String>,
+    /// It reruns a cheaper model's task one tier up (see `reruns`).
+    pub rerun: Option<brigadier_router::Rerun>,
 }
 
 pub(crate) fn category(kind: TaskKind) -> brigadier_router::TaskCategory {

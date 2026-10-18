@@ -872,6 +872,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, git and gh on the sign-in the user set up (a push, a pull request) need no approval, even when the keychain makes them run outside the sandbox. request_approval is for spending money, handling credentials yourself (a token, a password, the keychain directly) and destroying anything outside this session's own work.",
         worker: "From now on, git and gh on the sign-in the user set up are fine. What goes under needs user is spending money, handling credentials yourself (a token, a password, the keychain directly) and deleting anything outside your own work.",
     },
+    Revision {
+        number: RERUN_REVISION,
+        thread: "From now on, a scout or research task whose report marks a \"done when\" [not met] runs again once by itself, one tier up, as a new task: its report says which model ran it, which takes over and why. Use the rerun's report, ignore it or stop it, as you judge. rerun_task does the same when you judge that a scout's or researcher's answer lacks support. A citation marked [unevidenced] is no reason to rerun. Nothing reruns twice, and implement, review and merge tasks never rerun.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1245,6 +1250,9 @@ pub(crate) const PR_MERGE_REVISION: u32 = 101;
 /// git and gh on the user's own sign-in need no approval, though it lives in the keychain (Q61):
 /// approval is for handling credentials directly.
 pub(crate) const GIT_SIGN_IN_REVISION: u32 = 102;
+/// A cheap scout or research task whose check fails, or whose answer the thread judges
+/// unsupported (rerun_task), runs again once, one tier up (WORKSPACES-PLAN.md phase 6).
+pub(crate) const RERUN_REVISION: u32 = 103;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:

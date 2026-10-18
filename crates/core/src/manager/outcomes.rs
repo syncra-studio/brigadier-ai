@@ -113,6 +113,7 @@ impl SessionManager {
             tokens,
             quota_percent,
             at_ms: ended,
+            rerun: task.rerun.clone(),
         };
         if let Err(err) = store.put_outcome(outcome).await {
             tracing::debug!(task = %task.id, error = %err, "could not record the outcome");

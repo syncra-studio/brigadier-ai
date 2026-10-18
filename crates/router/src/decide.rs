@@ -174,6 +174,26 @@ pub fn default_floor(category: TaskCategory) -> QualityTier {
     }
 }
 
+/// Whether a category's cheap work runs once more, one tier up, when its answer falls short:
+/// scouting and research only, never code, reviews or merges.
+pub fn reruns(category: TaskCategory) -> bool {
+    matches!(category, TaskCategory::Scout | TaskCategory::Research)
+}
+
+/// The quality floor of a rerun: one tier above `ran_on`, the tier of the model that ran the
+/// task, and never below the task's own `floor`. `None` when the task doesn't rerun: another
+/// kind of work, or a model already at the top tier.
+pub fn rerun_floor(
+    category: TaskCategory,
+    ran_on: QualityTier,
+    floor: QualityTier,
+) -> Option<QualityTier> {
+    if !reruns(category) || ran_on == QualityTier::Frontier {
+        return None;
+    }
+    Some(next_tier(ran_on).max(floor))
+}
+
 /// Whether a category's work goes to the smallest, fastest model that can take it: models
 /// are tried tier by tier from the lowest up, by score within a tier. Short git text needs no
 /// more than a light model, and the user waits for it. A cheapest model short on quota gives
@@ -823,6 +843,7 @@ pub fn preview(query: &Query) -> Preview {
                     .collect(),
             }
         }),
+        rerun: None,
     };
     let mut reason = format!(
         "{} {}{} for {}: {why}",
@@ -2217,7 +2238,8 @@ fn role_text<'c>(categories: impl Iterator<Item = &'c TaskCategory>) -> String {
     }
 }
 
-fn tier_name(tier: QualityTier) -> &'static str {
+/// A tier's name in plain words ("light").
+pub fn tier_name(tier: QualityTier) -> &'static str {
     match tier {
         QualityTier::Unrated => "unrated",
         QualityTier::Light => "light",
@@ -2316,6 +2338,76 @@ mod tests {
         assert_eq!(default_floor(TaskCategory::Scout), QualityTier::Light);
         assert_eq!(category_effort(TaskCategory::Scout), Some("low"));
         assert_eq!(at_least(TaskCategory::Scout, "medium"), "low");
+    }
+
+    /// A cheap scout or research task whose answer fell short reruns one tier above the model
+    /// that ran it: never down, never below its own floor, never past the top, and never for
+    /// code, reviews, merges or any other work.
+    #[test]
+    fn a_cheap_task_reruns_one_tier_up_and_only_scouting_and_research_do() {
+        use QualityTier::{Frontier, Light, Standard, Strong, Unrated};
+        assert_eq!(
+            rerun_floor(TaskCategory::Scout, Light, Light),
+            Some(Standard)
+        );
+        assert_eq!(
+            rerun_floor(TaskCategory::Research, Standard, Standard),
+            Some(Strong)
+        );
+        assert_eq!(
+            rerun_floor(TaskCategory::Research, Strong, Standard),
+            Some(Frontier)
+        );
+        // A model on trial reruns on a rated one.
+        assert_eq!(
+            rerun_floor(TaskCategory::Scout, Unrated, Light),
+            Some(Light)
+        );
+        // A model below the task's floor (a manual ranking's) never brings the floor down.
+        assert_eq!(
+            rerun_floor(TaskCategory::Research, Light, Strong),
+            Some(Strong)
+        );
+        assert_eq!(rerun_floor(TaskCategory::Scout, Frontier, Light), None);
+        for category in TaskCategory::ALL {
+            let reruns = matches!(category, TaskCategory::Scout | TaskCategory::Research);
+            assert_eq!(super::reruns(category), reruns, "{category:?}");
+            for ran_on in [Unrated, Light, Standard, Strong] {
+                let floor = rerun_floor(category, ran_on, Light);
+                assert_eq!(floor.is_some(), reruns, "{category:?} {ran_on:?}");
+                assert!(
+                    floor.is_none_or(|floor| floor > ran_on),
+                    "{category:?} {ran_on:?}"
+                );
+            }
+        }
+    }
+
+    /// The scout that went to the cheapest model goes, on its rerun, to a model of a higher
+    /// tier.
+    #[test]
+    fn a_scouts_rerun_goes_to_a_stronger_model() {
+        let registry = Registry::bundled();
+        let models = catalog(&registry);
+        let both = [ProviderKind::Claude, ProviderKind::Codex].map(|provider| ProviderState {
+            provider,
+            logged_in: true,
+            quota: None,
+        });
+        let mut q = query(&registry, &models, &both);
+        q.category = TaskCategory::Scout;
+        q.floor = default_floor(TaskCategory::Scout);
+        let first = routed(&q);
+        assert_eq!(first.tier, QualityTier::Light, "{}", first.model);
+        q.floor = rerun_floor(TaskCategory::Scout, first.tier, q.floor).unwrap();
+        let rerun = routed(&q);
+        assert!(
+            rerun.tier > first.tier,
+            "{} after {}",
+            rerun.model,
+            first.model
+        );
+        assert_ne!(rerun.model, first.model);
     }
 
     #[test]

@@ -62,6 +62,15 @@
 //! for the floor check, with a +4 bonus. After its trial, a researched model is scored like any
 //! other; an unknown one waits for research to place it (it stays unrated, below every floor).
 //!
+//! # Reruns
+//!
+//! A scout or research task starts cheap. When its answer falls short (a "done when" it
+//! reports [not met], or the thread judging that it lacks support), it runs once more on a
+//! model one tier above the one that ran it ([`rerun_floor`]): never downward, never twice,
+//! never for implementation, reviews or merges. A missing or broken citation is no reason: the
+//! same worker fixes it. The rerun's explanation and outcome name the cheaper model and why
+//! ([`Rerun`]).
+//!
 //! # Rules
 //!
 //! `never`, `prefer` and `only` rules ([`OverrideRule`]) apply by project, category and area.
@@ -153,9 +162,10 @@ use ts_rs::TS;
 pub use areas::infer_areas;
 pub use decide::{
     Decision, Exclusion, Needs, Preview, ProviderState, Query, Routed, Waiting, allows_trials,
-    available, decide, default_floor, eligible, preview, rule_text, targets,
+    available, decide, default_floor, eligible, preview, rerun_floor, reruns, rule_text, targets,
+    tier_name,
 };
-pub use explain::{Alternative, Explanation, Factor, RouteCandidate};
+pub use explain::{Alternative, Explanation, Factor, Rerun, RouteCandidate};
 pub use forecast::{
     active_limit, heat, provider_quota, quota_penalty, window_applies, window_state,
 };

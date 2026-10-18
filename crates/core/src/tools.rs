@@ -371,6 +371,17 @@ pub struct StopWorker {
     pub reason: String,
 }
 
+/// `rerun_task`: run a scout or research task again once, one tier up, when its answer lacks
+/// support.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RerunTask {
+    /// The task, e.g. "task-3".
+    pub task: String,
+    /// Why its answer falls short, in one line, e.g. "It names no file for the parser".
+    pub why: String,
+}
+
 /// `store_output`: keep a file the thread wrote (a corrected copy of a worker's deliverable) as
 /// a task's output.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1221,6 +1232,7 @@ pub enum OrchestratorCall {
     AnswerWorker(AnswerWorker),
     RouteFollowUp(RouteFollowUp),
     StopWorker(StopWorker),
+    RerunTask(RerunTask),
     AskUser(AskUser),
     ReadReport(ReportRef),
     ReadArtifact(ReadArtifact),
@@ -1277,6 +1289,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "answer_worker",
     "route_follow_up",
     "stop_worker",
+    "rerun_task",
     "ask_user",
     "read_report",
     "read_artifact",
@@ -1334,6 +1347,7 @@ impl OrchestratorCall {
             Self::AnswerWorker(_) => "answer_worker",
             Self::RouteFollowUp(_) => "route_follow_up",
             Self::StopWorker(_) => "stop_worker",
+            Self::RerunTask(_) => "rerun_task",
             Self::AskUser(_) => "ask_user",
             Self::ReadReport(_) => "read_report",
             Self::ReadArtifact(_) => "read_artifact",

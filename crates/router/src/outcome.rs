@@ -53,6 +53,10 @@ pub struct Outcome {
     /// Its estimated share of the provider's shortest window, in percentage points.
     pub quota_percent: Option<f64>,
     pub at_ms: i64,
+    /// It reran a cheaper model's task one tier up: that model and why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rerun: Option<crate::Rerun>,
 }
 
 /// What a project's outcomes say about one model for one category.

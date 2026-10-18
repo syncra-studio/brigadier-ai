@@ -76,6 +76,7 @@ const PLUMBING = new Set([
   "message_worker",
   "answer_worker",
   "stop_worker",
+  "rerun_task",
   "start_verifier",
   "ask_user",
   "propose_merge",

@@ -8,8 +8,8 @@ use brigadier_core::tools::{
     CodeRefs, CodeSearch, DelegateTask, EndRun, FinishSession, JobCall, LandPhase, ListSessions,
     MessageSession, MessageWorker, NoteForUser, OfferFeedback, OrchestratorCall, PlanPhases,
     PreviewLog, ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession,
-    RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, ReviewCandidate, ReviewPlan,
-    Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory,
+    RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, ReviewCandidate,
+    ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory,
     SearchTranscript, SettleStep, SettleWait, StartPreview, StartVerifier, StopMerge, StopPreview,
     StopWorker, StoreOutput, SubmitOutline, SubmitReport, SuggestFullAccess, TabChatCall, TabTools,
     ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
@@ -89,6 +89,13 @@ already merged. Optional: one left unsorted joins this work shortly.";
 const STOP_WORKER: &str = "Stop a running worker, e.g. when its task is no longer needed or \
 went wrong. Nothing of it lands. `reason` is required: one plain line on why, which the user \
 reads on the thread's \"Stopped\" row (e.g. \"No longer needed: the user dropped the export\").";
+
+const RERUN_TASK: &str = "Run a scout or research task again once, one tier up, when you judge \
+that its answer lacks support: the same spec on a model a tier above the one that ran it. Its \
+report arrives later as a message; use it, ignore it or stop it. Once per task; not for a rerun \
+or other kinds of work. A report with a [not met] line reruns by itself. A missing or broken \
+citation is no reason: the report marks it [unevidenced] for you to judge. `why` is one line on \
+what falls short.";
 
 const ASK_USER: &str = "Ask the user what only they can decide (a product choice, an unclear \
 requirement) on one card: 1 to 6 questions, each with 2 to 4 options and the one you recommend; \
@@ -570,6 +577,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             input_schema::<RouteFollowUp>(),
         ),
         tool("stop_worker", STOP_WORKER, input_schema::<StopWorker>()),
+        tool("rerun_task", RERUN_TASK, input_schema::<RerunTask>()),
         tool("ask_user", ASK_USER, input_schema::<AskUser>()),
         tool("read_report", READ_REPORT, input_schema::<ReportRef>()),
         tool(
@@ -929,6 +937,7 @@ pub fn parse_call(
                 "answer_worker" => OrchestratorCall::AnswerWorker(args(name, arguments)?),
                 "route_follow_up" => OrchestratorCall::RouteFollowUp(args(name, arguments)?),
                 "stop_worker" => OrchestratorCall::StopWorker(args(name, arguments)?),
+                "rerun_task" => OrchestratorCall::RerunTask(args(name, arguments)?),
                 "ask_user" => OrchestratorCall::AskUser(args(name, arguments)?),
                 "read_report" => OrchestratorCall::ReadReport(args(name, arguments)?),
                 "read_artifact" => OrchestratorCall::ReadArtifact(args(name, arguments)?),

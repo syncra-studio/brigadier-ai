@@ -50,6 +50,25 @@ pub struct Explanation {
     /// The user's manual ranking decided the choice, or had none of its models available.
     #[serde(default)]
     pub ranking: Option<RankingUse>,
+    /// It reruns a cheap task one tier up, because that task's answer fell short.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rerun: Option<Box<Rerun>>,
+}
+
+/// A scout or research task run again once, one tier up, because its answer fell short: what
+/// ran it first and why it reruns. Kept in the rerun's routing explanation and its outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Rerun {
+    /// The task it reruns (its id).
+    pub task_id: String,
+    /// The cheaper model that ran it first.
+    pub provider: ProviderKind,
+    pub model: String,
+    pub tier: QualityTier,
+    /// Why ("its check \"[not met] …\" failed", or the thread's words).
+    pub reason: String,
 }
 
 /// One model routing weighed, for the Routing page's live order.

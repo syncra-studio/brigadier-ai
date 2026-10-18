@@ -935,6 +935,11 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(skip)]
     pub trial_slot: bool,
+    /// It reruns a cheaper model's scout or research task once, one tier up: that task, the
+    /// model that ran it and why. A rerun never reruns again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rerun: Option<brigadier_router::Rerun>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }

@@ -428,6 +428,9 @@ impl SessionManager {
                 crate::heap(|| self.stop_worker(id, &task, reason)).await?;
                 Ok(format!("Stopped task-{}.", task.number))
             }
+            OrchestratorCall::RerunTask(args) => {
+                crate::heap(|| self.rerun_by_thread(id, args)).await
+            }
             OrchestratorCall::AskUser(args) => {
                 let items = ask_round(args.questions)?;
                 let task_id = match &args.task {

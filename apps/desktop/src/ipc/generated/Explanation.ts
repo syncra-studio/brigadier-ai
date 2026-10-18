@@ -2,6 +2,7 @@
 import type { Alternative } from "./Alternative";
 import type { Factor } from "./Factor";
 import type { RankingUse } from "./RankingUse";
+import type { Rerun } from "./Rerun";
 
 /**
  * The reasoning behind a routing choice, for the worker card's details.
@@ -30,4 +31,8 @@ balancing: boolean,
 /**
  * The user's manual ranking decided the choice, or had none of its models available.
  */
-ranking: RankingUse | null, };
+ranking: RankingUse | null, 
+/**
+ * It reruns a cheap task one tier up, because that task's answer fell short.
+ */
+rerun?: Rerun, };

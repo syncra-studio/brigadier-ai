@@ -339,6 +339,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "message_worker" => ToolCall::Orchestrator(O::MessageWorker(arg(name, args))),
         "answer_worker" => ToolCall::Orchestrator(O::AnswerWorker(arg(name, args))),
         "stop_worker" => ToolCall::Orchestrator(O::StopWorker(arg(name, args))),
+        "rerun_task" => ToolCall::Orchestrator(O::RerunTask(arg(name, args))),
         "ask_user" => ToolCall::Orchestrator(O::AskUser(arg(name, args))),
         "read_report" => ToolCall::Orchestrator(O::ReadReport(arg(name, args))),
         "store_output" => ToolCall::Orchestrator(O::StoreOutput(arg(name, args))),
@@ -481,6 +482,8 @@ type Removal = (ProviderKind, Option<String>, Vec<Artifact>);
 #[derive(Default)]
 pub(crate) struct FakeBehavior {
     pub signed_out: Mutex<Vec<ProviderKind>>,
+    /// Codex also lists a light model, so cheap work routes to it.
+    pub light_model: bool,
     pub refuse_steers: bool,
     pub cleanup: bool,
     pub fail_cleanup: std::sync::atomic::AtomicBool,
@@ -544,6 +547,9 @@ impl FakeCli {
     fn models(&self) -> Vec<ModelInfo> {
         let ids: &[(&str, &str)] = match self.kind {
             ProviderKind::Claude => &[("claude-opus-5-5", "Opus 5.5")],
+            ProviderKind::Codex if self.behavior.light_model => {
+                &[("gpt-6-astra", "GPT-6-Astra"), ("gpt-6-luna", "GPT-6-Luna")]
+            }
             // Each vendor's frontier model, as the registry rates them: the roles that write,
             // check or merge code run on a vendor's best.
             ProviderKind::Codex => &[("gpt-6-astra", "GPT-6-Astra")],
@@ -2048,6 +2054,8 @@ mod reads_tests;
 #[cfg(test)]
 mod rebirth_words_tests;
 mod request_changes_tests;
+#[cfg(test)]
+mod rerun_tests;
 #[cfg(test)]
 mod restart_waits_tests;
 #[cfg(test)]

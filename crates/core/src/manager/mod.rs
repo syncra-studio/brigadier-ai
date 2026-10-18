@@ -81,6 +81,7 @@ mod rebirth;
 mod refcheck;
 mod request_changes;
 mod requests;
+mod reruns;
 mod research;
 mod review;
 mod review_hold;

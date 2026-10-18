@@ -15,6 +15,7 @@ import type { Pin } from "./Pin";
 import type { QualityTier } from "./QualityTier";
 import type { QuotaWait } from "./QuotaWait";
 import type { Report } from "./Report";
+import type { Rerun } from "./Rerun";
 import type { Route } from "./Route";
 import type { RunTaskContext } from "./RunTaskContext";
 import type { Takeover } from "./Takeover";
@@ -172,4 +173,9 @@ resuming: boolean,
 /**
  * While the user has the worker's session open in a terminal ([`TaskState::TakenOver`]).
  */
-takeover?: Takeover, createdAtMs: number, updatedAtMs: number, };
+takeover?: Takeover, 
+/**
+ * It reruns a cheaper model's scout or research task once, one tier up: that task, the
+ * model that ran it and why. A rerun never reruns again.
+ */
+rerun?: Rerun, createdAtMs: number, updatedAtMs: number, };

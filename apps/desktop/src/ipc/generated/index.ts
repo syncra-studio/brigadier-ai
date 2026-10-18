@@ -347,6 +347,7 @@ export type { RequestEnd } from "./RequestEnd";
 export type { RequestState } from "./RequestState";
 export type { RequestSummary } from "./RequestSummary";
 export type { RequestUndo } from "./RequestUndo";
+export type { Rerun } from "./Rerun";
 export type { ResearchNote } from "./ResearchNote";
 export type { ResolvedBy } from "./ResolvedBy";
 export type { ResolvedTime } from "./ResolvedTime";
