@@ -8,6 +8,8 @@
  * - Review Changes opens the first waiting file's tab; a row's Keep keeps that file; Undo All
  *   undoes the rest.
  * - Done: "Edited 3 files", "· kept 2, undid 1", no buttons.
+ * - Merged while two files waited: "Edited 3 files", "· kept 1, merged 2", no buttons, those
+ *   rows "Merged".
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -94,6 +96,10 @@ async function measure() {
   [...document.querySelectorAll("button")].find((button) => words(button) === "Undo All")?.click();
   await until(() => look().title === "Edited 3 files");
   out.done = look();
+  review = { "src/a.ts": "merged", "src/b.ts": "kept", "src/c.ts": "merged" };
+  show();
+  await until(() => rows()[0]?.dataset.review === "merged");
+  out.merged = look();
   out.asked = asked;
   return out;
 }

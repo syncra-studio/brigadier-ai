@@ -351,23 +351,20 @@ impl Record {
 }
 
 impl Record {
-    /// Each file the request changed: what it held before and after, and why Undo leaves it,
-    /// if it does.
+    /// Each file the request touched (those it left as they were too): what it held before and
+    /// after, and why Undo leaves it, if it does.
     #[allow(clippy::type_complexity)]
-    pub(super) fn changed(
+    pub(super) fn touched(
         &self,
     ) -> impl Iterator<Item = (&str, Option<&Blob>, Option<&Blob>, Option<&str>)> {
-        self.paths
-            .iter()
-            .filter(|(_, owned)| owned.first != owned.last)
-            .map(|(path, owned)| {
-                (
-                    path.as_str(),
-                    owned.first.as_ref(),
-                    owned.last.as_ref(),
-                    owned.held.as_deref(),
-                )
-            })
+        self.paths.iter().map(|(path, owned)| {
+            (
+                path.as_str(),
+                owned.first.as_ref(),
+                owned.last.as_ref(),
+                owned.held.as_deref(),
+            )
+        })
     }
 }
 

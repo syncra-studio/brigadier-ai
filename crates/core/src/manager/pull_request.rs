@@ -380,6 +380,9 @@ impl SessionManager {
         let (named, onto_base) = (branch.clone(), base.clone());
         let auto = self.auto_merge_in(id);
         let record = self.merge_record(id, &worktree, &branch, &head, auto).await;
+        // A checkout moved to the merge has the base's other work too: that is merged as well.
+        let merged = if moved { &onto.0 } else { &head };
+        self.merged_pending(id, &requests, merged).await;
         self.orchestrator_step_in(
             id,
             requests.last().cloned(),

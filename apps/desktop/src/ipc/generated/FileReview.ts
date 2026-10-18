@@ -3,4 +3,4 @@
 /**
  * Where the user's review left one file a request changed (a turn diff card's row).
  */
-export type FileReview = "pending" | "later" | "kept" | "undone";
+export type FileReview = "pending" | "later" | "kept" | "undone" | "merged";

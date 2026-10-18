@@ -2796,6 +2796,8 @@ pub enum FileReview {
     Kept,
     /// Its changes are gone: the user undid them, or the file is back as it was.
     Undone,
+    /// A merge took its changes: the merge is their record now, not the review.
+    Merged,
 }
 
 /// The changes agents made that the user hasn't kept or undone yet.

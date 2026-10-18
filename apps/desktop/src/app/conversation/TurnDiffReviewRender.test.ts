@@ -5,9 +5,9 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 type Look = { title: string | null; review: string | null; buttons: (string | null)[]; rows: [string | null, string | null][] };
 
-test("an answer's card reviews its files: Undo All, Keep All, Review Changes, per-file Undo and Keep, then what was kept and undone", { timeout: 120000 }, async (t) => {
+test("an answer's card reviews its files: Undo All, Keep All, Review Changes, per-file Undo and Keep, then what was kept, undone and merged", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "turn-diff-review.html", "turn-diff-review-result", 90000)) as {
-    error?: string; waiting: Look; opened: string | null; keptOne: Look; done: Look; asked: string[];
+    error?: string; waiting: Look; opened: string | null; keptOne: Look; done: Look; merged: Look; asked: string[];
   };
   assert.equal(seen.error, undefined);
   assert.deepEqual([seen.waiting.title, seen.waiting.review], ["3 Files", "· 2 to review"]);
@@ -20,4 +20,7 @@ test("an answer's card reviews its files: Undo All, Keep All, Review Changes, pe
   // Done: the card stays as the turn's record, with no buttons.
   assert.deepEqual([seen.done.title, seen.done.review, seen.done.buttons], ["Edited 3 files", "· kept 2, undid 1", ["View changed files"]]);
   assert.deepEqual(seen.done.rows, [["kept", "Kept"], ["kept", "Kept"], ["undone", "Undone"]]);
+  // A merge took the files that waited (#288): no Undo or Keep, the rows say Merged.
+  assert.deepEqual([seen.merged.title, seen.merged.review, seen.merged.buttons], ["Edited 3 files", "· kept 1, merged 2", ["View changed files"]]);
+  assert.deepEqual(seen.merged.rows, [["merged", "Merged"], ["kept", "Kept"], ["merged", "Merged"]]);
 });

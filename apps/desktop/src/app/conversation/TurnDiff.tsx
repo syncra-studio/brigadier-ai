@@ -176,7 +176,7 @@ const FileRow: FC<{
 };
 
 /** Where the review left a file, as its row says it. */
-const REVIEWED: Record<Exclude<FileReview, "pending">, string> = { later: "Changed later", kept: "Kept", undone: "Undone" };
+const REVIEWED: Record<Exclude<FileReview, "pending">, string> = { later: "Changed later", kept: "Kept", undone: "Undone", merged: "Merged" };
 
 /**
  * One changed file of a reviewed turn: a row that opens the file's tab (its review while it
@@ -377,7 +377,7 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
                 <span data-slot="turn-diff-review" className="text-muted-foreground">
                   {waiting.length > 0
                     ? ` · ${waiting.length} to review`
-                    : ` · ${[tally("kept") > 0 && `kept ${tally("kept")}`, tally("undone") > 0 && `undid ${tally("undone")}`].filter(Boolean).join(", ")}`}
+                    : ` · ${[tally("kept") > 0 && `kept ${tally("kept")}`, tally("undone") > 0 && `undid ${tally("undone")}`, tally("merged") > 0 && `merged ${tally("merged")}`].filter(Boolean).join(", ")}`}
                 </span>
               </span>
             ) : (

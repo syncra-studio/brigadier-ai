@@ -1727,6 +1727,13 @@ impl SessionManager {
             String::new()
         };
         let requests = board.merging_requests(None);
+        // The turn that merged has its work so far in the merge too.
+        let mut reviewed = requests.clone();
+        if let Some(current) = self.request_for(id, None).await
+            && !reviewed.contains(&current)
+        {
+            reviewed.push(current);
+        }
         let record = self
             .merge_record(id, &repo, &branch, &session_tip.0, auto)
             .await;
@@ -1747,6 +1754,7 @@ impl SessionManager {
             },
         )
         .await;
+        self.merged_pending(id, &reviewed, &session_tip.0).await;
         self.tell_merged(id, &base, &new_tip.0).await;
         *conv.merge_told.lock().unwrap() = None;
         drop(landing_lock);

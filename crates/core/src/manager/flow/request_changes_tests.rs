@@ -2811,3 +2811,200 @@ async fn a_merge_of_the_base_counts_none_of_its_files_as_the_requests() {
     );
     flow.stop().await;
 }
+
+/// The thread's merge script: on "Edit a and b." it edits both and commits them (only `a.txt`
+/// when the words say "commit only a"); on "[merge]" it merges; on "...and merge it" it merges
+/// in the same turn, then puts `b.txt` back as it was.
+fn edit_and_merge() -> Script {
+    script(move |turn| async move {
+        let id = turn.conversation().unwrap();
+        let (workspace, _) = turn.host.changes_checkout(&id).unwrap();
+        if turn.input.contains("[merge] The user clicked") {
+            let reply = turn.call("finish_session", serde_json::json!({})).await;
+            assert!(!reply.is_error, "{}", reply.text);
+            return Reply::text("Merged.");
+        }
+        edit(&turn, &workspace.join("a.txt"), "edit-a", LINES, EDITED).await;
+        observed(&turn, 1).await;
+        edit(
+            &turn,
+            &workspace.join("b.txt"),
+            "edit-b",
+            "base\n",
+            "thread b\n",
+        )
+        .await;
+        observed(&turn, 2).await;
+        if turn.input.contains("commit only a") {
+            git(&workspace, &["add", "a.txt"]);
+        } else {
+            git(&workspace, &["add", "a.txt", "b.txt"]);
+        }
+        git(&workspace, &["commit", "-q", "-m", "Thread edits"]);
+        if turn.input.contains("merge it") {
+            let reply = turn
+                .call(
+                    "finish_session",
+                    serde_json::json!({ "user_words": "merge it" }),
+                )
+                .await;
+            assert!(!reply.is_error, "{}", reply.text);
+            edit(
+                &turn,
+                &workspace.join("b.txt"),
+                "edit-b2",
+                "thread b\n",
+                "base\n",
+            )
+            .await;
+            taken(&turn, 1).await;
+        }
+        Reply::text("Changed a and b.")
+    })
+}
+
+fn merged(board: &Board) -> bool {
+    board
+        .orchestrator_steps
+        .iter()
+        .any(|step| matches!(step.kind, OrchestratorStepKind::Merged { .. }))
+}
+
+/// A session whose thread ran `words` and whose user then clicked Merge, once merged and its
+/// review settled as `done` says.
+async fn merged_after(name: &str, words: &str, done: impl Fn(&Board) -> bool) -> (Flow, Board) {
+    let flow = Flow::start(name, review_options(), edit_and_merge()).await;
+    flow.say(words).await;
+    flow.until("its changes in review", |board| {
+        board
+            .latest_request()
+            .is_some_and(|request| request.review.len() == 2)
+    })
+    .await;
+    flow.manager
+        .merge_session(&flow.conversation, super::click())
+        .await
+        .unwrap();
+    flow.until("the merge", merged).await;
+    let board = flow.until("its review after the merge", done).await;
+    (flow, board)
+}
+
+/// #288: a merge takes its requests' changes out of the review. Merged after they settled,
+/// each file's row says Merged and nothing waits for Undo or Keep; a file the merge didn't
+/// take (left uncommitted) still waits, until a later merge takes it. Merged in the turn that made them, the same, and what
+/// the turn changed after the merge waits, from the merged file, even a file put back as it
+/// was.
+#[tokio::test]
+async fn pending_changes_leave_the_review_once_merged() {
+    use crate::work::FileReview;
+    let review = |board: &Board| {
+        let request = board.latest_request().unwrap();
+        request.review.clone().into_iter().collect::<Vec<_>>()
+    };
+    let (flow, board) = merged_after(
+        "20261018-1945-issues-run-2-w07-merged-review",
+        "Edit a and b.",
+        |board| {
+            board.latest_request().is_some_and(|request| {
+                request
+                    .review
+                    .values()
+                    .all(|state| *state == FileReview::Merged)
+            })
+        },
+    )
+    .await;
+    assert_eq!(review(&board).len(), 2);
+    assert!(
+        flow.manager
+            .pending_changes(flow.conversation.clone(), None)
+            .await
+            .unwrap()
+            .files
+            .is_empty()
+    );
+    flow.stop().await;
+
+    let (flow, board) = merged_after(
+        "20261018-1945-issues-run-2-w07-merged-uncommitted",
+        "Edit a and b, commit only a.",
+        |board| {
+            board
+                .latest_request()
+                .is_some_and(|request| request.review.get("a.txt") == Some(&FileReview::Merged))
+        },
+    )
+    .await;
+    assert_eq!(
+        review(&board),
+        [
+            ("a.txt".to_owned(), FileReview::Merged),
+            ("b.txt".to_owned(), FileReview::Pending)
+        ]
+    );
+    let pending = flow
+        .manager
+        .pending_changes(flow.conversation.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(pending.files.len(), 1);
+    assert_eq!(pending.files[0].path, "b.txt");
+    assert_eq!(pending.files[0].base.as_deref(), Some("base\n"));
+    assert_eq!(pending.files[0].current.as_deref(), Some("thread b\n"));
+    // Committed since and merged again, it is merged too, though no request of this merge
+    // changed it.
+    let (workspace, _) = flow.manager.changes_checkout(&flow.conversation).unwrap();
+    git(&workspace, &["commit", "-q", "-am", "The rest"]);
+    let first = board.latest_request().unwrap().id.clone();
+    flow.manager
+        .merge_session(&flow.conversation, super::click())
+        .await
+        .unwrap();
+    flow.until("b merged", |board| {
+        board.requests[&first].review.get("b.txt") == Some(&FileReview::Merged)
+    })
+    .await;
+    assert!(
+        flow.manager
+            .pending_changes(flow.conversation.clone(), None)
+            .await
+            .unwrap()
+            .files
+            .is_empty()
+    );
+    flow.stop().await;
+
+    let flow = Flow::start(
+        "20261018-1945-issues-run-2-w07-merged-in-turn",
+        review_options(),
+        edit_and_merge(),
+    )
+    .await;
+    flow.say("Edit a and b and merge it.").await;
+    let board = flow
+        .until("its review after the merge", |board| {
+            merged(board)
+                && board
+                    .latest_request()
+                    .is_some_and(|request| request.review.len() == 2)
+        })
+        .await;
+    assert_eq!(
+        review(&board),
+        [
+            ("a.txt".to_owned(), FileReview::Merged),
+            ("b.txt".to_owned(), FileReview::Pending)
+        ]
+    );
+    let pending = flow
+        .manager
+        .pending_changes(flow.conversation.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(pending.files.len(), 1);
+    assert_eq!(pending.files[0].path, "b.txt");
+    assert_eq!(pending.files[0].base.as_deref(), Some("thread b\n"));
+    assert_eq!(pending.files[0].current.as_deref(), Some("base\n"));
+    flow.stop().await;
+}

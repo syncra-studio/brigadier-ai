@@ -7,7 +7,8 @@
 //! now, so they build up across requests until the user keeps or undoes them. Keep moves the
 //! base on and never touches a file. Undo puts lines back in the checkout and lands as a
 //! request's Undo does: uncommitted, or by a commit on the session's branch when the change
-//! was committed.
+//! was committed. A merge takes its requests' changes out of the review: the merge is their
+//! record now, and its Revert takes them back.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -36,6 +37,9 @@ struct Pending {
     absorbed: BTreeSet<String>,
     /// Where the review left each request's files.
     reviews: BTreeMap<String, BTreeMap<String, FileReview>>,
+    /// The requests a merge took, each with the session's head that merged.
+    #[serde(default)]
+    merged: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -335,6 +339,7 @@ impl SessionManager {
         checkout: &Path,
         mut pending: Pending,
         changed: bool,
+        mut touched: BTreeSet<String>,
     ) -> Result<Pending> {
         let (git, checkout, bases, id_owned) = (
             self.git.clone(),
@@ -362,7 +367,7 @@ impl SessionManager {
                 .collect::<Result<BTreeMap<_, _>>>()
         })
         .await?;
-        let touched = pending.settle(&now);
+        touched.extend(pending.settle(&now));
         if changed || !touched.is_empty() {
             self.core
                 .store()
@@ -397,12 +402,41 @@ impl SessionManager {
         if !pending.absorbed.insert(request.to_owned()) {
             return Ok(());
         }
-        for (path, first, last, held) in record.changed() {
+        // A request a merge took before it settled: what the merge has is merged, and only what
+        // it changed since waits, from the merged file (even a file it put back as it was).
+        let merged = match pending.merged.get(request) {
+            Some(head) => Some(self.merged_files(checkout, head).await),
+            None => None,
+        };
+        let mut touched = BTreeSet::new();
+        for (path, first, last, held) in record.touched() {
+            let changed = first != last;
+            let mut first = first.cloned();
+            if let Some(files) = &merged {
+                let at_merge = files.as_ref().map(|files| files.get(path).cloned());
+                if at_merge
+                    .as_ref()
+                    .is_none_or(|at_merge| at_merge.as_ref() == last)
+                {
+                    if changed {
+                        pending
+                            .reviews
+                            .entry(request.to_owned())
+                            .or_default()
+                            .insert(path.to_owned(), FileReview::Merged);
+                        touched.insert(request.to_owned());
+                    }
+                    continue;
+                }
+                first = at_merge.flatten();
+            } else if !changed {
+                continue;
+            }
             let file = pending
                 .files
                 .entry(path.to_owned())
                 .or_insert_with(|| PendingPath {
-                    base: first.cloned(),
+                    base: first,
                     requests: Vec::new(),
                     held: None,
                     last: None,
@@ -415,7 +449,108 @@ impl SessionManager {
                 file.held = Some(held.to_owned());
             }
         }
-        self.save_pending(id, checkout, pending, true).await?;
+        self.save_pending(id, checkout, pending, true, touched)
+            .await?;
+        Ok(())
+    }
+
+    /// The files in `head`, the session's head a merge took, by path; None when the checkout
+    /// can't read it.
+    async fn merged_files(&self, checkout: &Path, head: &str) -> Option<BTreeMap<String, Blob>> {
+        let (git, checkout, head) = (self.git.clone(), checkout.to_owned(), head.to_owned());
+        blocking(move || {
+            let repo = git.open(&checkout).map_err(git_error)?;
+            let head = repo.resolve(&head).map_err(git_error)?;
+            let files = repo.file_blobs(&head).map_err(git_error)?;
+            Ok(files
+                .into_iter()
+                .map(|(path, blob)| (path, Blob::from(blob)))
+                .collect())
+        })
+        .await
+        .inspect_err(|err| tracing::debug!(error = %err, "could not read a merged head"))
+        .ok()
+    }
+
+    /// A merge took `requests`' work at `head`, what the session's checkout has as merged (its
+    /// head that merged, or the merge it moved to): every waiting file the checkout has as
+    /// merged leaves the review (Undo and Keep are done with; the merge's Revert takes them
+    /// back), and a file of theirs with more than the merge waits with only that, from the
+    /// merged file.
+    pub(super) async fn merged_pending(
+        &self,
+        id: &ConversationId,
+        requests: &[String],
+        head: &str,
+    ) {
+        if let Err(err) = self.merged_pending_inner(id, requests, head).await {
+            tracing::warn!(conversation = %id, error = %err, "could not take merged changes out of the review");
+        }
+    }
+
+    async fn merged_pending_inner(
+        &self,
+        id: &ConversationId,
+        requests: &[String],
+        head: &str,
+    ) -> Result<()> {
+        let Some((checkout, _)) = self.changes_checkout(id) else {
+            return Ok(());
+        };
+        let lock = self.change_records.lock(id);
+        let mut clock = lock.lock().await;
+        self.drain_changes(id, &checkout, &mut clock).await;
+        let mut pending = self.pending(id).await?;
+        for request in requests {
+            pending.merged.insert(request.clone(), head.to_owned());
+        }
+        let mut touched = BTreeSet::new();
+        // Every file that waits: one an earlier merge left (uncommitted then) may be in this one.
+        let paths: Vec<String> = pending.files.keys().cloned().collect();
+        if !paths.is_empty()
+            && let Some(files) = self.merged_files(&checkout, head).await
+        {
+            let (git, root) = (self.git.clone(), checkout.clone());
+            let now = blocking(move || {
+                let repo = git.open(&root).map_err(git_error)?;
+                paths
+                    .into_iter()
+                    .map(|path| {
+                        let blob = repo.checkout_blob(&path).map_err(git_error)?;
+                        Ok((path, blob.map(Blob::from)))
+                    })
+                    .collect::<Result<BTreeMap<_, _>>>()
+            })
+            .await?;
+            for (path, now) in now {
+                let at_merge = files.get(&path).cloned();
+                if now != at_merge {
+                    // What the checkout has beyond the merge (an edit left uncommitted, or made
+                    // since) still waits, from the merged file; a file the user kept some of
+                    // keeps its base, so what they kept stays kept.
+                    if let Some(file) = pending.files.get_mut(&path)
+                        && file.requests.iter().any(|each| requests.contains(each))
+                        && file.kept.is_empty()
+                    {
+                        file.base = at_merge;
+                    }
+                    continue;
+                }
+                let Some(file) = pending.files.remove(&path) else {
+                    continue;
+                };
+                for request in file.requests {
+                    pending
+                        .reviews
+                        .entry(request.clone())
+                        .or_default()
+                        .insert(path.clone(), FileReview::Merged);
+                    touched.insert(request);
+                }
+            }
+        }
+        self.save_pending(id, &checkout, pending, true, touched)
+            .await?;
         Ok(())
     }
 
@@ -436,7 +571,9 @@ impl SessionManager {
         let lock = self.change_records.lock(&id);
         let _clock = lock.lock().await;
         let pending = self.pending(&id).await?;
-        let pending = self.save_pending(&id, &checkout, pending, false).await?;
+        let pending = self
+            .save_pending(&id, &checkout, pending, false, BTreeSet::new())
+            .await?;
         let (git, files) = (self.git.clone(), pending.files);
         blocking(move || {
             let repo = git.open(&checkout).map_err(git_error)?;
@@ -520,7 +657,8 @@ impl SessionManager {
                 file.kept.extend(file.requests.iter().cloned());
             }
         }
-        self.save_pending(&id, &checkout, pending, true).await?;
+        self.save_pending(&id, &checkout, pending, true, BTreeSet::new())
+            .await?;
         Ok(())
     }
 
@@ -599,7 +737,8 @@ impl SessionManager {
                 file.last = target.map(Blob::from);
             }
         }
-        self.save_pending(&id, &checkout, pending, true).await?;
+        self.save_pending(&id, &checkout, pending, true, BTreeSet::new())
+            .await?;
         if !restored.is_empty() {
             self.conv(&id)?
                 .note(format!(
