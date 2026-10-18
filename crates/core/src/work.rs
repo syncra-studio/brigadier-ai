@@ -1281,6 +1281,11 @@ pub struct StepSettlement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub review: Option<String>,
+    /// For a step settled done: what it had no evidence for at that tip (failed or pending
+    /// full checks, unmet criteria), one line each. The thread's call stands (#251).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub unevidenced: Vec<String>,
 }
 
 /// How a settled step ended.

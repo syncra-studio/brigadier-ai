@@ -171,9 +171,10 @@ the lead's. Small work needs none: land the lead. Returns at once.";
 const SETTLE_STEP: &str = "Only during an overnight run: settle a step of the run's plan, by \
 its number, once you have judged its whole scope and every \"done when\" (your own edits \
 too) and nothing of it still runs or waits to land. Done: all of it is met and landed; partial: \
-some is left for a later run; blocked: what is left needs the user. Done needs evidence for \
-every criterion at the tip (its report's, or yours in `done_when`) and, with reviews on, its \
-review ended and recorded. A step settled done moves the tip the user's Merge takes, once every \
+some is left for a later run; blocked: what is left needs the user. Done should rest on \
+evidence for every criterion at the tip (its report's, or yours in `done_when`) and the full \
+checks passing there; what has none is said in the result and marked in the morning report, \
+not refused. With reviews on, its review must have ended and been recorded. A step settled done moves the tip the user's Merge takes, once every \
 step before it is done too.";
 
 const END_RUN: &str = "Only during an overnight run: end it now, because every selected step \

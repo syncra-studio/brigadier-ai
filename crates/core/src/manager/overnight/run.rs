@@ -500,8 +500,10 @@ impl SessionManager {
             ));
         }
         let tip = self.run_tip(&run).await?;
-        // A phase is done once the session's full checks pass at the run's tip
-        // (SESSION-FIXES-PLAN.md §11): that tip is what the user's Merge takes.
+        // A phase settled done should rest on the session's full checks passing at the run's
+        // tip (SESSION-FIXES-PLAN.md §11) and evidence for each criterion there. What's missing
+        // doesn't refuse the settle (#251): the thread hears it and the morning report marks it.
+        let mut unevidenced = Vec::new();
         if args.outcome == StepOutcome::Done
             && let (Some(workspace), Some(Setup::Session { repo, .. })) =
                 (run.workspace.as_ref(), self.core.conversation(id)?.setup)
@@ -523,17 +525,8 @@ impl SessionManager {
                         workspace.branch
                     )));
                 }
-                ChecksGate::Waiting(why) => {
-                    return Err(Error::Invalid(format!(
-                        "Phase {} isn't settled: the session's full checks {why}, and a phase is done only once they pass at the run's tip. Their result comes as a message; settle the phase then.",
-                        args.phase
-                    )));
-                }
-                ChecksGate::Failed(why) => {
-                    return Err(Error::Invalid(format!(
-                        "Phase {} isn't settled: the session's full checks {why}. Send the failure back to the task that broke it; once the fix lands they run again, and the phase settles after they pass.",
-                        args.phase
-                    )));
+                ChecksGate::Waiting(why) | ChecksGate::Failed(why) => {
+                    unevidenced.push(format!("the session's full checks {why}"));
                 }
             }
         }
@@ -544,19 +537,9 @@ impl SessionManager {
             match crate::heap(|| self.accept_phase(id, &run, args.phase, &tip, &args.done_when))
                 .await
             {
-                Ok(accepted) => (accepted.evidence, Some(accepted.review)),
-                Err(NotAccepted::Criteria(problems)) => {
-                    return Err(Error::Invalid(format!(
-                        "Phase {} isn't settled done: each \"done when\" needs evidence that holds at the run's tip ({}). Not yet:\n{}\nRun a check at the tip yourself (run_check in your workspace, which is at the tip) and give its out-… id in settle_step's done_when as \"[met] p{}-c1: out-…\", or send the work back; settle it partial, with what is left, if it can't be met.",
-                        args.phase,
-                        &tip[..tip.len().min(10)],
-                        problems
-                            .iter()
-                            .map(|problem| format!("- {problem}"))
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                        args.phase
-                    )));
+                Ok(accepted) => {
+                    unevidenced.extend(accepted.unmet);
+                    (accepted.evidence, Some(accepted.review))
                 }
                 Err(NotAccepted::Review(why)) => {
                     if let Ok(mut waits) = self.overnight.settle_waits.lock() {
@@ -579,6 +562,7 @@ impl SessionManager {
             at_ms: now_ms(),
             evidence,
             review,
+            unevidenced: unevidenced.clone(),
         };
         let plan = self
             .change_plan(id, &plan.id, |plan| {
@@ -634,6 +618,10 @@ impl SessionManager {
             }
         }
         let (what, why) = match args.outcome {
+            StepOutcome::Done if !unevidenced.is_empty() => (
+                format!("Settled \u{201c}{title}\u{201d} as done"),
+                format!("Settled without evidence for: {}", unevidenced.join("; ")),
+            ),
             StepOutcome::Done => (
                 format!("Settled \u{201c}{title}\u{201d} as done"),
                 "Its whole scope and every \"done when\" were checked and its work landed."
@@ -659,15 +647,29 @@ impl SessionManager {
         if args.outcome == StepOutcome::Done {
             self.phase_verified_waiting(id, &now.id, args.phase).await;
         }
+        let gaps = if unevidenced.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\nIt has no evidence at the run's tip ({}) for:\n{}\nThe morning report says so. To close a gap, run a check at the tip (run_check in your workspace, which is at the tip) and settle again with \"[met] p{}-c1: out-…\", or send the work back.",
+                &tip[..tip.len().min(10)],
+                unevidenced
+                    .iter()
+                    .map(|gap| format!("- {gap}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                args.phase
+            )
+        };
         if now.state == OvernightState::WindingDown {
             self.wind_down_soon(&now);
             return Ok(format!(
-                "Settled phase {}. It was the last the user wanted: the run is ending now. Start nothing new; write the user's morning answer (what got done, what is left, what waits on them).",
+                "Settled phase {}. It was the last the user wanted: the run is ending now. Start nothing new; write the user's morning answer (what got done, what is left, what waits on them).{gaps}",
                 args.phase
             ));
         }
         Ok(format!(
-            "Settled phase {}{}.",
+            "Settled phase {}{}.{gaps}",
             args.phase,
             if accepted {
                 format!(
@@ -1098,6 +1100,7 @@ mod tests {
             at_ms: 0,
             evidence: Vec::new(),
             review: None,
+            unevidenced: Vec::new(),
         });
         assert!(stop_reached(&run, Some(&settled)));
         assert_eq!(current_step(&settled), Some(4));

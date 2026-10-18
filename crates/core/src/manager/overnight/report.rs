@@ -829,7 +829,14 @@ fn phase_lines(run: &OvernightRun, board: &Board, steps: &[Step]) -> Vec<String>
                 (n, _) => format!(" {} landed.", plural(n, "task", "tasks")),
             };
             match step.mark {
-                Mark::Done => format!("{head}: {word}.{}", tasks(true)),
+                Mark::Done => match step.settled.map(|settled| &settled.unevidenced) {
+                    Some(gaps) if !gaps.is_empty() => format!(
+                        "{head}: {word}, settled without evidence for: {}{}",
+                        sentence(&one_line(&gaps.join("; "), EVIDENCE)),
+                        tasks(true)
+                    ),
+                    _ => format!("{head}: {word}.{}", tasks(true)),
+                },
                 Mark::Partial | Mark::Unfinished => format!(
                     "{head}: {word}, {}.{}",
                     unfinished_why(run, step),
@@ -1850,6 +1857,7 @@ mod tests {
                 at_ms: 1,
                 evidence: Vec::new(),
                 review: None,
+                unevidenced: Vec::new(),
             })
         };
         let plan = crate::work::Plan {
@@ -1992,6 +2000,23 @@ mod tests {
         }
         assert!(!details.contains("Phase 3:"), "{text}");
         assert_eq!(notification_body(&run, &board), "1 of 3 phases done");
+    }
+
+    #[test]
+    fn a_phase_settled_done_with_gaps_says_what_it_has_no_evidence_for() {
+        let (run, mut board) = settled_run();
+        let plan = board.plans.values_mut().next().unwrap();
+        plan.steps[0].settled.as_mut().unwrap().unevidenced = vec![
+            "the session's full checks failed".into(),
+            "p1-c1: [met] with no evidence that holds at the tip".into(),
+        ];
+        let text = render(&run, &board, &[], &usage(), 0);
+        assert!(
+            text.contains(
+                "- ✓ Phase 1 · Measure: done, settled without evidence for: the session's full checks failed; p1-c1: [met] with no evidence that holds at the tip.\n"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

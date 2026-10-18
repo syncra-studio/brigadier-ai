@@ -33,12 +33,13 @@ pub(crate) struct Accepted {
     pub evidence: Vec<String>,
     /// Its review, as the morning report says it.
     pub review: String,
+    /// What is missing, conflicting, failed, unchecked or not bound to the tip: a fact the
+    /// step settles with (#251), not a refusal.
+    pub unmet: Vec<String>,
 }
 
 /// Why a phase can't settle done yet.
 pub(crate) enum NotAccepted {
-    /// What is missing, conflicting, failed, unchecked or not bound to the tip.
-    Criteria(Vec<String>),
     /// Its review hasn't ended, or its findings aren't recorded.
     Review(String),
 }
@@ -59,11 +60,19 @@ impl SessionManager {
             return Ok(Accepted {
                 evidence: Vec::new(),
                 review,
+                unmet: Vec::new(),
             });
         };
-        let board = self.core.board(id).await.map_err(|err| {
-            NotAccepted::Criteria(vec![format!("the board can't be read: {err}")])
-        })?;
+        let board = match self.core.board(id).await {
+            Ok(board) => board,
+            Err(err) => {
+                return Ok(Accepted {
+                    evidence: Vec::new(),
+                    review,
+                    unmet: vec![format!("the board can't be read: {err}")],
+                });
+            }
+        };
         let tasks = phase_tasks(&board, run, number);
         // A verifier's final report stands for the phase; else every report of its workers.
         let reports: Vec<(&Task, &crate::work::Report)> = match tasks
@@ -211,11 +220,11 @@ impl SessionManager {
                 )),
             }
         }
-        if problems.is_empty() {
-            Ok(Accepted { evidence, review })
-        } else {
-            Err(NotAccepted::Criteria(problems))
-        }
+        Ok(Accepted {
+            evidence,
+            review,
+            unmet: problems,
+        })
     }
 
     /// A review ended: when settling its run's phase waited for it and nothing of the phase is

@@ -127,11 +127,11 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
                             .await
                         }
                     };
-                    let refused = settle(format!("[met] p1-c3: {early}")).await;
+                    let gapped = settle(format!("[met] p1-c3: {early}")).await;
                     log.lock()
                         .unwrap()
                         .settles
-                        .push((refused.is_error, refused.text));
+                        .push((gapped.is_error, gapped.text));
                     let check = turn
                         .call("run_check", json!({"command": "echo thread checked"}))
                         .await;
@@ -196,10 +196,14 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
 
     let settles = seen.lock().unwrap().settles.clone();
     assert_eq!(settles.len(), 2, "{settles:#?}");
+    // Evidence from another tree than the tip's refuses nothing (#251): the phase settles and
+    // the thread hears what it has no evidence for.
     let (refused, why) = &settles[0];
-    assert!(refused, "{why}");
+    assert!(!refused, "{why}");
     assert!(
-        why.contains("p1-c3: [met] with no evidence that holds at the tip")
+        why.starts_with("Settled phase 1")
+            && why.contains("It has no evidence at the run's tip")
+            && why.contains("p1-c3: [met] with no evidence that holds at the tip")
             && why.contains("ran on another tree than the tip's"),
         "{why}"
     );
@@ -210,6 +214,7 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
         "{why}"
     );
     assert!(!settles[1].0, "{}", settles[1].1);
+    assert!(!settles[1].1.contains("no evidence"), "{}", settles[1].1);
 
     let run = board.runs.get(&run.id).cloned().unwrap();
     let plan = board.plans.get(run.plan_id.as_ref().unwrap()).unwrap();
@@ -217,6 +222,7 @@ async fn a_phase_settles_done_only_with_evidence_at_its_tip(reviews: bool) {
     let settled = plan.steps[0].settled.clone().unwrap();
     assert_eq!(settled.outcome, StepOutcome::Done);
     assert_eq!(run.verified_commit, settled.tip);
+    assert!(settled.unevidenced.is_empty(), "{:?}", settled.unevidenced);
     let evidence = settled.evidence.join("\n");
     for line in [
         "p1-c1: p1.txt:1 shows `phase 1` at the tip",

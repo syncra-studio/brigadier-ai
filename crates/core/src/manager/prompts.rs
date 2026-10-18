@@ -842,6 +842,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, the user sees each line you write as you write it, a short one before or between tool calls too: speak when it helps them, and reply [quiet] when there's nothing to say, while work runs too. Brigadier no longer asks you again for an answer when a request ends with nothing said. A [follow-up …] needs route_follow_up only when it is a request of its own; otherwise it joins this work by itself, and you may answer or act on it at once.",
         worker: "",
     },
+    Revision {
+        number: SETTLE_GAPS_REVISION,
+        thread: "From now on, settle_step no longer refuses an overnight phase settled done for missing evidence or full checks that haven't passed at the run's tip: it settles, its result lists what has no evidence, and the morning report marks the phase \"settled without evidence for: …\". Close a gap with a check at the tip when you can.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1157,6 +1162,9 @@ pub(crate) const FACTS_NOT_REFUSALS_REVISION: u32 = 95;
 /// the user as it streams, [quiet] is for when there's nothing to say, nothing asks it again
 /// for an answer, and route_follow_up is optional.
 pub(crate) const THREAD_SPEAKS_REVISION: u32 = 96;
+/// An overnight phase settled done without evidence or passing full checks at the tip settles
+/// anyway (#251): the result and the morning report say what it has no evidence for.
+pub(crate) const SETTLE_GAPS_REVISION: u32 = 97;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -4232,6 +4240,18 @@ mod environment_tests {
         assert_eq!(
             revision_note(PEER_FREE_REVISION - 1, true),
             revision_note(PEER_FREE_REVISION, true)
+        );
+    }
+
+    /// An overnight phase settles with its gaps marked (#251); workers hear nothing.
+    #[test]
+    fn a_phase_settles_with_its_gaps_marked() {
+        let note = revision_note(SETTLE_GAPS_REVISION - 1, false).unwrap();
+        assert!(note.contains("settle_step no longer refuses an overnight phase settled done"));
+        assert!(note.contains("\"settled without evidence for: …\""));
+        assert_eq!(
+            revision_note(SETTLE_GAPS_REVISION - 1, true),
+            revision_note(SETTLE_GAPS_REVISION, true)
         );
     }
 
