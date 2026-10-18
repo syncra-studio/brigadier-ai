@@ -37,7 +37,7 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
       topPadding: number;
       spring: { moved: number; at100: Around; at200: Around; settledMs: number; overshoot: boolean };
       placed: { turnEnd: number; line: number; distance: number; room: number; userTop: number; viewHeight: number };
-      overflowed: { top: number; grew: number; distances: number[]; lastGap: number; button: Button; room: number };
+      overflowed: { top: number; grew: number; distances: number[]; lastDistance: number; lastGap: number; button: Button; room: number };
       unfollowed: { top: number; tops: number[]; distance: number; button: Button };
       followed: { distances: number[]; grew: number };
       shrunkWindow: number;
@@ -150,7 +150,10 @@ test("the thread keeps its place, follows from the bottom and places a sent turn
   assert.equal(send.placed.distance, 0);
   assert.ok(send.placed.room > 0, "room under the sent turn");
   assert.ok(send.overflowed.grew > 0, "followed past the room");
-  assert.deepEqual(send.overflowed.distances, [0]);
+  // The turn is followed once it reaches more than 1px past the view's bottom, so on its way
+  // there an answer under a pixel into the gap rounds the scroll height up a pixel (#306).
+  assert.ok(send.overflowed.distances.every((px) => px <= 1), `distances: ${send.overflowed.distances.join(", ")}`);
+  assert.equal(send.overflowed.lastDistance, 0);
   near(send.overflowed.lastGap, 32, "followed answer to the composer");
   assert.equal(send.overflowed.button.shown, false);
   assert.equal(send.overflowed.room, 0);

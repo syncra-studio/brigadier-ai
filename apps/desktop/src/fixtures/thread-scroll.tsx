@@ -587,6 +587,7 @@ const steps = {
       top,
       grew: streamed.tops.at(-1)! - top,
       distances: [...new Set(streamed.distances)],
+      lastDistance: streamed.distances.at(-1)!,
       lastGap: lastGap(),
       button: buttonState(),
       room: round($('[data-slot="aui_thread-spacer"]')!.getBoundingClientRect().height),
