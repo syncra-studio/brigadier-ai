@@ -193,6 +193,7 @@ class Smoke:
         self.native = {}          # name -> (provider, CLI session id)
         self.projects = []        # project ids, removed at cleanup
         self.expected = {}        # conversation -> {request id: [codes]}
+        self.inputs = {}          # (name, item id) -> the tool call's input
         self.ipc = Ipc(self.data)
 
     # -- setup --
@@ -309,9 +310,24 @@ class Smoke:
         v = self.view(name)
         return v["run"] in ("idle", "hibernated") and not any(state_of(r) == "working" for r in v["requests"]) and v
 
+    def runs(self, name, step, needle):
+        """Whether the tool call `step` of session `name` runs a command containing `needle`. A
+        named command's row shows its name, not the command: the call's input has the command."""
+        if needle in (step.get("detail") or ""):
+            return True
+        key = (name, step["itemId"])
+        if not self.inputs.get(key):
+            try:
+                item = self.ipc.call({"method": "getThreadItem", "conversationId": self.convs[name],
+                                      "itemId": step["itemId"]})["item"]
+            except RuntimeError:
+                return False
+            self.inputs[key] = item.get("input") or ""
+        return needle in self.inputs[key]
+
     def running_command(self, name, needle):
         v = self.view(name)
-        return next((s for s in tool_steps(v) if s["status"] == "inProgress" and needle in (s.get("detail") or "")), None)
+        return next((s for s in tool_steps(v) if s["status"] == "inProgress" and self.runs(name, s, needle)), None)
 
     # -- scenario 1: a long command, a follow-up and a steer during it --
 
@@ -344,7 +360,7 @@ class Smoke:
                     deciding_max = max(deciding_max, time.time() - deciding_since[item["id"]])
                 else:
                     deciding_since.pop(item["id"], None)
-            running = any(s["status"] == "inProgress" and f"sleep {long}" in (s.get("detail") or "") for s in tool_steps(v))
+            running = any(s["status"] == "inProgress" and self.runs("C1", s, f"sleep {long}") for s in tool_steps(v))
             if not running and cmd_end is None:
                 cmd_end = now_ms()
             steer_req = next((r for r in v["requests"] if r["id"] == steer_id), None)
@@ -397,7 +413,7 @@ class Smoke:
         def started_then_rested():
             nonlocal turn_end, retired
             v = self.view("C2")
-            started = any(f"sleep {long}" in (s.get("detail") or "") for s in tool_steps(v))
+            started = any(self.runs("C2", s, f"sleep {long}") for s in tool_steps(v))
             if started and v["run"] != "running" and turn_end is None:
                 turn_end = now_ms()
             if turn_end and retired is None and now_ms() - turn_end > 5000 and not os.path.exists(out):
