@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 
 import { request } from "@/ipc/client";
@@ -16,6 +17,8 @@ type Activity = {
   run: RunState;
   /** Tasks not over yet, by id. */
   tasks: Readonly<Record<string, TaskState>>;
+  /** Their titles, by id. */
+  titles?: Readonly<Record<string, string>>;
   /** Approvals and plans waiting for the user. */
   approvals: ReadonlySet<string>;
   /** Unanswered questions. */
@@ -29,6 +32,7 @@ type Activity = {
 const IDLE: Activity = {
   run: "idle",
   tasks: {},
+  titles: {},
   approvals: new Set(),
   questions: new Set(),
   phases: {},
@@ -67,6 +71,7 @@ export function fromSnapshot(activity: ConversationActivity): Activity {
   return {
     run: activity.run,
     tasks: Object.fromEntries(activity.tasks),
+    titles: Object.fromEntries(activity.titles ?? []),
     approvals: new Set(activity.approvals),
     questions: new Set(activity.questions),
     phases: Object.fromEntries(activity.phases),
@@ -150,7 +155,7 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
       return failed === current.failed ? current : { ...current, failed };
     }
     case "taskUpdated": {
-      const { id, state, kind } = event.task;
+      const { id, state, kind, title } = event.task;
       const next = phased(
         current,
         `task:${id}`,
@@ -159,9 +164,11 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
       if (FINAL.has(state)) {
         if (!(id in next.tasks)) return next;
         const { [id]: _over, ...tasks } = next.tasks;
-        return { ...next, tasks };
+        const { [id]: _gone, ...titles } = next.titles ?? {};
+        return { ...next, tasks, titles };
       }
-      return next.tasks[id] === state ? next : { ...next, tasks: { ...next.tasks, [id]: state } };
+      if (next.tasks[id] === state && next.titles?.[id] === title) return next;
+      return { ...next, tasks: { ...next.tasks, [id]: state }, titles: { ...next.titles, [id]: title } };
     }
     case "reviewUpdated":
       return phased(
@@ -286,6 +293,25 @@ export function rowActivity(activity: Activity | undefined): RowActivity {
   const phase = PHASE_ORDER.find((each) => phases.has(each)) ?? null;
   const workers = states.filter((state) => WORKING.has(state)).length;
   return running || awaiting || phase ? { running, awaiting, phase, workers } : QUIET;
+}
+
+/** A worker of a session, as its row under the session's sidebar row shows it. */
+export type SessionWorker = { id: string; title: string; state: TaskState };
+
+const NO_WORKERS: readonly SessionWorker[] = [];
+
+/** The open workers of a session, oldest first as the daemon lists them; re-renders only when one changes. */
+export function useSessionWorkers(conversationId: string): readonly SessionWorker[] {
+  const key = useActivity((s) => {
+    const activity = s.byConversation[conversationId];
+    if (!activity) return "";
+    return JSON.stringify(Object.entries(activity.tasks).map(([id, state]) => [id, activity.titles?.[id] ?? "", state]));
+  });
+  return useMemo(() => {
+    if (!key) return NO_WORKERS;
+    const rows = JSON.parse(key) as [string, string, TaskState][];
+    return rows.map(([id, title, state]) => ({ id, title, state }));
+  }, [key]);
 }
 
 /** The row activity of one conversation; re-renders only when it changes. */

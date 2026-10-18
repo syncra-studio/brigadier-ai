@@ -14,6 +14,10 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     activeAfter: string[];
     rowsAfter: string[];
     countAfter: { text: string; title: string } | null;
+    workers: string[];
+    fold: string;
+    workerOpened: unknown;
+    workersFolded: string[];
   };
   assert.deepEqual(
     seen.rows.map(({ title, status }) => [title, status]),
@@ -40,6 +44,11 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     "a session that starts needing the user moves up",
   );
   assert.deepEqual(seen.countAfter, { text: "3 need you", title: "3 need you" });
+  // A session's workers are read-only rows under it, with their state, folded from their count.
+  assert.deepEqual(seen.workers, ["Header layoutRunning", "Header testsQueued"]);
+  assert.equal(seen.fold, "2 workers");
+  assert.deepEqual(seen.workerOpened, { selection: { type: "conversation", id: "w1-a" }, worker: { conversationId: "w1-a", taskId: "t-2" } }, "a worker's row opens its session with that worker asked for");
+  assert.deepEqual(seen.workersFolded, [], "the fold hides them");
 });
 
 test("closing a working session's tab stops nothing; it stays in the sidebar and its row opens it again", { timeout: 60000 }, async (t) => {

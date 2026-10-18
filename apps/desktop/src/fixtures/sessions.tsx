@@ -18,6 +18,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, ConversationActivity, EventEnvelope, Project, Request } from "@/ipc/generated";
 import { fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
+import { useOpenWorker } from "@/state/openWorker";
 import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
 
 const params = new URLSearchParams(location.search);
@@ -62,7 +63,7 @@ const activity = (id: string, extra: Partial<ConversationActivity>): [string, Re
   [id, fromSnapshot({ conversationId: id, run: "idle", tasks: [], approvals: [], questions: [], phases: [], ...extra })];
 useActivity.setState({
   byConversation: Object.fromEntries([
-    activity("w1-a", { run: "running", tasks: [["t-1", "running"], ["t-2", "running"]] }),
+    activity("w1-a", { run: "running", tasks: [["t-1", "running"], ["t-2", "queued"]], titles: [["t-1", "Header layout"], ["t-2", "Header tests"]] }),
     activity("w1-b", { run: "running", phases: [["ci:o/n main abc", "watchingCi"]] }),
     activity("w5-a", { run: "running" }),
     activity("w6-a", { approvals: ["a-1"] }),
@@ -88,7 +89,7 @@ applySettledTabEvents([
 ]);
 
 const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~ * li, li li')]
-  .filter((row, index, all) => all.indexOf(row) === index)
+  .filter((row, index, all) => all.indexOf(row) === index && row.dataset.slot !== "session-workers")
   .map((row) => {
     const button = row.querySelector<HTMLButtonElement>("button")!;
     const status = row.querySelector<HTMLElement>('[data-slot="row-status"]');
@@ -106,6 +107,9 @@ const needYou = () => {
   const count = document.querySelector<HTMLElement>('[data-slot="need-you-count"]');
   return count ? { text: count.textContent?.trim(), title: count.title } : null;
 };
+/** The worker rows under a session's row, and their fold. */
+const workerRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="session-worker"]')].map((row) => row.textContent?.trim());
+const workersFold = () => document.querySelector<HTMLButtonElement>('[data-slot="session-workers"] > button[aria-expanded]');
 const rowStatus = (title: string) => rows().find((row) => row.title === title)?.status ?? null;
 
 const close = () => document.querySelector<HTMLButtonElement>('[data-slot="session-tabs"] button[aria-label="Close Lone worker tab"]');
@@ -155,8 +159,17 @@ function Fixture() {
       void closeAndReopen().then((seen) => { if (!disposed) setResult(JSON.stringify(seen)); });
       return () => { disposed = true; };
     }
-    const timer = setTimeout(() => {
-      const seen: Record<string, unknown> = { rows: rows(), count: needYou() };
+    const timer = setTimeout(async () => {
+      const seen: Record<string, unknown> = { rows: rows(), count: needYou(), workers: workerRows(), fold: workersFold()?.textContent?.trim() };
+      // A worker's row opens its session with that worker asked for in its Workers panel.
+      document.querySelector<HTMLButtonElement>('[data-slot="session-worker"][data-task="t-2"]')!.click();
+      seen.workerOpened = { selection: useApp.getState().selection, worker: useOpenWorker.getState().request };
+      useApp.setState({ selection: { type: "none" } });
+      workersFold()!.click();
+      await until(() => workerRows().length === 0);
+      seen.workersFolded = workerRows();
+      workersFold()!.click();
+      await until(() => workerRows().length > 0);
       rowButton("Header")!.click();
       setTimeout(() => {
         seen.opened = useApp.getState().selection;

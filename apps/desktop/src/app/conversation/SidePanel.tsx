@@ -8,6 +8,7 @@ import { TitlebarButton } from "@/components/titlebar-button";
 import { tokenPx } from "@/lib/tokens";
 import { takePaneClose } from "@/state/closedPanes";
 import { HOME_PLACE, placeOf, terminalWorksHere, toggleTerminal, undoTabClose, useTerminalPlaces } from "@/state/terminalPlaces";
+import { takeOpenWorker, useOpenWorker } from "@/state/openWorker";
 import { useApp } from "@/state/store";
 import { columnsFit } from "@/state/workspacePane";
 
@@ -55,6 +56,19 @@ export function useSidePanel(conversationId: string | null, enabled: boolean, em
     if (opened.pane) setOpen(false);
     else if (opened.workers) closeWorkspace(false);
   }, [workspace.open, open, setOpen, closeWorkspace]);
+  // A worker's row in the sidebar opened this session to show that worker.
+  const asked = useOpenWorker((s) => (s.request?.conversationId === conversationId ? s.request.taskId : null));
+  const wanted = asked && enabled && !embedded ? asked : null;
+  const [shownAsked, setShownAsked] = useState<string | null>(null);
+  if (wanted !== shownAsked) {
+    setShownAsked(wanted);
+    if (wanted) setWorker(wanted);
+  }
+  useEffect(() => {
+    if (!shownAsked || conversationId === null) return;
+    takeOpenWorker(conversationId);
+    openTab("workers");
+  }, [shownAsked, conversationId, openTab]);
   const agents = useMemo(() => ({
     panel: open && active === "workers" ? worker : undefined,
     setPanel: (next: AgentsPanelState) => {

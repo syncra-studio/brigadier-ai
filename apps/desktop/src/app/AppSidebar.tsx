@@ -2,6 +2,7 @@ import {
   Archive,
   ArrowLeft,
   Chats,
+  ChevronRight,
   ComposeEditSquare,
   DotsHorizontal,
   Download,
@@ -79,6 +80,9 @@ import { useCanStep } from "@/state/history";
 import { lastFinished, unread, useLastOpened } from "@/state/lastOpened";
 import { askDelete, clearPicked, pickClick, pickedIn, prunePicked, usePicked } from "@/state/picking";
 import { useTabStates } from "@/state/tabStates";
+import { type SessionWorker, useSessionWorkers } from "@/state/activity";
+import { openWorker } from "@/state/openWorker";
+import { TASK_STATE_LABELS } from "@/app/conversation/WorkerChip";
 import { useApp } from "@/state/store";
 
 // ----- titlebar --------------------------------------------------------------------------
@@ -931,6 +935,7 @@ const ConversationRow = memo(function ConversationRow({
   const [targets, setTargets] = useState<string[]>([]);
 
   return (
+    <>
     <li className="group/row relative">
       <ContextMenu
         modal={false}
@@ -1035,5 +1040,48 @@ const ConversationRow = memo(function ConversationRow({
         </Tooltip>
       </RowActionsSlot>
     </li>
+    {nested && <SessionWorkers conversationId={conversation.id} />}
+    </>
   );
 });
+
+/**
+ * A session's open workers under its row, read-only: one row each with its title and state,
+ * which opens the session with that worker in its Workers panel. Folds away from its count.
+ */
+function SessionWorkers({ conversationId }: { conversationId: string }) {
+  const workers = useSessionWorkers(conversationId);
+  const [open, setOpen] = useState(true);
+  if (workers.length === 0) return null;
+  return (
+    <li data-slot="session-workers" className="flex flex-col">
+      <button
+        type="button"
+        aria-expanded={open}
+        className="text-muted-foreground hover:text-foreground/85 h-row-sm flex items-center gap-1 ps-8 pe-2 text-start text-2xs"
+        onClick={() => setOpen(!open)}
+      >
+        <ChevronRight className={cn("size-icon-sm transition-transform motion-reduce:transition-none", open && "rotate-90")} />
+        {workers.length === 1 ? "1 worker" : `${workers.length} workers`}
+      </button>
+      {open && workers.map((worker) => <SessionWorkerRow key={worker.id} conversationId={conversationId} worker={worker} />)}
+    </li>
+  );
+}
+
+function SessionWorkerRow({ conversationId, worker }: { conversationId: string; worker: SessionWorker }) {
+  const title = worker.title || "Worker";
+  return (
+    <button
+      type="button"
+      data-slot="session-worker"
+      data-task={worker.id}
+      title={`Open ${title}`}
+      className={cn(navRow, "h-row-sm text-foreground/70 ps-12 pe-1.5 text-xs")}
+      onClick={() => openWorker(conversationId, worker.id)}
+    >
+      <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">{title}</span>
+      <span className="text-muted-foreground shrink-0 text-2xs">{TASK_STATE_LABELS[worker.state]}</span>
+    </button>
+  );
+}

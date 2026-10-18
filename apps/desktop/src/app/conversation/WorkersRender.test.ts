@@ -26,6 +26,11 @@ test("a brief gains Show brief when its panel narrows", { timeout: 90000 }, asyn
   assert.equal(seen.shortNarrow, true, JSON.stringify(seen.shortMetrics));
 });
 
+test("a worker's row in the sidebar opens its session with that worker in the Workers panel", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "workers-ux.html?open-worker=1&approvals=0&sidebar=0", "workers-result", 15000));
+  assert.deepEqual(seen, { label: "Worker: Readme draft", taken: null });
+});
+
 test("the worker view is a region named for its worker that nothing hides from the accessibility tree", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "workers-ux.html?panel-test=1&approvals=0&sidebar=0", "workers-result", 15000));
   assert.equal(seen.error, undefined);

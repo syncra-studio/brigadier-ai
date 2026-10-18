@@ -3,6 +3,7 @@
 import { leadTranscript, workerPatch } from "@/fixtures/flow";
 import type { Message, ProviderEvent, RawEntry, Report, Task } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
+import { openWorker, useOpenWorker } from "@/state/openWorker";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -85,6 +86,19 @@ useApp.setState((s) => ({ threads: { ...s.threads, [id]: { ...s.threads[id]!, it
   ...(done ? [message(19, "assistant", "The README draft is ready."), message(23, "assistant", "Both workers have completed their inspections."),
     message(30, "assistant", "The files have been summarized and the README draft is ready. Both workers verified the project without changing any source files.")] : []),
 ] } }, conversations: { ...s.conversations, [id]: { ...s.conversations[id]!, title: "Summarize probe project" } } }));
+
+// A worker's row in the sidebar asks for it: the open session's Workers panel shows it.
+const workerThread = () => document.querySelector('[data-slot="worker-thread"]');
+if (query.has("open-worker")) {
+  const result = document.body.appendChild(document.createElement("pre"));
+  result.id = "workers-result";
+  void (async () => {
+    openWorker(id, "t2");
+    for (let i = 0; i < 100 && !workerThread(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+    const view = workerThread()?.closest('[role="region"], section');
+    result.textContent = JSON.stringify({ label: view?.getAttribute("aria-label") ?? null, taken: useOpenWorker.getState().request });
+  })();
+}
 
 // The render test uses the real sidebar and chat. Manual mode leaves it ready for screenshots.
 const wait = (ms = 150) => new Promise((resolve) => setTimeout(resolve, ms));

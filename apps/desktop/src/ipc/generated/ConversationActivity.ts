@@ -16,6 +16,10 @@ export type ConversationActivity = { conversationId: ConversationId, run: RunSta
  */
 tasks: Array<[TaskId, TaskState]>, 
 /**
+ * The titles of those tasks, for their rows under the session's row.
+ */
+titles?: Array<[TaskId, string]>, 
+/**
  * Approvals and plans waiting for the user's decision.
  */
 approvals: Array<CardId>, 

@@ -1948,6 +1948,10 @@ pub struct ConversationActivity {
     pub run: RunState,
     /// Its tasks that are not over, with their state.
     pub tasks: Vec<(TaskId, TaskState)>,
+    /// The titles of those tasks, for their rows under the session's row.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<(TaskId, String)>>", optional)]
+    pub titles: Vec<(TaskId, String)>,
     /// Approvals and plans waiting for the user's decision.
     pub approvals: Vec<CardId>,
     /// Questions not answered yet.

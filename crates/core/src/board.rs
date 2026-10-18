@@ -254,11 +254,18 @@ impl Board {
     /// failed run or latest request counts as waiting for the user until the next run starts
     /// (a turn's error fails its request; the CLI's failure, its run).
     pub(crate) fn activity(&self, id: &ConversationId) -> Option<ConversationActivity> {
-        let tasks: Vec<_> = self
+        let open: Vec<_> = self
             .tasks
             .values()
             .filter(|task| !task.state.is_final())
+            .collect();
+        let tasks: Vec<_> = open
+            .iter()
             .map(|task| (task.id.clone(), task.state))
+            .collect();
+        let titles = open
+            .iter()
+            .map(|task| (task.id.clone(), task.title.clone()))
             .collect();
         let approvals: Vec<_> = self
             .approvals
@@ -295,6 +302,7 @@ impl Board {
             conversation_id: id.clone(),
             run: self.run,
             tasks,
+            titles,
             approvals,
             questions,
             phases,
@@ -1398,6 +1406,41 @@ mod tab_state_tests {
                 "kind": { "type": "merged", "branch": "brigadier/tab/session", "base": "main", "commits": 1 },
             },
         }))
+    }
+
+    /// A session's open workers come with their titles, for their rows under its sidebar row;
+    /// one that ended leaves both.
+    #[test]
+    fn the_activity_names_its_open_workers() {
+        let tab = id();
+        let mut board = Board::default();
+        let task = |id: &str, title: &str, state: &str| {
+            DomainEvent::TaskUpdated {
+            task: Box::new(
+                serde_json::from_value(serde_json::json!({
+                    "id": id, "conversationId": tab.0, "number": 1, "position": 0,
+                    "title": title, "kind": "implement", "spec": "Do it.",
+                    "access": { "repo": "write", "network": false, "unsandboxed": false },
+                    "route": { "choice": { "provider": "claude", "model": null, "effort": null }, "reason": "" },
+                    "state": state, "attachments": [], "createdAtMs": 0, "updatedAtMs": 0
+                }))
+                .expect("a task"),
+            ),
+        }
+        };
+        board.apply(&task("t1", "Fix the header", "running"), 1);
+        board.apply(&task("t2", "Old work", "landed"), 2);
+        let activity = board.activity(&tab).expect("a worker runs");
+        assert_eq!(
+            activity.tasks,
+            vec![(TaskId("t1".into()), TaskState::Running)]
+        );
+        assert_eq!(
+            activity.titles,
+            vec![(TaskId("t1".into()), "Fix the header".to_owned())]
+        );
+        board.apply(&task("t1", "Fix the header", "done"), 3);
+        assert!(board.activity(&tab).is_none());
     }
 
     /// Each row of the states table, first match winning: a new tab has none (not Merged); an
