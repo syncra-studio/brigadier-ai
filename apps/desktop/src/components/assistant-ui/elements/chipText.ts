@@ -44,8 +44,11 @@ export function imageChip(n: number): Unstable_TriggerItem {
 
 const CODE_TOKEN = /(?<!`)`([^`\n]+)`(?!`)/y;
 export const URL_TOKEN = /https?:\/\/[^\s<>"'`]+/y;
-/** Punctuation that ends a sentence after a link rather than belonging to it. */
-const URL_TAIL = /[.,;:!?)\]}]+$/;
+/**
+ * Punctuation that ends a sentence after a link rather than belonging to it, and Markdown's
+ * emphasis markers closing around it (`**see https://x.com**`).
+ */
+const URL_TAIL = /[.,;:!?)\]}*_~]+$/;
 export const SPACE = /\s/;
 /** A character that would make `@label` part of a longer word or path. */
 const WORD = /[\p{L}\p{N}_\-./]/u;

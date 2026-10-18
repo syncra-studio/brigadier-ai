@@ -8,8 +8,6 @@ import {
 } from "@assistant-ui/react-lexical";
 import { useAui, useAuiState } from "@assistant-ui/store";
 import {
-  $createCodeHighlightNode,
-  $isCodeHighlightNode,
   $isCodeNode,
   CodeExtension,
   CodeHighlightNode,
@@ -71,6 +69,8 @@ import {
   COMPOSER_NODES,
   COMPOSER_TRANSFORMERS,
 } from "@/app/conversation/composerMarkdown";
+
+import { $applyColours } from "./codeColours";
 
 import "./rich-composer-input.css";
 
@@ -442,73 +442,6 @@ function CodeColoursPlugin() {
     );
   }, [editor]);
   return null;
-}
-
-type Token = { content: string; color: string | undefined; italic: boolean };
-
-/** The style a token's text gets. */
-function tokenStyle(token: Token): string {
-  return `${token.color ? `color: ${token.color};` : ""}${token.italic ? " font-style: italic;" : ""}`.trim();
-}
-
-/** Colours code block `key` with `lines`, if its text is still `text`; the caret stays put. */
-function $applyColours(key: string, text: string, lines: Token[][]) {
-  const code = $getNodeByKey(key);
-  if (!$isCodeNode(code) || code.getTextContent() !== text) return;
-  const want = lines.flatMap((line, at) => [
-    ...(at > 0 ? [{ content: "\n", style: "" }] : []),
-    ...line.flatMap((token) =>
-      token.content.split(/(\t)/).filter(Boolean).map((content) => ({ content, style: content === "\t" ? "" : tokenStyle(token) })),
-    ),
-  ]);
-  const have = code.getChildren().map((child) => ({
-    content: child.getTextContent(),
-    style: $isCodeHighlightNode(child) ? child.getStyle() : "",
-  }));
-  if (JSON.stringify(want) === JSON.stringify(have)) return;
-  // Where the caret is, as an offset in the block's text.
-  const selection = $getSelection();
-  let caret: number | null = null;
-  if ($isRangeSelection(selection) && selection.isCollapsed()) {
-    const { anchor } = selection;
-    let offset = 0;
-    for (const child of code.getChildren()) {
-      if (anchor.key === child.getKey()) {
-        caret = offset + (anchor.type === "text" ? anchor.offset : 0);
-        break;
-      }
-      offset += child.getTextContentSize();
-    }
-    if (anchor.key === key) {
-      caret = code.getChildren().slice(0, anchor.offset).reduce((sum, child) => sum + child.getTextContentSize(), 0);
-    }
-  }
-  code.clear();
-  for (const piece of want) {
-    if (piece.content === "\n") code.append($createLineBreakNode());
-    else if (piece.content === "\t") code.append($createTabNode());
-    else {
-      const node = $createCodeHighlightNode(piece.content);
-      if (piece.style) node.setStyle(piece.style);
-      code.append(node);
-    }
-  }
-  if (caret === null) return;
-  let left = caret;
-  for (const child of code.getChildren()) {
-    const size = child.getTextContentSize();
-    if (left <= size && $isTextNode(child) && !$isLineBreakNode(child)) {
-      child.select(left, left);
-      return;
-    }
-    if (left < size || (left === size && $isLineBreakNode(child))) {
-      if (left === 0) child.selectPrevious();
-      else child.selectNext(0, 0);
-      return;
-    }
-    left -= size;
-  }
-  code.selectEnd();
 }
 
 /** Focuses the field on mount if asked, and when a run starts (as assistant-ui's input does). */

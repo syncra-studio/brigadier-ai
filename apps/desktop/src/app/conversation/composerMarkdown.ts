@@ -27,7 +27,7 @@ import {
 import { HorizontalRuleNode } from "@lexical/react/LexicalHorizontalRuleNode";
 import { HeadingNode, QuoteNode } from "@lexical/rich-text";
 import { $dfs } from "@lexical/utils";
-import { $createTextNode, $isTextNode, type Klass, type LexicalNode, type TextNode } from "lexical";
+import { $createTextNode, $isLineBreakNode, $isTextNode, type Klass, type LexicalNode, type TextNode } from "lexical";
 
 import { DIVIDER } from "@/app/conversation/pages/pageMarkdown";
 
@@ -49,11 +49,15 @@ function $inCode(node: TextNode): boolean {
   return node.hasFormat("code") || $isCodeNode(node.getParent());
 }
 
-/** Whether `node` is where its block's text starts (where `#`, `-` or `>` would start a block). */
+/**
+ * Whether `node` is where a line of its block starts (where `#`, `-` or `>` would start a
+ * block): first in it, or after a line break.
+ */
 function $startsBlock(node: TextNode): boolean {
   let child: LexicalNode = node;
   for (let parent = node.getParent(); parent; child = parent, parent = parent.getParent()) {
-    if (child.getPreviousSibling() !== null) return false;
+    const previous = child.getPreviousSibling();
+    if (previous !== null) return $isLineBreakNode(previous);
     if (!parent.isInline()) return true;
   }
   return true;

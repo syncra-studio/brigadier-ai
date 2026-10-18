@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { $isDirectiveNode } from "@assistant-ui/react-lexical";
 import { createHeadlessEditor } from "@lexical/headless";
 import { $dfs } from "@lexical/utils";
-import { $createParagraphNode, $createTextNode, $getRoot, $isTextNode, type LexicalEditor } from "lexical";
+import { $createLineBreakNode, $createParagraphNode, $createTextNode, $getRoot, $isTextNode, type LexicalEditor } from "lexical";
 
 import { imageMarkerAt } from "@/app/conversation/inlineImages";
 import { chipFormatter } from "@/components/assistant-ui/elements/chipText";
@@ -92,6 +92,18 @@ test("text typed or pasted as text stays text: only the markers that would forma
   }
 });
 
+test("a line after a line break in a paragraph is a line start: its block marker goes escaped", () => {
+  const field = editor();
+  field.update(
+    () => $getRoot().append($createParagraphNode().append($createTextNode("a"), $createLineBreakNode(), $createTextNode("# literal"))),
+    { discrete: true },
+  );
+  assert.equal(exported(field), "a\n\\# literal");
+  imported(exported(field)).getEditorState().read(() => {
+    assert.ok([...$dfs()].every(({ node }) => node.getType() !== "heading"));
+  });
+});
+
 /** The chips the editor holds, by id, in order. */
 function chips(field: LexicalEditor): string[] {
   return field.getEditorState().read(() =>
@@ -103,6 +115,12 @@ test("chips stay whole, Markdown in their names too, and stay text in code", () 
   const markdown = "Ask @Release *draft* and @notes `v2` with @task-9 [Image #2] https://a.b/c_d_e";
   assert.equal(roundTrip(markdown), markdown);
   assert.deepEqual(chips(imported(markdown)), ["chat:c1", "chat:c2", "task:9", "image:2", "url:https://a.b/c_d_e"]);
+  // Emphasis closing right after a link stays emphasis, outside the link's chip.
+  const bold = imported("**see https://example.com**");
+  assert.deepEqual(chips(bold), ["url:https://example.com"]);
+  bold.getEditorState().read(() => {
+    assert.ok([...$dfs()].some(({ node }) => $isTextNode(node) && node.hasFormat("bold") && node.getTextContent() === "see "));
+  });
   // In a heading and a list item too.
   assert.deepEqual(chips(imported("## About @task-9\n- see [Image #1]")), ["task:9", "image:1"]);
   // Code keeps them as their text.
