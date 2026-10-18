@@ -1065,6 +1065,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: concat!("From now on: ", clarify_rule!()),
         worker: "",
     },
+    Revision {
+        number: VISIBLE_PROOF_REVISION,
+        thread: "From now on, while merging on its own is on: a change the user can see (a page, a screen, a control, its words or its look), however small, comes with its proof before you merge it: the app run (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message (attach_proof), as your instructions say. Reading the code, a grep or a passing test isn't that proof. When the proof can't be had, decide whether to merge or wait, and say in the merge message that nobody saw the change work.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1195,17 +1200,17 @@ const AUTO_MERGE_OFF_LABEL: &str = "merging on its own off";
 /// phase 3, Q62, Q68): guidance it judges, never a list the engine checks. The engine doesn't
 /// gate a merge; the merge message shows what was verified.
 pub(crate) const AUTO_MERGE: &str = "Merging on its own is on (the user's setting): when the work is ready, ship it and merge it yourself, with no consent asked; this replaces what your instructions say about waiting for the user's yes to merge. With a GitHub remote and `gh` signed in: push the branch, open a pull request, babysit its CI and reviews, fix, and merge it with `gh pr merge`; Brigadier records the merge and brings the base up to date when your request ends. When the base needs a merge queue or auto-merge (the merge is refused, or the pull request only joins the queue), use `gh pr merge --auto` with the same method instead of failing or waiting yourself: say it is queued, not merged; Brigadier watches it and records the merge when GitHub lands it. Otherwise finish_session merges it into the base here.
-Ship it the way a careful engineer would; you judge how much a change needs. What usually makes a merge safe:
+Ship it the way a careful engineer would; you judge how much a change needs, and a change the user can see always comes with its proof. What usually makes a merge safe:
 - tests and type checks run on the final commit, after your last change;
 - the other vendor's review of the final commit (review_candidate reuses a review that covers it), each finding fixed or answered in one line; a running review is usually worth waiting for;
 - with a pull request, green CI on it (ci_status reads its checks);
-- for a change the user can see: the dev app run in the background (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message (attach_proof);
+- for a change the user can see (a page, a screen, a control, its words or its look), however small: the app run in the background (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message (attach_proof). Reading the code, a grep or a passing test isn't that proof: it shows the change is there, not that it works for the user;
 - for a change you judge big or risky: a fresh verifier (start_verifier with fresh: true) that tries to break it against the original request.
 When something can't be had (CI broken on main, the other vendor out of quota), decide whether to merge or wait, and say what was missing. The merge message (your reply that says it merged) shows what was verified: the pull request or commit, the checks on the final commit, the review and how each finding was settled, CI, the proof, the verifier's verdict if one ran, and anything left out. \"Beyond this request:\" lists what you found outside it (filed as issues when the repo is on GitHub); never drop a finding without saying so.";
 
 /// How a change on a web page is proved where agents have the browser tools (Q82): the same
 /// tool that works pages drives the preview's.
-pub(crate) const BROWSER_PROOF: &str = "For a change on a web page (a web app's preview, a site), get the proof with your browser tools: browser_open on the preview's URL opens it in a background Browser tab, use the change there (browser_click, browser_type), then browser_screenshot; attach_proof takes the file it saves. A change in a desktop app's own window is shown with computer use.";
+pub(crate) const BROWSER_PROOF: &str = "For a change on a web page (a web app's preview, a site), however small, get the proof with your browser tools: browser_open on the preview's URL opens it in a background Browser tab, use the change there (browser_click, browser_type), then browser_screenshot; attach_proof takes the file it saves. A change in a desktop app's own window is shown with computer use.";
 
 /// What the thread is told about merging on its own: with the browser tools, how a web page's
 /// change is proved with them.
@@ -1520,6 +1525,9 @@ pub(crate) const OFFER_SESSION_REVISION: u32 = 109;
 pub(crate) const BOLD_LEAD_REVISION: u32 = 110;
 /// One clarifying card before research, only for what changes the answer (Q78).
 pub(crate) const CLARIFY_REVISION: u32 = 111;
+/// A change the user can see is merged on its own with its proof, however small: a grep or a
+/// test isn't proof (Q68; a one-file page change merged on a grep check, phase BR's live run).
+pub(crate) const VISIBLE_PROOF_REVISION: u32 = 112;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -4341,6 +4349,9 @@ mod environment_tests {
             "start_preview",
             "a screenshot or short recording attached to the merge message",
             "(attach_proof)",
+            "a change the user can see always comes with its proof",
+            "however small",
+            "a grep or a passing test isn't that proof",
             "a change you judge big or risky",
             "start_verifier with fresh: true",
             "decide whether to merge or wait, and say what was missing",
@@ -4371,6 +4382,32 @@ mod environment_tests {
             !AUTO_MERGE.chars().any(|c| c.is_ascii_digit()),
             "no thresholds"
         );
+    }
+
+    /// Q68: a one-file page change was merged on its own on a grep check. A change the user can
+    /// see comes with its proof however small, a grep or a test isn't it, and open sessions hear
+    /// so; still guidance, so a missing proof is the agent's call, said in the merge message.
+    #[test]
+    fn a_change_the_user_can_see_comes_with_its_proof_however_small() {
+        assert!(AUTO_MERGE.contains("Reading the code, a grep or a passing test isn't that proof"));
+        assert!(BROWSER_PROOF.contains("(a web app's preview, a site), however small"));
+        let note = revision_note(VISIBLE_PROOF_REVISION - 1, false).unwrap_or_default();
+        for words in [
+            "while merging on its own is on",
+            "a change the user can see",
+            "however small, comes with its proof before you merge it",
+            "start_preview",
+            "(attach_proof)",
+            "Reading the code, a grep or a passing test isn't that proof",
+            "decide whether to merge or wait",
+        ] {
+            assert!(note.contains(words), "{words}: {note}");
+        }
+        assert!(
+            !note.contains("browser_"),
+            "the tools named only where they are"
+        );
+        assert_eq!(revision_note(VISIBLE_PROOF_REVISION - 1, true), None);
     }
 
     /// While the built-in browser is on, the instructions don't mention it: the browser tools
@@ -5197,7 +5234,6 @@ mod environment_tests {
     /// the answer; open threads hear it once, workers nothing.
     #[test]
     fn open_threads_hear_once_to_ask_one_clarifying_card_before_research() {
-        assert_eq!(revision(), CLARIFY_REVISION);
         let note = revision_note(CLARIFY_REVISION - 1, false).unwrap();
         assert!(note.contains(CHAT_THREAD_RULES[0]), "{note}");
         assert!(revision_note(CLARIFY_REVISION - 1, true).is_none());

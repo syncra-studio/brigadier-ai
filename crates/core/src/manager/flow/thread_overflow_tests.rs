@@ -18,7 +18,7 @@ use crate::manager::prompts::{
     ANSWER_DETAILS_REVISION, ANSWER_FILES_REVISION, ANSWER_FORMAT_REVISION, BOLD_LEAD_REVISION,
     COMMIT_FIRST_REVISION, LEAN_TOOLS_REVISION, OFFER_SESSION_REVISION, OVERFLOW_REVISION,
     REVISED_ANSWER_REVISION, SAVE_ONLY_REVISION, SHORT_START_REVISION, STORED_FIX_REVISION,
-    THREAD_STEPS_REVISION, revision_note,
+    THREAD_STEPS_REVISION, VISIBLE_PROOF_REVISION, revision_note,
 };
 use crate::model::{DomainEvent, streams};
 use crate::work::{OrchestratorEntry, RequestState};
@@ -521,6 +521,16 @@ async fn a_session_from_before_the_bold_lead_rule_is_told_once() {
     told_once(
         BOLD_LEAD_REVISION,
         "No line or list item starts with bold text",
+    )
+    .await;
+}
+
+/// Rule R for a visible change's proof however small (Q68).
+#[tokio::test]
+async fn a_session_from_before_the_visible_proof_rule_is_told_once() {
+    told_once(
+        VISIBLE_PROOF_REVISION,
+        "a grep or a passing test isn't that proof",
     )
     .await;
 }
