@@ -205,7 +205,8 @@ async fn a_lead_waiting_for_its_go_ahead_still_waits_after_a_kill() {
                     assert!(!reply.is_error, "{}", reply.text);
                     return Reply::text("Started it.");
                 }
-                if turn.input.contains("Do it.") {
+                // The user's own words: a later message for that request names it too.
+                if turn.input.starts_with("Do it.") {
                     return delegate(&turn, "implement").await;
                 }
                 // Its outline, and anything else, waits for the user here.
