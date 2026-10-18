@@ -190,7 +190,6 @@ mod tests {
                 waiting: false,
                 runs: Vec::new(),
                 result: Some("passed".into()),
-                consent: None,
             },
             position,
         )

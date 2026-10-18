@@ -1167,7 +1167,6 @@ mod ci_tests {
                     waiting: false,
                     runs: Vec::new(),
                     result: result.map(str::to_owned),
-                    consent: None,
                 },
                 at_ms: 0,
                 position: 0,

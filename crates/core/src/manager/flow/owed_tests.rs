@@ -228,7 +228,6 @@ fn ci_row(result: Option<&str>) -> OrchestratorStepKind {
         waiting: result.is_none(),
         runs: Vec::new(),
         result: result.map(str::to_owned),
-        consent: None,
     }
 }
 

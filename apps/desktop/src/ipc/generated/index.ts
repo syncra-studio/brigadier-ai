@@ -78,7 +78,6 @@ export type { CauseTokens } from "./CauseTokens";
 export type { CheckStatus } from "./CheckStatus";
 export type { CheckoutFile } from "./CheckoutFile";
 export type { ChecksResult } from "./ChecksResult";
-export type { CiConsent } from "./CiConsent";
 export type { CiRun } from "./CiRun";
 export type { Claim } from "./Claim";
 export type { CleanBadge } from "./CleanBadge";

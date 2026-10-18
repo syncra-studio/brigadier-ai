@@ -1387,41 +1387,6 @@ impl SessionManager {
         Ok(run)
     }
 
-    /// When the user last wrote on the branch shown, if ever.
-    pub(super) async fn latest_user_message_at(
-        &self,
-        id: &ConversationId,
-        board: &crate::board::Board,
-    ) -> Result<Option<i64>> {
-        let messages = match &board.head {
-            Some((head, _)) => self.core.branch(id, head).await?,
-            None => self.core.all_messages(id).await?,
-        };
-        Ok(messages
-            .iter()
-            .rev()
-            .find(|message| message.role == MessageRole::User)
-            .map(|message| message.created_at_ms))
-    }
-
-    /// When the user last wrote: their latest message, or a message they queued for the running
-    /// turn or edited there, whichever is newer. A "don't push" queued while a CI fix's turn
-    /// runs ends the yes it would have pushed under.
-    pub(super) async fn user_wrote_at(
-        &self,
-        id: &ConversationId,
-        board: &crate::board::Board,
-    ) -> Result<Option<i64>> {
-        let sent = self.latest_user_message_at(id, board).await?;
-        let queued = board
-            .queue
-            .items
-            .iter()
-            .map(|item| item.edited_at_ms.unwrap_or(item.queued_at_ms))
-            .max();
-        Ok(sent.max(queued))
-    }
-
     /// `finish_session` with `when` "now": see [`Self::finish_session_when`].
     #[cfg(all(test, unix))]
     pub(crate) async fn finish_session(

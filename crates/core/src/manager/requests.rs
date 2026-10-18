@@ -1093,7 +1093,6 @@ mod tests {
             waiting: false,
             runs: Vec::new(),
             result: result.map(str::to_owned),
-            consent: None,
         }
     }
 

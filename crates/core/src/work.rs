@@ -2329,11 +2329,6 @@ pub enum OrchestratorStepKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         result: Option<String>,
-        /// The user's yes to watching, which lets a CI fix be pushed to the same repository
-        /// and branch under Approve for me; none for a watch the user didn't answer.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        consent: Option<CiConsent>,
     },
     /// "Couldn't message ‹title›": a `message_session` the engine refused before anything was
     /// recorded (an archived, unknown or own target, the hop or rate rule, a bad `reply_to`,
@@ -2371,22 +2366,6 @@ impl OrchestratorStepKind {
             _ => false,
         }
     }
-}
-
-/// The user's answer on the card where the thread asked to watch a push's CI. While its loop
-/// lasts (a red run, a fix pushed, watched again), Brigadier's escalation reviewer may allow a
-/// push to the same repository and branch; it ends with a watch that passed, saw no runs or
-/// stopped, or with the user's next message (SESSION-FIXES-PLAN.md phase 5, the user's
-/// addition). The reviewer, not Brigadier, judges whether the answer was a yes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct CiConsent {
-    /// The question card the user answered.
-    pub card: CardId,
-    /// What it asked, and the user's answer.
-    pub question: String,
-    pub answer: String,
-    pub answered_at_ms: i64,
 }
 
 /// One GitHub Actions run of a watched push.

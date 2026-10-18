@@ -87,7 +87,7 @@ impl SessionManager {
             workdir.display()
         );
         let verdict = self
-            .review_escalation(id, &request, workspace, Some(workdir), protection)
+            .review_escalation(id, &request, workspace, protection)
             .await;
         let why = match verdict {
             Ok(verdict) if verdict.allow => {
@@ -157,9 +157,8 @@ impl SessionManager {
         unattended: bool,
     ) -> Settled {
         let what = describe(request);
-        let dir = request.cwd.as_deref().map(Path::new).or(workspace);
         let why = match self
-            .review_escalation(id, &what, workspace, dir, protection)
+            .review_escalation(id, &what, workspace, protection)
             .await
         {
             Ok(verdict) if verdict.allow => {
@@ -204,44 +203,13 @@ impl SessionManager {
         }
     }
 
-    /// The reviewer's verdict on `request` (what is asked, and where: `dir`). The user's
-    /// consents it was shown are read again before an allowing verdict counts: a message they
-    /// wrote or a watch that ended while it reviewed changes them, and then it reviews again
-    /// with the current ones. Consents still changing after that leave no verdict (the user's
-    /// card, or a refusal when nobody is there).
+    /// The reviewer's verdict on a sandbox escalation under the session's protection rules.
     async fn review_escalation(
         &self,
         id: &ConversationId,
         request: &str,
         workspace: Option<&Path>,
-        dir: Option<&Path>,
         protection: &Protection,
-    ) -> std::result::Result<Verdict, String> {
-        let mut consents = self.push_consents(id, dir, workspace).await;
-        for _ in 0..2 {
-            let verdict = self
-                .review_once(id, request, workspace, protection, consents.as_deref())
-                .await?;
-            if !verdict.allow || consents.is_none() {
-                return Ok(verdict);
-            }
-            let now = self.push_consents(id, dir, workspace).await;
-            if now == consents {
-                return Ok(verdict);
-            }
-            consents = now;
-        }
-        Err("the user's consents changed while it reviewed".to_owned())
-    }
-
-    /// One run of the reviewer on `request`, shown `consents` (`push_consents`).
-    async fn review_once(
-        &self,
-        id: &ConversationId,
-        request: &str,
-        workspace: Option<&Path>,
-        protection: &Protection,
-        consents: Option<&str>,
     ) -> std::result::Result<Verdict, String> {
         let counted_as = TaskId(format!("{ESCALATION_OWNER}{}", uuid::Uuid::now_v7()));
         let owner = counted_as.0.clone();
@@ -299,9 +267,6 @@ impl SessionManager {
                 // outside it would reach.
                 if let Some(rule) = brigadier_providers::approver_rule(protection) {
                     prompt.push_str(&format!("\n\n{rule}"));
-                }
-                if let Some(consents) = consents {
-                    prompt.push_str(&format!("\n\n{consents}"));
                 }
                 let turn = async {
                     session
@@ -367,70 +332,6 @@ impl SessionManager {
         self.runtime.ledger().dispose(&owner).await;
         verdict(&reply?)
     }
-}
-
-impl SessionManager {
-    /// The user's consents that may cover a push, as the reviewer reads them: their yes to
-    /// watching CI while its loop lasts (a fix pushed to the same repository and branch, and
-    /// watched again; `ci::live_ci_consents`), with the push remotes to check the push against:
-    /// of `dir`, where the request runs, or else of the project's folder (`workspace`; a
-    /// thread runs in a folder of its own). None when there is no such yes.
-    async fn push_consents(
-        &self,
-        id: &ConversationId,
-        dir: Option<&Path>,
-        workspace: Option<&Path>,
-    ) -> Option<String> {
-        let board = self.core.board(id).await.ok()?;
-        let spoke = self.user_wrote_at(id, &board).await.ok()?;
-        let consents = super::ci::live_ci_consents(&board, spoke);
-        if consents.is_empty() {
-            return None;
-        }
-        let mut text = String::from(
-            "The user's consent that may cover a push: they said yes to watching CI, which covers pushing CI fixes to the same repository and branch while the watch goes on.",
-        );
-        for (repo, branch, consent) in &consents {
-            text.push_str(&format!(
-                "\n- `{repo}` on GitHub, branch `{branch}`: asked \u{201c}{}\u{201d}, the user answered \u{201c}{}\u{201d}.",
-                consent.question.trim(),
-                consent.answer.trim()
-            ));
-        }
-        let mut remotes = push_remotes(dir).await;
-        if remotes.is_none() && workspace != dir {
-            remotes = push_remotes(workspace).await;
-        }
-        text.push_str(&format!(
-            "\nThe folder's push remotes:\n{}",
-            remotes.as_deref().unwrap_or("(none found)")
-        ));
-        Some(text)
-    }
-}
-
-/// `git remote -v`'s push lines in `dir`; none when there are none to read.
-async fn push_remotes(dir: Option<&Path>) -> Option<String> {
-    let dir = dir?;
-    let output = tokio::time::timeout(
-        Duration::from_secs(10),
-        tokio::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["remote", "-v"])
-            .stdin(std::process::Stdio::null())
-            .output(),
-    )
-    .await;
-    let lines: Vec<String> = match output {
-        Ok(Ok(output)) if output.status.success() => String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter(|line| line.ends_with("(push)"))
-            .map(str::to_owned)
-            .collect(),
-        _ => Vec::new(),
-    };
-    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 /// A CLI's request to go beyond its sandbox as the reviewer reads it.
