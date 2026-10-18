@@ -493,6 +493,8 @@ type Log = Arc<Mutex<Vec<String>>>;
 async fn shipping(name: &str, auto_merge: bool) -> (Flow, Log) {
     let log: Log = Arc::default();
     let said = log.clone();
+    // Each ship writes new notes, so a second session has something to merge too.
+    let shipped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let flow = Flow::start(
         name,
         Options {
@@ -500,7 +502,7 @@ async fn shipping(name: &str, auto_merge: bool) -> (Flow, Log) {
             ..Options::default()
         },
         script(move |turn| {
-            let said = said.clone();
+            let (said, shipped) = (said.clone(), shipped.clone());
             async move {
                 if !turn.is_orchestrator() {
                     return Reply::text("Done.");
@@ -510,7 +512,8 @@ async fn shipping(name: &str, auto_merge: bool) -> (Flow, Log) {
                         .unwrap()
                         .push(format!("bar: {}", turn.prompt.contains(AUTO_MERGE)));
                     let workspace = &turn.add_dirs[0];
-                    std::fs::write(workspace.join("NOTES.md"), "notes\n").unwrap();
+                    let n = shipped.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    std::fs::write(workspace.join("NOTES.md"), format!("notes {n}\n")).unwrap();
                     git(workspace, &["add", "NOTES.md"]);
                     git(workspace, &["commit", "-q", "-m", "Add notes"]);
                     let reply = turn.call("finish_session", json!({})).await;
@@ -563,6 +566,41 @@ async fn with_merging_on_its_own_on_the_thread_merges_with_no_consent() {
         "no card: {:#?}",
         board.questions
     );
+    flow.stop().await;
+}
+
+/// A merge carries its record: the commit it merged, and what ran on it. The first merge on its
+/// own in a project says so; the next one, from another session of the project, stays quiet.
+#[tokio::test]
+async fn the_first_merge_on_its_own_in_a_project_is_marked_once() {
+    let (flow, _) = shipping("auto-merge-first", true).await;
+    let record = |board: &crate::board::Board| {
+        board
+            .orchestrator_steps
+            .iter()
+            .find_map(|step| match &step.kind {
+                OrchestratorStepKind::Merged { record, head, .. } => {
+                    Some((record.clone().expect("a merge record"), head.clone()))
+                }
+                _ => None,
+            })
+            .expect("merged")
+    };
+    flow.say("Ship it.").await;
+    let (first, head) = record(&flow.settled().await);
+    assert!(first.first_auto);
+    assert_eq!(Some(first.head.clone()), head);
+    // Nothing ran on it: the record shows each part missing.
+    assert!(first.checks.is_empty() && first.ci.is_none() && first.verifier.is_none());
+    let sibling = flow
+        .manager
+        .create_session_from(&flow.conversation, None)
+        .await
+        .unwrap()
+        .id;
+    flow.say_to(&sibling, "Ship it.").await;
+    let (second, _) = record(&flow.settled_in(&sibling).await);
+    assert!(!second.first_auto, "quiet after the first");
     flow.stop().await;
 }
 

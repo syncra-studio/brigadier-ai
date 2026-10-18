@@ -2824,6 +2824,7 @@ mod tests {
                 pr: None,
                 auto: false,
                 requests: Vec::new(),
+                record: None,
             },
             at_ms: 20,
             position: 0,

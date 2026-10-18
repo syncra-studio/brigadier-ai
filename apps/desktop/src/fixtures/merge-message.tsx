@@ -1,11 +1,12 @@
 /**
  * The merge message in a production ConversationView (the finished phase flow): the first
  * request merged its pull request on its own, and its reply carries the thread's proof, a
- * screenshot and a recording (`attach_proof`), and Revert. ?drive=1 writes what the message
+ * screenshot and a recording (`attach_proof`), what was checked, and Revert (beside the line saying
+ * it merged on its own, the project's first such merge; ?first=0 a later one). ?drive=1 writes what the message
  * shows to #merge-message-result, then clicks Revert twice and records what was sent
  * (MergeMessageRender.test.ts reads it).
  */
-import type { OrchestratorStep } from "@/ipc/generated";
+import type { MergeRecord, OrchestratorStep } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 
 const params = new URLSearchParams(location.search);
@@ -35,6 +36,17 @@ internals.invoke = (command, args, options) => {
   return invoke(command, args, options);
 };
 
+// Tests ran on the merged commit; the review stopped one commit short of it; CI passed on it.
+const RECORD: MergeRecord = {
+  head: "a1b2c3d4",
+  checks: [{ command: "pnpm test", status: "exit 0", onHead: true }],
+  reviews: [{ reviewer: "codex", model: "gpt-6", from: "0000aaaa", to: "9999bbbb", state: { type: "findings", count: 2 }, fixed: 1, dismissed: 1, open: 0, onHead: false }],
+  ci: { sha: "a1b2c3d4", result: "passed", onHead: true },
+  proofs: 2,
+  verifier: null,
+  firstAuto: params.get("first") !== "0",
+};
+
 const step = (position: number, kind: OrchestratorStep["kind"]): OrchestratorStep => ({ requestId: "r1", atMs: Date.now(), position, kind });
 useBoard.setState(({ board }) =>
   board
@@ -45,7 +57,7 @@ useBoard.setState(({ board }) =>
             ...board.orchestratorSteps,
             step(7.2, { type: "proof", id: "proof-shot", name: "readme.png", mime: "image/png", caption: "The install section, fixed" }),
             step(7.3, { type: "proof", id: "proof-video", name: "install.webm", mime: "video/webm" }),
-            step(7.4, { type: "merged", branch: "brigadier/flow/session", base: "main", commits: 1, askedIn: "auto:1", head: "a1b2c3d", mergeCommit: "f00dfeed", pr: 7, auto: true, requests: ["r1"] }),
+            step(7.4, { type: "merged", branch: "brigadier/flow/session", base: "main", commits: 1, askedIn: "auto:1", head: "a1b2c3d4", mergeCommit: "f00dfeed", pr: 7, auto: true, requests: ["r1"], record: RECORD }),
           ],
         },
       }
@@ -73,6 +85,9 @@ async function drive() {
     // No row of its own in the work.
     rows: [...document.querySelectorAll('[data-slot="orchestrator-step"]')].filter((row) => /readme\.png|install\.webm|attach/i.test(text(row))).length,
     read: [...new Set(read)].toSorted(),
+    checked: [...(root?.querySelectorAll<HTMLElement>('[data-slot="merge-checked"] li') ?? [])].map((line) => `${line.dataset.warn ? "! " : ""}${text(line)}`),
+    firstAuto: text(root?.querySelector('[data-slot="merge-first-auto"] p')) || null,
+    revertBeside: !!root?.querySelector('[data-slot="merge-first-auto"] [data-slot="merge-revert"]'),
     revert: await revert(),
   };
 }

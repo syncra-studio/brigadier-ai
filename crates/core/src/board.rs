@@ -136,6 +136,20 @@ pub(crate) struct CutOff {
     pub(crate) began: bool,
 }
 
+/// How many of the thread's check runs a board keeps.
+pub(crate) const THREAD_CHECKS_KEPT: usize = 20;
+
+/// One of the thread's `run_check` runs ([`Board::thread_checks`]).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ThreadCheck {
+    pub(crate) command: String,
+    pub(crate) workdir: String,
+    /// The tree of the files it ran on, uncommitted changes included, when known.
+    pub(crate) tree: Option<String>,
+    pub(crate) status: String,
+    pub(crate) position: i64,
+}
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Board {
     pub(crate) tasks: HashMap<TaskId, Task>,
@@ -183,6 +197,9 @@ pub(crate) struct Board {
     pub(crate) runs: HashMap<OvernightRunId, OvernightRun>,
     /// Its one-shot reviews, by id.
     pub(crate) reviews: HashMap<String, ReviewRun>,
+    /// The thread's own `run_check` runs, the latest of each command and folder (at most
+    /// [`THREAD_CHECKS_KEPT`]): what a merge record reads.
+    pub(crate) thread_checks: Vec<ThreadCheck>,
     /// Its runs of the full checks on the integrated tree, by id.
     pub(crate) integrated_checks: HashMap<String, crate::work::IntegratedCheck>,
     /// The thread's commands that went to the background, by id.
@@ -544,6 +561,27 @@ impl Board {
             }
             DomainEvent::OutputStored { output, .. } => {
                 self.outputs.insert(output.alias.clone(), output.clone());
+            }
+            DomainEvent::CheckRan {
+                task_id: None,
+                tree,
+                command,
+                workdir,
+                status,
+                ..
+            } => {
+                self.thread_checks
+                    .retain(|check| check.command != *command || check.workdir != *workdir);
+                self.thread_checks.push(ThreadCheck {
+                    command: command.clone(),
+                    workdir: workdir.clone(),
+                    tree: tree.clone(),
+                    status: status.clone(),
+                    position: stream_seq,
+                });
+                if self.thread_checks.len() > THREAD_CHECKS_KEPT {
+                    self.thread_checks.remove(0);
+                }
             }
             DomainEvent::ThreadLooked {
                 reads, searches, ..

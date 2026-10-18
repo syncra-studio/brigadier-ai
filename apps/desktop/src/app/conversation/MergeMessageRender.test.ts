@@ -25,3 +25,19 @@ test("Revert on the merge message sends the fixed request once", { timeout: 6000
     after: "Revert asked",
   });
 });
+
+// The merge message lists what was checked of the merged commit, a review short of it marked;
+// the project's first merge on its own says so once, with Revert beside the line.
+test("the merge message shows what was checked and the first merge on its own", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "merge-message.html?drive=1", "merge-message-result", 15000)) as Record<string, unknown>;
+  assert.deepEqual(seen.checked, [
+    "pnpm test: passed on a1b2c3d",
+    "! Codex review of 0000aaa..9999bbb: 2 findings, 1 fixed, 1 dismissed, 0 open, not up to the merged commit",
+    "CI passed on a1b2c3d",
+    "2 screenshots or recordings",
+  ]);
+  assert.equal(seen.firstAuto, "Merged on its own, as your setting has it.");
+  assert.equal(seen.revertBeside, true);
+  const later = JSON.parse(await renderFixturePage(t, "merge-message.html?drive=1&first=0", "merge-message-result", 15000)) as Record<string, unknown>;
+  assert.equal(later.firstAuto, null, "quiet after the first");
+});

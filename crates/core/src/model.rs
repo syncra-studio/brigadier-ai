@@ -105,6 +105,11 @@ pub struct Project {
     /// about. A folder with none is asked about.
     #[serde(default)]
     pub trust: Vec<FolderTrust>,
+    /// A session of it merged on its own once: the merge messages after that one stay quiet
+    /// about it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub auto_merged: bool,
 }
 
 impl Project {
@@ -2709,6 +2714,7 @@ mod tests {
                 trusted: false,
                 decided_at_ms: 1,
             }],
+            auto_merged: false,
         };
         // The project's folder, never answered: asked about, and not trusted until then.
         assert!(!project.counts_trusted("/code/now"));

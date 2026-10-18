@@ -60,6 +60,7 @@ mod landing;
 mod lifecycle;
 mod machine;
 mod merge_consent;
+mod merge_record;
 mod outcomes;
 mod outputs;
 pub mod overnight;

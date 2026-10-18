@@ -350,6 +350,8 @@ impl SessionManager {
             requests.push(request.to_owned());
         }
         let (named, onto_base) = (branch.clone(), base.clone());
+        let auto = self.auto_merge_in(id);
+        let record = self.merge_record(id, &worktree, &branch, &head, auto).await;
         self.orchestrator_step_in(
             id,
             requests.last().cloned(),
@@ -362,8 +364,9 @@ impl SessionManager {
                 head: Some(head),
                 merge_commit: Some(onto.0.clone()),
                 pr: Some(pr.number),
-                auto: self.auto_merge_in(id),
+                auto,
                 requests,
+                record,
             },
         )
         .await;

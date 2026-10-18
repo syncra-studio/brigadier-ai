@@ -7,6 +7,7 @@ import type { FeedbackKind } from "./FeedbackKind";
 import type { FileStat } from "./FileStat";
 import type { ItemStatus } from "./ItemStatus";
 import type { MergeCondition } from "./MergeCondition";
+import type { MergeRecord } from "./MergeRecord";
 import type { MergedUpstream } from "./MergedUpstream";
 import type { ProviderKind } from "./ProviderKind";
 import type { TaskId } from "./TaskId";
@@ -97,7 +98,12 @@ auto?: boolean,
 /**
  * The requests whose work it merged.
  */
-requests?: Array<string>, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "mergeHeld", branch: string, base: string, 
+requests?: Array<string>, 
+/**
+ * What was checked of the code it merged, as recorded then (the merge message's
+ * "Checked" list); none on merges from before it was kept.
+ */
+record?: MergeRecord, } | { "type": "fullAccessSuggested", reason: string, } | { "type": "feedbackOffered", id: string, kind: FeedbackKind, title: string, body: string, } | { "type": "feedbackAnswered", id: string, sent: boolean, } | { "type": "mergeHeld", branch: string, base: string, 
 /**
  * The user message, or "Merge into main" click (a merge card's, before BUILD-PLAN
  * A4), whose consent it holds.

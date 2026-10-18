@@ -1445,7 +1445,7 @@ pub enum ReviewKind {
 }
 
 /// Where a one-shot review stands.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -1532,6 +1532,78 @@ pub struct ReviewRun {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(skip)]
     pub answer_waits: bool,
+}
+
+/// What was checked of the code a merge took, as Brigadier recorded it when it merged: each
+/// check with the commit it ran on, so one on an older commit reads stale and one that never
+/// ran reads missing. Informational: nothing here holds or gates a merge.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeRecord {
+    /// The commit whose code merged (the session branch's head).
+    pub head: String,
+    /// The thread's checks (`run_check`) since the last merge, the latest run of each.
+    pub checks: Vec<MergeCheck>,
+    /// The other vendor's code reviews since the last merge, oldest first.
+    pub reviews: Vec<MergeReview>,
+    /// The branch's last CI watch.
+    pub ci: Option<MergeCi>,
+    /// The screenshots and recordings attached since the last merge.
+    pub proofs: u32,
+    /// The last fresh verifier's result, when one ran.
+    pub verifier: Option<MergeVerifier>,
+    /// It merged on its own, the project's first such merge: the message says so once.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub first_auto: bool,
+}
+
+/// A `run_check` command, as it last ran.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeCheck {
+    pub command: String,
+    /// "exit 0", "exit 1", "timed out after 600 s".
+    pub status: String,
+    /// It ran on exactly the merged code (the head's files, committed or not then).
+    pub on_head: bool,
+}
+
+/// A review of the merged work: who reviewed which range, and how its findings were settled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeReview {
+    pub reviewer: ProviderKind,
+    pub model: Option<String>,
+    pub from: String,
+    pub to: String,
+    pub state: ReviewState,
+    pub fixed: u32,
+    pub dismissed: u32,
+    /// Open, or not recorded by the thread.
+    pub open: u32,
+    /// It reviewed up to the merged head.
+    pub on_head: bool,
+}
+
+/// A CI watch's result on its commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeCi {
+    pub sha: String,
+    /// "passed", "failed", "no runs", "stopped"; none while it still ran.
+    pub result: Option<String>,
+    pub on_head: bool,
+}
+
+/// A fresh verifier's result on its commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeVerifier {
+    pub commit: String,
+    /// None while it hadn't reported.
+    pub result: Option<ChecksResult>,
+    pub on_head: bool,
 }
 
 /// One finding of a review. Brigadier splits it from the review's text; the thread decides
@@ -2169,6 +2241,11 @@ pub enum OrchestratorStepKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         #[ts(as = "Option<Vec<String>>", optional)]
         requests: Vec<String>,
+        /// What was checked of the code it merged, as recorded then (the merge message's
+        /// "Checked" list); none on merges from before it was kept.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        record: Option<Box<MergeRecord>>,
     },
     /// A notice that something the user asked for needs more than the session's sandbox
     /// allows (`suggest_full_access`), with a button that switches the session to Full access.

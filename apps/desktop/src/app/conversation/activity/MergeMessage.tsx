@@ -5,7 +5,8 @@ import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { Button } from "@/components/ui/button";
-import type { OrchestratorStepKind } from "@/ipc/generated";
+import type { MergeRecord, OrchestratorStepKind } from "@/ipc/generated";
+import { VENDOR_LABELS } from "@/lib/routing";
 import { send } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
@@ -14,7 +15,7 @@ import { useThreadImages } from "@/state/threadImages";
 /**
  * What the thread attached to its reply, the merge message: the screenshots and recordings it
  * made of the change (`attach_proof`), under the answer, each with what it shows; and, once the
- * turn merged, Revert.
+ * turn merged, what was checked of the merged commit and Revert.
  */
 
 type Proof = Extract<OrchestratorStepKind, { type: "proof" }>;
@@ -62,6 +63,67 @@ function Revert({ conversationId, merge }: { conversationId: string; merge: Merg
   );
 }
 
+const short = (sha: string) => sha.slice(0, 7);
+
+/**
+ * What was checked of the merged commit, one plain line each, as recorded when it merged: a
+ * check on an older commit, a failure or something missing reads as a warning. Never a gate.
+ */
+function checkedLines(record: MergeRecord, pr: boolean): { text: string; warn: boolean }[] {
+  const head = short(record.head);
+  const on = (sha: string, onHead: boolean) => (onHead ? `on ${head}` : `on ${short(sha)}, not the merged commit`);
+  const lines: { text: string; warn: boolean }[] = [];
+  for (const check of record.checks) {
+    const passed = check.status === "exit 0";
+    lines.push({ text: `${check.command}: ${passed ? "passed" : check.status} ${check.onHead ? `on ${head}` : "on an earlier version"}`, warn: !passed || !check.onHead });
+  }
+  if (record.checks.length === 0) lines.push({ text: "No tests or type checks ran", warn: true });
+  for (const review of record.reviews) {
+    const findings = review.fixed + review.dismissed + review.open;
+    const outcome =
+      review.state.type === "clean"
+        ? "clean"
+        : review.state.type === "running"
+          ? "still running"
+          : review.state.type === "failed"
+            ? "couldn't run"
+            : `${findings} finding${findings === 1 ? "" : "s"}, ${review.fixed} fixed, ${review.dismissed} dismissed, ${review.open} open`;
+    lines.push({
+      text: `${VENDOR_LABELS[review.reviewer]} review of ${short(review.from)}..${short(review.to)}: ${outcome}${review.onHead ? "" : ", not up to the merged commit"}`,
+      warn: !review.onHead || review.open > 0 || review.state.type === "running" || review.state.type === "failed",
+    });
+  }
+  if (record.reviews.length === 0) lines.push({ text: "No review", warn: true });
+  if (record.ci) {
+    const result = record.ci.result ?? "still running";
+    lines.push({ text: `CI ${result} ${on(record.ci.sha, record.ci.onHead)}`, warn: result !== "passed" || !record.ci.onHead });
+  } else if (pr) {
+    lines.push({ text: "No CI result", warn: true });
+  }
+  if (record.verifier) {
+    const result = record.verifier.result;
+    const said = result === null ? "no report yet" : { passed: "passed", failed: "failed", notRun: "couldn't run every check", noChecks: "no checks to run" }[result];
+    lines.push({ text: `Fresh verifier: ${said} ${on(record.verifier.commit, record.verifier.onHead)}`, warn: result !== "passed" || !record.verifier.onHead });
+  }
+  lines.push({ text: record.proofs === 0 ? "No screenshot or recording" : `${record.proofs} screenshot${record.proofs === 1 ? "" : "s"} or recording${record.proofs === 1 ? "" : "s"}`, warn: false });
+  return lines;
+}
+
+function Checked({ record, pr }: { record: MergeRecord; pr: boolean }) {
+  return (
+    <div data-slot="merge-checked" className="flex flex-col gap-0.5 text-sm">
+      <p className="text-muted-foreground font-medium">Checked</p>
+      <ul className="flex flex-col gap-0.5">
+        {checkedLines(record, pr).map((line) => (
+          <li key={line.text} data-warn={line.warn || undefined} className={line.warn ? "text-warning" : "text-muted-foreground"}>
+            {line.text}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** The proofs of a finished turn, in the order the thread attached them, then Revert. */
 export function MergeMessage({ steps }: { steps: readonly BlockOrchestratorStep[] }) {
   const conversationId = useViewConversation()?.id ?? null;
@@ -102,7 +164,16 @@ export function MergeMessage({ steps }: { steps: readonly BlockOrchestratorStep[
           </figure>
         );
       })}
-      {merge && conversationId && <Revert conversationId={conversationId} merge={merge} />}
+      {merge?.record && <Checked record={merge.record} pr={merge.pr !== undefined} />}
+      {merge && conversationId && merge.record?.firstAuto ? (
+        // The project's first merge on its own says so once, with its undo beside it.
+        <div data-slot="merge-first-auto" className="flex items-center gap-2">
+          <p className="text-sm">Merged on its own, as your setting has it.</p>
+          <Revert conversationId={conversationId} merge={merge} />
+        </div>
+      ) : (
+        merge && conversationId && <Revert conversationId={conversationId} merge={merge} />
+      )}
     </div>
   );
 }

@@ -1727,6 +1727,9 @@ impl SessionManager {
             String::new()
         };
         let requests = board.merging_requests(None);
+        let record = self
+            .merge_record(id, &repo, &branch, &session_tip.0, auto)
+            .await;
         self.orchestrator_step(
             id,
             OrchestratorStepKind::Merged {
@@ -1740,6 +1743,7 @@ impl SessionManager {
                 pr: None,
                 auto,
                 requests,
+                record,
             },
         )
         .await;

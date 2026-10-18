@@ -21,4 +21,9 @@ prefs: ProjectPrefs,
  * The user's answers to "Do you trust this folder?", one per repository folder asked
  * about. A folder with none is asked about.
  */
-trust: Array<FolderTrust>, };
+trust: Array<FolderTrust>, 
+/**
+ * A session of it merged on its own once: the merge messages after that one stay quiet
+ * about it.
+ */
+autoMerged?: boolean, };

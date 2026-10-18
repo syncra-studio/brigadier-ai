@@ -261,6 +261,7 @@ mod tests {
             repos: Vec::new(),
             prefs: Default::default(),
             trust: Vec::new(),
+            auto_merged: false,
         }
     }
 
