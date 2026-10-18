@@ -17,7 +17,7 @@ where
 }
 
 #[tokio::test]
-async fn clean_up_removes_its_own_merged_branch_and_keeps_another_sessions() {
+async fn clean_up_removes_merged_work_and_explains_how_to_discard_kept_unmerged_work() {
     let flow = Flow::start(
         "clean-up",
         Options::default(),
@@ -59,6 +59,9 @@ async fn clean_up_removes_its_own_merged_branch_and_keeps_another_sessions() {
         }),
     )
     .await;
+    let mut settings = flow.core.settings();
+    settings.branch_prefix = "team$USER/".into();
+    flow.core.update_settings(settings).await.unwrap();
     flow.say("Add a note.").await;
     let board = flow
         .until("the landing", |board| {
@@ -90,5 +93,27 @@ async fn clean_up_removes_its_own_merged_branch_and_keeps_another_sessions() {
     // Nothing more to remove the second time.
     let again = flow.manager.clean_up(&flow.conversation).await.unwrap();
     assert!(again.starts_with("Nothing to remove"), "{again}");
+    // A finished task's unmerged branch stays, with instructions that do not point to Storage.
+    let tree = git(&flow.repo, &["rev-parse", &format!("{tip}^{{tree}}")]);
+    let unmerged = git(
+        &flow.repo,
+        &["commit-tree", &tree, "-p", &tip, "-m", "Unmerged work"],
+    );
+    git(&flow.repo, &["branch", &branch, &unmerged]);
+    let kept = flow.manager.clean_up(&flow.conversation).await.unwrap();
+    assert!(
+        kept.contains(&format!(
+            "Kept: branch `{branch}` (task-1): kept with its unmerged work"
+        )),
+        "{kept}"
+    );
+    assert!(kept.contains("open a terminal in the repository"), "{kept}");
+    assert!(
+        kept.contains(&format!("`git branch -D '{branch}'`")),
+        "{kept}"
+    );
+    assert!(kept.contains("discard that work"), "{kept}");
+    assert!(!kept.contains("Settings › Storage"), "{kept}");
+    assert_eq!(git(&flow.repo, &["rev-parse", &branch]), unmerged);
     flow.stop().await;
 }

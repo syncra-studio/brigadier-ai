@@ -124,8 +124,9 @@ impl SessionManager {
                     removed.push(format!("branch `{branch}` (task-{}, merged)", task.number));
                 }
                 Ok(Some((branch, false))) => kept.push(format!(
-                    "branch `{branch}` (task-{}): its work isn't merged; the user can remove it in Settings › Storage",
-                    task.number
+                    "branch `{branch}` (task-{}): kept with its unmerged work; to discard that work, the user can open a terminal in the repository and run `git branch -D {}`",
+                    task.number,
+                    super::disk::shell_quote(&branch)
                 )),
                 Ok(None) => {}
                 Err(err) => kept.push(format!("task-{}'s branch: {err}", task.number)),
@@ -139,7 +140,7 @@ impl SessionManager {
         if !kept.is_empty() {
             text.push_str(&format!(" Kept: {}.", kept.join("; ")));
         }
-        text.push_str(" The session's own worktree and branch, your temp folder and other sessions' work are never touched; don't remove anything by hand.");
+        text.push_str(" The session's own worktree and branch, your temp folder and other sessions' work are never touched; leave those alone.");
         Ok(text)
     }
 }
