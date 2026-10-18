@@ -1272,15 +1272,37 @@ fn busy_in(processes: &dyn brigadier_sandbox::Processes, dir: &Path) -> bool {
     // Read after the search, so a git command of ours found in it is among them; one gone by
     // now runs nothing.
     let own = processes.children(std::process::id()).unwrap_or_default();
-    found.iter().any(|pid| {
-        let ours_git = own.contains(pid)
-            && processes.command_line(*pid).is_some_and(|args| {
-                args.first()
+    found
+        .iter()
+        .any(|pid| runs_in(processes, own.contains(pid), *pid))
+}
+
+/// Whether `pid`, found working in a folder, keeps it busy; `ours` when it is a child of
+/// Brigadier's. A child of ours can't be told yet between its start and its program's: it still
+/// shows Brigadier's own command line, and one exiting shows none. Either is looked at again a
+/// moment later, when it runs its program or is gone (#269).
+fn runs_in(processes: &dyn brigadier_sandbox::Processes, ours: bool, pid: u32) -> bool {
+    let me: Vec<String> = std::env::args_os()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    for _ in 0..10 {
+        if !processes.is_alive(pid) || processes.is_zombie(pid) {
+            return false;
+        }
+        if !ours {
+            return true;
+        }
+        match processes.command_line(pid) {
+            Some(args) if args != me => {
+                return !args
+                    .first()
                     .and_then(|program| Path::new(program).file_stem())
-                    .is_some_and(|stem| stem == "git")
-            });
-        !ours_git && processes.is_alive(*pid) && !processes.is_zombie(*pid)
-    })
+                    .is_some_and(|stem| stem == "git");
+            }
+            _ => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+    true
 }
 
 fn older_than(path: &Path, age: Duration) -> bool {

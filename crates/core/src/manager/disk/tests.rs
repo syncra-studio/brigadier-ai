@@ -900,6 +900,109 @@ async fn only_what_is_not_brigadiers_own_git_keeps_a_folder_busy() {
     flow.stop().await;
 }
 
+/// One child of the test working in a folder, as Linux showed it moment by moment: each
+/// `(alive, zombie, command line)` holds for [`Replay::STEP`], the last one for good.
+struct Replay {
+    pid: u32,
+    since: std::time::Instant,
+    moments: Vec<(bool, bool, Option<Vec<String>>)>,
+}
+
+impl Replay {
+    const STEP: Duration = Duration::from_millis(15);
+
+    fn new(moments: Vec<(bool, bool, Option<Vec<String>>)>) -> Self {
+        Self {
+            pid: 4242,
+            since: std::time::Instant::now(),
+            moments,
+        }
+    }
+
+    fn now(&self) -> &(bool, bool, Option<Vec<String>>) {
+        let at = (self.since.elapsed().as_millis() / Self::STEP.as_millis()) as usize;
+        &self.moments[at.min(self.moments.len() - 1)]
+    }
+}
+
+impl brigadier_sandbox::Processes for Replay {
+    fn spawn_detached(
+        &self,
+        _: &brigadier_sandbox::SpawnSpec,
+    ) -> brigadier_sandbox::Result<brigadier_sandbox::DetachedChild> {
+        unreachable!()
+    }
+    fn piped_command(&self, _: &brigadier_sandbox::SpawnSpec) -> std::process::Command {
+        unreachable!()
+    }
+    fn is_alive(&self, pid: u32) -> bool {
+        pid == self.pid && self.now().0
+    }
+    fn is_zombie(&self, pid: u32) -> bool {
+        pid == self.pid && self.now().1
+    }
+    fn terminate(&self, _: u32) -> brigadier_sandbox::Result<()> {
+        unreachable!()
+    }
+    fn kill_tree(&self, _: u32) -> brigadier_sandbox::Result<()> {
+        unreachable!()
+    }
+    fn kill_group(&self, _: u32) -> brigadier_sandbox::Result<()> {
+        unreachable!()
+    }
+    fn descendants(&self, _: u32) -> brigadier_sandbox::Result<Vec<u32>> {
+        unreachable!()
+    }
+    fn children(&self, pid: u32) -> brigadier_sandbox::Result<Vec<u32>> {
+        assert_eq!(pid, std::process::id());
+        Ok(vec![self.pid])
+    }
+    fn group_of(&self, _: u32) -> Option<u32> {
+        unreachable!()
+    }
+    fn command_line(&self, pid: u32) -> Option<Vec<String>> {
+        (pid == self.pid).then(|| self.now().2.clone()).flatten()
+    }
+    fn suspend(&self, _: u32) -> brigadier_sandbox::Result<()> {
+        unreachable!()
+    }
+    fn resume(&self, _: u32) -> brigadier_sandbox::Result<()> {
+        unreachable!()
+    }
+    fn cpu_time_ms(&self, _: u32) -> Option<u64> {
+        unreachable!()
+    }
+    fn start_time_ms(&self, _: u32) -> brigadier_sandbox::Result<f64> {
+        unreachable!()
+    }
+    fn in_dir(&self, _: &Path) -> brigadier_sandbox::Result<Vec<u32>> {
+        Ok(vec![self.pid])
+    }
+}
+
+/// A git command of ours keeps no folder busy in its first and last moments either: started
+/// but not yet git, Linux shows it with the test's own command line, and exiting, with none
+/// (#269). A child of ours that turns out to run something else does keep it busy.
+#[test]
+fn brigadiers_own_git_starting_or_exiting_keeps_no_folder_busy() {
+    let me: Vec<String> = std::env::args_os()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let run = |program: &str| Some(vec![program.to_owned(), "status".to_owned()]);
+    let folder = Path::new("/nowhere");
+    let starting = Replay::new(vec![
+        (true, false, Some(me.clone())),
+        (true, false, run("git")),
+    ]);
+    assert!(!super::busy_in(&starting, folder));
+    let exiting = Replay::new(vec![(true, false, None), (false, false, None)]);
+    assert!(!super::busy_in(&exiting, folder));
+    let reaped_late = Replay::new(vec![(true, false, None), (true, true, None)]);
+    assert!(!super::busy_in(&reaped_late, folder));
+    let agent = Replay::new(vec![(true, false, Some(me)), (true, false, run("sleep"))]);
+    assert!(super::busy_in(&agent, folder));
+}
+
 /// A project's usage says where it is, when it was last used and how many conversations it
 /// has; what a scan offers names the project it belongs to.
 #[tokio::test]
