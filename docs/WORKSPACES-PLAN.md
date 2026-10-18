@@ -369,7 +369,7 @@ judges what a change needs. No must-lists, no thresholds, no loop:
      reconciliation after a PR merge.
    - Done when: the `M/ci.rs` tests cover PR checks, a `merge_by_user_tests` sibling for auto merges passes, and an
      `auto_merge_tests` case squash-merges a PR (stub `gh`, local bare remote), then sends a second request in the
-     same tab: the tab read Merged, and the second request starts from the new base with none of the old commits.
+     same tab: the tab reads Merged, and the second request starts from the new base with none of the old commits.
 5. **Setting + bar (behind `BRIGADIER_AUTO_MERGE=1`).** The setting, the revision note, and `finish_session`
    accepting `auto`.
    - Done when: flow tests show an auto merge with no consent when on, and consent still needed when off. Prompt tests
