@@ -222,7 +222,13 @@ impl Tool for SetValueTool {
             "set_value.AXValue",
             || async move {
                 tokio::task::spawn_blocking(move || {
-                    set_value_blocking(element_guard.as_ptr(), element_index, pid, &value)
+                    set_value_blocking(
+                        element_guard.as_ptr(),
+                        element_index,
+                        pid,
+                        window_id,
+                        &value,
+                    )
                 })
                 .await
             },
@@ -468,6 +474,7 @@ fn set_value_blocking(
     element_ptr: usize,
     element_index: usize,
     pid: i32,
+    window_id: u32,
     value: &str,
 ) -> anyhow::Result<SetValueOutcome> {
     let element = element_ptr as AXUIElementRef;
@@ -477,14 +484,20 @@ fn set_value_blocking(
     if role == "AXPopUpButton" {
         let element_title = unsafe { copy_string_attr(element, "AXTitle") }.unwrap_or_default();
         // Menu-item selection, not an AXValue write — no read-back to report.
-        select_popup_option(element, element_index, pid, value, &element_title).map(|detail| {
-            SetValueOutcome {
-                detail,
-                verified: None,
-                changed: None,
-                not_applied: false,
-                document_edited: None,
-            }
+        select_popup_option(
+            element,
+            element_index,
+            pid,
+            window_id,
+            value,
+            &element_title,
+        )
+        .map(|detail| SetValueOutcome {
+            detail,
+            verified: None,
+            changed: None,
+            not_applied: false,
+            document_edited: None,
         })
     } else {
         // Default path: write AXValue directly. Numeric controls (AXSlider /
@@ -852,10 +865,14 @@ fn dismiss_popup_menu(popup: AXUIElementRef, pid: i32) {
     }
 }
 
+// Popup selection is semantic AX input. Do not type labels speculatively:
+// prefix matches can commit other options, and pid-routed keys may reach a
+// sibling when an exact key window cannot be confirmed.
 fn select_popup_option(
     element: AXUIElementRef,
     element_index: usize,
     pid: i32,
+    _window_id: u32,
     value: &str,
     element_title: &str,
 ) -> anyhow::Result<String> {
@@ -1003,6 +1020,21 @@ mod popup_option_tests {
             .iter()
             .map(|title| ((*title).to_owned(), String::new()))
             .collect()
+    }
+
+    #[test]
+    fn regression_popup_selection_never_types_speculative_labels() {
+        // set_value is admitted as semantic AX input, not process-routed keys.
+        // Typing a label can commit prefix matches and reach a sibling window.
+        let source = include_str!("set_value.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            !production.contains("keyboard::type_text("),
+            "semantic popup selection must never synthesize option-label keys"
+        );
+        let options = pairs(&["Apple", "Apricot"]);
+        assert_eq!(matching_option(&options, "Applez"), None);
+        assert_eq!(matching_option(&options, "Apricot"), Some(1));
     }
 
     #[test]

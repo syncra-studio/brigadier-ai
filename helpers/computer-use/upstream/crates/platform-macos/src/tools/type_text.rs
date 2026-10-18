@@ -378,6 +378,7 @@ impl Tool for TypeTextTool {
                             window_id,
                             keyboard_policy: blocking_policy,
                             explicit_target: element_ptr.is_some() || used_pixel_focus,
+                            key_window_confirmed: false,
                         },
                     )
                 })
@@ -859,7 +860,10 @@ async fn background_keyboard_policy(
         }
     };
     let target = ExactWindowTarget { pid, window_id };
-    match decide_background_input(target, &facts, BackgroundAction::InsertText) {
+    // The exact window is made key for the key post (see
+    // `super::post_keys_to_window`), so a sibling window is not ambiguous.
+    let action = super::window_keyboard_action(BackgroundAction::InsertText);
+    match decide_background_input(target, &facts, action) {
         BackgroundInputDecision::Execute { .. } => Ok((lease, BackgroundKeyboardPolicy::Allowed)),
         BackgroundInputDecision::Refuse(refusal) => {
             let semantic_available = element_ptr.is_some()
@@ -1096,6 +1100,31 @@ fn classify_target_web_area(
     }
 }
 
+/// True when the window's own focused element is an editable field that sits
+/// OUTSIDE the page's `AXWebArea` — the browser's native chrome (omnibox,
+/// find bar). A paste or typed chord aimed at "the page" would land there.
+/// Conservative: unknown focus, a non-editable role, or any AX failure is
+/// `false`, so an unprobeable browser is never refused.
+pub(super) fn window_focus_is_browser_chrome_field(pid: i32, window_id: u32) -> bool {
+    unsafe {
+        let Some(el) = crate::ax::exact_target::focused_element_in_window(pid, window_id) else {
+            return false;
+        };
+        let role = copy_string_attr(el, "AXRole");
+        CFRelease(el as _);
+        if !matches!(
+            role.as_deref(),
+            Some("AXTextField") | Some("AXComboBox") | Some("AXSearchField")
+        ) {
+            return false;
+        }
+    }
+    matches!(
+        classify_target_web_area(pid, None, Some(window_id)),
+        WebAreaClassification::NonWebContent
+    )
+}
+
 /// Whether `pid` is a web browser whose omnibox and pages the foreground
 /// typing rung must activate fully (see the browser branch of the rung).
 pub(super) fn is_browser_pid(pid: i32) -> bool {
@@ -1271,6 +1300,10 @@ struct KeyboardRoute {
     /// The caller chose where the text goes: an `element_token`, or `x,y`
     /// that pixel-focused a field first.
     explicit_target: bool,
+    /// The addressed window was confirmed as the app's key window before this
+    /// call. An app that is not active reports no focused element even then
+    /// (LibreOffice), so a missing focus is not a reason to refuse.
+    key_window_confirmed: bool,
 }
 
 /// Best-effort-background ladder for `type_text`.
@@ -1291,11 +1324,79 @@ fn type_text_blocking(
     is_terminal_target: bool,
     route: KeyboardRoute,
 ) -> anyhow::Result<TypeTextDelivery> {
+    let window_id = route.window_id;
+    type_text_with_key_scope(
+        route,
+        element_ptr_and_idx.is_some(),
+        is_terminal_target,
+        || super::key_scope(pid, window_id),
+        |route| {
+            type_text_in_key_window(
+                pid,
+                text,
+                element_ptr_and_idx,
+                delay_ms,
+                is_terminal_target,
+                route,
+            )
+        },
+    )
+}
+
+/// Keep the key-window lease alive through dispatch. A retained AX target
+/// can still accept semantic text when process-routed keyboard input is unsafe.
+fn type_text_with_key_scope<S>(
+    mut route: KeyboardRoute,
+    retained_element: bool,
+    is_terminal: bool,
+    key_scope: impl FnOnce() -> Result<Option<S>, String>,
+    dispatch: impl FnOnce(KeyboardRoute) -> anyhow::Result<TypeTextDelivery>,
+) -> anyhow::Result<TypeTextDelivery> {
+    // Prime the addressed window before reading implicit focus or posting
+    // keys. A retained element can still take a semantic AX insert if priming
+    // fails, but no synthesized keys may then reach a sibling window.
+    let _scope = if !route.delivery_mode.is_foreground()
+        && matches!(route.keyboard_policy, BackgroundKeyboardPolicy::Allowed)
+    {
+        match key_scope() {
+            Ok(scope) => scope,
+            Err(reason) => {
+                let refusal = BackgroundRefusal {
+                    code: super::WINDOW_NOT_KEY,
+                    reason,
+                    advice: Some("foreground"),
+                };
+                if !retained_element || is_terminal {
+                    return Ok(TypeTextDelivery::Refused(refusal));
+                }
+                route.keyboard_policy = BackgroundKeyboardPolicy::SemanticOnly(refusal);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let route = KeyboardRoute {
+        key_window_confirmed: _scope.is_some(),
+        ..route
+    };
+    dispatch(route)
+}
+
+fn type_text_in_key_window(
+    pid: i32,
+    text: &str,
+    element_ptr_and_idx: Option<(usize, Option<usize>)>,
+    delay_ms: u64,
+    is_terminal_target: bool,
+    route: KeyboardRoute,
+) -> anyhow::Result<TypeTextDelivery> {
     let KeyboardRoute {
         delivery_mode,
         window_id,
         keyboard_policy,
         explicit_target,
+        key_window_confirmed,
     } = route;
     // Original field value before any rung drives read-back verification only.
     // An unreadable value is not evidence that the field is empty — and for a
@@ -1518,10 +1619,16 @@ fn type_text_blocking(
     // selection to another file, and the next Return renamed the wrong
     // item). Refuse before anything is sent.
     if !explicit_target && window_id.is_some() {
-        let accepts_text = ax_target.is_some_and(|(element, _, _)| unsafe {
-            focused_accepts_text(element)
-                || target_in_web_area(pid, Some((element as usize, None)), window_id)
-        });
+        let accepts_text = match ax_target {
+            Some((element, _, _)) => unsafe {
+                focused_accepts_text(element)
+                    || focused_is_editor_surface(pid, element)
+                    || target_in_web_area(pid, Some((element as usize, None)), window_id)
+            },
+            // No focused element, but the window is the confirmed key window:
+            // post the keys to it, as press_key does.
+            None => unfocused_window_accepts_keys(key_window_confirmed, &bundle_id_of(pid)),
+        };
         if !accepts_text {
             if let Some((element, true, _)) = ax_target {
                 unsafe { CFRelease(element as _) };
@@ -1557,6 +1664,7 @@ fn type_text_blocking(
         // not marked edited and would never save the new text (DS-07).
         let document = if ax_progress == Some(TypedProgress::Complete)
             && crate::document_edit::key_edit_after_insert()
+            && matches!(keyboard_policy, BackgroundKeyboardPolicy::Allowed)
         {
             unsafe { crate::document_edit::ensure_marked_after_ax_write(pid, element, false) }
         } else {
@@ -1663,6 +1771,52 @@ fn is_text_input_role(role: &str) -> bool {
     )
 }
 
+/// Roles of a focused element that is an editing surface without being a text
+/// field: a spreadsheet grid or cell, a document canvas, the scroll view that
+/// hosts one (LibreOffice Calc and Writer, Numbers, Pages). Keys typed into
+/// them edit the document, so a pid-routed key post is the right route.
+/// Lists and outlines stay out: there typed keys move the selection.
+fn is_editor_surface_role(role: &str) -> bool {
+    matches!(
+        role,
+        "AXLayoutArea" | "AXLayoutItem" | "AXScrollArea" | "AXTable" | "AXCell" | "AXGroup"
+    )
+}
+
+/// Apps whose focused views of those roles are file or item browsers, where
+/// typed keys drive type-to-select rather than edit.
+/// A window with no focused element takes keys only when it is the confirmed
+/// key window and the app is not an item browser.
+fn unfocused_window_accepts_keys(key_window_confirmed: bool, bundle_id: &str) -> bool {
+    key_window_confirmed && !is_item_browser_app(bundle_id)
+}
+
+fn bundle_id_of(pid: i32) -> String {
+    crate::apps::bundle_id_for_pid(pid).unwrap_or_default()
+}
+
+fn is_item_browser_app(bundle_id: &str) -> bool {
+    matches!(bundle_id, "com.apple.finder" | "com.apple.dock")
+}
+
+fn editor_surface_accepts_keys(role: &str, bundle_id: &str) -> bool {
+    is_editor_surface_role(role) && !is_item_browser_app(bundle_id)
+}
+
+/// Whether the focused element is an editing surface that takes typed keys
+/// even though it is not a text field (CUA-1767).
+///
+/// # Safety
+/// `element` must be a live `AXUIElementRef`.
+unsafe fn focused_is_editor_surface(pid: i32, element: AXUIElementRef) -> bool {
+    let role = copy_string_attr(element, "AXRole").unwrap_or_default();
+    if !is_editor_surface_role(&role) {
+        return false;
+    }
+    let bundle_id = crate::apps::bundle_id_for_pid(pid).unwrap_or_default();
+    editor_surface_accepts_keys(&role, &bundle_id)
+}
+
 const NO_FOCUSED_TEXT_INPUT: &str = "no_focused_text_input";
 
 fn no_focused_text_input_refusal(
@@ -1687,6 +1841,46 @@ fn no_focused_text_input_refusal(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unfocused_window_needs_a_confirmed_key_window() {
+        assert!(super::unfocused_window_accepts_keys(
+            true,
+            "org.libreoffice.script"
+        ));
+        assert!(!super::unfocused_window_accepts_keys(
+            false,
+            "org.libreoffice.script"
+        ));
+        assert!(!super::unfocused_window_accepts_keys(
+            true,
+            "com.apple.finder"
+        ));
+    }
+
+    #[test]
+    fn editor_surfaces_take_keys_but_item_browsers_do_not() {
+        for role in ["AXLayoutArea", "AXScrollArea", "AXTable", "AXCell"] {
+            assert!(super::editor_surface_accepts_keys(
+                role,
+                "org.libreoffice.script"
+            ));
+            assert!(super::editor_surface_accepts_keys(
+                role,
+                "com.apple.iWork.Numbers"
+            ));
+            assert!(!super::editor_surface_accepts_keys(
+                role,
+                "com.apple.finder"
+            ));
+        }
+        for role in ["AXOutline", "AXList", "AXRow", "AXButton", "AXMenuItem", ""] {
+            assert!(!super::editor_surface_accepts_keys(
+                role,
+                "org.libreoffice.script"
+            ));
+        }
+    }
+
     #[test]
     fn chromium_native_field_refuses_only_background_submits() {
         let refusal = super::chromium_native_field_submit_refusal(true, "file:///tmp/report.log\n")
@@ -1724,6 +1918,72 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn regression_retained_ax_insert_survives_failed_keyboard_priming() {
+        use std::cell::Cell;
+        let inserted = Cell::new(false);
+        let route = || KeyboardRoute {
+            delivery_mode: super::super::DeliveryMode::Background,
+            window_id: Some(7),
+            keyboard_policy: BackgroundKeyboardPolicy::Allowed,
+            explicit_target: true,
+            key_window_confirmed: false,
+        };
+        let result = type_text_with_key_scope::<()>(
+            route(),
+            true,
+            false,
+            || Err("window not key".into()),
+            |route| {
+                assert!(!route.key_window_confirmed);
+                assert!(matches!(
+                    route.keyboard_policy,
+                    BackgroundKeyboardPolicy::SemanticOnly(_)
+                ));
+                inserted.set(true);
+                Ok(TypeTextDelivery::Typed(TypeTextOutcome {
+                    detail: "semantic AX insert".into(),
+                    path: PATH_AX,
+                    verified: true,
+                    delivered_chars: Some(1),
+                }))
+            },
+        )
+        .unwrap();
+        assert!(
+            inserted.get(),
+            "the retained AX field must get its semantic insert"
+        );
+        assert!(matches!(result, TypeTextDelivery::Typed(_)));
+        // Untargeted text and terminals have no safe retained-element AX route.
+        for (retained, terminal) in [(false, false), (true, true)] {
+            let result = type_text_with_key_scope::<()>(
+                route(),
+                retained,
+                terminal,
+                || Err("window not key".into()),
+                |_| panic!("keyboard dispatch must stay refused"),
+            )
+            .unwrap();
+            assert!(matches!(result, TypeTextDelivery::Refused(_)));
+        }
+        // An AX write that does not land must not fall through to synthesized keys.
+        let result = type_text_with_key_scope::<()>(
+            route(),
+            true,
+            false,
+            || Err("window not key".into()),
+            |route| match route.keyboard_policy {
+                BackgroundKeyboardPolicy::SemanticOnly(refusal) => {
+                    Ok(TypeTextDelivery::Refused(refusal))
+                }
+                _ => panic!("failed priming must forbid synthesized keys"),
+            },
+        )
+        .unwrap();
+        assert!(matches!(result, TypeTextDelivery::Refused(_)));
+    }
+
     /// A semantic-only policy must refuse the terminal short-circuit before
     /// any CGEvent is posted: terminals have no semantic AX rung, so nothing
     /// safe remains and the carried refusal comes back unchanged.
@@ -1745,6 +2005,7 @@ mod tests {
                 window_id: Some(7),
                 keyboard_policy: BackgroundKeyboardPolicy::SemanticOnly(refusal.clone()),
                 explicit_target: false,
+                key_window_confirmed: false,
             },
         );
         match r {
@@ -1757,7 +2018,7 @@ mod tests {
     /// window is refused before any key event (Finder type-to-select).
     #[test]
     fn untargeted_text_without_a_focused_text_input_is_refused() {
-        let result = type_text_blocking(
+        let result = type_text_in_key_window(
             -1,
             "renamed.txt",
             None,
@@ -1768,6 +2029,7 @@ mod tests {
                 window_id: Some(7),
                 keyboard_policy: BackgroundKeyboardPolicy::Allowed,
                 explicit_target: false,
+                key_window_confirmed: false,
             },
         )
         .expect("the refusal is a delivery outcome");
@@ -1811,6 +2073,7 @@ mod tests {
                 window_id: None,
                 keyboard_policy: BackgroundKeyboardPolicy::Allowed,
                 explicit_target: false,
+                key_window_confirmed: false,
             },
         )
         .expect("preflight refusal must not attempt the invalid pid");

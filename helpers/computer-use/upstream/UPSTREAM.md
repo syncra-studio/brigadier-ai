@@ -36,12 +36,12 @@ backends, the optional perception add-on and the test and tooling crates.
 | | |
 |---|---|
 | Repository | https://github.com/trycua/cua |
-| Tag | `cua-driver-rs-v0.35.3` |
-| Commit | `cac7d8732f1fb21d31579466d59e95bf1422e422` (2026-10-13) |
+| Tag | `cua-driver-rs-v0.36.0` |
+| Commit | `6d6c734c127025fb39ad5d585a10382808b39dc1` (2026-10-16) |
 | Path in the repository | `libs/cua-driver/rust` |
 | Crates | `cua-driver-core` `cua-driver-contract` `platform-macos` `cursor-overlay` `cua-cursor-motion` `pip-preview` |
 | Also copied | `Skills/cua-driver/` `LICENSE.md` `THIRD_PARTY_NOTICES.md` |
-| Files | 296 (sha256 of PRISTINE.sha256: `3aedef96e1dd95133f58d328cdc9c1a3d532f623156cd9fbeace5badd78664da`) |
+| Files | 297 (sha256 of PRISTINE.sha256: `bdb691adb13d1725aa8b3b2160031dc52a6e90c3a614ba912a9ba8129832762a`) |
 
 Patches applied, in order:
 
@@ -55,7 +55,51 @@ Patches applied, in order:
 - `patches/0008-web-content-off-space.diff`: the Chromium/Electron accessibility wait also looks for web content in the app's windows on another Space, so the first read of such an app whose windows are all off-Space returns at once instead of waiting out the 4 s timeout (up to three times per app lifetime).
 - `patches/0009-space-lookups-where-needed.diff`: Space lookups only where they are read: a one-window Space check asks about that window only, and the exact-target check and the running-app list skip them, so typing into an app takes about 0.1 s less with a hundred windows open.
 - `patches/0010-key-edit-after-insert.diff`: a host switch (document_edit::set_key_edit_after_insert) for the net-zero key edit after an AXSelectedText insert into a document window, so an embedding app whose inserts already mark the document edited can keep ⌘Z undoing the insert itself.
+- `patches/0011-menu-window-confirmation.diff`: v0.36.0 treated app-menu membership as window ancestry, so a command addressed to one window could act on a sibling key window; require the addressed window to be the app's focused window before admitting an app-menu element.
+- `patches/0012-semantic-insert-before-keyboard-refusal.diff`: v0.36.0 refused a retained-element AX text insert when key-window priming failed; keep the semantic insert available while refusing implicit targets, terminals, synthesized-key fallback and document key edits without keyboard permission.
+- `patches/0013-native-accessibility-without-web-wait.diff`: v0.36.0 waited up to four seconds for a web tree in native apps accepting AXEnhancedUserInterface; require a Chromium-family framework in the addressed process's bundle for that wait, preserving Chromium and Electron first-read readiness.
+- `patches/0014-popup-without-speculative-keys.diff`: v0.36.0 selected Chromium popup labels with speculative pid-routed typeahead, which can reach a sibling without confirmed key routing and commit intermediate or invalid prefix selections; use the existing exact-match semantic AX popup route instead.
+- `patches/0015-preserve-original-key-target.diff`: v0.36.0 key-window cleanup could pick a sibling after priming a target that was already AXFocusedWindow but lacked a focused element; when the original window is the target, restore nothing and leave that window focused.
 <!-- sync:end -->
+
+## Notes for v0.36.0
+
+The latest plain SemVer driver release checked on 2026-10-18 is v0.36.0.
+Upstream labels these releases as pre-releases only to keep its monorepo's
+repository-wide latest pointer stable; plain SemVer versions are stable.
+
+All ten original local patches remain necessary. Patches 0003 and 0009 were ported:
+0003 checks the host restore policy before the new AX window-order restore
+path, and 0009 preserves upstream's new pid/layer filters while limiting
+Space queries to the windows the caller reads. The other eight original patches apply
+unchanged. Upstream's Chromium first-read fix complements patch 0008; it
+does not add the off-Space window probe that patch provides.
+
+Review found five v0.36.0 regressions. Patches 0011–0013 keep menu
+commands tied to the addressed key window, preserve semantic AX insertion
+when keyboard priming fails, and skip the Chromium wait for native apps.
+Patches 0014–0015 remove speculative popup-label keystrokes and keep an
+already-focused target window focused when key priming ends. These two
+additional problems were found in the follow-up review. Each new patch
+includes a regression test that failed before its fix. Run these
+vendored unit tests with the helper's dependency versions (Cargo prunes the
+helper-only lock entries without fetching newer dependencies):
+
+```sh
+cp Cargo.lock upstream/Cargo.lock
+cargo test --offline --manifest-path upstream/Cargo.toml -p platform-macos --lib regression_
+```
+
+The v0.35.4 and v0.36.0 macOS release notes were reviewed, including
+background typing, menus, drags, off-Space reads, focus restoration and the
+new WindowServer health check. Its recognition of Brigadier's own bundle
+identity is tracked separately in issue #317. Existing tool classifications
+are retained;
+drag remains withheld. Driver arguments and foreground wording are checked
+by the driver snapshots. Per issue #270, signed warm/cold benchmarks, focus
+checks and the reliability matrix belong in the nightly/release report and
+do not gate this sync. Repository-wide checks run once on the integrated
+tree; this change runs the helper's own build, lint, tests and verification.
 
 ## Where the driver keeps state
 

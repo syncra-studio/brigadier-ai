@@ -1,0 +1,31 @@
+Why: v0.36.0 key-window cleanup could pick a sibling after priming a target that was already AXFocusedWindow but lacked a focused element; when the original window is the target, restore nothing and leave that window focused.
+
+Includes a regression test that fails with the v0.36.0 behavior.
+
+diff --git a/crates/platform-macos/src/input/skylight.rs b/crates/platform-macos/src/input/skylight.rs
+index 70e87b39bd5c13bd1d7f0bec46a571c0404dc260..2d5718ffe77c131df390405b076669fa49235b73 100644
+--- a/crates/platform-macos/src/input/skylight.rs
++++ b/crates/platform-macos/src/input/skylight.rs
+@@ -151,6 +151,9 @@ fn restore_target(
+     order_before: &[u32],
+     on_screen_now: &[u32],
+ ) -> Option<u32> {
++    if previous == Some(target) {
++        return None;
++    }
+     let present = |w: &u32| *w != target && on_screen_now.contains(w);
+     previous
+         .filter(present)
+@@ -1789,6 +1792,12 @@ mod key_prime_tests {
+         assert_eq!(r, Ok(KeyPrime::KeyRecords));
+     }
+
++    #[test]
++    fn regression_priming_preserves_an_already_focused_target() {
++        assert_eq!(restore_target(7, Some(7), &[7, 9], &[7, 9]), None);
++        assert_eq!(restore_target(7, Some(7), &[9, 7], &[9, 7]), None);
++    }
++
+     #[test]
+     fn key_goes_back_to_the_previous_window() {
+         assert_eq!(restore_target(7, Some(9), &[9, 7, 5], &[7, 9, 5]), Some(9));

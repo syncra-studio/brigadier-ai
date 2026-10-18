@@ -1362,6 +1362,79 @@ async fn approved_existing_profile_tools_stay_within_the_reviewed_cdp_surface() 
 }
 
 #[tokio::test]
+async fn existing_profile_sessions_share_one_browser_connection_across_session_ends() {
+    // Chrome asks the person to approve every new browser-level WebSocket.
+    // Sessions for the same browser instance must therefore multiplex over
+    // the one approved socket, survive each other's session end, and let a
+    // later session reuse the parked socket without a new browser prompt.
+    let (f, _provider) = protected_existing_profile_fixture().await;
+    let prepare = |session: &'static str, transport: &'static str| {
+        let engine = f.engine.clone();
+        async move {
+            let prepared = BrowserPrepareTool::new(engine)
+                .invoke(json!({
+                    "pid": 1,
+                    "window_id": 7,
+                    "session": session,
+                    "_transport_session_id": transport,
+                    "strategy": { "kind": "existing_profile" }
+                }))
+                .await;
+            structured(&prepared).clone()
+        }
+    };
+    let state = |session: &'static str, transport: &'static str| {
+        let engine = f.engine.clone();
+        async move {
+            let state = GetBrowserStateTool::new(engine)
+                .invoke(json!({
+                    "pid": 1,
+                    "window_id": 7,
+                    "session": session,
+                    "_transport_session_id": transport
+                }))
+                .await;
+            structured(&state).clone()
+        }
+    };
+
+    let a = prepare("shared-socket-a", "shared-transport-a").await;
+    assert_eq!(a["status"], "ok", "{a}");
+    let after_first_attach = f._server.accepted_connections();
+    assert!(after_first_attach >= 1);
+
+    let b = prepare("shared-socket-b", "shared-transport-b").await;
+    assert_eq!(b["status"], "ok", "{b}");
+    assert_eq!(b["side_effects"]["displayed_consent_prompt"], false);
+    let a_state = state("shared-socket-a", "shared-transport-a").await;
+    assert_eq!(a_state["status"], "ok", "{a_state}");
+    let b_state = state("shared-socket-b", "shared-transport-b").await;
+    assert_eq!(b_state["status"], "ok", "{b_state}");
+    assert_eq!(
+        f._server.accepted_connections(),
+        after_first_attach,
+        "a second session must not open another browser-level socket"
+    );
+
+    // Ending A must neither close nor invalidate B's use of the socket.
+    crate::session::fire_session_end("shared-transport-a");
+    tokio::task::yield_now().await;
+    let b_state = state("shared-socket-b", "shared-transport-b").await;
+    assert_eq!(b_state["status"], "ok", "{b_state}");
+
+    // After every session ended, the next approved session reuses the
+    // parked socket instead of dialing (which would prompt again).
+    crate::session::fire_session_end("shared-transport-b");
+    tokio::task::yield_now().await;
+    let c = prepare("shared-socket-c", "shared-transport-c").await;
+    assert_eq!(c["status"], "ok", "{c}");
+    let c_state = state("shared-socket-c", "shared-transport-c").await;
+    assert_eq!(c_state["status"], "ok", "{c_state}");
+    assert_eq!(f._server.accepted_connections(), after_first_attach);
+    crate::session::fire_session_end("shared-transport-c");
+}
+
+#[tokio::test]
 async fn protected_provider_accepts_exact_attach_and_session_end_revokes_the_grant() {
     const PROTECTED_SESSION: &str = "protected-provider-v2";
     const PROTECTED_TRANSPORT: &str = "protected-transport-v2";
@@ -1446,6 +1519,13 @@ async fn background_existing_profile_attach_refuses_before_any_visible_effect() 
     let refused = structured(&result);
     assert_eq!(refused["code"], "background_unavailable", "{refused}");
     assert_eq!(refused["escalation"]["recommended"], "foreground");
+    let suggestion = refused["suggestion"].as_str().unwrap();
+    assert!(
+        suggestion.starts_with("Not blocked: use get_window_state"),
+        "the refusal must lead with the working route: {suggestion}"
+    );
+    let message = refused["refusal"]["message"].as_str().unwrap();
+    assert!(message.contains("use get_window_state"), "{message}");
     assert_eq!(refused["status"], "refused");
     assert_eq!(refused["refusal"]["code"], "background_unavailable");
     assert_eq!(refused["refusal"]["detail"]["frontmost_pid"], 99);
@@ -2605,11 +2685,12 @@ async fn foreground_delivery_mode_accepts_window_activation_for_trusted_click() 
         "foreground"
     );
 
+    let foreground_args = json!({
+        "target_id": target, "tab_id": tab, "ref": main_ref,
+        "delivery_mode": "foreground", "session": SESSION
+    });
     let foreground = BrowserClickTool::new(f.engine.clone())
-        .invoke(json!({
-            "target_id": target, "tab_id": tab, "ref": main_ref,
-            "delivery_mode": "foreground", "session": SESSION
-        }))
+        .invoke(foreground_args.clone())
         .await;
     let s = structured(&foreground);
     assert_eq!(s["status"], "ok", "{s}");
@@ -2617,6 +2698,29 @@ async fn foreground_delivery_mode_accepts_window_activation_for_trusted_click() 
     assert_eq!(s["delivery_mode"], "foreground");
     let mouse = recorded_calls(&f, "Input.dispatchMouseEvent");
     assert_eq!(mouse.len(), 2, "press and release: {mouse:?}");
+    let public = ActionExecutionRecord::from_legacy("browser_click", &foreground_args, s)
+        .expect("browser click action record")
+        .public_result()
+        .expect("public browser click result");
+    let public = serde_json::to_value(public).expect("serialize public result");
+    assert_eq!(public["delivery"]["mode"], "foreground", "{public}");
+
+    let pointer_args = json!({
+        "target_id": target, "tab_id": tab, "action": "hover", "x": 10, "y": 10,
+        "delivery_mode": "foreground", "session": SESSION
+    });
+    let pointer = BrowserPointerTool::new(f.engine.clone())
+        .invoke(pointer_args.clone())
+        .await;
+    let p = structured(&pointer);
+    assert_eq!(p["status"], "ok", "{p}");
+    assert_eq!(p["delivery_mode"], "foreground", "{p}");
+    let public = ActionExecutionRecord::from_legacy("browser_pointer", &pointer_args, p)
+        .expect("browser pointer action record")
+        .public_result()
+        .expect("public browser pointer result");
+    let public = serde_json::to_value(public).expect("serialize public result");
+    assert_eq!(public["delivery"]["mode"], "foreground", "{public}");
 }
 
 #[tokio::test]
@@ -2680,7 +2784,38 @@ async fn trusted_click_refuses_when_standalone_background_posture_is_unavailable
         "{public}"
     );
     assert!(public.get("status").is_none(), "{public}");
-    assert!(!recorded_calls(&f, "Runtime.callFunctionOn").is_empty());
+    let dispatches = recorded_calls(&f, "Runtime.callFunctionOn");
+    let click_sequence = dispatches
+        .iter()
+        .filter_map(|(_, params)| params["functionDeclaration"].as_str())
+        .find(|declaration| declaration.contains("'pointerdown'"))
+        .expect("dom_event click dispatches a pointer sequence, not a bare click()");
+    // Apps that open rows from pointer/mouse down+up ignore a bare click(),
+    // so the synthetic route must replay the whole primary-button sequence
+    // at the element's center, in order.
+    let order = [
+        "'pointermove'",
+        "'pointerdown'",
+        "'mousedown'",
+        "'pointerup'",
+        "'mouseup'",
+        "'click'",
+    ];
+    let positions: Vec<usize> = order
+        .iter()
+        .map(|event| {
+            click_sequence
+                .find(event)
+                .unwrap_or_else(|| panic!("missing {event}"))
+        })
+        .collect();
+    assert!(
+        positions.windows(2).all(|w| w[0] < w[1]),
+        "{click_sequence}"
+    );
+    assert!(click_sequence.contains("clientX: x"), "{click_sequence}");
+    assert!(!click_sequence.contains("this.click()"), "{click_sequence}");
+    assert!(recorded_calls(&f, "Input.dispatchMouseEvent").is_empty());
     assert!(recorded_calls(&f, "Page.bringToFront").is_empty());
     assert!(recorded_calls(&f, "Target.activateTarget").is_empty());
 }

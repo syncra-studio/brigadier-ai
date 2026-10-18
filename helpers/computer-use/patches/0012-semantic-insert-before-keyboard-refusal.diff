@@ -1,0 +1,167 @@
+Why: v0.36.0 refused a retained-element AX text insert when key-window priming failed; keep the semantic insert available while refusing implicit targets, terminals, synthesized-key fallback and document key edits without keyboard permission.
+
+Each regression has a focused unit test in this patch. No foreground action
+is introduced; unknown target facts continue to fail closed.
+
+diff --git a/crates/platform-macos/src/tools/type_text.rs b/crates/platform-macos/src/tools/type_text.rs
+index a11abc8762b73b38387e0867ed867af417ccbb6e..f7a69499e81cfc1a50171d859a6d9a477fcea4d0 100644
+--- a/crates/platform-macos/src/tools/type_text.rs
++++ b/crates/platform-macos/src/tools/type_text.rs
+@@ -1324,21 +1324,53 @@ fn type_text_blocking(
+     is_terminal_target: bool,
+     route: KeyboardRoute,
+ ) -> anyhow::Result<TypeTextDelivery> {
+-    // A window-addressed background insert first makes that window the app's
+-    // key window, proven by re-reading the app's focused window, BEFORE the
+-    // focused element is read or any key is posted. Unconfirmed: refuse
+-    // (CUA-1767: with Find & Replace open the keys went into its Find field).
++    let window_id = route.window_id;
++    type_text_with_key_scope(
++        route,
++        element_ptr_and_idx.is_some(),
++        is_terminal_target,
++        || super::key_scope(pid, window_id),
++        |route| {
++            type_text_in_key_window(
++                pid,
++                text,
++                element_ptr_and_idx,
++                delay_ms,
++                is_terminal_target,
++                route,
++            )
++        },
++    )
++}
++
++/// Keep the key-window lease alive through dispatch. A retained AX target
++/// can still accept semantic text when process-routed keyboard input is unsafe.
++fn type_text_with_key_scope<S>(
++    mut route: KeyboardRoute,
++    retained_element: bool,
++    is_terminal: bool,
++    key_scope: impl FnOnce() -> Result<Option<S>, String>,
++    dispatch: impl FnOnce(KeyboardRoute) -> anyhow::Result<TypeTextDelivery>,
++) -> anyhow::Result<TypeTextDelivery> {
++    // Prime the addressed window before reading implicit focus or posting
++    // keys. A retained element can still take a semantic AX insert if priming
++    // fails, but no synthesized keys may then reach a sibling window.
+     let _scope = if !route.delivery_mode.is_foreground()
+         && matches!(route.keyboard_policy, BackgroundKeyboardPolicy::Allowed)
+     {
+-        match super::key_scope(pid, route.window_id) {
++        match key_scope() {
+             Ok(scope) => scope,
+             Err(reason) => {
+-                return Ok(TypeTextDelivery::Refused(BackgroundRefusal {
++                let refusal = BackgroundRefusal {
+                     code: super::WINDOW_NOT_KEY,
+                     reason,
+                     advice: Some("foreground"),
+-                }))
++                };
++                if !retained_element || is_terminal {
++                    return Ok(TypeTextDelivery::Refused(refusal));
++                }
++                route.keyboard_policy = BackgroundKeyboardPolicy::SemanticOnly(refusal);
++                None
+             }
+         }
+     } else {
+@@ -1348,14 +1380,7 @@ fn type_text_blocking(
+         key_window_confirmed: _scope.is_some(),
+         ..route
+     };
+-    type_text_in_key_window(
+-        pid,
+-        text,
+-        element_ptr_and_idx,
+-        delay_ms,
+-        is_terminal_target,
+-        route,
+-    )
++    dispatch(route)
+ }
+
+ fn type_text_in_key_window(
+@@ -1639,6 +1664,7 @@ fn type_text_in_key_window(
+         // not marked edited and would never save the new text (DS-07).
+         let document = if ax_progress == Some(TypedProgress::Complete)
+             && crate::document_edit::key_edit_after_insert()
++            && matches!(keyboard_policy, BackgroundKeyboardPolicy::Allowed)
+         {
+             unsafe { crate::document_edit::ensure_marked_after_ax_write(pid, element, false) }
+         } else {
+@@ -1892,6 +1918,72 @@ mod tests {
+
+     use super::*;
+
++    #[test]
++    fn regression_retained_ax_insert_survives_failed_keyboard_priming() {
++        use std::cell::Cell;
++        let inserted = Cell::new(false);
++        let route = || KeyboardRoute {
++            delivery_mode: super::super::DeliveryMode::Background,
++            window_id: Some(7),
++            keyboard_policy: BackgroundKeyboardPolicy::Allowed,
++            explicit_target: true,
++            key_window_confirmed: false,
++        };
++        let result = type_text_with_key_scope::<()>(
++            route(),
++            true,
++            false,
++            || Err("window not key".into()),
++            |route| {
++                assert!(!route.key_window_confirmed);
++                assert!(matches!(
++                    route.keyboard_policy,
++                    BackgroundKeyboardPolicy::SemanticOnly(_)
++                ));
++                inserted.set(true);
++                Ok(TypeTextDelivery::Typed(TypeTextOutcome {
++                    detail: "semantic AX insert".into(),
++                    path: PATH_AX,
++                    verified: true,
++                    delivered_chars: Some(1),
++                }))
++            },
++        )
++        .unwrap();
++        assert!(
++            inserted.get(),
++            "the retained AX field must get its semantic insert"
++        );
++        assert!(matches!(result, TypeTextDelivery::Typed(_)));
++        // Untargeted text and terminals have no safe retained-element AX route.
++        for (retained, terminal) in [(false, false), (true, true)] {
++            let result = type_text_with_key_scope::<()>(
++                route(),
++                retained,
++                terminal,
++                || Err("window not key".into()),
++                |_| panic!("keyboard dispatch must stay refused"),
++            )
++            .unwrap();
++            assert!(matches!(result, TypeTextDelivery::Refused(_)));
++        }
++        // An AX write that does not land must not fall through to synthesized keys.
++        let result = type_text_with_key_scope::<()>(
++            route(),
++            true,
++            false,
++            || Err("window not key".into()),
++            |route| match route.keyboard_policy {
++                BackgroundKeyboardPolicy::SemanticOnly(refusal) => {
++                    Ok(TypeTextDelivery::Refused(refusal))
++                }
++                _ => panic!("failed priming must forbid synthesized keys"),
++            },
++        )
++        .unwrap();
++        assert!(matches!(result, TypeTextDelivery::Refused(_)));
++    }
++
+     /// A semantic-only policy must refuse the terminal short-circuit before
+     /// any CGEvent is posted: terminals have no semantic AX rung, so nothing
+     /// safe remains and the carried refusal comes back unchanged.

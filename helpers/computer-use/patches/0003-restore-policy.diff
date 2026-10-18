@@ -12,7 +12,7 @@ key_focus_guard::would_revert_self_activation and order_restore_allowed
 expose the decisions without restoring, for tests. Upstreamable as is.
 
 diff --git a/crates/platform-macos/src/focus_steal.rs b/crates/platform-macos/src/focus_steal.rs
-index 682a6ff8..b65848e7 100644
+index 682a6ff..b65848e 100644
 --- a/crates/platform-macos/src/focus_steal.rs
 +++ b/crates/platform-macos/src/focus_steal.rs
 @@ -100,6 +100,8 @@ struct Entry {
@@ -167,10 +167,10 @@ index 682a6ff8..b65848e7 100644
                  },
              );
 diff --git a/crates/platform-macos/src/key_focus_guard.rs b/crates/platform-macos/src/key_focus_guard.rs
-index b21548c3..af24b8e2 100644
+index 4d1fee1..d175241 100644
 --- a/crates/platform-macos/src/key_focus_guard.rs
 +++ b/crates/platform-macos/src/key_focus_guard.rs
-@@ -83,7 +83,7 @@ fn target_above_front_in(windows: &[crate::windows::WindowInfo], target: i32, fr
+@@ -95,7 +95,7 @@ fn target_above_front_in(windows: &[crate::windows::WindowInfo], target: i32, fr
  pub fn restore_order_now(target: i32, front: i32) -> bool {
      // NSWorkspace's frontmost reading can lag inside the daemon; the caller
      // has already checked WindowServer's front process.
@@ -178,8 +178,8 @@ index b21548c3..af24b8e2 100644
 +    if !target_above_front(target, front) || !order_restore_allowed(target, front) {
          return false;
      }
-     use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
-@@ -101,7 +101,10 @@ pub fn target_window_above_front(target: i32, front: i32) -> bool {
+     put_front_window_back(front)
+@@ -124,7 +124,10 @@ pub fn target_window_above_front(target: i32, front: i32) -> bool {
  }
  
  fn restore_front_if_raised(target: i32, front: i32) -> bool {
@@ -190,8 +190,8 @@ index b21548c3..af24b8e2 100644
 +    {
          return false;
      }
-     use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
-@@ -139,12 +142,7 @@ pub fn revert_now(target: i32, front: i32) -> bool {
+     let restored = put_front_window_back(front);
+@@ -157,12 +160,7 @@ pub fn revert_now(target: i32, front: i32) -> bool {
  }
  
  fn revert_self_activation(target: i32, front: i32) -> bool {
@@ -205,7 +205,7 @@ index b21548c3..af24b8e2 100644
          return false;
      }
      let started = Instant::now();
-@@ -176,6 +174,37 @@ fn revert_self_activation(target: i32, front: i32) -> bool {
+@@ -194,6 +192,37 @@ fn revert_self_activation(target: i32, front: i32) -> bool {
      true
  }
  

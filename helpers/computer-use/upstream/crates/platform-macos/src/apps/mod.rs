@@ -95,7 +95,7 @@ fn all_pids() -> Vec<i32> {
 
 /// The executable path of one live pid, via `proc_pidpath`. `None` when the
 /// process has already exited or its path is not readable.
-fn path_of_pid(pid: i32) -> Option<String> {
+pub(crate) fn path_of_pid(pid: i32) -> Option<String> {
     extern "C" {
         fn proc_pidpath(pid: i32, buffer: *mut c_void, buffersize: u32) -> i32;
     }

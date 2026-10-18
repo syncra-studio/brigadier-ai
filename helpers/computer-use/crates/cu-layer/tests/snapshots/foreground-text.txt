@@ -1,14 +1,14 @@
-  26 cua-driver-core/src/action_record.rs
+  28 cua-driver-core/src/action_record.rs
    3 cua-driver-core/src/action_target.rs
    3 cua-driver-core/src/authorization.rs
    2 cua-driver-core/src/background_input.rs
    1 cua-driver-core/src/batch_tools/locate.rs
    7 cua-driver-core/src/batch_tools/reliability_tests.rs
   15 cua-driver-core/src/batch_tools.rs
-   4 cua-driver-core/src/browser/pointer.rs
+   5 cua-driver-core/src/browser/pointer.rs
    3 cua-driver-core/src/browser/prepare.rs
-  21 cua-driver-core/src/browser/tools.rs
-   6 cua-driver-core/src/browser/v2_tests.rs
+  22 cua-driver-core/src/browser/tools.rs
+  11 cua-driver-core/src/browser/v2_tests.rs
    1 cua-driver-core/src/capture_scope.rs
    2 cua-driver-core/src/cursor_events.rs
    9 cua-driver-core/src/delivery.rs
@@ -25,7 +25,7 @@
    1 platform-macos/src/focus_steal.rs
    3 platform-macos/src/input/ax_actions.rs
    2 platform-macos/src/input/mouse.rs
-   4 platform-macos/src/input/skylight.rs
+   5 platform-macos/src/input/skylight.rs
   20 platform-macos/src/tools/bring_to_front.rs
    6 platform-macos/src/tools/click.rs
    4 platform-macos/src/tools/desktop_pointer_guard.rs
@@ -34,10 +34,10 @@
    8 platform-macos/src/tools/hotkey.rs
    3 platform-macos/src/tools/invoke_menu.rs
    1 platform-macos/src/tools/launch_app.rs
-   1 platform-macos/src/tools/mod.rs
+   3 platform-macos/src/tools/mod.rs
    6 platform-macos/src/tools/move_cursor.rs
   16 platform-macos/src/tools/pixel_route.rs
    5 platform-macos/src/tools/press_key.rs
    4 platform-macos/src/tools/scroll.rs
    2 platform-macos/src/tools/set_value.rs
-  18 platform-macos/src/tools/type_text.rs
+  19 platform-macos/src/tools/type_text.rs

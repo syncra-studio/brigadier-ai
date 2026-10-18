@@ -30,6 +30,7 @@ const MATERIALIZE_MAX_ATTEMPTS: u32 = 3;
 const MATERIALIZE_RETRY_BACKOFF_SECONDS: f64 = 30.0;
 const RUN_LOOP_PUMPS_PER_POLL: u32 = 4;
 const WEB_AREA_ROLE: &str = "AXWebArea";
+const MENU_BAR_ROLE: &str = "AXMenuBar";
 const WEB_AREA_MAX_DEPTH: u32 = 10;
 const WEB_AREA_PROBE_NODES: u32 = 400;
 
@@ -120,22 +121,37 @@ fn next_attempt(
 
 fn wait_outcome(
     opt_in: AccessibilityOptIn,
+    chromium: bool,
     prior_timeouts: u32,
     attempted_at: Instant,
     await_tree: impl FnOnce() -> bool,
 ) -> Option<Wait> {
     match opt_in {
         AccessibilityOptIn::NotAccepted => None,
-        AccessibilityOptIn::EnhancedUserInterface => Some(Wait::Complete),
-        AccessibilityOptIn::ManualAccessibility => Some(if await_tree() {
-            Wait::Complete
-        } else {
-            Wait::TimedOut {
-                attempts: prior_timeouts + 1,
-                attempted_at,
-            }
-        }),
+        AccessibilityOptIn::EnhancedUserInterface if !chromium => Some(Wait::Complete),
+        // Chrome builds its web tree asynchronously after either opt-in, so
+        // both wait for it. Returning at once for `AXEnhancedUserInterface`
+        // let the first read return browser chrome only (CUA-1766).
+        AccessibilityOptIn::EnhancedUserInterface | AccessibilityOptIn::ManualAccessibility => {
+            Some(if await_tree() {
+                Wait::Complete
+            } else {
+                Wait::TimedOut {
+                    attempts: prior_timeouts + 1,
+                    attempted_at,
+                }
+            })
+        }
     }
+}
+
+unsafe fn web_area_is_populated(web_area: AXUIElementRef) -> bool {
+    let children = copy_children(web_area);
+    let populated = !children.is_empty();
+    for child in children {
+        CFRelease(child as CFTypeRef);
+    }
+    populated
 }
 
 unsafe fn has_web_area(element: AXUIElementRef, depth: u32, visits: &mut u32) -> bool {
@@ -146,8 +162,15 @@ unsafe fn has_web_area(element: AXUIElementRef, depth: u32, visits: &mut u32) ->
     for child in copy_children(element) {
         if !found && *visits > 0 {
             *visits -= 1;
-            found = copy_string_attr(child, "AXRole").as_deref() == Some(WEB_AREA_ROLE)
-                || has_web_area(child, depth - 1, visits);
+            let role = copy_string_attr(child, "AXRole");
+            found = match role.as_deref() {
+                // Menu items are numerous and never hold web content.
+                Some(MENU_BAR_ROLE) => false,
+                // An AXWebArea with no children is a stub: Chrome has not
+                // built the page tree yet, so it does not count as content.
+                Some(WEB_AREA_ROLE) => web_area_is_populated(child),
+                _ => has_web_area(child, depth - 1, visits),
+            };
         }
         CFRelease(child as CFTypeRef);
     }
@@ -220,6 +243,55 @@ fn await_web_content(
     false
 }
 
+/// Enhanced accessibility is also accepted by native apps. Only a process
+/// shipping a Chromium-family framework needs the web-tree materialization wait.
+fn chromium_process(pid: i32) -> bool {
+    let Some(executable) = crate::apps::path_of_pid(pid) else {
+        return false;
+    };
+    let Some(contents) = std::path::Path::new(executable.trim_end_matches('\0'))
+        .parent()
+        .and_then(std::path::Path::parent)
+    else {
+        return false;
+    };
+    chromium_framework_in(contents)
+}
+
+fn chromium_framework_in(contents: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(contents.join("Frameworks")) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        let Some(product) = name
+            .to_str()
+            .and_then(|name| name.strip_suffix(" Framework.framework"))
+        else {
+            return false;
+        };
+        product
+            .to_ascii_lowercase()
+            .split(|ch: char| !ch.is_ascii_alphanumeric())
+            .any(|token| {
+                matches!(
+                    token,
+                    "chrome"
+                        | "chromium"
+                        | "electron"
+                        | "edge"
+                        | "brave"
+                        | "vivaldi"
+                        | "opera"
+                        | "arc"
+                        | "thorium"
+                        | "iridium"
+                        | "yandex"
+                )
+            })
+    })
+}
+
 /// # Safety
 ///
 /// `app_element` must be a valid application `AXUIElementRef` for `pid`.
@@ -234,28 +306,25 @@ pub unsafe fn ensure_chromium_ax_enabled(pid: i32, app_element: AXUIElementRef) 
         Attempt::Skip => return,
         Attempt::Run { prior_timeouts } => prior_timeouts,
     };
-    let outcome = wait_outcome(
-        enable_chromium_accessibility(app_element),
-        prior_timeouts,
-        attempted_at,
-        || {
-            // An app whose windows are all on another Space has no window
-            // among its children: look for the web content in those windows
-            // too, or the wait would always run to its timeout.
-            let off_space = copy_off_space_windows(app_element, pid);
-            let materialized = await_web_content(
-                || probe_web_content(app_element, &off_space),
-                || {
-                    enable_chromium_accessibility(app_element);
-                },
-                pump_for,
-            );
-            for window in off_space {
-                CFRelease(window as CFTypeRef);
-            }
-            materialized
-        },
-    );
+    let opt_in = enable_chromium_accessibility(app_element);
+    let chromium = opt_in != AccessibilityOptIn::EnhancedUserInterface || chromium_process(pid);
+    let outcome = wait_outcome(opt_in, chromium, prior_timeouts, attempted_at, || {
+        // An app whose windows are all on another Space has no window
+        // among its children: look for the web content in those windows
+        // too, or the wait would always run to its timeout.
+        let off_space = copy_off_space_windows(app_element, pid);
+        let materialized = await_web_content(
+            || probe_web_content(app_element, &off_space),
+            || {
+                enable_chromium_accessibility(app_element);
+            },
+            pump_for,
+        );
+        for window in off_space {
+            CFRelease(window as CFTypeRef);
+        }
+        materialized
+    });
     if let (Some(stamp), Some(wait)) = (stamp, outcome) {
         if let Ok(mut state) = ENABLEMENT_STATE.lock() {
             state.insert(pid, ProcessEnablement { stamp, wait });
@@ -355,28 +424,80 @@ mod tests {
     }
 
     #[test]
-    fn only_the_manual_accessibility_path_polls_for_web_content() {
+    fn both_chromium_opt_ins_wait_for_web_content_and_others_do_not() {
         let now = Instant::now();
+        for opt_in in [
+            AccessibilityOptIn::EnhancedUserInterface,
+            AccessibilityOptIn::ManualAccessibility,
+        ] {
+            let polls = Cell::new(0u32);
+            let ready = wait_outcome(opt_in, true, 0, now, || {
+                polls.set(polls.get() + 1);
+                true
+            });
+            assert_eq!(ready, Some(Wait::Complete));
+            assert_eq!(polls.get(), 1, "{opt_in:?} must wait for the web tree");
+            assert_eq!(
+                wait_outcome(opt_in, true, 1, now, || false),
+                Some(Wait::TimedOut {
+                    attempts: 2,
+                    attempted_at: now
+                }),
+                "{opt_in:?}: a tree that never appears is a timeout, not Complete"
+            );
+        }
         let polls = Cell::new(0u32);
-        let probe = || {
-            polls.set(polls.get() + 1);
-            false
-        };
-
         assert_eq!(
-            wait_outcome(AccessibilityOptIn::EnhancedUserInterface, 0, now, probe),
-            Some(Wait::Complete),
-            "an app that only accepts AXEnhancedUserInterface has no web area to wait for"
-        );
-        assert_eq!(
-            wait_outcome(AccessibilityOptIn::NotAccepted, 0, now, probe),
+            wait_outcome(AccessibilityOptIn::NotAccepted, true, 0, now, || {
+                polls.set(polls.get() + 1);
+                false
+            }),
             None
         );
-        assert_eq!(
-            polls.get(),
+        assert_eq!(polls.get(), 0, "native apps must not pay the wait");
+    }
+
+    #[test]
+    fn chromium_identity_comes_from_the_process_bundle_framework() {
+        let temp = tempfile::tempdir().unwrap();
+        let contents = temp.path().join("Contents");
+        let frameworks = contents.join("Frameworks");
+        std::fs::create_dir_all(&frameworks).unwrap();
+        std::fs::create_dir(frameworks.join("Native Framework.framework")).unwrap();
+        assert!(!chromium_framework_in(&contents));
+        for name in [
+            "Electron Framework.framework",
+            "Google Chrome Canary Framework.framework",
+        ] {
+            let framework = frameworks.join(name);
+            std::fs::create_dir(&framework).unwrap();
+            assert!(chromium_framework_in(&contents));
+            std::fs::remove_dir(&framework).unwrap();
+        }
+        assert!(!chromium_framework_in(&temp.path().join("missing")));
+    }
+
+    #[test]
+    fn regression_native_enhanced_accessibility_does_not_wait_for_web_content() {
+        let ready = wait_outcome(
+            AccessibilityOptIn::EnhancedUserInterface,
+            false,
             0,
-            "only the Chromium opt-in may pay the materialization wait"
+            Instant::now(),
+            || panic!("a native app has no Chromium web tree to wait for"),
         );
+        assert_eq!(ready, Some(Wait::Complete));
+        // Identified Chromium apps still wait on their first read.
+        assert!(matches!(
+            wait_outcome(
+                AccessibilityOptIn::EnhancedUserInterface,
+                true,
+                0,
+                Instant::now(),
+                || false,
+            ),
+            Some(Wait::TimedOut { .. })
+        ));
     }
 
     #[test]
@@ -384,7 +505,13 @@ mod tests {
         let now = Instant::now();
         let stamp = (100, 10);
 
-        let wait = wait_outcome(AccessibilityOptIn::ManualAccessibility, 0, now, || true);
+        let wait = wait_outcome(
+            AccessibilityOptIn::ManualAccessibility,
+            true,
+            0,
+            now,
+            || true,
+        );
         assert_eq!(wait, Some(Wait::Complete));
 
         let cached = ProcessEnablement {
@@ -404,7 +531,13 @@ mod tests {
         let stamp = (100, 10);
         let backoff = Duration::from_secs_f64(MATERIALIZE_RETRY_BACKOFF_SECONDS);
 
-        let wait = wait_outcome(AccessibilityOptIn::ManualAccessibility, 0, now, || false);
+        let wait = wait_outcome(
+            AccessibilityOptIn::ManualAccessibility,
+            true,
+            0,
+            now,
+            || false,
+        );
         assert_eq!(
             wait,
             Some(Wait::TimedOut {
