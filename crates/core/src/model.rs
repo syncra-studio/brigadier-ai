@@ -2311,10 +2311,11 @@ pub enum DomainEvent {
         head: String,
     },
     /// What a session branch's pull request on GitHub was last seen as (none: it has none
-    /// now); recorded when that changed. Its row's "PR open".
+    /// now); recorded when that changed. Its row's "PR open". Boxed: every event is the size of
+    /// its largest kind.
     PullRequestSeen {
         conversation_id: ConversationId,
-        pull_request: Option<crate::work::PullRequest>,
+        pull_request: Option<Box<crate::work::PullRequest>>,
     },
     /// A worker started, finished, waits for the user, and so on.
     WorkerStepped {

@@ -176,7 +176,7 @@ pub(crate) struct Board {
     /// it was recorded.
     pub(crate) ready: HashMap<String, (String, i64)>,
     /// Its branch's pull request as last seen on GitHub (`PullRequestSeen`).
-    pub(crate) pull_request: Option<crate::work::PullRequest>,
+    pub(crate) pull_request: Option<Box<crate::work::PullRequest>>,
     /// The request whose turn was still starting or running when the daemon last stopped (a
     /// quit or a crash cut it off), and when the conversation last recorded anything, which is
     /// as far as it is known to have worked: found when the board is first read after a start,
@@ -1618,11 +1618,19 @@ mod tab_state_tests {
 
         let seen = |state: Option<crate::work::PullRequestState>| DomainEvent::PullRequestSeen {
             conversation_id: id(),
-            pull_request: state.map(|state| crate::work::PullRequest {
-                number: 7,
-                title: "Header".into(),
-                url: "https://github.com/o/n/pull/7".into(),
-                state,
+            pull_request: state.map(|state| {
+                Box::new(crate::work::PullRequest {
+                    number: 7,
+                    title: "Header".into(),
+                    url: "https://github.com/o/n/pull/7".into(),
+                    state,
+                    base: None,
+                    merge_commit: None,
+                    ci: None,
+                    conflicts: false,
+                    changes_requested: false,
+                    unresolved: 0,
+                })
             }),
         };
         board.apply(&seen(Some(crate::work::PullRequestState::Open)), 4);

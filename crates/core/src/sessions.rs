@@ -1563,13 +1563,13 @@ impl Core {
         }
         if boards
             .get(id)
-            .is_some_and(|board| board.pull_request == pull_request)
+            .is_some_and(|board| board.pull_request.as_deref() == pull_request.as_ref())
         {
             return Ok(());
         }
         let event = DomainEvent::PullRequestSeen {
             conversation_id: id.clone(),
-            pull_request,
+            pull_request: pull_request.map(Box::new),
         };
         let stored = self
             .record(vec![(streams::conversation(id), event.clone())])
