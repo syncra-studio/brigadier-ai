@@ -641,6 +641,22 @@ pub struct StartPreview {
     /// else "web".
     #[serde(default)]
     pub kind: Option<crate::work::PreviewKind>,
+    /// Why it runs: "user" when the user asked to see it or to keep it running, so the merge
+    /// of the session's work leaves it running; "proof" (the default) when you started it to
+    /// check or show your change, so that merge stops it.
+    #[serde(default)]
+    pub purpose: Option<PreviewPurpose>,
+}
+
+/// Why a preview runs, which decides whether a merge of the session's work stops it (#335).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PreviewPurpose {
+    /// Started to check or show the change: the merge of that work stops it.
+    #[default]
+    Proof,
+    /// The user asked to see it or keep it running: it runs on after a merge.
+    User,
 }
 
 /// `stop_preview`: stop one preview, or every running one, and remove it from the user's list.

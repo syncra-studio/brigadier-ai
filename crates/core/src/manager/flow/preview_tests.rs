@@ -58,6 +58,14 @@ fn thread(replies: Replies) -> Script {
                         "start_preview",
                         json!({ "command": command, "name": "app", "kind": "app" }),
                     )
+                } else if let Some(command) = input
+                    .lines()
+                    .find_map(|line| line.strip_prefix("start-for-user "))
+                {
+                    (
+                        "start_preview",
+                        json!({ "command": command, "name": "site", "purpose": "user" }),
+                    )
                 } else if input.contains("Please stop it.") {
                     ("stop_preview", json!({}))
                 } else if input.contains("Please merge.") {
@@ -120,9 +128,14 @@ fn child_pid(pids: &Path) -> u32 {
 /// Starts the preview with `say`, and waits for it to run; returns it and the pid of the
 /// process it started.
 async fn start(flow: &Flow, pids: &Path) -> (Preview, u32) {
+    start_as(flow, "start", pids).await
+}
+
+/// [`start`] with the message's own verb (`start-for-user` asks with `purpose: "user"`).
+async fn start_as(flow: &Flow, verb: &str, pids: &Path) -> (Preview, u32) {
     let _ = std::fs::remove_file(pids);
     let before = flow.board().await.previews.len();
-    flow.say(&format!("start {}", server(pids))).await;
+    flow.say(&format!("{verb} {}", server(pids))).await;
     let board = flow
         .until("the preview to run", |board| {
             // The shell makes the file before it writes the pid in.
@@ -131,7 +144,10 @@ async fn start(flow: &Flow, pids: &Path) -> (Preview, u32) {
                 && !running(board).is_empty()
         })
         .await;
-    let preview = running(&board).pop().unwrap();
+    let preview = running(&board)
+        .into_iter()
+        .max_by_key(|preview| preview.started_at_ms)
+        .unwrap();
     (preview, child_pid(pids))
 }
 
@@ -404,7 +420,8 @@ async fn the_thread_hears_of_a_preview_the_user_stopped_or_that_ended() {
 
 /// The user's Stop, a change of the thread's workspace and the merge of the session's work each
 /// stop the running previews: the merge's because they showed the work it took (#289), though
-/// the workspace stays; its result tells the thread.
+/// the workspace stays; its result tells the thread. One the user asked for runs on past the
+/// merge (#335).
 #[tokio::test]
 async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
     let replies: Replies = Arc::default();
@@ -485,8 +502,12 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
         .await
         .unwrap();
 
-    // The merge: the thread committed in the worktree, and the user asked for the merge.
+    // The merge: the thread committed in the worktree, and the user asked for the merge. The
+    // thread started one preview to show its change and another the user asked for.
     let (preview, child) = start(&flow, &pids).await;
+    flow.settled().await;
+    let user_pids = tmp.join("user-child.pid");
+    let (asked, asked_child) = start_as(&flow, "start-for-user", &user_pids).await;
     flow.settled().await;
     let worktree = workspace(&flow);
     std::fs::write(worktree.join("page.html"), "<h1>Hi</h1>\n").unwrap();
@@ -518,6 +539,17 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
         )),
         "{reply}"
     );
+    assert!(board.previews[&asked.id].state.is_running());
+    assert!(
+        alive(&flow, asked_child),
+        "the asked-for preview's child still runs"
+    );
+    assert!(!reply.contains(&asked.id), "{reply}");
+    flow.manager
+        .stop_preview(flow.conversation.clone(), Some(asked.id.clone()))
+        .await
+        .unwrap();
+    gone(&flow, asked_child).await;
     flow.stop().await;
 }
 
@@ -543,6 +575,7 @@ async fn a_stop_during_a_start_refuses_it_and_a_late_log_snapshot_keeps_the_end(
             env: None,
             workdir: None,
             kind: None,
+            purpose: None,
         };
         manager.start_preview(&id, args).await
     });

@@ -11,7 +11,7 @@
 //! - It runs in the thread's effective workspace (a folder inside it), and belongs to that
 //!   workspace: when the workspace changes (an overnight run starts or ends) it stops.
 //! - It stops on `stop_preview`, the user's Stop, the merge of the session's work (a thread's
-//!   preview: it showed the work the merge took, #289), archive and delete (before the `session:<id>` owner's worktree goes) and Brigadier's quit; the launch
+//!   preview started to show it, #289; not one the user asked for, #335), archive and delete (before the `session:<id>` owner's worktree goes) and Brigadier's quit; the launch
 //!   sweep ends any a crash left running, and its record reads as stopped.
 //! - Stopping it is SIGTERM to its process group, then, after [`STOP_GRACE`], SIGKILL to it
 //!   and everything it started. The grace is for all of them, not only the leader: one that
@@ -99,6 +99,8 @@ pub(crate) struct LivePreview {
     id: String,
     /// The worker that started it; none for the thread.
     task: Option<TaskId>,
+    /// The user asked for it (`purpose: "user"`): a merge leaves it running (#335).
+    for_user: bool,
     pid: u32,
     kind: PreviewKind,
     workspace: PathBuf,
@@ -354,6 +356,7 @@ impl SessionManager {
         let kind = args
             .kind
             .unwrap_or_else(|| super::preview_ready::infer_kind(&command));
+        let for_user = args.purpose == Some(crate::tools::PreviewPurpose::User);
         let mut env = args.env.unwrap_or_default();
         // An app runs in the background: the user's work keeps the focus (#142).
         if kind == PreviewKind::App {
@@ -506,6 +509,7 @@ impl SessionManager {
             conversation: id.clone(),
             id: preview_id.clone(),
             task: task.clone(),
+            for_user,
             pid,
             kind,
             workspace,
@@ -604,6 +608,10 @@ impl SessionManager {
              user presses Stop, when the session closes, when Brigadier quits and when your task \
              ends and its folder is removed: a preview you show the user lasts only while your \
              task is alive"
+        } else if for_user {
+            "It keeps running across your turns and after the session's work merges, until you \
+             call stop_preview, and stops when the session is archived or deleted, when your \
+             workspace changes, when the user presses Stop and when Brigadier quits"
         } else {
             "It keeps running across your turns until you call stop_preview, and stops when the \
              session is merged, archived or deleted, when your workspace changes, when the user \
@@ -1719,16 +1727,16 @@ impl SessionManager {
         stop_all(&gone, "its worker's folder was removed").await;
     }
 
-    /// The session's work merged: the thread's previews showed it, so they stop (#289). A
-    /// worker's runs on with the worker, in its own folder. Returns what the merge's result
-    /// says of them (nothing when none ran).
+    /// The session's work merged: the thread's previews started to show it stop (#289); one
+    /// the user asked for runs on (#335), as does a worker's, in its own folder. Returns what
+    /// the merge's result says of the stopped ones (nothing when none ran).
     pub(crate) async fn stop_merged_previews(&self, id: &ConversationId) -> String {
         drop(self.previews.starting.lock().await);
         let live: Vec<_> = self
             .previews
             .of(id)
             .into_iter()
-            .filter(|live| live.task.is_none())
+            .filter(|live| live.task.is_none() && !live.for_user)
             .collect();
         stop_all(&live, MERGED_STOP).await;
         let ids: Vec<_> = live.iter().map(|live| live.id.clone()).collect();
@@ -1807,6 +1815,7 @@ impl SessionManager {
                 conversation: id.clone(),
                 id: preview.id.clone(),
                 task: preview.task_id.clone(),
+                for_user: false,
                 pid: preview.pid.unwrap_or_default(),
                 kind: preview.kind,
                 workspace: PathBuf::from(&preview.workspace),
@@ -2628,6 +2637,7 @@ while True: time.sleep(0.03)
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
             task: None,
+            for_user: false,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
@@ -2751,6 +2761,7 @@ while True:
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
             task: None,
+            for_user: false,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
@@ -2821,6 +2832,7 @@ while True:
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
             task: None,
+            for_user: false,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
@@ -2889,6 +2901,7 @@ while True:
             conversation: flow.conversation.clone(),
             id: "preview-1".into(),
             task: None,
+            for_user: false,
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),

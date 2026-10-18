@@ -399,7 +399,7 @@ port answers, or an app's window opens): until preview_log says it is running, t
 it is starting, not that it runs. `kind` \"app\" (inferred for `tauri dev` and Electron) is a \
 desktop app with its own window and no URL; for \"web\" tell the user where to look (the URL \
 and port). It stops when you call stop_preview, when the user presses Stop, and when the \
-session is merged, archived or deleted; for one-off commands use your shell instead. Users may \
+session is merged (unless `purpose` is \"user\"), archived or deleted; for one-off commands use your shell instead. Users may \
 pause previews; preview_log gives the logs. Running Brigadier itself, use a new \
 BRIGADIER_DATA_DIR under /tmp and a dev identity, never ai.brigadier.app. macOS GUI previews below \
 Full access stay confined with private temp space. Chromium/Electron may need `--no-sandbox`; \
