@@ -256,6 +256,10 @@ without cache reads. A figure a source doesn't report is "not reported", never 0
   threads the daemon didn't meter, which `armtokens.sh` adds from their rollouts. A daemon from
   phase 2 on meters a worker's or thread's auto-review threads itself (step `guardian`, the child
   named in `child_thread`), so those are never added twice.
+- Transcripts below `turn_usage` by one review's tokens is expected (#139): a Codex plan review runs
+  `codex exec --ephemeral` (since `5473f36a`), which saves no rollout, so its use is only in
+  `turn_usage`. The T7L gaps that were traced (97,667 and 115,358) were each exactly one review
+  with no rollout. `turn_usage` is the right figure, and the bench and the tripwire read it.
 - Unknown usage (no transcript, no usage record, an unmatched review file) or an unexplained
   difference makes `tokens.py`/`armtokens.sh` write `"complete": false` and exit 3. Codex
   descendants (`parent_thread_id`) are followed recursively in both manifests; `--also DIR` adds a

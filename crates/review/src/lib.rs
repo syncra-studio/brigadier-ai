@@ -792,6 +792,8 @@ exit 1"#
     #[cfg(unix)]
     #[tokio::test]
     async fn a_plan_review_runs_ephemeral_and_leaves_no_thread_to_clean_up() {
+        // Codex saves no rollout for it, so its use is only in what it streams: the meter
+        // counts it and a count over transcripts can't (#139).
         let (dir, env) = fake_codex(
             "plan",
             &format!(
@@ -809,6 +811,12 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_token
         };
         let ended = review_of(&dir, &env, plan, ledger.clone(), CancellationToken::new()).await;
         assert_eq!(ended.outcome.map(|review| review.findings), Ok(0));
+        assert_eq!(
+            ended
+                .usage
+                .map(|usage| (usage.input_tokens, usage.cached_input_tokens)),
+            Some((60, 40))
+        );
         assert!(
             !ledger
                 .0

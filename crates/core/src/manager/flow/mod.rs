@@ -2111,6 +2111,8 @@ mod usage_tests;
 #[cfg(test)]
 mod warm_session_tests;
 #[cfg(test)]
+mod worker_turns_tests;
+#[cfg(test)]
 mod workspace_tests;
 #[cfg(test)]
 mod workspaces_tests;
