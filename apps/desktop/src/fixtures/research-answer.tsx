@@ -6,7 +6,8 @@
  * `bold=1` writes its breakdown in bold-led lines, as models still sometimes do (#319), with one
  * bold run mid-sentence; `details=0` drops its Details. `old=1` is an answer written before Q87:
  * numbered markers and a trailing `### Sources` list, which now read as plain Markdown.
- * `preview=1` has the answer name the one local page the turn left running; `preview=2` names two.
+ * `preview=1` has the answer name the one local page left running (a preview an earlier turn
+ * started, still up); `preview=2` names two.
  * `late=1` adds a late note under the answer; `local=system` sends local pages to the default
  * browser (Settings › Browser).
  *
@@ -20,7 +21,7 @@ import { createRoot } from "react-dom/client";
 import { ConversationView } from "@/app/ConversationView";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { Conversation, ConversationView as View, Message, Page, Request, UserRequest } from "@/ipc/generated";
+import type { Conversation, ConversationView as View, Message, Page, Preview, Request, UserRequest } from "@/ipc/generated";
 import { openConversation } from "@/state/actions";
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -111,6 +112,12 @@ const page: Page = {
   content: { title: "AI models for 3D printing", emoji: null, body: "## Figurines\n\nMeshy, Tripo and Rodin compared in full." },
 } as unknown as Page;
 
+// The dev server the answer's page runs on, started before this turn and still running.
+const server = (port: number): Preview => ({
+  id: `preview-${port}`, conversationId: ID, name: "npm run dev", command: "npm run dev", workdir: "/w", workspace: "/w", pid: 1,
+  state: { type: "running" }, startedAtMs: begun - 60_000, endedAtMs: null, log: null, url: `http://localhost:${port}/`, kind: "web", building: false,
+});
+
 const read: string[] = [];
 const system: string[] = [];
 
@@ -122,7 +129,7 @@ function view(): View {
     orchestratorSteps: [], machineSteps: [], thinking: [], compactions: [], decisions: [], waiting: [],
     queue: { items: [], paused: false },
     run: "idle", runRequest: null, head: "a1", ratings: {}, streaming: null,
-    notices: [], memories: [], overnight: [], reviews: [], previews: [],
+    notices: [], memories: [], overnight: [], reviews: [], previews: previews ? [server(5173), ...(previews > 1 ? [server(3000)] : [])] : [],
   } as unknown as View;
 }
 

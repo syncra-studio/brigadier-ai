@@ -6,9 +6,9 @@ function addresses(text: string): string[] {
 }
 
 /**
- * The page a finished turn left for the user to try: its final answer names exactly one local
- * address with a port (`localhost:3000`, `127.0.0.1:5173`…), counted once however often it
- * appears. None, or more than one, and the answer has no web preview.
+ * The page a finished turn's answer points the user to: exactly one local address with a port
+ * (`localhost:3000`, `127.0.0.1:5173`…), counted once however often it appears. None, or more
+ * than one, and it names no page. Only a preview serving it makes it a card (TurnPreviews).
  */
 export function webPreviewUrl(answer: string): string | null {
   const found = new Set<string>();

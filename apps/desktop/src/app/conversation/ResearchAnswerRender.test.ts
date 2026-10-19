@@ -56,11 +56,12 @@ test("a session answer whose request changed code keeps Details, its one fold", 
   assert.deepEqual(seen.links, LINKS);
 });
 
-// Q87: a turn whose answer names exactly one local page left running ends with a web preview
-// that opens it in the session's browser; two pages, or none, and there is no card.
+// Q87: a turn whose answer names exactly one local page left running (a preview serves it) ends
+// with a web preview that opens it in the session's browser; two pages, or none, and there is no
+// card.
 test("an answer naming one local page gets a web preview that opens in the browser", { timeout: 90000 }, async (t) => {
   const one = await see(t, "kind=session&preview=1");
-  assert.equal(one.preview, "Web previewlocalhost:5173Open");
+  assert.equal(one.preview, "Web previewRunning·localhost:5173Open");
   assert.equal(one.browsed, "http://localhost:5173/");
   const two = await see(t, "kind=session&preview=2");
   assert.equal(two.preview, null);
@@ -72,7 +73,7 @@ test("an answer naming one local page gets a web preview that opens in the brows
 // local pages.
 test("a web preview stays under a late note and opens where local pages go", { timeout: 90000 }, async (t) => {
   const late = await see(t, "kind=session&preview=1&late=1");
-  assert.equal(late.preview, "Web previewlocalhost:5173Open");
+  assert.equal(late.preview, "Web previewRunning·localhost:5173Open");
   assert.equal(late.browsed, "http://localhost:5173/");
   const system = await see(t, "kind=session&preview=1&local=system");
   assert.equal(system.browsed, null);

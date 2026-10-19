@@ -8,7 +8,7 @@
  * - `paused`: the page paused: Start again, the screenshots kept.
  * - `stopped`: the page stopped: Start again (its own command run again), the screenshots kept.
  * - `no-proofs`: running, no screenshots: the header line alone, no chevron.
- * - `no-record`: a page with no preview record: the address alone, no state.
+ * - `no-record`: an address with no preview record behind it: no card (#438).
  * - `proofs-only`: proofs with no page left running, from before proofs kept their kind and
  *   place: "Screenshots and recordings".
  * - `test-output`: a test run's output as a proof: "Test output", its last five lines under its
@@ -17,8 +17,11 @@
  * - `pdf`: a rendered PDF, ready: Open opens the file in the system's viewer.
  * - `test-run`: a test run that passed, its own output's last five lines; Run again.
  * - `test-failed`: one that failed, folded to its header.
- * - `turn`: a turn's other previews, found as its end finds them: the simulator its recording
- *   names and the test run started while its request ran, not one started after.
+ * - `turn`: a turn's previews, found as its end finds them: the page and the test run started
+ *   while its request ran and the simulator its recording names, not a run started after.
+ * - `turn-said`: a turn that started nothing, its answer naming an address no preview serves: no
+ *   card (#438). `turn-said-stopped`: the address of an older preview, stopped: no card either.
+ *   `turn-running`: the address of an older preview still running: its card, route and all.
  *
  * `?case=<id>` shows one case alone (for a screenshot); `?drive=1` writes what each case shows,
  * then clicks through it, to `<pre id="preview-card-result">` (PreviewCardRender.test.ts).
@@ -27,7 +30,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";
 
-import { PreviewCard, useTurnPreviews } from "@/app/conversation/activity/PreviewCard";
+import { PreviewCard, TurnPreviews } from "@/app/conversation/activity/PreviewCard";
+import { webPreviewUrl } from "@/app/conversation/activity/webPreview";
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { driveFold } from "@/fixtures/cardFold";
@@ -95,10 +99,19 @@ useBoard.setState({
     ...emptyBoard(CHAT),
     loaded: true,
     previews: Object.fromEntries(
-      [preview("preview-1", 3000, { type: "running" }), preview("preview-2", 3002, { type: "paused" }), preview("preview-3", 3003, { type: "stopped", reason: "stopped" }), ...OTHERS].map((each) => [each.id, each]),
+      [
+        preview("preview-1", 3000, { type: "running" }),
+        preview("preview-2", 3002, { type: "paused" }),
+        preview("preview-3", 3003, { type: "stopped", reason: "stopped" }),
+        // Started while the turn's request ran: its page.
+        { ...preview("preview-own", 4000, { type: "running" }), startedAtMs: 1500 },
+        ...OTHERS,
+      ].map((each) => [each.id, each]),
     ),
     requests: {
       "turn-1": { id: "turn-1", conversationId: CHAT, preview: "", state: { type: "done" }, startedAtMs: 1000, endedAtMs: 5000, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false },
+      // A later turn that started nothing.
+      "turn-2": { id: "turn-2", conversationId: CHAT, preview: "", state: { type: "done" }, startedAtMs: 6000, endedAtMs: 8000, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false },
     } as unknown as ReturnType<typeof emptyBoard>["requests"],
   },
 });
@@ -126,17 +139,12 @@ const SIM_PROOFS = [
   { position: 0, atMs: at22, kind: { type: "proof", id: "sim-video", name: "sim.mov", mime: "video/quicktime", kind: "recording", takenOn: "iPhone 17", preview: "preview-sim", caption: "Adding a todo on the phone", takenAtMs: at22 } },
 ] as BlockOrchestratorStep[];
 
-/** A turn's end as RequestBlock lays it out: one card for each of its other previews. */
-function Turn() {
-  const others = useTurnPreviews(["turn-1"], SIM_PROOFS);
-  return (
-    <div className="flex flex-col gap-3">
-      {others.map((each) => (
-        <PreviewCard key={each.id} url={null} preview={each} steps={SIM_PROOFS.filter((step) => step.kind.type === "proof" && step.kind.preview === each.id)} session />
-      ))}
-    </div>
-  );
-}
+/** A turn's end as RequestBlock lays it out, its answer read as RequestBlock reads it. */
+const Turn = ({ request, steps = [], answer = "" }: { request: string; steps?: BlockOrchestratorStep[]; answer?: string }) => (
+  <div className="flex flex-col gap-3">
+    <TurnPreviews requestIds={[request]} steps={steps} answered={webPreviewUrl(answer)} session />
+  </div>
+);
 
 const session = { id: CHAT, kind: "session", title: "Due dates", setup: { type: "session" } } as unknown as Conversation;
 
@@ -153,7 +161,10 @@ const CASES: { id: string; node: ReactNode }[] = [
   { id: "pdf", node: <PreviewCard url={null} preview={OTHERS[1]!} steps={[]} session /> },
   { id: "test-run", node: <PreviewCard url={null} preview={OTHERS[2]!} steps={[]} session /> },
   { id: "test-failed", node: <PreviewCard url={null} preview={OTHERS[3]!} steps={[]} session /> },
-  { id: "turn", node: <Turn /> },
+  { id: "turn", node: <Turn request="turn-1" steps={SIM_PROOFS} /> },
+  { id: "turn-said", node: <Turn request="turn-2" answer="Run `npm run dev`; it starts on http://localhost:5173." /> },
+  { id: "turn-said-stopped", node: <Turn request="turn-2" answer="It was on http://localhost:3003/ earlier." /> },
+  { id: "turn-running", node: <Turn request="turn-2" answer="Still running at http://localhost:3000/#/todos." /> },
 ];
 
 const only = query.get("case");
@@ -241,7 +252,11 @@ async function drive() {
   at("simulator")?.querySelector<HTMLButtonElement>("[data-slot=preview-open]")?.click();
   await until(() => calls.filter((each) => each.startsWith("restartPreview") || each.startsWith("open_")).length >= 4, 2000);
   // The turn's other previews, as its end finds them.
-  out.turn = [...(at("turn")?.querySelectorAll("[data-slot=preview-card]") ?? [])].map((card) => [words(card.querySelector("[data-slot=preview-title]")), words(card.querySelector("[data-slot=preview-target]"))]);
+  const cards = (id: string) => [...(at(id)?.querySelectorAll("[data-slot=preview-card]") ?? [])].map((card) => [words(card.querySelector("[data-slot=preview-title]")), words(card.querySelector("[data-slot=preview-target]"))]);
+  out.turn = cards("turn");
+  // Only a preview really started makes a page's card, never an address in the answer (#438).
+  out.said = [cards("turn-said"), cards("turn-said-stopped"), cards("turn-running")];
+  out.noRecord = !!at("no-record")?.querySelector("[data-slot=preview-card]");
   out.calls = calls;
   return out;
 }

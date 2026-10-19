@@ -22,6 +22,8 @@ type Seen = {
   error?: string;
   cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only" | "test-output" | "simulator" | "pdf" | "test-run" | "test-failed", Look>;
   turn: [string | null, string | null][];
+  said: [string | null, string | null][][];
+  noRecord: boolean;
   opened: string | null;
   browserTabs: number;
   menu: string[];
@@ -70,9 +72,10 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
     "✓ rejects a title longer than 200 characters\n✓ accepts years 0000 to 0099\n✓ marks a past due date as overdue\n✓ a todo due today is not overdue\n15 passing (412ms)",
   ]);
   assert.deepEqual([cases["test-failed"].standing, cases["test-failed"].state], ["Failed", "stopped"]);
-  // A turn's other previews: the simulator its recording names, the test runs started while its
-  // request ran and the PDF, not the run started after it.
+  // A turn's previews: the page and the test runs and PDF started while its request ran, the
+  // simulator its recording names, not the run started after it.
   assert.deepEqual(seen.turn, [
+    ["Web preview", "localhost:4000"],
     ["iOS Simulator", "iPhone 17"],
     ["Rendered PDF", "out/invoice.pdf"],
     ["Test run", "npm test"],
@@ -80,8 +83,11 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   ]);
   // No screenshots: the one line, no chevron.
   assert.deepEqual([cases["no-proofs"].buttons, cases["no-proofs"].heading], [["Open", "Open in"], null]);
-  // No preview record: the address alone.
-  assert.deepEqual([cases["no-record"].standing, cases["no-record"].target, cases["no-record"].state], [null, "localhost:5173", null]);
+  // An address with no preview record behind it is no card (#438): a turn that started nothing
+  // has no page card for an address its answer names, nor for an older preview's that stopped; an
+  // older preview still running on it is the page, route and all.
+  assert.equal(seen.noRecord, false);
+  assert.deepEqual(seen.said, [[], [], [["Web preview", "localhost:3000/#/todos"]]]);
   // Proofs with no page left running: their card alone.
   const alone = cases["proofs-only"];
   assert.deepEqual([alone.title, alone.count, alone.buttons], ["Screenshots and recordings", "1 screenshot, 1 recording", ["Fold the proofs"]]);

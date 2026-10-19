@@ -238,18 +238,20 @@ const pdfPath = (record: Preview) =>
   !record.target ? null : record.target.startsWith("/") ? record.target : `${record.workdir.replace(/\/$/, "")}/${record.target}`;
 
 /**
- * What a finished turn left to look at: the one local page its answer names (`url`) or one of its
- * other previews (`preview`: a simulator run, a rendered PDF, a test run), and the proofs it took
+ * What a finished turn left to look at: its page (`url`, served by a preview record; an address
+ * with no preview behind it is no card) or one of its other previews (`preview`: a simulator run, a rendered PDF, a test run), and the proofs it took
  * of it (`steps`). Neither page nor preview, and the card is the proofs' alone; no proofs either,
  * and there is no card. `session`: the turn is a session's, whose Browser tabs can show the page.
  */
-export function PreviewCard({ url, preview = null, steps, session }: { url: string | null; preview?: Preview | null; steps: readonly BlockOrchestratorStep[]; session: boolean }) {
+export function PreviewCard({ url: named, preview = null, steps, session }: { url: string | null; preview?: Preview | null; steps: readonly BlockOrchestratorStep[]; session: boolean }) {
   const viewed = useViewConversation()?.id ?? null;
   const conversationId = session ? viewed : null;
   const proofs = steps.flatMap((step) => (step.kind.type === "proof" ? [{ proof: step.kind as Proof, atMs: (step.kind as Proof).takenAtMs ?? step.atMs }] : []));
   const page = useBoard((s) =>
-    url && !preview ? Object.values(s.board?.previews ?? {}).filter((each) => samePage(each, url)).toSorted((a, b) => a.startedAtMs - b.startedAtMs).at(-1) ?? null : null,
+    named && !preview ? Object.values(s.board?.previews ?? {}).filter((each) => samePage(each, named)).toSorted((a, b) => a.startedAtMs - b.startedAtMs).at(-1) ?? null : null,
   );
+  // An address nothing was started on is no page (#438).
+  const url = page ? named : null;
   const record = preview ?? page;
   const kind = preview ? KINDS[preview.kind as keyof typeof KINDS] : null;
   const ownLog = preview?.kind === "test" && !proofs.some(({ proof }) => printed(proof));
@@ -396,12 +398,44 @@ export function PreviewCard({ url, preview = null, steps, session }: { url: stri
   );
 }
 
+/** A web page's preview: a local server with an address. */
+const isPage = (preview: Preview) => preview.url !== null && !isOtherPreview(preview);
+
 /**
- * The turn's other previews (a simulator run, a rendered PDF, a test run): those its proofs were
- * taken of, and those started while its requests ran. One that was its stays its while the card
- * shows, though Start again gives it a new start time.
+ * A finished turn's previews, each a card with the proofs taken of it: its page, then its other
+ * previews. The page is one the turn started or took proofs of, or one still running on the local
+ * address its answer names (`answered`, read as that address, route and all). An address in the
+ * answer with no preview behind it is no card (#438).
  */
-export function useTurnPreviews(requestIds: readonly string[], steps: readonly BlockOrchestratorStep[]): Preview[] {
+export function TurnPreviews({ requestIds, steps, answered, session }: { requestIds: readonly string[]; steps: readonly BlockOrchestratorStep[]; answered: string | null; session: boolean }) {
+  const own = useTurnPreviews(requestIds, steps, isPage)
+    .toSorted((a, b) => a.startedAtMs - b.startedAtMs)
+    .at(-1);
+  const serving = useBoard(
+    (s) => answered !== null && Object.values(s.board?.previews ?? {}).some((each) => isPage(each) && !["stopped", "exited"].includes(each.state.type) && samePage(each, answered)),
+  );
+  const url = own ? (answered && samePage(own, answered) ? answered : (own.url ?? null)) : serving ? answered : null;
+  const others = useTurnPreviews(requestIds, steps, isOtherPreview);
+  const ofPreview = (id: string | null) =>
+    steps.filter((step) =>
+      step.kind.type !== "proof" ? id === null : id === null ? !others.some((other) => other.id === (step.kind as { preview?: string }).preview) : step.kind.preview === id,
+    );
+  return (
+    <>
+      <PreviewCard url={url} steps={ofPreview(null)} session={session} />
+      {others.map((other) => (
+        <PreviewCard key={other.id} url={null} preview={other} steps={ofPreview(other.id)} session={session} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * The turn's previews of a sort (`which`): those its proofs were taken of, and those started while
+ * its requests ran. One that was its stays its while the card shows, though Start again gives it a
+ * new start time.
+ */
+function useTurnPreviews(requestIds: readonly string[], steps: readonly BlockOrchestratorStep[], which: (preview: Preview) => boolean): Preview[] {
   const named = steps.flatMap((step) => (step.kind.type === "proof" && step.kind.preview ? [step.kind.preview] : []));
   // TODO(#435): a preview's own request, once its record keeps the request that started it.
   const found = useBoard(
@@ -410,7 +444,7 @@ export function useTurnPreviews(requestIds: readonly string[], steps: readonly B
       const from = Math.min(...requests.map((each) => each.startedAtMs));
       const to = requests.some((each) => each.endedAtMs === null) ? Infinity : Math.max(...requests.map((each) => each.endedAtMs ?? 0));
       return Object.values(s.board?.previews ?? {})
-        .filter(isOtherPreview)
+        .filter(which)
         .filter((each) => named.includes(each.id) || (each.startedAtMs >= from && each.startedAtMs <= to))
         .map((each) => each.id);
     }),
