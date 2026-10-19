@@ -27,7 +27,7 @@ import {
   type AgentPlanStep,
   type AgentPlanStepStatus,
 } from "@/components/assistant-ui/elements/agent-plan";
-import { JobProgress, type JobOutcomeStatus } from "@/components/assistant-ui/elements/job-progress";
+import { ProgressLine, type ProgressOutcomeStatus } from "@/components/assistant-ui/elements/progress-line";
 import { disclosureRow } from "@/components/assistant-ui/elements/surfaces";
 import { Timeline, type TimelineEvent } from "@/components/assistant-ui/elements/timeline";
 import { Badge } from "@/components/ui/badge";
@@ -431,11 +431,11 @@ function RunProgress({ model, over, ending }: { model: OvernightCardModel; over:
   const { done, worked } = phasesDone(details.steps);
   const counted = `${done} of ${worked} done`;
   if (over) {
-    const status: JobOutcomeStatus =
+    const status: ProgressOutcomeStatus =
       done === worked ? "success" : done > 0 ? "partial" : run.stop?.type === "stopped" ? "cancelled" : "failed";
     const took =
       run.startedAtMs !== null && run.finishedAtMs !== null ? spanWords(run.finishedAtMs - run.startedAtMs) : undefined;
-    return <JobProgress title={counted} done={done} total={worked} meta={took} outcome={{ status }} />;
+    return <ProgressLine title={counted} done={done} total={worked} meta={took} outcome={{ status }} />;
   }
   const current = details.steps.find((step) => step.mark === "working");
   const title = ending
@@ -446,7 +446,7 @@ function RunProgress({ model, over, ending }: { model: OvernightCardModel; over:
         ? phaseTitle(current, details.steps.length)
         : "Starting the next phase";
   return (
-    <JobProgress
+    <ProgressLine
       title={title}
       done={done}
       total={worked}

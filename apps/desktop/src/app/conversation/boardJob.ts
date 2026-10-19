@@ -37,6 +37,9 @@ export type JobInput = Pick<Board, "tasks" | "reviews" | "integratedChecks" | "o
 /** The work kinds that build: a change, or an app driven to a state. */
 const BUILDS = new Set<Task["kind"]>(["implement", "operate"]);
 
+/** A worker that builds: not one that only looks at the running app and changes nothing (#423). */
+const builds = (task: Task) => BUILDS.has(task.kind) && !task.liveLook;
+
 /** A task's part in Building: queued, at work, or past it (it reported, landed or ended). */
 function buildState(state: TaskState): JobStepState | "stopped" {
   switch (state) {
@@ -199,17 +202,18 @@ function windowJob(
   phase: { tasks: readonly Task[]; state: JobStepState } | null,
 ): BoardJob | null {
   const inWindow = (atMs: number) => atMs >= since && atMs < until;
-  const tasks = phase?.tasks ?? Object.values(input.tasks).filter((task) => BUILDS.has(task.kind) && !isRunRequest(task.requestId) && inWindow(task.createdAtMs));
+  const tasks = phase?.tasks ?? Object.values(input.tasks).filter((task) => builds(task) && !isRunRequest(task.requestId) && inWindow(task.createdAtMs));
   const reviews = batchReviews(Object.values(input.reviews), since, until).filter((review) => !isRunRequest(review.requestId));
   const checks = Object.values(input.integratedChecks).filter((check) => inWindow(check.dueAtMs) && !check.requests.some(isRunRequest));
   const steps = input.orchestratorSteps.filter((step) => inWindow(step.atMs) && !isRunRequest(step.requestId));
   const watch = steps.flatMap((step) => (step.kind.type === "ciWatch" ? [{ kind: step.kind, atMs: step.atMs }] : [])).at(-1);
   const findings = findingRows(reviews);
 
-  // A build that starts after a review found something or the checks failed is a fix.
+  // A build that starts once the reviews or checks have begun is a fix: the job never goes back
+  // to Building (#423).
   const trouble = Math.min(
-    ...reviews.flatMap((review) => (review.endedAtMs !== null && findingCount([review]) > 0 ? [review.endedAtMs] : [])),
-    ...checks.flatMap((check) => (check.endedAtMs !== null && (check.state.type === "failed" || check.state.type === "interrupted") ? [check.endedAtMs] : [])),
+    ...reviews.map((review) => review.startedAtMs),
+    ...checks.flatMap((check) => (check.startedAtMs !== null ? [check.startedAtMs] : [])),
   );
   const lead = phase?.tasks[0];
   const fixes = tasks.filter((task) => task !== lead && task.createdAtMs > trouble);
@@ -227,7 +231,8 @@ function windowJob(
       ? {
           id: "fix",
           name: "Fixing",
-          state: fixing || ((unrecorded > 0 || checkFailed) && live) ? "active" : unrecorded > 0 || checkFailed ? "pending" : "done",
+          // While a review still runs, its findings wait for it.
+          state: fixing || ((unrecorded > 0 || checkFailed) && live && review?.state !== "active") ? "active" : unrecorded > 0 || checkFailed ? "pending" : "done",
           count: unrecorded > 0 ? `${plural(unrecorded, "finding")} to go` : undefined,
           summary: unrecorded > 0 ? undefined : settledWords(findings),
         }
@@ -240,11 +245,12 @@ function windowJob(
   // While a step is at work, what the session still goes through comes after it.
   const furthest = Math.max(...ORDER.map((id, index) => (real[id] ? index : -1)));
   const expected = new Set<JobStepId>([...(input.reviewWork ? (["review"] as const) : []), "checks", ...(input.autoMerge ? (["merge"] as const) : [])]);
-  const result: JobStep[] = ORDER.flatMap((id, index) => {
+  const listed: JobStep[] = ORDER.flatMap((id, index) => {
     const step = real[id];
     if (step) return [step];
     return live && !merged && index > furthest && expected.has(id) ? [{ id, name: NAMES[id], state: "pending" as const }] : [];
   });
+  const result = onwards(listed);
   const atMs = Math.min(...result.flatMap((step) => (step.startedAtMs ? [step.startedAtMs] : [])), merged?.atMs ?? Number.POSITIVE_INFINITY);
   return {
     steps: result,
@@ -254,6 +260,16 @@ function windowJob(
       merge: merged ? { commit: merged.kind.mergeCommit ?? null, base: merged.kind.base, pr: merged.kind.pr !== undefined, record: merged.kind.record ?? null } : null,
     },
   };
+}
+
+/**
+ * One step at work at a time, and never back to an earlier one (#414): the furthest step at work
+ * is the job's, and every step before it that was still at work or to come counts as passed. A
+ * failed step stays failed.
+ */
+export function onwards(steps: readonly JobStep[]): JobStep[] {
+  const at = steps.findLastIndex((step) => step.state === "active");
+  return steps.map((step, index) => (index < at && (step.state === "active" || step.state === "pending") ? { ...step, state: "done", count: undefined } : step));
 }
 
 /** The phase at work of the session's current plan of several phases, with its window. */
@@ -281,7 +297,7 @@ function currentPhase(input: JobInput): { plan: Plan; index: number; since: numb
   const state: JobStepState = task ? (buildState(task.state) === "stopped" ? "done" : (buildState(task.state) as JobStepState)) : status === "stopped" ? "done" : status;
   // The phase's other builds (its fixes): those since it started that no other phase leads.
   const leads = new Set(plan.steps.flatMap((step) => (step.taskId ? [step.taskId] : [])));
-  const others = Object.values(input.tasks).filter((other) => !leads.has(other.id) && BUILDS.has(other.kind) && other.createdAtMs >= since);
+  const others = Object.values(input.tasks).filter((other) => !leads.has(other.id) && builds(other) && other.createdAtMs >= since);
   return { plan, index, since, until: Number.POSITIVE_INFINITY, state, tasks: task ? [task, ...others] : others };
 }
 

@@ -1,12 +1,12 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { JobProgress } from "@/components/assistant-ui/elements/job-progress";
+import { ProgressLine } from "@/components/assistant-ui/elements/progress-line";
 
 /** A download at a third, then each way a job can end. */
 function Fixture() {
   useEffect(() => {
-    const jobs = [...document.querySelectorAll<HTMLElement>('[data-slot="job-progress"]')];
+    const jobs = [...document.querySelectorAll<HTMLElement>('[data-slot="progress-line"]')];
     const seen = jobs.map((job) => {
       const bar = job.querySelector<HTMLElement>('[role="progressbar"]')!;
       return {
@@ -19,24 +19,24 @@ function Fixture() {
       };
     });
     const result = document.createElement("pre");
-    result.id = "job-progress-result";
+    result.id = "progress-line-result";
     result.textContent = JSON.stringify(seen);
     document.body.append(result);
     return () => result.remove();
   }, []);
   return (
     <div className="flex w-96 flex-col gap-6 p-4">
-      <JobProgress title="Downloading…" done={47} total={141} meta="47.0 MB of 141.0 MB" />
-      <JobProgress title="Windows support" done={6} total={6} meta="5h 12m" outcome={{ status: "success" }} />
-      <JobProgress
+      <ProgressLine title="Downloading…" done={47} total={141} meta="47.0 MB of 141.0 MB" />
+      <ProgressLine title="Windows support" done={6} total={6} meta="5h 12m" outcome={{ status: "success" }} />
+      <ProgressLine
         title="Windows support"
         done={4}
         total={6}
         outcome={{ status: "partial", summary: "Four of six phases are verified." }}
       />
-      <JobProgress title="Windows support" done={2} total={6} outcome={{ status: "failed" }} />
-      <JobProgress title="Windows support" done={1} total={6} outcome={{ status: "cancelled" }} />
-      <JobProgress title="Nothing to do" done={0} total={0} />
+      <ProgressLine title="Windows support" done={2} total={6} outcome={{ status: "failed" }} />
+      <ProgressLine title="Windows support" done={1} total={6} outcome={{ status: "cancelled" }} />
+      <ProgressLine title="Nothing to do" done={0} total={0} />
     </div>
   );
 }

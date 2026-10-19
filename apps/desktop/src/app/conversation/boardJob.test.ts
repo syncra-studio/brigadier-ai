@@ -102,3 +102,31 @@ test("an overnight run at work has its own card: no job beside it", () => {
   const run = { id: "o1", state: "running", planId: null } as unknown as OvernightRun;
   assert.equal(sessionJobs(input({ tasks: byId([task("t1", "running", 10)]), overnight: { o1: run } })).current, null);
 });
+
+// Issue 414: the thread fixed a finding itself and the checks run before it records it: the
+// checks are the one step at work, Fixing behind them is passed.
+test("one step is at work at a time, and the job never goes back to an earlier one", () => {
+  const finding = { id: "R1.1", severity: "P3", title: "Years below 100", location: null, status: { type: "new" }, high: false } as ReviewRun["items"][number];
+  const parts = {
+    tasks: byId([task("t1", "landed", 10)]),
+    reviews: byId([review("v1", 20, { type: "findings", count: 1 }, [finding])]),
+    integratedChecks: byId([check(1, 30, { type: "running", command: "npm test" })]),
+  };
+  assert.deepEqual(steps(parts), ["build:done", "review:done", "fix:done", "checks:active", "merge:pending"]);
+  // While a review still runs, an earlier review's finding waits: Reviewing is the step at work.
+  const reviewing = { tasks: parts.tasks, reviews: byId([review("v1", 20, { type: "findings", count: 1 }, [finding]), review("v2", 25, { type: "running" })]) };
+  assert.deepEqual(steps(reviewing), ["build:done", "review:active", "fix:pending", "checks:pending", "merge:pending"]);
+  // Issue 423: a worker started once the reviews began is a fix, not Building again.
+  const after = { ...parts, integratedChecks: {}, tasks: { ...parts.tasks, ...byId([task("t2", "running", 40)]) }, reviews: byId([review("v1", 20, { type: "clean" })]) };
+  assert.deepEqual(steps(after), ["build:done", "review:done", "fix:active", "checks:pending", "merge:pending"]);
+});
+
+// Issue 423: a worker that only looks at the running app after the merge changes nothing: no new
+// job at Building.
+test("a live look after a merge starts no job", () => {
+  const parts = {
+    tasks: byId([task("t1", "landed", 10), task("t2", "running", 60, { liveLook: true })]),
+    orchestratorSteps: [step(50, { type: "merged", branch: "b", base: "main", commits: 1, askedIn: null, mergeCommit: "1234567890" })],
+  };
+  assert.equal(sessionJobs(input(parts)).current, null);
+});

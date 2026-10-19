@@ -5,9 +5,9 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 type Job = { state: string; text: string; value: string; fill: number; spinning: boolean };
 
-test("job progress fills its bar by the share done, and settles into how the job ended", { timeout: 60000 }, async (t) => {
+test("a progress line fills its bar by the share done, and settles into how the job ended", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(
-    await renderFixtureLive(t, "job-progress.html", "job-progress-result", 30000, { reducedMotion: true }),
+    await renderFixtureLive(t, "progress-line.html", "progress-line-result", 30000, { reducedMotion: true }),
   ) as Job[];
   assert.deepEqual(
     seen.map((job) => job.state),

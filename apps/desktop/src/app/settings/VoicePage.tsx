@@ -11,7 +11,7 @@ import {
   SettingsSelect,
 } from "@/app/settings/parts";
 import { cleanWords, languageChoices, microphoneChoices } from "@/app/settings/voice";
-import { JobProgress } from "@/components/assistant-ui/elements/job-progress";
+import { ProgressLine } from "@/components/assistant-ui/elements/progress-line";
 import { formatBytes } from "@/lib/format";
 import {
   cancelSpeechModelDownload,
@@ -207,7 +207,7 @@ function SpeechModelRow() {
     ? "Looking…"
     : model
       ? (
-          <JobProgress
+          <ProgressLine
             className="gap-1.5 pt-1 text-xs"
             title="Downloading…"
             done={model.received}

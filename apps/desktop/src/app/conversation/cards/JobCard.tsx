@@ -17,12 +17,22 @@ export function StackCard({ className, children }: { className?: string; childre
   );
 }
 
+/** "3 of 5" as a share of the step done; nothing to count reads as a step just begun. */
+function share(count: string | undefined): number {
+  const [done, of] = (count?.match(/^(\d+) of (\d+)/) ?? []).slice(1).map(Number);
+  return done !== undefined && of ? done / of : 0;
+}
+
 /**
- * The session's job while it works through steps: one bar cut into its steps and one short
- * line ("Reviewing · 3 of 5", "Checks failed · fixing"). A click opens every step in a tab.
+ * The session's job while it works through steps: assistant-ui's job progress element with the
+ * job's line ("Reviewing · 3 of 5", "Checks failed · fixing"), its bar, and its steps listed, the
+ * one at work shimmering, each passed one checked. A click opens every step in a tab.
  */
 export function JobCard({ job, onOpen }: { job: Job; onOpen?: () => void }) {
-  const done = job.steps.filter((step) => step.state === "done").length;
+  const at = job.steps.findIndex((step) => step.state === "active");
+  const next = job.steps.findIndex((step) => step.state !== "done");
+  const index = at !== -1 ? at : next !== -1 ? next : job.steps.length;
+  const current = job.steps[index];
   return (
     <StackCard>
       <button
@@ -34,9 +44,14 @@ export function JobCard({ job, onOpen }: { job: Job; onOpen?: () => void }) {
       >
         <JobProgress
           title={jobLabel(job)}
-          done={done}
-          total={job.steps.length}
-          stages={job.steps.map((step) => step.state)}
+          stageIndex={index}
+          stageProgress={current?.state === "active" ? share(current.count) : 0}
+          stages={job.steps.map((step, i) => ({
+            name: step.name,
+            weight: 1,
+            state: step.state,
+            description: i === index && step.state === "active" ? step.summary : undefined,
+          }))}
         />
       </button>
     </StackCard>
