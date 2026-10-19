@@ -591,12 +591,12 @@ async fn a_session_from_before_the_lean_tools_is_told_once() {
     .await;
 }
 
-/// Rule R for the Save… under an answer, which offers only the worker files it links (#218).
+/// Rule R for the worker files an answer links, which it hands over (#218).
 #[tokio::test]
 async fn a_session_from_before_the_answer_files_is_told_once() {
     told_once(
         ANSWER_FILES_REVISION,
-        "link one you hand over as [notes.md](outputs/notes.md)",
+        "link a worker's file you hand over as [notes.md](outputs/notes.md)",
     )
     .await;
 }

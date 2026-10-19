@@ -121,6 +121,14 @@ macro_rules! clarify_rule {
     };
 }
 
+/// Where a worker's file shows in an answer (Q84): once, inline, as a link that opens it in
+/// Brigadier, where the user saves it. Nothing lists files under or at the end of the answer.
+macro_rules! inline_files {
+    () => {
+        "Name each file a worker made for the user once, inline, where your answer speaks of it, by its name as a link: [list.csv](outputs/list.csv). A click opens it in Brigadier, where the user saves it. Never list files at the end (\"the full findings are in …\") and never tell the user to save one under your answer."
+    };
+}
+
 /// What a Chat can do as a thread without a project (Q76), in its instructions and in the note
 /// that tells a Chat from before.
 macro_rules! chat_thread {
@@ -137,7 +145,9 @@ macro_rules! chat_thread {
             fusion_rule!(),
             "
 - Start a worker with delegate_task: kind research (it searches the web, compares and writes files) or operate (it uses an app on this computer or a website, with target and end_state). A Chat has no repository, so no other kind. Then reply exactly [quiet]: each report comes later as a message ([report task-N …]), a worker's question as [question from task-N], which you answer with answer_worker. Write your answer from the reports.
-- You write no files yourself. A file the user wants (a list, a table, a document, an image) is made by a research worker in its outputs folder: link it in your answer by its name, [list.csv](outputs/list.csv), which puts its Save under your answer. Never give the user a folder or file path, nor link a file you haven't seen in a report.
+- You write no files yourself. A file the user wants (a list, a table, a document, an image) is made by a research worker in its outputs folder. ",
+            inline_files!(),
+            " Never give the user a folder or file path, nor link a file you haven't seen in a report.
 - With the browser tools listed, read or use a few pages yourself; a long browsing job goes to an operate worker."
         )
     };
@@ -267,7 +277,7 @@ How to work:
 - {OFFER_SESSION_RULE}
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
-- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer ([notes.md](outputs/notes.md), which puts its Save… under your answer): Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
+- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer: {INLINE_FILES} Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
 
 How to talk to the user:
@@ -353,9 +363,12 @@ pub(crate) const REVISED_ANSWER: &str = revised_answer!();
 
 macro_rules! no_promised_files {
     () => {
-        "Never promise a file or a link for later: a worker's findings go in your answer itself (a research report saved with save_report), not only a link to the worker's file or a path. A file the user asked for is still linked, so its Save… shows under your answer."
+        "Never promise a file or a link for later: a worker's findings go in your answer itself (a research report saved with save_report), not only a link to the worker's file or a path. A file the user asked for is still linked, once, inline."
     };
 }
+
+/// Where a worker's file shows in an answer (Q84).
+pub(crate) const INLINE_FILES: &str = inline_files!();
 
 /// The thread never says a file or link comes later (Q81).
 pub(crate) const NO_PROMISED_FILES: &str = no_promised_files!();
@@ -819,7 +832,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: DELIVERABLES_REVISION,
-        thread: "From now on, a worker's scratch folder goes when its task ends and its outputs open and save from its task card (a link to a stored output, even an old one, opens Brigadier's copy): never give the user a scratch path, and never point them at a file you haven't just seen exist; link a worker's file as [notes.md](outputs/notes.md). Hand a file over through its task card's Save, the Save… shown under your answer for each stored output, or an ask_user card asking where it goes; never copy it to the Desktop, another folder or the clipboard unless the user asked. \"To check: …\" is only for what nobody here can check or fix: a known defect in a deliverable is no decision for a card: fix it yourself (your workspace is writable at your permission level: write the corrected file there and link its full path), or send it back, before you answer.",
+        thread: "From now on, a worker's scratch folder goes when its task ends and its outputs open and save from its task card (a link to a stored output, even an old one, opens Brigadier's copy): never give the user a scratch path, and never point them at a file you haven't just seen exist; link a worker's file as [notes.md](outputs/notes.md). Hand a file over through its task card's Save, a link in your answer, or an ask_user card asking where it goes; never copy it to the Desktop, another folder or the clipboard unless the user asked. \"To check: …\" is only for what nobody here can check or fix: a known defect in a deliverable is no decision for a card: fix it yourself (your workspace is writable at your permission level: write the corrected file there and link its full path), or send it back, before you answer.",
         worker: "From now on, your scratch folder goes when the task ends: never link its path in your report or messages; name the output file (outputs/notes.md).",
     },
     Revision {
@@ -944,7 +957,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: ANSWER_FILES_REVISION,
-        thread: "From now on, the Save… under your answer is only for the workers' files your answer links: link one you hand over as [notes.md](outputs/notes.md). The other outputs stay on their task cards.",
+        thread: "From now on, link a worker's file you hand over as [notes.md](outputs/notes.md). The other outputs stay on their task cards.",
         worker: "",
     },
     Revision {
@@ -1121,6 +1134,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: concat!("From now on: ", fused_interview_fixes!()),
         worker: "",
     },
+    Revision {
+        number: INLINE_FILES_REVISION,
+        thread: concat!("From now on: ", inline_files!()),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1156,8 +1174,9 @@ const CHAT_GRILLING: &str = grilling_rule!();
 /// tab chats the thread's voice and the research answer's format (Q79); 3 its breakdown in
 /// sentences; 4 no bold at the start of any of its lines, colon or not; 5 a Chat is a thread
 /// without a project (Q76: workers, cards, one clarifying card); 6 it fuses a costly question (Q77); 7 it keeps stable personal facts, nothing sensitive (Q78); 8 it interviews on cards, in numbered
-/// rounds, facts looked up first (Q78); 9 the live run's fixes to both ([`CHAT_FIXES_NOTE`]).
-const CHAT_CONTRACT: u32 = 9;
+/// rounds, facts looked up first (Q78); 9 the live run's fixes to both ([`CHAT_FIXES_NOTE`]); 10
+/// it names each file once, inline, with no Save under the answer (Q84).
+const CHAT_CONTRACT: u32 = 10;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
 /// The first Chat contract with the breakdown rule as it is now; a Chat told the voice before
@@ -1178,6 +1197,9 @@ const CHAT_GRILLING_CONTRACT: u32 = 8;
 /// The first Chat contract with the live run's fixes to fusion and the interview; a Chat told
 /// fusion's older words hears [`CHAT_FIXES_NOTE`] (one told less hears them within its notes).
 const CHAT_FIXES_CONTRACT: u32 = 9;
+/// The first Chat contract with files named once, inline (Q84); a Chat told a thread's
+/// abilities before hears [`CHAT_FILES_NOTE`] (one told less hears it within [`CHAT_THREAD_NOTE`]).
+const CHAT_FILES_CONTRACT: u32 = 10;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1213,6 +1235,9 @@ const CHAT_THREAD_NOTE: &str = concat!("[instructions] From now on: ", chat_thre
 /// Tells a Chat that heard fusion's and the interview's first words what changed (Q77, Q78).
 const CHAT_FIXES_NOTE: &str = concat!("[instructions] From now on: ", fused_interview_fixes!());
 
+/// Tells a Chat that was already a thread where a file shows in its answer now (Q84).
+const CHAT_FILES_NOTE: &str = concat!("[instructions] From now on: ", inline_files!());
+
 /// Tells a Chat from before how it interviews the user (Q78).
 const CHAT_GRILLING_NOTE: &str = concat!("[instructions] From now on: ", grilling_rule!());
 
@@ -1238,6 +1263,7 @@ const CHAT_FUSION_LABEL: &str = "fused answers";
 const CHAT_MEMORY_LABEL: &str = "personal facts";
 const CHAT_GRILLING_LABEL: &str = "interview on cards";
 const CHAT_FIXES_LABEL: &str = "fused answers and interview fixes";
+const CHAT_FILES_LABEL: &str = "files inline";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
@@ -1622,6 +1648,9 @@ pub(crate) const GRILLING_REVISION: u32 = 114;
 /// The live run's fixes: the fused answer's two lines as paragraphs, an interview's first round
 /// after its research, no "Recommended" written in an option (Q77, Q78).
 pub(crate) const FUSED_INTERVIEW_FIXES_REVISION: u32 = 115;
+/// A worker's file shows once, inline, as a link that opens it in Brigadier; nothing lists
+/// files under or at the end of the answer (Q84).
+pub(crate) const INLINE_FILES_REVISION: u32 = 116;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1847,7 +1876,7 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
                 contract: Some(if heard_fusion {
                     CHAT_GRILLING_CONTRACT
                 } else {
-                    CHAT_FIXES_CONTRACT
+                    CHAT_CONTRACT
                 }),
                 ..Told::default()
             },
@@ -1859,6 +1888,21 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             label: CHAT_FIXES_LABEL,
             told: Told {
                 contract: Some(CHAT_FIXES_CONTRACT),
+                ..Told::default()
+            },
+        });
+    }
+    // Told a thread's abilities with the Save under the answer (contract 5 to 9); one told less
+    // hears where files go within the thread note.
+    if now.chat
+        && now.reports
+        && (CHAT_THREAD_CONTRACT..CHAT_FILES_CONTRACT).contains(&told.contract.unwrap_or(0))
+    {
+        notes.push(Note {
+            text: CHAT_FILES_NOTE.to_owned(),
+            label: CHAT_FILES_LABEL,
+            told: Told {
+                contract: Some(CHAT_FILES_CONTRACT),
                 ..Told::default()
             },
         });
@@ -2770,7 +2814,7 @@ fn short_report(task: &Task, report: &Report, route: &str) -> String {
         &mut text,
     );
     named(
-        "Outputs (the user saves them from the task card; read_artifact reads them; link one as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy)",
+        "Outputs (the user saves them from the task card; read_artifact reads them; link one once, inline where your answer speaks of it, as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy)",
         task.outputs
             .iter()
             .map(|o| output_line(task, o, &cut(&o.title, 120)))
@@ -2883,7 +2927,7 @@ pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
     }
     if !task.outputs.is_empty() {
         text.push_str(
-            "\nOutputs (the user opens and saves them from the task card; read_artifact reads them; link one as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy after its scratch folder goes, never by its scratch path):",
+            "\nOutputs (the user opens and saves them from the task card; read_artifact reads them; link one once, inline where your answer speaks of it, as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy after its scratch folder goes, never by its scratch path):",
         );
         for output in &task.outputs {
             text.push_str(&format!("\n- {}", output_line(task, output, &output.title)));
@@ -4044,8 +4088,9 @@ mod environment_tests {
         // bold-led breakdown line, even where what the thread read has one (#319), and to 14,500
         // for one clarifying card before research (Q78), and to 15,300 for fusing a costly
         // research question, judged blind (Q77), and to 16,000 for the interview on cards: a
-        // decision tree, facts looked up first, numbered rounds and a confirm card (Q78).
-        assert!(codex.len() < 16_000, "{}", codex.len());
+        // decision tree, facts looked up first, numbered rounds and a confirm card (Q78), and to
+        // 16,300 for each file named once, inline, never listed at the end (Q84).
+        assert!(codex.len() < 16_300, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -4644,11 +4689,8 @@ mod environment_tests {
                     && text.contains("not only a link to the worker's file or a path"),
                 "{provider:?}"
             );
-            // A deliverable's link and its Save… stay.
-            assert!(
-                text.contains("[notes.md](outputs/notes.md)"),
-                "{provider:?}"
-            );
+            // A deliverable is still linked, once, inline (Q84).
+            assert!(text.contains(INLINE_FILES), "{provider:?}");
         }
         let note = revision_note(BREAKDOWN_REVISION, false).unwrap();
         assert!(note.contains(REVISED_ANSWER));
@@ -5421,7 +5463,12 @@ mod environment_tests {
         let sent = notes(&told, &now);
         assert_eq!(
             labels(&sent),
-            vec![CHAT_FUSION_LABEL, CHAT_MEMORY_LABEL, CHAT_GRILLING_LABEL]
+            vec![
+                CHAT_FUSION_LABEL,
+                CHAT_MEMORY_LABEL,
+                CHAT_GRILLING_LABEL,
+                CHAT_FILES_LABEL
+            ]
         );
         for words in FUSION_RULES {
             assert!(sent[0].text.contains(words), "{words}");
@@ -5455,7 +5502,12 @@ mod environment_tests {
         let sent = notes(&told, &now);
         assert_eq!(
             labels(&sent),
-            vec![CHAT_MEMORY_LABEL, CHAT_GRILLING_LABEL, CHAT_FIXES_LABEL]
+            vec![
+                CHAT_MEMORY_LABEL,
+                CHAT_GRILLING_LABEL,
+                CHAT_FIXES_LABEL,
+                CHAT_FILES_LABEL
+            ]
         );
         for words in [
             "a stable fact about themselves",
@@ -5483,7 +5535,10 @@ mod environment_tests {
         let mut told = now.told();
         told.contract = Some(CHAT_GRILLING_CONTRACT - 1);
         let sent = notes(&told, &now);
-        assert_eq!(labels(&sent), vec![CHAT_GRILLING_LABEL, CHAT_FIXES_LABEL]);
+        assert_eq!(
+            labels(&sent),
+            vec![CHAT_GRILLING_LABEL, CHAT_FIXES_LABEL, CHAT_FILES_LABEL]
+        );
         took(&mut told, &sent);
         assert_eq!(told.contract, Some(CHAT_CONTRACT));
         assert!(notes(&told, &now).is_empty());
@@ -5523,12 +5578,16 @@ mod environment_tests {
             let mut told = now.told();
             told.contract = Some(contract);
             let sent = notes(&told, &now);
-            assert_eq!(labels(&sent).last(), Some(&CHAT_FIXES_LABEL));
+            assert_eq!(
+                labels(&sent)[labels(&sent).len() - 2..],
+                [CHAT_FIXES_LABEL, CHAT_FILES_LABEL]
+            );
             took(&mut told, &sent);
             assert_eq!(told.contract, Some(CHAT_CONTRACT));
             assert!(notes(&told, &now).is_empty());
+            let fixes_note = &sent[sent.len() - 2];
             for words in fixes {
-                assert!(sent.last().unwrap().text.contains(words), "{words}");
+                assert!(fixes_note.text.contains(words), "{words}");
                 assert!(note.contains(words), "{words}");
             }
         }
@@ -5537,6 +5596,61 @@ mod environment_tests {
         assert!(!labels(&notes(&told, &now)).contains(&CHAT_FIXES_LABEL));
         for words in &fixes[..2] {
             assert!(chat(&[]).contains(words), "{words}");
+        }
+    }
+
+    /// Q84: a file shows once, inline, as a link that opens it in Brigadier. Open threads and
+    /// Chats that were threads hear so once; a Chat from before hears it within the thread
+    /// note, once; new instructions hold it and nothing says a Save sits under the answer.
+    #[test]
+    fn threads_and_chats_hear_once_that_files_show_once_inline() {
+        let words = [
+            "once, inline, where your answer speaks of it",
+            "A click opens it in Brigadier, where the user saves it.",
+            "Never list files at the end (\"the full findings are in …\")",
+            "never tell the user to save one under your answer",
+        ];
+        let note = revision_note(INLINE_FILES_REVISION - 1, false).unwrap();
+        assert!(revision_note(INLINE_FILES_REVISION - 1, true).is_none());
+        let now = Current::chat(Vec::new());
+        for contract in [CHAT_THREAD_CONTRACT, CHAT_FILES_CONTRACT - 1] {
+            let mut told = now.told();
+            told.contract = Some(contract);
+            let sent = notes(&told, &now);
+            assert_eq!(labels(&sent).last(), Some(&CHAT_FILES_LABEL));
+            took(&mut told, &sent);
+            assert_eq!(told.contract, Some(CHAT_CONTRACT));
+            assert!(notes(&told, &now).is_empty());
+            for words in words {
+                assert!(sent.last().unwrap().text.contains(words), "{words}");
+            }
+        }
+        let mut told = now.told();
+        told.contract = Some(CHAT_THREAD_CONTRACT - 1);
+        let sent = notes(&told, &now);
+        assert!(!labels(&sent).contains(&CHAT_FILES_LABEL));
+        assert!(sent.iter().any(|note| note.text.contains(words[0])));
+        took(&mut told, &sent);
+        assert_eq!(told.contract, Some(CHAT_CONTRACT));
+        let session = thread(
+            &session("fullAccess"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Claude,
+            true,
+        );
+        for words in words {
+            assert!(note.contains(words), "{words}");
+            assert!(chat(&[]).contains(words), "{words}");
+            assert!(session.contains(words), "{words}");
+        }
+        for prompt in [chat(&[]), session] {
+            assert!(!prompt.contains("under your answer)"));
+            assert!(!prompt.contains("Save under your answer"));
+            assert!(!prompt.contains("Save… under your answer"));
+            assert!(!prompt.contains("Save… shows under your answer"));
         }
     }
 

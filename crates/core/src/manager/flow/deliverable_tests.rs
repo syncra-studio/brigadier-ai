@@ -145,7 +145,7 @@ async fn a_scouts_output_linked_by_its_scratch_path_opens_the_stored_copy_after_
         .unwrap();
     assert!(
         report.contains(
-            "link one as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy after its scratch folder goes, never by its scratch path"
+            "link one once, inline where your answer speaks of it, as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy after its scratch folder goes, never by its scratch path"
         ),
         "{report}"
     );
