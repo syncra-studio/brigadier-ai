@@ -21,7 +21,6 @@ import { Check, Copy, Document, DownloadSimple, ExpandLg, Globe, Mail } from "@o
 
 import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
 import {
-  CitationContext,
   InlineImageContext,
   InlinePasteContext,
   LinkTimeContext,
@@ -46,8 +45,6 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { PICK_HREF } from "@/app/conversation/answerLayout";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -633,9 +630,6 @@ export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, c
   if (href?.startsWith("brigadier-task:")) return <>{task?.(Number(href.slice("brigadier-task:".length))) ?? children}</>;
   if (href?.startsWith("brigadier-image:")) return <>{image?.(Number(href.slice("brigadier-image:".length))) ?? children}</>;
   if (href?.startsWith("brigadier-paste:")) return <>{paste?.(Number(href.slice("brigadier-paste:".length))) ?? children}</>;
-  if (href?.startsWith("brigadier-cite:")) return <CitationMarker n={Number(href.slice("brigadier-cite:".length))}>{children}</CitationMarker>;
-  // The badge an answer's comparison puts on its pick's row (Q86).
-  if (href === PICK_HREF) return <Badge variant="success" data-slot="answer-pick" className="ms-2 align-middle">{children}</Badge>;
   if (href?.startsWith("brigadier-page:")) return <ReportLink pageId={href.slice("brigadier-page:".length)}>{children}</ReportLink>;
   if (href && !/^(https?:|mailto:|#)/i.test(href)) {
     return <FileChip href={href}>{children}</FileChip>;
@@ -684,36 +678,6 @@ export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, c
     </ContextMenu>
   );
 };
-
-/**
- * A research answer's numbered marker ([1]): a small raised number that opens its source, whose
- * words and address show on hover. A number with no source stays as written.
- */
-function CitationMarker({ n, children }: { n: number; children: ReactNode }) {
-  const source = useContext(CitationContext)?.(n) ?? null;
-  if (!source) return <>[{children}]</>;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <a
-          href={source.url}
-          data-slot="citation"
-          onClick={(event) => {
-            event.preventDefault();
-            openLink(source.url, { agent: true }).catch(failed);
-          }}
-          className="bg-foreground/8 text-muted-foreground hover:bg-foreground/15 hover:text-foreground ms-0.5 inline-flex h-4 min-w-4 -translate-y-1 items-center justify-center rounded-full px-1 align-baseline text-2xs leading-none font-medium no-underline tabular-nums"
-        >
-          {n}
-        </a>
-      </TooltipTrigger>
-      <TooltipContent side="top" data-slot="citation-source" className="max-w-sm">
-        {source.title}
-        <span className="text-muted-foreground block break-all">{source.url}</span>
-      </TooltipContent>
-    </Tooltip>
-  );
-}
 
 /**
  * The link to a research answer's full report (`brigadier-page:<id>`, a page `save_report` made):
@@ -808,11 +772,12 @@ function tableMarkdown(table: HTMLTableElement): string {
 }
 
 /**
- * A table cell's width: an import path, URL or identifier wraps anywhere, so it never holds its
- * column wide enough to squeeze another to a word per line; no column gets narrower than a few
- * words.
+ * A table cell's width: words wrap only between them, never mid-word, so a column is at least as
+ * wide as its longest word; an import path, URL or identifier (code, a link) breaks anywhere, so it
+ * never holds its column wide enough to squeeze another to a word per line. No column gets
+ * narrower than a few words; a table too wide for the column scrolls sideways instead (#402).
  */
-const TABLE_CELL = "min-w-24 [overflow-wrap:anywhere]";
+const TABLE_CELL = "min-w-24 [overflow-wrap:break-word] hyphens-manual [&_a]:break-all [&_code]:break-all";
 
 /** The table: rules between rows, no outer border; on hover "Expand table" and "Copy table". */
 const Table: FC<React.ComponentProps<"table">> = ({ className, ...props }) => {

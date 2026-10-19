@@ -5,12 +5,10 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 type Seen = {
   first: string | null;
-  citations: string[];
-  sources: { summary: string | null; open: boolean }[];
-  linksShown: number;
-  details: (string | null)[];
+  links: string[];
+  folds: (string | null)[];
+  markers: number;
   report: (string | null)[];
-  listed: (string | null)[];
   bold: (string | null)[];
   items: (string | null)[];
   opened: { tab: { pageId: string | null; active: boolean } | null; dialog: string | null; read: string[] };
@@ -20,22 +18,20 @@ const PAGE = "5".repeat(32);
 const see = async (t: Parameters<typeof renderFixtureLive>[0], query: string) =>
   JSON.parse(await renderFixtureLive(t, `research-answer.html?drive=1&${query}`, "research-answer-result")) as Seen;
 
-// Q79: the recommendation first, numbered markers linked to their source, one folded
-// "Sources · N" at the end, the full report one click away, and no Details when no code changed.
-test("a research answer in a Chat: markers, folded sources, the report over the thread, no Details", { timeout: 90000 }, async (t) => {
+const LINKS = [
+  "pricing https://meshy.ai/pricing",
+  "Zoo https://zoo.dev/text-to-cad",
+  "Rodin https://hyper3d.ai/",
+];
+
+// Q87: the outcome first, each source linked where it is used, no Sources fold or markers, the
+// full report one click away, and no Details when no code changed.
+test("a research answer in a Chat: inline sources, no folds, the report over the thread", { timeout: 90000 }, async (t) => {
   const seen = await see(t, "kind=chat");
   assert.match(seen.first ?? "", /^Start with Meshy's free plan/);
-  assert.deepEqual(seen.citations, [
-    "1 https://meshy.ai/pricing",
-    "2 https://zoo.dev/text-to-cad",
-    "3 https://hyper3d.ai/",
-    "3 https://hyper3d.ai/",
-    "2 https://zoo.dev/text-to-cad",
-  ]);
-  assert.deepEqual(seen.sources, [{ summary: "Sources · 3", open: false }]);
-  assert.equal(seen.linksShown, 0);
-  assert.deepEqual(seen.listed, ["Meshy pricing", "Zoo Text-to-CAD", "Rodin Gen-2.5"]);
-  assert.deepEqual(seen.details, []);
+  assert.deepEqual(seen.links, LINKS);
+  assert.deepEqual(seen.folds, []);
+  assert.equal(seen.markers, 0);
   assert.deepEqual(seen.report, ["Full report"]);
   // A Chat has no tabs: the report opens over the thread.
   assert.equal(seen.opened.tab, null);
@@ -45,24 +41,37 @@ test("a research answer in a Chat: markers, folded sources, the report over the 
 
 test("a research answer in a session opens its report as a page tab and drops Details when no code changed", { timeout: 90000 }, async (t) => {
   const seen = await see(t, "kind=session");
-  assert.deepEqual(seen.sources, [{ summary: "Sources · 3", open: false }]);
-  assert.equal(seen.citations.length, 5);
-  assert.deepEqual(seen.details, []);
+  assert.deepEqual(seen.links, LINKS);
+  assert.deepEqual(seen.folds, []);
   assert.deepEqual(seen.opened.tab, { pageId: PAGE, active: true });
   assert.equal(seen.opened.dialog, null);
 });
 
-test("a session answer whose request changed code keeps its folded Details beside its sources", { timeout: 90000 }, async (t) => {
+test("a session answer whose request changed code keeps Details, its one fold", { timeout: 90000 }, async (t) => {
   const seen = await see(t, "kind=session&changed=1");
-  assert.deepEqual(seen.sources, [{ summary: "Sources · 3", open: false }]);
-  assert.deepEqual(seen.details, ["Details"]);
+  assert.deepEqual(seen.folds, ["Details"]);
+  assert.deepEqual(seen.links, LINKS);
+});
+
+// An answer written before Q87 reads as plain Markdown: its list of sources shows as written,
+// nothing folds and no marker turns into a badge.
+test("an older answer's numbered markers and Sources list read as written", { timeout: 90000 }, async (t) => {
+  const seen = await see(t, "kind=chat&old=1");
+  assert.deepEqual(seen.folds, []);
+  assert.equal(seen.markers, 0);
+  assert.match(seen.first ?? "", /\[1\]/);
+  assert.deepEqual(seen.links, [
+    "Meshy pricing https://meshy.ai/pricing",
+    "Zoo Text-to-CAD https://zoo.dev/text-to-cad",
+    "Rodin Gen-2.5 https://hyper3d.ai/",
+  ]);
 });
 
 // #319: bold that opens a line or list item shows plain, whatever the model wrote; bold inside a
 // sentence stays, and the words stay as written.
 for (const [kind, query] of [
   ["a Chat's research answer", "kind=chat&bold=1"],
-  ["a session's answer without sources", "kind=session&bold=1&sources=0"],
+  ["a session's answer without Details", "kind=session&bold=1&details=0"],
 ] as const) {
   test(`${kind}: no line or item opens in bold, and mid-sentence bold stays`, { timeout: 90000 }, async (t) => {
     const seen = await see(t, query);

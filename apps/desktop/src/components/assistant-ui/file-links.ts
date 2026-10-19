@@ -60,8 +60,3 @@ export function useLinkConversation(): string | null {
   return own ?? selected;
 }
 
-/**
- * The sources of the answer around a `brigadier-cite:n` marker (Q79): source `n`'s words and
- * address. Without it the marker stays as written.
- */
-export const CitationContext = createContext<((n: number) => { title: string; url: string } | null) | null>(null);

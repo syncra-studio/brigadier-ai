@@ -1,12 +1,13 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: a finished research
- * answer in the app's own conversation view (Q79). The answer has numbered markers, one trailing
- * `### Sources` list, a link to its full report (a page `save_report` made) and the `### Details`
- * a thread writes. `kind=session` shows it in a session (else a Chat); `changed=1` has the request
- * change code. `bold=1` writes its breakdown in bold-led lines, as models still sometimes do
- * (#319), with one bold run mid-sentence; `sources=0` drops its Sources and Details.
+ * answer in the app's own conversation view (Q87). The answer links its sources where it uses them,
+ * links its full report (a page `save_report` made) and ends with a `### Details` section.
+ * `kind=session` shows it in a session (else a Chat); `changed=1` has the request change code.
+ * `bold=1` writes its breakdown in bold-led lines, as models still sometimes do (#319), with one
+ * bold run mid-sentence; `details=0` drops its Details. `old=1` is an answer written before Q87:
+ * numbered markers and a trailing `### Sources` list, which now read as plain Markdown.
  *
- * `drive=1` reads what shows, opens the sources and the report, and writes what it saw to
+ * `drive=1` reads what shows, opens the report, and writes what it saw to
  * `<pre id="research-answer-result">` (ResearchAnswerRender.test.ts reads it). Without it the
  * page holds the answer still, for a screenshot.
  */
@@ -25,41 +26,43 @@ const query = new URLSearchParams(location.search);
 const session = query.get("kind") === "session";
 const changed = query.get("changed") === "1";
 const bold = query.get("bold") === "1";
-const sourced = query.get("sources") !== "0";
+const detailed = query.get("details") !== "0";
+const old = query.get("old") === "1";
 const ID = "research-answer";
 const PAGE = "5".repeat(32);
 const begun = Date.now() - 600_000;
 
-const ANSWER = [
-  "Start with Meshy's free plan: it exports print-ready STL and is what most guides recommend [1]. For exact, measured parts use Zoo instead [2, 3].",
-  "",
-  ...(bold
-    ? [
-        "- **Figurines and gifts:** Meshy, or Rodin for the finest detail [3].",
-        "- **Zoo** writes editable CAD for functional parts [2].",
-        "",
-        "**Print monitoring**",
-        "Obico watches the camera and **stops a failed print** on its own.",
-      ]
-    : [
-        "- Figurines and gifts: Meshy, or Rodin for the finest detail [3].",
-        "- Functional parts: Zoo writes editable CAD [2].",
-      ]),
-  "",
-  `The full comparison is in [Full report](brigadier-page:${PAGE}).`,
-  ...(sourced
-    ? [
-        "",
-        "### Sources",
-        "1. [Meshy pricing](https://meshy.ai/pricing)",
-        "2. [Zoo Text-to-CAD](https://zoo.dev/text-to-cad)",
-        "3. [Rodin Gen-2.5](https://hyper3d.ai/)",
-        "",
-        "### Details",
-        "Checks: none run. Review: none. Not checked: nothing.",
-      ]
-    : []),
-].join("\n");
+const ANSWER = old
+  ? [
+      "Start with Meshy's free plan: it exports print-ready STL [1]. For exact, measured parts use Zoo instead [2, 3].",
+      "",
+      "- Figurines and gifts: Meshy, or Rodin for the finest detail [3].",
+      "- Functional parts: Zoo writes editable CAD [2].",
+      "",
+      "### Sources",
+      "1. [Meshy pricing](https://meshy.ai/pricing)",
+      "2. [Zoo Text-to-CAD](https://zoo.dev/text-to-cad)",
+      "3. [Rodin Gen-2.5](https://hyper3d.ai/)",
+    ].join("\n")
+  : [
+      "Start with Meshy's free plan: it exports print-ready STL ([pricing](https://meshy.ai/pricing)). For exact, measured parts use [Zoo](https://zoo.dev/text-to-cad) instead.",
+      "",
+      ...(bold
+        ? [
+            "- **Figurines and gifts:** Meshy, or Rodin for the finest detail.",
+            "- **Zoo** writes editable CAD for functional parts.",
+            "",
+            "**Print monitoring**",
+            "Obico watches the camera and **stops a failed print** on its own.",
+          ]
+        : [
+            "- Figurines and gifts: Meshy, or [Rodin](https://hyper3d.ai/) for the finest detail.",
+            "- Functional parts: Zoo writes editable CAD.",
+          ]),
+      "",
+      `The full comparison is in [Full report](brigadier-page:${PAGE}).`,
+      ...(detailed ? ["", "### Details", "Checks: none run. Review: none. Not checked: nothing."] : []),
+    ].join("\n");
 
 const conversation = {
   id: ID, kind: session ? "session" : "chat", projectId: null, title: "Which AI models for 3D printing", pinnedAtMs: null,
@@ -155,32 +158,26 @@ async function until(found: () => boolean, ms = 10_000): Promise<void> {
 }
 
 async function drive(): Promise<object> {
-  await until(() => all(sourced ? "[data-slot=citation]" : "[data-answer] li").length > 0);
+  await until(() => all("[data-answer] li").length > 0);
   await wait(200);
   const answer = all("[data-answer]")[0];
-  const sources = all<HTMLDetailsElement>("[data-slot=answer-sources]");
   const shown = {
-    // What reads with everything folded: a closed fold's list doesn't.
+    // What reads with everything folded: a closed fold's text doesn't.
     first: answer?.innerText.split("\n")[0] ?? null,
-    citations: all<HTMLAnchorElement>("[data-slot=citation]").map((marker) => `${text(marker)} ${marker.getAttribute("href")}`),
-    sources: sources.map((fold) => ({ summary: text(fold.querySelector("summary")), open: fold.open })),
-    // No source shows before the fold opens; the old wall of links is gone from the answer.
-    linksShown: all<HTMLAnchorElement>("[data-answer] a[href^=http]").filter((link) => link.checkVisibility() && link.dataset.slot !== "citation").length,
-    details: all<HTMLDetailsElement>("[data-slot=report-details]").map((fold) => text(fold.querySelector("summary"))),
+    // Sources are the answer's own links, each where it is used.
+    links: all<HTMLAnchorElement>("[data-answer] a[href^=http]").filter((link) => link.checkVisibility()).map((link) => `${text(link)} ${link.getAttribute("href")}`),
+    folds: all("[data-answer] details > summary").map((summary) => text(summary)),
+    markers: all("[data-slot=citation], [data-slot=answer-pick]").length,
     report: all("[data-slot=report-link]").map((link) => text(link)),
     bold: all("[data-answer] strong").map((run) => text(run)),
-    items: all("[data-answer] li").filter((item) => !item.closest("[data-slot=answer-source-list]")).map((item) => text(item)),
+    items: all("[data-answer] li").map((item) => text(item)),
   };
-  sources[0]?.querySelector("summary")?.click();
-  await wait(300);
-  const listed = all("[data-slot=answer-source-list] li").map((item) => text(item)?.replace(/\u2060/g, "") ?? null);
   all<HTMLAnchorElement>("[data-slot=report-link]")[0]?.click();
   await until(() => !!document.querySelector("[data-slot=report-dialog]") || sessionTabs(ID).tabs.some((tab) => tab.kind === "page"), 3000);
   await wait(200);
   const tab = sessionTabs(ID).tabs.find((each) => each.kind === "page");
   return {
     ...shown,
-    listed,
     opened: {
       tab: tab?.kind === "page" ? { pageId: tab.pageId, active: sessionTabs(ID).active === tab.id } : null,
       dialog: text(document.querySelector("[data-slot=report-dialog]")),
