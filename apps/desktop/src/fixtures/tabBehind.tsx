@@ -43,7 +43,8 @@ function Fixture() {
   useEffect(() => {
     if (!params.has("drive")) return;
     void (async () => {
-      await wait(300);
+      // The toolbar draws once its tab's chunk loads: slow under load, so wait for it.
+      for (const end = performance.now() + 10_000; showing().length < 4 && performance.now() < end; ) await wait(16);
       const seen: Record<string, unknown> = { front: showing().length };
       selectTab(SESSION, CHAT_TAB);
       await frame();
