@@ -1428,6 +1428,7 @@ fn answered_beside(request: &Request) -> bool {
             | Request::Uninstall { .. }
             | Request::GetSettledTabs
             | Request::GetMergeUndo { .. }
+            | Request::RestartPreview { .. }
     )
 }
 
@@ -1916,6 +1917,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         } => {
             heap(|| sessions.resume_preview(conversation_id, preview_id)).await?;
             Response::ResumePreview
+        }
+        Request::RestartPreview {
+            conversation_id,
+            preview_id,
+        } => {
+            heap(|| sessions.restart_preview(conversation_id, preview_id)).await?;
+            Response::RestartPreview
         }
         Request::ClearPreviews { conversation_id } => {
             heap(|| sessions.clear_previews(conversation_id)).await?;

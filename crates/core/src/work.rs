@@ -628,6 +628,10 @@ pub struct Preview {
     /// Starting.
     #[serde(default)]
     pub building: bool,
+    /// The variables the agent gave it, for Start again (Brigadier's own are added again).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[ts(skip)]
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 /// What a proof is, which decides how it shows.

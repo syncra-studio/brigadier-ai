@@ -66,6 +66,14 @@ fn thread(replies: Replies) -> Script {
                         "start_preview",
                         json!({ "command": command, "name": "site", "purpose": "user" }),
                     )
+                } else if let Some(command) = input
+                    .lines()
+                    .find_map(|line| line.strip_prefix("start-with-env "))
+                {
+                    (
+                        "start_preview",
+                        json!({ "command": command, "name": "site", "env": {"GREETING": "hi"} }),
+                    )
                 } else if input.contains("Please stop it.") {
                     ("stop_preview", json!({}))
                 } else if input.contains("Please merge.") {
@@ -1549,6 +1557,82 @@ async fn user_stops_remove_previews_but_keep_natural_exits() {
             "{mode} removed a natural exit"
         );
     }
+    flow.stop().await;
+}
+
+/// Start again on an ended preview runs its own command again from its record: the same id,
+/// folder and variables, for the user, and the thread hears of it. A running one, an unknown
+/// one and a second start of one that runs again are refused.
+#[tokio::test]
+async fn start_again_runs_an_ended_previews_own_command_from_its_record() {
+    let flow = Flow::start(
+        "preview-restart",
+        Options::default(),
+        thread(Arc::default()),
+    )
+    .await;
+    let tmp = scratch("restart");
+    let runs = tmp.join("runs.txt");
+    let id = flow.conversation.clone();
+    flow.say(&format!(
+        "start-with-env echo \"run $GREETING $(pwd)\" >> {}; exit 3",
+        runs.display()
+    ))
+    .await;
+    flow.settled().await;
+    let ended = flow.board().await.sorted_previews().pop().unwrap();
+    assert!(matches!(
+        ended.state,
+        PreviewState::Exited { code: Some(3), .. }
+    ));
+    assert_eq!(ended.env.get("GREETING").map(String::as_str), Some("hi"));
+
+    flow.manager
+        .restart_preview(id.clone(), ended.id.clone())
+        .await
+        .unwrap();
+    let board = flow
+        .until("it ran and ended again", |board| {
+            let again = &board.previews[&ended.id];
+            again.ended_at_ms > ended.ended_at_ms && !again.state.is_live()
+        })
+        .await;
+    let again = &board.previews[&ended.id];
+    assert_eq!(board.previews.len(), 1, "the same preview, not a new one");
+    assert!(again.started_at_ms >= ended.started_at_ms);
+    assert_eq!(
+        (&again.command, &again.workdir),
+        (&ended.command, &ended.workdir)
+    );
+    let lines: Vec<String> = std::fs::read_to_string(&runs)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0], lines[1], "same variables, same folder");
+    assert!(lines[1].starts_with("run hi "), "{lines:?}");
+
+    let err = flow
+        .manager
+        .restart_preview(id.clone(), "preview-9".into())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no preview-9"), "{err}");
+
+    // A running one isn't started twice.
+    let (running, child) = start(&flow, &tmp.join("server.pid")).await;
+    let err = flow
+        .manager
+        .restart_preview(id.clone(), running.id.clone())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("running already"), "{err}");
+    flow.manager
+        .stop_preview(id.clone(), Some(running.id.clone()))
+        .await
+        .unwrap();
+    gone(&flow, child).await;
     flow.stop().await;
 }
 

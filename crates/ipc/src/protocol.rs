@@ -619,6 +619,12 @@ pub enum Request {
         conversation_id: ConversationId,
         preview_id: String,
     },
+    /// Start again on an ended preview: its own command from its record, same folder, same
+    /// variables, its old port when free; the thread hears of it.
+    RestartPreview {
+        conversation_id: ConversationId,
+        preview_id: String,
+    },
     ClearPreviews {
         conversation_id: ConversationId,
     },
@@ -1583,6 +1589,7 @@ pub enum Response {
     StopBackgroundRun,
     PausePreview,
     ResumePreview,
+    RestartPreview,
     ClearPreviews,
     PreviewLog {
         tail: String,

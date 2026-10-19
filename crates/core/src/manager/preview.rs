@@ -266,7 +266,7 @@ impl SessionManager {
             scratch: self.owned_dir("orch", &id.0),
             task: None,
         };
-        self.start_preview_as(id, args, starter, stops).await
+        self.start_preview_as(id, args, starter, stops, None).await
     }
 
     /// A worker's `start_preview`: starts `args.command` in its worktree (or scratch folder),
@@ -279,6 +279,13 @@ impl SessionManager {
     ) -> Result<String> {
         self.check_preview_start(id)?;
         let stops = self.previews.stops_of(id);
+        let starter = self.worker_starter(id, task_id).await?;
+        self.start_preview_as(id, args, starter, stops, None).await
+    }
+
+    /// Who starts a preview for the worker of `task_id`: in its worktree (or scratch folder),
+    /// with its access while it runs.
+    async fn worker_starter(&self, id: &ConversationId, task_id: &TaskId) -> Result<Starter> {
         let access = match self.existing_task_live(task_id) {
             Some(live) => live.tool_access().await,
             None => None,
@@ -306,7 +313,87 @@ impl SessionManager {
             scratch,
             task: Some(task_id.clone()),
         };
-        self.start_preview_as(id, args, starter, stops).await
+        Ok(starter)
+    }
+
+    /// The user's Start again on an ended preview: its own command again, from its record, in
+    /// the same folder with the same variables, under the same id, on its old port when that is
+    /// free (as `PORT`, for servers that take it). A thread's runs with the session's access now,
+    /// asleep or not; a worker's only while that worker runs. It runs for the user (a merge
+    /// leaves it running), and the thread hears of it.
+    pub async fn restart_preview(&self, id: ConversationId, preview_id: String) -> Result<()> {
+        self.check_preview_start(&id)?;
+        let stops = self.previews.stops_of(&id);
+        let board = self.core.board(&id).await?;
+        let preview =
+            board.previews.get(&preview_id).cloned().ok_or_else(|| {
+                Error::Invalid(format!("there is no {preview_id} in this session"))
+            })?;
+        if preview.state.is_live() || self.previews.get(&id, &preview_id).is_some() {
+            return Err(Error::Invalid(format!("{preview_id} is running already")));
+        }
+        let starter = match &preview.task_id {
+            Some(task) => self.worker_starter(&id, task).await.map_err(|_| {
+                Error::Invalid(
+                    "the worker that started it has ended: ask the thread to start it again".into(),
+                )
+            })?,
+            None => {
+                let scratch = self.owned_dir("orch", &id.0);
+                let access = match self.conv(&id)?.live_cli().await {
+                    Some(cli) => cli.launch.as_ref().map(|launch| launch.access.clone()),
+                    None => None,
+                };
+                let access = match access {
+                    Some(access) => access,
+                    None => self.thread_launch(&id, &scratch, false).await?.0.access,
+                };
+                let workspace = self
+                    .recorded_workspace(&id)
+                    .map(|workspace| workspace.path)
+                    .ok_or_else(|| Error::Invalid("this session has no workspace now".into()))?;
+                Starter {
+                    access,
+                    workspace,
+                    scratch,
+                    task: None,
+                }
+            }
+        };
+        if starter.workspace != Path::new(&preview.workspace)
+            && starter.scratch != Path::new(&preview.workspace)
+        {
+            return Err(Error::Invalid(
+                "the session's workspace changed since it ran: ask the thread to start it again"
+                    .into(),
+            ));
+        }
+        let mut env = preview.env.clone();
+        if let Some(port) = preview.url.as_deref().and_then(url_port)
+            && !env.contains_key("PORT")
+            && port_free(port).await
+        {
+            env.insert("PORT".into(), port.to_string());
+        }
+        let args = StartPreview {
+            command: preview.command.clone(),
+            name: Some(preview.name.clone()),
+            env: Some(env),
+            workdir: Some(preview.workdir.clone()),
+            kind: Some(preview.kind),
+            purpose: Some(crate::tools::PreviewPurpose::User),
+        };
+        self.start_preview_as(&id, args, starter, stops, Some(preview_id.clone()))
+            .await?;
+        if let Ok(conv) = self.conv(&id) {
+            conv.note(format!(
+                "[preview] The user started {preview_id} \"{}\" again (its own command, in its \
+                 folder); check preview_log before you tell them how it runs.",
+                preview.name
+            ))
+            .await;
+        }
+        Ok(())
     }
 
     /// Whether a preview may start in conversation `id` now.
@@ -332,6 +419,7 @@ impl SessionManager {
         args: StartPreview,
         starter: Starter,
         stops: u64,
+        again: Option<String>,
     ) -> Result<String> {
         let Starter {
             access,
@@ -358,6 +446,8 @@ impl SessionManager {
             .unwrap_or_else(|| super::preview_ready::infer_kind(&command));
         let for_user = args.purpose == Some(crate::tools::PreviewPurpose::User);
         let mut env = args.env.unwrap_or_default();
+        // As given, for a start again: what Brigadier adds is added again then.
+        let given_env = env.clone();
         // An app runs in the background: the user's work keeps the focus (#142).
         if kind == PreviewKind::App {
             env.entry(brigadier_sandbox::BACKGROUND_LAUNCH_ENV.into())
@@ -393,8 +483,22 @@ impl SessionManager {
                     .into(),
             ));
         }
-        let number = self.core.board(id).await?.preview_number + 1;
-        let preview_id = format!("preview-{number}");
+        let board = self.core.board(id).await?;
+        let preview_id = match again {
+            // Started again: only while it is still ended (two clicks start it once).
+            Some(again) => {
+                if self.previews.get(id, &again).is_some()
+                    || board
+                        .previews
+                        .get(&again)
+                        .is_none_or(|preview| preview.state.is_live())
+                {
+                    return Err(Error::Invalid(format!("{again} is running already")));
+                }
+                again
+            }
+            None => format!("preview-{}", board.preview_number + 1),
+        };
         let owner = preview_owner(id);
         let ledger = self.runtime.ledger();
         let dir = self.owned_dir(LOG_AREA, &id.0);
@@ -504,6 +608,7 @@ impl SessionManager {
             kind,
             task_id: task.clone(),
             building: false,
+            env: given_env,
         };
         let live = Arc::new(LivePreview {
             conversation: id.clone(),
@@ -1970,6 +2075,27 @@ fn terminate_group(
 
 /// The folder a preview runs in: the workspace, or `requested` (relative to it), which must be
 /// inside it.
+/// The port a local URL names: its own, or its scheme's.
+fn url_port(url: &str) -> Option<u16> {
+    let (scheme, rest) = url.split_once("://")?;
+    let host = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    match host.rsplit_once(':') {
+        Some((_, port)) if !port.ends_with(']') => port.parse().ok(),
+        _ => match scheme {
+            "http" => Some(80),
+            "https" => Some(443),
+            _ => None,
+        },
+    }
+}
+
+/// Whether nothing listens on local `port` now.
+async fn port_free(port: u16) -> bool {
+    tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .is_ok()
+}
+
 fn preview_workdir(requested: Option<&str>, workspace: &Path) -> Result<PathBuf> {
     let wanted = match requested.map(str::trim).filter(|dir| !dir.is_empty()) {
         None => workspace.to_owned(),
@@ -2530,6 +2656,16 @@ fn io_error(path: &Path, err: &std::io::Error) -> Error {
 
 #[cfg(all(test, unix))]
 mod tests {
+    /// A URL's port, its own or its scheme's.
+    #[test]
+    fn a_urls_port_is_its_own_or_its_schemes() {
+        assert_eq!(super::url_port("http://localhost:5173/app"), Some(5173));
+        assert_eq!(super::url_port("http://127.0.0.1:3000"), Some(3000));
+        assert_eq!(super::url_port("http://localhost/"), Some(80));
+        assert_eq!(super::url_port("https://example.test?x=1"), Some(443));
+        assert_eq!(super::url_port("file:///tmp/a.pdf"), None);
+    }
+
     use super::*;
 
     /// A worker's preview writes where its CLI may write, never more: a read-only Codex
