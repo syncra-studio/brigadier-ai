@@ -25,7 +25,9 @@ export const ContextArc: FC<{ share: number | null; className?: string }> = ({
   className,
 }) => (
   <svg viewBox="0 0 16 16" aria-hidden className={cn("-rotate-90", className)}>
-    <circle cx="8" cy="8" r={RADIUS} fill="none" className="stroke-muted stroke-2" />
+    {/* A track that shows on the composer's surface (`muted` matched it, so a small share
+        showed only its round cap, a stray dot). */}
+    <circle cx="8" cy="8" r={RADIUS} fill="none" className="stroke-foreground/15 stroke-2" />
     {share !== null && share > 0 && (
       <circle
         cx="8"
