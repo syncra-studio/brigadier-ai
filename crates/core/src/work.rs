@@ -3276,8 +3276,14 @@ pub enum ReviewScope {
     Unstaged,
     /// What is staged.
     Staged,
-    /// One commit.
-    Commit { commit: String },
+    /// One commit. A fast-forward merge's `commits`, when it names them: all of them, its
+    /// head being the merge's commit.
+    Commit {
+        commit: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        commits: Option<u32>,
+    },
     /// The session's branch since it left its base.
     Branch,
 }

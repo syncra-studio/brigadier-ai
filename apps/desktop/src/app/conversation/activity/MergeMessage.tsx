@@ -74,16 +74,20 @@ export function MergeRevert({ merge }: { merge: Merged }) {
   );
 }
 
-/** View changes on a merge: the merge commit's own change, in the diff tab. */
+/**
+ * View changes on a merge: the merge commit's own change, in a diff tab of its own. A
+ * fast-forward's commit is the branch's head: its change is all the merged commits (#411).
+ */
 export function MergeViewChanges({ merge }: { merge: Merged }) {
   const conversationId = useViewConversation()?.id ?? null;
   if (!conversationId || !merge.mergeCommit) return null;
+  const commits = merge.pr == null && merge.mergeCommit === merge.head && merge.commits > 1 ? merge.commits : undefined;
   return (
     <Button
       data-slot="merge-view-changes"
       variant="ghost"
       size="sm"
-      onClick={() => openReviewTab(conversationId, { type: "commit", commit: merge.mergeCommit!, staged: false })}
+      onClick={() => openReviewTab(conversationId, { type: "commit", commit: merge.mergeCommit!, ...(commits ? { commits } : {}), staged: false })}
       className="border-border border font-normal"
     >
       View changes

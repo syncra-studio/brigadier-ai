@@ -3008,3 +3008,42 @@ async fn pending_changes_leave_the_review_once_merged() {
     assert_eq!(pending.files[0].current.as_deref(), Some("base\n"));
     flow.stop().await;
 }
+
+/// A fast-forward merge's View changes shows all its commits, not only the last (#411).
+#[tokio::test]
+async fn a_fast_forward_merges_change_spans_its_commits() {
+    let flow = Flow::start(
+        "20261019-2108-workspaces-rework-w102-ff",
+        Options::default(),
+        script(|_turn| async move { Reply::text("Hi.") }),
+    )
+    .await;
+    flow.say("Hi.").await;
+    for (file, text) in [("one.txt", "one\n"), ("two.txt", "two\n")] {
+        std::fs::write(flow.repo.join(file), text).unwrap();
+        git(&flow.repo, &["add", file]);
+        git(&flow.repo, &["commit", "-qm", file]);
+    }
+    let head = git(&flow.repo, &["rev-parse", "HEAD"]).trim().to_owned();
+    let diff = |commits| {
+        let (manager, conversation, commit) = (&flow.manager, &flow.conversation, head.clone());
+        async move {
+            manager
+                .review_diff(
+                    conversation,
+                    ReviewScope::Commit { commit, commits },
+                    false,
+                    false,
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let both = diff(Some(2)).await;
+    let paths: Vec<&str> = both.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["one.txt", "two.txt"]);
+    let last = diff(None).await;
+    let paths: Vec<&str> = last.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["two.txt"]);
+    flow.stop().await;
+}

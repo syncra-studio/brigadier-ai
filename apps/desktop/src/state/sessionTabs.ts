@@ -20,8 +20,8 @@ export const MOCKUP_TAB = "mockup";
 export type ReviewTarget =
   | { type: "changes"; staged: boolean }
   | { type: "file"; path: string; staged: boolean }
-  /** One commit's own change: a merge's, from its turn's View changes. */
-  | { type: "commit"; commit: string; staged: false }
+  /** One commit's own change: a merge's, from its turn's View changes; a fast-forward's `commits` all. */
+  | { type: "commit"; commit: string; commits?: number; staged: false }
   /** The session's branch since it left its base: the context card's Changes row. */
   | { type: "branch"; staged: false };
 
@@ -55,7 +55,8 @@ export type FileTab = {
 
 export type ReviewTabState = {
   kind: "review";
-  id: typeof REVIEW_TAB;
+  /** REVIEW_TAB; a merge's change has a tab of its own (`review:<commit>`). */
+  id: string;
   target: ReviewTarget;
   opener: string | null;
 };
@@ -477,25 +478,27 @@ export function keepTabOpen(conversationId: string, id: string): void {
 
 /** Opens the Review tab on `target`, in place of what it showed. */
 export function openReviewTab(conversationId: string, target: ReviewTarget, replace?: string): void {
+  // A merge's change opens beside the Changes tab, not in its place (#411).
+  const id = target.type === "commit" ? `${REVIEW_TAB}:${target.commit}` : REVIEW_TAB;
   update(conversationId, (current) => {
-    const existing = current.tabs.find((tab) => tab.kind === "review");
+    const existing = current.tabs.find((tab) => tab.id === id);
     const replaced = replacePlaceholder(current, replace, {
-      kind: "review", id: REVIEW_TAB, target, opener: existing?.opener ?? current.active,
+      kind: "review", id, target, opener: existing?.opener ?? current.active,
     });
     if (replaced) return replaced;
-    if (current.tabs.some((tab) => tab.id === REVIEW_TAB)) {
+    if (existing) {
       return {
-        tabs: current.tabs.map((tab) => (tab.kind === "review" ? { ...tab, target } : tab)),
-        active: REVIEW_TAB,
+        tabs: current.tabs.map((tab) => (tab.id === id ? { ...tab, target } : tab)),
+        active: id,
       };
     }
     const tab: ReviewTabState = {
       kind: "review",
-      id: REVIEW_TAB,
+      id,
       target,
       opener: current.active,
     };
-    return { tabs: insertAfterActive(current, tab), active: REVIEW_TAB };
+    return { tabs: insertAfterActive(current, tab), active: id };
   });
 }
 

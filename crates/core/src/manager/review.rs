@@ -81,11 +81,11 @@ impl SessionManager {
                 let landed = request_id.as_deref().map(landed_by).unwrap_or_default();
                 (ReviewScope::LastTurn { request_id }, landed)
             }
-            ReviewScope::Commit { commit } => {
+            ReviewScope::Commit { commit, commits } => {
                 if commit.is_empty() || !commit.chars().all(|c| c.is_ascii_hexdigit()) {
                     return Err(Error::Invalid(format!("`{commit}` is not a commit id")));
                 }
-                (ReviewScope::Commit { commit }, Vec::new())
+                (ReviewScope::Commit { commit, commits }, Vec::new())
             }
             other => (other, Vec::new()),
         };
@@ -121,9 +121,14 @@ impl SessionManager {
                         _ => Some((trees.head_tree, trees.staged)),
                     }
                 }
-                ReviewScope::Commit { commit } => {
+                ReviewScope::Commit { commit, commits } => {
                     let commit = repo.resolve(commit).map_err(git_error)?;
-                    let parent = match repo.resolve(&format!("{}^", commit.0)) {
+                    // A fast-forward's commits reach back from its head (#411).
+                    let back = commits.filter(|&n| n > 1).unwrap_or(1);
+                    let parent = match repo
+                        .resolve(&format!("{}~{back}", commit.0))
+                        .or_else(|_| repo.resolve(&format!("{}^", commit.0)))
+                    {
                         Ok(parent) => parent,
                         Err(_) => repo.empty_tree().map_err(git_error)?,
                     };

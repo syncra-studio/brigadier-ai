@@ -334,6 +334,16 @@ test("Review replaces a placeholder in place, or consumes it and selects the exi
   assert.equal(sessionTabs("review-new").active, "review");
 });
 
+test("a merge's View changes opens a tab of its own beside the Changes tab (issue 411)", () => {
+  openReviewTab("review-merge", { type: "branch", staged: false });
+  openReviewTab("review-merge", { type: "commit", commit: "e4206df", commits: 6, staged: false });
+  const tabs = sessionTabs("review-merge").tabs.filter((tab) => tab.kind === "review");
+  assert.deepEqual(tabs.map((tab) => [tab.id, tab.kind === "review" && tab.target.type]), [["review", "branch"], ["review:e4206df", "commit"]]);
+  assert.equal(sessionTabs("review-merge").active, "review:e4206df");
+  openReviewTab("review-merge", { type: "commit", commit: "e4206df", commits: 6, staged: false });
+  assert.equal(sessionTabs("review-merge").tabs.filter((tab) => tab.kind === "review").length, 2);
+});
+
 test("Find file replaces its originating New tab without consuming an unrelated preview; duplicates focus the existing file", () => {
   openFileTab("find-new", "preview.ts", { preview: true });
   const placeholder = newSessionTab("find-new", "newTab");

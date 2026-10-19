@@ -142,10 +142,11 @@ export function ReviewTab({
   const single = target.type === "file" ? target : null;
   const staged = target.staged;
   const commit = target.type === "commit" ? target.commit : null;
+  const commits = target.type === "commit" ? target.commits : undefined;
   const branch = target.type === "branch";
   const scope = useMemo<ReviewScope>(
-    () => (commit ? { type: "commit", commit } : branch ? { type: "branch" } : { type: staged ? "staged" : "unstaged" }),
-    [commit, branch, staged],
+    () => (commit ? { type: "commit", commit, ...(commits ? { commits } : {}) } : branch ? { type: "branch" } : { type: staged ? "staged" : "unstaged" }),
+    [commit, commits, branch, staged],
   );
   const options = useReview((s) => s.options);
   const [tick, setTick] = useState(0);

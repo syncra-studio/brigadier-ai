@@ -3,4 +3,4 @@
 /**
  * What the side panel's Review tab compares (the scope picker).
  */
-export type ReviewScope = { "type": "lastTurn", requestId: string | null, } | { "type": "uncommitted" } | { "type": "unstaged" } | { "type": "staged" } | { "type": "commit", commit: string, } | { "type": "branch" };
+export type ReviewScope = { "type": "lastTurn", requestId: string | null, } | { "type": "uncommitted" } | { "type": "unstaged" } | { "type": "staged" } | { "type": "commit", commit: string, commits?: number, } | { "type": "branch" };
