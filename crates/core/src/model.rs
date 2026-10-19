@@ -902,10 +902,11 @@ pub struct Settings {
     /// review starts and nothing waits for one (THREAD-PLAN.md §2 Q12).
     #[serde(default = "default_true")]
     pub review_work: bool,
-    /// The tab merges its work on its own once it judges it ready (WORKSPACES-PLAN.md phase 3,
-    /// Q62): a pull request on GitHub, or into the base here, with no consent asked. Off, it
-    /// says the work is ready and the user merges.
-    #[serde(default = "default_true")]
+    /// The tab merges its work on its own once it judges it ready: a pull request on GitHub,
+    /// or into the base here, with no consent asked. Off (the default), it says the work is
+    /// ready and the user merges. A user who turned it on keeps it on; settings saved before
+    /// this field existed, or that never set it, read as off.
+    #[serde(default)]
     pub auto_merge: bool,
     /// The first-run setup (welcome, name, agents, then projects) was finished or skipped.
     pub onboarded: bool,
@@ -1133,7 +1134,7 @@ impl Default for Settings {
             pr_instructions: String::new(),
             branch_prefix: DEFAULT_BRANCH_PREFIX.to_owned(),
             review_work: true,
-            auto_merge: true,
+            auto_merge: false,
             onboarded: false,
             intro_seen: false,
             user_name: String::new(),
@@ -2967,12 +2968,18 @@ mod tests {
     }
 
     #[test]
-    fn work_merges_on_its_own_by_default_and_for_settings_saved_before_the_switch() {
-        assert!(Settings::default().auto_merge);
+    fn work_does_not_merge_on_its_own_by_default_and_for_settings_saved_before_the_switch() {
+        assert!(!Settings::default().auto_merge);
         let settings: Settings = serde_json::from_str(r#"{"hibernateAfterMinutes":12}"#).unwrap();
-        assert!(settings.auto_merge);
+        assert!(!settings.auto_merge);
         let settings: Settings = serde_json::from_str(r#"{"autoMerge":false}"#).unwrap();
         assert!(!settings.auto_merge);
+    }
+
+    #[test]
+    fn work_keeps_merging_on_its_own_when_the_user_turned_it_on() {
+        let settings: Settings = serde_json::from_str(r#"{"autoMerge":true}"#).unwrap();
+        assert!(settings.auto_merge);
     }
 
     #[test]

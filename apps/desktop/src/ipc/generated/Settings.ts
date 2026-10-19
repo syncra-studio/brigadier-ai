@@ -102,9 +102,10 @@ branchPrefix: string,
  */
 reviewWork: boolean, 
 /**
- * The tab merges its work on its own once it judges it ready (WORKSPACES-PLAN.md phase 3,
- * Q62): a pull request on GitHub, or into the base here, with no consent asked. Off, it
- * says the work is ready and the user merges.
+ * The tab merges its work on its own once it judges it ready: a pull request on GitHub,
+ * or into the base here, with no consent asked. Off (the default), it says the work is
+ * ready and the user merges. A user who turned it on keeps it on; settings saved before
+ * this field existed, or that never set it, read as off.
  */
 autoMerge: boolean, 
 /**
