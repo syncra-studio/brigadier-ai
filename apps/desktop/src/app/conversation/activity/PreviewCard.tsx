@@ -210,7 +210,7 @@ function kindStanding(record: Preview): { words: string; live: boolean } {
   const kind = KINDS[record.kind as keyof typeof KINDS];
   if (record.state.type === "running") return { words: kind.up, live: true };
   if (record.kind === "test" && record.state.type === "exited") {
-    // TODO: how many tests passed ("15 passed") once a test run records its count.
+    // TODO(#434): how many tests passed ("15 passed") once a test run records its count.
     return record.state.code === 0 ? { words: "Passed", live: true } : { words: "Failed", live: false };
   }
   return standing(record);
@@ -324,6 +324,7 @@ export function PreviewCard({ url, preview = null, steps, session }: { url: stri
       </span>,
     );
   }
+  // TODO(#436): a rendered PDF's page count ("2 pages") once its record keeps it.
   // Folded, a card of proofs alone or another kind of preview, the header counts them.
   if (counted && (!open || !url || preview)) {
     line.push(
@@ -402,7 +403,7 @@ export function PreviewCard({ url, preview = null, steps, session }: { url: stri
  */
 export function useTurnPreviews(requestIds: readonly string[], steps: readonly BlockOrchestratorStep[]): Preview[] {
   const named = steps.flatMap((step) => (step.kind.type === "proof" && step.kind.preview ? [step.kind.preview] : []));
-  // TODO: a preview's own request, once its record keeps the request that started it.
+  // TODO(#435): a preview's own request, once its record keeps the request that started it.
   const found = useBoard(
     useShallow((s) => {
       const requests = requestIds.flatMap((id) => (s.board?.requests[id] ? [s.board.requests[id]] : []));
