@@ -16,19 +16,21 @@ export function useMergeUndo(conversationId: string, mergeCommit: string | null 
     s.board?.conversationId === conversationId ? s.board.orchestratorSteps.filter((step) => step.kind.type === "merged").length : 0,
   );
   const settled = useSettledTabs((s) => s.byTab[conversationId]?.state ?? null);
-  const [found, setFound] = useState<{ key: string; undo: MergeUndo | null } | null>(null);
+  const [found, setFound] = useState<{ key: string; asked: string; undo: MergeUndo | null } | null>(null);
   const key = mergeCommit ? `${conversationId} ${mergeCommit}` : null;
+  // What it was asked after: a new merge or settled state asks again.
+  const asked = `${merges} ${settled ?? ""}`;
   useEffect(() => {
     if (!key || !mergeCommit) return;
     let current = true;
     request({ method: "getMergeUndo", conversationId, mergeCommit })
       .then(({ undo }) => {
-        if (current) setFound({ key, undo: undo ?? null });
+        if (current) setFound({ key, asked, undo: undo ?? null });
       })
       .catch(() => {});
     return () => {
       current = false;
     };
-  }, [key, conversationId, mergeCommit, merges, settled]);
+  }, [key, conversationId, mergeCommit, asked]);
   return found && found.key === key ? found.undo : null;
 }
