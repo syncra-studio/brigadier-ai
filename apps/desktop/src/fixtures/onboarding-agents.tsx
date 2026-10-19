@@ -114,8 +114,8 @@ function shown(waitButton: Element) {
 }
 const claudeCard = () => card(cards().findIndex((element) => text(element.querySelector("p")) === "Claude Code"));
 
-async function until(check: () => boolean, what: string) {
-  for (let tries = 0; tries < 100; tries++) {
+async function until(check: () => boolean, what: string, ms = 10_000) {
+  for (const end = performance.now() + ms; performance.now() < end; ) {
     if (check()) return;
     await wait(50);
   }
