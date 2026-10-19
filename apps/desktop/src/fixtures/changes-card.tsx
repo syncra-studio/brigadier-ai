@@ -8,7 +8,8 @@
  * - `all`: merged, no finding, every file shown ("Show less"); no footer.
  * - `confirm`: Revert asks in the footer: what happens to main, Cancel and "Revert 6 files".
  * - `reverting`: the revert sent: "Reverting…" in place of the footer's buttons.
- * - `reverted`: the session reads Reverted: one line, folded, "Undone on main".
+ * - `reverted`: the session reads Reverted and git shows the revert: one line, folded,
+ *   "Undone on main · 4:02 PM", Redo.
  * - `branch`: not merged yet, on its branch two commits ahead: Discard and Merge into main.
  * - `merge-only`: a turn that merged with nothing of its own counted: the merge's card.
  *
@@ -65,6 +66,9 @@ const merged = (commit: string, open = 0): Merged => ({
   requests: [], record: record(open),
 });
 
+/** When the reverted merge's revert landed: 4:02 PM. */
+const REVERTED_AT = new Date(2026, 9, 19, 16, 2).getTime();
+
 const MERGES = {
   finding: merged("f1f1f1f1", 1),
   clean: merged("c1c1c1c1"),
@@ -102,6 +106,10 @@ mockIPC((command, payload) => {
     sent.push(req.text);
     const message = { id: `sent-${sent.length}`, conversationId: req.conversationId, seq: 100 + sent.length, role: "user", text: req.text, blob: null, createdAtMs: Date.now(), attachments: [], mentions: [], model: null, requestId: null, parentId: null };
     return { method: req.method, outcome: { type: "sent", message } };
+  }
+  // The reverted merge's revert, as git shows it; the other merges stand.
+  if (req.method === "getMergeUndo") {
+    return { method: req.method, undo: req.mergeCommit === MERGES.reverted.mergeCommit ? { revertedBy: "d0d0d0d0d0", revertedAtMs: REVERTED_AT } : null };
   }
   return { method: req.method };
 });
@@ -215,6 +223,9 @@ async function drive() {
   button("reverted", "Show the files")?.click();
   await wait(50);
   out.revertedOpen = look("reverted").files.length;
+  // Redo asks the thread to revert the revert.
+  button("reverted", "Redo")?.click();
+  await until(() => sent.length >= 3);
   out.sent = sent;
   return out;
 }

@@ -16,7 +16,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useAskRequest } from "@/app/conversation/activity/askRequest";
 import { mergeWarning } from "@/app/conversation/activity/mergeChecks";
 import { mergeViewTarget, mergeWords, type TurnMerge } from "@/app/conversation/activity/MergeMessage";
-import { type Merged, revertRequest } from "@/app/conversation/activity/revert";
+import { type Merged, redoRequest, revertRequest } from "@/app/conversation/activity/revert";
 import { isFinal } from "@/app/conversation/blocks";
 import { mergeStats } from "@/app/conversation/ComposerCapsule";
 import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
@@ -24,11 +24,12 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { LinkButton, Pill, PrimaryPill, QuietPill, RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import type { DiffStat, FileReview, FileStat, HeldPath, ReviewDiff } from "@/ipc/generated";
+import type { DiffStat, FileReview, FileStat, HeldPath, MergeUndo, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
+import { useMergeUndo } from "@/state/mergeUndo";
 import { keepChanges, undoChanges } from "@/state/pendingChanges";
 import { openFileTab, openPanelTab, openReviewTab } from "@/state/sessionTabs";
 import { useSettledTabs } from "@/state/tabStates";
@@ -169,16 +170,18 @@ export function useTurnChanged(requestIds: readonly string[]): boolean {
 }
 
 /**
- * Whether the merge was taken back on its base: the session reads Reverted and this is its latest
- * merge (a later merge brings work back). When the revert happened, once the record has it.
+ * Whether the merge was taken back on its base: this is the session's latest merge (a later merge
+ * brings work back), and the session reads Reverted or git shows the merge's revert, not redone
+ * since. With what git shows of that revert: its time, and the commit Redo reverts.
  */
-function useReverted(merge: Merged | null): { reverted: boolean; atMs: number | null } {
+function useReverted(merge: Merged | null): { reverted: boolean; undo: MergeUndo | null } {
   const conversationId = useViewConversation()?.id ?? "";
   const settled = useSettledTabs((s) => s.byTab[conversationId]?.state === "reverted");
   const latest = useBoard((s) => s.board?.orchestratorSteps.findLast((step) => step.kind.type === "merged")?.kind as Merged | undefined);
-  const reverted = !!merge && settled && latest?.mergeCommit === merge.mergeCommit;
-  // TODO(w105): the merge record's revert time ("Undone on main · 4:02 PM") once it lands.
-  return { reverted, atMs: null };
+  const undo = useMergeUndo(conversationId, merge?.mergeCommit);
+  const standing = undo !== null && undo.redoneBy === undefined;
+  const reverted = !!merge && latest?.mergeCommit === merge.mergeCommit && (standing || (settled && undo?.redoneBy === undefined));
+  return { reverted, undo: reverted ? undo : null };
 }
 
 /**
@@ -266,13 +269,15 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   );
   const diff = known ?? fetched?.stat ?? null;
   const merged = merge?.merge ?? null;
-  const { reverted, atMs: revertedAtMs } = useReverted(merged);
+  const { reverted, undo } = useReverted(merged);
   const finding = useOpenFinding(merged);
   // Folded by the user, else folded once reverted.
   const [fold, setFold] = useState<{ reverted: boolean; open: boolean } | null>(null);
   const open = fold && fold.reverted === reverted ? fold.open : !reverted;
   const revertText = merged ? revertRequest(merged) : null;
   const revert = useAskRequest(conversationId ?? "", revertText);
+  const redoText = merged && reverted ? redoRequest(merged, undo) : null;
+  const redo = useAskRequest(conversationId ?? "", redoText);
   const environment = conversation?.setup?.type === "session" ? conversation.setup.environment : null;
   // The session branch's commits its base lacks, as git counted them last.
   const ahead = useSettledTabs((s) => (conversationId ? s.byTab[conversationId]?.ahead : undefined));
@@ -308,7 +313,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   const tally = (state: FileReview) => Object.values(review).filter((each) => each === state).length;
   const reviewed = [tally("kept") > 0 && `kept ${tally("kept")}`, tally("undone") > 0 && `undid ${tally("undone")}`].filter(Boolean).join(", ");
   const status = reverted
-    ? [`Undone on ${merged?.base ?? "main"}`, revertedAtMs === null ? null : formatTime(revertedAtMs)].filter(Boolean).join(" · ")
+    ? [`Undone on ${merged?.base ?? "main"}`, undo ? formatTime(undo.revertedAtMs) : null].filter(Boolean).join(" · ")
     : waits
       ? `${waiting.length} to review`
       : [
@@ -380,8 +385,19 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
       </>
     );
   } else if (merged && reverted) {
-    // TODO(w105): Redo, re-applying the reverted merge, once its action lands.
-    actions = null;
+    // Redo asks the thread to revert the revert; "Redoing…" while its run has it.
+    actions =
+      redoText && redo.asked && threadBusy ? (
+        <span role="status" data-slot="merge-redoing" className="text-muted-foreground flex shrink-0 items-center gap-1.5 px-3 text-label">
+          <Spinner className="size-icon-sm animate-spin" />
+          Redoing…
+        </span>
+      ) : redoText ? (
+        <QuietPill className={QUIET} data-slot="merge-redo" title={redoText} disabled={redo.asked} onClick={redo.ask}>
+          <ArrowRotateCw aria-hidden className="size-icon-sm" />
+          Redo
+        </QuietPill>
+      ) : null;
   } else if (merged) {
     actions = (
       <>

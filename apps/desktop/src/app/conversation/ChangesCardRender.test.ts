@@ -51,10 +51,10 @@ test("the Changes card: merged with a finding, folded, all files, Revert's quest
   assert.deepEqual(cases.confirm.buttons, ["View changes", "Fold the files"]);
   assert.match(cases.reverting.confirm ?? "", /Reverting…$/);
   assert.deepEqual(seen.cancelled, ["Revert", "View changes", "Fold the files"]);
-  // Reverted: one folded line, the counts dim, and its files a click away.
+  // Reverted: one folded line, when git shows the revert, Redo, and its files a click away.
   assert.deepEqual(
     [cases.reverted.state, cases.reverted.title, cases.reverted.status, cases.reverted.files, cases.reverted.buttons],
-    ["reverted", "Reverted 6 files", "Undone on main", [], ["Show the files"]],
+    ["reverted", "Reverted 6 files", "Undone on main · 4:02 PM", [], ["Redo", "Show the files"]],
   );
   assert.equal(seen.revertedOpen, 3);
   // Not merged yet: on its branch, Discard and Merge into main.
@@ -67,6 +67,10 @@ test("the Changes card: merged with a finding, folded, all files, Revert's quest
   assert.equal(seen.finding, "panel:reviews");
   // Not merged, a row opens its part of the turn.
   assert.deepEqual(seen.branchRow, { id: "review", target: { type: "lastTurn", requestId: "branch", path: "public/index.html", staged: false } });
-  // Revert and Merge ask the thread, once each.
-  assert.deepEqual(seen.sent, ["Revert merge c1c1c1c on main the way it went in", "Merge three-small-improvements into main"]);
+  // Revert, Merge and Redo ask the thread, once each.
+  assert.deepEqual(seen.sent, [
+    "Revert merge c1c1c1c on main the way it went in",
+    "Merge three-small-improvements into main",
+    "Redo merge e1e1e1e on main: revert its revert d0d0d0d the way it went in",
+  ]);
 });
