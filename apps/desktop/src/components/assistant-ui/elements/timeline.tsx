@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
  * Events in order, joined by a line (assistant-ui's timeline element,
  * https://www.assistant-ui.com/elements, on Brigadier's tokens): what happened, what happens
  * now and what is still to come, each with its time and a line of detail. An event may carry
- * more behind it (`more`), shown under its detail.
+ * more behind it (`more`), shown under its detail. One that failed is marked red.
  */
 
 export type TimelineWhen = "past" | "now" | "future";
@@ -20,6 +20,7 @@ export interface TimelineEvent {
   title: ReactNode;
   detail?: ReactNode;
   more?: ReactNode;
+  failed?: boolean;
 }
 
 export function Timeline({
@@ -29,6 +30,8 @@ export function Timeline({
 }: Omit<ComponentProps<"ol">, "children"> & { events: readonly TimelineEvent[] }) {
   // Without a time on any event, the dots line up with the text before it instead.
   const timed = events.some((event) => event.time);
+  // A time with its day half ("1:10 AM") gets the room to stay on one line.
+  const wide = events.some((event) => event.time.length > 5);
   return (
     <ol data-slot="timeline" className={cn("flex w-full min-w-0 flex-col", className)} {...props}>
       {events.map((event, index) => {
@@ -43,7 +46,8 @@ export function Timeline({
               <span
                 className={cn(
                   mono,
-                  "w-11 shrink-0 pt-0.5 text-end tabular-nums",
+                  "shrink-0 pt-0.5 text-end whitespace-nowrap tabular-nums",
+                  wide ? "w-14" : "w-11",
                   event.when === "future" ? "text-muted-foreground/60" : "text-muted-foreground",
                 )}
               >
@@ -54,8 +58,12 @@ export function Timeline({
               <span
                 className={cn(
                   "mt-1.5 size-2 shrink-0 rounded-full",
-                  event.when === "now" && "bg-foreground ring-foreground/15 ring-4",
-                  event.when === "past" && "bg-foreground/40",
+                  event.failed
+                    ? "bg-destructive"
+                    : [
+                        event.when === "now" && "bg-foreground ring-foreground/15 ring-4",
+                        event.when === "past" && "bg-foreground/40",
+                      ],
                   event.when === "future" && "border-foreground/25 border",
                 )}
               />
@@ -69,7 +77,11 @@ export function Timeline({
               <span
                 className={cn(
                   "text-sm wrap-anywhere",
-                  event.when === "future" ? "text-muted-foreground" : "text-foreground/90",
+                  event.failed
+                    ? "text-destructive"
+                    : event.when === "future"
+                      ? "text-muted-foreground"
+                      : "text-foreground/90",
                   event.when === "now" && "font-medium",
                 )}
               >
