@@ -118,9 +118,11 @@ async function clear() {
   await until("an empty field", () => typed() === "");
 }
 
-/** Sends what is typed with Enter, and returns the text sent. */
+/** Sends what is typed with Enter, once its attachments are stored, and returns the text sent. */
 async function send(): Promise<string> {
   const before = sends.length;
+  // Enter is refused while an image is still being stored (Send says Files uploading…).
+  await until("the attachments stored", () => document.querySelector(".aui-composer-send")?.hasAttribute("disabled") === false);
   await key("Enter");
   await until("the send", () => sends.length > before);
   await until("the field emptied", () => typed() === "");
