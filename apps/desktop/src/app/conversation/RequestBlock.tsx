@@ -69,6 +69,8 @@ import { HeldNote } from "@/app/conversation/HeldNote";
 import { AnsweredStatus, StatusLine, type ThreadStatusProps, useThreadStatusHead } from "@/app/conversation/ThreadStatus";
 import { TurnDiff, useTurnChanged } from "@/app/conversation/TurnDiff";
 import { linkMarkers, splitSources } from "@/app/conversation/answerSources";
+import { type AnswerMode, splitAnswer, spokenAnswer } from "@/app/conversation/answerLayout";
+import { AnswerParts, SourcesFold } from "@/app/conversation/AnswerParts";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { describeTurnError, interruptedByQuit } from "@/app/conversation/turnError";
 import { useAction } from "@/app/conversation/useAction";
@@ -365,16 +367,25 @@ const ReplyText: FC<{ index: number; streaming: boolean; report?: boolean; comme
 const AnswerDetails = createContext(true);
 
 /**
+ * Whose finished answer it is, for its optional parts (Q86): a Chat's or a session's; "off" for one
+ * that keeps today's look whatever it holds (it changed code, a run's report).
+ */
+const AnswerShape = createContext<AnswerMode>("off");
+
+/**
  * A finished answer, a run's morning report too: what it came to in view, its `### Details`
  * (the checks run, review findings, what wasn't tested) folded under "Details", whether the
  * app asked for the section or the model wrote one of its own (#198), when the turn changed code.
  * A research answer's trailing sources list folds under "Sources · N", and its numbered markers
- * ([1]) link to their source (Q79).
+ * ([1]) link to their source (Q79). An answer with optional parts (Q86) is laid out in them.
  */
 const ReportText: FC<TextMessagePartProps> = (props) => {
   const keepDetails = useContext(AnswerDetails);
+  const mode = useContext(AnswerShape);
   const report = splitReport(props.text);
   const head = report?.head ?? props.text;
+  const layout = splitAnswer(head, mode);
+  if (layout) return <AnswerParts layout={layout} />;
   const sourced = splitSources(head);
   const details = keepDetails ? report?.details : undefined;
   if (!sourced && !details) {
@@ -387,15 +398,9 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
         <MarkdownBlock text={sourced ? linkMarkers(sourced.head, sourced.sources) : head} plainLeads />
       </CitationContext.Provider>
       {sourced && (
-        <details data-slot="answer-sources" className="group/sources">
-          <summary className={cn(ROW, ROW_TOGGLE, "list-none [&::-webkit-details-marker]:hidden")}>
-            Sources · {sourced.sources.length}
-            <ChevronRightAlt aria-hidden className={cn(CHEVRON, "group-open/sources:rotate-90")} />
-          </summary>
-          <div data-slot="answer-source-list" className="pt-2 text-sm">
-            <MarkdownBlock text={sourced.sources.map((source) => `${source.n}. [${source.title.replace(/[[\]]/g, "")}](<${source.url}>)`).join("\n")} />
-          </div>
-        </details>
+        <div className="border-border/60 border-t">
+          <SourcesFold sources={sourced.sources} />
+        </div>
       )}
       {details && (
         <details data-slot="report-details" className="group/details">
@@ -903,7 +908,9 @@ export const RequestBlock: FC = () => {
                 className={cn("text-foreground leading-relaxed wrap-break-word", (header || parts.length > 0 || before.length > 0) && "pt-activity")}
               >
                 <AnswerDetails.Provider value={!!phase || changed}>
-                  <ReplyText index={answer} streaming={streams(answer)} report={!streams(answer)} />
+                  <AnswerShape.Provider value={phase || changed ? "off" : meta.session ? "session" : "chat"}>
+                    <ReplyText index={answer} streaming={streams(answer)} report={!streams(answer)} />
+                  </AnswerShape.Provider>
                 </AnswerDetails.Provider>
               </div>
             )}
@@ -936,6 +943,7 @@ export const RequestBlock: FC = () => {
       {!live && last >= 0 && !phase && (
         <AnswerActions
           session={meta.session}
+          mode={changed ? "off" : meta.session ? "session" : "chat"}
           rework={meta.rework}
           atMs={meta.endedAtMs}
           shown={answer === null ? null : [answer, ...updates]}
@@ -1040,21 +1048,32 @@ const ModelChanged: FC<{ model: ModelChoice | null; picked: ModelChoice | null }
  */
 const AnswerActions: FC<{
   session: boolean;
+  /** Whose answer, for its optional parts: Read aloud says only what they show (Q86). */
+  mode: AnswerMode;
   rework: boolean;
   atMs: number | null;
   shown: number[] | null;
   forkId: string | null;
   answerId: string | null;
-}> = ({ session, rework, atMs, shown, forkId, answerId }) => {
+}> = ({ session, mode, rework, atMs, shown, forkId, answerId }) => {
   const conversation = useViewConversation();
-  const answer = useAuiState((s) => {
+  // One string, so the selector's result compares by value: its parts split at a NUL.
+  const texts = useAuiState((s) => {
     const parts = s.message.parts;
     return (shown ?? [parts.length - 1])
       .map((index) => parts[index])
       .map((part) => (part?.type === "text" ? part.text : ""))
       .filter((text) => text !== "")
-      .join("\n\n");
-  });
+      .join("\0");
+  }).split("\0");
+  const answer = texts.join("\n\n");
+  // The answer laid out in parts is read as shown: its opening and parts, never its folds.
+  const spoken = texts
+    .map((text, index) => {
+      const layout = index === 0 && shown !== null ? splitAnswer(splitReport(text)?.head ?? text, mode) : null;
+      return layout ? spokenAnswer(layout) : text;
+    })
+    .join("\n\n");
   const rated = useAuiState((s) => {
     const type = s.message.metadata.submittedFeedback?.type;
     return type === "positive" ? "good" : type === "negative" ? "bad" : null;
@@ -1082,7 +1101,7 @@ const AnswerActions: FC<{
           <Copy className="animate-in zoom-in-75 fade-in duration-150" />
         )}
       </TooltipIconButton>
-      <ReadAloud text={answer} />
+      <ReadAloud text={spoken} />
       <RateMenu rated={rated} onClear={() => {
         if (conversation && answerId) {
           rateMessage(conversation.id, answerId, null).catch((error: unknown) =>

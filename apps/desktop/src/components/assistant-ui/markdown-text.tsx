@@ -43,6 +43,8 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { PICK_HREF } from "@/app/conversation/answerLayout";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -469,6 +471,8 @@ export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, c
   if (href?.startsWith("brigadier-image:")) return <>{image?.(Number(href.slice("brigadier-image:".length))) ?? children}</>;
   if (href?.startsWith("brigadier-paste:")) return <>{paste?.(Number(href.slice("brigadier-paste:".length))) ?? children}</>;
   if (href?.startsWith("brigadier-cite:")) return <CitationMarker n={Number(href.slice("brigadier-cite:".length))}>{children}</CitationMarker>;
+  // The badge an answer's comparison puts on its pick's row (Q86).
+  if (href === PICK_HREF) return <Badge variant="success" data-slot="answer-pick" className="ms-2 align-middle">{children}</Badge>;
   if (href?.startsWith("brigadier-page:")) return <ReportLink pageId={href.slice("brigadier-page:".length)}>{children}</ReportLink>;
   if (href && !/^(https?:|mailto:|#)/i.test(href)) {
     return <FileChip href={href}>{children}</FileChip>;
