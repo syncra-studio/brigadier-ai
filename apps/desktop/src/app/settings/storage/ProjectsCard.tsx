@@ -40,6 +40,7 @@ import {
   ShareBar,
   StorageCard,
 } from "@/app/settings/storage/parts";
+import { selectTrigger } from "@/app/settings/parts";
 import { Spinner } from "@/components/glyphs/spinner";
 import {
   DropdownMenu,
@@ -101,9 +102,9 @@ export function ProjectsCard({
     const stale = unusedProjects(report, nowMs);
     return (
       <StorageCard data-projects="all">
-        <div className="border-settings-divider flex items-center gap-3 border-b py-3.5">
-          <label className="bg-storage-search border-settings-control-border rounded-storage-search flex h-8 min-w-0 flex-1 items-center gap-2 border px-3">
-            <Search aria-hidden className="text-settings-text-tertiary size-3.5 shrink-0" />
+        <div className="border-divider flex items-center gap-3 border-b py-3.5">
+          <label className="rounded-capsule border-foreground/16 bg-foreground/8 flex h-8 min-w-0 flex-1 items-center gap-2 border px-2.5">
+            <Search aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
             <input
               value={query}
               onChange={(event) => {
@@ -112,7 +113,7 @@ export function ProjectsCard({
               }}
               placeholder={`Search ${count(report.projects.length, "project", "projects")}`}
               aria-label="Search projects"
-              className="text-settings-text placeholder:text-settings-text-tertiary min-w-0 flex-1 bg-transparent text-settings-body outline-none"
+              className="placeholder:text-foreground/50 min-w-0 flex-1 bg-transparent text-sm outline-none"
             />
           </label>
           <SortSelect value={sort} onChange={setSort} />
@@ -153,7 +154,7 @@ export function ProjectsCard({
           />
         ))}
         <div className="flex items-center justify-between py-3.5">
-          <span className="text-settings-text-tertiary text-settings-meta">
+          <span className="text-muted-foreground text-xs">
             {found.length === 0 ? "No project matches" : `Showing ${Math.min(shown, found.length)} of ${found.length}`}
           </span>
           {found.length > shown && (
@@ -173,7 +174,7 @@ export function ProjectsCard({
   const restUnused = rest.filter((project) => isUnused(project, nowMs)).length;
   const shared = sharedParts(report);
   return (
-    <StorageCard data-projects="top" className="divide-settings-divider divide-y">
+    <StorageCard data-projects="top" className="divide-divider divide-y">
       {top.map((project) => (
         <ProjectRows
           key={project.projectId}
@@ -189,11 +190,11 @@ export function ProjectsCard({
       ))}
       {rest.length > 0 && (
         <div data-project="more" className="flex items-center gap-4 py-3.5">
-          <Folders aria-hidden className="text-settings-text-secondary size-4 shrink-0" />
+          <Folders aria-hidden className="text-foreground/65 size-4 shrink-0" />
           <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="text-settings-text text-settings-body font-medium">{count(rest.length, "more project", "more projects")}</span>
+            <span className="text-foreground text-label font-medium">{count(rest.length, "more project", "more projects")}</span>
             {restUnused > 0 && (
-              <span className="text-settings-text-tertiary text-settings-meta">
+              <span className="text-muted-foreground text-xs">
                 {rest.length === 1
                   ? "It hasn't been used in 3 months"
                   : `${restUnused === rest.length ? "None" : restUnused} of them ${restUnused === rest.length ? "have been used in 3 months" : restUnused === 1 ? "hasn't been used in 3 months" : "haven't been used in 3 months"}`}
@@ -207,8 +208,8 @@ export function ProjectsCard({
       )}
       <ExpandableRow
         name="shared"
-        icon={<Stack aria-hidden className="text-settings-text-secondary size-4 shrink-0" />}
-        title={<span className="text-settings-text text-settings-body font-medium">Shared by all projects</span>}
+        icon={<Stack aria-hidden className="text-foreground/65 size-4 shrink-0" />}
+        title={<span className="text-foreground text-label font-medium">Shared by all projects</span>}
         line="Models, logs & recordings, and other"
         parts={shared}
         total={total}
@@ -255,20 +256,20 @@ function ProjectRows({
   const leftover = report.items.filter(
     (item) => item.projectId === project.projectId && item.category === "finishedWork" && item.selectable,
   ).length;
-  const name = <span className="text-settings-text font-mono text-settings-small font-medium">{project.name}</span>;
+  const name = <span className="text-foreground font-mono text-xs font-medium">{project.name}</span>;
   return (
     <ExpandableRow
       name={project.projectId}
       compact={compact}
-      icon={<Folder aria-hidden className="text-settings-text-secondary size-4 shrink-0" />}
+      icon={<Folder aria-hidden className="text-foreground/65 size-4 shrink-0" />}
       title={
         compact ? (
           <span className="flex min-w-0 items-center gap-2.5">
             {name}
             <span
               className={cn(
-                "shrink-0 text-settings-meta",
-                isUnused(project, nowMs) ? "text-settings-warning" : "text-settings-text-tertiary",
+                "shrink-0 text-xs",
+                isUnused(project, nowMs) ? "text-warning" : "text-muted-foreground",
               )}
             >
               {usedWords(project.lastUsedMs, nowMs)}
@@ -296,8 +297,8 @@ function ProjectRows({
               : "None left over from finished sessions"
         }
       />
-      <div className="border-settings-divider flex items-center gap-2 border-t pt-3">
-        <span className="text-settings-text-secondary min-w-0 flex-1 text-settings-small">
+      <div className="border-divider flex items-center gap-2 border-t pt-3">
+        <span className="text-foreground/65 min-w-0 flex-1 text-xs">
           {items === 0
             ? "Nothing of this project's can go"
             : canGo > 0
@@ -346,7 +347,7 @@ function ExpandableRow({
   children: ReactNode;
 }) {
   return (
-    <div data-project={name} className={cn("flex flex-col", compact && "border-settings-divider border-b")}>
+    <div data-project={name} className={cn("flex flex-col", compact && "border-divider border-b")}>
       <button
         type="button"
         aria-expanded={open}
@@ -356,14 +357,14 @@ function ExpandableRow({
         {icon}
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           {title}
-          {line && <span className="text-settings-text-tertiary truncate text-settings-meta">{line}</span>}
+          {line && <span className="text-muted-foreground truncate text-xs">{line}</span>}
         </span>
         <ShareBar parts={parts} total={total} />
         <Size bytes={sumBytes(parts)} />
         {open ? (
-          <ChevronDown aria-hidden className="text-settings-text-tertiary size-3.75 shrink-0" />
+          <ChevronDown aria-hidden className="text-muted-foreground size-3.75 shrink-0" />
         ) : (
-          <ChevronRight aria-hidden className="text-settings-text-tertiary size-3.75 shrink-0" />
+          <ChevronRight aria-hidden className="text-muted-foreground size-3.75 shrink-0" />
         )}
       </button>
       {open && <div className="flex flex-col pb-3.5 ps-8">{children}</div>}
@@ -374,16 +375,16 @@ function ExpandableRow({
 /** One part of what an opened row holds: its dot, name, line and size. */
 function DetailRow({ part, line }: { part: Part; line: string }) {
   return (
-    <div data-part-row={part.key} className="border-settings-divider flex items-center gap-3 border-t py-2.5">
+    <div data-part-row={part.key} className="border-divider flex items-center gap-3 border-t py-2.5">
       <Dot color={part.color} />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-settings-text text-settings-small font-medium">{part.label}</span>
-        <span className="text-settings-text-secondary text-settings-meta">{line}</span>
+        <span className="text-foreground text-xs font-medium">{part.label}</span>
+        <span className="text-foreground/65 text-xs">{line}</span>
       </div>
       <span
         className={cn(
-          "w-18 shrink-0 text-right text-settings-small",
-          part.bytes > 0 ? "text-settings-text" : "text-settings-text-tertiary",
+          "w-18 shrink-0 text-right text-xs",
+          part.bytes > 0 ? "text-foreground" : "text-muted-foreground",
         )}
       >
         {size(part.bytes)}
@@ -393,7 +394,7 @@ function DetailRow({ part, line }: { part: Part; line: string }) {
 }
 
 function Size({ bytes }: { bytes: number }) {
-  return <span className="text-settings-text w-18 shrink-0 text-right text-settings-small font-medium">{size(bytes)}</span>;
+  return <span className="text-foreground w-18 shrink-0 text-right text-xs font-medium">{size(bytes)}</span>;
 }
 
 /** The projects not used for three months: what their Brains and conversations take, and
@@ -429,13 +430,13 @@ function UnusedRow({
         ? state.line
         : `${n === 1 ? "Its" : "Their"} brains and conversations take ${size(bytes)}. Your repositories and files stay.`;
   return (
-    <div data-unused className="border-settings-divider flex items-center gap-4 border-b py-3.5">
+    <div data-unused className="border-divider flex items-center gap-4 border-b py-3.5">
       <RoundBadge>
         <History />
       </RoundBadge>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-settings-text text-settings-body font-medium">{title}</span>
-        <span className={cn("text-settings-small", state.phase === "failed" ? "text-settings-danger" : "text-settings-text-secondary")}>
+        <span className="text-foreground text-label font-medium">{title}</span>
+        <span className={cn("text-xs", state.phase === "failed" ? "text-destructive" : "text-foreground/65")}>
           {line}
         </span>
       </div>
@@ -468,10 +469,10 @@ function SortSelect({ value, onChange }: { value: ProjectSort; onChange: (value:
         <button
           type="button"
           aria-label="Sort projects"
-          className="bg-settings-control border-settings-control-border text-settings-text rounded-capsule flex h-7.5 shrink-0 items-center gap-1.5 border ps-3.5 pe-3 text-settings-body"
+          className={cn(selectTrigger, "flex shrink-0 gap-1")}
         >
           {chosen?.label}
-          <ChevronDown aria-hidden className="size-3" />
+          <ChevronDown aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">

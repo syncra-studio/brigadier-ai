@@ -1,14 +1,16 @@
 import { Check, ChevronRight, Minus } from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentProps, ReactNode } from "react";
 
+import { SettingsButton, settingsCard, SettingsSection } from "@/app/settings/parts";
 import type { Part } from "@/app/settings/storage/model";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /*
- * The parts Settings › Storage is built from, drawn to the user's own design: a section (its
- * title, a line under it and a note on the right, over its card), a card, pill buttons, a blue
- * link, a round badge, a tick box, the usage bar and a project's share bar. Its colours and
- * type are the redesigned Settings pages' (`settings-*`) and Storage's own (`storage-*`).
+ * The parts Settings › Storage is built from, laid out as the user's design has it and drawn with
+ * every Settings page's parts: a section (its title, a line under it and a note on the right,
+ * over its card), a card, buttons, a blue link, a round badge, a tick box, the usage bar and a
+ * project's share bar.
  */
 
 /** A section: its title (and a line under it), an optional note on the right, its card. */
@@ -27,20 +29,19 @@ export function StorageSection({
   children: ReactNode;
 }) {
   return (
-    <section data-setting={setting ?? title} aria-label={title} className="flex flex-col gap-3.5">
-      <div className="flex items-end gap-6">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <h2 className="text-settings-text text-settings-heading font-medium">{title}</h2>
-          {description && <p className="text-settings-text-secondary text-settings-small">{description}</p>}
-        </div>
-        {aside && <div className="text-settings-text-tertiary shrink-0 text-settings-small">{aside}</div>}
-      </div>
-      {children}
-    </section>
+    <div data-setting={setting ?? title}>
+      <SettingsSection
+        title={title}
+        description={description}
+        actions={aside && <div className="text-foreground/65 text-label">{aside}</div>}
+      >
+        {children}
+      </SettingsSection>
+    </div>
   );
 }
 
-/** A card: rows 20 in from its edges (`padded` pads the whole card, the usage card). */
+/** A card: rows 16 in from its edges (`padded` pads the whole card, the usage card). */
 export function StorageCard({
   padded = false,
   className,
@@ -52,8 +53,8 @@ export function StorageCard({
       data-slot="storage-card"
       {...props}
       className={cn(
-        "bg-settings-surface border-settings-border rounded-storage-card flex flex-col border",
-        padded ? "gap-4.5 p-5" : "px-5",
+        settingsCard,
+        padded ? "gap-4.5 p-4" : "px-4",
         className,
       )}
     >
@@ -66,64 +67,33 @@ export function StorageCard({
 export function RowText({ title, line, className }: { title: ReactNode; line?: ReactNode; className?: string }) {
   return (
     <div className={cn("flex min-w-0 flex-1 flex-col gap-1", className)}>
-      <span className="text-settings-text text-settings-body font-medium">{title}</span>
-      {line && <span className="text-settings-text-secondary text-settings-small">{line}</span>}
+      <span className="text-label font-medium">{title}</span>
+      {line && <span className="text-foreground/65 text-xs">{line}</span>}
     </div>
   );
 }
 
-/** A grey pill button: Refresh, Review, Manage, Reveal in Finder, Free up. */
-export function Pill({ className, ...props }: ComponentProps<"button">) {
-  return (
-    <button
-      type="button"
-      {...props}
-      className={cn(
-        "bg-settings-raised border-settings-ring text-settings-text hover:bg-settings-chosen rounded-capsule flex h-7.5 shrink-0 items-center gap-1.5 border px-3.5 text-settings-small font-medium transition-colors disabled:opacity-50 [&_svg]:size-3.25",
-        className,
-      )}
-    />
-  );
+/** A row's button: Refresh, Review, Manage, Reveal in Finder, Free up. */
+export function Pill(props: ComponentProps<"button">) {
+  return <SettingsButton {...props} />;
 }
 
-/** The light pill that confirms: Free up 39.7 MB. */
+/** The button that confirms: Free up 39.7 MB. */
 export function PrimaryPill({ className, ...props }: ComponentProps<"button">) {
-  return (
-    <button
-      type="button"
-      {...props}
-      className={cn(
-        "bg-settings-text text-settings-on-light rounded-capsule flex h-7.5 shrink-0 items-center px-3.5 text-settings-small font-medium transition-opacity hover:opacity-90 disabled:opacity-50",
-        className,
-      )}
-    />
-  );
+  return <Button type="button" size="sm" className={className} {...props} />;
 }
 
-/** The quiet pill beside it: Cancel. */
+/** The quiet button beside it: Cancel. */
 export function QuietPill({ className, ...props }: ComponentProps<"button">) {
-  return (
-    <button
-      type="button"
-      {...props}
-      className={cn(
-        "text-settings-text-secondary hover:text-settings-text rounded-capsule flex h-7.5 shrink-0 items-center px-3 text-settings-small font-medium transition-colors disabled:opacity-50",
-        className,
-      )}
-    />
-  );
+  return <Button type="button" variant="ghost" size="sm" className={className} {...props} />;
 }
 
-/** The red pill: Uninstall…. */
+/** The red button: Uninstall…, as Archived chats' delete. */
 export function DangerPill({ className, ...props }: ComponentProps<"button">) {
   return (
-    <button
-      type="button"
+    <SettingsButton
       {...props}
-      className={cn(
-        "bg-storage-danger border-storage-danger-edge text-storage-danger-text rounded-capsule flex h-7.5 shrink-0 items-center border px-3.5 text-settings-small font-medium transition-opacity hover:opacity-90",
-        className,
-      )}
+      className={cn("bg-destructive/10 hover:bg-destructive/20 text-destructive border-transparent", className)}
     />
   );
 }
@@ -140,12 +110,12 @@ export function LinkButton({
       type="button"
       {...props}
       className={cn(
-        "text-settings-link flex shrink-0 items-center gap-1 text-settings-small font-medium hover:underline",
+        "text-link flex shrink-0 items-center gap-1 text-xs font-medium hover:underline",
         className,
       )}
     >
       {children}
-      <Icon aria-hidden className="size-3.25" />
+      <Icon aria-hidden className="size-icon-xs" />
     </button>
   );
 }
@@ -156,8 +126,8 @@ export function RoundBadge({ tone = "plain", children }: { tone?: "plain" | "don
     <span
       aria-hidden
       className={cn(
-        "flex size-9 shrink-0 items-center justify-center rounded-full [&_svg]:size-4",
-        tone === "done" ? "bg-settings-success-soft text-settings-success" : "bg-settings-raised text-settings-text",
+        "flex size-9 shrink-0 items-center justify-center rounded-full [&_svg]:size-icon-md",
+        tone === "done" ? "bg-success/15 text-success" : "bg-foreground/8 text-foreground",
       )}
     >
       {children}
@@ -183,12 +153,13 @@ export function TickBox({
       aria-label={label}
       onClick={onToggle}
       className={cn(
-        "rounded-storage-box flex size-4 shrink-0 items-center justify-center",
-        state === "none" ? "shadow-storage-box" : "bg-settings-text text-settings-on-light",
+        // Clear browsing data's tick box.
+        "border-border flex size-4 shrink-0 items-center justify-center rounded-xs border",
+        state !== "none" && "bg-foreground/10",
       )}
     >
-      {state === "all" && <Check aria-hidden className="size-3" />}
-      {state === "some" && <Minus aria-hidden className="size-3" />}
+      {state === "all" && <Check aria-hidden className="size-icon-xs" />}
+      {state === "some" && <Minus aria-hidden className="size-icon-xs" />}
     </button>
   );
 }
@@ -206,7 +177,7 @@ export function UsageBar({ parts, pending = false }: { parts: readonly Part[]; p
       aria-hidden
       // Before the first scan the empty track holds the bar's room.
       data-slot={pending ? "storage-bar-pending" : "storage-bar"}
-      className="bg-settings-track flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full">
+      className="bg-muted flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full">
       {shown.map((part) => (
         <span
           key={part.key}
@@ -222,7 +193,7 @@ export function UsageBar({ parts, pending = false }: { parts: readonly Part[]; p
 /** A project's share of everything Brigadier uses: its parts on a 200-wide track. */
 export function ShareBar({ parts, total }: { parts: readonly Part[]; total: number }) {
   return (
-    <div aria-hidden className="bg-settings-track flex h-1.5 w-50 shrink-0 overflow-hidden rounded-full">
+    <div aria-hidden className="bg-muted flex h-1.5 w-50 shrink-0 overflow-hidden rounded-full">
       {parts
         .filter((part) => part.bytes > 0)
         .map((part) => (

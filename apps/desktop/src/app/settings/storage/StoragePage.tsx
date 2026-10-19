@@ -184,7 +184,7 @@ export function StoragePage() {
       actions={
         <>
           {checkedAtMs > 0 && (
-            <span className="text-settings-text-tertiary pe-1 text-settings-small">
+            <span className="text-muted-foreground pe-1 text-xs">
               {scanning ? "Checking…" : checkedWords(checkedAtMs, now)}
             </span>
           )}
@@ -252,10 +252,10 @@ function UsageCard({ report, error }: { report: StorageReport | null; error: str
     <StorageCard padded data-usage>
       <div className="flex items-end gap-4">
         <div className="flex min-w-0 flex-1 items-end gap-2.5">
-          <span className="text-settings-text text-storage-total font-medium">
+          <span className="text-page-title font-medium">
             {report ? size(report.totalBytes) : "…"}
           </span>
-          <span className="text-settings-text-secondary text-settings-body leading-none">
+          <span className="text-foreground/65 text-label leading-none">
             {report ? "used by Brigadier" : "Looking…"}
           </span>
         </div>
@@ -264,26 +264,26 @@ function UsageCard({ report, error }: { report: StorageReport | null; error: str
             type="button"
             title={report.dataDir}
             onClick={() => void revealPath(report.dataDir).catch(() => {})}
-            className="text-settings-text-tertiary hover:text-settings-text-secondary flex min-w-0 items-center gap-2 font-mono text-settings-meta"
+            className="text-muted-foreground hover:text-foreground/65 flex min-w-0 items-center gap-2 font-mono text-xs"
           >
             <span className="truncate">{shortPath(report.dataDir)}</span>
-            <FolderOpen aria-hidden className="text-settings-text-secondary size-3.5 shrink-0" />
+            <FolderOpen aria-hidden className="text-foreground/65 size-3.5 shrink-0" />
           </button>
         )}
       </div>
-      {error && <span className="text-settings-danger text-settings-small">{error}</span>}
+      {error && <span className="text-destructive text-xs">{error}</span>}
       <UsageBar parts={parts} pending={!report} />
       <div className="flex justify-between gap-4">
         {parts.map((part) => (
           <div key={part.key} data-legend={part.key} className="flex flex-col gap-1.25">
-            <span className="text-settings-text-secondary flex items-center gap-1.75 text-settings-small">
+            <span className="text-foreground/65 flex items-center gap-1.75 text-xs">
               <Dot color={part.color} />
               {part.label}
             </span>
             <span
               className={cn(
-                "text-settings-small font-medium",
-                part.bytes > 0 ? "text-settings-text" : "text-settings-text-tertiary",
+                "text-xs font-medium",
+                part.bytes > 0 ? "text-foreground" : "text-muted-foreground",
               )}
             >
               {size(part.bytes)}

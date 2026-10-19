@@ -3,9 +3,13 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { SettingsView } from "@/app/settings/SettingsView";
 import { StoragePage } from "@/app/settings/storage/StoragePage";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { surface } from "@/fixtures/look";
 import type { CleanItem, ProjectUsage, Request, StorageReport } from "@/ipc/generated";
+import { openSettings } from "@/state/actions";
 import { emitCleanProgress, useStorageUi } from "@/state/storage";
 import { useApp } from "@/state/store";
 
@@ -14,9 +18,11 @@ import { useApp } from "@/state/store";
  * goes through every state (the review ticked and unticked, removing with how far it got,
  * done and what was removed, a project opened and freed up alone, all projects searched,
  * sorted and paged, the projects not in use freed up, Manage and Uninstall) and writes what it
- * saw to #storage-result (StoragePageRender.test.ts reads it).
+ * saw to #storage-result (StoragePageRender.test.ts reads it). ?drive=look reads Settings ›
+ * General's card and button, then Storage's cards and its Review button, to #storage-result too.
  */
 const params = new URLSearchParams(location.search);
+const look = params.get("drive") === "look";
 document.documentElement.dataset.density = "normal";
 if (params.has("drive")) {
   const still = document.createElement("style");
@@ -249,6 +255,40 @@ const leaves = (root: Element | null) =>
 
 type Step = [state: string | null, run: () => void];
 
+/** Settings › General's card and button, then Storage's cards and Review, as the browser drew them. */
+function Look() {
+  const page = useApp((s) => (s.selection.type === "settings" ? s.selection.page : null));
+  const [result, setResult] = useState("");
+  useEffect(() => {
+    const seen: Record<string, unknown> = {};
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    openSettings("general");
+    void (async () => {
+      await pause(600);
+      seen.general = {
+        card: surface(q('[data-slot="settings-card"]')),
+        button: surface(q('[data-slot="settings-card"] button[data-variant="outline"]')),
+      };
+      openSettings("storage");
+      await pause(800);
+      seen.storage = { cards: all('[data-slot="storage-card"]').map(surface), button: surface(button("Review")) };
+      setResult(JSON.stringify(seen));
+    })();
+  }, []);
+  return (
+    <TooltipProvider>
+      <SidebarProvider>
+        <div className="bg-background text-foreground flex h-screen w-full">
+          <main className="flex h-full min-w-0 flex-1">
+            <div className="min-w-0 flex-1">{page && <SettingsView page={page} />}</div>
+          </main>
+        </div>
+      </SidebarProvider>
+      {result && <pre id="storage-result">{result}</pre>}
+    </TooltipProvider>
+  );
+}
+
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
@@ -428,7 +468,7 @@ function Fixture() {
   }, []);
   return (
     <TooltipProvider>
-      <div className="bg-settings-bg text-foreground flex h-screen">
+      <div className="bg-background text-foreground flex h-screen">
         <main className="flex h-full min-w-0 flex-1">
           <div className="min-w-0 flex-1">
             <StoragePage />
@@ -441,4 +481,4 @@ function Fixture() {
 }
 
 const root = document.getElementById("root");
-if (root) createRoot(root).render(<Fixture />);
+if (root) createRoot(root).render(look ? <Look /> : <Fixture />);

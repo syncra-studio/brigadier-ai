@@ -84,7 +84,7 @@ export function FreeUpCard({
           title={!report ? "Looking…" : canGo > 0 || startTicked(report).size > 0 ? `${size(canGo)} can go` : "Nothing to free up"}
           line={
             state.phase === "rest" && state.error ? (
-              <span className="text-settings-danger">{state.error}</span>
+              <span className="text-destructive">{state.error}</span>
             ) : report ? (
               summaryLine(report)
             ) : (
@@ -131,7 +131,7 @@ function Review({
           type="button"
           aria-label="Close the review"
           onClick={cancel}
-          className="text-settings-text-tertiary hover:text-settings-text shrink-0"
+          className="text-muted-foreground hover:text-foreground shrink-0"
         >
           <ChevronUp aria-hidden className="size-3.75" />
         </button>
@@ -154,10 +154,10 @@ function Review({
         ))}
         {kept.length > 0 && <KeptRows kept={kept} bytes={keptBytes} />}
       </div>
-      <div className="border-settings-divider flex items-center gap-3 border-t pt-3.5 pb-4 ps-13">
+      <div className="border-divider flex items-center gap-3 border-t pt-3.5 pb-4 ps-13">
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="text-settings-text text-settings-small font-medium">{size(picked.bytes)} selected</span>
-          <span className={cn("text-settings-meta", state.error ? "text-settings-danger" : "text-settings-text-tertiary")}>
+          <span className="text-foreground text-xs font-medium">{size(picked.bytes)} selected</span>
+          <span className={cn("text-xs", state.error ? "text-destructive" : "text-muted-foreground")}>
             {state.error ?? `${picked.picked} of ${count(picked.of, "item", "items")} · nothing else is touched`}
           </span>
         </div>
@@ -197,14 +197,14 @@ function GroupRows({
   const ids = group.items.map((item) => item.id);
   return (
     <div data-group={group.category}>
-      <div className="border-settings-divider flex h-11.5 items-center gap-3 border-t">
+      <div className="border-divider flex h-11.5 items-center gap-3 border-t">
         <TickBox state={state} label={group.title} onToggle={() => onTick(ids, state !== "all")} />
         <OpenButton open={open} label={group.title} onToggle={() => setOpen(!open)} />
-        <span className="text-settings-text min-w-0 flex-1 truncate text-settings-body font-medium">{group.title}</span>
-        <span className="text-settings-text-tertiary shrink-0 text-settings-small">
+        <span className="text-foreground min-w-0 flex-1 truncate text-label font-medium">{group.title}</span>
+        <span className="text-muted-foreground shrink-0 text-xs">
           {state === "some" ? `${on} of ${group.items.length}` : count(group.items.length, "item", "items")}
         </span>
-        <span className="text-settings-text w-18 shrink-0 text-right text-settings-small font-medium">{size(state === "some" ? picked.reduce((total, item) => total + item.bytes, 0) : group.bytes)}</span>
+        <span className="text-foreground w-18 shrink-0 text-right text-xs font-medium">{size(state === "some" ? picked.reduce((total, item) => total + item.bytes, 0) : group.bytes)}</span>
       </div>
       {open && (
         <div className="flex flex-col pb-2 ps-13.5">
@@ -231,7 +231,7 @@ function OpenButton({ open, label, onToggle }: { open: boolean; label: string; o
       aria-expanded={open}
       aria-label={`${open ? "Close" : "Open"} ${label}`}
       onClick={onToggle}
-      className="text-settings-text-tertiary hover:text-settings-text shrink-0"
+      className="text-muted-foreground hover:text-foreground shrink-0"
     >
       {open ? <ChevronDown aria-hidden className="size-3.5" /> : <ChevronRight aria-hidden className="size-3.5" />}
     </button>
@@ -246,16 +246,16 @@ function ItemRow({ item, on, onToggle }: { item: CleanItem; on: boolean; onToggl
         <TickBox state={on ? "all" : "none"} label={item.label} onToggle={onToggle} />
       </div>
       <div className={cn("flex min-w-0 flex-1 flex-col gap-0.75", !on && "opacity-55")}>
-        <span className="text-settings-text text-settings-small font-medium">{item.label}</span>
-        {item.reason && <span className="text-settings-text-secondary text-settings-meta">{item.reason}</span>}
+        <span className="text-foreground text-xs font-medium">{item.label}</span>
+        {item.reason && <span className="text-foreground/65 text-xs">{item.reason}</span>}
         {item.path && (
-          <span className="text-settings-text-tertiary truncate font-mono text-settings-badge">{item.path}</span>
+          <span className="text-muted-foreground truncate font-mono text-2xs">{item.path}</span>
         )}
       </div>
       <span
         className={cn(
-          "w-16 shrink-0 text-right text-settings-small",
-          on ? "text-settings-text" : "text-settings-text-tertiary",
+          "w-16 shrink-0 text-right text-xs",
+          on ? "text-foreground" : "text-muted-foreground",
         )}
       >
         {size(item.bytes)}
@@ -272,7 +272,7 @@ function RevealIcon({ path }: { path: string | null }) {
       type="button"
       aria-label="Reveal in Finder"
       onClick={() => void revealPath(path)}
-      className="text-settings-text-tertiary hover:text-settings-text h-fit shrink-0"
+      className="text-muted-foreground hover:text-foreground h-fit shrink-0"
     >
       <FolderOpen aria-hidden className="size-3.5" />
     </button>
@@ -284,25 +284,25 @@ function KeptRows({ kept, bytes }: { kept: Kept[]; bytes: number }) {
   const [open, setOpen] = useState(false);
   return (
     <div data-group="kept">
-      <div className="border-settings-divider flex h-11.5 items-center gap-3 border-t">
-        <Lock aria-hidden className="text-settings-text-tertiary size-3.5 shrink-0" />
+      <div className="border-divider flex h-11.5 items-center gap-3 border-t">
+        <Lock aria-hidden className="text-muted-foreground size-3.5 shrink-0" />
         <OpenButton open={open} label="Kept on purpose" onToggle={() => setOpen(!open)} />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="text-settings-text-secondary text-settings-body font-medium">Kept on purpose</span>
-          <span className="text-settings-text-tertiary text-settings-meta">Brigadier still needs these, so they never go</span>
+          <span className="text-foreground/65 text-label font-medium">Kept on purpose</span>
+          <span className="text-muted-foreground text-xs">Brigadier still needs these, so they never go</span>
         </div>
-        <span className="text-settings-text-tertiary shrink-0 text-settings-small">{count(kept.length, "thing", "things")}</span>
-        <span className="text-settings-text-secondary w-18 shrink-0 text-right text-settings-small font-medium">{size(bytes)}</span>
+        <span className="text-muted-foreground shrink-0 text-xs">{count(kept.length, "thing", "things")}</span>
+        <span className="text-foreground/65 w-18 shrink-0 text-right text-xs font-medium">{size(bytes)}</span>
       </div>
       {open && (
         <div className="flex flex-col pb-2 ps-13.5">
           {kept.map((line) => (
             <div key={line.key} className="flex gap-3 py-2.5 ps-7">
               <div className="flex min-w-0 flex-1 flex-col gap-0.75">
-                <span className="text-settings-text-secondary text-settings-small font-medium">{line.label}</span>
-                <span className="text-settings-text-tertiary text-settings-meta">{line.reason}</span>
+                <span className="text-foreground/65 text-xs font-medium">{line.label}</span>
+                <span className="text-muted-foreground text-xs">{line.reason}</span>
               </div>
-              <span className="text-settings-text-tertiary w-16 shrink-0 text-right text-settings-small">{size(line.bytes)}</span>
+              <span className="text-muted-foreground w-16 shrink-0 text-right text-xs">{size(line.bytes)}</span>
               <RevealIcon path={line.path} />
             </div>
           ))}
@@ -322,13 +322,13 @@ function Removing({ state }: { state: Extract<FreeUp, { phase: "removing" }> }) 
         </RoundBadge>
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex items-baseline justify-between gap-4">
-            <span className="text-settings-text text-settings-body font-medium">Freeing up {size(state.bytes)}…</span>
-            <span className="text-settings-text-tertiary text-settings-small">
+            <span className="text-foreground text-label font-medium">Freeing up {size(state.bytes)}…</span>
+            <span className="text-muted-foreground text-xs">
               {state.done} of {count(state.total, "item", "items")}
             </span>
           </div>
-          <div className="bg-settings-track h-1 w-full overflow-hidden rounded-xs">
-            <div className="bg-settings-text h-full rounded-xs transition-[width]" style={{ width: `${share * 100}%` }} />
+          <div className="bg-muted h-1 w-full overflow-hidden rounded-xs">
+            <div className="bg-foreground h-full rounded-xs transition-[width]" style={{ width: `${share * 100}%` }} />
           </div>
         </div>
       </div>
@@ -369,21 +369,21 @@ function Done({
         </LinkButton>
       </div>
       {open && (
-        <div data-removed className="border-settings-divider flex flex-col border-t py-2 ps-13">
+        <div data-removed className="border-divider flex flex-col border-t py-2 ps-13">
           {went.removed.map((item) => (
             <div key={item.id} className="flex gap-3 py-2">
-              <span className="text-settings-text min-w-0 flex-1 truncate text-settings-small">{item.label}</span>
-              <span className="text-settings-text-secondary w-16 shrink-0 text-right text-settings-small">{size(item.bytes)}</span>
+              <span className="text-foreground min-w-0 flex-1 truncate text-xs">{item.label}</span>
+              <span className="text-foreground/65 w-16 shrink-0 text-right text-xs">{size(item.bytes)}</span>
             </div>
           ))}
           {went.stayed.map((stayed) => (
             <div key={stayed.label + stayed.error} className="flex flex-col gap-0.75 py-2">
-              <span className="text-settings-text text-settings-small">{stayed.label}</span>
-              <span className="text-settings-danger text-settings-meta">Left in place: {stayed.error}</span>
+              <span className="text-foreground text-xs">{stayed.label}</span>
+              <span className="text-destructive text-xs">Left in place: {stayed.error}</span>
             </div>
           ))}
           {went.removed.length === 0 && went.stayed.length === 0 && (
-            <span className="text-settings-text-tertiary py-2 text-settings-small">Nothing.</span>
+            <span className="text-muted-foreground py-2 text-xs">Nothing.</span>
           )}
         </div>
       )}

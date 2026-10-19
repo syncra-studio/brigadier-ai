@@ -89,3 +89,16 @@ test("Storage reviews, frees up and shows each project, in the design's words", 
   assert.equal(seen.uninstall, true);
   assert.deepEqual(seen.calls, ["clean 14", "free up 38 projects"]);
 });
+
+// Storage's cards and buttons are Settings › General's (#385): the same fill, corners, edge and drop.
+test("Storage draws its cards and buttons as Settings › General does", { timeout: 60000 }, async (t) => {
+  const dump = await renderFixtureLive(t, "storage.html?drive=look", "storage-result", 30000);
+  const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<
+    "general" | "storage",
+    { card?: unknown; cards?: unknown[]; button: unknown }
+  >;
+  assert.ok(seen.general.card && seen.general.button, "General has a card and a button");
+  assert.equal(seen.storage.cards?.length, 5);
+  for (const card of seen.storage.cards ?? []) assert.deepEqual(card, seen.general.card);
+  assert.deepEqual(seen.storage.button, seen.general.button);
+});

@@ -42,13 +42,14 @@ export function count(n: number, one: string, many: string): string {
 /** One part of a bar: what it is, its size and its colour (a `bg-*` class). */
 export type Part = { key: string; label: string; bytes: number; color: string };
 
+/** The parts' colours: the app's glyph colours (the Inspector's brain kinds use them too), Other in the muted grey. */
 export const PART_COLOR = {
-  work: "bg-storage-work",
-  conversations: "bg-storage-conversations",
-  brains: "bg-storage-brains",
-  models: "bg-storage-models",
-  logs: "bg-settings-success",
-  other: "bg-storage-other",
+  work: "bg-glyph-5",
+  conversations: "bg-glyph-1",
+  brains: "bg-glyph-7",
+  models: "bg-glyph-3",
+  logs: "bg-glyph-4",
+  other: "bg-muted-foreground",
 } as const;
 
 const shared = (report: StorageReport, part: SharedPart) =>
