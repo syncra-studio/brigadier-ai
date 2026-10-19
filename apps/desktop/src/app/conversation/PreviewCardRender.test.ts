@@ -10,6 +10,7 @@ type Look = {
   standing: string | null;
   target: string | null;
   count: string | null;
+  pages: string | null;
   buttons: string[];
   heading: string | null;
   where: string | null;
@@ -20,7 +21,7 @@ type Look = {
 };
 type Seen = {
   error?: string;
-  cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only" | "test-output" | "simulator" | "pdf" | "test-run" | "test-failed" | "test-uncounted", Look>;
+  cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only" | "test-output" | "simulator" | "pdf" | "pdf-uncounted" | "test-run" | "test-failed" | "test-uncounted", Look>;
   turn: [string | null, string | null][];
   said: [string | null, string | null][][];
   noRecord: boolean;
@@ -64,7 +65,9 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   assert.deepEqual([sim.title, sim.standing, sim.target, sim.count, sim.buttons], ["iOS Simulator", "Running", "iPhone 17", "1 recording", ["Open", "Fold the proofs"]]);
   assert.deepEqual(sim.captions, ["1. Adding a todo on the phone 10:11 PM"]);
   const pdf = cases.pdf;
-  assert.deepEqual([pdf.title, pdf.standing, pdf.target, pdf.buttons], ["Rendered PDF", "Ready", "out/invoice.pdf", ["Open"]]);
+  assert.deepEqual([pdf.title, pdf.standing, pdf.target, pdf.pages, pdf.buttons], ["Rendered PDF", "Ready", "out/invoice.pdf", "2 pages", ["Open"]]);
+  // Its page count unread, the card leaves it out.
+  assert.deepEqual([cases["pdf-uncounted"].target, cases["pdf-uncounted"].pages], ["out/invoice.pdf", null]);
   const run = cases["test-run"];
   assert.deepEqual([run.title, run.standing, run.target, run.buttons], ["Test run", "15 passed", "npm test", ["Run again", "Fold the proofs"]]);
   assert.deepEqual(run.shell, [

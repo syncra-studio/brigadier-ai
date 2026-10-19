@@ -647,6 +647,11 @@ pub struct Preview {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tests: Option<TestCounts>,
+    /// A rendered PDF's page count, read from its file when it was ready and again when its
+    /// render ended; none when it couldn't be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pages: Option<u32>,
 }
 
 /// How many tests a test run passed, failed and skipped, as its runner printed them.

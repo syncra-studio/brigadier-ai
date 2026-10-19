@@ -69,4 +69,9 @@ requestId?: string,
  * A test run's counts, read from its output when it ended; none when its runner's
  * summary wasn't found.
  */
-tests?: TestCounts, };
+tests?: TestCounts, 
+/**
+ * A rendered PDF's page count, read from its file when it was ready and again when its
+ * render ended; none when it couldn't be read.
+ */
+pages?: number, };

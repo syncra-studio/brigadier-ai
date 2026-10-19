@@ -486,6 +486,7 @@ dependencies = [
  "globset",
  "ignore",
  "jiff",
+ "lopdf",
  "memchr",
  "nix 0.31.3",
  "notify",

@@ -14,7 +14,8 @@
  * - `test-output`: a test run's output as a proof: "Test output", its last five lines under its
  *   command.
  * - `simulator`: an iOS simulator run on "iPhone 17" with a recording of it: Open brings Simulator forward.
- * - `pdf`: a rendered PDF, ready: Open opens the file in the system's viewer.
+ * - `pdf`: a rendered PDF, ready, "2 pages": Open opens the file in the system's viewer.
+ * - `pdf-uncounted`: one whose page count couldn't be read: no count.
  * - `test-run`: a test run that passed, "15 passed", its own output's last five lines; Run again.
  * - `test-failed`: one that failed, "2 failed, 13 passed, 1 skipped".
  * - `test-uncounted`: one whose runner's summary wasn't found: "Passed".
@@ -164,7 +165,8 @@ const CASES: { id: string; node: ReactNode }[] = [
   { id: "proofs-only", node: <PreviewCard url={null} steps={MIXED} session /> },
   { id: "test-output", node: <PreviewCard url={null} steps={TESTS} session /> },
   { id: "simulator", node: <PreviewCard url={null} preview={OTHERS[0]!} steps={SIM_PROOFS} session /> },
-  { id: "pdf", node: <PreviewCard url={null} preview={OTHERS[1]!} steps={[]} session /> },
+  { id: "pdf", node: <PreviewCard url={null} preview={{ ...OTHERS[1]!, pages: 2 }} steps={[]} session /> },
+  { id: "pdf-uncounted", node: <PreviewCard url={null} preview={OTHERS[1]!} steps={[]} session /> },
   { id: "test-run", node: <PreviewCard url={null} preview={OTHERS[2]!} steps={[]} session /> },
   { id: "test-failed", node: <PreviewCard url={null} preview={OTHERS[3]!} steps={[]} session /> },
   { id: "test-uncounted", node: <PreviewCard url={null} preview={OTHERS[5]!} steps={[]} session /> },
@@ -205,6 +207,7 @@ function look(id: string) {
     standing: words(card?.querySelector("[data-slot=preview-state]")),
     target: words(card?.querySelector("[data-slot=preview-target]")),
     count: words(card?.querySelector("[data-slot=preview-count]")),
+    pages: words(card?.querySelector("[data-slot=preview-pages]")),
     buttons: [...(card?.querySelectorAll("button") ?? [])].filter((each) => !each.closest("[data-slot=proof],[data-slot=preview-run-output]")).map((each) => each.getAttribute("aria-label") ?? words(each)),
     heading: words(card?.querySelector("[data-slot=preview-proofs-count]")),
     where: words(card?.querySelector("[data-slot=preview-proofs-where]")),

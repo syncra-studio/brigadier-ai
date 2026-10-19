@@ -333,7 +333,14 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
       </span>,
     );
   }
-  // TODO(#436): a rendered PDF's page count ("2 pages") once its record keeps it.
+  // A rendered PDF's page count, when its file could be read.
+  if (preview?.kind === "pdf" && preview.pages) {
+    line.push(
+      <span key="pages" data-slot="preview-pages" className="text-muted-foreground shrink-0">
+        {preview.pages === 1 ? "1 page" : `${preview.pages} pages`}
+      </span>,
+    );
+  }
   // Folded, a card of proofs alone or another kind of preview, the header counts them.
   if (counted && (!open || !url || preview)) {
     line.push(

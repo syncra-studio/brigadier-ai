@@ -634,6 +634,7 @@ impl SessionManager {
             env: given_env,
             target: target.clone(),
             tests: None,
+            pages: None,
             request_id,
         };
         let live = Arc::new(LivePreview {
@@ -1035,6 +1036,7 @@ impl SessionManager {
     /// only then says it is ready, so `start_preview` reads the recorded state. False when it
     /// couldn't be recorded (it is checked again).
     async fn mark_ready(&self, live: &LivePreview, url: Option<String>) -> bool {
+        let pages = pdf_pages(live).await;
         let _updating = live.updating.lock().await;
         let preview = match self.core.board(&live.conversation).await {
             Ok(board) => board.previews.get(&live.id).cloned(),
@@ -1052,6 +1054,7 @@ impl SessionManager {
         if live.kind == PreviewKind::Web {
             preview.url = preview.url.or(url);
         }
+        preview.pages = pages;
         if let Err(err) = self.record_preview(preview).await {
             tracing::warn!(conversation = %live.conversation, preview = %live.id, error = %err, "could not record a preview as running");
             return false;
@@ -1139,6 +1142,8 @@ impl SessionManager {
             }
             _ => None,
         };
+        // A rendered PDF's pages as its render left them.
+        let pages = pdf_pages(live).await;
         let _updating = live.updating.lock().await;
         let preview = match self.core.board(id).await {
             Ok(board) => board.previews.get(&live.id).cloned(),
@@ -1203,6 +1208,7 @@ impl SessionManager {
             }
             preview.url = preview.url.or(url);
             preview.tests = tests;
+            preview.pages = pages;
             preview.state = state;
             preview.building = false;
             preview.ended_at_ms = Some(now_ms());
@@ -2035,6 +2041,16 @@ fn process_artifact(member: crate::machine::builds::Proc) -> Artifact {
         pid: member.pid,
         started_at_ms: Some(member.started_ms as f64),
     }
+}
+
+/// A rendered PDF preview's page count, read from its file as it is now; none for another kind
+/// of preview or a file that can't be read.
+async fn pdf_pages(live: &LivePreview) -> Option<u32> {
+    let file = live.pdf.clone()?;
+    blocking(move || Ok(crate::documents::pdf_pages(&file)))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Asks each of `live` to stop for `reason`, and waits until each one's end is recorded.

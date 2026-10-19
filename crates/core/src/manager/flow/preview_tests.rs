@@ -1699,7 +1699,10 @@ async fn test_runs_pdfs_and_simulators_are_previews_with_their_targets() {
         tests.state
     );
 
-    flow.say("start-pdf sleep 1; echo pdf > out.pdf; sleep 600")
+    let pages = |n: usize| crate::documents::tests::pdf(&vec![&["a page"][..]; n]);
+    std::fs::write(workspace(&flow).join("two.pdf"), pages(2)).unwrap();
+    std::fs::write(workspace(&flow).join("three.pdf"), pages(3)).unwrap();
+    flow.say("start-pdf sleep 1; cp two.pdf out.pdf; sleep 600")
         .await;
     let board = flow
         .until("the PDF is there", |board| {
@@ -1712,10 +1715,22 @@ async fn test_runs_pdfs_and_simulators_are_previews_with_their_targets() {
         workspace(&flow).join("out.pdf").is_file(),
         "ready once it is there"
     );
+    // Its page count, read when it is ready.
+    assert_eq!(pdf.pages, Some(2));
     flow.manager
         .stop_preview(flow.conversation.clone(), Some(pdf.id.clone()))
         .await
         .unwrap();
+    // Rendered anew, its count is read again when the render ends: none while the file isn't
+    // a PDF it can read.
+    flow.say("start-pdf rm out.pdf; sleep 1; echo pdf > out.pdf; sleep 1; cp three.pdf out.pdf")
+        .await;
+    let board = flow
+        .until("the PDF rendered anew", |board| {
+            latest(board).kind == PreviewKind::Pdf && !latest(board).state.is_live()
+        })
+        .await;
+    assert_eq!(latest(&board).pages, Some(3));
 
     flow.say("start true simctl boot 'iPhone 16'; sleep 600")
         .await;

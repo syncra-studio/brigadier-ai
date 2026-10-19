@@ -1,7 +1,9 @@
 //! Text out of documents an agent can't read as they are: a Word file's paragraphs and a PDF's
-//! text, for a Chat, which gets its attachments as text in the message.
+//! text, for a Chat, which gets its attachments as text in the message. Also a PDF's page
+//! count, for a rendered PDF's preview.
 
 use std::io::{Cursor, Read};
+use std::path::Path;
 
 use quick_xml::Reader;
 use quick_xml::escape::resolve_predefined_entity;
@@ -39,6 +41,17 @@ pub(crate) fn pdf_text(bytes: &[u8]) -> Option<String> {
 }
 
 /// A page's lines, trimmed at the end, with one blank line at most between blocks.
+/// How many pages the PDF at `path` has, from its page tree without reading the pages. None
+/// when that can't be read (no such file, not a PDF, encrypted, or one the reader trips on).
+pub(crate) fn pdf_pages(path: &Path) -> Option<u32> {
+    // The reader panics on some malformed files, as `pdf_text`'s does.
+    std::panic::catch_unwind(|| lopdf::Document::load_metadata(path))
+        .ok()?
+        .ok()
+        .map(|metadata| metadata.page_count)
+        .filter(|&pages| pages > 0)
+}
+
 fn page_lines(page: &str) -> String {
     let mut out = String::new();
     let mut blank = false;
@@ -240,6 +253,24 @@ pub(crate) mod tests {
         assert_eq!(pdf_text(b"not a pdf"), None);
         assert_eq!(pdf_text(b"%PDF-1.4\n1 0 obj\n<< /Type"), None);
         assert_eq!(pdf_text(&pdf(&[&[]])), None);
+    }
+
+    #[test]
+    fn a_pdfs_pages_are_counted_from_its_file() {
+        let dir = std::env::temp_dir().join(format!("brigadier-pdf-pages-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, bytes: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let two = file("two.pdf", &pdf(&[&["one"], &["two"]]));
+        let one = file("one.pdf", &pdf(&[&["one"]]));
+        let not = file("not.pdf", b"not a pdf");
+        let cut = file("cut.pdf", b"%PDF-1.4\n1 0 obj\n<< /Type");
+        let counts = [&two, &one, &not, &cut, &dir.join("gone.pdf")].map(|path| pdf_pages(path));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(counts, [Some(2), Some(1), None, None, None]);
     }
 
     #[test]
