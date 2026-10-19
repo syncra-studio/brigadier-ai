@@ -18,7 +18,7 @@ use brigadier_providers::{ApprovalDecision, ApprovalKind, ApprovalRequest};
 use super::SessionManager;
 use super::cards::CardAnswer;
 use super::escalation::OWN_APPROVAL;
-use super::takeover::TerminalSnapshot;
+use super::takeover::{TerminalHost, TerminalSnapshot};
 use crate::app_call::{AppAnswer, AppOp, OpenTarget};
 use crate::model::{PermissionLevel, Setup};
 use crate::tools::TerminalRun;
@@ -36,6 +36,19 @@ pub(crate) fn agents(terminal: &TerminalSnapshot) -> bool {
         .key
         .as_deref()
         .is_some_and(|key| key.starts_with(AGENT_TERMINAL))
+}
+
+/// Whether the session's terminal `terminal` is there and runs nothing now.
+fn at_rest(host: &dyn TerminalHost, id: &ConversationId, terminal: &str) -> bool {
+    host.list(&id.0)
+        .iter()
+        .any(|each| each.id == terminal && each.busy == Some(false))
+}
+
+fn busy_now(terminal: &str) -> Error {
+    Error::Invalid(format!(
+        "{terminal} is running something now (or it can't be told), so nothing was typed in it; leave the terminal out to use one of your own."
+    ))
 }
 
 impl SessionManager {
@@ -81,12 +94,7 @@ impl SessionManager {
         let target = match named {
             Some(terminal) if terminal.busy == Some(false) => Some(terminal),
             Some(_) if own => None,
-            Some(terminal) => {
-                return Err(Error::Invalid(format!(
-                    "{} is running something now (or it can't be told), so nothing was typed in it; leave the terminal out to use one of your own.",
-                    terminal.id
-                )));
-            }
+            Some(terminal) => return Err(busy_now(&terminal.id)),
             None => terminals
                 .iter()
                 .rev()
@@ -100,6 +108,17 @@ impl SessionManager {
         if !own || !full_access {
             self.confirm_terminal(id, &command, &cwd, own).await?;
         }
+        // While the card waited, a command may have started in it: the agent's own then gets a
+        // new tab; the user's is left alone.
+        let target = match target {
+            Some(terminal) if !at_rest(host.as_ref(), id, &terminal.id) => {
+                if !own {
+                    return Err(busy_now(&terminal.id));
+                }
+                None
+            }
+            target => target,
+        };
         let (terminal_id, key, new) = match target {
             Some(terminal) => (terminal.id, terminal.key, false),
             None => {
@@ -140,6 +159,10 @@ impl SessionManager {
                     return Err(Error::Invalid(format!("{message} Nothing was typed.")));
                 }
             }
+        }
+        // The window's answer took a moment too.
+        if !new && !at_rest(host.as_ref(), id, &terminal_id) {
+            return Err(busy_now(&terminal_id));
         }
         host.type_in(&id.0, &terminal_id, &format!("{command}\r"))?;
         let whose = if own {

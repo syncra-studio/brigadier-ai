@@ -63,11 +63,18 @@ impl SessionManager {
             AppAnswer::Failed { message } => Err(message),
             _ => Err("Brigadier's window answered something else.".to_owned()),
         };
-        let terminals = self
+        let mut terminals = self
             .terminal_host
             .get()
             .map(|host| host.list(&id.0))
             .unwrap_or_default();
+        // Secrets go before the tails are cut: a cut one would no longer be found.
+        for terminal in &mut terminals {
+            let shown = self
+                .hide_secrets(id, terminal_text(&terminal.tail).into_bytes())
+                .await;
+            terminal.tail = String::from_utf8_lossy(&shown).into_owned();
+        }
         let mut text = String::new();
         window_lines(&mut text, window);
         terminal_lines(&mut text, &terminals);

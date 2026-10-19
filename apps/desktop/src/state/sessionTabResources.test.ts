@@ -86,3 +86,17 @@ test("an agent's terminal tab shows the shell the daemon started for it, with wh
   assert.deepEqual(opens().map((req) => req.fresh ?? false), [false]);
   assert.equal(terminal.scrollback, "startup\r\n");
 });
+
+test("an agent's terminal tab closed before it ever showed ends the shell the daemon started for it", async () => {
+  running.set("terminal:agent-2", "shell-unshown");
+  const tab = openForAgent("agent-unshown", false, () => openTerminalTab("agent-unshown", "terminal:agent-2", "/repo"));
+  closeTab("agent-unshown", tab);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(sent.filter((req) => req.method === "closeTerminal").map((req) => req.terminalId), ["shell-unshown"]);
+  assert.equal(running.size, 0);
+  // A tab of the user's that never showed has no shell: nothing is started to end.
+  const theirs = newSessionTab("agent-unshown", "terminal");
+  closeTab("agent-unshown", theirs);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(opens().length, 1);
+});

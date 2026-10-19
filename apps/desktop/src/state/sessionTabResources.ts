@@ -60,6 +60,16 @@ function closeShell(id: string): void {
   void entry.terminal.then((terminal) => request({ method: "closeTerminal", terminalId: terminal.id })).catch(console.error);
 }
 
+/**
+ * An agent's terminal tab closed before it ever showed: the daemon started its shell
+ * (terminal_run), which only an attach names, so it is attached to and ended.
+ */
+function endUnshownShell(conversationId: string, tabId: string): void {
+  void request({ method: "openTerminal", conversationId, sessionId: tabId, cols: 80, rows: 24 })
+    .then(({ terminal }) => request({ method: "closeTerminal", terminalId: terminal.id }))
+    .catch(console.error);
+}
+
 useSessionTabs.subscribe(followTabChats);
 // A gone tab chat's unsent text goes with it.
 useSessionTabs.subscribe((state, before) => { for (const id of goneTabChats(state, before)) forgetDraft(id); });
@@ -67,7 +77,8 @@ useSessionTabs.subscribe((state, before) => {
   for (const [id, previous] of Object.entries(before.sessions)) {
     const kept = state.sessions[id]?.tabs ?? [];
     for (const tab of previous.tabs) if (!kept.some((current) => current.id === tab.id)) {
-      if (tab.kind === "terminal") closeShell(tab.id);
+      if (tab.kind === "terminal" && shells.has(tab.id)) closeShell(tab.id);
+      else if (tab.kind === "terminal" && isAgentTab(tab)) endUnshownShell(id, tab.id);
       if (tab.kind === "browser") {
         closePage(tab.id);
         handBack(tab.id);

@@ -159,6 +159,100 @@ async fn app_state_tells_the_window_terminals_and_composer_in_a_small_answer() {
     flow.stop().await;
 }
 
+/// One terminal of the session, whose last lines are `tail`.
+struct Printed {
+    conversation: String,
+    tail: String,
+}
+
+impl TerminalHost for Printed {
+    fn start(
+        &self,
+        _conversation: &str,
+        _key: &str,
+        _command: TerminalCommand,
+        _cols: u16,
+        _rows: u16,
+    ) -> crate::Result<HostedTerminal> {
+        Err(crate::Error::Invalid("not in this test".into()))
+    }
+
+    fn terminate(&self, _id: &str) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        Box::pin(async {})
+    }
+
+    fn list(&self, conversation: &str) -> Vec<TerminalSnapshot> {
+        (conversation == self.conversation)
+            .then(|| TerminalSnapshot {
+                id: "terminal-1".into(),
+                key: Some("terminal:tab-1".into()),
+                cwd: "/repo".into(),
+                busy: Some(false),
+                tail: self.tail.clone(),
+            })
+            .into_iter()
+            .collect()
+    }
+
+    fn output(&self, conversation: &str, _id: &str) -> Option<String> {
+        (conversation == self.conversation).then(|| self.tail.clone())
+    }
+}
+
+#[tokio::test]
+async fn a_secret_a_terminal_printed_never_reaches_the_agent() {
+    const SECRET: &str = "app-state-secret-value";
+    let flow = Flow::start("app-state-secret", Options::default(), quiet()).await;
+    std::fs::write(flow.repo.join(".env"), format!("TOKEN={SECRET}\n")).unwrap();
+    let project = flow
+        .core
+        .conversation(&flow.conversation)
+        .unwrap()
+        .project_id
+        .unwrap();
+    let mut prefs = flow.core.project(&project).unwrap().prefs;
+    prefs.secret_files = vec![".env".into()];
+    flow.core
+        .update_project(
+            project,
+            crate::model::ProjectPatch {
+                name: None,
+                repos: None,
+                prefs: Some(prefs),
+            },
+        )
+        .await
+        .unwrap();
+    flow.manager.set_terminal_host(Arc::new(Printed {
+        conversation: flow.conversation.0.clone(),
+        tail: format!("$ cat .env\r\nTOKEN=\u{1b}[1m{SECRET}\u{1b}[0m\r\n$ "),
+    }));
+    window(&flow, view());
+    let state = flow
+        .manager
+        .app_tool(flow.conversation.clone(), AppToolCall::State)
+        .await;
+    assert!(!state.is_error, "{}", state.text);
+    assert!(!state.text.contains(SECRET), "{}", state.text);
+    assert!(
+        state.text.contains("  | TOKEN=[redacted]"),
+        "{}",
+        state.text
+    );
+    let read = flow
+        .manager
+        .app_tool(
+            flow.conversation.clone(),
+            AppToolCall::ReadTerminal(ReadTerminal {
+                terminal: "terminal-1".into(),
+            }),
+        )
+        .await;
+    assert!(!read.is_error, "{}", read.text);
+    assert!(!read.text.contains(SECRET), "{}", read.text);
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn with_no_window_app_state_still_tells_the_terminals_and_says_so() {
     let flow = Flow::start("app-state-no-window", Options::default(), quiet()).await;

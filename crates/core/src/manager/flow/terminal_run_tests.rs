@@ -157,6 +157,16 @@ async fn answered(
     call: AppToolCall,
     decision: ApprovalDecision,
 ) -> (ToolReply, String) {
+    answered_after(flow, call, decision, || {}).await
+}
+
+/// As [`answered`], with `meanwhile` done while the card waits.
+async fn answered_after(
+    flow: &Flow,
+    call: AppToolCall,
+    decision: ApprovalDecision,
+    meanwhile: impl FnOnce(),
+) -> (ToolReply, String) {
     let manager = flow.manager.clone();
     let conversation = flow.conversation.clone();
     let waiting = tokio::spawn(async move { manager.app_tool(conversation, call).await });
@@ -175,6 +185,7 @@ async fn answered(
         panic!("not a command card: {:?}", card.subject);
     };
     let command = request.command.clone().unwrap_or_default();
+    meanwhile();
     flow.manager
         .answer_card(flow.conversation.clone(), card.id.clone(), decision)
         .await
@@ -310,6 +321,61 @@ async fn a_busy_terminal_of_the_users_is_never_typed_into() {
     assert!(
         flow.board().await.approvals.is_empty(),
         "refused before any card"
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn a_command_started_while_the_card_waited_is_never_typed_into() {
+    let (flow, shells) = start(
+        "terminal-run-busy-meanwhile",
+        PermissionLevel::AskForApproval,
+    )
+    .await;
+    window(&flow);
+    let busy = |id: &str| {
+        let shells = shells.clone();
+        let id = id.to_owned();
+        move || {
+            for terminal in shells.terminals.lock().unwrap().iter_mut() {
+                if terminal.id == id {
+                    terminal.busy = Some(true);
+                }
+            }
+        }
+    };
+    // The user's terminal: refused, though they said yes.
+    let (reply, _) = answered_after(
+        &flow,
+        run("git status", Some("terminal-1")),
+        ApprovalDecision::Allow,
+        busy("terminal-1"),
+    )
+    .await;
+    assert!(reply.is_error);
+    assert!(
+        reply.text.contains("terminal-1 is running something now"),
+        "{}",
+        reply.text
+    );
+    assert!(shells.typed().is_empty());
+    // The agent's own: a new tab beside it.
+    let (reply, _) = answered(&flow, run("npm run dev", None), ApprovalDecision::Allow).await;
+    assert!(!reply.is_error, "{}", reply.text);
+    let (reply, _) = answered_after(
+        &flow,
+        run("npm test", None),
+        ApprovalDecision::Allow,
+        busy("terminal-3"),
+    )
+    .await;
+    assert!(!reply.is_error, "{}", reply.text);
+    assert_eq!(
+        shells.typed(),
+        vec![
+            ("terminal-3".into(), "npm run dev\r".into()),
+            ("terminal-4".into(), "npm test\r".into()),
+        ]
     );
     flow.stop().await;
 }
