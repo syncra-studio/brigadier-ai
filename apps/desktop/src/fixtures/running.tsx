@@ -1,5 +1,5 @@
 /**
- * The production context card's Background rows for five previews (three still there, two ended)
+ * The production context card's Background rows for five previews (three still there, two stopped)
  * and the output tab a row opens, with Pause, Resume, Stop and Open; synthetic IPC, no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
@@ -28,8 +28,8 @@ const rows: Preview[] = [
   { id: "preview-5", name: "Brigadier dev app", command: "pnpm tauri dev", kind: "app", state: { type: "starting" }, startedAtMs: now - 90000, endedAtMs: null },
   { id: "preview-4", name: "Web app", command: "pnpm dev --host 127.0.0.1", state: { type: "running" }, url: "http://localhost:5173/", startedAtMs: now - 154000, endedAtMs: null },
   { id: "preview-3", name: "Component explorer", command: "pnpm storybook --port 6006", state: { type: "paused" }, url: "http://127.0.0.1:6006/", startedAtMs: now - 302000, endedAtMs: null },
-  { id: "preview-2", name: "Static preview", command: "pnpm preview", state: { type: "exited", code: 1, status: "exit 1" }, startedAtMs: now - 500000, endedAtMs: now - 488000 },
-  { id: "preview-1", name: "Desktop app", command: "pnpm tauri dev --config src-tauri/tauri.dev.conf.json", kind: "app", state: { type: "exited", code: 0, status: "exit 0" }, url: "http://localhost:1420/", startedAtMs: now - 600000, endedAtMs: now - 350000 },
+  { id: "preview-2", name: "Static preview", command: "pnpm preview", state: { type: "stopped", reason: "stopped by the user" }, startedAtMs: now - 500000, endedAtMs: now - 488000 },
+  { id: "preview-1", name: "Desktop app", command: "pnpm tauri dev --config src-tauri/tauri.dev.conf.json", kind: "app", state: { type: "stopped", reason: "the session closed" }, url: "http://localhost:1420/", startedAtMs: now - 600000, endedAtMs: now - 350000 },
 ].map((row) => ({ conversationId: id, pid: 42, workdir: "/work/session", workspace: "/work/session", log: null, kind: "web", ...row }) as Preview);
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, previews: Object.fromEntries(rows.map((row) => [row.id, row])) } });
 useApp.setState({
@@ -135,7 +135,7 @@ function Fixture() {
         seen.focusAfterStop = document.activeElement?.getAttribute("data-slot");
         seen.calls = calls.filter((call) => ["pausePreview", "resumePreview", "stopPreview"].includes(call.method)).map((call) => call.method);
         // Reactivate after a long idle period without waiting a minute in the fixture.
-        const stopped = { ...rows[0]!, state: { type: "exited" as const, code: 0, status: "exit 0" }, endedAtMs: now - 60000 };
+        const stopped = { ...rows[0]!, state: { type: "stopped" as const, reason: "stopped by the user" }, endedAtMs: now - 60000 };
         useBoard.setState({ board: { ...useBoard.getState().board!, previews: { [stopped.id]: stopped } } });
       });
       const realNow = Date.now;

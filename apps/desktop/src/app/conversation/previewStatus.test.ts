@@ -34,6 +34,16 @@ test("Clear finished keeps starting, running and paused previews", () => {
   assert.deepEqual(Object.keys(board.previews).toSorted(), ["preview-1", "preview-2", "preview-3"]);
 });
 
+test("a Background row taken off by dismiss or Restart stays off, until its preview starts again under its id (Q94)", () => {
+  let board = emptyBoard("c");
+  board = applyToBoard(board, event(1, { type: "previewUpdated", preview: preview("preview-1", { type: "exited", code: 1, status: "exit 1" }) }));
+  board = applyToBoard(board, event(2, { type: "backgroundCleared", conversationId: "c", ids: ["preview-1", "run-2"] }));
+  board = applyToBoard(board, event(3, { type: "backgroundCleared", conversationId: "c", ids: ["run-2"] }));
+  assert.deepEqual(board.backgroundCleared, ["preview-1", "run-2"]);
+  board = applyToBoard(board, event(4, { type: "previewUpdated", preview: preview("preview-1", { type: "starting" }) }));
+  assert.deepEqual(board.backgroundCleared, ["run-2"]);
+});
+
 const web = (state: PreviewState, building = false) => ({ ...preview("page", state), building });
 const app = (state: PreviewState) => ({ ...preview("app", state), kind: "app" as const });
 test("an activity's state word: building, starting, running for an app, showing for a page, stopped or failed", () => {

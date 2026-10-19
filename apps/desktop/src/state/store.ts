@@ -696,6 +696,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "threadLooked":
     case "previewUpdated":
     case "previewsCleared":
+    case "backgroundCleared":
     case "overnightUpdated":
     case "workerEvent":
     case "outputKept":

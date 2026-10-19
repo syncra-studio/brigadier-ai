@@ -38,6 +38,7 @@ pub(crate) const KINDS: &[&str] = &[
     "thread.looked",
     "preview.updated",
     "previews.cleared",
+    "background.cleared",
     "queue.changed",
     "request.updated",
     "request.ready",
@@ -231,6 +232,9 @@ pub(crate) struct Board {
     pub(crate) previews: HashMap<String, crate::work::Preview>,
     /// Highest preview number ever recorded, including cleared rows.
     pub(crate) preview_number: u64,
+    /// The ended previews and background runs that left the Background rows (Q94); a preview
+    /// started again under its id is back.
+    pub(crate) background_cleared: HashSet<String>,
     /// Its messages to and from other sessions, by message id.
     pub(crate) peer_messages: HashMap<String, PeerRecord>,
 }
@@ -693,7 +697,13 @@ impl Board {
                 {
                     self.preview_number = self.preview_number.max(number);
                 }
+                if preview.state.is_live() {
+                    self.background_cleared.remove(&preview.id);
+                }
                 self.previews.insert(preview.id.clone(), preview.clone());
+            }
+            DomainEvent::BackgroundCleared { ids, .. } => {
+                self.background_cleared.extend(ids.iter().cloned());
             }
             DomainEvent::PreviewsCleared { ids, .. } => {
                 self.previews
@@ -1157,6 +1167,13 @@ impl Board {
         let mut previews: Vec<_> = self.previews.values().cloned().collect();
         previews.sort_by(|a, b| a.started_at_ms.cmp(&b.started_at_ms).then(a.id.cmp(&b.id)));
         previews
+    }
+
+    /// The ended previews and runs that left the Background rows, by id.
+    pub(crate) fn sorted_background_cleared(&self) -> Vec<String> {
+        let mut ids: Vec<_> = self.background_cleared.iter().cloned().collect();
+        ids.sort();
+        ids
     }
 
     /// Its messages to and from other sessions, in stream order.

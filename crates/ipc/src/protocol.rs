@@ -628,6 +628,17 @@ pub enum Request {
     ClearPreviews {
         conversation_id: ConversationId,
     },
+    /// The × on an ended preview's or run's Background row (Q94): it leaves the rows.
+    DismissBackground {
+        conversation_id: ConversationId,
+        id: String,
+    },
+    /// Restart on a failed run's Background row (Q94): the row leaves and the thread runs it
+    /// again.
+    RestartBackgroundRun {
+        conversation_id: ConversationId,
+        run_id: String,
+    },
     PreviewLog {
         conversation_id: ConversationId,
         preview_id: String,
@@ -1591,6 +1602,8 @@ pub enum Response {
     ResumePreview,
     RestartPreview,
     ClearPreviews,
+    DismissBackground,
+    RestartBackgroundRun,
     PreviewLog {
         tail: String,
         url: Option<String>,

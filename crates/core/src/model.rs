@@ -1429,6 +1429,10 @@ pub struct ConversationView {
     /// The thread's commands that went to the background, oldest first.
     #[serde(default)]
     pub background_runs: Vec<crate::work::BackgroundRun>,
+    /// The ended previews and background runs the user dismissed or restarted from the
+    /// Background rows (Q94), by id.
+    #[serde(default)]
+    pub background_cleared: Vec<String>,
     /// The MCP servers of its agents whose CLI runs now, its own model's first, then each
     /// worker's by task id.
     #[serde(default)]
@@ -2545,6 +2549,12 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         ids: Vec<String>,
     },
+    /// Ended previews and background runs (by id) that leave the context card's Background
+    /// rows: the user's dismiss or Restart of a failed one (Q94). The records stay.
+    BackgroundCleared {
+        conversation_id: ConversationId,
+        ids: Vec<String>,
+    },
     QueueChanged {
         conversation_id: ConversationId,
         queue: MessageQueue,
@@ -2759,6 +2769,7 @@ impl DomainEvent {
             Self::ThreadLooked { .. } => "thread.looked",
             Self::PreviewUpdated { .. } => "preview.updated",
             Self::PreviewsCleared { .. } => "previews.cleared",
+            Self::BackgroundCleared { .. } => "background.cleared",
             Self::QueueChanged { .. } => "queue.changed",
             Self::WorkerEvent { .. } => "worker.event",
             Self::OutputKept { .. } => "output.kept",

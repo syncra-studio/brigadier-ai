@@ -958,11 +958,11 @@ async function driveBackground(): Promise<object> {
   // The row's Stop, in its time's place on hover.
   one<HTMLButtonElement>("[data-slot=summary-row-action] button", card()?.parentElement ?? document.createElement("div"))?.click();
   for (const end = Date.now() + 3000; Date.now() < end && calls.length === 0; ) await wait(25);
-  // The result came and the thread answered it: the request is done, the run's row gone.
+  // It stopped and the thread answered: the request is done, the run's row gone.
   const answer: Message = { ...said, id: "a2", seq: 3, text: "The full Rust tests pass: 812 tests, no failures.", createdAtMs: Date.now(), answerAtMs: Date.now() };
   daemon.messages = [...daemon.messages, answer];
   useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
-  change(() => ({ head: "a2", backgroundRuns: { [run.id]: { ...run, endedAtMs: Date.now(), state: { type: "finished", status: "exit 0" } } } }));
+  change(() => ({ head: "a2", backgroundRuns: { [run.id]: { ...run, endedAtMs: Date.now(), state: { type: "stopped" } } } }));
   request("r1", { state: { type: "done" }, endedAtMs: Date.now(), worked: [{ fromMs: begun, toMs: Date.now() }] });
   await settle(300);
   return { running, calls, done: { ...seen(), row: text(card()) } };

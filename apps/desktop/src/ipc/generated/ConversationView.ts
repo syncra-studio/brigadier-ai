@@ -113,6 +113,11 @@ integratedChecks: Array<IntegratedCheck>,
  */
 backgroundRuns: Array<BackgroundRun>, 
 /**
+ * The ended previews and background runs the user dismissed or restarted from the
+ * Background rows (Q94), by id.
+ */
+backgroundCleared: Array<string>, 
+/**
  * The MCP servers of its agents whose CLI runs now, its own model's first, then each
  * worker's by task id.
  */

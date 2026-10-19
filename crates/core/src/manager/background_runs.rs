@@ -238,6 +238,15 @@ fn stopped_text(run: &BackgroundRun, kept: &str) -> String {
     )
 }
 
+/// What the thread hears of the user's Restart of a failed run (`ended`: how it ended).
+fn restart_text(run: &BackgroundRun, ended: &str) -> String {
+    format!(
+        "[The user pressed Restart on {} ({ended}) · {} `{}`: run it again now with {}, the same \
+         command, then say in one line how it went.]",
+        run.id, run.tool, run.command, run.tool
+    )
+}
+
 /// What the thread hears when its call goes on in the background: no guess at how long it has
 /// left, which would stay under its row once it stopped or finished (#89).
 fn backgrounded_text(id: &str) -> String {
@@ -710,6 +719,80 @@ impl SessionManager {
             Some(()) => Ok(()),
             None => self.stop_missed_run(&id, &run).await,
         }
+    }
+
+    /// The user's × on an ended preview's or run's Background row (Q94): it leaves the rows;
+    /// its record and output stay. One still running is refused.
+    pub async fn dismiss_background(&self, id: ConversationId, row: String) -> Result<()> {
+        let board = self.core.board(&id).await?;
+        let ended = match (board.previews.get(&row), board.background_runs.get(&row)) {
+            (Some(preview), _) => !preview.state.is_live(),
+            (None, Some(run)) => run.state != BackgroundRunState::Running,
+            (None, None) => {
+                return Err(crate::Error::Invalid(format!(
+                    "there is no {row} in this session"
+                )));
+            }
+        };
+        if !ended {
+            return Err(crate::Error::Invalid(format!("{row} still runs")));
+        }
+        self.core
+            .record_conversation(
+                &id,
+                vec![DomainEvent::BackgroundCleared {
+                    conversation_id: id.clone(),
+                    ids: vec![row],
+                }],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// The user's Restart on a failed run's Background row (Q94): the row leaves, and the
+    /// thread is asked to run the same command again with the same tool, as only it may (its
+    /// access, its checks); its new run, if it outlasts a tool call, is a row of its own. A run
+    /// still going, or one that ended well or was stopped, is refused.
+    pub async fn restart_background_run(&self, id: ConversationId, run: String) -> Result<()> {
+        let board = self.core.board(&id).await?;
+        let Some(run) = board.background_runs.get(&run).cloned() else {
+            return Err(crate::Error::Invalid(format!(
+                "there is no {run} in this session"
+            )));
+        };
+        let ended = match &run.state {
+            BackgroundRunState::Finished { status } if status != "exit 0" => status.clone(),
+            BackgroundRunState::Interrupted { reason } => reason.clone(),
+            _ => {
+                return Err(crate::Error::Invalid(format!(
+                    "{} didn't fail: only a failed run restarts",
+                    run.id
+                )));
+            }
+        };
+        self.core
+            .record_conversation(
+                &id,
+                vec![DomainEvent::BackgroundCleared {
+                    conversation_id: id.clone(),
+                    ids: vec![run.id.clone()],
+                }],
+            )
+            .await?;
+        let envelope = Envelope {
+            kind: InjectionKind::BackgroundRun,
+            label: format!("{} restart", run.id),
+            task_id: None,
+            text: restart_text(&run, &ended),
+        };
+        let conv = self
+            .queue_envelope(&id, envelope, run.request_id.clone())
+            .await;
+        self.settle_requests(&id).await;
+        if let Some(conv) = conv {
+            self.kick(&conv);
+        }
+        Ok(())
     }
 
     /// The user's Stop of a run its row shows running though nothing watches it any more (its

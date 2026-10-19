@@ -4,7 +4,10 @@
  * as its preview events say), the thread's named long command and an unnamed one. With `drive=1`
  * it opens their output, stops two, ends them, and writes what it saw. With `states=1` it shows a
  * row in each state (building, starting, running, paused, smoke testing, checking) and writes how
- * each one's icon and word look and move. Synthetic IPC; no daemon.
+ * each one's icon and word look and move. With `ended=1` it shows what stays once processes end
+ * (Q94): failed rows with their last line, Restart and ×, finished rows until the next message;
+ * it restarts, dismisses, starts one again and sends a message, and writes what it saw.
+ * Synthetic IPC; no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -15,7 +18,7 @@ import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
-import type { BackgroundRun, Conversation, EventEnvelope, Preview, Request, Task } from "@/ipc/generated";
+import type { BackgroundRun, Conversation, EventEnvelope, Preview, Request, Task, UserRequest } from "@/ipc/generated";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -60,9 +63,23 @@ mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   if (req.method === "getPullRequest") return { method: req.method, pullRequest: null };
-  if (req.method === "previewLog") return { method: req.method, tail: "VITE ready in 286 ms", url: null };
+  if (req.method === "previewLog") {
+    const tail = req.previewId === "preview-11" ? "listening…\nError: listen EADDRINUSE: address already in use :::5199\n\n" : "VITE ready in 286 ms";
+    return { method: req.method, tail, url: null };
+  }
+  if (req.method === "readBackgroundRun") return { method: req.method, output: req.runId === "run-13" ? "running 12 tests\ntest result: FAILED. 9 passed; 3 failed\n" : "done\n" };
   if (req.method === "stopPreview") calls.push(`stopPreview ${req.previewId}`);
   if (req.method === "stopBackgroundRun") calls.push(`stopBackgroundRun ${req.runId}`);
+  if (req.method === "restartPreview") {
+    calls.push(`restartPreview ${req.previewId}`);
+    const record = useBoard.getState().board!.previews[req.previewId]!;
+    setTimeout(() => send({ type: "previewUpdated", preview: { ...record, state: { type: "starting" }, startedAtMs: Date.now(), endedAtMs: null } }));
+  }
+  if (req.method === "restartBackgroundRun" || req.method === "dismissBackground") {
+    const row = req.method === "restartBackgroundRun" ? req.runId : req.id;
+    calls.push(`${req.method} ${row}`);
+    setTimeout(() => send({ type: "backgroundCleared", conversationId: id, ids: [row] }));
+  }
   return { method: req.method };
 });
 
@@ -168,11 +185,65 @@ async function drive(): Promise<Record<string, unknown>> {
   stop("run-1")?.click();
   for (const end = Date.now() + 3000; Date.now() < end && calls.length < 2; ) await frame();
   seen.calls = calls.toSorted();
-  // What ends leaves the card.
-  send({ type: "previewUpdated", preview: { ...page, state: { type: "stopped", reason: "the user stopped it" }, endedAtMs: Date.now() } },
-    { type: "backgroundRunUpdated", run: { ...tests, state: { type: "finished", status: "exit 0" }, endedAtMs: Date.now() } as BackgroundRun });
+  // What the user stopped leaves the card.
+  send({ type: "previewUpdated", preview: { ...page, state: { type: "stopped", reason: "stopped by the user" }, endedAtMs: Date.now() } },
+    { type: "backgroundRunUpdated", run: { ...tests, state: { type: "stopped" }, endedAtMs: Date.now() } as BackgroundRun });
   await frame();
   seen.left = [...(section()?.querySelectorAll("[data-activity]") ?? [])].map((card) => card.getAttribute("data-activity"));
+  return seen;
+}
+
+/** The thread's processes that ended (Q94): a page that crashed, an api server that failed, a docs build and a lint that finished, tests that failed, a check interrupted, and one the user stopped. */
+const exited = (code: number) => ({ type: "exited" as const, code, status: `exit ${code}` });
+const crashed: Preview = { ...page, id: "preview-11", state: exited(1), startedAtMs: now - 9 * MIN, endedAtMs: now - 8 * MIN };
+const api: Preview = { ...own, id: "preview-12", name: "api server", command: "node server.js", building: false, state: { type: "exited", code: null, status: "killed by signal 11" }, startedAtMs: now - 7 * MIN, endedAtMs: now - 6 * MIN };
+const docs: Preview = { ...own, id: "preview-13", name: "docs build", command: "pnpm docs", building: false, state: exited(0), startedAtMs: now - 5 * MIN, endedAtMs: now - 4 * MIN };
+const userStopped: Preview = { ...own, id: "preview-14", name: "storybook", command: "pnpm storybook", building: false, state: { type: "stopped", reason: "stopped by the user" }, startedAtMs: now - 3 * MIN, endedAtMs: now - 2 * MIN };
+const failedTests: BackgroundRun = { ...tests, id: "run-13", state: { type: "finished", status: "exit 101" }, startedAtMs: now - 10 * MIN, endedAtMs: now - 9 * MIN };
+const lintDone: BackgroundRun = { ...lint, id: "run-14", state: { type: "finished", status: "exit 0" }, startedAtMs: now - 11 * MIN, endedAtMs: now - 10 * MIN };
+const cut: BackgroundRun = { ...lint, id: "run-15", name: "e2e", command: "pnpm e2e", state: { type: "interrupted", reason: "Brigadier quit" }, startedAtMs: now - 12 * MIN, endedAtMs: now - 11 * MIN };
+
+/** The rows' ids, top to bottom. */
+const ids = () => [...(section()?.querySelectorAll("[data-activity]") ?? [])].map((card) => card.getAttribute("data-activity"));
+
+async function driveEnded(): Promise<Record<string, unknown>> {
+  const seen: Record<string, unknown> = {};
+  for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
+  send(...[crashed, api, docs, userStopped].map((preview) => ({ type: "previewUpdated" as const, preview })),
+    ...[failedTests, lintDone, cut].map((run) => ({ type: "backgroundRunUpdated" as const, run })));
+  for (const end = Date.now() + 3000; Date.now() < end && !row("preview-11")?.querySelector("[data-last-line]"); ) await frame();
+  seen.order = ids();
+  seen.rows = Object.fromEntries(ids().map((activity) => {
+    const button = row(activity!)!;
+    const word = button.querySelector("[data-state]");
+    const place = button.nextElementSibling?.matches('[data-slot="summary-row-action"]') ? button.nextElementSibling : null;
+    const actions = [...(place?.querySelectorAll("button") ?? [])].map((each) => each.getAttribute("aria-label"));
+    return [activity, {
+      state: text(word), icon: button.querySelector("[data-icon]")?.getAttribute("data-icon") ?? null,
+      red: word?.classList.contains("text-destructive") ?? false, shimmer: word?.classList.contains("shimmer") ?? false,
+      muted: button.classList.contains("text-muted-foreground"), lastLine: text(button.querySelector("[data-last-line]")),
+      elapsed: text(button.querySelector("span.tabular-nums")), actions,
+    }];
+  }));
+  // Restart on the crashed page: its own command again, under its id; the row is the running one.
+  action("preview-11", "Restart")?.click();
+  // Restart on the failed tests asks the thread to run them again; × on the interrupted e2e.
+  action("run-13", "Restart")?.click();
+  action("run-15", "Dismiss")?.click();
+  for (const end = Date.now() + 3000; Date.now() < end && (calls.length < 3 || row("run-13") || row("run-15")); ) await frame();
+  await frame();
+  seen.calls = calls.toSorted();
+  seen.restarted = text(row("preview-11")?.querySelector("[data-state]"));
+  seen.afterActions = ids();
+  // The thread starts the api server again: the new one is its row.
+  send({ type: "previewUpdated", preview: { ...api, id: "preview-15", command: "PORT=4100 node server.js", state: { type: "running" }, startedAtMs: Date.now(), endedAtMs: null } });
+  await frame();
+  seen.startedAgain = ids();
+  // The next message: the finished rows leave.
+  send({ type: "requestUpdated", request: { id: "r9", conversationId: id, preview: "Now the docs", state: { type: "working" }, startedAtMs: Date.now(), endedAtMs: null,
+    steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false } as UserRequest });
+  await frame();
+  seen.afterMessage = ids();
   return seen;
 }
 
@@ -181,6 +252,7 @@ function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
     if (params.has("drive")) void drive().then((seen) => setResult(JSON.stringify(seen)));
+    else if (params.has("ended")) void driveEnded().then((seen) => params.has("shot") || setResult(JSON.stringify(seen)));
     // `shot=1` leaves the result off the page, for a screenshot.
     else if (params.has("states")) void readStates().then((seen) => params.has("shot") || setResult(JSON.stringify(seen)));
     else send({ type: "previewUpdated", preview: page }, { type: "backgroundRunUpdated", run: tests }, { type: "previewUpdated", preview: app },

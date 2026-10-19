@@ -1518,6 +1518,7 @@ impl Core {
             previews: board.sorted_previews(),
             integrated_checks: board.sorted_integrated_checks(),
             background_runs: board.sorted_background_runs(),
+            background_cleared: board.sorted_background_cleared(),
             mcp_servers: board.current_mcp_servers(),
             peer_messages: board.sorted_peer_messages(),
         })

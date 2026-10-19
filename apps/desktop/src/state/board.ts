@@ -90,6 +90,8 @@ export type Board = {
   integratedChecks: Record<string, IntegratedCheck>;
   /** The thread's run / run_check commands still going after a minute, owned by the session, by id. */
   backgroundRuns: Record<string, BackgroundRun>;
+  /** The ended previews and runs the user dismissed or restarted from the Background rows (Q94), by id. */
+  backgroundCleared: string[];
   /** The MCP servers of each agent whose CLI runs, by `mcpAgentKey` (its own model's, or a worker's task id). */
   mcpServers: Record<string, AgentMcpServers>;
   /** Overnight runs, a segment each, by id. */
@@ -280,6 +282,7 @@ export function emptyBoard(conversationId: string): Board {
     previews: {},
     integratedChecks: {},
     backgroundRuns: {},
+    backgroundCleared: [],
     mcpServers: {},
     overnight: {},
     requests: {},
@@ -334,6 +337,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "mcpServersUpdated",
   "previewUpdated",
   "previewsCleared",
+  "backgroundCleared",
   "overnightUpdated",
   "queueChanged",
   "runStateChanged",
@@ -398,6 +402,7 @@ export function boardFromView(
     integratedChecks: byId(view.integratedChecks ?? []),
     // Nor one from before the thread's long commands went to the background.
     backgroundRuns: byId(view.backgroundRuns ?? []),
+    backgroundCleared: view.backgroundCleared ?? [],
     // Nor one from before agents told their MCP servers.
     mcpServers: Object.fromEntries((view.mcpServers ?? []).map((agent) => [mcpAgentKey(agent.taskId), agent])),
     overnight: byId(view.overnight),
@@ -594,8 +599,14 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       const agent: AgentMcpServers = { taskId: event.taskId, provider: event.provider, servers: event.servers, atStart: event.atStart };
       return { ...board, mcpServers: { ...others, [key]: agent } };
     }
-    case "previewUpdated":
-      return { ...board, previews: { ...board.previews, [event.preview.id]: event.preview } };
+    case "previewUpdated": {
+      const previews = { ...board.previews, [event.preview.id]: event.preview };
+      // Started again under its id, it is back in the Background rows.
+      if (!previewActive(event.preview.state) || !board.backgroundCleared.includes(event.preview.id)) return { ...board, previews };
+      return { ...board, previews, backgroundCleared: board.backgroundCleared.filter((id) => id !== event.preview.id) };
+    }
+    case "backgroundCleared":
+      return { ...board, backgroundCleared: [...new Set([...board.backgroundCleared, ...event.ids])] };
     case "previewsCleared":
       return { ...board, previews: Object.fromEntries(Object.entries(board.previews).filter(([id, preview]) =>
         previewActive(preview.state) || !event.ids.includes(id),

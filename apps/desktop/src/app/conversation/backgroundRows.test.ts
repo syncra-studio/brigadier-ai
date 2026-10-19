@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { appCommand, backgroundRows, runState } from "@/app/conversation/backgroundRows";
+import { appCommand, type BackgroundLeft, backgroundRows, runState } from "@/app/conversation/backgroundRows";
 import type { BackgroundRun, Preview, PreviewState, Task } from "@/ipc/generated";
 
 const preview = (id: string, name: string, command: string, startedAtMs: number, state: PreviewState = { type: "running" }, extra: Partial<Preview> = {}): Preview =>
@@ -10,8 +10,11 @@ const preview = (id: string, name: string, command: string, startedAtMs: number,
 const run = (id: string, command: string, startedAtMs: number): BackgroundRun =>
   ({ id, conversationId: "c", requestId: null, tool: "Bash", command, startedAtMs, endedAtMs: null, state: { type: "running" } }) as BackgroundRun;
 
-const rows = (previews: Preview[], runs: BackgroundRun[] = [], tasks: Record<string, Task> = {}) =>
-  backgroundRows(previews, runs, tasks, () => null).map((row) => [row.type === "preview" ? row.preview.name : row.run.command, row.state]);
+const rows = (previews: Preview[], runs: BackgroundRun[] = [], tasks: Record<string, Task> = {}, left?: BackgroundLeft) =>
+  backgroundRows(previews, runs, tasks, () => null, left).map((row) => [row.type === "preview" ? row.preview.name : row.run.command, row.state]);
+
+const ended = (record: BackgroundRun, state: BackgroundRun["state"], endedAtMs: number): BackgroundRun => ({ ...record, state, endedAtMs });
+const exited = (code: number | null) => ({ type: "exited", code, status: code === null ? "killed by signal 9" : `exit ${code}` }) as PreviewState;
 
 test("a worker's smoke test of the running app is a state of the app's row, not a row of its own", () => {
   const app = preview("preview-4", "todo app", 'PORT=3000 TODO_FILE="$TMPDIR/todos.json" node src/server.js', 10);
@@ -38,4 +41,44 @@ test("a row's state follows its process: building, starting, running, paused; a 
   ]);
   assert.equal(runState("npm run build"), "building");
   assert.equal(appCommand("PORT=1 A='b c' node x.js"), "node x.js");
+});
+
+test("a row stays while it still needs the user (Q94): failed until dealt with, finished until the next message, stopped never", () => {
+  const crashed = preview("preview-1", "Dev app", "pnpm dev", 10, exited(1), { endedAtMs: 50 });
+  const done = preview("preview-2", "Docs build", "pnpm docs", 20, exited(0), { endedAtMs: 60 });
+  const stopped = preview("preview-3", "Web app", "pnpm web", 30, { type: "stopped", reason: "stopped by the user" }, { endedAtMs: 70 });
+  const paused = preview("preview-4", "API", "node api.js", 40, { type: "paused" });
+  // Failed: a non-zero exit, a crash; finished: a clean exit; stopped by the user: gone; paused: stays.
+  assert.deepEqual(rows([crashed, done, stopped, paused]), [["API", "paused"], ["Docs build", "finished"], ["Dev app", "failed"]]);
+  assert.deepEqual(rows([{ ...crashed, state: exited(null) }]), [["Dev app", "failed"]]);
+  // The next message takes the finished row off, never the failed one.
+  assert.deepEqual(rows([crashed, done], [], {}, { cleared: [], lastSentMs: 80 }), [["Dev app", "failed"]]);
+  // A message sent before it finished doesn't.
+  assert.deepEqual(rows([done], [], {}, { cleared: [], lastSentMs: 55 }), [["Docs build", "finished"]]);
+  // Dismissed (or restarted, for a run): it leaves.
+  assert.deepEqual(rows([crashed, done], [], {}, { cleared: ["preview-1"], lastSentMs: null }), [["Docs build", "finished"]]);
+  // Restarted under its id, it is the running row again.
+  assert.deepEqual(rows([{ ...crashed, state: { type: "starting" } }]), [["Dev app", "starting"]]);
+  // The thread starts the same process again: the new one is the row, running or ended.
+  const again = preview("preview-5", "Dev app", "PORT=4000 pnpm dev", 90);
+  assert.deepEqual(rows([crashed, again]), [["Dev app", "running"]]);
+  assert.deepEqual(rows([crashed, { ...again, state: { type: "stopped", reason: "stopped by the user" } }]), []);
+  // A worker's process that ended is its worker's: no row.
+  assert.deepEqual(rows([{ ...crashed, taskId: "t1" }]), []);
+});
+
+test("a background run's row: a non-zero exit or an interruption failed, exit 0 finished, a Stop leaves", () => {
+  const tests = run("run-1", "pnpm test", 10);
+  const build = run("run-2", "cargo build", 20);
+  assert.deepEqual(rows([], [ended(tests, { type: "finished", status: "exit 1" }, 30), ended(build, { type: "finished", status: "exit 0" }, 40)]), [
+    ["cargo build", "finished"],
+    ["pnpm test", "failed"],
+  ]);
+  assert.deepEqual(rows([], [ended(tests, { type: "interrupted", reason: "Brigadier restarted" }, 30)]), [["pnpm test", "failed"]]);
+  assert.deepEqual(rows([], [ended(tests, { type: "finished", status: "timed out after 600 s" }, 30)]), [["pnpm test", "failed"]]);
+  assert.deepEqual(rows([], [ended(tests, { type: "stopped" }, 30)]), []);
+  // The next message, Restart or dismiss, and the thread's next run of it.
+  assert.deepEqual(rows([], [ended(build, { type: "finished", status: "exit 0" }, 40)], {}, { cleared: [], lastSentMs: 41 }), []);
+  assert.deepEqual(rows([], [ended(tests, { type: "finished", status: "exit 1" }, 30)], {}, { cleared: ["run-1"], lastSentMs: null }), []);
+  assert.deepEqual(rows([], [ended(tests, { type: "finished", status: "exit 1" }, 30), run("run-3", "pnpm test", 50)]), [["pnpm test", "checking"]]);
 });

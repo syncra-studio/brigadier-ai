@@ -10,7 +10,7 @@ test("Background lists the previews still there; a web preview's Show output ope
     lastStopFocus: string; lastStopRemoved: boolean;
   };
   assert.match(seen.section, /^Background/);
-  // Only what is still there, newest first: the two that ended are not in the card.
+  // Only what is still there, newest first: the two that were stopped are not in the card.
   assert.deepEqual(seen.order, ["preview-5", "preview-4", "preview-3"]);
   // Its state in a word: the app is starting.
   assert.match(seen.chip, /^Brigadier dev app starting1m/);

@@ -1931,6 +1931,20 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.restart_preview(conversation_id, preview_id)).await?;
             Response::RestartPreview
         }
+        Request::DismissBackground {
+            conversation_id,
+            id,
+        } => {
+            heap(|| sessions.dismiss_background(conversation_id, id)).await?;
+            Response::DismissBackground
+        }
+        Request::RestartBackgroundRun {
+            conversation_id,
+            run_id,
+        } => {
+            heap(|| sessions.restart_background_run(conversation_id, run_id)).await?;
+            Response::RestartBackgroundRun
+        }
         Request::ClearPreviews { conversation_id } => {
             heap(|| sessions.clear_previews(conversation_id)).await?;
             Response::ClearPreviews
