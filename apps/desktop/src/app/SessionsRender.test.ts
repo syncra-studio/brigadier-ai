@@ -8,7 +8,7 @@ import { renderFixturePage } from "@/fixtures/headless";
 // and a click opens that session.
 test("sidebar: a project's sessions are rows of their own, the sessions of an old workspace too, each with its state", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html", "sessions-result", 20000)) as {
-    rows: { title: string; status: string | null; tip: string | null; active: boolean; mark: string | null; words: string | null }[];
+    rows: { title: string; status: string | null; tip: string | null; active: boolean; mark: string | null; words: string | null; error: boolean; plain: boolean }[];
     widths: { title: string; titleShare: number; stateWhole: boolean }[];
     count: { text: string; title: string } | null;
     opened: unknown;
@@ -37,8 +37,10 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     ],
   );
   for (const row of seen.rows) {
-    assert.ok(row.words, `${row.title}: a state word or chip`);
-    assert.equal(row.mark, row.status?.startsWith("working:") || row.status?.startsWith("merging:") ? "spinner" : "dot", `${row.title}: its mark`);
+    assert.ok(row.words, `${row.title}: a plain state word`);
+    assert.equal(row.mark, row.status?.startsWith("working:") || row.status?.startsWith("merging:") ? "spinner" : null, `${row.title}: its mark`);
+    assert.equal(row.error, row.status?.startsWith("failed:"));
+    assert.equal(row.plain, true, `${row.title}: no chip`);
   }
   // The title tells sessions apart: the state takes at most two fifths of the row.
   assert.equal(seen.widths.length, 12);
@@ -80,15 +82,22 @@ test("closing a working session's tab stops nothing and says so in a note; it st
 });
 
 
-for (const kind of ["session", "chat"]) {
-  test(`${kind} rows pair every state word with a mark; session tabs show only a mark and name the state in their tooltip`, { timeout: 60000 }, async (t) => {
-    const seen = JSON.parse(await renderFixturePage(t, `sessions.html?states=1${kind === "chat" ? "&chats=1" : ""}`, "sessions-result", 20000)) as {
-      title: string; rowWords: string; state: string; words: string; tip: string; rowTip: string; rowMark: string; mark: string; width: number; titleFlex: string;
+for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
+  test(`${kind} rows preserve activity, error and unread marks with plain state words (${unread ? "unread" : "read"}); tab indicators stay unchanged`, { timeout: 60000 }, async (t) => {
+    const seen = JSON.parse(await renderFixturePage(t, `sessions.html?states=1${kind === "chat" ? "&chats=1" : ""}${unread ? "&unread=1" : ""}`, "sessions-result", 20000)) as {
+      title: string; rowWords: string; state: string; words: string; tip: string; rowTip: string; rowMark: string; mark: string; width: number; titleFlex: string; beforeMark: string | null; error: boolean; plain: boolean; unreadSize: number | null; unreadSlot: number | null; spinnerSize: number | null; spinnerSlot: number | null; spinnerDuration: string | null; errorSize: number | null; errorSlot: number | null; leadingError: number | null;
     }[];
     assert.deepEqual([...new Set(seen.map((row) => row.rowWords))].toSorted(), ["Working", "Needs you", "Ready", "Merging", "Merged", "PR open", "Failed", "Stopped", "Reverted"].toSorted());
     for (const row of seen) {
       const mark = row.state === "working" || row.state === "merging" ? "spinner" : "dot";
-      assert.equal(row.rowMark, mark, `${row.title}: row mark`);
+      const busy = mark === "spinner";
+      assert.equal(row.beforeMark, busy ? "spinner" : unread ? "unread" : null, `${row.title}: closed row mark`);
+      assert.equal(row.rowMark, busy ? "spinner" : null, `${row.title}: the open row has no unread mark`);
+      assert.equal(row.error, row.state === "failed", `${row.title}: errors have a separate leading icon`);
+      assert.equal(row.plain, true, `${row.title}: no chip`);
+      if (row.beforeMark === "unread") { assert.equal(row.unreadSize, 8); assert.equal(row.unreadSlot, 20); }
+      if (busy) { assert.equal(row.spinnerSize, 16); assert.equal(row.spinnerSlot, 20); assert.equal(row.spinnerDuration, "2s"); }
+      if (row.error) { assert.equal(row.errorSize, 16); assert.equal(row.errorSlot, 20); assert.equal(row.leadingError, 4); }
       assert.equal(row.mark, mark, `${row.title}: tab mark`);
       assert.equal(row.words, "", `${row.title}: no state word in the tab`);
       assert.equal(row.tip, `${row.title} · ${row.rowTip}`, `${row.title}: the whole tab has the state tooltip`);
@@ -97,3 +106,11 @@ for (const kind of ["session", "chat"]) {
     }
   });
 }
+
+
+test("a finished thread with no named state keeps its unread dot", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "sessions.html?unreadOnly=1", "sessions-result", 20000)) as { rows: { title: string; mark: string | null; words: string | null }[] };
+  const row = seen.rows.find((each) => each.title === "Unread reply");
+  assert.equal(row?.mark, "unread");
+  assert.equal(row?.words, null);
+});

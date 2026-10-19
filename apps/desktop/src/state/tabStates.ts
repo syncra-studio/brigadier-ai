@@ -162,6 +162,19 @@ export function sessionStatus(
   return { state, reason };
 }
 
+/** Busy work replaces an unread mark; an idle error keeps its own leading icon. */
+export function sidebarIndicators(activity: RowActivity, quotaWait: boolean, unread: boolean) {
+  const working = activity.awaiting !== "input" && (activity.running || activity.phase !== null || quotaWait);
+  return { working, error: !working && activity.awaiting === "failed", unread: !working && unread };
+}
+
+/** The sidebar's activity marks, independent of the state words shared with the tab. */
+export function useSidebarIndicators(id: string, unread = false) {
+  const activity = useRowActivity(id);
+  const quotaWait = useApp((s) => !!s.conversations[id]?.quotaWait);
+  return sidebarIndicators(activity, quotaWait, unread);
+}
+
 /** One session's state and reason; re-renders only when they change. */
 export function useSessionStatus(id: string): SessionStatus | null {
   const activity = useRowActivity(id);

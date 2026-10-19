@@ -54,6 +54,8 @@ const conversations = [
   session("w10-a", "Ready to review", 1),
   session("w11-a", "Paused task", 0),
 ];
+if (params.has("unread")) for (const conversation of conversations) conversation.finishedAtMs = 1;
+if (params.has("unreadOnly")) conversations.push(session("w12-a", "Unread reply", -1, { finishedAtMs: 1 }));
 if (params.has("chats")) for (const conversation of conversations) { conversation.kind = "chat"; conversation.projectId = null; }
 useApp.setState({
   catalogLoaded: true,
@@ -93,17 +95,28 @@ applySettledTabEvents([
   }),
 ]);
 
+const plainStatus = (status: HTMLElement) => {
+  const blank = document.body.appendChild(document.createElement("span"));
+  const defaults = getComputedStyle(blank);
+  const style = getComputedStyle(status);
+  const plain = style.backgroundColor === defaults.backgroundColor && style.borderRadius === defaults.borderRadius;
+  blank.remove();
+  return plain;
+};
+
 const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~ * li, li li')]
   .filter((row, index, all) => all.indexOf(row) === index)
   .map((row) => {
     const button = row.querySelector<HTMLButtonElement>("button")!;
     const status = row.querySelector<HTMLElement>('[data-slot="row-status"]');
     return {
-      title: button.querySelector("span")?.textContent?.trim(),
+      title: button.querySelector('[data-slot="row-title"]')?.textContent?.trim(),
       status: status ? `${status.dataset.status}:${status.textContent?.trim() ?? ""}` : null,
       tip: status?.title ?? null,
       active: button.dataset.active === "true",
-      mark: status?.querySelector('[data-slot="status-spinner"]') ? "spinner" : status?.querySelector('[data-slot="status-dot"]') ? "dot" : null,
+      mark: status?.querySelector('[data-slot="status-spinner"]') ? "spinner" : status?.querySelector('[data-slot="status-unread"]') ? "unread" : null,
+      error: !!button.querySelector('[data-slot="status-error"]'),
+      plain: status ? plainStatus(status) : true,
       words: status?.querySelector('[data-slot="status-word"]')?.textContent ?? null,
     };
   });
@@ -125,7 +138,7 @@ const rowWidths = () => [...document.querySelectorAll<HTMLElement>('[data-slot="
   .filter((status) => status.dataset.status !== "unread")
   .map((status) => {
     const button = status.closest("button")!;
-    const title = button.querySelector("span")!;
+    const title = button.querySelector('[data-slot="row-title"]')!;
     const words = status.querySelector<HTMLElement>('[data-slot="status-word"]')!;
     const style = getComputedStyle(button);
     const inside = button.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
@@ -202,14 +215,27 @@ function Fixture() {
         const states = [];
         await until(() => document.querySelector('[data-slot="row-status"]') !== null);
         for (const conversation of conversations.filter((each) => each.lifecycle === "active")) {
+          useApp.setState({ selection: { type: "none" } });
+          const row = [...document.querySelectorAll<HTMLElement>('[data-slot="row-status"]')].find((status) => status.closest("button")?.querySelector('[data-slot="row-title"]')?.textContent === conversation.title)!;
+          await until(() => row.closest("button")?.dataset.active !== "true");
+          const beforeMark = row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-unread"]') ? "unread" : null;
+          const unread = row.querySelector<HTMLElement>('[data-slot="status-unread"]');
+          const spinner = row.querySelector<HTMLElement>('[data-slot="status-spinner"]');
+          const error = row.closest("button")?.querySelector<HTMLElement>('[data-slot="status-error"]');
+          const info = { beforeMark, error: !!error, plain: plainStatus(row),
+            unreadSize: unread?.getBoundingClientRect().width ?? null, unreadSlot: unread?.parentElement?.getBoundingClientRect().width ?? null,
+            spinnerSize: spinner ? Number.parseFloat(getComputedStyle(spinner).width) : null, spinnerSlot: spinner?.parentElement?.getBoundingClientRect().width ?? null,
+            spinnerDuration: spinner ? getComputedStyle(spinner).animationDuration : null,
+            errorSize: error?.querySelector("svg")?.getBoundingClientRect().width ?? null, errorSlot: error?.getBoundingClientRect().width ?? null,
+            leadingError: error ? error.compareDocumentPosition(row.closest("button")!.querySelector('[data-slot="row-title"]')!) & Node.DOCUMENT_POSITION_FOLLOWING : null,
+          };
           useApp.setState({ selection: { type: "conversation", id: conversation.id } });
           await until(() => document.querySelector('[data-tab-id="chat"] .session-tab-title')?.textContent === conversation.title);
           const tab = document.querySelector<HTMLElement>('[data-tab-id="chat"] [role="tab"]')!;
           const mark = tab.querySelector<HTMLElement>('[data-slot="tab-status"]')!;
-          const row = [...document.querySelectorAll<HTMLElement>('[data-slot="row-status"]')].find((status) => status.closest("button")?.querySelector("span")?.textContent === conversation.title)!;
-          states.push({ title: conversation.title, rowWords: row.querySelector('[data-slot="status-word"]')?.textContent,
+          states.push({ ...info, title: conversation.title, rowWords: row.querySelector('[data-slot="status-word"]')?.textContent,
             state: mark.dataset.status, words: mark.textContent, tip: tab.title, rowTip: row.title,
-            rowMark: row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-dot"]') ? "dot" : null,
+            rowMark: row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-unread"]') ? "unread" : null,
             mark: mark.querySelector('[data-slot="status-spinner"]') ? "spinner" : mark.querySelector('[data-slot="status-dot"]') ? "dot" : null,
             width: mark.getBoundingClientRect().width, titleFlex: getComputedStyle(tab.querySelector('.session-tab-title')!).flexGrow,
           });

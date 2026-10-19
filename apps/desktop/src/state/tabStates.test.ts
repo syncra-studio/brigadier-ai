@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import type { Conversation, ConversationActivity, EventEnvelope, TabState } from "@/ipc/generated";
 import { fromSnapshot, rowActivity } from "@/state/activity";
-import { applySettledTabEvents, isTaskTab, sessionStatus, tabState, useSettledTabs } from "@/state/tabStates";
+import { applySettledTabEvents, isTaskTab, sessionStatus, sidebarIndicators, tabState, useSettledTabs } from "@/state/tabStates";
 
 const quiet = { running: false, awaiting: null, phase: null, workers: 0 } as const;
 
@@ -91,4 +91,18 @@ test("a project's open session is a task of its own; a chat, a side chat, an arc
   assert.equal(isTaskTab(session({ kind: "chat" })), false);
   assert.equal(isTaskTab(session({ sideOf: "other" })), false);
   assert.equal(isTaskTab(session({ lifecycle: "archived" })), false);
+});
+
+
+test("sidebar marks follow live work, errors and unread activity independently of settled state words", () => {
+  assert.deepEqual(sidebarIndicators(quiet, false, false), { working: false, error: false, unread: false });
+  assert.deepEqual(sidebarIndicators(quiet, false, true), { working: false, error: false, unread: true });
+  assert.deepEqual(sidebarIndicators({ ...quiet, running: true }, false, true), { working: true, error: false, unread: false });
+  assert.deepEqual(sidebarIndicators({ ...quiet, phase: "merging" }, false, true), { working: true, error: false, unread: false });
+  assert.deepEqual(sidebarIndicators(quiet, true, true), { working: true, error: false, unread: false });
+  assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "approval" }, false, false), { working: false, error: false, unread: false });
+  assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "approval", running: true }, false, true), { working: true, error: false, unread: false });
+  assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "input", running: true }, false, true), { working: false, error: false, unread: true });
+  assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "failed" }, false, true), { working: false, error: true, unread: true });
+  assert.deepEqual(sidebarIndicators({ ...quiet, awaiting: "failed", running: true }, false, true), { working: true, error: false, unread: false });
 });

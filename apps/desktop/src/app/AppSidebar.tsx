@@ -61,7 +61,7 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, Project } from "@/ipc/generated";
-import { SessionStatusLabel } from "@/app/SessionStatus";
+import { SessionStatusLabel, SidebarActivityMark, SidebarError } from "@/app/SessionStatus";
 import { cn } from "@/lib/utils";
 import {
   archive,
@@ -632,7 +632,8 @@ function FlyoutConversation({
         className={cn(navRow, "pe-1.5", nested && "ps-8")}
         onClick={() => pick(() => openConversation(conversation.id))}
       >
-        <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
+        <SidebarError conversationId={conversation.id} />
+        <span data-slot="row-title" className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
           {conversation.title}
         </span>
         <RowStatus conversationId={conversation.id} />
@@ -882,16 +883,10 @@ function RowStatus({ conversationId }: { conversationId: string }) {
   const seen = useLastOpened((s) => s.at[conversationId]);
   const finishedAtMs = useApp((s) => lastFinished(s.conversations[conversationId]));
   const open = useApp((s) => s.selection.type === "conversation" && s.selection.id === conversationId);
-  const dot = unread(finishedAtMs, seen, open) ? (
-    <span
-      data-slot="row-status"
-      data-status="unread"
-      role="img"
-      aria-label="Unread"
-      className={cn("bg-link size-1.5 shrink-0 rounded-full me-1", hideOnRowHover)}
-    />
-  ) : null;
-  return <SessionStatusLabel conversationId={conversationId} place="row" className={hideOnRowHover} fallback={dot} />;
+  const isUnread = unread(finishedAtMs, seen, open);
+  const mark = <SidebarActivityMark conversationId={conversationId} unread={isUnread} />;
+  return <SessionStatusLabel conversationId={conversationId} place="row" className={hideOnRowHover}
+    rowIndicator={mark} fallback={isUnread ? <span data-slot="row-status" data-status="unread" className={hideOnRowHover}>{mark}</span> : null} />;
 }
 
 /**
@@ -957,7 +952,8 @@ const ConversationRow = memo(function ConversationRow({
               if (!actions.onPick(conversation.id, event)) openConversation(conversation.id);
             }}
           >
-            <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
+            <SidebarError conversationId={conversation.id} />
+            <span data-slot="row-title" className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
               {title}
             </span>
             <RowStatus conversationId={conversation.id} />
