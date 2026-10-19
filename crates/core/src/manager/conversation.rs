@@ -3949,7 +3949,8 @@ impl SessionManager {
     }
 
     /// A Chat's non-image attachment as text in the message: the file itself when it is text
-    /// of a sensible size, a Word file's text, otherwise a note saying it could not be read.
+    /// of a sensible size, a Word file's or a PDF's text, otherwise a note saying it could not
+    /// be read.
     async fn inline_attachment(&self, attachment: &AttachmentRef) -> String {
         let bytes = match attachment.id.parse::<brigadier_store::BlobHash>() {
             Ok(hash) => self.core.store().blobs().get(hash).await.ok().flatten(),
@@ -3959,6 +3960,12 @@ impl SessionManager {
             Some(bytes) if crate::documents::is_docx(&attachment.name, &attachment.mime) => {
                 match super::blocking(move || Ok(crate::documents::docx_text(&bytes))).await {
                     Ok(Some(text)) => return inline_document(attachment, "Word document", &text),
+                    _ => None,
+                }
+            }
+            Some(bytes) if crate::documents::is_pdf(&attachment.name, &attachment.mime) => {
+                match super::blocking(move || Ok(crate::documents::pdf_text(&bytes))).await {
+                    Ok(Some(text)) => return inline_document(attachment, "PDF", &text),
                     _ => None,
                 }
             }
