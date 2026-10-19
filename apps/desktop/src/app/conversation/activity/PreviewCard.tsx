@@ -215,7 +215,7 @@ function testCounts(record: Preview): string | null {
 /** How a simulator, PDF or test run stands, in a word: a test run that ended well Passed (green), with its counts when its runner gave them. */
 function kindStanding(record: Preview): { words: string; live: boolean } {
   const kind = KINDS[record.kind as keyof typeof KINDS];
-  if (record.state.type === "running") return { words: kind.up, live: true };
+  if (record.state.type === "running" || rendered(record)) return { words: kind.up, live: true };
   if (record.kind === "test" && record.state.type === "exited") {
     const passed = record.state.code === 0;
     return { words: testCounts(record) ?? (passed ? "Passed" : "Failed"), live: passed };
@@ -239,6 +239,10 @@ function useRunOutput(conversationId: string | null, record: Preview | null): st
   }, [key, conversationId, record]);
   return found && found.key === key ? found.tail : null;
 }
+
+/** A PDF whose render is going or ended well: its file is there to open. */
+const rendered = (record: Preview) =>
+  record.kind === "pdf" && (record.state.type === "running" || (record.state.type === "exited" && record.state.code === 0));
 
 /** A rendered PDF's file: its target, from the preview's folder when not absolute. */
 const pdfPath = (record: Preview) =>
@@ -268,7 +272,8 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
 
   const counted = proofCount(proofs.map(({ proof }) => proof));
   const state = record ? (preview ? kindStanding(preview) : standing(record)) : null;
-  const ended = record !== null && ["stopped", "exited"].includes(record.state.type);
+  // A PDF's render that ended well has done what it was for: it opens, not starts again.
+  const ended = record !== null && ["stopped", "exited"].includes(record.state.type) && !(preview && rendered(preview));
   const stopped = state !== null && !state.live && record?.state.type !== "starting";
   const address = preview ? (preview.target ?? null) : (url?.replace(/^https?:\/\//, "").replace(/\/$/, "") ?? null);
   const title = kind ? kind.title : url ? "Web preview" : proofsTitle(proofs.map(({ proof }) => proof));
@@ -294,7 +299,7 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
         {again ? "Run again" : "Start again"}
       </Pill>
     );
-  } else if (preview?.kind === "pdf" && preview.state.type === "running") {
+  } else if (preview && rendered(preview)) {
     const file = pdfPath(preview);
     if (file) {
       action = (

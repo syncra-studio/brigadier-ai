@@ -14,7 +14,7 @@
  * - `test-output`: a test run's output as a proof: "Test output", its last five lines under its
  *   command.
  * - `simulator`: an iOS simulator run on "iPhone 17" with a recording of it: Open brings Simulator forward.
- * - `pdf`: a rendered PDF, ready, "2 pages": Open opens the file in the system's viewer.
+ * - `pdf`: a rendered PDF whose render ended well, ready, "2 pages": Open opens the file in the system's viewer.
  * - `pdf-uncounted`: one whose page count couldn't be read: no count.
  * - `test-run`: a test run that passed, "15 passed", its own output's last five lines; Run again.
  * - `test-failed`: one that failed, "2 failed, 13 passed, 1 skipped".
@@ -90,7 +90,8 @@ const other = (id: string, kind: Preview["kind"], target: string, state: Preview
 });
 const OTHERS = [
   other("preview-sim", "simulator", "iPhone 17", { type: "running" }, 500),
-  other("preview-pdf", "pdf", "out/invoice.pdf", { type: "running" }, 2000, "node render.js"),
+  // Its render ended well, as most do: the file is there.
+  other("preview-pdf", "pdf", "out/invoice.pdf", { type: "exited", code: 0, status: "exit 0" }, 2000, "pandoc invoice.md -o out/invoice.pdf"),
   other("preview-test", "test", "npm test", { type: "exited", code: 0, status: "exit 0" }, 3000, "npm test", { passed: 15, failed: 0, skipped: 0 }),
   other("preview-failed", "test", "npm test", { type: "exited", code: 1, status: "exit 1" }, 3500, "npm test", { passed: 13, failed: 2, skipped: 1 }),
   // Started after the turn's request ended: another turn's.
