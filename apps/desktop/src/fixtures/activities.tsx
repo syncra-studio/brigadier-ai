@@ -103,6 +103,11 @@ const read = (activity: string) => {
 const action = (activity: string, label: string) =>
   row(activity)?.parentElement?.querySelector<HTMLButtonElement>(`[data-slot="summary-row-action"] button[aria-label^="${label}"]`) ?? null;
 const stop = (activity: string) => action(activity, "Stop");
+/** Whether a row's actions show without the mouse over it or focus on it. */
+const actionsVisible = (activity: string) => {
+  const place = row(activity)?.parentElement?.querySelector<HTMLElement>('[data-slot="summary-row-action"]');
+  return !!place && getComputedStyle(place).display !== "none";
+};
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 30)));
 
 /** One row in each state: a build, an app starting, the thread's page up, a paused app, an app a
@@ -158,6 +163,8 @@ async function drive(): Promise<Record<string, unknown>> {
   await frame();
   seen.sameRow = building !== null && row("preview-2") === building;
   seen.stops = ["preview-1", "preview-2", "run-1", "run-2"].map((activity) => text(stop(activity)));
+  // A running row's Stop shows only on hover or focus, not at rest.
+  seen.stopVisibleAtRest = actionsVisible("run-1");
   // A web preview that is up opens its page in Brigadier's browser, its output one button away;
   // anything else opens what it prints in a tab. Nothing opens in the card.
   const height = section()!.getBoundingClientRect().height;
@@ -223,6 +230,8 @@ async function driveEnded(): Promise<Record<string, unknown>> {
       red: word?.classList.contains("text-destructive") ?? false, shimmer: word?.classList.contains("shimmer") ?? false,
       muted: button.classList.contains("text-muted-foreground"), lastLine: text(button.querySelector("[data-last-line]")),
       elapsed: text(button.querySelector("span.tabular-nums")), actions,
+      // A failed row's Restart and × show at rest, not only on hover; a finished row has none to show.
+      actionsVisibleAtRest: place ? getComputedStyle(place).display !== "none" : null,
     }];
   }));
   // Restart on the crashed page: its own command again, under its id; the row is the running one.

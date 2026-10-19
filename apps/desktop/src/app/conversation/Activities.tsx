@@ -121,6 +121,7 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
       icon={<StateIcon state={activity.state} />}
       meta={elapsedWords((ended ? (endedAtMs ?? now) : now) - activity.startedAtMs)}
       muted={activity.state === "finished"}
+      actionVisible={failed}
       action={
         failed ? (
           <EndedActions conversationId={conversationId} activity={activity} name={name} />

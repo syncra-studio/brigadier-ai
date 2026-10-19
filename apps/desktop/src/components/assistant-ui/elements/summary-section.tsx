@@ -114,9 +114,11 @@ type RowContent = {
   muted?: boolean;
   /** The row's one action, in its meta's place while the row is hovered or focused. */
   action?: ReactNode;
+  /** Keeps `action` showing without hover or focus (a failed row's Restart and ×). */
+  actionVisible?: boolean | undefined;
 };
 
-function RowParts({ icon, meta, action, children }: RowContent & { children: ReactNode }) {
+function RowParts({ icon, meta, action, actionVisible, children }: RowContent & { children: ReactNode }) {
   return (
     <>
       {icon !== undefined && (
@@ -132,7 +134,7 @@ function RowParts({ icon, meta, action, children }: RowContent & { children: Rea
         <span
           className={cn(
             "text-muted-foreground/70 flex shrink-0 items-center gap-1.5 text-xs tabular-nums",
-            action && "group-hover/row:invisible group-focus-within/row:invisible",
+            action && (actionVisible ? "invisible" : "group-hover/row:invisible group-focus-within/row:invisible"),
           )}
         >
           {meta}
@@ -142,12 +144,16 @@ function RowParts({ icon, meta, action, children }: RowContent & { children: Rea
   );
 }
 
-/** The action's place: over the meta, at the row's end, shown while the row is hovered or focused. */
-function RowAction({ children }: { children: ReactNode }) {
+/** The action's place: over the meta, at the row's end, shown while the row is hovered or focused
+ * (or always, for a row whose action must stay put, like a failed row's Restart and ×). */
+function RowAction({ children, visible }: { children: ReactNode; visible?: boolean | undefined }) {
   return (
     <span
       data-slot="summary-row-action"
-      className="absolute inset-y-0 end-0 hidden items-center group-focus-within/row:flex group-hover/row:flex"
+      className={cn(
+        "absolute inset-y-0 end-0 items-center",
+        visible ? "flex" : "hidden group-focus-within/row:flex group-hover/row:flex",
+      )}
     >
       {children}
     </span>
@@ -160,6 +166,7 @@ export function SummaryRow({
   meta,
   muted,
   action,
+  actionVisible,
   className,
   children,
   ...props
@@ -170,10 +177,10 @@ export function SummaryRow({
       className={cn(ROW, "group/row isolate", muted && "text-muted-foreground", className)}
       {...props}
     >
-      <RowParts icon={icon} meta={meta} action={action}>
+      <RowParts icon={icon} meta={meta} action={action} actionVisible={actionVisible}>
         {children}
       </RowParts>
-      {action && <RowAction>{action}</RowAction>}
+      {action && <RowAction visible={actionVisible}>{action}</RowAction>}
     </div>
   );
 }
@@ -184,6 +191,7 @@ export function SummaryRowButton({
   meta,
   muted,
   action,
+  actionVisible,
   className,
   children,
   ...props
@@ -195,7 +203,7 @@ export function SummaryRowButton({
       className={cn(ROW, ROW_INTERACTIVE, "isolate", !action && "group/row", muted && "text-muted-foreground", className)}
       {...props}
     >
-      <RowParts icon={icon} meta={meta} action={action}>
+      <RowParts icon={icon} meta={meta} action={action} actionVisible={actionVisible}>
         {children}
       </RowParts>
     </button>
@@ -204,7 +212,7 @@ export function SummaryRowButton({
   return (
     <div className="group/row relative isolate flex min-w-0">
       {button}
-      <RowAction>{action}</RowAction>
+      <RowAction visible={actionVisible}>{action}</RowAction>
     </div>
   );
 }

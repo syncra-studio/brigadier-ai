@@ -7,7 +7,7 @@ type Row = { label: string; state: string; moving: boolean; elapsed: string; tip
 test("Background lists what still runs, one line each with its state and Stop on hover; a web preview opens in the browser, the rest open their output in a tab, and what the user stopped leaves the card", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?drive=1", "activities-result", 60000)) as {
     empty: boolean; title: string; order: string[]; rows: Record<string, Row>; heights: number[]; workerLine: string | null; sameRow: boolean;
-    stops: string[]; browsed: string | null; outputs: boolean[]; opened: string | null; openedApp: string; openedRun: string; grew: boolean; calls: string[]; left: string[];
+    stops: string[]; stopVisibleAtRest: boolean; browsed: string | null; outputs: boolean[]; opened: string | null; openedApp: string; openedRun: string; grew: boolean; calls: string[]; left: string[];
   };
   assert.equal(seen.empty, true, "nothing running, no section");
   assert.equal(seen.title, "Background");
@@ -25,6 +25,7 @@ test("Background lists what still runs, one line each with its state and Stop on
   assert.doesNotMatch(seen.workerLine ?? "", /cargo clippy --workspace/);
   assert.equal(seen.sameRow, true, "the build and the app are the same row");
   assert.deepEqual(seen.stops, ["Stop", "Stop", "Stop", "Stop"]);
+  assert.equal(seen.stopVisibleAtRest, false, "a running row's Stop shows on hover only");
   // The web preview opens in Brigadier's browser; its output is its row's Show output.
   assert.equal(seen.browsed, "http://localhost:5199/");
   assert.deepEqual(seen.outputs, [true, false, false]);
@@ -37,7 +38,7 @@ test("Background lists what still runs, one line each with its state and Stop on
   assert.deepEqual(seen.left, ["run-2", "preview-2"], "what the user stopped left the card");
 });
 
-type Ended = { state: string; icon: string | null; red: boolean; shimmer: boolean; muted: boolean; lastLine: string | null; elapsed: string; actions: string[] };
+type Ended = { state: string; icon: string | null; red: boolean; shimmer: boolean; muted: boolean; lastLine: string | null; elapsed: string; actions: string[]; actionsVisibleAtRest: boolean | null };
 
 test("Background rows stay while they need the user (Q94): a failed one red with its last line, Restart and ×; a finished one muted until the next message; a stopped one gone", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?ended=1", "activities-result", 60000)) as {
@@ -46,14 +47,16 @@ test("Background rows stay while they need the user (Q94): a failed one red with
   // Newest first; the storybook the user stopped is not there.
   assert.deepEqual(seen.order, ["preview-13", "preview-12", "preview-11", "run-13", "run-14", "run-15"]);
   assert.deepEqual(seen.rows["preview-11"], { state: "failed", icon: "failed", red: true, shimmer: false, muted: false,
-    lastLine: "· Error: listen EADDRINUSE: address already in use :::5199", elapsed: "1m", actions: ["Restart Demo pages", "Dismiss Demo pages"] });
+    lastLine: "· Error: listen EADDRINUSE: address already in use :::5199", elapsed: "1m", actions: ["Restart Demo pages", "Dismiss Demo pages"], actionsVisibleAtRest: true });
   // A crash is a failure too, and so is a run with a non-zero exit or one cut off.
   assert.equal(seen.rows["preview-12"]?.state, "failed");
-  assert.deepEqual([seen.rows["run-13"]?.state, seen.rows["run-13"]?.lastLine, seen.rows["run-13"]?.actions], ["failed", "· test result: FAILED. 9 passed; 3 failed", ["Restart Core tests", "Dismiss Core tests"]]);
+  assert.deepEqual([seen.rows["run-13"]?.state, seen.rows["run-13"]?.lastLine, seen.rows["run-13"]?.actions, seen.rows["run-13"]?.actionsVisibleAtRest],
+    ["failed", "· test result: FAILED. 9 passed; 3 failed", ["Restart Core tests", "Dismiss Core tests"], true]);
   assert.equal(seen.rows["run-15"]?.state, "failed");
+  assert.equal(seen.rows["run-15"]?.actionsVisibleAtRest, true, "a failed row's Restart and × show without hover");
   // Finished on its own: muted, still, no controls.
   for (const finished of ["preview-13", "run-14"]) {
-    assert.deepEqual(seen.rows[finished], { state: "finished", icon: "finished", red: false, shimmer: false, muted: true, lastLine: null, elapsed: "1m", actions: [] }, finished);
+    assert.deepEqual(seen.rows[finished], { state: "finished", icon: "finished", red: false, shimmer: false, muted: true, lastLine: null, elapsed: "1m", actions: [], actionsVisibleAtRest: null }, finished);
   }
   assert.deepEqual(seen.calls, ["dismissBackground run-15", "restartBackgroundRun run-13", "restartPreview preview-11"]);
   // Restarted under its id, the page is its running row again; the run restarted and the one dismissed left.
