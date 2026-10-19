@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive, renderFixturePage } from "@/fixtures/headless";
 
 // The real dialog in Chromium over a faked daemon: the repositories on this computer most
 // recent first, a project already added that can't be picked, search, and the three ways to
@@ -39,3 +39,35 @@ test("Add project lists the repositories on this computer and adds, clones or st
     "add ~/code/notes init",
   ]);
 });
+
+type Frame = { ms: number; top: number; height: number; title: string | null };
+
+/** The dialog's moves over a second of frames: where its top edge went, and its heights in turn. */
+function moves(frames: Frame[]) {
+  const heights = frames.map((frame) => frame.height).filter((height, at, all) => at === 0 || height !== all[at - 1]);
+  return { tops: [...new Set(frames.map((frame) => frame.top))], heights, frames: frames.length };
+}
+
+// Recorded frame by frame in real time, the scan answering late as it does (#384): the dialog
+// opens where it stays, and Clone from URL and the back arrow change only its content, its top
+// edge where it was and its height in one step.
+for (const reducedMotion of [false, true]) {
+  test(`Add project stays put as it opens, on Clone from URL and on back${reducedMotion ? " (reduced motion)" : ""}`, { timeout: 90000 }, async (t) => {
+    const seen = JSON.parse(await renderFixtureLive(t, "add-project.html?frames=1", "add-project-frames", 60000, { reducedMotion })) as Record<
+      "opened" | "cloned" | "back",
+      Frame[]
+    >;
+    assert.equal(seen.opened.at(-1)?.title, "Add project");
+    assert.equal(seen.cloned.at(-1)?.title, "Clone from URL");
+    assert.equal(seen.back.at(-1)?.title, "Add project");
+    const top = seen.opened[0]!.top;
+    for (const [moment, frames] of Object.entries(seen)) {
+      const moved = moves(frames);
+      assert.ok(moved.frames > 20, `${moment}: frames came (${moved.frames})`);
+      assert.deepEqual(moved.tops, [top], `${moment}: the top edge stays put: ${JSON.stringify(moved)}`);
+      assert.ok(moved.heights.length <= 2, `${moment}: the height changes once at most: ${JSON.stringify(moved)}`);
+    }
+    // The list is there as it opens: no height change at all.
+    assert.equal(moves(seen.opened).heights.length, 1, JSON.stringify(moves(seen.opened)));
+  });
+}

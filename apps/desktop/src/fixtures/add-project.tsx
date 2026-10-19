@@ -3,13 +3,17 @@
  * already a project) and a clone or a new repository that works. ?view=clone opens Clone from
  * URL with a URL pasted, ?view=new New repository. ?drive=1 searches, picks, adds, clones and
  * starts a repository, and writes what it saw to #add-project-result (AddProjectRender.test.ts
- * reads it). Without it the page stays as it opens, for screenshots.
+ * reads it). ?frames=1 (under renderFixtureLive) answers the scan late, as a real one is, and
+ * records the dialog's top edge and height on every frame for a second after it opens, after
+ * Clone from URL and after the back arrow, into #add-project-frames. Without either the page
+ * stays as it opens, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AddProjectDialog } from "@/app/dialogs/AddProjectDialog";
+import { fixtureClick } from "@/fixtures/input";
 import type { Project, RepoSuggestion, Request } from "@/ipc/generated";
 import { revealApp } from "@/lib/splash";
 import { openAddProject } from "@/state/addProject";
@@ -24,6 +28,8 @@ if (params.has("drive")) {
 }
 
 const HOUR = 3_600_000;
+/** How long the scan for repositories takes under ?frames=1. */
+const SCAN_MS = 400;
 // The page's clock reads noon today, so "2h ago" and "Yesterday" don't depend on the time of day.
 const realNow = Date.now.bind(Date);
 const offset = new Date(realNow()).setHours(12, 0, 0, 0) - realNow();
@@ -57,6 +63,8 @@ mockIPC((command, payload) => {
   const req = (payload as { request: Request }).request;
   switch (req.method) {
     case "findRepos":
+      // Recording frames, the scan takes a moment: the dialog shows before its list does.
+      if (params.has("frames")) return new Promise((resolve) => setTimeout(() => resolve({ method: req.method, repos }), SCAN_MS));
       return { method: req.method, repos };
     case "addProject":
       asked.push(`add ${req.path}${req.init ? " init" : ""}`);
@@ -136,6 +144,40 @@ async function drive(): Promise<string> {
   return JSON.stringify(seen);
 }
 
+/** Where the dialog is on one frame: its top edge (as drawn) and its height (as laid out). */
+type Frame = { ms: number; top: number; height: number; title: string | null };
+
+/** The dialog on every frame for a second from `act`. */
+function record(act: () => unknown): Promise<Frame[]> {
+  return new Promise((resolve) => {
+    const seen: Frame[] = [];
+    const start = performance.now();
+    const tick = () => {
+      const found = card();
+      if (found) {
+        seen.push({
+          ms: Math.round(performance.now() - start),
+          top: Math.round(found.getBoundingClientRect().top * 10) / 10,
+          height: found.offsetHeight,
+          title: found.querySelector("h2")?.textContent ?? null,
+        });
+      }
+      if (performance.now() - start < 1000) requestAnimationFrame(tick);
+      else resolve(seen);
+    };
+    requestAnimationFrame(tick);
+    void act();
+  });
+}
+
+/** Opens the dialog, then Clone from URL, then back, recording each. */
+async function frames(): Promise<string> {
+  const opened = await record(openAddProject);
+  const cloned = await record(() => fixtureClick(button("Clone from URL")!));
+  const back = await record(() => fixtureClick(card()!.querySelector("button[aria-label=Back]")!));
+  return JSON.stringify({ opened, cloned, back });
+}
+
 /** Opens the view asked for, with a URL pasted in Clone. */
 async function show() {
   openAddProject();
@@ -150,8 +192,10 @@ async function show() {
 
 function Page() {
   const [result, setResult] = useState<string | null>(null);
+  const [recorded, setFrames] = useState<string | null>(null);
   useEffect(() => {
     if (params.has("drive")) void drive().then(setResult);
+    else if (params.has("frames")) void frames().then(setFrames);
     else void show();
   }, []);
   return (
@@ -160,6 +204,7 @@ function Page() {
       <main className="flex-1" />
       <AddProjectDialog />
       {result && <pre id="add-project-result">{result}</pre>}
+      {recorded && <pre id="add-project-frames">{recorded}</pre>}
     </div>
   );
 }

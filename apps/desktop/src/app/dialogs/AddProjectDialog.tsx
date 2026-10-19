@@ -8,7 +8,18 @@ import {
   Search,
   X,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useEffectEvent, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { DialogPill } from "@/app/dialogs/pills";
@@ -48,9 +59,10 @@ export function AddProjectDialog() {
       <DialogContent
         data-testid="add-project-dialog"
         showCloseButton={false}
-        className="bg-settings-surface border-settings-border rounded-design-dialog max-w-add-project shadow-design-dialog text-settings-text gap-0 border p-0 ring-0"
+        className="bg-settings-surface border-settings-border rounded-design-dialog max-w-add-project shadow-design-dialog text-settings-text top-add-project-top origin-top translate-y-0 gap-0 border p-0 ring-0 motion-reduce:animate-none"
       >
-        {/* Remounted per opening so it starts over. */}
+        {/* Its top edge stays put (#384): a view or the list loading changes only its height,
+            which moves the bottom edge. Remounted per opening so it starts over. */}
         {open && <AddProject key={opening} initialPath={path} />}
       </DialogContent>
     </Dialog>
@@ -61,12 +73,15 @@ type View = { kind: "pick" } | { kind: "clone" } | { kind: "new"; parent: string
 
 function AddProject({ initialPath }: { initialPath: string }) {
   const [view, setView] = useState<View>({ kind: "pick" });
+  // The repositories found, kept for the list's return from Clone or New repository.
+  const found = useRef<Row[] | null>(null);
   const back = () => setView({ kind: "pick" });
   switch (view.kind) {
     case "pick":
       return (
         <PickView
           initialPath={initialPath}
+          found={found}
           onClone={() => setView({ kind: "clone" })}
           onNew={(parent = DEFAULT_PARENT, name = "") => setView({ kind: "new", parent, name })}
         />
@@ -215,14 +230,16 @@ function rowOf(repo: RepoSuggestion): Row {
 
 function PickView({
   initialPath,
+  found,
   onClone,
   onNew,
 }: {
   initialPath: string;
+  found: RefObject<Row[] | null>;
   onClone: () => void;
   onNew: (parent?: string, name?: string) => void;
 }) {
-  const [repos, setRepos] = useState<Row[] | null>(null);
+  const [repos, setRepos] = useState<Row[] | null>(found.current);
   // A folder chosen (or dropped, or opened), first in the list.
   const [chosen, setChosen] = useState<Row | null>(null);
   const [query, setQuery] = useState("");
@@ -232,10 +249,12 @@ function PickView({
   const now = useNow(60_000);
 
   useEffect(() => {
+    if (found.current) return;
     let live = true;
     findRepos()
-      .then((found) => {
-        if (live) setRepos(found.map(rowOf));
+      .then((list) => {
+        found.current = list.map(rowOf);
+        if (live) setRepos(found.current);
       })
       .catch((cause: unknown) => {
         if (live) {
@@ -246,7 +265,7 @@ function PickView({
     return () => {
       live = false;
     };
-  }, []);
+  }, [found]);
 
   /** Puts a checked folder at the top of the list and picks it; a project shows itself. */
   const apply = (check: FolderCheck) => {
@@ -363,10 +382,11 @@ function PickView({
           <span className="text-settings-text-tertiary text-settings-small">On this Mac</span>
           <span className="text-settings-text-tertiary text-settings-meta">Most recent first</span>
         </div>
+        {/* While the scan runs the list holds its five rows' room. */}
         <div
           role="radiogroup"
           aria-label="On this Mac"
-          className="max-h-add-project-list flex flex-col gap-0.5 overflow-y-auto"
+          className={cn("max-h-add-project-list flex flex-col gap-0.5 overflow-y-auto", repos === null && "min-h-add-project-list")}
         >
           {rows.map((row) => (
             <RepoRow
