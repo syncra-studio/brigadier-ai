@@ -11,8 +11,9 @@ test("the summary card starts closed, opens by itself for a session's first proj
   assert.equal(seen.noSetupClosed, true, "a session with nothing to show yet keeps it closed");
   assert.equal(seen.firstContentOpened, true, "its project and branch open the card by itself");
   assert.match(String(seen.cardText), /release-notes/);
-  // The branch is the Changes row's tooltip, not its text.
-  assert.match(String(seen.cardText), /Changes/);
+  // The project's branch line (Q91: no Changes row).
+  assert.match(String(seen.cardText), /main/);
+  assert.doesNotMatch(String(seen.cardText), /Changes/);
   assert.equal(typeof seen.messageRight, "number");
   assert.equal(typeof seen.cardLeft, "number");
   assert.ok((seen.messageRight as number) <= (seen.cardLeft as number),
