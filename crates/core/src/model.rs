@@ -2235,7 +2235,7 @@ pub enum DomainEvent {
         message: Message,
     },
     SettingsChanged {
-        settings: Settings,
+        settings: Box<Settings>,
     },
     RawSessionCreated {
         session: RawSession,

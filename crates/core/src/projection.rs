@@ -130,7 +130,7 @@ impl Projection {
             }
             DomainEvent::SettingsChanged { settings } => {
                 if seq >= self.settings_seq {
-                    self.settings = settings.clone();
+                    self.settings = (**settings).clone();
                     self.settings_seq = seq;
                 }
             }

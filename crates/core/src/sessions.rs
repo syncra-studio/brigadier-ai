@@ -2479,7 +2479,7 @@ impl Core {
         self.record(vec![(
             streams::SETTINGS.into(),
             DomainEvent::SettingsChanged {
-                settings: settings.clone(),
+                settings: Box::new(settings.clone()),
             },
         )])
         .await?;
