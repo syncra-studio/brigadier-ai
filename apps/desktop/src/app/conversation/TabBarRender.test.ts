@@ -51,7 +51,7 @@ for (const compact of [false, true]) {
 
 for (const reduced of [false, true]) {
   test(`tabs animate opening and closing and native menu events reach session tabs with browser focus${reduced ? " (reduced motion)" : ""}`, { timeout: 90000 }, async (t) => {
-    const seen = JSON.parse(await renderFixtureLive(t, "tabbar.html?live=1", "tabbar-result", 60000, reduced)) as Record<string, unknown>;
+    const seen = JSON.parse(await renderFixtureLive(t, "tabbar.html?live=1", "tabbar-result", 60000, { reducedMotion: reduced })) as Record<string, unknown>;
     if (process.env.TABBAR_SEEN) console.log(JSON.stringify(seen, null, 2));
     assert.equal(seen.reduced, reduced);
     assert.equal(seen.openAnimation, !reduced);

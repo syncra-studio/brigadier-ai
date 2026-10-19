@@ -305,12 +305,26 @@ function keyEvent(key: string): { key: string; code: string; windowsVirtualKeyCo
   throw new Error(`fixtureInput doesn't know the key ${JSON.stringify(key)}`);
 }
 
+/** How a live render's browser differs from a quick, idle one's. */
+type LiveOptions = {
+  /** It asks for reduced motion. */
+  reducedMotion?: boolean;
+  /** The request whose URL holds `url` (a module loaded on first use) is answered `ms` late. */
+  slow?: { url: string; ms: number };
+};
+
 /**
  * Like `renderFixturePage`, for a fixture that measures motion: Chromium runs in real time (its
  * frames, animation callbacks and resize observers run as in the app, which virtual time stops),
  * in a 1280×976 window, and the result is read over the DevTools protocol once it shows.
  */
-export async function renderFixtureLive(t: TestContext, page: string, resultId: string, timeoutMs = 60000, reducedMotion = false): Promise<string> {
+export async function renderFixtureLive(
+  t: TestContext,
+  page: string,
+  resultId: string,
+  timeoutMs = 60000,
+  { reducedMotion = false, slow }: LiveOptions = {},
+): Promise<string> {
   const binary = chromium();
   const { url, scratch, log, stopFirst } = await serveFixtures(t);
   const profile = join(scratch, "profile");
@@ -436,6 +450,16 @@ export async function renderFixtureLive(t: TestContext, page: string, resultId: 
   // window's focus, so a field's focus() would fire no focus event.
   await call("Emulation.setFocusEmulationEnabled", { enabled: true });
   if (reducedMotion) await call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+  // A busy machine's server, slow to answer one module.
+  if (slow) {
+    socket.addEventListener("message", (event) => {
+      const message = JSON.parse(String(event.data)) as { method?: string; params?: { requestId: string } };
+      if (message.method !== "Fetch.requestPaused") return;
+      const { requestId } = message.params!;
+      setTimeout(() => void call("Fetch.continueRequest", { requestId }).catch(() => {}), slow.ms);
+    });
+    await call("Fetch.enable", { patterns: [{ urlPattern: `*${slow.url}*` }] });
+  }
   await call("Page.navigate", { url: `${url}fixtures/${page}` });
   while (Date.now() < deadline) {
     const { result } = (await call("Runtime.evaluate", {

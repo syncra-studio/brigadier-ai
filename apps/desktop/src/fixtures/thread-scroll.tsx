@@ -262,9 +262,10 @@ const animating = () =>
   document.getAnimations().some((animation) => animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity);
 
 /**
- * Waits `ms`, then until every request is answered, no reply waits on its renderer, nothing
- * animates and the layout holds for 100ms of frames. A slower machine (a CI runner) loads and
- * lays out later than the time a step allows; the step then waits longer, never less.
+ * Waits `ms`, then until every request is answered, no reply or card waits on its view (loaded
+ * on first use, late from a busy dev server), nothing animates and the layout holds for 100ms of
+ * frames. A slower machine (a CI runner) loads and lays out later than the time a step allows;
+ * the step then waits longer, never less.
  */
 async function settle(ms: number): Promise<void> {
   await wait(ms);
@@ -274,7 +275,7 @@ async function settle(ms: number): Promise<void> {
   for (let frames = 0; performance.now() < until; ) {
     await frame();
     const now = layoutNow();
-    if (pending > 0 || $('[data-slot="reply-loading"]') || animating() || now !== last) {
+    if (pending > 0 || $('[data-slot="reply-loading"], [data-slot="request-card"]:empty') || animating() || now !== last) {
       stillSince = performance.now();
       frames = 0;
     } else if (++frames >= 3 && performance.now() - stillSince >= 100) return;

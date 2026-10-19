@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
 test("image preview geometry, zoom, pan and native download contract", { timeout: 90000 }, async (t) => {
-  const seen = JSON.parse(await renderFixtureLive(t, "lightbox.html", "lightbox-result", 60000, true));
+  const seen = JSON.parse(await renderFixtureLive(t, "lightbox.html", "lightbox-result", 60000, { reducedMotion: true }));
   assert.equal(seen.error, undefined, seen.stack);
   assert.equal(seen.aria, "Image preview");
   assert.deepEqual(seen.labels, ["Download image", "Close image preview", "Zoom out image", "Zoom in image", "Previous image", "Next image"]);

@@ -5,7 +5,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 
 for (const reduced of [false, true]) {
   test(`new tab tools, history and favicon phases${reduced ? " with reduced motion" : ""}`, { timeout: 90000 }, async (t) => {
-    const seen = JSON.parse(await renderFixtureLive(t, "new-tab.html?drive=1", "new-tab-result", 60000, reduced)) as Record<string, unknown>;
+    const seen = JSON.parse(await renderFixtureLive(t, "new-tab.html?drive=1", "new-tab-result", 60000, { reducedMotion: reduced })) as Record<string, unknown>;
     if (process.env.NEW_TAB_SEEN) console.log(JSON.stringify(seen, null, 2));
     assert.deepEqual(seen.sections, ["Tools", "Suggested"]);
     assert.equal(seen.session, false, "a session's New tab has no New session");
