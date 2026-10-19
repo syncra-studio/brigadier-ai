@@ -693,13 +693,33 @@ impl Routing {
         self.results.lock().unwrap()[before].clone()
     }
 
-    /// Lets the routing turn end, and what waited in the queue go.
-    async fn release(&self, flow: &Flow, tab: &ConversationId) {
+    /// Lets the routing turn end, and waits for what stayed queued to reach its next turn.
+    async fn release(&self, flow: &Flow, tab: &ConversationId, inputs: &Inputs) {
+        let folder = worktree(flow, tab).0.expect("the session's worktree");
+        let waiting: Vec<_> = flow
+            .board_of(tab)
+            .await
+            .queue
+            .items
+            .into_iter()
+            .map(|item| {
+                let before = heard(inputs, &folder, &item.text);
+                (item.text, before)
+            })
+            .collect();
         self.gate.notify_one();
         flow.until_in(tab, "the queue to empty", |board| {
             board.queue.items.is_empty()
         })
         .await;
+        // The queue empties before the next request is recorded as working. The old
+        // requests can all be settled in that gap, before the script has read the message.
+        for (text, before) in waiting {
+            super::eventually("the queued follow-up's turn to start", || {
+                heard(inputs, &folder, &text) > before
+            })
+            .await;
+        }
         flow.settled_in(tab).await;
     }
 }
@@ -752,7 +772,7 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
         .await;
     assert!(joined.starts_with("It joins this work"), "{joined}");
     assert!(last_queue(&flow, &a).items.is_empty());
-    routes.release(&flow, &a).await;
+    routes.release(&flow, &a, &inputs).await;
 
     // wait
     let waits = routes
@@ -765,7 +785,7 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
         .await;
     assert!(waits.starts_with("It waits in the queue"), "{waits}");
     assert_eq!(last_queue(&flow, &a).items.len(), 1);
-    routes.release(&flow, &a).await;
+    routes.release(&flow, &a, &inputs).await;
 
     // new_session: it waits too, and no session starts.
     let tabs = flow.core.catalog().conversations.len();
@@ -787,7 +807,7 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
         tabs,
         "no session started"
     );
-    routes.release(&flow, &a).await;
+    routes.release(&flow, &a, &inputs).await;
     assert_eq!(
         heard(&inputs, &folder_a, notes),
         heard_before + 1,
@@ -814,7 +834,7 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
         queue.moved.is_empty() && queue.items.len() == 1,
         "{queue:?}"
     );
-    routes.release(&flow, &a).await;
+    routes.release(&flow, &a, &inputs).await;
 
     // session: it goes to B as the user's message; A keeps a notice.
     let message = "Rename the beta file.";
@@ -834,7 +854,7 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
     assert_eq!(queue.moved.len(), 1);
     assert_eq!(queue.moved[0].to, b);
     assert_eq!(queue.moved[0].text, message);
-    routes.release(&flow, &a).await;
+    routes.release(&flow, &a, &inputs).await;
     flow.settled_in(&b).await;
     assert_eq!(heard(&inputs, &folder_b, message), 1, "B got it");
     assert_eq!(
@@ -884,7 +904,7 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
         late.contains("has already merged into `main` at "),
         "{late}"
     );
-    routes.release(&flow, &a).await;
+    routes.release(&flow, &a, &inputs).await;
     flow.settled_in(&b).await;
     assert_eq!(heard(&inputs, &folder_b, "Also tidy the beta file."), 1);
     flow.stop().await;
@@ -938,7 +958,7 @@ async fn an_open_thread_resumes_with_the_routes_note_and_joins_still_routes() {
         )
         .await;
     assert!(joined.starts_with("It joins this work"), "{joined}");
-    routes.release(&flow, &a).await;
+    routes.release(&flow, &a, &inputs).await;
     let specs = flow.thread_specs();
     assert!(
         matches!(
@@ -1041,7 +1061,7 @@ async fn an_open_thread_resumes_with_the_sessions_note_and_the_older_names_still
         )
         .await;
     assert!(moved.contains("It went to session"), "{moved}");
-    routes.release(&flow, &a).await;
+    routes.release(&flow, &a, &inputs).await;
 
     flow.say_to(&a, "List the tabs the old way.").await;
     flow.settled_in(&a).await;
