@@ -4,7 +4,9 @@
  * for the compact sizes, ?long=1 for a path too long for its line. ?drive=1 moves between a
  * plain chat, an answered project and the two unanswered ones, answers both and comes back,
  * and writes what it saw to #trust-result
- * (TrustDialogRender.test.ts reads it). Without it the page stays as it opens, for screenshots.
+ * (TrustDialogRender.test.ts reads it). ?look=1 sets the open dialog, its two answers and the
+ * path's tooltip beside the app's shared parts and writes their looks to #trust-look. Without
+ * either the page stays as it opens, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { Folder } from "@openai/apps-sdk-ui/components/Icon";
@@ -12,13 +14,14 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { TrustDialog } from "@/app/dialogs/TrustDialog";
+import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
 import type { Conversation, Project, Request } from "@/ipc/generated";
 import { revealApp } from "@/lib/splash";
 import { type Selection, useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
 document.documentElement.dataset.density = params.get("density") === "compact" ? "compact" : "normal";
-if (params.has("drive")) {
+if (params.has("drive") || params.has("look")) {
   const still = document.createElement("style");
   still.textContent =
     "*, *::before, *::after { animation: none !important; transition: none !important; backdrop-filter: none !important; }";
@@ -75,16 +78,12 @@ function dialog() {
   const card = document.querySelector<HTMLElement>("[data-testid=trust-dialog]");
   if (!card) return null;
   const pills = [...card.querySelectorAll("button:not([data-slot=trust-path])")];
-  const first = pills[0]!;
   return {
     title: card.querySelector("h2")?.textContent,
     path: card.querySelector("[data-slot=trust-path]")?.textContent,
     buttons: pills.map((button) => button.textContent),
     focused: (document.activeElement as HTMLElement | null)?.dataset.testid ?? document.activeElement?.textContent,
     width: card.getBoundingClientRect().width,
-    radius: parseFloat(getComputedStyle(card).borderRadius),
-    // A pill: its corners round off its whole height.
-    pill: parseFloat(getComputedStyle(first).borderRadius) >= first.getBoundingClientRect().height / 2,
   };
 }
 
@@ -115,10 +114,31 @@ async function drive(): Promise<string> {
   return JSON.stringify(seen);
 }
 
+/** The dialog's parts and the shared ones they are drawn with, once `Canon` is mounted. */
+async function looks(): Promise<string> {
+  for (let i = 0; i < 50 && !dialog(); i++) await settle();
+  const card = document.querySelector<HTMLElement>("[data-testid=trust-dialog]");
+  card?.querySelector<HTMLElement>("[data-slot=trust-path]")?.focus();
+  await settle();
+  const labelled = (label: string) =>
+    [...(card?.querySelectorAll("button") ?? [])].find((button) => button.textContent === label);
+  const pairs: LookPairs = {
+    card: [look(card, "surface"), canon("dialog", "surface")],
+    title: [look(card?.querySelector("h2"), "text"), canon("title", "text")],
+    line: [look(card?.querySelector("p"), "text"), canon("line", "text")],
+    trust: [look(labelled("Trust folder"), "button"), canon("primary", "button")],
+    dontTrust: [look(labelled("Don't trust"), "button"), canon("ghost", "button")],
+    tooltip: [look(card?.querySelector("[data-slot=trust-path-tooltip]"), "surface"), canon("tooltip", "surface")],
+  };
+  return JSON.stringify(pairs);
+}
+
 function Shell() {
   const [result, setResult] = useState<string | null>(null);
+  const [looked, setLooked] = useState<string | null>(null);
   useEffect(() => {
     if (params.has("drive")) void drive().then(setResult);
+    if (params.has("look")) void looks().then(setLooked);
   }, []);
   return (
     <div className="flex h-screen">
@@ -140,6 +160,8 @@ function Shell() {
       </main>
       <TrustDialog />
       {result && <pre id="trust-result">{result}</pre>}
+      {params.has("look") && <Canon />}
+      {looked && <pre id="trust-look">{looked}</pre>}
     </div>
   );
 }

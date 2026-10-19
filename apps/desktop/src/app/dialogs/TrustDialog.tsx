@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
-import { DialogPill } from "@/app/dialogs/pills";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -38,7 +38,7 @@ export function TrustDialog() {
       <DialogContent
         data-testid="trust-dialog"
         showCloseButton={false}
-        className="bg-settings-surface border-settings-border rounded-design-dialog max-w-trust shadow-design-dialog text-settings-text gap-0 border p-0 ring-0"
+        className="max-w-trust gap-0 p-0"
         onInteractOutside={(event) => event.preventDefault()}
         onEscapeKeyDown={(event) => event.preventDefault()}
         // The card itself takes focus, not an answer: Enter never trusts a folder by accident.
@@ -130,17 +130,17 @@ function FolderPath({ folder }: { folder: string }) {
         type="button"
         data-slot="trust-path"
         aria-label={`${folder}, click to copy`}
-        className="text-settings-meta flex w-full min-w-0 cursor-default text-left font-mono outline-none"
+        className="flex w-full min-w-0 cursor-default text-left font-mono text-xs outline-none"
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={() => setOpen(false)}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onClick={copy}
       >
-        <span className={cn("shrink-0 whitespace-pre", open ? "text-settings-text-secondary" : "text-settings-text-tertiary")}>
+        <span className={cn("shrink-0 whitespace-pre", open ? "text-foreground/65" : "text-muted-foreground")}>
           {shown.parent}
         </span>
-        <span className={cn("min-w-0 break-all", open ? "text-settings-text" : "text-settings-text-secondary")}>
+        <span className={cn("min-w-0 break-all", open ? "text-foreground" : "text-foreground/65")}>
           {shown.name}
         </span>
       </button>
@@ -148,17 +148,17 @@ function FolderPath({ folder }: { folder: string }) {
         <div
           role="tooltip"
           data-slot="trust-path-tooltip"
-          className="bg-settings-chosen border-settings-ring rounded-design-tooltip shadow-design-tooltip pointer-events-none absolute top-full -right-2 -left-2 z-10 mt-1.75 flex flex-col gap-1.5 border px-3 py-2.5"
+          className="bg-popover text-popover-foreground border-border rounded-tooltip shadow-tooltip pointer-events-none absolute top-full -right-2 -left-2 z-10 mt-1.75 flex flex-col gap-1.5 border px-3 py-2.5"
         >
           {/* Lines break after a slash: each part with its slash is one piece, split only when wider than a line. */}
-          <span className="text-settings-text text-settings-meta leading-[1.5] font-mono wrap-anywhere">
+          <span className="font-mono text-xs leading-[1.5] wrap-anywhere">
             {folder.split(/(?<=\/)/).map((part, index) => (
               <span key={index} className="inline-block max-w-full">
                 {part}
               </span>
             ))}
           </span>
-          <span className="text-settings-text-tertiary text-settings-badge">{copied ? "Copied" : "Click to copy"}</span>
+          <span className="text-muted-foreground text-2xs">{copied ? "Copied" : "Click to copy"}</span>
         </div>
       )}
     </div>
@@ -173,21 +173,21 @@ export function TrustForm({ project, folder }: { project: Project; folder: strin
     <div className="flex flex-col">
       <div className="flex flex-col gap-3 px-6 pt-6">
         <DialogHeader className="gap-1.5">
-          <DialogTitle className="text-dialog-title text-settings-text font-medium">Trust this folder?</DialogTitle>
+          <DialogTitle>Trust this folder?</DialogTitle>
           <FolderPath folder={folder} />
         </DialogHeader>
-        <DialogDescription className="text-settings-text-secondary text-settings-small leading-[1.5]">
+        <DialogDescription>
           Agents can edit and run files here without asking, and the folder's own settings can run code.
         </DialogDescription>
         <ErrorLine error={action.error} />
       </div>
       <div className="flex items-center justify-end gap-2 px-6 pt-6 pb-5">
-        <DialogPill look="secondary" disabled={action.busy} onClick={() => answer(false)}>
+        <Button variant="ghost" size="sm" disabled={action.busy} onClick={() => answer(false)}>
           Don't trust
-        </DialogPill>
-        <DialogPill look="primary" disabled={action.busy} onClick={() => answer(true)}>
+        </Button>
+        <Button size="sm" disabled={action.busy} onClick={() => answer(true)}>
           Trust folder
-        </DialogPill>
+        </Button>
       </div>
     </div>
   );
