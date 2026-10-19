@@ -81,3 +81,17 @@ test("/ opens the commands menu after leading spaces, never mid-sentence", () =>
   // The caret before the slash.
   assert.equal(slashTrigger("  /x", "/", 2), null);
 });
+
+test("the session's Browser tabs are a section of their own, and a query finds one by its title", () => {
+  const tabs = [
+    { id: "browser:1", title: "Checkout", url: "http://localhost:3000/checkout" },
+    { id: "browser:2", title: "", url: "https://example.com/" },
+  ];
+  const sections = mentionSections("", { ...sources, tabs });
+  assert.deepEqual(sections.map((section) => section.title), ["Workers", "Browser tabs", "Files", "Folders", "Chats"]);
+  assert.deepEqual(sections[1]?.rows.map((row) => [row.label, row.detail, row.mention]), [
+    ["Checkout", "localhost:3000/checkout", { type: "browserTab", tab: "browser:1", title: "Checkout", url: "http://localhost:3000/checkout" }],
+    ["example.com", undefined, { type: "browserTab", tab: "browser:2", title: "", url: "https://example.com/" }],
+  ]);
+  assert.deepEqual(mentionSections("checko", { ...sources, tabs })[0]?.rows[0]?.mention.type, "browserTab");
+});

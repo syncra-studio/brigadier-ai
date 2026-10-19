@@ -20,9 +20,16 @@ export type MentionRow = {
 /** A part of the `@` menu: its heading (none for the ranked results), rows and a grey note. */
 export type MentionSection = { title: string | null; rows: MentionRow[]; note?: string | undefined };
 
-/** What can be mentioned: the open session's workers, its checkout's files and folders, other chats. */
+/** A Browser tab of the open session: its id, its page's title and address. */
+export type MentionTab = { id: string; title: string; url: string };
+
+/**
+ * What can be mentioned: the open session's workers, its Browser tabs, its checkout's files and
+ * folders, other chats.
+ */
 export type MentionSources = {
   workers: readonly MentionTarget[];
+  tabs?: readonly MentionTab[];
   files: readonly string[];
   folders: readonly string[];
   /** Newest first. */
@@ -60,6 +67,16 @@ function workerRow(target: MentionTarget): MentionRow {
   return { mention: { type: "task", id: target.id }, label: `task-${target.number}`, name: target.title, trailing: target.state };
 }
 
+/** A page's address as it reads: without its scheme or a trailing slash. */
+function address(url: string): string {
+  return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+}
+
+function tabRow(tab: MentionTab): MentionRow {
+  const name = tab.title.trim() || address(tab.url) || "New tab";
+  return { mention: { type: "browserTab", tab: tab.id, title: tab.title, url: tab.url }, label: name, name, detail: tab.title.trim() ? address(tab.url) : undefined };
+}
+
 function chatRow(chat: { id: string; title: string }): MentionRow {
   return { mention: { type: "chat", id: chat.id, title: chat.title }, label: chat.title, name: chat.title };
 }
@@ -80,7 +97,7 @@ function score(row: MentionRow, query: string): number | null {
   return path.rank === 2 ? 5 : 3;
 }
 
-const KIND_ORDER: Record<Mention["type"], number> = { task: 0, file: 1, folder: 2, chat: 3, page: 4 };
+const KIND_ORDER: Record<Mention["type"], number> = { task: 0, browserTab: 1, file: 2, folder: 3, chat: 4, page: 5 };
 
 /**
  * The `@` menu for `query`. Before anything is typed, a section per kind under its heading:
@@ -92,6 +109,7 @@ export function mentionSections(query: string, sources: MentionSources): Mention
   if (!query) {
     const sections: MentionSection[] = [];
     if (sources.workers.length > 0) sections.push({ title: "Workers", rows: sources.workers.map(workerRow) });
+    if (sources.tabs?.length) sections.push({ title: "Browser tabs", rows: sources.tabs.map(tabRow) });
     if (sources.files.length > 0) sections.push({ title: "Files", rows: [], note: "Type to search for files" });
     const top = sources.folders.filter((folder) => !folder.includes("/")).slice(0, SECTION_ROWS);
     if (top.length > 0) sections.push({ title: "Folders", rows: top.map((folder) => pathRow("folder", folder)) });
@@ -100,6 +118,7 @@ export function mentionSections(query: string, sources: MentionSources): Mention
   }
   const rows = [
     ...sources.workers.map(workerRow),
+    ...(sources.tabs ?? []).map(tabRow),
     ...sources.files.map((file) => pathRow("file", file)),
     ...sources.folders.map((folder) => pathRow("folder", folder)),
     ...sources.chats.map(chatRow),

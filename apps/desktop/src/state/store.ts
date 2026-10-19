@@ -520,6 +520,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
               const queued = item.mentions[index];
               if (mention.type === "file" || mention.type === "folder") return queued?.type === mention.type && mention.path === queued.path;
               if (mention.type === "task") return queued?.type === "task" && mention.id === queued.id;
+              if (mention.type === "browserTab") return queued?.type === "browserTab" && mention.tab === queued.tab;
               return queued?.type === "chat" && mention.id === queued.id && mention.title === queued.title;
             }) &&
             entry.attachments.length === item.attachments.length &&

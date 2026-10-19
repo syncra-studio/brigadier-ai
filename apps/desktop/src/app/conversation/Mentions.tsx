@@ -1,5 +1,5 @@
 import { useAuiState, type TextMessagePartProps, type Unstable_TriggerItem } from "@assistant-ui/react";
-import { Chat, File, Folder } from "@openai/apps-sdk-ui/components/Icon";
+import { Chat, File, Folder, Globe } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -15,9 +15,10 @@ import { MessagePastedText } from "@/components/assistant-ui/elements/pasted-tex
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
 import { normalizedImages } from "@/lib/inlineImages";
-import { foldersOf, mentionSections, type MentionRow, type MentionTarget } from "@/app/conversation/mentionSearch";
+import { foldersOf, mentionSections, type MentionRow, type MentionTab, type MentionTarget } from "@/app/conversation/mentionSearch";
 import { listFiles, listProjectFiles } from "@/state/actions";
 import { useBoard } from "@/state/board";
+import { type BrowserTabState, sessionTabs, sessionWith, useSessionTabsOf } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 export type { MentionTarget };
@@ -36,6 +37,8 @@ function label(mention: Mention, targets: readonly MentionTarget[]): string | nu
       return mention.path;
     case "chat":
       return mention.title;
+    case "browserTab":
+      return mention.title.trim() || mention.url;
     case "page":
       // Sent from a page's own composer, never written in the text.
       return null;
@@ -122,7 +125,7 @@ export function mentionsIn(
   for (const mention of known) {
     if (mention.type === "task") continue;
     const name = label(mention, targets);
-    const key = `${mention.type}:${"path" in mention ? mention.path : mention.id}`;
+    const key = itemOf(mention, name ?? "").id;
     if (name && !seen.has(key) && hasMention(text, name)) {
       seen.add(key);
       mentions.push(mention);
@@ -158,6 +161,7 @@ export class MentionMemory {
     for (const mention of mentions) {
       if (mention.type === "file" || mention.type === "folder") this.record(mention, mention.path);
       else if (mention.type === "chat") this.record(mention, mention.title);
+      else if (mention.type === "browserTab") this.record(mention, mention.title.trim() || mention.url);
     }
   }
 
@@ -188,7 +192,9 @@ export class MentionMemory {
 
 /** A mention's menu item: its id is unique across kinds, its label goes in the text. */
 function itemOf(mention: Mention, name: string): Unstable_TriggerItem {
-  const id = "path" in mention ? `${mention.type}:${mention.path}` : `${mention.type}:${mention.id}`;
+  const id = "path" in mention ? `${mention.type}:${mention.path}`
+    : mention.type === "browserTab" ? `${mention.type}:${mention.tab}`
+    : `${mention.type}:${mention.id}`;
   return { id, type: mention.type, label: name };
 }
 
@@ -204,6 +210,12 @@ export function mentionOf(item: { id: string; type: string; label: string }): Me
       return { type: "chat", id: rest, title: item.label };
     case "task":
       return { type: "task", id: rest };
+    case "browserTab": {
+      // Its page as the tab shows it now; the tab gone, the address is unknown.
+      const session = sessionWith(rest);
+      const tab = session ? sessionTabs(session).tabs.find((each) => each.id === rest) : undefined;
+      return { type: "browserTab", tab: rest, title: item.label, url: tab?.kind === "browser" ? tab.url : "" };
+    }
     default:
       return null;
   }
@@ -275,6 +287,8 @@ function iconOf(mention: Mention): ReactNode {
       return <Folder />;
     case "chat":
       return <Chat />;
+    case "browserTab":
+      return <Globe />;
     default:
       return <File />;
   }
@@ -293,6 +307,10 @@ export const Mentions: FC<{
   const [refresh, setRefresh] = useState(0);
   const onOpen = useCallback(() => setRefresh((value) => value + 1), []);
   const files = useCheckoutFiles(conversation, refresh, projectId);
+  const sessionTabsNow = useSessionTabsOf(conversation?.kind === "session" ? conversation.id : null);
+  const tabs = useMemo((): MentionTab[] => sessionTabsNow.tabs
+    .filter((tab): tab is BrowserTabState => tab.kind === "browser" && Boolean(tab.url))
+    .map((tab) => ({ id: tab.id, title: tab.title, url: tab.url })), [sessionTabsNow]);
   const folders = useMemo(() => foldersOf(files?.files ?? []), [files]);
   const chats = useApp(
     useShallow((s) =>
@@ -313,11 +331,11 @@ export const Mentions: FC<{
         detail: row.detail,
         trailing: row.trailing,
       });
-      return mentionSections(query, { workers: targets, files: files?.files ?? [], folders, chats }).map(
+      return mentionSections(query, { workers: targets, tabs, files: files?.files ?? [], folders, chats }).map(
         (section) => ({ title: section.title, options: section.rows.map(option), note: section.note }),
       );
     },
-    [targets, files, folders, chats],
+    [targets, tabs, files, folders, chats],
   );
 
   return <ComposerMentions search={search} onOpen={onOpen} />;

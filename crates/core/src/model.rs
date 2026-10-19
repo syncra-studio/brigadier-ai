@@ -574,6 +574,12 @@ pub enum Mention {
     /// The page the message was sent from: while it is the user's latest message, the thread
     /// may read and change that page (and no other).
     Page { id: String, title: String },
+    /// A Browser tab of the session the user pointed at: `browser_read` reads it.
+    BrowserTab {
+        tab: String,
+        title: String,
+        url: String,
+    },
 }
 
 /// Also reads mentions stored before files and chats could be mentioned: a bare task id.
@@ -582,11 +588,28 @@ impl<'de> Deserialize<'de> for Mention {
         #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "camelCase")]
         enum Tagged {
-            Task { id: TaskId },
-            File { path: String },
-            Folder { path: String },
-            Chat { id: ConversationId, title: String },
-            Page { id: String, title: String },
+            Task {
+                id: TaskId,
+            },
+            File {
+                path: String,
+            },
+            Folder {
+                path: String,
+            },
+            Chat {
+                id: ConversationId,
+                title: String,
+            },
+            Page {
+                id: String,
+                title: String,
+            },
+            BrowserTab {
+                tab: String,
+                title: String,
+                url: String,
+            },
         }
         #[derive(Deserialize)]
         #[serde(untagged)]
@@ -600,6 +623,9 @@ impl<'de> Deserialize<'de> for Mention {
             Stored::Tagged(Tagged::Folder { path }) => Mention::Folder { path },
             Stored::Tagged(Tagged::Chat { id, title }) => Mention::Chat { id, title },
             Stored::Tagged(Tagged::Page { id, title }) => Mention::Page { id, title },
+            Stored::Tagged(Tagged::BrowserTab { tab, title, url }) => {
+                Mention::BrowserTab { tab, title, url }
+            }
         })
     }
 }
