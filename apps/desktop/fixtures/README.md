@@ -130,7 +130,7 @@ build.
 
 `/fixtures/composer-suggestion.html` opens a Chat whose finished request carries its guess
 at the next message, in the app's own conversation view. It drives the real keys: the guess shows
-in the empty composer with "Press Tab to accept", Tab puts it in the field unsent, it comes back
+in the empty composer with no key hint, Tab puts it in the field unsent, it comes back
 when the field empties and hides while something is typed, and a working request shows none. It
 writes JSON into `#composer-suggestion-result`;
 `ComposerSuggestionRender.test.ts` checks it. IPC stays mocked. This entry is absent from the

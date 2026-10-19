@@ -3,8 +3,8 @@
  * the user's next message (`UserRequest.suggestion`, G18) in the app's own conversation view.
  * A Chat whose one request is over carries a guess; IPC is mocked and records every
  * request (Enter takes the guess, never sends). It drives the
- * real keys (`fixtureInput`): Tab, → and Enter each take it, and its "Press Tab to accept" goes
- * once one was taken. Then it checks the field keeps typed
+ * real keys (`fixtureInput`): Tab, → and Enter each take it; no key hint shows with it. Then it
+ * checks the field keeps typed
  * text as typed (no text checking, no double-space period), and writes what it saw as JSON
  * into `<pre id="composer-suggestion-result">`.
  */
@@ -43,8 +43,6 @@ const request = {
 
 /** Every request, in order. */
 const asked: string[] = [];
-// Never taken one: the key hint shows.
-localStorage.removeItem("brigadier.suggestionAccepted");
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
@@ -91,7 +89,6 @@ async function drive() {
   try {
     await until("the guess", () => ghost() !== null && field() !== null);
     seen.ghost = ghost()?.textContent;
-    seen.chip = ghost()?.querySelector("[data-slot=composer-suggestion-key]")?.textContent;
     seen.placeholder = document.querySelector("[data-slot=aui_composer-shell] [contenteditable=true]")?.getAttribute("aria-placeholder") ?? null;
     // Tab in the empty field takes it, unsent.
     await fixtureClick(field()!);
@@ -104,8 +101,6 @@ async function drive() {
     await until("the field empty", () => typed() === "");
     await until("the guess back", () => ghost() !== null);
     seen.backWhenEmpty = true;
-    // Taken once, the hint is gone for good.
-    seen.chipAfterTaken = ghost()?.querySelector("[data-slot=composer-suggestion-key]") !== null;
     seen.ghostAfterTaken = ghost()?.textContent;
     // → and Enter take it too; Enter sends nothing.
     const takes: Record<string, boolean> = {};

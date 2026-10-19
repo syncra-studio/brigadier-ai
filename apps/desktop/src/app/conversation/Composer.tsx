@@ -31,7 +31,7 @@ import {
   ProvidersButton,
   useShownPermission,
 } from "@/app/conversation/SetupPickers";
-import { SuggestionContext, useSuggestion, useSuggestionAccepted } from "@/app/conversation/suggestion";
+import { SuggestionContext, useSuggestion } from "@/app/conversation/suggestion";
 import type { ComposerInputProps } from "@/app/conversation/ComposerEditor";
 import { type MentionMemory, Mentions } from "@/app/conversation/Mentions";
 import { SlashCommands } from "@/app/conversation/SlashCommands";
@@ -337,28 +337,16 @@ function ComposerDraft({
 function ComposerInput({ guess, ...props }: ComposerInputProps & { guess: string | null }) {
   const { placeholder, autoFocus } = props;
   const empty = useAuiState((s) => s.composer.isEmpty);
-  const accepted = useSuggestionAccepted();
   return (
     <div className="relative min-w-0">
       <ComposerField placeholder={placeholder} autoFocus={autoFocus} />
-      {/* The guess at the next message, where the placeholder would be; its key hint only until one is taken. */}
+      {/* The guess at the next message, where the placeholder would be. */}
       {guess && empty && (
         <p
           data-slot="composer-suggestion"
           className="text-muted-foreground/60 pointer-events-none absolute inset-x-0 top-0 px-2 py-2.5 text-base"
         >
           {guess}
-          {!accepted && (
-            <>
-              {" "}
-              <span
-                data-slot="composer-suggestion-key"
-                className="bg-foreground/5 text-muted-foreground/60 ms-0.5 inline-block rounded-sm px-1.5 py-0.5 align-middle text-sm leading-4"
-              >
-                Press Tab to accept
-              </span>
-            </>
-          )}
         </p>
       )}
     </div>

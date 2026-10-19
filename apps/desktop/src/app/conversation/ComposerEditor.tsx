@@ -44,7 +44,7 @@ import { clearBackgroundSend, markBackgroundSend } from "@/state/backgroundSend"
 import { isTaskTab } from "@/state/tabStates";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { useImagesBlocked } from "@/app/conversation/imageInput";
-import { SuggestionContext, markSuggestionAccepted } from "@/app/conversation/suggestion";
+import { SuggestionContext } from "@/app/conversation/suggestion";
 import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import {
   imageMarkerAt,
@@ -253,7 +253,6 @@ function SuggestionKeys() {
       if (!aui.composer().getState().isEmpty) return false;
       event.preventDefault();
       aui.composer().setText(guess);
-      markSuggestionAccepted();
       return true;
     };
     return mergeRegister(
