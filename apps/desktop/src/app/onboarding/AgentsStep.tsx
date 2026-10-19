@@ -18,8 +18,7 @@ import { useApp } from "@/state/store";
 // sign-in in the daemon first; ProviderKind holds only these two.
 const PROVIDERS: readonly ProviderKind[] = ["claude", "codex"];
 
-// TODO(onboarding): confirm install guide URLs with the user. The app had none; these are the
-// vendors' own install pages. (Connect's in-app installer, state/connect.ts, could be used instead.)
+// Install opens each vendor's own install page.
 const INSTALL_GUIDES: Record<ProviderKind, string> = {
   claude: "https://code.claude.com/docs/en/setup",
   codex: "https://github.com/openai/codex",
