@@ -268,6 +268,9 @@ pub fn wakes_waiting_work(before: &Settings, after: &Settings) -> bool {
 ///
 /// Version 2: a model's worker switch saved before operate work existed covers it too, so a
 /// model kept from worker tasks stays kept from all of them.
+///
+/// Version 3: merging on its own used to default on; settings saved before this version read
+/// it as off, once. A user's own later choice (on or off) after that is kept from then on.
 pub fn migrate(settings: &Settings) -> Option<Settings> {
     if settings.settings_version >= SETTINGS_VERSION {
         return None;
@@ -303,6 +306,9 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
                 rule.categories.push(TaskCategory::Operate);
             }
         }
+    }
+    if settings.settings_version < 3 {
+        next.auto_merge = false;
     }
     next.settings_version = SETTINGS_VERSION;
     Some(next)
@@ -540,6 +546,30 @@ mod tests {
             "haiku"
         ));
         assert!(migrate(&next).is_none());
+    }
+
+    #[test]
+    fn work_stops_merging_on_its_own_once_for_settings_saved_before_the_new_default() {
+        let settings = Settings {
+            auto_merge: true,
+            settings_version: 2,
+            ..Settings::default()
+        };
+        let next = migrate(&settings).expect("version 2 converts");
+        assert!(!next.auto_merge);
+        assert_eq!(next.settings_version, SETTINGS_VERSION);
+        assert!(migrate(&next).is_none());
+    }
+
+    #[test]
+    fn work_keeps_merging_on_its_own_once_the_user_chose_it_after_the_new_default() {
+        let settings = Settings {
+            auto_merge: true,
+            settings_version: SETTINGS_VERSION,
+            ..Settings::default()
+        };
+        assert!(migrate(&settings).is_none());
+        assert!(settings.auto_merge);
     }
 
     #[test]
