@@ -5234,9 +5234,9 @@ impl SessionManager {
             // request answered by an earlier turn keeps that answer: a quiet turn for a late
             // report or addendum doesn't reopen it.
             if let Some(request) = &served {
-                let quiet = reply
-                    .as_deref()
-                    .is_none_or(|reply| reply.trim_end().ends_with(prompts::QUIET));
+                let quiet = reply.as_deref().is_none_or(|reply| {
+                    reply.trim_end().ends_with(prompts::QUIET) || without_quiet(reply).is_none()
+                });
                 if status == TurnStatus::Completed && quiet {
                     if !state.answered.contains(request) {
                         state.deferred.insert(request.clone());
@@ -6705,7 +6705,10 @@ impl Quiet {
                     let (so_far, said) = self.held.entry(item_id.clone()).or_default();
                     so_far.push_str(&text);
                     *said = said.or(phase);
-                    if prompts::QUIET.starts_with(so_far.trim()) {
+                    // A reply that starts with it is quiet, sources and all: it shows only
+                    // once whole, if anything of it is left (`without_quiet`).
+                    let trimmed = so_far.trim();
+                    if prompts::QUIET.starts_with(trimmed) || trimmed.starts_with(prompts::QUIET) {
                         return None;
                     }
                     let (text, phase) = self.held.remove(&item_id).unwrap_or_default();
@@ -6734,9 +6737,16 @@ impl Quiet {
 const ASK_ON_A_CARD: &str = "[Your reply asked the user a question in text. Ask it on a card instead, with ask_user (with options and the one you recommend); a merge needs no question: the user merges by asking in words. Then reply [quiet], and don't repeat the question in text.]";
 
 /// An orchestrator reply as the user sees it: without a trailing [`prompts::QUIET`], and
-/// nothing when that was all of it.
+/// nothing when that was all of it, or when [`prompts::QUIET`] came first and only the
+/// sources it read follow ("[quiet]\n\n### Sources …").
 fn without_quiet(text: &str) -> Option<&str> {
-    let text = text.trim_end();
+    let mut text = text.trim_end();
+    if let Some(rest) = text.trim_start().strip_prefix(prompts::QUIET) {
+        text = rest.trim_start();
+        if text.starts_with("### Sources") {
+            return None;
+        }
+    }
     let text = text.strip_suffix(prompts::QUIET).unwrap_or(text).trim_end();
     (!text.trim_start().is_empty()).then_some(text)
 }
@@ -7120,6 +7130,35 @@ fn setup_choice(conversation: &crate::model::Conversation) -> Option<ModelChoice
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_quiet_reply_that_lists_its_sources_shows_nothing() {
+        assert_eq!(without_quiet("[quiet]"), None);
+        assert_eq!(without_quiet("  [quiet]\n"), None);
+        assert_eq!(
+            without_quiet("[quiet]\n\n### Sources\n1. [Box](https://example.com/box)"),
+            None
+        );
+        assert_eq!(
+            without_quiet("The answer [1].\n[quiet]"),
+            Some("The answer [1].")
+        );
+        assert_eq!(without_quiet("[quiet]\n\nThe answer."), Some("The answer."));
+        let mut quiet = Quiet::default();
+        let delta = |text: &str| ProviderEvent::MessageDelta {
+            item_id: "m1".into(),
+            text: text.into(),
+            phase: None,
+        };
+        for text in [
+            "[qui",
+            "et]\n\n",
+            "### Sources\n",
+            "1. [Box](https://example.com/box)",
+        ] {
+            assert!(quiet.pass(vec![delta(text)]).is_empty(), "{text}");
+        }
+    }
 
     fn image_ref(id: &str, inline: bool, mime: &str) -> AttachmentRef {
         AttachmentRef {
