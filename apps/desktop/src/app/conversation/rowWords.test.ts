@@ -21,6 +21,19 @@ test("every worker uses a short plain unique job name, regardless of role", () =
   assert.equal(workerName({}, { ...byNumber(1), title: "File summary", role: "lead", phase: 1 }), "File summary");
 });
 
+test("worker names follow the board's tasks: worked out once per record, again for a changed one (issue 401)", () => {
+  const first = byNumber(1);
+  const name = workerName(tasks, first);
+  assert.equal(workerName(tasks, first), name);
+  // A new record (as the board makes when a task changes) names the worker by its new title.
+  const renamed = { ...tasks, [first.id]: { ...first, title: "Tidy release notes" } };
+  assert.equal(workerName(renamed, renamed[first.id]!), "Tidy release notes");
+  // A worker the record doesn't hold yet comes after all of them, its name kept unique.
+  const extra = { ...first, id: "not-on-board", number: 999, title: first.title };
+  assert.notEqual(workerName(tasks, extra), name);
+  assert.equal(workerName(tasks, extra), workerName(tasks, extra));
+});
+
 test("a line's task-N reads as the worker's name, once where the line already quotes it", () => {
   assert.equal(
     namedTasks("Landed task-13 “Make cause 1's fix in the A/B note obey §10.6” on `run`", tasks),

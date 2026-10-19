@@ -158,10 +158,9 @@ export function shortWorkerName(title: string, fallback = "Worker task"): string
   return name.split(" ").length === 1 ? `${name} task` : name;
 }
 
-/** Unique in a chat, including old stored workers created before names were constrained. */
-export function workerName(tasks: Readonly<Record<string, Task>>, task: Task, _depth = 0): string {
-  const ordered = Object.values(tasks).toSorted((a, b) => a.number - b.number);
-  if (!ordered.some((other) => other.id === task.id)) ordered.push(task);
+/** Every worker's name in `ordered`, by id: unique in a chat, in the order the workers came. */
+function namesInOrder(ordered: readonly Task[]): Map<string, string> {
+  const names = new Map<string, string>();
   const used = new Set<string>();
   for (const other of ordered) {
     const fallback = other.kind === "review" ? "Review changes" : other.kind === "verify" ? "Check changes" : "Worker task";
@@ -170,9 +169,31 @@ export function workerName(tasks: Readonly<Record<string, Task>>, task: Task, _d
     let ordinal = 2;
     while (used.has(name.toLowerCase())) name = `${base.split(" ").slice(0, 3).join(" ")} ${ordinal++}`;
     used.add(name.toLowerCase());
-    if (other.id === task.id) return name;
+    names.set(other.id, name);
   }
-  return "Worker task";
+  return names;
+}
+
+/**
+ * The names of a board's workers, worked out once per tasks record: a board's tasks are a new
+ * record whenever one changes, and every worker named on screen asks on every render, so working
+ * them out each time made opening the Workers panel lag in a session with many workers.
+ */
+const namesOfTasks = new WeakMap<Readonly<Record<string, Task>>, Map<string, string>>();
+
+const inOrder = (a: Task, b: Task) => a.number - b.number;
+
+/** Unique in a chat, including old stored workers created before names were constrained. */
+export function workerName(tasks: Readonly<Record<string, Task>>, task: Task, _depth = 0): string {
+  let names = namesOfTasks.get(tasks);
+  if (!names) {
+    names = namesInOrder(Object.values(tasks).toSorted(inOrder));
+    namesOfTasks.set(tasks, names);
+  }
+  const name = names.get(task.id);
+  if (name !== undefined) return name;
+  // A worker the record doesn't hold yet comes after all of them.
+  return namesInOrder([...Object.values(tasks).toSorted(inOrder), task]).get(task.id) ?? "Worker task";
 }
 
 /**
