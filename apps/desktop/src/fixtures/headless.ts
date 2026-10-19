@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { accessSync, constants, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { type ChildProcess, spawn } from "node:child_process";
+import { accessSync, closeSync, constants, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
@@ -44,9 +44,150 @@ function chromium(): string {
   throw new Error("Fixture rendering tests need Chromium. Set CHROME_BIN to an installed Chrome/Chromium.");
 }
 
+/** A Vite server on the fixtures: its address, its process, and the files its output goes to. */
+export type FixtureServer = { url: string; pid: number; log: string; errors: string };
+
+// Where a run's one server is announced to its test files (`globalSetup`, below).
+const ANNOUNCED = "BRIGADIER_FIXTURE_SERVER";
+let serversStarted = 0;
+
 /**
- * Serves the fixtures through Vite until the test ends: its address, a scratch folder in the
- * system temporary folder (never the app's data), what Vite logged, and `stopFirst`, which names
+ * Starts Vite on the fixtures, its dependency cache and output in a folder of its own (in the
+ * system temporary folder, never the app's data, and gone if it can't start), and answers once its dependencies are optimized: a
+ * render then loads the page, not a cold dev server's first optimization. It is a throwaway:
+ * it goes outright (SIGKILL), as Vite's close can wait on a request still being served.
+ */
+async function startFixtureServer(): Promise<{ server: FixtureServer; child: ChildProcess; folder: string }> {
+  const folder = mkdtempSync(join(tmpdir(), "fixture-server-"));
+  // Keep Vite outside the pure-module test loader, which only resolves TypeScript imports.
+  const config = {
+    cacheDir: join(folder, "vite-cache"),
+    logLevel: "error",
+    // Vite forwards the page's console to its log when it detects an agent's shell (AI_AGENT),
+    // which would read as a compilation error here: the page's console stays its own.
+    server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null, forwardConsole: false },
+  };
+  const log = join(folder, "vite.log");
+  const errors = join(folder, "vite-errors.log");
+  const out = openSync(log, "a");
+  const err = openSync(errors, "a");
+  // Vite logs each request's start (>) and end (<), so a page that never finishes loading names
+  // the request it waits on, and a dependency optimized again mid-run (which would leave a page
+  // loaded before it asking for files that are gone).
+  const server = spawn(process.execPath, ["--input-type=module", "--eval", `
+    import { createLogger, createServer } from "vite";
+    const requests = { name: "requests", configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        console.log("> " + request.url);
+        response.on("close", () => console.log("< " + request.url));
+        next();
+      });
+    } };
+    const logger = createLogger(${JSON.stringify(config.logLevel)});
+    const info = (message) => { if (/dependencies optimized|optimized dependencies changed/.test(message)) console.log("optimizer: " + message); };
+    const server = await createServer({ ...${JSON.stringify(config)}, customLogger: { ...logger, info }, plugins: [requests] });
+    await server.listen();
+    // Dependencies are optimized once the scan of every fixture's imports has run and its bundle
+    // is written; no page waits on it after that.
+    const optimizer = server.environments.client.depsOptimizer;
+    await optimizer?.scanProcessing;
+    await Promise.all(Object.values(optimizer?.metadata.discovered ?? {}).map((dep) => dep.processing));
+    console.log("ready " + server.resolvedUrls.local[0]);
+    // A run stopped outright (its teardown never ran) leaves no server behind.
+    const parent = process.ppid;
+    setInterval(() => { if (process.ppid !== parent) process.exit(0); }, 1000).unref();
+  `], { stdio: ["ignore", out, err] });
+  serversStarted += 1;
+  closeSync(out);
+  closeSync(err);
+  const url = await new Promise<string>((resolve, reject) => {
+    // Its first optimization takes a while on a busy machine.
+    const deadline = Date.now() + 120000;
+    // Until it's ready: once it is, its end (and its folder) is the run's to handle.
+    const failed = (error: Error) => {
+      clearInterval(poll);
+      server.off("error", failed);
+      server.off("exit", exited);
+      rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      reject(error);
+    };
+    const exited = (code: number | null) => failed(new Error(`Vite exited ${code}: ${readFileSync(errors, "utf8")}`));
+    const poll = setInterval(() => {
+      const address = readFileSync(log, "utf8").match(/^ready (http:\/\/127\.0\.0\.1:\d+\/)$/m)?.[1];
+      if (address) {
+        clearInterval(poll);
+        server.off("error", failed);
+        server.off("exit", exited);
+        resolve(address);
+      } else if (Date.now() > deadline) {
+        server.kill("SIGKILL");
+        failed(new Error(`Vite startup timed out: ${readFileSync(errors, "utf8")}`));
+      }
+    }, 50);
+    server.once("error", failed);
+    server.once("exit", exited);
+  });
+  return { server: { url, pid: server.pid!, log, errors }, child: server, folder };
+}
+
+let own: Promise<FixtureServer> | undefined;
+
+/** How many servers this process started: none in a run's test file, one in a file run alone. */
+export function fixtureServersStarted(): number {
+  return serversStarted;
+}
+
+/**
+ * The fixtures' server: the run's one (`globalSetup`) or, for a file run on its own, one the
+ * file's renders share, gone with its process.
+ */
+export function fixtureServer(): Promise<FixtureServer> {
+  const announced = process.env[ANNOUNCED];
+  if (announced) return Promise.resolve(JSON.parse(announced) as FixtureServer);
+  own ??= (async () => {
+    const { server, child, folder } = await startFixtureServer();
+    // It doesn't keep the file's run going. When that ends, Vite goes outright, then its folder.
+    child.unref();
+    process.once("exit", () => {
+      child.kill("SIGKILL");
+      rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+    return server;
+  })();
+  return own;
+}
+
+let run: { folder: string; child: ChildProcess } | undefined;
+
+/**
+ * `node --test --test-global-setup` (scripts/run-tests.mjs): one server, its dependencies already
+ * optimized, for every render test file of the run, which finds it through the environment.
+ */
+export async function globalSetup(): Promise<void> {
+  const { server, child, folder } = await startFixtureServer();
+  run = { folder, child };
+  process.env[ANNOUNCED] = JSON.stringify(server);
+}
+
+// All at once: `--test-force-exit` ends the process while a teardown still waits.
+export function globalTeardown(): void {
+  if (!run) return;
+  run.child.kill("SIGKILL");
+  rmSync(run.folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  run = undefined;
+}
+
+/** The size of a file of a server's output, then what it gained since. */
+function sizeOf(file: string): number {
+  return statSync(file).size;
+}
+function since(file: string, from: number): string {
+  return readFileSync(file).subarray(from).toString();
+}
+
+/**
+ * Serves the fixtures until the test ends: the server's address, a scratch folder in the system
+ * temporary folder (never the app's data), what Vite logged since, and `stopFirst`, which names
  * what must be gone before the folder goes (the browser, whose profile is in it).
  */
 async function serveFixtures(t: TestContext): Promise<{
@@ -55,74 +196,20 @@ async function serveFixtures(t: TestContext): Promise<{
   log: () => string;
   stopFirst: (stop: () => void | Promise<void>) => void;
 }> {
+  const server = await fixtureServer();
   const scratch = mkdtempSync(join(tmpdir(), "fixture-render-"));
   const stops: (() => void | Promise<void>)[] = [];
-  // Keep Vite outside the pure-module test loader, which only resolves TypeScript imports.
-  const config = {
-    cacheDir: join(scratch, "vite-cache"),
-    logLevel: "error",
-    // Vite forwards the page's console to its log when it detects an agent's shell (AI_AGENT),
-    // which would read as a compilation error here: the page's console stays its own.
-    server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null, forwardConsole: false },
-  };
-  // Vite logs each request's start (>) and end (<), so a page that never finishes loading names
-  // the request it waits on.
-  const server = spawn(process.execPath, ["--input-type=module", "--eval", `
-    import { createServer } from "vite";
-    const requests = { name: "requests", configureServer(server) {
-      server.middlewares.use((request, response, next) => {
-        console.log("> " + request.url);
-        response.on("close", () => console.log("< " + request.url));
-        next();
-      });
-    } };
-    const server = await createServer({ ...${JSON.stringify(config)}, plugins: [requests] });
-    await server.listen();
-    console.log(server.resolvedUrls.local[0]);
-    process.on("SIGTERM", async () => { await server.close(); process.exit(0); });
-  `], { stdio: ["ignore", "pipe", "pipe"] });
-  let serverErrors = "";
-  let serverOutput = "";
-  server.stdout.on("data", (chunk: Buffer) => { serverOutput += chunk.toString(); });
-  server.stderr.on("data", (chunk: Buffer) => { serverErrors += chunk.toString(); });
+  const logFrom = sizeOf(server.log);
+  const errorsFrom = sizeOf(server.errors);
   t.after(async () => {
     // The browser first: until it's gone it writes into its profile here, and the folder can't go.
     for (const stop of stops) await stop();
-    if (server.exitCode === null && server.signalCode === null) {
-      const stopped = new Promise((resolve) => server.once("exit", resolve));
-      server.kill();
-      // Vite's close can wait on a request still being served: it goes outright after a moment,
-      // so the test (and the file's run) always ends.
-      const stuck = setTimeout(() => server.kill("SIGKILL"), 3000);
-      await stopped;
-      clearTimeout(stuck);
-    }
-    // Its pipes too, which a process it started could otherwise hold open.
-    server.stdout.destroy();
-    server.stderr.destroy();
     // A process the browser started may still be closing its files: a few tries.
     rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    assert.equal(serverErrors, "", "Vite must render without compilation errors");
+    // Another file's render may share the server: an error in its time fails this one too.
+    assert.equal(since(server.errors, errorsFrom), "", "Vite must render without compilation errors");
   });
-  const url = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Vite startup timed out: ${serverErrors}`)), 15000);
-    server.stdout.on("data", () => {
-      const address = serverOutput.match(/http:\/\/127\.0\.0\.1:\d+\//)?.[0];
-      if (address) {
-        clearTimeout(timeout);
-        resolve(address);
-      }
-    });
-    server.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    server.once("exit", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`Vite exited ${code}: ${serverErrors}`));
-    });
-  });
-  return { url, scratch, log: () => serverOutput, stopFirst: (stop) => stops.push(stop) };
+  return { url: server.url, scratch, log: () => since(server.log, logFrom), stopFirst: (stop) => stops.push(stop) };
 }
 
 /** The requests Vite started and never answered, from its log. */

@@ -8,6 +8,9 @@
 // Under CI (CI=true) a test file that fails is run once more, and the run passes if it passes
 // then: shared runners make some render tests miss a timing now and then. A test that fails both
 // tries is skipped in its file and listed in issue #85.
+//
+// A run with render tests starts one Vite server for all of them (src/fixtures/headless.ts),
+// its dependencies optimized before the first test file starts.
 import { spawn } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +21,17 @@ const given = process.argv.slice(2);
 const named = given.some((arg) => /\.test\.[cm]?[jt]s$/.test(arg));
 const retry = process.env.CI === "true";
 
+/** Whether `files` (with `node --test`'s options) take in a render test: a glob may. */
+function rendering(files) {
+  return files.filter((arg) => !arg.startsWith("-")).some((arg) => {
+    try {
+      return readFileSync(arg, "utf8").includes("@/fixtures/headless");
+    } catch {
+      return true;
+    }
+  });
+}
+
 /** One `node --test` run of `files`: its exit code and, under CI, the files with a failed test. */
 function runOnce(files) {
   const failedList = join(tmpdir(), `brigadier-failed-tests-${process.pid}-${Date.now()}.json`);
@@ -27,6 +41,7 @@ function runOnce(files) {
     : [];
   const run = spawn(process.execPath, [
     "--import", "./scripts/test-alias.mjs", "--test", "--test-timeout=180000", "--test-force-exit", ...reporters,
+    ...(rendering(files) ? ["--test-global-setup=./src/fixtures/headless.ts"] : []),
     ...files,
   ], { stdio: ["inherit", "pipe", "pipe"] });
 
