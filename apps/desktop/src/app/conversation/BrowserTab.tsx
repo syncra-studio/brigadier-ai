@@ -45,7 +45,7 @@ import {
   zoomPage,
 } from "@/state/browsers";
 import { openSettings } from "@/state/actions";
-import { handBack, useAgentPause, userUsed } from "@/state/agentPause";
+import { handBack, pageShows, useAgentPause, userUsed } from "@/state/agentPause";
 import { openBrowserSettings } from "@/state/browserSettings";
 import { useBrowserOn } from "@/state/links";
 import { selectTab, sessionWith, useSessionTabs } from "@/state/sessionTabs";
@@ -464,6 +464,7 @@ export function BrowserTab({
         if (beneath) showPage(conversationId, bounds);
       }
       shown.current = bounds !== null;
+      pageShows(conversationId, shown.current);
       next = requestAnimationFrame(place);
     };
     next = requestAnimationFrame(place);
@@ -471,6 +472,7 @@ export function BrowserTab({
       cancelAnimationFrame(next);
       observer.disconnect();
       shown.current = false;
+      pageShows(conversationId, false);
       browserPlace(conversationId, null).catch(() => {});
       if (beneath) showPage(conversationId, null);
     };

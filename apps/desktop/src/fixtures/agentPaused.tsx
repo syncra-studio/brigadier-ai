@@ -1,6 +1,7 @@
 /**
  * An agent's Browser tab taken over by the user, over a faked shell: the strip that says the
- * agent waits, its Continue, and the toolbar's own buttons pausing it too. ?drive=1 drives it
+ * agent waits, its Continue, and the toolbar's own buttons pausing it too; its page heard while
+ * behind its tab pauses nothing. ?drive=1 drives it
  * and writes what it saw to #agent-paused-result (AgentPausedRender.test.ts reads it).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -10,7 +11,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserTab } from "@/app/conversation/BrowserTab";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Request } from "@/ipc/generated";
-import { userUsed } from "@/state/agentPause";
+import { isPaused, pageUsed, userUsed } from "@/state/agentPause";
 import { useBrowsers } from "@/state/browsers";
 import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -69,8 +70,8 @@ function Fixture() {
     void (async () => {
       await wait(200);
       const seen: Record<string, unknown> = { before: strip() !== null };
-      // The page's input script heard the user.
-      userUsed(ID);
+      // The page's input script heard the user, the page in front.
+      pageUsed(ID);
       await wait(50);
       const shown = strip();
       seen.paused = {
@@ -93,6 +94,11 @@ function Fixture() {
       useSessionTabs.setState(({ sessions }) => ({ sessions: { ...sessions, session: { ...sessions.session!, active: MINE } } }));
       await wait(50);
       seen.mine = strip() === null;
+      // The agent's page, behind its tab now, hears keys and scrolls meant for the app: its
+      // agent goes on (#416).
+      pageUsed(ID);
+      await wait(50);
+      seen.behind = isPaused(ID);
       seen.told = told;
       setResult(JSON.stringify(seen));
     })();

@@ -36,6 +36,24 @@ export function userUsed(id: string): void {
   tell(owner.conversationId, id, true);
 }
 
+/** The Browser tabs whose page shows now. */
+const showing = new Set<string>();
+
+/** Tab `id`'s page shows over its tab, or stops showing (its tab went behind, closed). */
+export function pageShows(id: string, shows: boolean): void {
+  if (shows) showing.add(id);
+  else showing.delete(id);
+}
+
+/**
+ * The page of tab `id` heard the user's click, key or scroll. Only a page that shows can be the
+ * user's: one behind its tab (an agent's tab the user never opened) hears keys and scrolls
+ * meant for the app, which would pause its agent (#416).
+ */
+export function pageUsed(id: string): void {
+  if (showing.has(id)) userUsed(id);
+}
+
 /** Continue: the agent goes on in tab `id`; also when the tab closes. */
 export function handBack(id: string): void {
   const conversationId = useAgentPause.getState().paused[id];

@@ -15,7 +15,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage, crypto: globalThis.crypto, innerWidth: 1200, innerHeight: 800 } });
 const { base64 } = await import("./agentBrowser");
 const { runAppCall } = await import("./appCalls");
-const { handBack, isPaused, userUsed } = await import("./agentPause");
+const { handBack, isPaused, pageShows, userUsed } = await import("./agentPause");
 const { useBrowsers } = await import("./browsers");
 const { CHAT_TAB, selectTab, sessionTabs } = await import("./sessionTabs");
 const { useApp } = await import("./store");
@@ -160,7 +160,12 @@ test("the user's input in an agent's tab pauses it until Continue, and closing t
   const tab = tabOf(await answered(shell, { op: "open", url: "http://127.0.0.1:4000/" }));
   const click: BrowserOp = { op: "click", tab, target: "e1", guard: { declared: null, approved: null } };
 
-  // A click in its page, as the page's input script tells it.
+  // Input its page hears while behind its tab is none of the user's (#416).
+  shell.channels.get(tab)!.onmessage({ type: "userInput" });
+  assert.equal(isPaused(tab), false);
+  assert.deepEqual(shell.paused, []);
+  // Its tab in front, a click in its page, as the page's input script tells it.
+  pageShows(tab, true);
   shell.channels.get(tab)!.onmessage({ type: "userInput" });
   assert.equal(isPaused(tab), true);
   assert.deepEqual(shell.paused, [{ tab, paused: true }], "the daemon holds the agent's calls");
