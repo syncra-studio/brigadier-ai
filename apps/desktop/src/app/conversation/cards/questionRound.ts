@@ -44,11 +44,14 @@ export function questionOpen(question: Question): boolean {
   return question.answer === null && question.answeredAtMs === null;
 }
 
-/** An answer as the thread shows it: the recommended option says so. */
+/**
+ * An answer as the thread shows it: the recommended option says so. It shows as plain text, so
+ * Markdown's backslash escapes in text pasted from a Markdown source ("1\. Cover") go.
+ */
 export function answerWords(item: QuestionItem, answer: string): string {
   if (!answer.trim()) return "No answer provided";
   const recommended = item.recommended === null ? undefined : item.options[item.recommended];
-  return recommended?.label === answer ? `${answer} (Recommended)` : answer;
+  return recommended?.label === answer ? `${answer} (Recommended)` : answer.replace(/\\([!-/:-@[-`{-~])/g, "$1");
 }
 
 /** Text with its `code` spans' backticks left out, for where it can't show code (a tooltip, a label). */

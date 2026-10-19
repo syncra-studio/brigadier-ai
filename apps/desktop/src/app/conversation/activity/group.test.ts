@@ -231,6 +231,9 @@ test("a question card's row says what it asks, what it asked, and the recommende
   assert.equal(answerWords(item, "No"), "No");
   // Skipped: said so.
   assert.equal(answerWords(item, ""), "No answer provided");
+  // Typed text pasted from a Markdown source shows without its escapes; a path keeps its own.
+  assert.equal(answerWords(item, "1\\. Cover: USM.  2\\. Format: A4 \\*bold\\*"), "1. Cover: USM.  2. Format: A4 *bold*");
+  assert.equal(answerWords(item, "C:\\Users\\me"), "C:\\Users\\me");
   const merge = { ...single, kind: { type: "merge" as const, branch: "b", base: "main", conflicted: false, conflicts: [] }, answer: null, answeredAtMs: null };
   assert.equal(questionRowWords(merge), "Asking whether to merge into main");
 });
