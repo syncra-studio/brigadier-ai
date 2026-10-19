@@ -163,6 +163,26 @@ async fn pick_folder(app: tauri::AppHandle, starting: Option<String>) -> Option<
     Some(folder.display().to_string())
 }
 
+/// Readies the system folder picker without showing anything, so the first `pick_folder` opens
+/// at once: on macOS the first open panel of a run loads its frameworks (about half a second).
+/// Only the first call does anything.
+#[tauri::command]
+fn warm_folder_picker(app: tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        static WARMED: std::sync::Once = std::sync::Once::new();
+        WARMED.call_once(|| {
+            let _ = app.run_on_main_thread(|| {
+                if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+                    drop(objc2_app_kit::NSOpenPanel::openPanel(mtm));
+                }
+            });
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
 /// Asks for one file with the system picker, titled `title` and opening in `starting` when that
 /// folder exists; `None` when the user cancels.
 #[tauri::command]
@@ -831,6 +851,7 @@ fn main() {
             intro::intro_release,
             smoke_finish,
             pick_folder,
+            warm_folder_picker,
             pick_folders,
             pick_file,
             take_opened_folders,

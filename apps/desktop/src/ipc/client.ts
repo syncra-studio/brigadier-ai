@@ -153,6 +153,11 @@ export function pickFolder(starting?: string): Promise<string | null> {
   return invoke<string | null>("pick_folder", { starting: starting || null });
 }
 
+/** Readies the system folder picker so the next `pickFolder` opens at once; shows nothing. */
+export function warmFolderPicker(): Promise<void> {
+  return invoke<void>("warm_folder_picker");
+}
+
 /** Opens the system file picker titled `title` (in `starting` when it exists); `null` when cancelled. */
 export function pickFile(title: string, starting?: string): Promise<string | null> {
   return invoke<string | null>("pick_file", { title, starting: starting || null });

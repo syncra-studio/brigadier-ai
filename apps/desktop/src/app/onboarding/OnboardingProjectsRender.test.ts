@@ -7,6 +7,7 @@ import { renderFixtureLive } from "@/fixtures/headless";
 // a folder added by hand comes ticked too but isn't counted as found in the history. One button
 // ticks the rest or clears them all, its label following the cards, and it stays put. With none
 // ticked the action continues without projects, and Enter on a card presses it, not the card.
+// The folder picker is readied as the step opens.
 test("onboarding: projects come ticked, one button selects all or none", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "onboarding-projects.html?drive=1", "onboarding-projects-result", 20000)) as Record<string, unknown>;
   assert.deepEqual(seen, {
@@ -17,6 +18,6 @@ test("onboarding: projects come ticked, one button selects all or none", { timeo
     all: { count: "3 of 3 selected", toggle: "Select none", action: "Add 3 projects↩" },
     none: { count: "0 of 3 selected", toggle: "Select all", action: "Continue without projects↩", moved: false },
     enter: { billing: "false" },
-    asked: ["checkFolder", "updateSettings"],
+    asked: ["warm_folder_picker", "checkFolder", "updateSettings"],
   });
 });

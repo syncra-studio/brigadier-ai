@@ -38,6 +38,10 @@ if (params.has("many")) {
 const calls: string[] = [];
 mockIPC((command, payload) => {
   if (command === "pick_folder") return "/w/hand-picked";
+  if (command === "warm_folder_picker") {
+    calls.push(command);
+    return null;
+  }
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   calls.push(req.method);

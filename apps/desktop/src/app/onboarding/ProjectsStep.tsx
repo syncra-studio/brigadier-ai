@@ -7,7 +7,7 @@ import { PILL_BUTTON, RAISED_BUTTON, StepFooter, StepHeader, TickMark } from "@/
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import { pickFolder } from "@/ipc/client";
+import { pickFolder, warmFolderPicker } from "@/ipc/client";
 import type { ProjectCandidate } from "@/ipc/generated";
 import { formatAgo, shortPath } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -29,6 +29,9 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [nowMs] = useState(Date.now);
+
+  // Add folder…'s picker opens at once on the first click.
+  useEffect(() => void warmFolderPicker().catch(() => {}), []);
 
   useEffect(() => {
     let live = true;
