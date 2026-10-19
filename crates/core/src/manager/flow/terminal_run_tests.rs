@@ -494,6 +494,14 @@ async fn an_agents_tab_closes_at_once_and_one_at_rest_in_its_terminal_too() {
             ("terminal:agent-1".to_owned(), true),
         ]
     );
+    let reply = flow
+        .manager
+        .app_tool(flow.conversation.clone(), close("terminal-3"))
+        .await;
+    assert_eq!(
+        reply.text, "Closed terminal:agent-1.",
+        "a terminal's name closes its tab"
+    );
     for (tab, said) in [
         ("chat", "never closes"),
         ("browser:gone", "There is no tab browser:gone"),

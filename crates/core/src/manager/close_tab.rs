@@ -71,6 +71,9 @@ impl SessionManager {
         ) {
             return Err(Error::Invalid("A Chat has no tabs to close.".into()));
         }
+        // A terminal named as terminal_run and read_terminal name it means its tab.
+        let tab = self.terminal_tab(id, tab).unwrap_or_else(|| tab.to_owned());
+        let tab = tab.as_str();
         let label = self.browser_label(id, None).await;
         let close = |confirmed| AppOp::CloseTab {
             tab: tab.to_owned(),
@@ -134,6 +137,16 @@ impl SessionManager {
             .into_iter()
             .find(|terminal| terminal.key.as_deref() == Some(tab) || terminal.id == tab)
             .map_or(Some(false), |terminal| terminal.busy)
+    }
+
+    /// The tab of the terminal named `name` (`terminal-3`), when it has one.
+    fn terminal_tab(&self, id: &ConversationId, name: &str) -> Option<String> {
+        let host = self.terminal_host.get()?;
+        host.list(&id.0)
+            .into_iter()
+            .find(|terminal| terminal.id == name)?
+            .key
+            .filter(|key| key.starts_with("terminal:"))
     }
 
     fn closed(&self, id: &ConversationId, tab: &str) -> String {

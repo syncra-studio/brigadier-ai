@@ -2049,7 +2049,7 @@ pub struct ShowSession {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CloseTab {
-    /// The tab's id, as app_state lists it.
+    /// The tab's id, as app_state lists it, or a terminal's name (terminal-3).
     pub tab: String,
 }
 

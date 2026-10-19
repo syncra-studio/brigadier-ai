@@ -399,7 +399,8 @@ itself never comes forward.",
 );
 
 const CLOSE_TAB: &str = concat!(
-    "Close one of this session's tabs by its id from app_state. A tab you opened closes at \
+    "Close one of this session's tabs by its id from app_state, or a terminal's tab by the \
+terminal's name (terminal-3). A tab you opened closes at \
 once; one of the user's, one with unsaved edits or a terminal that may be running something \
 closes only after the user says yes on a card, and the call waits for their answer. Close the \
 user's own tabs only when they ask.",
