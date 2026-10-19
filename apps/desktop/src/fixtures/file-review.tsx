@@ -122,17 +122,20 @@ async function measure() {
   out.first = look();
   // Scrolled to the end, the change in view is the first one there; back at the top, the first again.
   const box = document.querySelector<HTMLElement>("[data-slot=file-review]")!;
-  box.scrollTop = box.scrollHeight;
-  await until(() => look().current !== 0, 2000);
+  // Again each frame: the diff may still be growing when its changes first show.
+  await until(() => {
+    box.scrollTop = box.scrollHeight;
+    return look().current !== 0;
+  });
   out.scrolled = look().current;
   box.scrollTop = 0;
-  await until(() => look().current === 0, 2000);
+  await until(() => look().current === 0);
   window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyY", key: "y", metaKey: true, bubbles: true }));
   await until(() => changes().length === 2);
   out.kept = look();
   // The next change down steps into view; Undo on it.
   changes()[0]?.querySelector<HTMLButtonElement>("button[aria-label='Next change']")?.click();
-  await until(() => look().current === 1, 2000);
+  await until(() => look().current === 1);
   out.stepped = look().current;
   [...(changes()[1]?.querySelectorAll("button") ?? [])].find((button) => button.textContent?.startsWith("Undo"))?.click();
   await until(() => changes().length === 1);

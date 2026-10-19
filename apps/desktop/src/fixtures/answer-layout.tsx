@@ -155,12 +155,17 @@ async function until(found: () => boolean, ms = 10_000): Promise<void> {
   for (const end = performance.now() + ms; !found() && performance.now() < end; ) await wait(50);
 }
 
-/** Until the answer stops changing for a second: on a slow machine its deferred Markdown draws late. */
+/**
+ * Until the answer stops changing for a second: on a slow machine its deferred Markdown draws
+ * late. Each look waits for the browser to idle, which it does only once React's deferred
+ * render has no work left queued.
+ */
 async function settled(ms = 10_000): Promise<void> {
   let last = "";
   let still = 0;
   for (const end = performance.now() + ms; still < 10 && performance.now() < end; ) {
     await wait(100);
+    await new Promise((resolve) => requestIdleCallback(resolve, { timeout: 2000 }));
     const now = document.querySelector("[data-answer]")?.innerHTML ?? "";
     still = now === last ? still + 1 : 0;
     last = now;
