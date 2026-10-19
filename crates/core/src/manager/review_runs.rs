@@ -226,9 +226,10 @@ fn next_number<'a>(reviews: impl IntoIterator<Item = &'a ReviewRun>) -> u32 {
         .saturating_add(1)
 }
 
-/// The findings of review `number`'s `text`, as items (`R{number}.{n}`). A text that names a
-/// priority but can't be split is one item that points at the review.
-pub(crate) fn items_of(number: u32, text: &str) -> Vec<Finding> {
+/// The findings of review `number`'s `text`, as items (`R{number}.{n}`), each location in the
+/// project's own terms: a path in the review's `checkout` relative to it, a one-line range one
+/// line. A text that names a priority but can't be split is one item that points at the review.
+pub(crate) fn items_of(number: u32, text: &str, checkout: Option<&Path>) -> Vec<Finding> {
     let mut items: Vec<Finding> = brigadier_review::split_findings(text)
         .into_iter()
         .enumerate()
@@ -236,7 +237,9 @@ pub(crate) fn items_of(number: u32, text: &str) -> Vec<Finding> {
             id: format!("R{number}.{}", n + 1),
             severity: Some(found.severity),
             title: found.title,
-            location: found.location,
+            location: found
+                .location
+                .map(|location| project_location(&location, checkout)),
             status: FindingStatus::New,
             high: false,
         })
@@ -253,6 +256,39 @@ pub(crate) fn items_of(number: u32, text: &str) -> Vec<Finding> {
         });
     }
     items
+}
+
+/// The name of review `review`'s checkout and scratch folders.
+fn review_dir_name(review: &ReviewRun) -> String {
+    format!(
+        "review-{}",
+        &review.id[review.id.len().saturating_sub(12)..]
+    )
+}
+
+/// `location` (`path:line`) with the review's `checkout` taken off its path, and "19-19" as "19".
+fn project_location(location: &str, checkout: Option<&Path>) -> String {
+    let mut location = location;
+    if let Some(root) = checkout.and_then(Path::to_str)
+        && let Some(inside) = location
+            .strip_prefix(root.trim_end_matches('/'))
+            .and_then(|rest| rest.strip_prefix('/'))
+    {
+        location = inside;
+    }
+    match location.rsplit_once(':') {
+        Some((path, lines))
+            if lines
+                .split_once('-')
+                .is_some_and(|(from, to)| from == to && !from.is_empty()) =>
+        {
+            format!(
+                "{path}:{}",
+                lines.split_once('-').map_or(lines, |(from, _)| from)
+            )
+        }
+        _ => location.to_owned(),
+    }
 }
 
 /// The task of `board` named `task-7`, `Task 7` or `7`.
@@ -1664,6 +1700,18 @@ impl SessionManager {
         }
     }
 
+    /// Where review `review` checks out the code it reads: a worktree of its own, removed after.
+    fn review_worktree(&self, review: &ReviewRun) -> PathBuf {
+        let project = self
+            .core
+            .conversation(&review.conversation_id)
+            .ok()
+            .and_then(|conversation| conversation.project_id)
+            .map_or_else(|| "none".to_owned(), |id| id.0);
+        self.owned_dir("worktrees", &project)
+            .join(review_dir_name(review))
+    }
+
     /// Runs `review` in a checkout of its own and removes everything it made after, also when
     /// `stop` ends it early (its conversation closed).
     async fn run_review(
@@ -1676,17 +1724,8 @@ impl SessionManager {
         stop: tokio_util::sync::CancellationToken,
     ) -> std::result::Result<Review, String> {
         let owner = review_owner(&review.id);
-        let project = self
-            .core
-            .conversation(&review.conversation_id)
-            .ok()
-            .and_then(|conversation| conversation.project_id)
-            .map_or_else(|| "none".to_owned(), |id| id.0);
-        let name = format!(
-            "review-{}",
-            &review.id[review.id.len().saturating_sub(12)..]
-        );
-        let checkout = self.owned_dir("worktrees", &project).join(&name);
+        let name = review_dir_name(review);
+        let checkout = self.review_worktree(review);
         let scratch = self.owned_dir("scratch", &name);
         // Its checkout is made to the end even when it is stopped meanwhile, so that what is
         // disposed after is all there is.
@@ -2005,7 +2044,8 @@ impl SessionManager {
                         tracing::warn!(review = %ended.id, error = %err, "could not keep a review's text");
                     }
                 }
-                ended.items = items_of(ended.number, &found.text);
+                let checkout = self.review_worktree(&ended);
+                ended.items = items_of(ended.number, &found.text, Some(&checkout));
                 ended.state = match u32::try_from(ended.items.len()).unwrap_or(u32::MAX) {
                     0 => ReviewState::Clean,
                     count => ReviewState::Findings { count },
@@ -2970,20 +3010,28 @@ mod tests {
     #[test]
     fn a_reviews_findings_are_stored_as_items() {
         let text = "- [P1] Guard the empty list — src/a.rs:10\n  Fix.\n- [P2] Old events fail — src/b.rs:3\n- [P3] Typo — README.md:4";
-        let items = items_of(3, text);
+        let items = items_of(3, text, None);
         let ids: Vec<_> = items.iter().map(|item| item.id.as_str()).collect();
         assert_eq!(ids, ["R3.1", "R3.2", "R3.3"]);
         assert_eq!(items[1].severity.as_deref(), Some("P2"));
         assert_eq!(items[1].title, "Old events fail");
         assert_eq!(items[1].location.as_deref(), Some("src/b.rs:3"));
         assert!(items.iter().all(|item| item.status == FindingStatus::New));
-        assert!(items_of(1, "No findings.").is_empty());
-        assert!(items_of(1, "Looks right to me.").is_empty());
-        let unsplit = items_of(2, "Two problems, see [P1] and [P2] in the summary.");
+        assert!(items_of(1, "No findings.", None).is_empty());
+        assert!(items_of(1, "Looks right to me.", None).is_empty());
+        let unsplit = items_of(2, "Two problems, see [P1] and [P2] in the summary.", None);
         assert_eq!(unsplit.len(), 1);
         assert_eq!(unsplit[0].title, "See the review");
         assert_eq!(unsplit[0].severity, None);
         assert_eq!(next_number([&review("a", ReviewKind::Code, "a", "b")]), 1);
+        // A path in the review's own checkout reads as the project's (#413).
+        let checkout =
+            Path::new("/Users/me/Library/Application Support/x/worktrees/p/review-72d3a50237ec");
+        let codex = "- [P3] Preserve years below 100 — /Users/me/Library/Application Support/x/worktrees/p/review-72d3a50237ec/src/validate.js:19-19\n- [P2] Span — /elsewhere/a.rs:3-5";
+        let items = items_of(1, codex, Some(checkout));
+        assert_eq!(items[0].title, "Preserve years below 100");
+        assert_eq!(items[0].location.as_deref(), Some("src/validate.js:19"));
+        assert_eq!(items[1].location.as_deref(), Some("/elsewhere/a.rs:3-5"));
     }
 
     /// Q7: the merge's result counts only what the thread recorded for the reviews since the
@@ -2996,7 +3044,11 @@ mod tests {
         first.number = 1;
         first.started_at_ms = 10;
         first.state = ReviewState::Findings { count: 3 };
-        first.items = items_of(1, "- [P1] One — a:1\n- [P2] Two — a:2\n- [P3] Three — a:3");
+        first.items = items_of(
+            1,
+            "- [P1] One — a:1\n- [P2] Two — a:2\n- [P3] Three — a:3",
+            None,
+        );
         first.items[0].status = FindingStatus::Open { why: None };
         first.items[1].status = FindingStatus::Open {
             why: Some("needs the user's call".into()),
@@ -3036,7 +3088,7 @@ mod tests {
         second.number = 2;
         second.started_at_ms = 30;
         second.state = ReviewState::Findings { count: 2 };
-        second.items = items_of(2, "- [P2] Four — a:4\n- [P2] Five — a:5");
+        second.items = items_of(2, "- [P2] Four — a:4\n- [P2] Five — a:5", None);
         board.reviews.insert(second.id.clone(), second);
         let merged = super::super::landing::merged_findings(&board, false);
         assert_eq!(

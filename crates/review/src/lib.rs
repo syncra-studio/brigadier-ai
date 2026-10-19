@@ -193,8 +193,11 @@ fn finding(line: &str) -> Option<Finding> {
         .find_map(|dash| {
             let (title, location) = rest.rsplit_once(dash)?;
             let location = location.trim().trim_matches('`');
-            (!location.is_empty() && !location.contains(' ') && location.contains(':'))
-                .then(|| (title.trim(), Some(location.to_owned())))
+            // An absolute path may hold spaces ("…/Application Support/…").
+            (!location.is_empty()
+                && (!location.contains(' ') || location.starts_with('/'))
+                && location.contains(':'))
+            .then(|| (title.trim(), Some(location.to_owned())))
         })
         .unwrap_or((rest, None));
     Some(Finding {
@@ -1054,6 +1057,17 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_token
                     location: None,
                 },
             ]
+        );
+        // A path in the reviewer's checkout, spaces and all, is still the location.
+        let absolute = split_findings(
+            "- [P3] Preserve years below 100 — /Users/me/Library/Application Support/x/worktrees/p/review-1/src/validate.js:19-19",
+        );
+        assert_eq!(absolute[0].title, "Preserve years below 100");
+        assert_eq!(
+            absolute[0].location.as_deref(),
+            Some(
+                "/Users/me/Library/Application Support/x/worktrees/p/review-1/src/validate.js:19-19"
+            )
         );
         let claude = split_findings("1. **[P0]** Leaks the token - crates/x/src/y.rs:1");
         assert_eq!(claude[0].severity, "P0");
