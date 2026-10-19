@@ -633,6 +633,7 @@ export function ConversationView({
     !embedded && (conversation?.kind === "session" || (selection.type === "draft" && selection.kind === "session")),
     embedded,
     selection.type === "draft" && selection.kind === "session" ? selection.projectId : conversation?.projectId ?? null,
+    !embedded && !!conversation,
   );
   const [renaming, setRenaming] = useState(false);
 
@@ -929,7 +930,7 @@ export function ConversationView({
                             >
                               <SummaryPane summary={summary}>
                                 {summary && <PinnedSummary conversation={conversation} />}
-                                {conversation?.kind === "session" && <WorkerDiffs conversationId={conversation.id} />}
+                                {conversation && <WorkerDiffs conversationId={conversation.id} />}
                                 <Thread
                                   components={embedded ? EMBEDDED_THREAD_COMPONENTS : THREAD_COMPONENTS}
                                   // One placeholder, in every conversation.
@@ -945,7 +946,7 @@ export function ConversationView({
                       </div>
                       </div>
                     </div>
-                    {tabbed && conversationId && <RightSidebar conversationId={conversationId} />}
+                    {!embedded && conversation && <RightSidebar conversationId={conversation.id} />}
                     <WorkspacePane />
                     </div>
                     </div>

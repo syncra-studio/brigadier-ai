@@ -510,7 +510,8 @@ async function drivePlan(): Promise<object> {
   const opened = {
     canOpen: one("[data-slot=plan-card] [role=button]") !== null,
     active: tabs.active, kinds: tabs.tabs.map((tab) => tab.kind), shown: text(panel)?.includes("Add a test.") ?? false,
-    tab: text(one('[role=tab][aria-selected=true]')), rightPanel: one('[data-slot="right-sidebar"] [data-pane="plan"]') !== null,
+    // The conversation's own tabs: the Workers panel's tab is not one.
+    tab: text(one('[role=tab][aria-selected=true]:not([id^="right-sidebar-"])')), rightPanel: one('[data-slot="right-sidebar"] [data-pane="plan"]') !== null,
   };
   if (tabs.active !== "chat") closeTab(ID, tabs.active);
   return { ended, closed, remounted, opened };

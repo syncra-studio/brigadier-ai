@@ -22,9 +22,12 @@ export function shortcutLabel(keys: string, mac: boolean): string {
         .replace("⌘", "Ctrl+");
 }
 
-/** Shared right-sidebar selection and shortcuts; there is no legacy side-panel slot. */
-export function useSidePanel(conversationId: string | null, enabled: boolean, embedded = false, projectId: string | null = null) {
-  const rightSidebar = useRightSidebar(conversationId, enabled && conversationId !== null);
+/**
+ * Shared right-sidebar selection and shortcuts; there is no legacy side-panel slot. `workers`
+ * gives the conversation its Workers panel (any chat or session); `enabled` its session panes.
+ */
+export function useSidePanel(conversationId: string | null, enabled: boolean, embedded = false, projectId: string | null = null, workers = enabled) {
+  const rightSidebar = useRightSidebar(conversationId, workers && conversationId !== null);
   const workspace = useWorkspacePane(conversationId, projectId, enabled);
   const [worker, setWorker] = useState<string | null>(null);
   const [scope, setScope] = useState(conversationId);
@@ -58,7 +61,7 @@ export function useSidePanel(conversationId: string | null, enabled: boolean, em
   }, [workspace.open, open, setOpen, closeWorkspace]);
   // A worker's row in the sidebar opened this session to show that worker.
   const asked = useOpenWorker((s) => (s.request?.conversationId === conversationId ? s.request.taskId : null));
-  const wanted = asked && enabled && !embedded ? asked : null;
+  const wanted = asked && workers && !embedded ? asked : null;
   const [shownAsked, setShownAsked] = useState<string | null>(null);
   if (wanted !== shownAsked) {
     setShownAsked(wanted);

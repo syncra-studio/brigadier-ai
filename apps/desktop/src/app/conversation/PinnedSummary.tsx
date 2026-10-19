@@ -786,16 +786,18 @@ function SummaryContent({ conversation, active }: { conversation: Conversation |
     : <ChatSummaryContent conversation={conversation} active={active} />;
 }
 
-/** Plain chats expose their own sources, attachments and usage, without session sections. */
+/** Plain chats expose their own workers, sources, attachments and usage, without session sections. */
 function ChatSummaryContent({ conversation, active }: { conversation: Conversation; active: boolean }) {
   const sources = useSources(conversation.id, false);
   const attachments = useApp(useShallow((s) => [...new Map((s.threads[conversation.id]?.items ?? [])
     .flatMap((item) => item.attachments).map((attachment) => [attachment.id, attachment])).values()]));
   const context = useBoard((s) => s.board?.conversationId === conversation.id ? s.board.context : null);
-  const empty = sources.length === 0 && attachments.length === 0 && !context;
+  const workers = useBoard((s) => s.board?.conversationId === conversation.id && Object.keys(s.board.tasks).length > 0);
+  const empty = sources.length === 0 && attachments.length === 0 && !context && !workers;
   return <SummaryCard scrollKey={`${conversation.id}/context`} active={active}>
     <div className="flex flex-col py-2.5">
       {empty && <p className="text-muted-foreground px-4 py-1.5 text-sm">Nothing here yet</p>}
+      <WorkersSummary conversationId={conversation.id} />
       <Sources conversationId={conversation.id} session={false} />
       {attachments.length > 0 && <SummarySection foldKey="attachments" title="Attachments" count={attachments.length}>
         {attachments.map((attachment) => <SummaryRow key={attachment.id}>{attachment.name}</SummaryRow>)}

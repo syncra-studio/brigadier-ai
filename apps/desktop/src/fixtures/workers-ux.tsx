@@ -2,12 +2,15 @@
 /** Production chat/panel fixture with stored worker events. No live workers or daemon. */
 import { leadTranscript, workerPatch } from "@/fixtures/flow";
 import type { Message, ProviderEvent, RawEntry, Report, Task } from "@/ipc/generated";
+import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
 import { openWorker, useOpenWorker } from "@/state/openWorker";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
 const done = query.get("view") === "done";
+// The same workers in a plain Chat: no project, no folder, no session tabs.
+const chat = query.has("chat");
 const stress = query.has("panel-test");
 // The worker view's header at the panel's own width in a 1280-wide window.
 const headerTest = query.has("header-test");
@@ -85,7 +88,12 @@ useApp.setState((s) => ({ threads: { ...s.threads, [id]: { ...s.threads[id]!, it
   message(11, "assistant", "I’ll run both workers in parallel, then summarize their results."),
   ...(done ? [message(19, "assistant", "The README draft is ready."), message(23, "assistant", "Both workers have completed their inspections."),
     message(30, "assistant", "The files have been summarized and the README draft is ready. Both workers verified the project without changing any source files.")] : []),
-] } }, conversations: { ...s.conversations, [id]: { ...s.conversations[id]!, title: "Summarize probe project" } } }));
+] } }, conversations: { ...s.conversations, [id]: { ...s.conversations[id]!, title: "Summarize probe project",
+  ...(chat ? { kind: "chat" as const, projectId: null, setup: null } : {}) } } }));
+// The sidebar's worker rows read the conversation's activity, as the app's catalog sends it.
+useActivity.setState((s) => ({ byConversation: { ...s.byConversation, [id]: { ...s.byConversation[id]!,
+  tasks: Object.fromEntries(Object.values(tasks).map((task) => [task.id, task.state])),
+  titles: Object.fromEntries(Object.values(tasks).map((task) => [task.id, task.title])) } } }));
 
 // A worker's row in the sidebar asks for it: the open session's Workers panel shows it.
 const workerThread = () => document.querySelector('[data-slot="worker-thread"]');
@@ -98,6 +106,42 @@ if (query.has("open-worker")) {
     const view = workerThread()?.closest('[role="region"], section');
     result.textContent = JSON.stringify({ label: view?.getAttribute("aria-label") ?? null, taken: useOpenWorker.getState().request });
   })();
+}
+
+// A Chat's workers, everywhere a session shows them: the context card's Workers row opens the
+// Workers panel, a thread row opens its worker there, and the left sidebar lists them under the
+// Chat's row, where one opens too.
+const until = async (check: () => boolean) => {
+  for (let i = 0; i < 100 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+  return check();
+};
+const panelOpen = () => document.querySelector<HTMLElement>('[data-slot="right-sidebar"]')?.dataset.state === "expanded";
+const shownWorker = () => document.querySelector('[data-slot="worker-thread"]')?.closest('[role="region"], section')?.getAttribute("aria-label") ?? null;
+async function closePanel() {
+  document.querySelector<HTMLButtonElement>('[data-slot="right-sidebar"] button[aria-label="Close right panel"]')?.click();
+  await until(() => !panelOpen());
+}
+if (chat && !query.has("manual")) {
+  const result = document.body.appendChild(document.createElement("pre"));
+  result.id = "workers-result";
+  void (async () => {
+    await until(() => !!document.querySelector('[data-slot="workers-summary"]'));
+    const summaryRow = document.querySelector<HTMLButtonElement>('[data-slot="workers-summary"]');
+    const summary = summaryRow?.textContent?.match(/^\d+ working/)?.[0] ?? null;
+    summaryRow?.click();
+    const fromSummary = await until(() => panelOpen() && !!document.querySelector('[role="tablist"][aria-label="Right panel"]'));
+    await closePanel();
+    document.querySelector<HTMLButtonElement>('[data-slot="pane-workspace"] button[title="Open File summary"]')?.click();
+    await until(() => shownWorker() === "Worker: File summary");
+    const fromThread = shownWorker();
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-slot="session-workers"] [data-slot="session-worker"]')];
+    const sidebar = rows.map((row) => row.textContent);
+    rows.find((row) => row.dataset.task === "t2")?.click();
+    await until(() => shownWorker() === "Worker: Readme draft");
+    result.textContent = JSON.stringify({ summary, fromSummary, fromThread, sidebar, fromSidebar: shownWorker(),
+      // Files and Source stay a session's: a Chat has no folder.
+      noFiles: !document.querySelector('[data-slot="workspace-pane"]') });
+  })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
 }
 
 // The render test uses the real sidebar and chat. Manual mode leaves it ready for screenshots.

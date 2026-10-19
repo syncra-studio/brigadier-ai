@@ -1040,16 +1040,17 @@ const ConversationRow = memo(function ConversationRow({
         </Tooltip>
       </RowActionsSlot>
     </li>
-    {nested && <SessionWorkers conversationId={conversation.id} />}
+    {(nested || conversation.kind === "chat") && <SessionWorkers conversationId={conversation.id} nested={nested} />}
     </>
   );
 });
 
 /**
- * A session's open workers under its row, read-only: one row each with its title and state,
- * which opens the session with that worker in its Workers panel. Folds away from its count.
+ * A session's or chat's open workers under its row, read-only: one row each with its title and
+ * state, which opens the conversation with that worker in its Workers panel. Folds away from its
+ * count. Indented from the row's own start.
  */
-function SessionWorkers({ conversationId }: { conversationId: string }) {
+function SessionWorkers({ conversationId, nested }: { conversationId: string; nested: boolean }) {
   const workers = useSessionWorkers(conversationId);
   const [open, setOpen] = useState(true);
   if (workers.length === 0) return null;
@@ -1058,18 +1059,18 @@ function SessionWorkers({ conversationId }: { conversationId: string }) {
       <button
         type="button"
         aria-expanded={open}
-        className="text-muted-foreground hover:text-foreground/85 h-row-sm flex items-center gap-1 ps-8 pe-2 text-start text-2xs"
+        className={cn("text-muted-foreground hover:text-foreground/85 h-row-sm flex items-center gap-1 pe-2 text-start text-2xs", nested ? "ps-8" : "ps-2")}
         onClick={() => setOpen(!open)}
       >
         <ChevronRight className={cn("size-icon-sm transition-transform motion-reduce:transition-none", open && "rotate-90")} />
         {workers.length === 1 ? "1 worker" : `${workers.length} workers`}
       </button>
-      {open && workers.map((worker) => <SessionWorkerRow key={worker.id} conversationId={conversationId} worker={worker} />)}
+      {open && workers.map((worker) => <SessionWorkerRow key={worker.id} conversationId={conversationId} worker={worker} nested={nested} />)}
     </li>
   );
 }
 
-function SessionWorkerRow({ conversationId, worker }: { conversationId: string; worker: SessionWorker }) {
+function SessionWorkerRow({ conversationId, worker, nested }: { conversationId: string; worker: SessionWorker; nested: boolean }) {
   const title = worker.title || "Worker";
   return (
     <button
@@ -1077,7 +1078,7 @@ function SessionWorkerRow({ conversationId, worker }: { conversationId: string; 
       data-slot="session-worker"
       data-task={worker.id}
       title={`Open ${title}`}
-      className={cn(navRow, "h-row-sm text-foreground/70 ps-12 pe-1.5 text-xs")}
+      className={cn(navRow, "h-row-sm text-foreground/70 pe-1.5 text-xs", nested ? "ps-12" : "ps-6")}
       onClick={() => openWorker(conversationId, worker.id)}
     >
       <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">{title}</span>

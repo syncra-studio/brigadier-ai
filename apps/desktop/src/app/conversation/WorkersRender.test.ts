@@ -31,6 +31,18 @@ test("a worker's row in the sidebar opens its session with that worker in the Wo
   assert.deepEqual(seen, { label: "Worker: Readme draft", taken: null });
 });
 
+test("a Chat shows and opens its workers as a session does: context card, thread, Workers panel, left sidebar", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "workers-ux.html?chat=1&approvals=0", "workers-result", 15000));
+  assert.deepEqual(seen, {
+    summary: "2 working",
+    fromSummary: true,
+    fromThread: "Worker: File summary",
+    sidebar: ["File summaryRunning", "Readme draftRunning"],
+    fromSidebar: "Worker: Readme draft",
+    noFiles: true,
+  });
+});
+
 test("the worker view is a region named for its worker that nothing hides from the accessibility tree", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "workers-ux.html?panel-test=1&approvals=0&sidebar=0", "workers-result", 15000));
   assert.equal(seen.error, undefined);
