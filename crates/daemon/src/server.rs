@@ -1945,13 +1945,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             daemon.metrics.undo_ended(outcome.is_ok());
             Response::UndoPendingChanges { outcome: outcome? }
         }
-        Request::SetComposerShown {
-            conversation_id,
-            shown,
-        } => {
-            heap(|| sessions.set_composer_shown(conversation_id, shown)).await;
-            Response::SetComposerShown
-        }
         Request::ReadThreadImage {
             conversation_id,
             item_id,

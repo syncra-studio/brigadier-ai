@@ -283,9 +283,6 @@ pub(crate) struct Cli {
     pub meter: TokenMeter,
     /// A session thread's: the workspace, level and access it was started for.
     pub launch: Option<super::thread::ThreadLaunch>,
-    /// Whether its next-message guesses were last held (none sent yet): a hold is sent only
-    /// when it changes.
-    pub guesses_held: std::sync::Mutex<Option<bool>>,
 }
 
 #[derive(Default)]
@@ -365,8 +362,8 @@ struct ConvState {
     hand_over: Option<HandOver>,
     /// The request the running turn serves.
     request: Option<String>,
-    /// The request the last turn served: the CLI's guess at the next message, which comes
-    /// after that turn ended, belongs to it.
+    /// The request the last turn served: the guess at the next message its answer ended with,
+    /// kept once that turn ended, belongs to it.
     guess_for: Option<String>,
     /// What the CLI still runs in the background for a request (a command run in the
     /// background): its end starts a turn of the CLI's own, and until that turn is over the
@@ -434,7 +431,7 @@ struct ConvState {
     /// The running turn's last reply.
     last_reply: Option<String>,
     /// The guess at the next message its last reply ended with ([`prompts::NEXT_OPEN`]), kept
-    /// once the turn is over as a CLI's own guess is.
+    /// once the turn is over.
     next_guess: Option<String>,
     /// Requests whose last turn ended asking the user something in its reply: until the user
     /// writes again, no reminder pushes the orchestrator past its question.
@@ -3245,8 +3242,6 @@ impl SessionManager {
                 current.git_writing = writing;
                 current.browser = browser;
                 current.auto_merge = auto_merge;
-                // As the prompt it was written with says.
-                current.next_message = prompts::marks_next(conv.kind, choice.provider);
                 // A Codex thread runs long commands through `run`; a Claude thread's own Bash
                 // output is trimmed by its hook (THREAD-PLAN.md Q4).
                 let commands = super::run::run_tools(choice.provider, permission);
@@ -3426,12 +3421,6 @@ impl SessionManager {
             output_hook,
             stop_hook: None,
             deny_tools: None,
-            // The user types into this one: its CLI guesses their next message, held while
-            // its composer is off screen (`pause_suggestions`). Never a worker's. A Claude
-            // Session's final answers carry the guess instead (`marks_next`): Claude Code
-            // 2.1.301 acknowledges the pause and guesses anyway, each guess reading the whole
-            // context again. Codex is asked by Brigadier.
-            suggestions: !prompts::marks_next(conv.kind, choice.provider),
             protection: launch
                 .as_ref()
                 .map(|launch| launch.protection.clone())
@@ -3552,7 +3541,6 @@ impl SessionManager {
             owner,
             ended: CancellationToken::new(),
             launch,
-            guesses_held: std::sync::Mutex::new(None),
         });
         {
             let mut state = conv.state.lock().await;
@@ -3561,75 +3549,11 @@ impl SessionManager {
                 state.fork_base = fork_base;
             }
         }
-        // It guesses the user's next message only while they can see its composer.
-        self.hold_guesses(&conv.id).await;
         let manager = self.arc();
         let pumped = cli.clone();
         let pumping = conv.clone();
         self.spawn(async move { manager.pump_conversation(pumping, pumped, events).await });
         Ok(cli)
-    }
-
-    /// Whether the user can see conversation `id`'s composer (the app says so as it shows and
-    /// hides it): only then does its CLI guess their next message, each guess a small request
-    /// of the CLI's own.
-    pub async fn set_composer_shown(&self, id: ConversationId, shown: bool) {
-        {
-            let mut set = self
-                .composers_shown
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if shown {
-                set.insert(id.clone());
-            } else {
-                set.remove(&id);
-            }
-        }
-        self.hold_guesses(&id).await;
-    }
-
-    /// Holds the thread CLI's next-message guesses while no composer shows them, and while its
-    /// newest request has work that will wake the thread again (a worker, a background command,
-    /// a review of its work): each guess reads the whole conversation from the cache once more,
-    /// and only the turn that ends the request needs one. Sent only when it changes.
-    pub(super) async fn hold_guesses(&self, id: &ConversationId) {
-        let Some(conv) = self.convs_lock().get(id).cloned() else {
-            return;
-        };
-        let Some(cli) = conv.state.lock().await.cli.clone() else {
-            return;
-        };
-        let later = match self.core.board(id).await {
-            Ok(board) => board
-                .latest_request()
-                .is_some_and(|request| super::requests::wakes_later(&board, &request.id)),
-            Err(_) => false,
-        };
-        let held = !self.composer_shown(id) || later;
-        {
-            let mut last = cli
-                .guesses_held
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if *last == Some(held) {
-                return;
-            }
-            *last = Some(held);
-        }
-        self.pause_suggestions(&cli, held).await;
-    }
-
-    fn composer_shown(&self, id: &ConversationId) -> bool {
-        self.composers_shown
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .contains(id)
-    }
-
-    async fn pause_suggestions(&self, cli: &Cli, paused: bool) {
-        if let Err(err) = cli.session.pause_suggestions(paused).await {
-            tracing::debug!(owner = %cli.owner, error = %err, "could not hold or resume next-message guesses");
-        }
     }
 
     /// Removes the files of `owner`'s CLI session `native_id` (one that started after its
@@ -4505,12 +4429,6 @@ impl SessionManager {
         cli: &Arc<Cli>,
         event: ProviderEvent,
     ) {
-        // The CLI's guess at the user's next message is for the composer only: never logged,
-        // so no transcript, digest or rebirth ever reads it as said.
-        if let ProviderEvent::PromptSuggestion { text } = event {
-            self.keep_guess(conv, text).await;
-            return;
-        }
         let event = self.retain_thread_image(&conv.id, event).await;
         // A tool call's row points at its log entry, and a turn's start keys the calls that
         // follow: both are logged before they are handled.
@@ -4560,8 +4478,7 @@ impl SessionManager {
                 let (request, answer_at_ms) = {
                     let mut state = conv.state.lock().await;
                     state.last_reply = Some(text.to_owned());
-                    state.next_guess =
-                        guess.filter(|_| prompts::marks_next(conv.kind, cli.provider));
+                    state.next_guess = guess;
                     let request = state
                         .replying_for
                         .remove(item_id)
@@ -5040,7 +4957,7 @@ impl SessionManager {
         }
         if let Some(status) = completed {
             crate::heap(|| self.turn_completed(conv, cli, status)).await;
-            // The guess its final answer ended with, once the turn is over, as a CLI's comes.
+            // The guess its final answer ended with, once the turn is over.
             let guess = conv.state.lock().await.next_guess.take();
             if let Some(text) = guess.filter(|_| status == TurnStatus::Completed) {
                 self.keep_guess(conv, text).await;
@@ -5062,6 +4979,13 @@ impl SessionManager {
         let Some(request) = request else {
             return;
         };
+        // A turn that leaves work running (a worker that will report, a background command, a
+        // review of its work) isn't the request's last: the turn that ends it guesses.
+        if let Ok(board) = self.core.board(&conv.id).await
+            && super::requests::wakes_later(&board, &request)
+        {
+            return;
+        }
         if let Err(err) = self.core.set_suggestion(&conv.id, &request, text).await {
             tracing::debug!(conversation = %conv.id, error = %err, "could not keep a next-message guess");
         }
@@ -6324,7 +6248,6 @@ impl SessionManager {
                 current.due = due;
                 if let Some(cli) = conv.live_cli().await {
                     current.provider = cli.provider;
-                    current.next_message = prompts::marks_next(conv.kind, cli.provider);
                 }
                 current
             }

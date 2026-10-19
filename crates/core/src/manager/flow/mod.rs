@@ -93,8 +93,6 @@ pub(crate) struct Reply {
     pub error: Option<String>,
     /// Its text streams first, the CLI saying it is the turn's final answer.
     pub answer: bool,
-    /// The CLI's guess at the user's next message, which comes after the turn ended.
-    pub suggestion: Option<String>,
 }
 
 impl Reply {
@@ -543,10 +541,6 @@ pub(crate) struct FakeBehavior {
     pub hold_send: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
     /// The next login check of an extra account signals the first and waits for the second.
     pub hold_status: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
-    /// Each CLI start's [`SessionSpec::suggestions`], in order.
-    pub suggesting: Mutex<Vec<bool>>,
-    /// Each hold (true) or resumption (false) of a suggesting CLI's next-message guesses.
-    pub suggestion_pauses: Mutex<Vec<bool>>,
 }
 
 /// Adds a line to a scripted session's transcript, as a real CLI keeps one: an input it took
@@ -754,14 +748,8 @@ impl Provider for FakeCli {
                 self.script.clone()
             };
             let brief = BRIEFS.lock().unwrap().get(&native_id).cloned();
-            self.behavior
-                .suggesting
-                .lock()
-                .unwrap()
-                .push(spec.suggestions);
             let session = Arc::new(FakeSession {
                 kind: self.kind,
-                suggestions: spec.suggestions,
                 transcript: self.transcripts.join(&native_id),
                 behavior: self.behavior.clone(),
                 account: self.account.clone(),
@@ -911,8 +899,6 @@ impl Replayer for NoRecordings {
 
 struct FakeSession {
     kind: ProviderKind,
-    /// It guesses the user's next message ([`SessionSpec::suggestions`]).
-    suggestions: bool,
     /// Its transcript ([`transcribe`]).
     transcript: PathBuf,
     behavior: Arc<FakeBehavior>,
@@ -1143,9 +1129,6 @@ impl ProviderSession for FakeSession {
                         usage: None,
                     })
                     .await;
-                if let Some(text) = reply.suggestion {
-                    let _ = tx.send(ProviderEvent::PromptSuggestion { text }).await;
-                }
             });
             Ok(())
         })
@@ -1168,13 +1151,6 @@ impl ProviderSession for FakeSession {
         }
         drop(running);
         self.send(input)
-    }
-
-    fn pause_suggestions(&self, paused: bool) -> BoxFuture<'_, brigadier_providers::Result<()>> {
-        if self.suggestions {
-            self.behavior.suggestion_pauses.lock().unwrap().push(paused);
-        }
-        Box::pin(async { Ok(()) })
     }
 
     fn interrupt(&self) -> BoxFuture<'_, brigadier_providers::Result<()>> {

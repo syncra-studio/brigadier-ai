@@ -9,8 +9,6 @@ test("the guess at the next message shows in the empty composer with Press Tab t
   assert.equal(seen.chip, "Press Tab to accept");
   // The guess stands in for the placeholder, not on top of it.
   assert.ok(!seen.placeholder || seen.placeholder === "", `placeholder: ${String(seen.placeholder)}`);
-  // The open conversation's composer is on screen: its CLI may guess.
-  assert.deepEqual(seen.shownAtStart, [true]);
   assert.equal(seen.taken, "Run the tests once more.");
   assert.equal(seen.ghostAfterTab, false);
   assert.equal(seen.backWhenEmpty, true);

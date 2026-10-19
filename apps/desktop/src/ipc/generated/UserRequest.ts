@@ -88,7 +88,7 @@ changes?: RequestChanges,
  */
 review?: { [key in string]: FileReview }, 
 /**
- * The thread's CLI's own guess at the user's next message after this request's last
- * turn, for the empty composer once it is over. Never sent by itself.
+ * The guess at the user's next message its conversation's last turn for it ended with (a
+ * hidden `[next: …]` line), for the empty composer once it is over. Never sent by itself.
  */
 suggestion?: string, };

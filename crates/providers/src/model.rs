@@ -934,11 +934,6 @@ pub enum ProviderEvent {
         duration_ms: Option<i64>,
         usage: Option<TokenUsage>,
     },
-    /// The CLI's own guess at the user's next message, after a turn
-    /// ([`SessionSpec::suggestions`]): shown in the empty composer, never sent by itself.
-    PromptSuggestion {
-        text: String,
-    },
     Error {
         error: ProviderError,
     },
@@ -1321,14 +1316,6 @@ pub struct SessionSpec {
     /// tool list (and the cached prefix it starts) stays the same; `--disallowedTools` would
     /// change it (BUILD-PLAN B5, a thread's note fork). Codex runs no hooks: it ignores this.
     pub deny_tools: Option<String>,
-    /// The CLI predicts the user's next message after each turn, with its own small request
-    /// ([`ProviderEvent::PromptSuggestion`]): a conversation the user types into, never a
-    /// worker or a one-shot run. [`ProviderSession::pause_suggestions`] holds them while its
-    /// composer is off screen. A CLI that has none ignores it. A Claude Session thread goes
-    /// without: Claude Code 2.1.301 acknowledges the pause and keeps guessing.
-    ///
-    /// [`ProviderSession::pause_suggestions`]: crate::ProviderSession::pause_suggestions
-    pub suggestions: bool,
     /// What the session may never write (other sessions' branches, the base, Brigadier's
     /// bookkeeping; PLAN bug 6). Below Full access the CLI's sandbox grants none of it
     /// already, and Claude also gets it as `denyWrite` and file-tool deny rules (its file

@@ -1,8 +1,8 @@
 /**
- * A standalone Vite entry, excluded from the app entry and production build: the CLI's guess at
+ * A standalone Vite entry, excluded from the app entry and production build: the conversation's guess at
  * the user's next message (`UserRequest.suggestion`, G18) in the app's own conversation view.
- * A Chat whose one request is over carries a guess; IPC is mocked and records each
- * `setComposerShown` and every other request (Enter takes the guess, never sends). It drives the
+ * A Chat whose one request is over carries a guess; IPC is mocked and records every
+ * request (Enter takes the guess, never sends). It drives the
  * real keys (`fixtureInput`): Tab, → and Enter each take it, and its "Press Tab to accept" goes
  * once one was taken. Then it checks the field keeps typed
  * text as typed (no text checking, no double-space period), and writes what it saw as JSON
@@ -41,15 +41,14 @@ const request = {
   suggestion: GUESS,
 } as unknown as UserRequest;
 
-const shown: boolean[] = [];
-/** Every request but `setComposerShown`, in order. */
+/** Every request, in order. */
 const asked: string[] = [];
 // Never taken one: the key hint shows.
 localStorage.removeItem("brigadier.suggestionAccepted");
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
-  if (req.method !== "setComposerShown") asked.push(req.method);
+  asked.push(req.method);
   switch (req.method) {
     case "getConversation":
       return {
@@ -62,9 +61,6 @@ mockIPC((command, payload) => {
           reviews: [], previews: [],
         } as unknown as View,
       };
-    case "setComposerShown":
-      shown.push(req.shown);
-      return { method: req.method };
     default:
       return { method: req.method };
   }
@@ -97,7 +93,6 @@ async function drive() {
     seen.ghost = ghost()?.textContent;
     seen.chip = ghost()?.querySelector("[data-slot=composer-suggestion-key]")?.textContent;
     seen.placeholder = document.querySelector("[data-slot=aui_composer-shell] [contenteditable=true]")?.getAttribute("aria-placeholder") ?? null;
-    seen.shownAtStart = [...shown];
     // Tab in the empty field takes it, unsent.
     await fixtureClick(field()!);
     await key("Tab");

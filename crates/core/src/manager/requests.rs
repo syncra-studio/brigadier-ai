@@ -216,12 +216,6 @@ impl SessionManager {
 
     /// Brings every request of the conversation up to date with what runs and waits.
     pub(crate) async fn settle_requests(&self, conversation_id: &ConversationId) {
-        self.settle_requests_inner(conversation_id).await;
-        // What still runs for the newest request decides whether its CLI guesses now.
-        self.hold_guesses(conversation_id).await;
-    }
-
-    async fn settle_requests_inner(&self, conversation_id: &ConversationId) {
         let Ok(mut board) = self.core.board(conversation_id).await else {
             return;
         };

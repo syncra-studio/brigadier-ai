@@ -1,16 +1,15 @@
-import { createContext, useEffect, useSyncExternalStore } from "react";
+import { createContext, useSyncExternalStore } from "react";
 
 import { latestRequest } from "@/app/conversation/rework";
-import { request } from "@/ipc/client";
 import { useBoard } from "@/state/board";
 
 /**
- * The guess at the user's next message (`UserRequest.suggestion`): its CLI's own, or, on a
- * Claude session thread, the one its final answer ended with (a hidden `[next: …]` line). Shown
+ * The guess at the user's next message (`UserRequest.suggestion`): the one the conversation's
+ * final answer ended with (a hidden `[next: …]` line), at no request of its own. Shown
  * in the empty composer in the placeholder's colour once the request it follows is over, with
  * "Press Tab to accept" until the user first takes one. Tab, → or Enter puts it in the field,
  * unsent; typing hides it until the field is empty again; sending ends it (the next request has
- * its own); an attachment hides it. A CLI guesses only while the composer is on screen.
+ * its own); an attachment hides it.
  */
 
 /** The guess the composer shows now (none in plan mode or with an attachment), for Tab. */
@@ -58,27 +57,4 @@ export function markSuggestionAccepted(): void {
     // Without storage the hint stays.
   }
   for (const listener of acceptedListeners) listener();
-}
-
-/**
- * Tells the daemon whether `conversationId`'s composer is on screen (`shown`, and the window
- * not hidden), so a CLI guesses only for a composer someone can see.
- */
-export function useComposerShown(conversationId: string | null, shown: boolean): void {
-  useEffect(() => {
-    if (conversationId === null) return;
-    let last: boolean | null = null;
-    const tell = () => {
-      const now = shown && document.visibilityState === "visible";
-      if (now === last) return;
-      last = now;
-      request({ method: "setComposerShown", conversationId, shown: now }).catch(() => {});
-    };
-    tell();
-    document.addEventListener("visibilitychange", tell);
-    return () => {
-      document.removeEventListener("visibilitychange", tell);
-      if (last) request({ method: "setComposerShown", conversationId, shown: false }).catch(() => {});
-    };
-  }, [conversationId, shown]);
 }

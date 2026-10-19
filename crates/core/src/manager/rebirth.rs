@@ -320,7 +320,6 @@ pub(crate) fn note_fork_spec(thread: &SessionSpec, native_id: String, grant: &st
         output_hook: None,
         stop_hook: None,
         deny_tools: Some(NOTE_FORK_REFUSAL.into()),
-        suggestions: false,
         ..thread.clone()
     }
 }
@@ -361,7 +360,6 @@ fn plain_fork_spec(
         output_hook: None,
         stop_hook: None,
         deny_tools: None,
-        suggestions: false,
         protection: Default::default(),
     }
 }

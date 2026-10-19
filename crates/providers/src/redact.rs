@@ -551,8 +551,7 @@ pub fn redact_event(redactor: &Redactor, event: &mut ProviderEvent) {
         | ProviderEvent::Message { text, .. }
         | ProviderEvent::ReasoningDelta { text, .. }
         | ProviderEvent::Reasoning { text, .. }
-        | ProviderEvent::CommandOutputDelta { text, .. }
-        | ProviderEvent::PromptSuggestion { text } => r(text),
+        | ProviderEvent::CommandOutputDelta { text, .. } => r(text),
         ProviderEvent::ToolCall {
             name,
             input,

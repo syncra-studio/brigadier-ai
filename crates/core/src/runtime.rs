@@ -1628,7 +1628,6 @@ fn spec_for(session: &RawSession, origin: Origin, record_to: Option<PathBuf>) ->
         output_hook: None,
         stop_hook: None,
         deny_tools: None,
-        suggestions: false,
         protection: Default::default(),
     }
 }

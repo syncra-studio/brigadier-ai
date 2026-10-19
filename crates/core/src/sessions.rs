@@ -1907,7 +1907,7 @@ impl Core {
         Ok(())
     }
 
-    /// Keeps the CLI's guess at the user's next message on `request_id`, the request whose turn
+    /// Keeps the guess at the user's next message on `request_id`, the request whose turn
     /// it follows, while that is still the conversation's latest: once a newer one started, the
     /// guess follows nothing the user sees.
     pub(crate) async fn set_suggestion(

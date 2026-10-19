@@ -663,9 +663,7 @@ impl Provider for Codex {
                 turn_id: Mutex::new(None),
                 compact_asked: AtomicBool::new(false),
                 events: Events::new(events_tx, spec.redactor.clone()),
-                predict_thread: Mutex::new(None),
-                predicting: AtomicBool::new(spec.suggestions),
-                predict_paused: AtomicBool::new(false),
+                thread: Mutex::new(None),
                 own_mcp: spec
                     .mcp_servers
                     .iter()
@@ -724,7 +722,7 @@ impl Provider for Codex {
                 }
             };
 
-            *lock(&shared.predict_thread) = Some(thread.id.clone());
+            *lock(&shared.thread) = Some(thread.id.clone());
             let session = Arc::new(CodexSession {
                 thread_id: thread.id.clone(),
                 ephemeral: thread.ephemeral,
@@ -1838,14 +1836,8 @@ struct Shared {
     /// `thread/compact/start` is being sent; the reader tells its parser.
     compact_asked: AtomicBool,
     events: Events,
-    /// The thread, once it is open: its turns get Codex's own guess at the user's next message
-    /// ([`SessionSpec::suggestions`]) and its MCP servers are listed.
-    predict_thread: Mutex<Option<String>>,
-    /// Asked after each finished turn; off for good once Codex refuses the request (an
-    /// app-server or account without it).
-    predicting: AtomicBool,
-    /// Held while the conversation's composer is off screen.
-    predict_paused: AtomicBool,
+    /// The thread, once it is open: its MCP servers are listed.
+    thread: Mutex<Option<String>>,
     /// Brigadier's own MCP servers, left out of the servers reported.
     own_mcp: HashSet<String>,
     /// Codex lists the thread's MCP servers (`mcpServerStatus/list`); off for good once it
@@ -1956,11 +1948,6 @@ impl CodexSession {
 }
 
 impl ProviderSession for CodexSession {
-    fn pause_suggestions(&self, paused: bool) -> BoxFuture<'_, Result<()>> {
-        self.shared.predict_paused.store(paused, Ordering::Release);
-        Box::pin(async { Ok(()) })
-    }
-
     fn native_id(&self) -> String {
         self.thread_id.clone()
     }
@@ -2116,30 +2103,6 @@ impl ProviderSession for CodexSession {
     }
 }
 
-/// Asks Codex for its guess at the user's next message after the turn `turn`, which comes back
-/// as `thread/prediction/updated` (an experimental request, `thread/prediction/request`, seen
-/// in 0.163.0). It runs apart: its answer arrives through the reader that calls this. A refusal
-/// ends the asking for this session, and Brigadier makes no guess of its own.
-fn predict(rpc: &Arc<Rpc>, shared: &Arc<Shared>, turn: String) {
-    if !shared.predicting.load(Ordering::Acquire) || shared.predict_paused.load(Ordering::Acquire) {
-        return;
-    }
-    let Some(thread) = lock(&shared.predict_thread).clone() else {
-        return;
-    };
-    let (rpc, shared) = (rpc.clone(), shared.clone());
-    tokio::spawn(async move {
-        let params = json!({ "threadId": thread.clone(), "sourceTurnId": turn });
-        if let Err(err) = rpc
-            .call::<_, Value>("thread/prediction/request", &params)
-            .await
-        {
-            shared.predicting.store(false, Ordering::Release);
-            crate::logging::private_trace!(rpc.process.private_logs(), debug, "Codex makes no next-message guesses here"; thread = %thread, error = %err);
-        }
-    });
-}
-
 /// Lists the thread's MCP servers with their state and tools, as
 /// [`ProviderEvent::McpServers`]. It runs apart, once the thread is open; asked again while it
 /// runs, it lists once more after. A refusal ends the listing for this session (an app-server
@@ -2148,7 +2111,7 @@ fn list_mcp_servers(rpc: &Arc<Rpc>, shared: &Arc<Shared>) {
     if !shared.mcp_listing.load(Ordering::Acquire) {
         return;
     }
-    let Some(thread) = lock(&shared.predict_thread).clone() else {
+    let Some(thread) = lock(&shared.thread).clone() else {
         return;
     };
     {
@@ -2217,14 +2180,6 @@ async fn read_loop(
         for output in parser.feed(&line) {
             match output {
                 Output::Event(event) => {
-                    let finished = match &event {
-                        ProviderEvent::TurnCompleted {
-                            turn_id: Some(turn),
-                            status: TurnStatus::Completed,
-                            ..
-                        } => Some(turn.clone()),
-                        _ => None,
-                    };
                     // A server that came up or gave up: its tools and state, as Codex lists
                     // them now.
                     let settled = matches!(
@@ -2233,9 +2188,6 @@ async fn read_loop(
                             if server.status != McpStatus::Connecting
                     );
                     shared.events.send(event).await;
-                    if let Some(turn) = finished {
-                        predict(&rpc, &shared, turn);
-                    }
                     if settled {
                         list_mcp_servers(&rpc, &shared);
                     }
@@ -2453,7 +2405,6 @@ mod tests {
             output_hook: None,
             stop_hook: None,
             deny_tools: None,
-            suggestions: false,
             protection: Default::default(),
         }
     }

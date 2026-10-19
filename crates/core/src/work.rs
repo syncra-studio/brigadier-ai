@@ -2728,8 +2728,8 @@ pub struct UserRequest {
         optional
     )]
     pub review: std::collections::BTreeMap<String, FileReview>,
-    /// The thread's CLI's own guess at the user's next message after this request's last
-    /// turn, for the empty composer once it is over. Never sent by itself.
+    /// The guess at the user's next message its conversation's last turn for it ended with (a
+    /// hidden `[next: …]` line), for the empty composer once it is over. Never sent by itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub suggestion: Option<String>,
@@ -3623,7 +3623,7 @@ pub struct Told {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_use: Option<Vec<String>>,
     /// Whether its final answers end with the user's likely next message on a `[next: …]` line
-    /// (`prompts::marks_next`); `None` counts as no.
+    /// (`prompts::NEXT_MESSAGE`); `None` counts as no.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_message: Option<bool>,
 }

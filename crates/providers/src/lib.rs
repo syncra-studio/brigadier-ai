@@ -186,14 +186,6 @@ pub trait ProviderSession: Send + Sync {
         Box::pin(async { Err(Error::Invalid("this CLI cannot compact its context".into())) })
     }
 
-    /// Holds (or lets go) the CLI's guesses at the user's next message
-    /// ([`SessionSpec::suggestions`]) while the conversation's composer is off screen, so none
-    /// costs a request nobody sees. Nothing for a session without them.
-    fn pause_suggestions(&self, paused: bool) -> BoxFuture<'_, Result<()>> {
-        let _ = paused;
-        Box::pin(async { Ok(()) })
-    }
-
     /// Answers an [`ProviderEvent::ApprovalRequested`].
     fn answer(&self, approval_id: String, decision: ApprovalDecision) -> BoxFuture<'_, Result<()>>;
 

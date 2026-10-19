@@ -4,8 +4,7 @@
 use brigadier_providers::ProviderKind;
 
 use crate::model::{
-    Conversation, ConversationKind, Environment, GitStyle, PermissionLevel, Project, Settings,
-    Setup,
+    Conversation, Environment, GitStyle, PermissionLevel, Project, Settings, Setup,
 };
 use crate::tools::THREAD_TOOLS;
 use crate::work::{
@@ -310,7 +309,8 @@ How to talk to the user:
 - A user message and everything it sets in motion is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. The user sees each line you write as you write it, a short one before or between tool calls too: speak when it helps them, and reply exactly {quiet} when there's nothing to say.
 - {LEAD}
 - While work runs, write one line only for: a failure of what you started (what failed, its key error line, what you do about it); work the user didn't ask for, before it starts; and [status due]: what runs and what's left.
-- When the request is done (work, a question or an error explained alike), write one final answer, shaped as below: what changed and what to know and, when a review ran, what it found and what you fixed, in a sentence. Then, if any, one line "To check: …" only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). A site or app the user can try stays running (start_preview), with its local URL in your final answer (http://localhost:5173). Say code compiles, works or runs only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text.{next}
+- When the request is done (work, a question or an error explained alike), write one final answer, shaped as below: what changed and what to know and, when a review ran, what it found and what you fixed, in a sentence. Then, if any, one line "To check: …" only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). A site or app the user can try stays running (start_preview), with its local URL in your final answer (http://localhost:5173). Say code compiles, works or runs only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text.
+- {NEXT_MESSAGE}
 - Fix a known defect in a deliverable yourself, with no card (write a fixed copy; store a worker's with store_output and link it as outputs/<name>, else link its full path), or send it back, before you answer.
 - {LATE_EVENT} {REVISED_ANSWER} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that request: answer about it briefly.{voice}
@@ -324,11 +324,6 @@ How to talk to the user:
         workers = workers_rule(start_workers).replace("{quiet}", QUIET),
         code_rules = WORKER_CODE_RULES,
         preferences = preference_lines(preferences),
-        next = if marks_next(ConversationKind::Session, provider) {
-            format!("\n- {NEXT_MESSAGE}")
-        } else {
-            String::new()
-        },
     );
     callable(&text, provider)
 }
@@ -386,22 +381,10 @@ pub(crate) const NEXT_OPEN: &str = "[next:";
 /// The one sentence that asks for that line (about 35 tokens in, at most about 25 out).
 pub(crate) const NEXT_MESSAGE: &str = "End your final answer with a last line [next: <the user's most likely next message, in their words>] when one is clear; Brigadier hides it.";
 
-/// Whether a conversation's final answers carry the guess at the next message ([`NEXT_OPEN`])
-/// instead of its CLI guessing with a request of its own (`SessionSpec::suggestions`, Q55).
-/// Only a Claude session thread for now: its CLI's guesses read the whole context again and
-/// can't be paused. Chats and Codex keep their CLI's guesses until the user decides.
-pub(crate) fn marks_next(kind: ConversationKind, provider: ProviderKind) -> bool {
-    kind == ConversationKind::Session && provider == ProviderKind::Claude
-}
-
-/// Tells a session whose instructions said otherwise whether its final answers end with the
-/// next-message line.
-pub(crate) fn next_message_note(on: bool) -> String {
-    if on {
-        format!("[instructions] From now on: {NEXT_MESSAGE} Don't mention this note.")
-    } else {
-        "[instructions] From now on, never end an answer with a [next: …] line. Don't mention this note.".to_owned()
-    }
+/// Tells a thread or Chat whose instructions didn't ask for the next-message line to end its
+/// final answers with it. Every conversation's do (Q89): none asks its CLI for a guess.
+pub(crate) fn next_message_note() -> String {
+    format!("[instructions] From now on: {NEXT_MESSAGE} Don't mention this note.")
 }
 
 macro_rules! offer_session_rule {
@@ -1372,8 +1355,7 @@ const RUN_OVER_LABEL: &str = "overnight run over";
 const PREFERENCES_LABEL: &str = "preferences";
 const WORKSPACE_LABEL: &str = "workspace";
 const REVISION_LABEL: &str = "instructions revision";
-const NEXT_ON_LABEL: &str = "next message on";
-const NEXT_OFF_LABEL: &str = "next message off";
+const NEXT_LABEL: &str = "next message";
 const REVIEWS_ON_LABEL: &str = "reviews on";
 const REVIEWS_OFF_LABEL: &str = "reviews off";
 const GIT_WRITING_LABEL: &str = "git writing";
@@ -1521,8 +1503,6 @@ pub(crate) struct Current {
     pub due: Vec<FirstUse>,
     /// The thread's CLI, which names Brigadier's tools in those rules.
     pub provider: ProviderKind,
-    /// Whether its final answers end with the next-message line ([`marks_next`]); off unless set.
-    pub next_message: bool,
     /// Whether it has `save_report` (a thread or a Chat; a tab chat hasn't): what its notes say
     /// about a research answer's report, and whether a Chat has a thread's tools.
     pub reports: bool,
@@ -1818,7 +1798,6 @@ impl Current {
             workspace,
             due: Vec::new(),
             provider: ProviderKind::Claude,
-            next_message: false,
             reports: true,
         }
     }
@@ -1850,7 +1829,6 @@ impl Current {
             workspace: None,
             due: Vec::new(),
             provider: ProviderKind::Claude,
-            next_message: false,
             reports: true,
         }
     }
@@ -1882,7 +1860,7 @@ impl Current {
             browser: session.then_some(self.browser),
             auto_merge: session.then_some(self.auto_merge),
             first_use: None,
-            next_message: self.next_message.then_some(true),
+            next_message: Some(true),
         }
     }
 }
@@ -2056,18 +2034,13 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             },
         });
     }
-    // Its final answers end with the next-message line, or no longer do: a session or Chat
-    // alike, as `marks_next` decides.
-    if told.next_message.unwrap_or(false) != now.next_message {
+    // Its final answers end with the next-message line: a thread or Chat alike, on either CLI.
+    if told.next_message != Some(true) {
         notes.push(Note {
-            text: next_message_note(now.next_message),
-            label: if now.next_message {
-                NEXT_ON_LABEL
-            } else {
-                NEXT_OFF_LABEL
-            },
+            text: next_message_note(),
+            label: NEXT_LABEL,
             told: Told {
-                next_message: Some(now.next_message),
+                next_message: Some(true),
                 ..Told::default()
             },
         });
@@ -2819,14 +2792,14 @@ pub(crate) fn tab_chat(target: &crate::model::TabTarget, checkout: &str) -> Stri
         }
     };
     format!(
-        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You are a chat beside {about}. It sits in a session whose checkout is {checkout}: you may read and search its files, but not change them, and you run no commands that change anything. Answer about what is beside you; keep replies short.\n{CHAT_AUTHORITY}{TAB_CHAT_VOICE}",
+        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You are a chat beside {about}. It sits in a session whose checkout is {checkout}: you may read and search its files, but not change them, and you run no commands that change anything. Answer about what is beside you; keep replies short.\n{CHAT_AUTHORITY}{TAB_CHAT_VOICE}\n- {NEXT_MESSAGE}",
         today()
     )
 }
 
 pub(crate) fn chat(memories: &[String]) -> String {
     let mut text = format!(
-        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{CHAT_THREAD}\n- {CHAT_GRILLING}\n{PERSONAL_MEMORY}\n{CHAT_AUTHORITY}{CHAT_VOICE}",
+        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{CHAT_THREAD}\n- {CHAT_GRILLING}\n{PERSONAL_MEMORY}\n{CHAT_AUTHORITY}{CHAT_VOICE}\n- {NEXT_MESSAGE}",
         today()
     );
     if !memories.is_empty() {
@@ -4534,56 +4507,53 @@ mod environment_tests {
         assert!(!prompt.contains("the user's setting):"));
     }
 
-    /// G18 at no extra request: a Claude Session thread's final answer ends with its guess at
-    /// the next message; a Codex thread and Chats keep their CLI's guesses and hear nothing of
-    /// it. An open Claude thread told before hears it once; a short sentence, a few tokens.
+    /// G18 at no extra request (Q89): every thread and Chat, on either CLI, ends its final
+    /// answer with its guess at the next message. An open one told before hears it once; a
+    /// short sentence, a few tokens.
     #[test]
-    fn a_claude_session_thread_ends_its_answer_with_the_next_message_line() {
-        assert!(marks_next(ConversationKind::Session, ProviderKind::Claude));
-        assert!(!marks_next(ConversationKind::Session, ProviderKind::Codex));
-        assert!(!marks_next(ConversationKind::Chat, ProviderKind::Claude));
-        assert!(!marks_next(ConversationKind::Chat, ProviderKind::Codex));
+    fn every_thread_and_chat_ends_its_answer_with_the_next_message_line() {
         // About 35 tokens: one sentence.
         assert!(NEXT_MESSAGE.len() < 200, "{}", NEXT_MESSAGE.len());
         assert!(NEXT_MESSAGE.contains("[next: "));
         let conversation = session("fullAccess");
-        let prompt = |provider| thread(&conversation, None, &[], None, None, provider, true);
+        let line = format!("never in text.\n- {NEXT_MESSAGE}\n");
+        for provider in [ProviderKind::Claude, ProviderKind::Codex] {
+            let prompt = thread(&conversation, None, &[], None, None, provider, true);
+            assert!(prompt.contains(&line), "{provider:?}");
+        }
+        assert!(chat(&[]).contains(&format!("\n- {NEXT_MESSAGE}")));
+        assert!(chat(&["Lives in Chisinau".into()]).contains(&format!(
+            "\n- {NEXT_MESSAGE}\n\nWhat you know about the user"
+        )));
         assert!(
-            prompt(ProviderKind::Claude).contains(&format!("never in text.\n- {NEXT_MESSAGE}\n"))
+            tab_chat(&crate::model::TabTarget::Browser, "/repo")
+                .ends_with(&format!("\n- {NEXT_MESSAGE}"))
         );
-        assert!(!prompt(ProviderKind::Codex).contains(NEXT_OPEN));
 
-        let mut now = Current::session(&conversation, true, None, true, vec![], None);
-        now.next_message = true;
-        assert_eq!(now.told().next_message, Some(true));
-        assert!(notes(&now.told(), &now).is_empty(), "a new thread has it");
-        // Told before it: once.
-        let mut told = now.told();
-        told.next_message = None;
-        let heard = notes(&told, &now);
-        assert_eq!(heard.len(), 1, "{heard:#?}");
-        assert_eq!(heard[0].label, NEXT_ON_LABEL);
-        assert_eq!(
-            heard[0].text,
-            format!("[instructions] From now on: {NEXT_MESSAGE} Don't mention this note.")
-        );
-        let mut after = heard[0].told.clone();
-        fill_told(&mut after, &told);
-        assert!(notes(&after, &now).is_empty(), "told once");
-        // A thread or Chat it doesn't apply to hears nothing; one told it stops once.
-        let codex = Current::session(&conversation, true, None, true, vec![], None);
-        assert_eq!(codex.told().next_message, None);
-        assert!(notes(&told, &codex).is_empty());
-        let chat = Current::chat(Vec::new());
-        assert!(notes(&chat.told(), &chat).is_empty());
-        let stop = notes(&after, &codex);
-        assert_eq!(stop.len(), 1, "{stop:#?}");
-        assert_eq!(stop[0].label, NEXT_OFF_LABEL);
-        assert!(
-            stop[0]
-                .text
-                .contains("never end an answer with a [next: …] line")
-        );
+        for now in [
+            Current::session(&conversation, true, None, true, vec![], None),
+            Current::chat(Vec::new()),
+            Current::tab_chat(),
+        ] {
+            assert_eq!(now.told().next_message, Some(true));
+            assert!(notes(&now.told(), &now).is_empty(), "a new one has it");
+            // Told before it: once.
+            let mut told = now.told();
+            told.next_message = None;
+            let heard = notes(&told, &now);
+            assert_eq!(heard.len(), 1, "{heard:#?}");
+            assert_eq!(heard[0].label, NEXT_LABEL);
+            assert_eq!(
+                heard[0].text,
+                format!("[instructions] From now on: {NEXT_MESSAGE} Don't mention this note.")
+            );
+            let mut after = heard[0].told.clone();
+            fill_told(&mut after, &told);
+            assert!(notes(&after, &now).is_empty(), "told once");
+            // One told it was off (before Q89) hears it on once too.
+            told.next_message = Some(false);
+            assert_eq!(notes(&told, &now).len(), 1);
+        }
     }
 
     /// B4: "Start workers on its own" picks the thread's rule before workers start, and a
@@ -5177,6 +5147,7 @@ mod environment_tests {
                 CHAT_THREAD_LABEL,
                 CHAT_MEMORY_LABEL,
                 CHAT_GRILLING_LABEL,
+                NEXT_LABEL,
                 PREFERENCES_LABEL
             ]
         );

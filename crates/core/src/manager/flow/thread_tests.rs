@@ -3104,7 +3104,6 @@ async fn a_claude_note_fork_starts_as_its_thread_and_every_call_is_refused() {
         sweep_dir: thread.sweep_dir.clone(),
         output_hook: thread.output_hook.clone(),
         deny_tools: None,
-        suggestions: false,
         ..fork.clone()
     };
     assert_eq!(format!("{unchanged:?}"), format!("{thread:?}"));
