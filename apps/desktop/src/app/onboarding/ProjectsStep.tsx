@@ -183,7 +183,7 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
                 Looking for projects in your history…
               </div>
             ) : candidates.length === 0 ? (
-              <p className="text-muted-foreground bg-card rounded-surface border px-4 py-6 text-center text-sm">
+              <p className="text-muted-foreground bg-card rounded-settings border px-4 py-6 text-center text-sm">
                 No repositories found in your history. Add a folder to start with one.
               </p>
             ) : (
@@ -254,7 +254,7 @@ function ProjectCard({
         disabled={disabled || added}
         onClick={onToggle}
         className={cn(
-          "bg-card rounded-surface flex h-full w-full min-w-0 flex-col gap-1 border p-4 text-start transition-colors",
+          "bg-card rounded-settings flex h-full w-full min-w-0 flex-col gap-1 border p-4 text-start transition-colors",
           "enabled:hover:bg-muted/60 disabled:cursor-default",
           added && "opacity-60",
         )}
