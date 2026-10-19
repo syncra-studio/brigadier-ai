@@ -148,6 +148,8 @@ async function send(): Promise<(typeof sends)[number]> {
   return sends.at(-1)!;
 }
 
+/** The pasted text open over the thread. */
+const pane = () => document.querySelector<HTMLElement>("[data-slot=pasted-text-pane]");
 /** The open pasted text's editor: editable, or read only. */
 const editor = () => document.querySelector<HTMLElement>("[data-slot=pasted-text-editor] [contenteditable=true]");
 const shown = () => document.querySelector("[data-slot=pasted-text-editor] [contenteditable=false]");
@@ -264,18 +266,19 @@ async function drive() {
     await until("the paste chip deleted", () => pasteChip() === null);
     await key("z", [navigator.platform.startsWith("Mac") ? "Meta" : "Control"]);
     await until("the paste chip back", () => pasteChip() !== null);
-    // The chip opens the pasted text in the Pages editor; Done keeps an edit.
+    // The chip opens the pasted text full size over the Chat's thread, in the Pages editor, no
+    // dialog (#427); an edit is kept as it is made, and its × closes it.
     await fixtureClick(pasteChip()!);
     await until("the editor", () => editor()?.querySelector("h2")?.textContent === "Title");
+    seen.opened = { pane: pane()?.getAttribute("aria-label"), dialog: document.querySelector("[role=dialog]") !== null };
     const item = [...editor()!.querySelectorAll("li")].at(-1)!;
     await fixtureClick(item);
     await key("ArrowRight");
     await key("ArrowRight");
     await type(" more");
     await until("the edit", () => item.textContent === "b more");
-    const done = [...document.querySelectorAll("button")].find((button) => button.textContent === "Done")!;
-    await fixtureClick(done);
-    await until("the editor closed", () => editor() === null);
+    await fixtureClick(pane()!.querySelector<HTMLElement>("button[aria-label='Close Pasted text #1']")!);
+    await until("the editor closed", () => editor() === null && pane() === null);
     await until("the edited text stored", () => document.querySelectorAll("[data-slot=composer-attachment]").length === 0 && pasteChip() !== null);
     field()!.focus();
     const both = await send();
@@ -291,6 +294,8 @@ async function drive() {
     await fixtureClick(bubble()!.querySelector("button")!);
     await until("the read-only editor", () => shown()?.querySelector("h1")?.textContent === "Notes");
     seen.bubble = {
+      pane: pane()?.getAttribute("aria-label"),
+      dialog: document.querySelector("[role=dialog]") !== null,
       done: [...document.querySelectorAll("button")].some((button) => button.textContent === "Done"),
       text: shown()!.querySelector("li:last-child")?.textContent,
       handles: document.querySelectorAll("[data-slot=pasted-text-editor] [data-slot=page-drag-handle]").length,

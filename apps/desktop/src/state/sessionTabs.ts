@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 
 import { notePaneClose } from "@/state/closedPanes";
 import { discardDocument, documentIsSaved } from "@/state/documentDrafts";
-import type { ReviewScope } from "@/ipc/generated";
+import type { AttachmentRef, ReviewScope } from "@/ipc/generated";
 import type { PlanDocRef } from "@/state/planDoc";
 
 /**
@@ -149,6 +149,11 @@ export type PanelView =
   /** What something in the context card's Background prints: a preview's log or a long command's output. */
   | { type: "output"; source: "preview" | "run"; id: string };
 export type PanelTabState = { kind: "panel"; id: string; opener: string | null; view: PanelView; title: string };
+/**
+ * Text pasted as a chip, `[Pasted text #n]`, read in a tab (#427): the composer's own, which
+ * edits (`paste` null: found in the composer by its number), or a sent message's, read only.
+ */
+export type PastedTabState = { kind: "pasted"; id: string; opener: string | null; n: number; paste: AttachmentRef | null };
 
 /**
  * Any tab may say an agent opened it (Q90): it is the agent's to close; every other tab is the
@@ -156,7 +161,7 @@ export type PanelTabState = { kind: "panel"; id: string; opener: string | null; 
  * comes to the front.
  */
 export type AgentMark = { agentOpened?: boolean; unseen?: boolean };
-export type SessionTab = (FileTab | ReviewTabState | PanelTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState | ConflictTabState) & AgentMark;
+export type SessionTab = (FileTab | ReviewTabState | PanelTabState | PastedTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState | ConflictTabState) & AgentMark;
 
 /** Whether an agent opened `tab`: by an app call, or with the browser tool. */
 export function isAgentTab(tab: SessionTab): boolean {
@@ -485,6 +490,20 @@ export function openPageTab(conversationId: string, pageId: string, title: strin
   return shown;
 }
 
+/**
+ * Shows pasted text `n` in a tab: the composer's (`paste` null) or a sent message's. The tab
+ * already showing it, else a new one after the tab in front. Returns the tab's ID.
+ */
+export function openPastedTab(conversationId: string, n: number, paste: AttachmentRef | null): string {
+  const id = paste ? `pasted:${paste.id}:${n}` : `pasted:composer:${n}`;
+  update(conversationId, (current) => {
+    if (current.tabs.some((tab) => tab.id === id)) return { ...current, active: id };
+    const tab: PastedTabState = { kind: "pasted", id, opener: current.active, n, paste };
+    return { tabs: insertAfterActive(current, tab), active: id };
+  });
+  return id;
+}
+
 /** File and Review keep their canonical IDs; an existing destination keeps its position. */
 function replacePlaceholder(current: SessionTabs, id: string | undefined, tab: SessionTab): SessionTabs | null {
   const placeholder = current.tabs.find((entry) => entry.id === id && entry.kind === "newTab");
@@ -796,6 +815,8 @@ export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSave
     const remapped = new Map<string, string>();
     const tabs = (session.tabs as (SessionTab | LegacyDocumentTab)[]).flatMap((tab): SessionTab[] => {
       if (tab.kind === "terminal") return [{ ...tab, title: "" }];
+      // The composer's pasted text was being edited in it: that edit is over.
+      if (tab.kind === "pasted" && !tab.paste) return [];
       // The old Review tab of every change and its scope picker is gone.
       if (tab.kind === "review" && !REVIEW_TARGETS.has(tab.target.type)) return [];
       // A popup its opener wrote (about:blank) is gone with its page: its tab starts empty.

@@ -16,7 +16,8 @@ Object.defineProperty(globalThis, "window", { configurable: true, value: { local
 const { CHAT_TAB, newSessionTab, sessionTabs, selectTab, closeTab, closeOtherTabs, reopenTab, moveTab,
   selectTabNumber, stepTab, changeSessionTab, restoreSessionTabs, useSessionTabs,
   replaceNewTab, replaceNewTabWithFile, openFileTab, openReviewTab, showMockupTab, closeMockupTab, MOCKUP_TAB, openBrowserTab, dropBrowserTabs,
-  sideChatName, sideChatTitle, openPlanTab } = await import("./sessionTabs");
+  sideChatName, sideChatTitle, openPlanTab, openPastedTab } = await import("./sessionTabs");
+const { tabTitle } = await import("./sessionTabTitle");
 const { documentText, documentIsSaved } = await import("./documentDrafts");
 const { ensurePage, migrateDrafts } = await import("./pageTabs");
 
@@ -430,4 +431,20 @@ test("a page already open in a Browser tab is brought to the front, not opened a
   const other = openBrowserTab(id, "http://localhost:3000/about");
   assert.notEqual(other, first, "another page is another tab");
   assert.equal(sessionTabs(id).tabs.length, 2);
+});
+
+test("a pasted-text chip opens its text in a tab after the one in front, once per paste; the composer's tab is not restored (issue 427)", () => {
+  const session = "pasted-session";
+  openFileTab(session, "src/a.ts");
+  selectTab(session, CHAT_TAB);
+  const sent = { id: "blob-1", name: "Pasted text.md", mime: "text/markdown", bytes: 4, pasted: true, inline: 1 };
+  const fromMessage = openPastedTab(session, 1, sent);
+  const fromComposer = openPastedTab(session, 1, null);
+  assert.equal(openPastedTab(session, 1, sent), fromMessage);
+  const { tabs, active } = sessionTabs(session);
+  assert.deepEqual(tabs.map((tab) => tab.id), [fromMessage, fromComposer, "file:src/a.ts"]);
+  assert.equal(active, fromMessage);
+  assert.deepEqual(tabs.slice(0, 2).map((tab) => tabTitle(tab, tabs)), ["Pasted text #1", "Pasted text #1"]);
+  const restored = restoreSessionTabs({ [session]: sessionTabs(session) })[session]!;
+  assert.deepEqual(restored.tabs.map((tab) => tab.id), [fromMessage, "file:src/a.ts"]);
 });

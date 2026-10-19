@@ -32,6 +32,7 @@ import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { ChatActions, RenameDialog } from "@/app/conversation/ChatActions";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
 import { SessionTabBar, SessionTabViews } from "@/app/conversation/SessionTabBar";
+import { PastedTextPane } from "@/app/conversation/PastedTextPane";
 import { WorkerDiffs } from "@/app/conversation/WorkerSummary";
 import { latestRequest, reworkableRequest } from "@/app/conversation/rework";
 import { interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/conversation/turnError";
@@ -75,6 +76,7 @@ import {
 } from "@/app/conversation/Mentions";
 import { TopBar } from "@/app/TopBar";
 import { MessageAttachments } from "@/components/assistant-ui/elements/message-attachment";
+import { type OpenPastedText, PastedTextOpenerContext } from "@/components/assistant-ui/elements/pasted-text";
 import {
   type AttachmentReader,
   AttachmentReaderContext,
@@ -121,7 +123,7 @@ import { takeBackgroundSend } from "@/state/backgroundSend";
 import { useBoard } from "@/state/board";
 import { lastFinished, markOpened } from "@/state/lastOpened";
 import { landReveal, useReveal } from "@/state/reveal";
-import { CHAT_TAB, openFileTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
+import { CHAT_TAB, openFileTab, openPastedTab, selectTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { isTaskTab } from "@/state/tabStates";
 import { placeOf } from "@/state/terminalPlaces";
 import {
@@ -846,7 +848,18 @@ export function ConversationView({
   // A session's own view has tabs; another tab in front covers the conversation (kept as it was).
   const tabbed = !embedded && conversation?.kind === "session";
   const { active: activeTab } = useSessionTabsOf(tabbed ? conversationId : null);
-  const covered = tabbed && activeTab !== CHAT_TAB;
+  // A pasted text a chip opened in a Chat or a draft, which have no tabs: over the thread (#427).
+  const place = conversationId ?? "draft";
+  const [pastedOver, setPastedOver] = useState<{ place: string; n: number; paste: AttachmentRef | null } | null>(null);
+  const pasted = !tabbed && pastedOver?.place === place ? pastedOver : null;
+  const openPasted = useCallback<OpenPastedText>(
+    (n, paste) => {
+      if (tabbed && conversationId) openPastedTab(conversationId, n, paste);
+      else setPastedOver({ place, n, paste });
+    },
+    [tabbed, conversationId, place],
+  );
+  const covered = tabbed ? activeTab !== CHAT_TAB : pasted !== null;
   // A file link in an answer opens in a tab of its own when it is one of the session's files.
   const checkout =
     setup?.type === "session"
@@ -874,6 +887,7 @@ export function ConversationView({
               <AssistantRuntimeProvider runtime={runtime}>
                 <AttachmentReaderContext.Provider value={reader}>
                   <OpenFileContext.Provider value={openFileAt}>
+                  <PastedTextOpenerContext.Provider value={openPasted}>
                   <LinkConversationContext.Provider value={conversationId}>
                     {/* The summary's popover, where it floats: opened in the top bar, under it. */}
                     <SummaryFloat>
@@ -937,6 +951,9 @@ export function ConversationView({
                               </SummaryPane>
                             </div>
                             {tabbed && conversationId && <SessionTabViews conversationId={conversationId} />}
+                            {pasted && (
+                              <PastedTextPane n={pasted.n} paste={pasted.paste} onClose={() => setPastedOver(null)} />
+                            )}
                           </div>
                           </div>
                         {!embedded && <TerminalPane place={placeOf(selection)} />}
@@ -949,6 +966,7 @@ export function ConversationView({
                     </div>
                     </SummaryFloat>
                   </LinkConversationContext.Provider>
+                  </PastedTextOpenerContext.Provider>
                   </OpenFileContext.Provider>
                   {conversation && (
                     <RenameDialog

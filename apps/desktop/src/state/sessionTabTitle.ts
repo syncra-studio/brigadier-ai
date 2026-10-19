@@ -1,3 +1,4 @@
+import { pastedTextLabel } from "@/components/assistant-ui/elements/chipText";
 import { type SessionTab, sideChatName } from "@/state/sessionTabs";
 
 function baseName(path: string): string {
@@ -24,6 +25,7 @@ export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "mockup") return "Mockup";
   if (tab.kind === "plan") return tab.title || "Plan";
   if (tab.kind === "panel") return tab.title;
+  if (tab.kind === "pasted") return pastedTextLabel(tab.n);
   if (tab.kind === "conflict") {
     return tab.view === "compare" ? `${baseName(tab.path)}: Current Changes ↔ Incoming Changes`
       : tab.view === "merge" ? `Merging: ${baseName(tab.path)}` : baseName(tab.path);

@@ -1,7 +1,7 @@
 import { useAui, useAuiState } from "@assistant-ui/react";
 import { FileDocument } from "@openai/apps-sdk-ui/components/Icon";
 import type { LexicalEditor } from "lexical";
-import { type MouseEventHandler, useContext, useEffect, useRef, useState } from "react";
+import { createContext, type MouseEventHandler, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import { literalMarkdown } from "@/app/conversation/composerMarkdown";
 import { PageEditor } from "@/app/conversation/pages/PageEditor";
@@ -25,8 +25,16 @@ import { cn } from "@/lib/utils";
 
 /**
  * Text pasted as a chip (`[Pasted text #n]`, or a "Pasted text" card): opened in the Pages
- * editor, where it can be edited (Done keeps the edits) or, sent, read.
+ * editor, where it can be edited or, sent, read. A chip opens it full size (a session's tab,
+ * elsewhere over the thread), its edits kept as they are made; a card in a dialog, whose Done
+ * keeps them.
  */
+
+/** Opens pasted text `n`: the composer's (`paste` null), or a sent message's. */
+export type OpenPastedText = (n: number, paste: AttachmentRef | null) => void;
+
+/** How the conversation view opens a pasted text: a session's tab, else over the thread. */
+export const PastedTextOpenerContext = createContext<OpenPastedText | null>(null);
 
 /** Whether a pasted text's bytes are Markdown (rich text pasted), not plain text. */
 function isMarkdown(source: AttachmentSource): boolean {
@@ -65,12 +73,16 @@ function PastedTextEditor({
   source,
   title,
   onDone,
+  onEdit,
   close,
 }: {
   source: AttachmentSource;
   title: string;
+  /** Done keeps the edits (a dialog's). */
   onDone?: ((markdown: string) => void) | undefined;
-  close: () => void;
+  /** Each edit as it is made (a full-size view's). */
+  onEdit?: ((markdown: string) => void) | undefined;
+  close?: () => void;
 }) {
   const reader = useContext(AttachmentReaderContext);
   const [body, setBody] = useState<string | null>(null);
@@ -90,22 +102,25 @@ function PastedTextEditor({
   }, [from, reader]);
   const done = () => {
     if (onDone && edited.current !== null) onDone(edited.current);
-    close();
+    close?.();
   };
   return (
     <>
       <div className="page-scroll" data-slot="pasted-text-editor">
         {body !== null && (
-          <PageEditor
-            body={body}
-            label={title}
-            editable={onDone !== undefined}
-            editorRef={editorRef}
-            onChange={(markdown) => {
-              edited.current = markdown;
-            }}
-            onOpenLink={(url) => void openLink(url)}
-          />
+          <div className="page-column">
+            <PageEditor
+              body={body}
+              label={title}
+              editable={onDone !== undefined || onEdit !== undefined}
+              editorRef={editorRef}
+              onChange={(markdown) => {
+                edited.current = markdown;
+                onEdit?.(markdown);
+              }}
+              onOpenLink={(url) => void openLink(url)}
+            />
+          </div>
         )}
       </div>
       {onDone && (
@@ -120,6 +135,76 @@ function PastedTextEditor({
 }
 
 /**
+ * Pasted text `n` full size, in the Pages editor: the composer's (`paste` null), whose edits
+ * go into the message as they are made, under the same number, or a sent message's, read only.
+ */
+export function PastedTextView({ n, paste }: { n: number; paste: AttachmentRef | null }) {
+  const { source, swap } = useComposerPaste(n);
+  // Read once: an edit swaps the composer's attachment, which the editor already shows.
+  const [from] = useState(paste ? { ref: paste } : source);
+  const latest = useRef(swap);
+  useEffect(() => {
+    latest.current = swap;
+  }, [swap]);
+  const pending = useRef<string | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const flush = useCallback(() => {
+    window.clearTimeout(timer.current);
+    if (pending.current === null) return;
+    latest.current(pending.current);
+    pending.current = null;
+  }, []);
+  // Closed with an edit not yet kept: it is kept now.
+  useEffect(() => flush, [flush]);
+  const edit = useCallback(
+    (markdown: string) => {
+      pending.current = markdown;
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(flush, 500);
+    },
+    [flush],
+  );
+  const label = pastedTextLabel(n);
+  return (
+    <div className="page-tab" data-slot="pasted-text-view">
+      {from ? (
+        <PastedTextEditor source={from} title={label} onEdit={paste ? undefined : edit} />
+      ) : (
+        <p className="text-muted-foreground p-6 text-sm">This pasted text is no longer in the message.</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The composer's pasted text `n`: its attachment, what it reads from, and `swap`, which puts an
+ * edit in its place under the same number.
+ */
+function useComposerPaste(n: number) {
+  const aui = useAui();
+  const reader = useContext(AttachmentReaderContext);
+  const attachment = useAuiState((s) =>
+    s.composer.attachments.find((entry) => composerInlineNumber(entry, reader, "paste") === n),
+  );
+  const source: AttachmentSource | null = attachment
+    ? { file: attachment.file, ref: attachment.file ? undefined : reader?.composerRef(attachment.id) }
+    : null;
+  const id = attachment?.id;
+  const swap = useCallback(
+    (markdown: string) => {
+      if (!id) return;
+      const composer = aui.composer();
+      void composer
+        .attachment({ id })
+        .remove()
+        .then(() => composer.addAttachment(pastedTextFile(markdown, { markdown: true, n })));
+    },
+    [aui, id, n],
+  );
+  return { attachment, source, swap };
+}
+
+/**
  * Text pasted into the message, where it was pasted: a chip with "Pasted text #n" that opens
  * it, and in the composer a × that removes it.
  */
@@ -127,16 +212,15 @@ export function InlinePastedText({
   source,
   n,
   busy = false,
+  onOpen,
   onRemove,
-  onDone,
 }: {
   source: AttachmentSource | null;
   n: number;
   busy?: boolean;
+  onOpen: (() => void) | null;
   onRemove?: MouseEventHandler<HTMLButtonElement> | undefined;
-  onDone?: ((markdown: string) => void) | undefined;
 }) {
-  const [open, setOpen] = useState(false);
   const label = pastedTextLabel(n);
   return (
     <span
@@ -150,8 +234,8 @@ export function InlinePastedText({
         type="button"
         aria-label={`Open ${label}`}
         title={label}
-        disabled={!source}
-        onClick={() => setOpen(true)}
+        disabled={!source || !onOpen}
+        onClick={() => onOpen?.()}
         className={cn("inline-flex items-center gap-1 rounded-sm px-0.5", busy && "opacity-50")}
       >
         <FileDocument aria-hidden className="size-icon-xs" />
@@ -169,17 +253,11 @@ export function InlinePastedText({
           className="relative inset-auto size-icon-xs shrink-0 after:absolute after:-inset-1 [&>svg]:size-2"
         />
       )}
-      {source && (
-        <PastedTextDialog source={source} title={label} open={open} onOpenChange={setOpen} onDone={onDone} />
-      )}
     </span>
   );
 }
 
-/**
- * Pasted text `n` in the composer's text, its content the composer's attachment for it; Done
- * in the editor swaps in the edited text, under the same number.
- */
+/** Pasted text `n` in the composer's text, its content the composer's attachment for it. */
 export function ComposerPastedText({
   n,
   onRemove,
@@ -187,34 +265,27 @@ export function ComposerPastedText({
   n: number;
   onRemove: MouseEventHandler<HTMLButtonElement>;
 }) {
-  const aui = useAui();
-  const reader = useContext(AttachmentReaderContext);
-  const attachment = useAuiState((s) =>
-    s.composer.attachments.find((entry) => composerInlineNumber(entry, reader, "paste") === n),
-  );
-  const source = attachment
-    ? { file: attachment.file, ref: attachment.file ? undefined : reader?.composerRef(attachment.id) }
-    : null;
-  const done = (markdown: string) => {
-    if (!attachment) return;
-    const composer = aui.composer();
-    void composer
-      .attachment({ id: attachment.id })
-      .remove()
-      .then(() => composer.addAttachment(pastedTextFile(markdown, { markdown: true, n })));
-  };
+  const open = useContext(PastedTextOpenerContext);
+  const { attachment, source } = useComposerPaste(n);
   return (
     <InlinePastedText
       source={source}
       n={n}
       busy={attachment?.status.type === "running"}
+      onOpen={open && (() => open(n, null))}
       onRemove={onRemove}
-      onDone={done}
     />
   );
 }
 
 /** A sent message's pasted text `n`, where it was pasted: opens read only. */
 export function MessagePastedText({ paste, n }: { paste: AttachmentRef | undefined; n: number }) {
-  return <InlinePastedText source={paste ? { ref: paste } : null} n={n} />;
+  const open = useContext(PastedTextOpenerContext);
+  return (
+    <InlinePastedText
+      source={paste ? { ref: paste } : null}
+      n={n}
+      onOpen={open && paste ? () => open(n, paste) : null}
+    />
+  );
 }

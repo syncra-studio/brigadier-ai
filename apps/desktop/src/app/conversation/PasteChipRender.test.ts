@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
-for (const mode of ["rich", "plain"] as const) test(`text pasted as a chip, in the ${mode} field: an image and a pasted text of the same number come back through a draft, ↑ and a pulled queue message; rich text pastes as a chip sent as Markdown, a bold phrase as formatting, long text as a chip or, into an empty field, a card; the chip opens the Pages editor and keeps an edit; a sent message shows it, opening read only`, { timeout: 120000 }, async (t) => {
+for (const mode of ["rich", "plain"] as const) test(`text pasted as a chip, in the ${mode} field: an image and a pasted text of the same number come back through a draft, ↑ and a pulled queue message; rich text pastes as a chip sent as Markdown, a bold phrase as formatting, long text as a chip or, into an empty field, a card; the chip opens the Pages editor full size over the Chat, no dialog, and keeps an edit as it is made; a sent message shows it, opening read only (issue 427)`, { timeout: 120000 }, async (t) => {
   const page = mode === "plain" ? "paste-chip.html?plain" : "paste-chip.html";
   const seen = JSON.parse(await renderFixtureLive(t, page, "paste-chip-result", 90000)) as Record<string, unknown>;
   assert.equal(seen.error, undefined, String(seen.error));
@@ -26,5 +26,6 @@ for (const mode of ["rich", "plain"] as const) test(`text pasted as a chip, in t
   assert.deepEqual(seen.copied, { text: "c [Pasted text #1] c [Pasted text #2]", kinds: [markdown, { ...markdown, inline: 2 }], same: true });
   assert.deepEqual(seen.copiedAgain, { text: "again c [Pasted text #1]", kinds: [markdown], content: "## Title\n\n- a\n- b" });
   assert.equal(seen.big, "Pasted text #1· Start and end are sent");
-  assert.deepEqual(seen.bubble, { done: false, text: "a", handles: 0 });
+  assert.deepEqual(seen.opened, { pane: "Pasted text #1", dialog: false });
+  assert.deepEqual(seen.bubble, { pane: "Pasted text #1", dialog: false, done: false, text: "a", handles: 0 });
 });

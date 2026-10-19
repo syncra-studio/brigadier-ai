@@ -1,4 +1,4 @@
-import { Archive, Chat, ChatCompose, Dock, Globe, Lightbulb, Plus, Document, ShieldCheck, Terminal, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, ChatCompose, Dock, FileDocument, Globe, Lightbulb, Plus, Document, ShieldCheck, Terminal, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -434,6 +434,7 @@ export function SessionTabBar({
                         : tab.kind === "page" ? <Document className="size-icon-sm shrink-0" />
                         : tab.kind === "mockup" ? <MockupTabIcon conversationId={id} />
                         : tab.kind === "plan" ? <Lightbulb className="size-icon-sm shrink-0" />
+                        : tab.kind === "pasted" ? <FileDocument className="size-icon-sm shrink-0" />
                         : tab.kind === "panel" ? tab.view.type === "output" ? <Terminal className="size-icon-sm shrink-0" /> : tab.view.type === "sources" ? <Globe className="size-icon-sm shrink-0" /> : <ShieldCheck className="size-icon-sm shrink-0" /> : (
                         <DiffGlyph className="size-icon-sm shrink-0" />
                       )}
@@ -580,6 +581,7 @@ const MockupView = lazy(() => import("./MockupTab").then((module) => ({ default:
 const SessionJobTab = lazy(() => import("./JobTab").then((module) => ({ default: module.SessionJobTab })));
 const SourcesTab = lazy(() => import("./SourcesTab").then((module) => ({ default: module.SourcesTab })));
 const PlanTab = lazy(() => import("./PlanTab").then((module) => ({ default: module.PlanTab })));
+const PastedTextView = lazy(() => import("@/components/assistant-ui/elements/pasted-text").then((module) => ({ default: module.PastedTextView })));
 const ConflictTab = lazy(() => import("./ConflictTab").then((module) => ({ default: module.ConflictTab })));
 const PageTabView = lazy(() => import("./pages/PageTabView").then((module) => ({ default: module.PageTabView })));
 const TabWithChat = lazy(() => import("./TabChat").then((module) => ({ default: module.TabWithChat })));
@@ -633,6 +635,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
               ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
                 : tab.kind === "plan" ? <PlanTab plan={tab.plan} />
+                : tab.kind === "pasted" ? <PastedTextView n={tab.n} paste={tab.paste} />
                 : tab.kind === "panel" ? tab.view.type === "output" ? <OutputTab conversationId={conversationId} view={tab.view} />
                   : tab.view.type === "sources" ? <SourcesTab conversationId={conversationId} /> : <SessionJobTab conversationId={conversationId} />
                 : tab.kind === "conflict" ? <ConflictTab conversationId={conversationId} tab={tab} />
