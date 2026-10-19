@@ -388,3 +388,80 @@ async fn a_turns_own_edits_and_long_command_come_back_whole_as_transcript_items(
         flow.stop().await;
     }
 }
+
+/// A session's thread that reads a page and searches the web leaves a page read and a search
+/// on the board, as a Chat's does: the context card's Sources and the Sources tab read them
+/// (#415).
+#[tokio::test]
+async fn a_sessions_web_lookups_reach_its_board() {
+    let flow = Flow::start(
+        "session-web",
+        Options::default(),
+        script(|turn| async move {
+            for (item, name, input) in [
+                (
+                    "fetch-1",
+                    "WebFetch",
+                    r#"{"url":"https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/date","prompt":"value format"}"#,
+                ),
+                ("search-1", "WebSearch", r#"{"query":"input type=date value"}"#),
+            ] {
+                for status in [ItemStatus::InProgress, ItemStatus::Completed] {
+                    turn.events
+                        .send(ProviderEvent::ToolCall {
+                            item_id: item.into(),
+                            name: name.into(),
+                            input: Some(input.into()),
+                            status,
+                            output: (status == ItemStatus::Completed).then(|| "ok".into()),
+                            kept: None,
+                        })
+                        .await
+                        .unwrap();
+                }
+            }
+            Reply::text("Looked it up.")
+        }),
+    )
+    .await;
+    flow.say("How does a date field report its value?").await;
+    let board = flow
+        .until("both lookups are on the board", |board| {
+            board
+                .orchestrator_steps
+                .iter()
+                .filter(|step| {
+                    matches!(
+                        step.kind,
+                        OrchestratorStepKind::ReadPage { .. }
+                            | OrchestratorStepKind::SearchedWeb { .. }
+                    )
+                })
+                .count()
+                == 2
+        })
+        .await;
+    let web: Vec<&OrchestratorStepKind> = board
+        .orchestrator_steps
+        .iter()
+        .map(|step| &step.kind)
+        .filter(|kind| {
+            matches!(
+                kind,
+                OrchestratorStepKind::ReadPage { .. } | OrchestratorStepKind::SearchedWeb { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        web,
+        [
+            &OrchestratorStepKind::ReadPage {
+                url: "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/date".into()
+            },
+            &OrchestratorStepKind::SearchedWeb {
+                query: "input type=date value".into()
+            },
+        ]
+    );
+    flow.stop().await;
+}

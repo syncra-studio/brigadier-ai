@@ -4680,8 +4680,9 @@ impl SessionManager {
                     },
                 )
                 .await;
-                if conv.kind == ConversationKind::Chat
-                    && *status == ItemStatus::Completed
+                // A web search or page read, a Chat's or a session's: its answer's rows and the
+                // session card's Sources (#415) read it.
+                if *status == ItemStatus::Completed
                     && let Some(kind) = super::thread_items::web_step(name, input.as_deref())
                 {
                     self.orchestrator_step(&conv.id, kind).await;
