@@ -784,8 +784,19 @@ impl SessionManager {
                     crate::now_ms(),
                     self.app.next.fetch_add(1, Ordering::Relaxed)
                 ));
-                let saved =
-                    std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, &bytes));
+                let note = super::thread_images::ShotNote {
+                    url: url.clone(),
+                    taken_at_ms: crate::now_ms(),
+                };
+                let saved = std::fs::create_dir_all(&dir)
+                    .and_then(|()| std::fs::write(&path, &bytes))
+                    .and_then(|()| {
+                        // attach_proof reads where it was taken from beside it.
+                        std::fs::write(
+                            super::thread_images::shot_note_path(&path),
+                            serde_json::to_vec(&note).unwrap_or_default(),
+                        )
+                    });
                 let text = match saved {
                     Ok(()) => format!(
                         "{tab} — {url}\nSaved as {} (attach_proof takes this path).",

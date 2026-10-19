@@ -332,17 +332,28 @@ pub struct ReviewCandidate {
     pub wait_seconds: Option<u64>,
 }
 
-/// `attach_proof`: a screenshot or short recording the thread made of the change, shown with
-/// its reply (the merge message's proof).
+/// `attach_proof`: a screenshot, short recording, log or test output the thread made of the
+/// change, shown with its reply (the merge message's proof).
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AttachProof {
-    /// The image (PNG, JPEG, GIF, WebP) or recording (MP4, MOV, WebM) file, at most 11 MB;
-    /// relative to your checkout.
+    /// The image (PNG, JPEG, GIF, WebP), recording (MP4, MOV, WebM) or text output (.log,
+    /// .txt) file, at most 11 MB (text 1 MB); relative to your checkout.
     pub path: String,
-    /// What it shows, in a few words.
+    /// What it shows, in a few words the user reads under it: "Added a todo with a due date".
     #[serde(default)]
     pub caption: Option<String>,
+    /// For a text file: "log" for a program's output, "test" for a test run's. A picture is a
+    /// screenshot and a video a recording without it.
+    #[serde(default)]
+    pub kind: Option<crate::work::ProofKind>,
+    /// The preview it shows ("preview-2"), when it was taken of one of yours.
+    #[serde(default)]
+    pub preview: Option<String>,
+    /// Where it was taken when that isn't a preview of yours or a browser_screenshot: the
+    /// page's URL, the device ("iPhone 16 simulator"), the file or the command.
+    #[serde(default)]
+    pub taken_on: Option<String>,
 }
 
 /// `start_verifier`: a verifier of a reported implement task, or with `fresh` one that gets

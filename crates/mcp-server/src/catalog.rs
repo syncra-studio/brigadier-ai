@@ -190,8 +190,11 @@ for the findings (wait_seconds) and returns them in its reply; one still running
 arrives as a message. With no other-vendor reviewer, or reviews off, it says so.";
 
 const ATTACH_PROOF: &str = "Attach a screenshot or short recording you made of the change \
-(PNG, JPEG, GIF, WebP, MP4, MOV or WebM, at most 11 MB) to your reply: the user sees it under \
-the reply, the merge message's proof. Brigadier keeps a copy, so a temporary file is fine.";
+(PNG, JPEG, GIF, WebP, MP4, MOV or WebM, at most 11 MB), or a log or test run's output (.log or \
+.txt, at most 1 MB, with `kind`), to your reply: the user sees it under the reply, the merge \
+message's proof. Always give a short `caption` of what it shows (\"Added a todo with a due \
+date\"), and `preview` when it was taken of one of your previews; a browser_screenshot \
+knows its page. Brigadier keeps a copy, so a temporary file is fine.";
 
 const SETTLE_STEP: &str = "Only during an overnight run: settle a step of the run's plan, by \
 its number, once you have judged its whole scope and every \"done when\" (your own edits \

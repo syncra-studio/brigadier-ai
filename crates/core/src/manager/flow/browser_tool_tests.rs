@@ -1049,8 +1049,22 @@ async fn the_thread_attaches_a_preview_s_screenshot_from_the_browser_tool_as_mer
                 name,
                 mime,
                 caption,
+                kind,
+                taken_on,
+                taken_at_ms,
                 ..
-            } => Some((id.clone(), name.clone(), mime.clone(), caption.clone())),
+            } => {
+                // Where and when the browser took it, kept beside the picture.
+                assert_eq!(
+                    (*kind, taken_on.as_deref()),
+                    (
+                        Some(crate::work::ProofKind::Screenshot),
+                        Some("http://127.0.0.1:9/form")
+                    )
+                );
+                assert!(taken_at_ms.is_some());
+                Some((id.clone(), name.clone(), mime.clone(), caption.clone()))
+            }
             _ => None,
         })
         .collect();

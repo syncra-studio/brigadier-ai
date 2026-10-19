@@ -1401,13 +1401,13 @@ Ship it the way a careful engineer would; you judge how much a change needs, and
 - tests and type checks run on the final commit, after your last change;
 - the other vendor's review of the final commit (review_candidate reuses a review that covers it), each finding fixed or answered in one line; a running review is usually worth waiting for;
 - with a pull request, green CI on it (ci_status reads its checks);
-- for a change the user can see (a page, a screen, a control, its words or its look), however small: the app run in the background (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message (attach_proof). Reading the code, a grep or a passing test isn't that proof: it shows the change is there, not that it works for the user;
+- for a change the user can see (a page, a screen, a control, its words or its look), however small: the app run in the background (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message (attach_proof), with a short caption of what it shows. Reading the code, a grep or a passing test isn't that proof: it shows the change is there, not that it works for the user;
 - for a change you judge big or risky: a fresh verifier (start_verifier with fresh: true) that tries to break it against the original request.
 When something can't be had (CI broken on main, the other vendor out of quota), decide whether to merge or wait, and say what was missing. The merge message (your reply that says it merged) shows what was verified: the pull request or commit, the checks on the final commit, the review and how each finding was settled, CI, the proof, the verifier's verdict if one ran, and anything left out. \"Beyond this request:\" lists what you found outside it (filed as issues when the repo is on GitHub); never drop a finding without saying so.";
 
 /// How a change on a web page is proved where agents have the browser tools (Q82): the same
 /// tool that works pages drives the preview's.
-pub(crate) const BROWSER_PROOF: &str = "For a change on a web page (a web app's preview, a site), however small, get the proof with your browser tools: browser_open on the preview's URL opens it in a background Browser tab, use the change there (browser_click, browser_type), then browser_screenshot; attach_proof takes the file it saves. A change in a desktop app's own window is shown with computer use.";
+pub(crate) const BROWSER_PROOF: &str = "For a change on a web page (a web app's preview, a site), however small, get the proof with your browser tools: browser_open on the preview's URL opens it in a background Browser tab, use the change there (browser_click, browser_type), then browser_screenshot; attach_proof takes the file it saves, with a short caption of what it shows (\"Added a todo with a due date\"). A change in a desktop app's own window is shown with computer use.";
 
 /// What the thread is told about merging on its own: with the browser tools, how a web page's
 /// change is proved with them.

@@ -630,6 +630,20 @@ pub struct Preview {
     pub building: bool,
 }
 
+/// What a proof is, which decides how it shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ProofKind {
+    /// A picture of a page, a window or a device's screen.
+    Screenshot,
+    /// A short video of the change used.
+    Recording,
+    /// A program's output (a preview's log, a command's).
+    Log,
+    /// A test run's output.
+    Test,
+}
+
 /// What a preview shows the user, which decides when it is ready and whether it has a URL.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema,
@@ -2317,19 +2331,36 @@ pub enum OrchestratorStepKind {
         branch: String,
         head: String,
     },
-    /// A screenshot or recording the thread attached to its reply (`attach_proof`): the merge
-    /// message's proof, read with `readThreadImage` by its `id`.
+    /// A screenshot, recording, log or test output the thread attached to its reply
+    /// (`attach_proof`): the merge message's proof, read with `readThreadImage` by its `id`.
     Proof {
         id: String,
         /// Its file name as the thread gave it.
         name: String,
         mime: String,
+        /// What it shows, in the thread's words ("Added a todo with a due date").
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         caption: Option<String>,
         /// Brigadier's copy.
         #[ts(skip)]
         file: String,
+        /// What it is; none on proofs from before it was kept (read it from `mime` then).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        kind: Option<ProofKind>,
+        /// Where it was taken: the page's URL, the device, the file or the command.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        taken_on: Option<String>,
+        /// The preview it was taken of (`preview-2`), when it was one of the session's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        preview: Option<String>,
+        /// When it was taken: the screenshot's own time, else the file's last change.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        taken_at_ms: Option<i64>,
     },
     /// "Merged {branch} into {base}": the user asked for it in the thread.
     Merged {

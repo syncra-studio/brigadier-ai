@@ -698,20 +698,32 @@ async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
                 }
                 let workspace = &turn.add_dirs[0];
                 std::fs::write(workspace.join("shot.png"), b"\x89PNG proof").unwrap();
-                std::fs::write(workspace.join("notes.txt"), "notes").unwrap();
+                std::fs::write(workspace.join("notes.md"), "notes").unwrap();
+                std::fs::write(workspace.join("tests.txt"), "test result: ok").unwrap();
                 let big = std::fs::File::create(workspace.join("big.png")).unwrap();
                 big.set_len(12 * 1024 * 1024).unwrap();
+                let long = std::fs::File::create(workspace.join("long.log")).unwrap();
+                long.set_len(2 * 1024 * 1024).unwrap();
                 // A link into Brigadier's private folder, named like a screenshot.
                 std::os::unix::fs::symlink(run_dir.unwrap(), workspace.join("token.png")).unwrap();
-                for (path, caption) in [
-                    ("shot.png", Some("The new switch")),
-                    ("notes.txt", None),
-                    ("big.png", None),
-                    ("token.png", None),
+                for (path, extra) in [
+                    (
+                        "shot.png",
+                        json!({"caption": "The new switch", "taken_on": "iPhone 16 simulator"}),
+                    ),
+                    ("notes.md", json!({})),
+                    ("big.png", json!({})),
+                    ("token.png", json!({})),
+                    (
+                        "tests.txt",
+                        json!({"caption": "The settings tests pass", "kind": "test"}),
+                    ),
+                    ("long.log", json!({"kind": "log"})),
+                    ("shot.png", json!({"preview": "preview-9"})),
                 ] {
-                    let reply = turn
-                        .call("attach_proof", json!({ "path": path, "caption": caption }))
-                        .await;
+                    let mut args = extra;
+                    args["path"] = json!(path);
+                    let reply = turn.call("attach_proof", args).await;
                     said.lock()
                         .unwrap()
                         .push(format!("{path}: {} {}", reply.is_error, reply.text));
@@ -731,9 +743,18 @@ async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
         log[0].starts_with("shot.png: false Attached shot.png"),
         "{log:?}"
     );
-    assert!(log[1].starts_with("notes.txt: true "), "{log:?}");
+    assert!(log[1].starts_with("notes.md: true "), "{log:?}");
     assert!(log[2].contains("over 11 MB"), "{log:?}");
     assert!(log[3].contains("private folder"), "{log:?}");
+    assert!(
+        log[4].starts_with("tests.txt: false Attached tests.txt"),
+        "{log:?}"
+    );
+    assert!(log[5].contains("over 1 MB"), "{log:?}");
+    assert!(
+        log[6].contains("preview-9 isn't one of your previews"),
+        "{log:?}"
+    );
     let proofs: Vec<_> = board
         .orchestrator_steps
         .iter()
@@ -743,16 +764,42 @@ async fn a_screenshot_the_thread_attaches_is_kept_for_the_merge_message() {
                 name,
                 mime,
                 caption,
+                kind,
+                taken_on,
+                preview,
+                taken_at_ms,
                 ..
-            } => Some((id.clone(), name.clone(), mime.clone(), caption.clone())),
+            } => Some((
+                (id.clone(), name.clone(), mime.clone(), caption.clone()),
+                (*kind, taken_on.clone(), preview.clone(), *taken_at_ms),
+            )),
             _ => None,
         })
         .collect();
-    assert_eq!(proofs.len(), 1, "{proofs:?}");
-    let (id, name, mime, caption) = proofs[0].clone();
+    assert_eq!(proofs.len(), 2, "{proofs:?}");
+    let ((id, name, mime, caption), (kind, taken_on, preview, taken_at)) = proofs[0].clone();
     assert_eq!(
         (name.as_str(), mime.as_str(), caption.as_deref()),
         ("shot.png", "image/png", Some("The new switch"))
+    );
+    assert_eq!(
+        (kind, taken_on.as_deref(), preview),
+        (
+            Some(crate::work::ProofKind::Screenshot),
+            Some("iPhone 16 simulator"),
+            None
+        )
+    );
+    assert!(taken_at.is_some_and(|at| at > 0), "the file's time");
+    let ((_, name, mime, caption), (kind, ..)) = proofs[1].clone();
+    assert_eq!(
+        (name.as_str(), mime.as_str(), caption.as_deref(), kind),
+        (
+            "tests.txt",
+            "text/plain",
+            Some("The settings tests pass"),
+            Some(crate::work::ProofKind::Test)
+        )
     );
     // Served from Brigadier's copy, even once the thread's own file is gone.
     let checkout = PathBuf::from(flow.manager.checkout_dir(&flow.conversation).unwrap());

@@ -8,6 +8,7 @@ import type { ItemStatus } from "./ItemStatus";
 import type { MergeCondition } from "./MergeCondition";
 import type { MergeRecord } from "./MergeRecord";
 import type { MergedUpstream } from "./MergedUpstream";
+import type { ProofKind } from "./ProofKind";
 import type { ProviderKind } from "./ProviderKind";
 import type { SettingChange } from "./SettingChange";
 import type { TaskId } from "./TaskId";
@@ -69,7 +70,27 @@ text?: string, } | { "type": "stopped", taskId: TaskId, reason: string, } | { "t
 /**
  * Its file name as the thread gave it.
  */
-name: string, mime: string, caption?: string, } | { "type": "merged", branch: string, base: string, commits: number, 
+name: string, mime: string, 
+/**
+ * What it shows, in the thread's words ("Added a todo with a due date").
+ */
+caption?: string, 
+/**
+ * What it is; none on proofs from before it was kept (read it from `mime` then).
+ */
+kind?: ProofKind, 
+/**
+ * Where it was taken: the page's URL, the device, the file or the command.
+ */
+takenOn?: string, 
+/**
+ * The preview it was taken of (`preview-2`), when it was one of the session's.
+ */
+preview?: string, 
+/**
+ * When it was taken: the screenshot's own time, else the file's last change.
+ */
+takenAtMs?: number, } | { "type": "merged", branch: string, base: string, commits: number, 
 /**
  * The user message whose words asked for it: it asks for no other merge.
  */
