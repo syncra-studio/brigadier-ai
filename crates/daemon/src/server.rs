@@ -26,6 +26,7 @@ use brigadier_ipc::protocol::{
 };
 use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token, Writer};
 use brigadier_providers::ProviderKind;
+use brigadier_providers::login_mark::LoginMark;
 use brigadier_store::{Store, StoredEvent};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, mpsc, watch};
@@ -921,7 +922,8 @@ impl Session {
 
     /// Opens (or shows again) the terminal that signs extra account `id` in: its CLI's own
     /// sign-in, run directly with the account's home and the user's environment less any
-    /// login variable. When it ends, the account is checked again.
+    /// login variable. The account is checked again the moment its login is stored, and when
+    /// the sign-in ends.
     async fn open_account_terminal(
         &mut self,
         id: &str,
@@ -955,6 +957,13 @@ impl Session {
         let terminal_id = match self.daemon.terminals.running(&key, &key) {
             Some(open) => open,
             None => {
+                let account_env = env.for_account(entry.provider, &home);
+                // Where its login is kept, as it stands before the sign-in starts.
+                let mark = LoginMark::of(entry.provider, &account_env);
+                let before = match &mark {
+                    Some(mark) => mark.read().await,
+                    None => None,
+                };
                 let command = brigadier_providers::TerminalCommand {
                     program,
                     args: brigadier_core::runtime::accounts::sign_in_args(entry.provider)
@@ -962,7 +971,7 @@ impl Session {
                         .map(|arg| (*arg).to_owned())
                         .collect(),
                     cwd: home.clone(),
-                    env: env.for_account(entry.provider, &home).vars(),
+                    env: account_env.vars(),
                 };
                 let hosted = match self
                     .daemon
@@ -973,10 +982,18 @@ impl Session {
                     Err(err) => return Ok(Err(IpcError::from(err))),
                 };
                 let (exited, account) = (hosted.exited, id.to_owned());
-                self.daemon.supervisor.spawn(async move {
-                    let _ = exited.await;
-                    runtime.refresh_account(account);
-                });
+                self.daemon
+                    .supervisor
+                    .spawn(crate::connect::follow_account_sign_in(
+                        runtime,
+                        entry.provider,
+                        account,
+                        mark,
+                        before,
+                        async move {
+                            let _ = exited.await;
+                        },
+                    ));
                 hosted.id
             }
         };
@@ -1767,7 +1784,32 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             Response::ClearTerminal
         }
         Request::CloseTerminal { terminal_id } => {
-            daemon.terminals.close(&terminal_id);
+            // An extra account's sign-in closed once the account reads as signed in (its row
+            // goes the moment the login is stored) ends by itself, stopped only if it doesn't.
+            let signed_in = daemon
+                .terminals
+                .session_of(&terminal_id)
+                .and_then(|key| key.strip_prefix("account:").map(str::to_owned))
+                .and_then(|id| {
+                    let entry = daemon
+                        .core
+                        .settings()
+                        .accounts
+                        .into_iter()
+                        .find(|entry| entry.id == id)?;
+                    Some(brigadier_core::accounts::AccountRef::new(
+                        entry.provider,
+                        Some(id),
+                    ))
+                })
+                .is_some_and(|account| daemon.runtime.signed_in(&account));
+            if signed_in {
+                daemon
+                    .terminals
+                    .close_after(&terminal_id, crate::connect::LINGER);
+            } else {
+                daemon.terminals.close(&terminal_id);
+            }
             Response::CloseTerminal
         }
         Request::GetComputerUse => Response::GetComputerUse {

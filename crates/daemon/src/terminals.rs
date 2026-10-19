@@ -443,6 +443,29 @@ impl Terminals {
         lock(&self.live).len()
     }
 
+    /// The key a terminal was started under (an extra account's sign-in: `account:<id>`).
+    pub fn session_of(&self, id: &str) -> Option<String> {
+        lock(&self.live).get(id)?.session.clone()
+    }
+
+    /// Lets a terminal go as [`Self::close`] does, but gives its process `grace` to end by
+    /// itself first: a sign-in that is done may still be saving what it saves.
+    pub fn close_after(&self, id: &str, grace: Duration) {
+        let Some(terminal) = lock(&self.live).remove(id) else {
+            return;
+        };
+        let platform = self.platform.clone();
+        let mut ended = terminal.ended.subscribe();
+        tokio::spawn(async move {
+            if tokio::time::timeout(grace, ended.wait_for(|ended| *ended))
+                .await
+                .is_err()
+            {
+                terminal.end(platform.as_ref());
+            }
+        });
+    }
+
     /// Ends a terminal's shell; closing one that already ended is fine.
     pub fn close(&self, id: &str) {
         let terminal = lock(&self.live).remove(id);

@@ -165,3 +165,30 @@ test("Providers draws its cards, rows and switches as Settings › General does"
   assert.deepEqual(seen.overview.switch, seen.general.switch);
   assert.deepEqual(seen.agent.switch, seen.general.switch);
 });
+
+const signedIn = (checkedAtMs: number) => ({ status: { loggedIn: true }, checkedAtMs });
+const signedOut = (checkedAtMs: number) => ({ status: { loggedIn: false }, checkedAtMs });
+
+// An account's sign-in row closes as soon as the account reads signed in from a check made after
+// the sign-in started (the daemon checks it the moment its login is stored, before the CLI
+// ends); one already signed in when it started waits for the sign-in to end, as before.
+test("an account's sign-in is done once it reads signed in since it started", async () => {
+  const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
+  try {
+    const { signInFinished } = await server.ssrLoadModule("/src/app/providers/AccountRows.tsx");
+    const fresh = { startedAtMs: 10_000, wasSignedIn: false, exitedAtMs: null };
+    assert.equal(signInFinished(fresh, undefined), false);
+    assert.equal(signInFinished(fresh, signedOut(12_000)), false);
+    // Still running, checked since it started: done.
+    assert.equal(signInFinished(fresh, signedIn(12_000)), true);
+    // A check from before it started doesn't count.
+    assert.equal(signInFinished(fresh, signedIn(9_000)), false);
+    // Signed in when it started ("Sign in again"): only a check after it ended counts.
+    const again = { startedAtMs: 10_000, wasSignedIn: true, exitedAtMs: null };
+    assert.equal(signInFinished(again, signedIn(12_000)), false);
+    assert.equal(signInFinished({ ...again, exitedAtMs: 15_000 }, signedIn(14_000)), true);
+    assert.equal(signInFinished({ ...again, exitedAtMs: 15_000 }, signedIn(12_000)), false);
+  } finally {
+    await server.close();
+  }
+});

@@ -22,6 +22,7 @@ pub mod fixtures;
 pub mod history;
 pub mod leftovers;
 mod logging;
+pub mod login_mark;
 mod looked;
 pub mod model;
 pub mod policy;

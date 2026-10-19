@@ -64,9 +64,31 @@ export function revealKey(view: AccountView): string {
 
 /**
  * An account being signed in to: a new one (`id` null until it is added; `fresh` stays true so
- * a sign-in that never finishes leaves no account behind) or an extra one again.
+ * a sign-in that never finishes leaves no account behind) or an extra one again. `wasSignedIn`:
+ * it read as signed in when the sign-in started.
  */
-type SigningIn = { id: string | null; fresh: boolean; exitedAtMs: number | null };
+type SigningIn = {
+  id: string | null;
+  fresh: boolean;
+  startedAtMs: number;
+  wasSignedIn: boolean;
+  exitedAtMs: number | null;
+};
+
+/**
+ * Whether the sign-in is done: the account reads as signed in from a check made after it ended,
+ * or, for one that wasn't signed in when it started, from any check made since (the daemon checks
+ * it the moment its login is stored, seconds before the sign-in ends).
+ */
+export function signInFinished(
+  signing: Pick<SigningIn, "startedAtMs" | "wasSignedIn" | "exitedAtMs">,
+  view: Pick<AccountView, "status" | "checkedAtMs"> | undefined,
+): boolean {
+  if (view?.status?.loggedIn !== true) return false;
+  const checkedAtMs = view.checkedAtMs ?? 0;
+  if (signing.exitedAtMs != null && checkedAtMs >= signing.exitedAtMs - SIGN_IN_SLACK_MS) return true;
+  return !signing.wasSignedIn && checkedAtMs >= signing.startedAtMs;
+}
 
 /**
  * One agent's accounts as a card (the computer's own login first), ending in a row that adds
@@ -100,7 +122,8 @@ export function ProviderAccounts({
   }, []);
   const start = (id: string | null) => {
     signingId.current = id;
-    setSigning({ id, fresh: id === null, exitedAtMs: null });
+    const wasSignedIn = id !== null && views?.find((view) => view.account.account === id)?.status?.loggedIn === true;
+    setSigning({ id, fresh: id === null, startedAtMs: Date.now(), wasSignedIn, exitedAtMs: null });
   };
   const openTerminal = useCallback(
     async (cols: number, rows: number) => {
@@ -123,12 +146,9 @@ export function ProviderAccounts({
     setSigning((current) => current && { ...current, exitedAtMs: Date.now() });
   }, []);
 
-  // Its row closes by itself once the account reads as signed in after the sign-in ended.
+  // Its row closes by itself once the account reads as signed in (see `signInFinished`).
   const signed = signing?.id ? views?.find((view) => view.account.account === signing.id) : undefined;
-  const finished =
-    signing?.exitedAtMs != null &&
-    signed?.status?.loggedIn === true &&
-    (signed.checkedAtMs ?? 0) >= signing.exitedAtMs - SIGN_IN_SLACK_MS;
+  const finished = signing !== null && signInFinished(signing, signed);
   const active = finished ? null : signing;
   // A new account shows in the list only once it is signed in.
   const shown = oneRowPerAccount(

@@ -1,10 +1,12 @@
 //! Connect: one step that gets an agent working, from the first-run setup or Providers. When
 //! its binary is missing, the vendor's own native installer runs; then, unless it is signed in
 //! already, the vendor's own sign-in, which opens its page in the browser; the agent is asked
-//! whether it is signed in each time the sign-in prints a line (it says so the moment the login
-//! is stored) or ends, and every few seconds besides. Each agent's progress is published as
-//! `agentConnectChanged`; failures are one plain sentence (what the installer printed goes to
-//! the log only). Connect again after a failure retries; Cancel stops it.
+//! whether it is signed in the moment its login is stored (where it keeps it changes: a
+//! [`LoginMark`]), each time the sign-in prints a line or ends, and every few seconds besides.
+//! Each agent's progress is published as `agentConnectChanged`; failures are one plain sentence
+//! (what the installer printed goes to the log only). Connect again after a failure retries;
+//! Cancel stops it. An extra account's sign-in, run in a terminal, is followed the same way
+//! ([`follow_account_sign_in`]).
 //!
 //! Both run as plain child processes, with stdin closed for the installer and nothing typed
 //! into either. That is their unattended contract, checked on 2026-10-18 against Claude Code's
@@ -35,10 +37,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use brigadier_core::accounts::AccountRef;
+use brigadier_core::runtime::Runtime;
 use brigadier_core::{
     AgentConnect, ConnectProgress, ConnectStep, ConnectView, DomainEvent, now_ms, streams,
 };
 use brigadier_providers::cli::CliEnv;
+use brigadier_providers::login_mark::LoginMark;
 use brigadier_providers::process::{self, CliProcess};
 use brigadier_providers::{ProviderKind, ProviderStatus};
 use brigadier_sandbox::{Platform, SpawnSpec};
@@ -57,12 +62,17 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 /// How often the agent is asked whether it is signed in yet, besides each time its sign-in
 /// prints a line or ends.
 const POLL_EVERY: Duration = Duration::from_secs(3);
+/// How often where the agent keeps its login is looked at while its sign-in runs: a read of a
+/// file's or a Keychain item's dates, nothing spawned.
+const MARK_EVERY: Duration = Duration::from_millis(100);
+/// How often the agent is asked instead when where it keeps its login can't be watched.
+const UNWATCHED_POLL: Duration = Duration::from_millis(500);
 /// A sign-in that ended well is asked this many times, this far apart, before it counts as not
 /// signed in: its login may land a moment after.
 const SETTLE_TRIES: u32 = 4;
 const SETTLE_EVERY: Duration = Duration::from_millis(250);
 /// Once signed in, how long its sign-in may take to end by itself before it is stopped.
-const LINGER: Duration = Duration::from_secs(20);
+pub(crate) const LINGER: Duration = Duration::from_secs(20);
 /// After asking a process to end, how long before it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(2);
 /// The installer's last lines kept for the log.
@@ -196,6 +206,81 @@ fn view_of(state: &HashMap<ProviderKind, Entry>) -> ConnectView {
     }
 }
 
+/// Follows extra account `id`'s sign-in, run in its terminal, until it ends: the account is
+/// checked again the moment where its CLI keeps its login changes (`before`: where it stood
+/// before the sign-in started), and when it ends. One whose login can't be watched is checked
+/// every [`UNWATCHED_POLL`] instead until it reads as signed in (for up to the sign-in timeout).
+pub async fn follow_account_sign_in(
+    runtime: Arc<Runtime>,
+    provider: ProviderKind,
+    id: String,
+    mark: Option<LoginMark>,
+    before: Option<String>,
+    exited: impl Future<Output = ()>,
+) {
+    let account = AccountRef::new(provider, Some(id.clone()));
+    let checker = runtime.clone();
+    follow_sign_in(
+        move || checker.refresh_account(id.clone()),
+        move || runtime.signed_in(&account),
+        mark,
+        before,
+        exited,
+        UNWATCHED_POLL,
+    )
+    .await;
+}
+
+/// [`follow_account_sign_in`] with how the account is checked (`check`, which checks it again
+/// after one already running) and whether it last read as signed in.
+async fn follow_sign_in(
+    check: impl Fn(),
+    signed_in: impl Fn() -> bool,
+    mark: Option<LoginMark>,
+    before: Option<String>,
+    exited: impl Future<Output = ()>,
+    unwatched_poll: Duration,
+) {
+    let watched = before.is_some();
+    let mut stamp = before;
+    let every = if watched { MARK_EVERY } else { unwatched_poll };
+    let started = tokio::time::Instant::now();
+    let mut tick = tokio::time::interval_at(started + every, every);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // After a store, until when it is checked again while it doesn't read as signed in yet: its
+    // status may follow the store by a moment.
+    let mut settling = None;
+    tokio::pin!(exited);
+    loop {
+        tokio::select! {
+            biased;
+            () = &mut exited => break,
+            _ = tick.tick() => {}
+        }
+        match &mark {
+            Some(mark) if watched => {
+                let now = mark.read().await;
+                if now.is_some() && now != stamp {
+                    tracing::info!("an account's login was just stored; checking it");
+                    stamp = now;
+                    settling = Some(tokio::time::Instant::now() + SETTLE_EVERY * SETTLE_TRIES);
+                    check();
+                } else if settling.is_some_and(|until| tokio::time::Instant::now() < until)
+                    && !signed_in()
+                {
+                    check();
+                }
+            }
+            _ => {
+                if started.elapsed() < SIGN_IN_TIMEOUT && !signed_in() {
+                    check();
+                }
+            }
+        }
+    }
+    check();
+}
+
 /// Starts connecting `provider` in the background. Refused while it already runs.
 pub fn start(daemon: &Arc<Daemon>, provider: ProviderKind) -> Result<(), String> {
     // What the last check found says where it begins; the flow checks again first.
@@ -299,6 +384,10 @@ struct Ops {
     install_timeout: Duration,
     sign_in_timeout: Duration,
     poll: Duration,
+    /// Where the agent keeps its login, watched while it signs in; `None`: it is asked every
+    /// `unwatched_poll` instead.
+    mark: Arc<dyn Fn(ProviderKind) -> Option<LoginMark> + Send + Sync>,
+    unwatched_poll: Duration,
     /// Once signed in, how long its sign-in may take to end by itself.
     linger: Duration,
     /// Opens the vendor's sign-in page in the browser.
@@ -309,6 +398,7 @@ struct Ops {
 impl Ops {
     fn of(daemon: &Daemon) -> Self {
         let runtime = daemon.runtime.clone();
+        let env = runtime.cli_env().clone();
         Self {
             platform: runtime.platform().clone(),
             env: runtime.cli_env().clone(),
@@ -320,6 +410,8 @@ impl Ops {
             install_timeout: INSTALL_TIMEOUT,
             sign_in_timeout: SIGN_IN_TIMEOUT,
             poll: POLL_EVERY,
+            mark: Arc::new(move |provider| LoginMark::of(provider, &env)),
+            unwatched_poll: UNWATCHED_POLL,
             linger: LINGER,
             #[cfg(unix)]
             open_link: Arc::new(open_in_browser),
@@ -581,10 +673,10 @@ fn install_error(provider: ProviderKind, output: &str) -> String {
 
 /// Runs the vendor's sign-in (it opens the browser) and answers once the agent says it is
 /// signed in, the sign-in ends without it, or it is given up on. The agent is asked the moment
-/// the sign-in prints a line: each CLI prints one as soon as the login is stored (Claude Code's
-/// "Login successful.", Codex's "Successfully logged in" on stderr), and Claude Code then takes
-/// seconds more to exit. Asked too when it ends, and every `poll` for a sign-in that finished
-/// without a word.
+/// where it keeps its login changes: Claude Code stores it seconds before it says so. Asked too
+/// each time the sign-in prints a line (Claude Code's "Login successful.", Codex's
+/// "Successfully logged in" on stderr; Claude Code then takes a moment more to exit), when it
+/// ends, and every `poll` besides (every `unwatched_poll` when the login can't be watched).
 async fn sign_in(
     ops: &Ops,
     provider: ProviderKind,
@@ -601,6 +693,13 @@ async fn sign_in(
         .map(Into::into)
         .collect();
     spec.cwd = ops.env.home();
+    // Where it keeps its login as it is before the sign-in starts, to see it stored.
+    let mark = (ops.mark)(provider);
+    let mut stamp = match &mark {
+        Some(mark) => mark.read().await,
+        None => None,
+    };
+    let watched = stamp.is_some();
     #[cfg(unix)]
     let catcher = LinkCatcher::new();
     #[cfg(unix)]
@@ -639,8 +738,16 @@ async fn sign_in(
     });
     let given_up = tokio::time::sleep(ops.sign_in_timeout);
     tokio::pin!(given_up);
-    let mut poll = tokio::time::interval_at(tokio::time::Instant::now() + ops.poll, ops.poll);
+    let every = if watched {
+        ops.poll
+    } else {
+        tracing::info!(%provider, "its login can't be watched; asking it more often");
+        ops.poll.min(ops.unwatched_poll)
+    };
+    let mut poll = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut look = tokio::time::interval(MARK_EVERY);
+    look.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let outcome = loop {
         tokio::select! {
             biased;
@@ -671,6 +778,23 @@ async fn sign_in(
                 }
             }
             _ = poll.tick() => {}
+            _ = look.tick(), if watched => {
+                let now = match &mark {
+                    Some(mark) => mark.read().await,
+                    None => None,
+                };
+                // Unchanged (or unreadable this time): nothing to ask yet.
+                if now.is_none() || now == stamp {
+                    continue;
+                }
+                tracing::info!(%provider, "its login was just stored; asking it");
+                stamp = now;
+                // Its status may follow the store by a moment: asked a few times.
+                if let Some(status) = settled(ops, provider, true).await {
+                    break Some(Ended::connected(status));
+                }
+                continue;
+            }
         }
         let status = (ops.status)(provider).await;
         if status.logged_in {
@@ -700,10 +824,10 @@ async fn sign_in(
     outcome
 }
 
-/// The agent's status once its sign-in ended: one that ended well may store its login a moment
-/// after, so it is asked a few times. Some when signed in.
-async fn settled(ops: &Ops, provider: ProviderKind, ended_well: bool) -> Option<ProviderStatus> {
-    let tries = if ended_well { SETTLE_TRIES } else { 1 };
+/// The agent's status once its sign-in ended or its login was stored: it may say so a moment
+/// after, so when `patient` it is asked a few times. Some when signed in.
+async fn settled(ops: &Ops, provider: ProviderKind, patient: bool) -> Option<ProviderStatus> {
+    let tries = if patient { SETTLE_TRIES } else { 1 };
     for attempt in 0..tries {
         if attempt > 0 {
             tokio::time::sleep(SETTLE_EVERY).await;
@@ -763,8 +887,10 @@ mod tests {
     /// what `login-mode` says: `finish` (signs in, then ends), `stay` (signs in and keeps
     /// running, as the real one can while the page is open), `quit` (ends without signing in),
     /// `wait` (never signs in, never ends), `linger` (as Claude Code's: signs in, says so, then
-    /// takes seconds to end), `quick` (as Codex's: signs in, says so on stderr, ends), `late`
+    /// takes seconds to end), `quick` (as Codex's: signs in, says so on stderr, ends), `stored`
+    /// (as Claude Code's really does: stores the login, says so only 3 s later, then ends), `late`
     /// (ends well, signed in only by the third time it is asked after), `never` (ends well, never signs in).
+    /// Where it keeps its login, the file `signed-in`, is what the tests' [`LoginMark`] watches.
     const FAKE_CLAUDE: &str = r#"#!/bin/sh
 home="$HOME"
 now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
@@ -796,6 +922,7 @@ case "$1 $2" in
       late) touch "$home/late"; exit 0 ;;
       never) exit 0 ;;
       quick) sleep 1; touch "$home/signed-in"; now > "$home/confirmed-at"; echo "Successfully logged in" >&2 ;;
+      stored) sleep 1; now > "$home/stored-at"; touch "$home/signed-in"; sleep 3; echo "Login successful."; sleep 1 ;;
       *) sleep 60 ;;
     esac ;;
 esac
@@ -842,6 +969,7 @@ echo "Claude Code successfully installed!"
         let claude = Arc::new(Claude::new(platform.clone(), env.clone()));
         let line = installer(home);
         let opened = home.0.clone();
+        let stored = home.0.join("signed-in");
         Ops {
             platform,
             env,
@@ -853,6 +981,8 @@ echo "Claude Code successfully installed!"
             install_timeout: Duration::from_secs(20),
             sign_in_timeout: Duration::from_secs(20),
             poll: Duration::from_millis(100),
+            mark: Arc::new(move |_| Some(LoginMark::file(&stored))),
+            unwatched_poll: UNWATCHED_POLL,
             linger: Duration::from_millis(500),
             open_link: Arc::new(move |link| {
                 std::fs::write(opened.join("opened"), link).unwrap();
@@ -1187,6 +1317,136 @@ echo "asked: $answer" > "$HOME/asked"
             eprintln!("{mode}: Connected {lag:.3}s after the agent's confirmation");
             assert!(lag < 1.0, "{mode}: Connected {lag:.3}s after");
         }
+    }
+
+    /// Claude Code stores the login seconds before it prints "Login successful." (6.8 s vs.
+    /// 10.6 s in a real run). Connected follows the stored login within 0.3 s, with the slow
+    /// check never coming in time; without a login to watch, the agent is asked every
+    /// `unwatched_poll`. Each lag is printed, beside how it was before (no watch, a 3 s check:
+    /// Connected at the success line).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn connected_follows_the_stored_login_within_the_target() {
+        let lag = |home: &Home| {
+            let done = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64();
+            let stored: f64 = std::fs::read_to_string(home.0.join("stored-at"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            done - stored
+        };
+        let cases: [(&str, bool, Duration, Duration, f64); 3] = [
+            (
+                "watched",
+                true,
+                Duration::from_secs(60),
+                UNWATCHED_POLL,
+                0.3,
+            ),
+            (
+                "unwatched",
+                false,
+                Duration::from_secs(60),
+                UNWATCHED_POLL,
+                1.0,
+            ),
+            ("as before", false, POLL_EVERY, POLL_EVERY, 3.5),
+        ];
+        for (name, watched, poll, unwatched_poll, target) in cases {
+            let home = Home::new("stored");
+            std::fs::write(home.0.join("login-mode"), "stored").unwrap();
+            let mut ops = ops(&home);
+            // Installed first, so only the sign-in is timed.
+            let (outcome, _) = run(&ops).await;
+            assert_eq!(outcome, Some(ConnectProgress::Connected));
+            std::fs::remove_file(home.0.join("signed-in")).unwrap();
+            ops.poll = poll;
+            ops.unwatched_poll = unwatched_poll;
+            if !watched {
+                ops.mark = Arc::new(|_| None);
+            }
+            let (outcome, _) = run(&ops).await;
+            let lag = lag(&home);
+            assert_eq!(outcome, Some(ConnectProgress::Connected));
+            eprintln!("{name}: Connected {lag:.3}s after the login was stored");
+            assert!(lag < target, "{name}: Connected {lag:.3}s after");
+        }
+    }
+
+    /// An extra account's sign-in, run in a terminal: the account is checked the moment its
+    /// login is stored, not only when the sign-in ends; one whose login can't be watched is
+    /// checked every `unwatched_poll` until it reads as signed in.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_accounts_sign_in_is_checked_the_moment_its_login_is_stored() {
+        let home = Home::new("account");
+        let stored = home.0.join("auth.json");
+        let mark = LoginMark::file(&stored);
+        let before = mark.read().await;
+        let (ended, exited) = tokio::sync::oneshot::channel::<()>();
+        let checked = Arc::new(Mutex::new(Vec::new()));
+        let follow = tokio::spawn({
+            let checked = checked.clone();
+            follow_sign_in(
+                move || checked.lock().unwrap().push(std::time::Instant::now()),
+                || false,
+                Some(mark),
+                before,
+                async move {
+                    let _ = exited.await;
+                },
+                Duration::from_secs(60),
+            )
+        });
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(
+            checked.lock().unwrap().is_empty(),
+            "checked before anything was stored"
+        );
+        std::fs::write(&stored, "{}").unwrap();
+        let at = std::time::Instant::now();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let first = *checked
+            .lock()
+            .unwrap()
+            .first()
+            .expect("checked once stored");
+        let lag = first.duration_since(at);
+        eprintln!(
+            "account: checked {:.3}s after its login was stored",
+            lag.as_secs_f64()
+        );
+        assert!(lag < Duration::from_millis(250));
+        // And once more as the sign-in ends.
+        let before_end = checked.lock().unwrap().len();
+        ended.send(()).unwrap();
+        follow.await.unwrap();
+        assert_eq!(checked.lock().unwrap().len(), before_end + 1);
+
+        // Not watched: asked every `unwatched_poll` until it reads as signed in.
+        let (ended, exited) = tokio::sync::oneshot::channel::<()>();
+        let asked = Arc::new(AtomicU64::new(0));
+        let follow = tokio::spawn({
+            let (count, read) = (asked.clone(), asked.clone());
+            follow_sign_in(
+                move || {
+                    count.fetch_add(1, Ordering::Relaxed);
+                },
+                move || read.load(Ordering::Relaxed) >= 3,
+                None,
+                None,
+                async move {
+                    let _ = exited.await;
+                },
+                Duration::from_millis(100),
+            )
+        });
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert_eq!(asked.load(Ordering::Relaxed), 3);
+        ended.send(()).unwrap();
+        follow.await.unwrap();
+        assert_eq!(asked.load(Ordering::Relaxed), 4);
     }
 
     /// A sign-in that ends well a moment before its login is stored still connects; one that
