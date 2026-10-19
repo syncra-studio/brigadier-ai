@@ -38,19 +38,45 @@ macro_rules! thread_voice {
     };
 }
 
-/// How a research answer is laid out (Q79): the recommendation first, numbered sources folded
-/// at the end by the app.
+/// How an answer someone acts on is laid out (Q79, Q86): the bottom line first, then free
+/// Markdown with optional parts the app draws, numbered sources folded at the end by the app.
 macro_rules! research_format {
     () => {
         concat!(
             "
 
-A research answer (you looked things up to answer):
-- Your recommendation first, in 3 to 5 lines: what to pick or do, and why. Then a short breakdown: only what changes the choice.",
+An answer someone will act on (advice, a decision, a how-to, research):
+- Start with the bottom line: one or two sentences that say what to do, or give the answer itself. Nothing before it. If you are unsure overall, say so once there, in plain words.
+- The rest is free Markdown, shaped as the answer needs. The app draws a few shapes as parts of its own. They are optional tools, never a template: use one only when the answer really has that shape; otherwise write freely in Markdown.",
+            answer_parts!(),
+            "
+- Never fold a warning, or anything the reader must know to stay safe. Write numbers as \"7 out of 10\", not percentages, with the same base each time. Use everyday words and sentences under 25 words, and explain each term once, in passing. A factual question gets the answer in its first sentence and at most a few lines after it.
+- Your text around the parts follows the voice.",
             research_breakdown!(),
             "
-- Mark each fact from a source with its number, [1] or [2, 3]. End with one `### Sources` heading, in English whatever language you write in, over a numbered list: `1. [Title](https://…)`. Nothing after it except `### Details` when that applies. Never list sources anywhere else: the app folds the list and links the numbers."
+- Mark only the facts that carry weight (a price, a law, a risk number) with their source's number, [1] or [2, 3]: about six at most before the `---`. End with one `### Sources` heading, in English whatever language you write in, over a numbered list: `1. [Title](https://…)`. Nothing after it except `### Details` when that applies. Never list sources anywhere else: the app folds the list and links the numbers."
         )
+    };
+}
+
+/// The optional parts an answer may use (Q86): the prompt's half of the app's parts registry
+/// (`answerLayout.ts`), one line per part. Adding a part is a line here and an entry there.
+macro_rules! answer_parts {
+    () => {
+        "
+  - Steps done in order: right after the bottom line, one numbered list of 3 to 7 steps. Each step starts with a short phrase that begins with a verb and ends with a full stop, then one sentence of detail, with the cost or time when you know it.
+  - A real choice between 2 to 4 options: one table, options as rows, at most 5 short columns, the last saying who each option is best for. End the first cell of your pick with ` ★`, and pick one: don't leave the choice open.
+  - A real trap (losing money, a scam, a legal or health risk): one avoid-list, a line `> [!CAUTION]`, then a short title line in the reader's language, then at most 4 bullets, each a sign the reader can recognise.
+  - What only some readers need (why, background, taxes, who can help, what you couldn't check): after a line `---`, one `### heading` per topic that says what is inside; the app folds each. Keep each short.
+  - A risk number that drives the advice: a fenced block `chance` holding `N of 100` and one caption line."
+    };
+}
+
+/// The questions a Chat's reader likely asks next (Q86): the app shows them as buttons.
+macro_rules! ask_next {
+    () => {
+        "
+- You may end with up to 3 short questions the reader is likely to ask next, as a list under one `### Ask next` heading, in English whatever language you write in, just before `### Sources`. Never one a fold already answers."
     };
 }
 
@@ -85,9 +111,24 @@ macro_rules! research_fan_out {
 }
 
 /// A research question costly to get wrong goes to both vendors, judged blind by the thread (Q77).
+macro_rules! fusion_lead {
+    () => {
+        "When a wrong answer would cost the user (money, a purchase, a choice hard to undo, a fact they will act on), delegate that research with fuse: true and the whole question in one brief, not split: two workers research it independently and their reports come back together as answers A and B. Judge them yourself: first name where they disagree (facts, numbers, the pick) and check what decides it, then write one answer as usual. Never guess or say which model gave which answer. When only one worker started or one answer came back, answer as usual, with no word about it."
+    };
+}
+
+/// How a fused answer shows its judging (Q86): no Confidence or Disagreement lines; a
+/// disagreement only where it changes what to do.
+macro_rules! fused_answer {
+    () => {
+        "In a fused answer, never write `Confidence:` or `Disagreement:` lines. Show a disagreement only when it changes what the reader should do: if it changes your pick, as a condition in the bottom line; otherwise as one first-person line in the section it concerns (\"I'm not fully sure of …: one source says …, but …, so I used …\"). If you are unsure overall, say so once in the bottom line."
+    };
+}
+
+/// The whole fusion rule, as new instructions hold it.
 macro_rules! fusion_rule {
     () => {
-        "When a wrong answer would cost the user (money, a purchase, a choice hard to undo, a fact they will act on), delegate that research with fuse: true and the whole question in one brief, not split: two workers research it independently and their reports come back together as answers A and B. Judge them yourself: first name where they disagree (facts, numbers, the pick) and check what decides it, then write one answer as usual, with one line `Confidence: high, medium or low, and why` and one line `Disagreement: …` (`Disagreement: none` when they agree) right under its opening lines, each a paragraph of its own (a blank line before each). Never guess or say which model gave which answer. When only one worker started or one answer came back, answer as usual, with neither line and no word about it."
+        concat!(fusion_lead!(), " ", fused_answer!())
     };
 }
 
@@ -98,12 +139,12 @@ macro_rules! grilling_rule {
     };
 }
 
-/// What the live run of fusion and the interview showed (Q77, Q78): the two lines ran into one
-/// paragraph, the first round was asked before its research came back, and options said
-/// "Recommended" next to the card's own mark.
+/// What the live run of the interview showed (Q78): the first round was asked before its
+/// research came back, and options said "Recommended" next to the card's own mark. (Its fix to
+/// the fused answer's two lines went with the lines, Q86.)
 macro_rules! fused_interview_fixes {
     () => {
-        "In a fused answer, the Confidence and Disagreement lines are each a paragraph of their own (a blank line before each). In an interview, when you start research workers to look facts up, wait for their reports before the first round's card. Never write \"Recommended\" in an option: the card marks the one you recommend."
+        "In an interview, when you start research workers to look facts up, wait for their reports before the first round's card. Never write \"Recommended\" in an option: the card marks the one you recommend."
     };
 }
 
@@ -369,6 +410,9 @@ macro_rules! no_promised_files {
 
 /// Where a worker's file shows in an answer (Q84).
 pub(crate) const INLINE_FILES: &str = inline_files!();
+
+/// How a fused answer shows its judging (Q86), for the note that brings answers A and B.
+pub(crate) const FUSED_ANSWER: &str = fused_answer!();
 
 /// The thread never says a file or link comes later (Q81).
 pub(crate) const NO_PROMISED_FILES: &str = no_promised_files!();
@@ -1071,7 +1115,7 @@ pub(crate) const REVISIONS: &[Revision] = &[
             "From now on, this replaces what your instructions say about how to write, about Details and about answering research yourself:",
             voice_core!(),
             thread_voice!(),
-            research_format!(),
+            // The answer's layout comes in ANSWER_PARTS_REVISION's note: said once, not twice.
             research_report!(),
             "\n- ",
             details_rule!(),
@@ -1101,12 +1145,10 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: concat!("From now on: ", offer_session_rule!()),
         worker: "",
     },
+    // Its rule now comes within the answer's layout, in ANSWER_PARTS_REVISION's note.
     Revision {
         number: BOLD_LEAD_REVISION,
-        thread: concat!(
-            "From now on, a research answer's breakdown follows this:",
-            research_breakdown!()
-        ),
+        thread: "",
         worker: "",
     },
     Revision {
@@ -1121,7 +1163,8 @@ pub(crate) const REVISIONS: &[Revision] = &[
     },
     Revision {
         number: FUSION_REVISION,
-        thread: concat!("From now on: ", fusion_rule!()),
+        // How the fused answer shows its judging comes in ANSWER_PARTS_REVISION's note.
+        thread: concat!("From now on: ", fusion_lead!()),
         worker: "",
     },
     Revision {
@@ -1137,6 +1180,16 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: INLINE_FILES_REVISION,
         thread: concat!("From now on: ", inline_files!()),
+        worker: "",
+    },
+    Revision {
+        number: ANSWER_PARTS_REVISION,
+        thread: concat!(
+            "From now on, this replaces what your instructions say about laying out an answer and about how a fused answer shows its judging:",
+            research_format!(),
+            "\n- ",
+            fused_answer!()
+        ),
         worker: "",
     },
 ];
@@ -1175,13 +1228,12 @@ const CHAT_GRILLING: &str = grilling_rule!();
 /// sentences; 4 no bold at the start of any of its lines, colon or not; 5 a Chat is a thread
 /// without a project (Q76: workers, cards, one clarifying card); 6 it fuses a costly question (Q77); 7 it keeps stable personal facts, nothing sensitive (Q78); 8 it interviews on cards, in numbered
 /// rounds, facts looked up first (Q78); 9 the live run's fixes to both ([`CHAT_FIXES_NOTE`]); 10
-/// it names each file once, inline, with no Save under the answer (Q84).
-const CHAT_CONTRACT: u32 = 10;
+/// it names each file once, inline, with no Save under the answer (Q84); 11 its answer leads
+/// with the bottom line and may use optional parts and Ask next, and a fused answer has no
+/// Confidence or Disagreement lines (Q86).
+const CHAT_CONTRACT: u32 = 11;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
-/// The first Chat contract with the breakdown rule as it is now; a Chat told the voice before
-/// hears [`CHAT_BREAKDOWN_NOTE`].
-const CHAT_BREAKDOWN_CONTRACT: u32 = 4;
 /// The first Chat contract with a thread's abilities; a Chat told an older one hears
 /// [`CHAT_THREAD_NOTE`] (a tab chat has none of them).
 const CHAT_THREAD_CONTRACT: u32 = 5;
@@ -1200,6 +1252,9 @@ const CHAT_FIXES_CONTRACT: u32 = 9;
 /// The first Chat contract with files named once, inline (Q84); a Chat told a thread's
 /// abilities before hears [`CHAT_FILES_NOTE`] (one told less hears it within [`CHAT_THREAD_NOTE`]).
 const CHAT_FILES_CONTRACT: u32 = 10;
+/// The first Chat contract with the answer's optional parts (Q86); a Chat or tab chat told the
+/// voice before hears [`chat_parts_note`] (one told less hears them within the voice's note).
+const CHAT_PARTS_CONTRACT: u32 = 11;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1218,16 +1273,30 @@ const CHAT_AUTHORITY: &str = "Brigadier tells you in a note at the start of a me
 /// What a Chat can do as a thread (Q76).
 const CHAT_THREAD: &str = chat_thread!();
 
-/// How a Chat writes, and lays out a research answer with its report (Q79).
-const CHAT_VOICE: &str = concat!(voice_core!(), research_format!(), research_report!());
-/// The same for a tab chat, which has no `save_report`.
-const TAB_CHAT_VOICE: &str = concat!(voice_core!(), research_format!());
-
-/// Tells a Chat or tab chat told the voice before the breakdown rule (Q79).
-const CHAT_BREAKDOWN_NOTE: &str = concat!(
-    "[instructions] From now on, a research answer's breakdown follows this:",
-    research_breakdown!()
+/// How a Chat writes, and lays out an answer with its report (Q79, Q86).
+const CHAT_VOICE: &str = concat!(
+    voice_core!(),
+    research_format!(),
+    ask_next!(),
+    research_report!()
 );
+/// The same for a tab chat, which has no `save_report`.
+const TAB_CHAT_VOICE: &str = concat!(voice_core!(), research_format!(), ask_next!());
+
+/// Tells a Chat or tab chat told the voice before how it lays out an answer now (Q86), and, when
+/// it heard fusion's first words (`fused`), how a fused answer shows its judging.
+fn chat_parts_note(fused: bool) -> String {
+    let mut text = concat!(
+        "[instructions] From now on, this replaces what your instructions say about laying out an answer:",
+        research_format!(),
+        ask_next!()
+    )
+    .to_owned();
+    if fused {
+        text.push_str(concat!("\n- ", fused_answer!()));
+    }
+    text
+}
 
 /// Tells a Chat from before it became a thread what it can do now (Q76).
 const CHAT_THREAD_NOTE: &str = concat!("[instructions] From now on: ", chat_thread!());
@@ -1257,13 +1326,13 @@ fn chat_voice_note(reports: bool) -> String {
 
 const CONTRACT_LABEL: &str = "notes replace instructions";
 const CHAT_VOICE_LABEL: &str = "voice and answer format";
-const CHAT_BREAKDOWN_LABEL: &str = "research breakdown";
 const CHAT_THREAD_LABEL: &str = "chat as a thread";
 const CHAT_FUSION_LABEL: &str = "fused answers";
 const CHAT_MEMORY_LABEL: &str = "personal facts";
 const CHAT_GRILLING_LABEL: &str = "interview on cards";
 const CHAT_FIXES_LABEL: &str = "fused answers and interview fixes";
 const CHAT_FILES_LABEL: &str = "files inline";
+const CHAT_PARTS_LABEL: &str = "answer parts";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
@@ -1651,6 +1720,9 @@ pub(crate) const FUSED_INTERVIEW_FIXES_REVISION: u32 = 115;
 /// A worker's file shows once, inline, as a link that opens it in Brigadier; nothing lists
 /// files under or at the end of the answer (Q84).
 pub(crate) const INLINE_FILES_REVISION: u32 = 116;
+/// An answer leads with its bottom line and may use optional parts the app draws (steps, a
+/// pick, an avoid-list, folds, odds); a fused answer has no Confidence or Disagreement lines (Q86).
+pub(crate) const ANSWER_PARTS_REVISION: u32 = 117;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1814,21 +1886,13 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             },
         });
     }
+    // The voice's note holds the answer's layout as it is now.
     if now.chat && told.contract.unwrap_or(0) < CHAT_VOICE_CONTRACT {
         notes.push(Note {
             text: chat_voice_note(now.reports),
             label: CHAT_VOICE_LABEL,
             told: Told {
-                contract: Some(CHAT_BREAKDOWN_CONTRACT),
-                ..Told::default()
-            },
-        });
-    } else if now.chat && told.contract.unwrap_or(0) < CHAT_BREAKDOWN_CONTRACT {
-        notes.push(Note {
-            text: CHAT_BREAKDOWN_NOTE.to_owned(),
-            label: CHAT_BREAKDOWN_LABEL,
-            told: Told {
-                contract: Some(CHAT_BREAKDOWN_CONTRACT),
+                contract: Some(CHAT_PARTS_CONTRACT),
                 ..Told::default()
             },
         });
@@ -1903,6 +1967,22 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             label: CHAT_FILES_LABEL,
             told: Told {
                 contract: Some(CHAT_FILES_CONTRACT),
+                ..Told::default()
+            },
+        });
+    }
+    // Told the voice before the answer's parts (contract 2 to 10): last, so its contract is the
+    // one the log keeps. Fusion's words only to a Chat that heard their first ones; one told
+    // less hears them within the thread or fusion note.
+    if now.chat && (CHAT_VOICE_CONTRACT..CHAT_PARTS_CONTRACT).contains(&told.contract.unwrap_or(0))
+    {
+        notes.push(Note {
+            text: chat_parts_note(
+                now.reports && told.contract.unwrap_or(0) >= CHAT_FUSION_CONTRACT,
+            ),
+            label: CHAT_PARTS_LABEL,
+            told: Told {
+                contract: Some(CHAT_PARTS_CONTRACT),
                 ..Told::default()
             },
         });
@@ -4089,8 +4169,9 @@ mod environment_tests {
         // for one clarifying card before research (Q78), and to 15,300 for fusing a costly
         // research question, judged blind (Q77), and to 16,000 for the interview on cards: a
         // decision tree, facts looked up first, numbered rounds and a confirm card (Q78), and to
-        // 16,300 for each file named once, inline, never listed at the end (Q84).
-        assert!(codex.len() < 16_300, "{}", codex.len());
+        // 16,300 for each file named once, inline, never listed at the end (Q84), and to 18,300
+        // for the answer's optional parts and a fused answer without its two lines (Q86).
+        assert!(codex.len() < 18_300, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -5244,10 +5325,10 @@ mod environment_tests {
 
     /// The research answer's layout (Q79), in every thread, Chat and tab chat.
     const RESEARCH_RULES: &[&str] = &[
-        "Your recommendation first, in 3 to 5 lines",
-        "Then a short breakdown: only what changes the choice.",
+        "Start with the bottom line: one or two sentences that say what to do, or give the answer itself.",
+        "They are optional tools, never a template: use one only when the answer really has that shape; otherwise write freely in Markdown.",
         "No line or list item starts with bold text, with or without a colon, even where what you read (a source, a worker's notes, a report) does: names stay plain (not \"- **Option:** costs …\" or \"- **Option** costs …\" but \"- Option costs …\"). Bold only for one critical warning, if at all.",
-        "Mark each fact from a source with its number, [1] or [2, 3]",
+        "Mark only the facts that carry weight (a price, a law, a risk number) with their source's number, [1] or [2, 3]",
         "End with one `### Sources` heading, in English whatever language you write in",
         "Never list sources anywhere else",
     ];
@@ -5342,21 +5423,20 @@ mod environment_tests {
 
     /// Q79, the 10-18 live checks (#319): a research answer broke the voice's no-bold-labels rule
     /// in its breakdown, a thread's after its workers' formatting, so a thread told the answer
-    /// format hears the tightened rule once, whether or not it heard revision 107's.
+    /// format hears the tightened rule once, whether or not it heard revision 107's: since Q86,
+    /// within the answer's layout.
     #[test]
     fn open_threads_hear_once_that_no_breakdown_line_starts_with_bold() {
-        for told in [ANSWER_FORMAT_REVISION, BREAKDOWN_REVISION] {
+        for told in [
+            ANSWER_FORMAT_REVISION,
+            BREAKDOWN_REVISION,
+            BOLD_LEAD_REVISION,
+        ] {
             let note = revision_note(told, false).unwrap();
-            assert!(note.contains("a research answer's breakdown follows this:"));
             assert_eq!(note.matches(RESEARCH_RULES[2]).count(), 1, "{note}");
             assert!(!note.contains("an item never opens with a bold name and a colon"));
-            assert!(!note.contains("### Sources"));
-            assert!(revision_note(told, true).is_none());
+            assert_eq!(note.matches("### Sources").count(), 1, "{note}");
         }
-        assert!(
-            !revision_note(BOLD_LEAD_REVISION, false)
-                .is_some_and(|note| note.contains("breakdown"))
-        );
     }
 
     /// Q79: a Chat or tab chat told the contract before hears the voice once, the report only
@@ -5387,21 +5467,21 @@ mod environment_tests {
             assert_eq!(sent[0].text.contains("save_report"), reports);
             took(&mut told, &sent);
             assert!(notes(&told, &now).is_empty());
-            // Told the voice before the breakdown rule, or before it was tightened (#319): only
-            // that rule comes, once.
+            // Told the voice before the breakdown rule, or before it was tightened (#319): the
+            // answer's layout as it is now comes, once, holding that rule (Q86).
             for contract in [CHAT_VOICE_CONTRACT, 3] {
                 told.contract = Some(contract);
                 let sent = notes(&told, &now);
-                assert_eq!(labels(&sent), thread(vec![CHAT_BREAKDOWN_LABEL]));
-                assert!(sent[0].text.contains(RESEARCH_RULES[2]));
-                assert!(!sent[0].text.contains("### Sources"));
+                let mut expected = thread(Vec::new());
+                expected.push(CHAT_PARTS_LABEL);
+                assert_eq!(labels(&sent), expected);
+                let layout = sent.last().unwrap();
+                assert_eq!(layout.text.matches(RESEARCH_RULES[2]).count(), 1);
+                assert!(layout.text.contains("### Sources"));
+                // Told no fusion yet: its words come whole in the thread note.
+                assert!(!layout.text.contains("`Confidence:`"));
                 took(&mut told, &sent);
-                let newest = if reports {
-                    CHAT_CONTRACT
-                } else {
-                    CHAT_BREAKDOWN_CONTRACT
-                };
-                assert_eq!(told.contract, Some(newest));
+                assert_eq!(told.contract, Some(CHAT_CONTRACT));
                 assert!(notes(&told, &now).is_empty());
             }
         }
@@ -5419,7 +5499,12 @@ mod environment_tests {
         let sent = notes(&told, &now);
         assert_eq!(
             labels(&sent),
-            vec![CHAT_THREAD_LABEL, CHAT_MEMORY_LABEL, CHAT_GRILLING_LABEL]
+            vec![
+                CHAT_THREAD_LABEL,
+                CHAT_MEMORY_LABEL,
+                CHAT_GRILLING_LABEL,
+                CHAT_PARTS_LABEL
+            ]
         );
         for words in CHAT_THREAD_RULES {
             assert!(sent[0].text.contains(words), "{words}");
@@ -5430,7 +5515,8 @@ mod environment_tests {
         let tab = Current::tab_chat();
         let mut told = tab.told();
         told.contract = Some(CHAT_THREAD_CONTRACT - 1);
-        assert!(notes(&told, &tab).is_empty());
+        // A tab chat hears only the answer's layout as it is now (Q86).
+        assert_eq!(labels(&notes(&told, &tab)), vec![CHAT_PARTS_LABEL]);
         assert!(!chat(&[]).contains("plain chat"));
     }
 
@@ -5467,7 +5553,8 @@ mod environment_tests {
                 CHAT_FUSION_LABEL,
                 CHAT_MEMORY_LABEL,
                 CHAT_GRILLING_LABEL,
-                CHAT_FILES_LABEL
+                CHAT_FILES_LABEL,
+                CHAT_PARTS_LABEL
             ]
         );
         for words in FUSION_RULES {
@@ -5481,7 +5568,12 @@ mod environment_tests {
         let sent = notes(&told, &now);
         assert_eq!(
             labels(&sent),
-            vec![CHAT_THREAD_LABEL, CHAT_MEMORY_LABEL, CHAT_GRILLING_LABEL]
+            vec![
+                CHAT_THREAD_LABEL,
+                CHAT_MEMORY_LABEL,
+                CHAT_GRILLING_LABEL,
+                CHAT_PARTS_LABEL
+            ]
         );
         assert_eq!(sent[0].text.matches(FUSION_RULES[0]).count(), 1);
         took(&mut told, &sent);
@@ -5489,7 +5581,8 @@ mod environment_tests {
         let tab = Current::tab_chat();
         let mut told = tab.told();
         told.contract = Some(CHAT_FUSION_CONTRACT - 1);
-        assert!(notes(&told, &tab).is_empty());
+        // A tab chat hears only the answer's layout as it is now (Q86).
+        assert_eq!(labels(&notes(&told, &tab)), vec![CHAT_PARTS_LABEL]);
     }
 
     /// Q78: a Chat told contract 6 hears once that it keeps stable personal facts and nothing
@@ -5506,7 +5599,8 @@ mod environment_tests {
                 CHAT_MEMORY_LABEL,
                 CHAT_GRILLING_LABEL,
                 CHAT_FIXES_LABEL,
-                CHAT_FILES_LABEL
+                CHAT_FILES_LABEL,
+                CHAT_PARTS_LABEL
             ]
         );
         for words in [
@@ -5524,7 +5618,8 @@ mod environment_tests {
         let tab = Current::tab_chat();
         let mut told = tab.told();
         told.contract = Some(CHAT_MEMORY_CONTRACT - 1);
-        assert!(notes(&told, &tab).is_empty());
+        // A tab chat hears only the answer's layout as it is now (Q86).
+        assert_eq!(labels(&notes(&told, &tab)), vec![CHAT_PARTS_LABEL]);
     }
 
     /// Q78: a Chat told contract 7 hears once how it interviews on cards; open threads hear it
@@ -5537,7 +5632,12 @@ mod environment_tests {
         let sent = notes(&told, &now);
         assert_eq!(
             labels(&sent),
-            vec![CHAT_GRILLING_LABEL, CHAT_FIXES_LABEL, CHAT_FILES_LABEL]
+            vec![
+                CHAT_GRILLING_LABEL,
+                CHAT_FIXES_LABEL,
+                CHAT_FILES_LABEL,
+                CHAT_PARTS_LABEL
+            ]
         );
         took(&mut told, &sent);
         assert_eq!(told.contract, Some(CHAT_CONTRACT));
@@ -5567,9 +5667,8 @@ mod environment_tests {
     #[test]
     fn threads_and_chats_hear_once_the_live_runs_fixes_to_fusion_and_the_interview() {
         let fixes = [
-            "(a blank line before each)",
             "wait for their reports before the first round's card",
-            "Recommended",
+            "Never write \"Recommended\" in an option",
         ];
         let note = revision_note(FUSED_INTERVIEW_FIXES_REVISION - 1, false).unwrap();
         assert!(revision_note(FUSED_INTERVIEW_FIXES_REVISION - 1, true).is_none());
@@ -5579,13 +5678,13 @@ mod environment_tests {
             told.contract = Some(contract);
             let sent = notes(&told, &now);
             assert_eq!(
-                labels(&sent)[labels(&sent).len() - 2..],
-                [CHAT_FIXES_LABEL, CHAT_FILES_LABEL]
+                labels(&sent)[labels(&sent).len() - 3..],
+                [CHAT_FIXES_LABEL, CHAT_FILES_LABEL, CHAT_PARTS_LABEL]
             );
             took(&mut told, &sent);
             assert_eq!(told.contract, Some(CHAT_CONTRACT));
             assert!(notes(&told, &now).is_empty());
-            let fixes_note = &sent[sent.len() - 2];
+            let fixes_note = &sent[sent.len() - 3];
             for words in fixes {
                 assert!(fixes_note.text.contains(words), "{words}");
                 assert!(note.contains(words), "{words}");
@@ -5594,9 +5693,111 @@ mod environment_tests {
         let mut told = now.told();
         told.contract = Some(CHAT_FUSION_CONTRACT - 1);
         assert!(!labels(&notes(&told, &now)).contains(&CHAT_FIXES_LABEL));
-        for words in &fixes[..2] {
-            assert!(chat(&[]).contains(words), "{words}");
+        // A new Chat's interview rule says the first in its own words; the card marks Recommended.
+        assert!(chat(&[]).contains(fixes[0]), "{}", fixes[0]);
+    }
+
+    /// The words of the answer's optional parts (Q86) the tests look for.
+    const PARTS_RULES: &[&str] = &[
+        "Start with the bottom line: one or two sentences",
+        "They are optional tools, never a template",
+        "one numbered list of 3 to 7 steps",
+        "End the first cell of your pick with ` ★`",
+        "a line `> [!CAUTION]`",
+        "after a line `---`, one `### heading` per topic",
+        "a fenced block `chance` holding `N of 100`",
+        "Never fold a warning",
+        "about six at most before the `---`",
+    ];
+
+    /// What instructions and notes say no more after Q86: the old layout and the fused
+    /// answer's report on its judging.
+    const RETIRED_RULES: &[&str] = &[
+        "Your recommendation first, in 3 to 5 lines",
+        "`Confidence: high, medium or low, and why`",
+        "`Disagreement: none`",
+        "the Confidence and Disagreement lines are each a paragraph",
+    ];
+
+    /// Q86: an answer leads with its bottom line and may use optional parts the app draws, and
+    /// a fused answer has no Confidence or Disagreement lines. A thread told any revision before
+    /// hears it once, the old words nowhere; a Chat or tab chat told the voice before hears it
+    /// once, Ask next with it, fusion's words only in a Chat; new instructions hold it all.
+    #[test]
+    fn threads_and_chats_hear_once_that_answers_have_optional_parts() {
+        let added = REVISIONS
+            .iter()
+            .find(|revision| revision.number == ANSWER_PARTS_REVISION)
+            .unwrap();
+        assert!(added.worker.is_empty());
+        for told in [
+            ANSWER_FORMAT_REVISION - 1,
+            BOLD_LEAD_REVISION - 1,
+            FUSION_REVISION - 1,
+            FUSED_INTERVIEW_FIXES_REVISION - 1,
+            ANSWER_PARTS_REVISION - 1,
+        ] {
+            let note = revision_note(told, false).unwrap();
+            for words in PARTS_RULES
+                .iter()
+                .chain([&RESEARCH_RULES[2], &FUSED_ANSWER])
+            {
+                assert_eq!(note.matches(words).count(), 1, "{told}: {words}");
+            }
+            for words in RETIRED_RULES {
+                assert!(!note.contains(words), "{told}: {words}");
+            }
+            assert!(!note.contains("### Ask next"), "{told}");
         }
+        assert!(revision_note(ANSWER_PARTS_REVISION, false).is_none());
+        for (now, reports) in [
+            (Current::chat(Vec::new()), true),
+            (Current::tab_chat(), false),
+        ] {
+            for contract in 0..CHAT_PARTS_CONTRACT {
+                let mut told = now.told();
+                told.contract = Some(contract);
+                let sent = notes(&told, &now);
+                let all: String = sent.iter().map(|note| note.text.as_str()).collect();
+                for words in PARTS_RULES
+                    .iter()
+                    .chain([&RESEARCH_RULES[2], &"### Ask next"])
+                {
+                    assert_eq!(all.matches(words).count(), 1, "{contract}: {words}");
+                }
+                assert_eq!(
+                    all.matches(FUSED_ANSWER).count(),
+                    usize::from(reports),
+                    "{contract}"
+                );
+                for words in RETIRED_RULES {
+                    assert!(!all.contains(words), "{contract}: {words}");
+                }
+                took(&mut told, &sent);
+                assert_eq!(told.contract, Some(CHAT_CONTRACT), "{contract}");
+                assert!(notes(&told, &now).is_empty(), "{contract}");
+            }
+        }
+        let session = thread(
+            &session("fullAccess"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Claude,
+            true,
+        );
+        for prompt in [chat(&[]), session.clone()] {
+            for words in PARTS_RULES.iter().chain([&FUSED_ANSWER]) {
+                assert_eq!(prompt.matches(words).count(), 1, "{words}");
+            }
+            for words in RETIRED_RULES {
+                assert!(!prompt.contains(words), "{words}");
+            }
+        }
+        // Ask next is a Chat's: a session's answers have no chips.
+        assert!(chat(&[]).contains("### Ask next"));
+        assert!(!session.contains("### Ask next"));
     }
 
     /// Q84: a file shows once, inline, as a link that opens it in Brigadier. Open threads and
@@ -5617,12 +5818,15 @@ mod environment_tests {
             let mut told = now.told();
             told.contract = Some(contract);
             let sent = notes(&told, &now);
-            assert_eq!(labels(&sent).last(), Some(&CHAT_FILES_LABEL));
+            assert_eq!(
+                labels(&sent)[labels(&sent).len() - 2..],
+                [CHAT_FILES_LABEL, CHAT_PARTS_LABEL]
+            );
             took(&mut told, &sent);
             assert_eq!(told.contract, Some(CHAT_CONTRACT));
             assert!(notes(&told, &now).is_empty());
             for words in words {
-                assert!(sent.last().unwrap().text.contains(words), "{words}");
+                assert!(sent[sent.len() - 2].text.contains(words), "{words}");
             }
         }
         let mut told = now.told();
@@ -5695,10 +5899,10 @@ mod environment_tests {
         "delegate that research with fuse: true",
         "answers A and B",
         "first name where they disagree",
-        "`Confidence: high, medium or low, and why`",
-        "`Disagreement: none` when they agree",
+        "never write `Confidence:` or `Disagreement:` lines",
+        "Show a disagreement only when it changes what the reader should do",
         "Never guess or say which model gave which answer.",
-        "neither line and no word about it",
+        "answer as usual, with no word about it.",
     ];
 
     /// The words of a Chat's thread rules the tests look for.
@@ -5734,8 +5938,9 @@ mod environment_tests {
         ] {
             assert!(note.contains(words), "{words}: {note}");
         }
+        // Not a word of task tabs ("a table" of the answer's parts is no tab).
         assert!(
-            !note.contains("workspace") && !note.contains(" tab"),
+            !note.contains("workspace") && !note.contains(" tab ") && !note.contains(" tabs"),
             "{note}"
         );
     }

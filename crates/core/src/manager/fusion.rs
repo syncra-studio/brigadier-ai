@@ -25,10 +25,12 @@ use crate::work::{Fusion, InjectionKind, Task, TaskId, TaskKind};
 use crate::{Error, Result};
 
 /// How a fused pair's reports reach the thread, after the reports.
-const FUSED_NOTE: &str = "[fused answers] These are two independent answers to the same brief, A and B. Before you pick, name where they disagree (facts, numbers, the recommendation) and check what decides it; then write one answer as your instructions say, with one line `Confidence: high, medium or low, and why` and one line `Disagreement: …` (or `Disagreement: none`), each a paragraph of its own. Link a file of either by the link its report gives, which opens that answer's own copy. Never say which model or vendor gave which.";
+const FUSED_NOTE: &str = "[fused answers] These are two independent answers to the same brief, A and B. Before you pick, name where they disagree (facts, numbers, the recommendation) and check what decides it; then write one answer as your instructions say.";
+/// What follows [`FUSED_NOTE`]'s judging, after how the answer shows it ([`prompts::FUSED_ANSWER`]).
+const FUSED_FILES: &str = "Link a file of either by the link its report gives, which opens that answer's own copy. Never say which model or vendor gave which.";
 
 /// How a lone report of a pair reaches the thread.
-const LONE_NOTE: &str = "[one answer] Only one of the two independent answers to this brief came back; write your answer from it as usual, with no Confidence or Disagreement line.";
+const LONE_NOTE: &str = "[one answer] Only one of the two independent answers to this brief came back; write your answer from it as usual, with no word about the other.";
 
 /// The pair's two labels, in the order the vendors are assigned.
 const LABELS: [&str; 2] = ["A", "B"];
@@ -189,7 +191,10 @@ impl SessionManager {
                     (other, envelope.to_owned())
                 };
                 FusedReport::Both {
-                    text: format!("{a}\n\n{b}\n{FUSED_NOTE}"),
+                    text: format!(
+                        "{a}\n\n{b}\n{FUSED_NOTE} {} {FUSED_FILES}",
+                        prompts::FUSED_ANSWER
+                    ),
                     partner: partner.id.clone(),
                 }
             }

@@ -1,6 +1,6 @@
 //! Fusion (Q77): a costly research question goes to a Claude and a Codex worker on the same
 //! brief; the thread gets both reports together, blind, as answers A and B, and writes one
-//! answer with a confidence and a disagreement line. One vendor: one worker, no fusion words.
+//! answer, a disagreement only where it changes what to do (Q86). One vendor: one worker, no fusion words.
 //! A restart between the reports changes nothing; a partner that ends without a report leaves
 //! the other's to go alone.
 
@@ -22,7 +22,9 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
-const ANSWER: &str = "Buy the hardened steel nozzle: it lasts with abrasive filament.\nConfidence: medium, the answers agree on wear but not on price.\nDisagreement: A puts it at 25 EUR, B at 40 EUR.";
+/// A fused answer as Q86 has it: the bottom line, and the one disagreement that matters in its
+/// fold, in the first person; no Confidence or Disagreement lines.
+const ANSWER: &str = "Buy the hardened steel nozzle: it lasts with abrasive filament.\n\n---\n\n### Price\nI'm not fully sure of the price: one source says 25 EUR, another 40 EUR, so check it at checkout.";
 
 /// Words that would tell the thread which vendor or model gave an answer.
 const VENDOR_WORDS: &[&str] = &[
@@ -137,7 +139,7 @@ fn fusing(heard: Arc<Mutex<Heard>>, codex_waits: Arc<AtomicBool>, codex: Codex) 
 
 /// A Chat fuses a costly question: one worker per vendor, both reports in one message as A and
 /// B with no vendor or model named (read_report and the stored full report too), and the
-/// answer with its confidence and disagreement lines.
+/// answer with no Confidence or Disagreement lines (Q86).
 #[tokio::test]
 async fn a_chat_fuses_a_costly_question_blind() {
     let heard: Arc<Mutex<Heard>> = Arc::default();
@@ -193,6 +195,10 @@ async fn a_chat_fuses_a_costly_question_blind() {
     assert!(reports.find("answer A").unwrap() < reports.find("answer B").unwrap());
     assert!(reports.contains("[fused answers]"));
     assert!(reports.contains("name where they disagree"));
+    // How the answer shows the judging (Q86): no report on it, a disagreement only where it counts.
+    assert!(reports.contains(crate::manager::prompts::FUSED_ANSWER));
+    assert!(reports.contains("never write `Confidence:` or `Disagreement:` lines"));
+    assert!(!reports.contains("`Disagreement: none`"));
     blind(reports);
     for reply in &heard.replies {
         blind(reply);
