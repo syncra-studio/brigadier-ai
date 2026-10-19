@@ -2481,7 +2481,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             // New rules or rankings, or an agent or model turned back on, may let work waiting
             // for quota run now.
             if before.accounts != settings.accounts
-                || before.switch_accounts != settings.switch_accounts
+                || before.manual_accounts != settings.manual_accounts
             {
                 // A new account is set up and checked, a removed one dropped, and the account
                 // new work starts on chosen again: work waiting for quota may run on it.

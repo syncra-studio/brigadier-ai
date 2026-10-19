@@ -884,12 +884,14 @@ async fn settings_and_the_usage_menu_mark_the_account_new_work_starts_on() {
     assert_eq!(in_use(&flow).await, (vec![None], Some(7.0)));
     assert_eq!(published_in_use(&flow).await, vec![None]);
 
-    // With switching off, work runs on the default: the account picked with Use.
-    let mut settings = flow.core.settings();
-    settings.switch_accounts = false;
+    // Use picks an account: it turns Claude's account switching off, and work runs there.
+    let before = flow.core.settings();
+    let mut settings = before.clone();
     for entry in &mut settings.accounts {
         entry.default = entry.id == "acct-c";
     }
+    let settings = crate::accounts::edited(&before, settings);
+    assert_eq!(settings.manual_accounts, [ProviderKind::Claude]);
     flow.core.update_settings(settings).await.unwrap();
     flow.manager.runtime.sync_accounts().await;
     assert_eq!(
@@ -897,6 +899,64 @@ async fn settings_and_the_usage_menu_mark_the_account_new_work_starts_on() {
         (vec![Some("acct-c".into())], Some(100.0))
     );
     assert_eq!(published_in_use(&flow).await, vec![Some("acct-c".into())]);
+
+    // Its switch on again hands the choice back: the soonest reset that can take work.
+    let mut settings = flow.core.settings();
+    settings.manual_accounts.clear();
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager.runtime.sync_accounts().await;
+    assert_eq!(in_use(&flow).await, (vec![None], Some(7.0)));
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn with_switching_to_another_agent_off_a_limit_waits_on_its_own_agent() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-agents-off",
+        Options::default(),
+        logging(&log, |turn| match turn.provider {
+            ProviderKind::Claude => Reply::limited(),
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    let mut settings = flow.core.settings();
+    settings.switch_providers = false;
+    flow.core.update_settings(settings).await.unwrap();
+    flow.say("Do the thing.").await;
+    // Accounts still switch (the agent switch is only about agents); with both at their
+    // limit, Codex isn't asked: the message waits for Claude's reset.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    let told = loop {
+        let told = notices(&flow).await;
+        if told
+            .iter()
+            .any(|notice| notice.contains("Your message waits"))
+        {
+            break told;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no wait: {told:#?}");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert!(
+        !told.iter().any(|notice| notice.contains("then back on")),
+        "{told:#?}"
+    );
+    let mut accounts: Vec<_> = seen(&log)
+        .iter()
+        .map(|turn| (turn.provider, turn.account.clone()))
+        .collect();
+    accounts.dedup();
+    assert_eq!(
+        accounts,
+        [
+            (ProviderKind::Claude, None),
+            (ProviderKind::Claude, Some("acct-b".into()))
+        ]
+    );
     flow.stop().await;
 }
 

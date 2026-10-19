@@ -1809,7 +1809,11 @@ impl Flow {
                 added_at_ms: 0,
             })
             .collect();
-        settings.switch_accounts = switch;
+        settings.manual_accounts = if switch {
+            Vec::new()
+        } else {
+            ProviderKind::ALL.to_vec()
+        };
         self.core.update_settings(settings).await.unwrap();
         self.manager.runtime.sync_accounts().await;
         let deadline = tokio::time::Instant::now() + *PATIENCE;

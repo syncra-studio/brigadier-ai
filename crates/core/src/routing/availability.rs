@@ -252,9 +252,10 @@ pub fn rebase(current: &Settings, mut incoming: Settings) -> Settings {
 }
 
 /// Whether a settings change may let work waiting for quota run now: new rules or rankings,
-/// or an agent or model turned back on.
+/// an agent or model turned back on, or switching to another agent turned on.
 pub fn wakes_waiting_work(before: &Settings, after: &Settings) -> bool {
-    before.routing_overrides != after.routing_overrides
+    (after.switch_providers && !before.switch_providers)
+        || before.routing_overrides != after.routing_overrides
         || before.routing_rankings != after.routing_rankings
         || before.disabled_providers != after.disabled_providers
         || before.hidden_models != after.hidden_models
@@ -271,6 +272,9 @@ pub fn wakes_waiting_work(before: &Settings, after: &Settings) -> bool {
 ///
 /// Version 3: merging on its own used to default on; settings saved before this version read
 /// it as off, once. A user's own later choice (on or off) after that is kept from then on.
+///
+/// Version 4: account switching is set per agent, and the one switch saved before covers
+/// every agent: off, every agent's work stays on its default account.
 pub fn migrate(settings: &Settings) -> Option<Settings> {
     if settings.settings_version >= SETTINGS_VERSION {
         return None;
@@ -309,6 +313,13 @@ pub fn migrate(settings: &Settings) -> Option<Settings> {
     }
     if settings.settings_version < 3 {
         next.auto_merge = false;
+    }
+    if settings.settings_version < 4 && !settings.legacy_switch_accounts {
+        for provider in ProviderKind::ALL {
+            if !next.manual_accounts.contains(&provider) {
+                next.manual_accounts.push(provider);
+            }
+        }
     }
     next.settings_version = SETTINGS_VERSION;
     Some(next)
@@ -546,6 +557,24 @@ mod tests {
             "haiku"
         ));
         assert!(migrate(&next).is_none());
+    }
+
+    #[test]
+    fn the_one_account_switch_saved_before_becomes_each_agents_own() {
+        let saved = |json: &str| -> Settings { serde_json::from_str(json).unwrap() };
+        let off = migrate(&saved(r#"{"switchAccounts":false,"settingsVersion":3}"#))
+            .expect("version 3 converts");
+        assert_eq!(off.manual_accounts, ProviderKind::ALL.to_vec());
+        assert!(off.switch_providers);
+        let on = migrate(&saved(r#"{"switchAccounts":true,"settingsVersion":3}"#))
+            .expect("version 3 converts");
+        assert!(on.manual_accounts.is_empty());
+        let unset = migrate(&saved(r#"{"settingsVersion":3}"#)).expect("version 3 converts");
+        assert!(unset.manual_accounts.is_empty());
+        // The old switch is read once, never saved again.
+        let json = serde_json::to_value(&off).unwrap();
+        assert!(json.get("switchAccounts").is_none());
+        assert!(migrate(&off).is_none());
     }
 
     #[test]

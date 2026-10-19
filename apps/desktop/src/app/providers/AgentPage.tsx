@@ -6,10 +6,10 @@ import { ErrorLine } from "@/app/dialogs/fields";
 import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
 import { agentState } from "@/app/onboarding/SetupTerminal";
 import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows";
-import { CLI_NAMES } from "@/app/providers/AgentsOverview";
+import { CLI_NAMES, OVERVIEW_ROWS } from "@/app/providers/AgentsOverview";
 import { AgentMark, CheckAgainButton, PlanChip, ProvidersSection, ROW_LINE, ROW_TITLE, StateDot } from "@/app/providers/parts";
 import { bestFor } from "@/app/routing/models";
-import { SettingsButton, SettingsCard, SettingsPage, settingsRows, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsButton, SettingsCard, SettingsPage, SettingsRow, settingsRows, SettingsSwitch } from "@/app/settings/parts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { pickFile, request } from "@/ipc/client";
 import type { AccountView, MergedModel, ModelInfo, ProviderKind, ProviderOverview } from "@/ipc/generated";
@@ -17,7 +17,7 @@ import { formatAgo } from "@/lib/format";
 import { isExpensive, TIER_LABELS, VENDOR_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { refreshProviders } from "@/state/actions";
-import { refreshAccounts } from "@/state/accounts";
+import { refreshAccounts, setSwitchAccounts, switchesAccounts } from "@/state/accounts";
 import { connectAgent, connecting, useConnectProgress } from "@/state/connect";
 import { modelAvailable, providerOn, setModelAvailable, setProviderOn } from "@/state/providers";
 import { setSetting } from "@/state/settings";
@@ -127,6 +127,8 @@ export function AgentPage({
   signIn?: boolean;
 }) {
   const on = useApp((s) => providerOn(s.settings, provider));
+  const switches = useApp((s) => switchesAccounts(s.settings, provider));
+  const switching = useAction();
   // Its own: going back to the agents hides the emails again.
   const revealed = useRevealedEmails();
   const checkedAtMs = overview?.checkedAtMs ?? null;
@@ -140,6 +142,18 @@ export function AgentPage({
       </ProvidersSection>
       <ProvidersSection title="Accounts" aside="Usage refreshes every few minutes">
         <SettingsCard>
+          <SettingsRow
+            label={OVERVIEW_ROWS.switchAccounts.label}
+            description={OVERVIEW_ROWS.switchAccounts.description}
+            error={switching.error}
+          >
+            <SettingsSwitch
+              label={OVERVIEW_ROWS.switchAccounts.label}
+              checked={switches}
+              disabled={switching.busy}
+              onCheckedChange={(next) => switching.run(() => setSwitchAccounts(provider, next))}
+            />
+          </SettingsRow>
           <ProviderAccounts page provider={provider} views={accounts} now={now} revealed={revealed} />
         </SettingsCard>
       </ProvidersSection>

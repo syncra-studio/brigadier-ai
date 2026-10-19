@@ -39,6 +39,7 @@ export const PROVIDERS_ROWS = {
     description: "How much of each account's 5-hour, weekly and model limits is used, and when each resets",
     target: "Accounts",
   },
+  switchAccounts: { ...OVERVIEW_ROWS.switchAccounts, target: "Accounts" },
   add: { label: "Add account", description: "Sign in to another Claude Code or Codex account", target: "Accounts" },
   own: { label: "This computer's login", description: "Also used by your terminal", target: "Accounts" },
   models: {

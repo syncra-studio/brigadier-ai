@@ -78,6 +78,13 @@ test("Providers lists the agents, and an agent's page has its installation, acco
   ]);
   // In use is the account new work starts on, as switching picks it, not the one picked with Use.
   assert.deepEqual(seen.switched, [false, true, false]);
+  // Each agent has its own account switch; Use pins an account and turns it off.
+  assert.deepEqual(seen.accountSwitch, [
+    { on: true, manual: [] },
+    { on: false, manual: ["claude"] },
+    { on: true, manual: [] },
+  ]);
+  assert.deepEqual(seen.afterUse, { on: false, manual: ["claude"] });
   // Codex's page has its own logo too (#386).
   assert.deepEqual(seen.codexMark, { provider: "codex", glyph: true, size: [44, 44], beforeTitle: true, tile: rowMark });
 });

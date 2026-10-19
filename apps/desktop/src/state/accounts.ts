@@ -73,13 +73,34 @@ export function renameAccount(id: string, name: string): Promise<unknown> {
   }));
 }
 
-/** Makes new work of `provider` start on the account `id` (absent: the user's own login). */
+/**
+ * Makes new work of `provider` start on the account `id` (absent: the user's own login): it pins
+ * the account, turning the provider's account switching off.
+ */
 export function makeDefaultAccount(provider: ProviderKind, id: string | undefined): Promise<unknown> {
   return editSettings((settings) => ({
     ...settings,
     accounts: settings.accounts.map((entry) =>
       entry.provider === provider ? { ...entry, default: entry.id === id } : entry,
     ),
+    manualAccounts: settings.manualAccounts.includes(provider)
+      ? settings.manualAccounts
+      : [...settings.manualAccounts, provider],
+  }));
+}
+
+/** Whether `provider`'s new work picks its account on its own (else it runs on the one picked with Use). */
+export function switchesAccounts(settings: { manualAccounts: readonly ProviderKind[] }, provider: ProviderKind): boolean {
+  return !settings.manualAccounts.includes(provider);
+}
+
+/** Turns `provider`'s account switching on (Brigadier picks) or off (the account picked with Use). */
+export function setSwitchAccounts(provider: ProviderKind, on: boolean): Promise<unknown> {
+  return editSettings((settings) => ({
+    ...settings,
+    manualAccounts: on
+      ? settings.manualAccounts.filter((entry) => entry !== provider)
+      : [...settings.manualAccounts.filter((entry) => entry !== provider), provider],
   }));
 }
 

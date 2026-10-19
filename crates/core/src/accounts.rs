@@ -52,7 +52,8 @@ impl AccountRef {
 
 /// `incoming` settings with their accounts as an edit may change them: a name, the default
 /// (one per provider) and nothing else. Accounts are added and removed by their own requests
-/// (adding makes the account's home; removing signs it out first).
+/// (adding makes the account's home; removing signs it out first). An account picked with Use
+/// (a new default) pins its provider: its accounts no longer switch on their own.
 pub fn edited(current: &Settings, mut incoming: Settings) -> Settings {
     let mut accounts = current.accounts.clone();
     for account in &mut accounts {
@@ -68,6 +69,28 @@ pub fn edited(current: &Settings, mut incoming: Settings) -> Settings {
             .filter(|a| a.provider == provider && a.default)
         {
             account.default = !std::mem::replace(&mut seen, true);
+        }
+    }
+    let picked: Vec<ProviderKind> = ProviderKind::ALL
+        .into_iter()
+        .filter(|provider| {
+            let id = |settings: &Settings| {
+                settings
+                    .accounts
+                    .iter()
+                    .find(|account| account.provider == *provider && account.default)
+                    .map(|account| account.id.clone())
+            };
+            id(current)
+                != accounts
+                    .iter()
+                    .find(|account| account.provider == *provider && account.default)
+                    .map(|account| account.id.clone())
+        })
+        .collect();
+    for provider in picked {
+        if !incoming.manual_accounts.contains(&provider) {
+            incoming.manual_accounts.push(provider);
         }
     }
     incoming.accounts = accounts;
@@ -105,7 +128,7 @@ pub fn select(
             .default_account(provider)
             .map(|account| account.id.clone()),
     );
-    if !settings.switch_accounts {
+    if !settings.switches_accounts(provider) {
         return default;
     }
     soonest_ready(settings, provider, model, candidates, avoid).unwrap_or(default)
@@ -305,7 +328,11 @@ mod tests {
                     added_at_ms: 0,
                 })
                 .collect(),
-            switch_accounts: switch,
+            manual_accounts: if switch {
+                vec![]
+            } else {
+                vec![ProviderKind::Claude]
+            },
             ..Settings::default()
         }
     }
@@ -517,6 +544,39 @@ mod tests {
             .account,
             None
         );
+    }
+
+    #[test]
+    fn use_pins_its_provider_and_a_rename_does_not() {
+        let current = settings(None, true);
+        let mut renamed = current.clone();
+        renamed.accounts[0].name = "Work".into();
+        assert!(edited(&current, renamed).manual_accounts.is_empty());
+        let mut picked = current.clone();
+        picked.accounts[1].default = true;
+        let after = edited(&current, picked);
+        assert_eq!(after.manual_accounts, [ProviderKind::Claude]);
+        // Back to the computer's login is a pick too.
+        let mut own = after.clone();
+        own.manual_accounts.clear();
+        own.accounts[1].default = false;
+        assert_eq!(edited(&after, own).manual_accounts, [ProviderKind::Claude]);
+    }
+
+    #[test]
+    fn each_agent_switches_its_own_accounts() {
+        let all = [
+            weekly(None, 0.0, Some(90)),
+            weekly(Some("work"), 0.0, Some(90)),
+            weekly(Some("home"), 0.0, Some(2)),
+        ];
+        let mut on = settings(Some("work"), true);
+        // Another agent's switch off leaves Claude's choice to Brigadier.
+        on.manual_accounts = vec![ProviderKind::Codex];
+        assert_eq!(pick(&on, &all), Some("home".into()));
+        let mut off = on.clone();
+        off.manual_accounts.push(ProviderKind::Claude);
+        assert_eq!(pick(&off, &all), Some("work".into()));
     }
 
     #[test]

@@ -980,11 +980,20 @@ pub struct Settings {
     /// user's own login, the one their terminal uses, is each provider's first account and is
     /// not listed.
     pub accounts: Vec<AccountEntry>,
-    /// New work starts on the provider's account whose weekly window resets soonest, and work
-    /// whose account hits its usage limit carries on with the next such account; only when
-    /// every account is used up does it move to another provider. Off: the default account.
-    #[serde(default = "default_true")]
-    pub switch_accounts: bool,
+    /// The one switch saved before account switching was set per agent (settings version 4):
+    /// read once into [`Self::manual_accounts`] by [`crate::routing::availability::migrate`],
+    /// never saved again.
+    #[serde(rename = "switchAccounts", skip_serializing)]
+    #[ts(skip)]
+    pub legacy_switch_accounts: bool,
+    /// Agents whose accounts don't switch on their own (their switch off, or an account picked
+    /// with Use): their new work starts on their default account. Every other agent's new work
+    /// starts on its account whose weekly window resets soonest, and work whose account hits
+    /// its usage limit carries on with the next such account.
+    pub manual_accounts: Vec<ProviderKind>,
+    /// Work moves to another agent when its own can't take it (every account it may use at
+    /// its limit). Off: it waits for the limit to reset.
+    pub switch_providers: bool,
     /// The language dictation listens for, as the speech engine names it ("en", "de"…). Empty:
     /// it is detected from the speech.
     pub dictation_language: String,
@@ -1110,6 +1119,12 @@ impl Settings {
             .find(|account| account.provider == provider && account.default)
     }
 
+    /// Whether `provider`'s new work picks its account on its own (else it runs on the
+    /// default account).
+    pub fn switches_accounts(&self, provider: ProviderKind) -> bool {
+        !self.manual_accounts.contains(&provider)
+    }
+
     /// The extra account `id` of `provider`.
     pub fn account(&self, provider: ProviderKind, id: &str) -> Option<&AccountEntry> {
         self.accounts
@@ -1132,7 +1147,7 @@ fn saved_default_permission() -> PermissionLevel {
 
 /// The settings' shape: each step up converts saved settings once (see
 /// [`crate::routing::availability::migrate`]).
-pub const SETTINGS_VERSION: u32 = 3;
+pub const SETTINGS_VERSION: u32 = 4;
 
 /// A model named by its CLI's id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -1181,7 +1196,9 @@ impl Default for Settings {
             known_models: Vec::new(),
             older_models_off: Vec::new(),
             accounts: Vec::new(),
-            switch_accounts: true,
+            legacy_switch_accounts: true,
+            manual_accounts: Vec::new(),
+            switch_providers: true,
             dictation_language: String::new(),
             dictation_words: Vec::new(),
             dictation_microphone: String::new(),

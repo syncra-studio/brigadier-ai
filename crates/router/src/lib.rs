@@ -162,8 +162,8 @@ use ts_rs::TS;
 pub use areas::infer_areas;
 pub use decide::{
     Decision, Exclusion, Needs, Preview, ProviderState, Query, Routed, Waiting, allows_trials,
-    available, decide, default_floor, eligible, preview, rerun_floor, reruns, rule_text, targets,
-    tier_name,
+    available, decide, default_floor, eligible, moved_by_limit, preview, rerun_floor, reruns,
+    rule_text, targets, tier_name,
 };
 pub use explain::{Alternative, Explanation, Factor, Rerun, RouteCandidate};
 pub use forecast::{

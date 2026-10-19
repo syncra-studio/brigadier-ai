@@ -3512,7 +3512,7 @@ impl SessionManager {
         let settings = self.core.settings();
         if choice.account.is_none()
             && conversation.setup.is_some()
-            && settings.switch_accounts
+            && settings.switches_accounts(choice.provider)
             && settings
                 .accounts
                 .iter()
@@ -5574,7 +5574,8 @@ impl SessionManager {
 
     /// The model a conversation continues on after `cli`'s model hit a usage limit: the
     /// router's choice for its kind of conversation, less that model (its provider too when
-    /// the limit is provider-wide), if one is usable.
+    /// the limit is provider-wide), if one is usable; only its own agent's with switching to
+    /// another agent off.
     ///
     /// Without one: the reason to wait, when a reset or the user's rules and rankings could
     /// change that (else nothing: the turn fails as before).
@@ -5592,10 +5593,22 @@ impl SessionManager {
             .conversation(&conv.id)
             .ok()
             .and_then(|conversation| conversation.project_id);
-        let exclude = [brigadier_router::Exclusion {
+        let mut exclude = vec![brigadier_router::Exclusion {
             provider: from.provider,
             model: from.model.clone(),
         }];
+        // With switching to another agent off, it stands in on its own agent or waits.
+        if !self.core.settings().switch_providers {
+            exclude.extend(
+                ProviderKind::ALL
+                    .into_iter()
+                    .filter(|provider| *provider != from.provider)
+                    .map(|provider| brigadier_router::Exclusion {
+                        provider,
+                        model: None,
+                    }),
+            );
+        }
         let decision = self
             .decide(&super::routing::Ask {
                 category,

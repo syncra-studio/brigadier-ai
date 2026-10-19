@@ -36,9 +36,14 @@ import { useApp } from "@/state/store";
 /** The overview's copy, for Settings search; the page renders this. */
 export const OVERVIEW_ROWS = {
   switch: {
-    label: "Switch to another account automatically",
+    label: "Switch to another agent automatically",
     description:
-      "A chat that hits its account's limit carries on with your next account, then with the other provider.",
+      "When every account of an agent is at its limit, work carries on with another agent. Off, it waits for the limit to reset.",
+  },
+  switchAccounts: {
+    label: "Switch accounts automatically",
+    description:
+      "New work starts on the account whose weekly limit resets soonest, and moves on when one hits its limit. Use picks one account and turns this off.",
   },
   notSetUp: "Agents Brigadier can run that aren't installed yet",
   routing: "Who does what is set in Routing",
@@ -86,9 +91,9 @@ export function AgentsOverview({
           >
             <SettingsSwitch
               label={OVERVIEW_ROWS.switch.label}
-              checked={settings.switchAccounts}
+              checked={settings.switchProviders}
               disabled={switching.busy}
-              onCheckedChange={(next) => switching.run(() => setSetting("switchAccounts", next))}
+              onCheckedChange={(next) => switching.run(() => setSetting("switchProviders", next))}
             />
           </SettingsRow>
         </SettingsCard>

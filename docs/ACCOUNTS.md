@@ -34,6 +34,17 @@ Evidence for every CLI behaviour relied on here: `docs/evidence/2026-10-09-accou
   A model's own window (Claude's weekly Opus) used up on the lead is shown to routing as the
   window of the signed-in account with the most room in it, since work on that model starts
   there. An agent counts as signed in when its lead account is.
+- **Two switches.** Each agent's page has its own account switch (Accounts section): on, Brigadier
+  picks the account as below; off (`Settings.manualAccounts` lists the agent), new work runs on
+  its default. Pressing Use on an account makes it the default and turns that agent's switch off
+  (`accounts::edited`); turning it on hands the choice back. The switch on the Providers page
+  (`Settings.switchProviders`) is only about agents: off, work whose agent can't take it waits
+  for the reset instead of moving to the other agent (`moved_by_limit` in the router, and the
+  chat stand-in kept on its own agent). Settings saved before version 4 had one switch for both
+  accounts and agents; its value became each agent's account switch, and the agent switch
+  starts on, so nothing changes on upgrade.
+- **In use** in Settings and the sidebar's Usage menu is the same account: the lead, the one new
+  work starts on (`AccountView.inUse`), whichever switch chose it.
 - **Which account work starts on** (`brigadier_core::accounts::select`): with switching on, of
   the signed-in accounts that can take work (room left for the model, per-model windows
   respected under any of the model's names, and under 99% of the 5-hour window), the one whose
@@ -53,7 +64,8 @@ Evidence for every CLI behaviour relied on here: `docs/evidence/2026-10-09-accou
   fallback runs at once. A worker hands its task to the next route as before, which now starts
   on the lead account; "Open in terminal" reopens a worker on the account its session ran on.
 - **Settings** keep only names and ids: `Settings.accounts` (`id`, `provider`, `name`,
-  `default`, `addedAtMs`), `Settings.switchAccounts` (on by default) and `ModelChoice.account`
+  `default`, `addedAtMs`), `Settings.manualAccounts` and `Settings.switchProviders` (on by
+  default) and `ModelChoice.account`
   (an account id, `own` for the computer's login, or absent for the default).
 
 ## Files

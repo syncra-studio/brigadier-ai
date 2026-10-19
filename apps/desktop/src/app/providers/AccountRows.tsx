@@ -279,7 +279,7 @@ export function accountNames(
 /**
  * One account: who it is (its email masked until its eye is pressed), its plan and a bar for
  * how much of each window is used, then Use (or In use for the one new chats start on, as the
- * engine picks it: with switching on, not always the one picked with Use).
+ * engine picks it). Use pins an account: its agent's account switching turns off.
  * Rename, Sign in again and Remove sit in its menu.
  */
 function AccountRow({
@@ -357,7 +357,7 @@ function AccountRow({
       <Badge variant="secondary" title="New chats start on this account">
         In use
       </Badge>
-    ) : view.default ? null : (
+    ) : (
       <SettingsButton
         disabled={action.busy || !signedIn}
         title="Start new chats on this account"
@@ -445,7 +445,7 @@ function AccountRow({
               Sign in
             </SettingsButton>
           ) : (
-            !view.default && (
+            !view.inUse && (
               <SettingsButton
                 disabled={action.busy || !signedIn}
                 title="Start new chats on this account"

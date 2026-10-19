@@ -379,7 +379,7 @@ impl Runtime {
     /// provider that can take it, when switching is on.
     pub fn switch_target(&self, from: &AccountRef, model: Option<&str>) -> Option<AccountRef> {
         let settings = self.core.settings();
-        if !settings.switch_accounts {
+        if !settings.switches_accounts(from.provider) {
             return None;
         }
         let mut candidates = self.account_candidates(from.provider);
@@ -431,7 +431,8 @@ impl Runtime {
             .into_iter()
             .filter(|candidate| {
                 candidate.logged_in
-                    && (settings.switch_accounts || candidate.account.account == default)
+                    && (settings.switches_accounts(provider)
+                        || candidate.account.account == default)
             })
             .collect();
         let back = usable

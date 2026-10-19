@@ -285,7 +285,7 @@ impl Runtime {
         let mut snapshot = self.monitor.current_for(&lead, now)?;
         let mut owners = vec![lead.clone(); snapshot.windows.len()];
         let settings = self.core.settings();
-        if settings.switch_accounts {
+        if settings.switches_accounts(kind) {
             let candidates = self.account_candidates(kind);
             for (window, owner) in snapshot.windows.iter_mut().zip(&mut owners) {
                 if window.model.is_none() || window.used_percent < 100.0 {

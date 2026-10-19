@@ -342,6 +342,43 @@ pub fn decide(query: &Query) -> Decision {
     preview(query).decision
 }
 
+/// The agent a reached limit moved this task away from: where it would go were no window at
+/// its limit (heat still counted, so balancing stays as it is), when that is another agent than
+/// [`decide`]'s. With switching to another agent off, the caller keeps the task there, and it
+/// waits for the reset instead.
+pub fn moved_by_limit(query: &Query) -> Option<ProviderKind> {
+    let Decision::Run(routed) = decide(query) else {
+        return None;
+    };
+    let open: Vec<ProviderState> = query
+        .providers
+        .iter()
+        .map(|state| ProviderState {
+            quota: state.quota.clone().map(|mut quota| {
+                quota.limit = None;
+                for window in &mut quota.windows {
+                    if window.heat == crate::Heat::Limited {
+                        window.heat = crate::Heat::Hot;
+                    }
+                    window.window.used_percent = window.window.used_percent.min(LIMITED_USED - 1.0);
+                }
+                if quota.heat == crate::Heat::Limited {
+                    quota.heat = crate::Heat::Hot;
+                }
+                quota
+            }),
+            ..state.clone()
+        })
+        .collect();
+    let Decision::Run(unlimited) = decide(&Query {
+        providers: &open,
+        ..query.clone()
+    }) else {
+        return None;
+    };
+    (unlimited.provider != routed.provider).then_some(unlimited.provider)
+}
+
 /// Every model that may take the task, by the same checks [`decide`] runs: no Fable, a login
 /// and no confirmed limit, not just failed on it, the user's rules and rankings, its needs and
 /// quality floor, a binding pin, and for reviews the author's vendor or model. The model
@@ -2539,6 +2576,22 @@ mod tests {
             (ProviderKind::Codex, "gpt-6.1-sol")
         );
         assert_eq!(route.effort.as_deref(), Some("medium"));
+        // Claude's limit moved it: with switching to another agent off, it stays on Claude.
+        assert_eq!(moved_by_limit(&q), Some(ProviderKind::Claude));
+        let open = [
+            providers[1].clone(),
+            ProviderState {
+                quota: None,
+                ..providers[0].clone()
+            },
+        ];
+        assert_eq!(
+            moved_by_limit(&Query {
+                providers: &open,
+                ..q.clone()
+            }),
+            None
+        );
     }
 
     /// Scouting and checks take the cheaper model when its score is near the best; other work

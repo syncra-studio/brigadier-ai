@@ -227,7 +227,9 @@ impl SessionManager {
         // Agents switched off and models made unavailable aren't considered at all.
         let (models, providers) =
             crate::routing::availability::routable(&settings, &inputs.models, &inputs.providers);
-        let query = Query {
+        // With switching to another agent off, work a limit would move stays on its agent.
+        let held: Vec<Exclusion>;
+        let mut query = Query {
             category: ask.category,
             areas: ask.areas,
             floor: ask.floor,
@@ -249,6 +251,25 @@ impl SessionManager {
             learned: &inputs.learned,
             now_ms: now,
         };
+        if !settings.switch_providers
+            && let Some(agent) = brigadier_router::moved_by_limit(&query)
+        {
+            held = ask
+                .exclude
+                .iter()
+                .cloned()
+                .chain(
+                    ProviderKind::ALL
+                        .into_iter()
+                        .filter(|provider| *provider != agent)
+                        .map(|provider| Exclusion {
+                            provider,
+                            model: None,
+                        }),
+                )
+                .collect();
+            query.exclude = &held;
+        }
         (answer(&query, &inputs), trial_slot)
     }
 

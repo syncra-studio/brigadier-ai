@@ -48,7 +48,7 @@ const missingCodex = (fields: Partial<NonNullable<ProviderOverview["status"]>>) 
 useApp.setState((state) => ({
   info: { ...state.info, platform: "macos" } as typeof state.info,
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
-  settings: { ...state.settings, routingOverrides: rules, routingRankings: rankings, switchAccounts: true },
+  settings: { ...state.settings, routingOverrides: rules, routingRankings: rankings, switchProviders: true },
   projects,
   accounts: { accounts, warnings: [] },
   providers: {
@@ -153,6 +153,12 @@ mockIPC((command, payload) => {
   }
 });
 
+/** The agent page's account switch, and how it and the settings stand. */
+const accountSwitch = () => document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Switch accounts automatically"]');
+const accountSwitchState = () => ({
+  on: accountSwitch()?.getAttribute("aria-checked") === "true",
+  manual: useApp.getState().settings.manualAccounts,
+});
 const all = <T extends Element = HTMLElement>(selector: string, root: ParentNode = document) => [
   ...root.querySelectorAll<T>(selector),
 ];
@@ -284,7 +290,7 @@ function Fixture() {
         const probe = document.body.appendChild(Object.assign(document.createElement("div"), { className: "max-w-settings" }));
         seen.settingsColumn = Boolean(column) && getComputedStyle(column as Element).maxWidth === getComputedStyle(probe).maxWidth;
         probe.remove();
-        seen.fallback = Boolean(document.querySelector('[data-setting="Switch to another account automatically"]'));
+        seen.fallback = Boolean(document.querySelector('[data-setting="Switch to another agent automatically"]'));
         seen.agents = all('[data-slot="agent-row"]').map((row) => ({
           name: row.dataset.setting,
           state: text(row.querySelector('[data-slot="agent-state"]')),
@@ -391,6 +397,21 @@ function Fixture() {
       },
       () => {
         seen.switched = all('[data-slot="account-row"]').map((row) => Boolean(row.querySelector('[data-slot="in-use"]')));
+        // Claude's own account switch: on, then off, then on again.
+        seen.accountSwitch = [accountSwitchState()];
+        accountSwitch()?.click();
+      },
+      () => {
+        seen.accountSwitch = [...(seen.accountSwitch as unknown[]), accountSwitchState()];
+        accountSwitch()?.click();
+      },
+      () => {
+        seen.accountSwitch = [...(seen.accountSwitch as unknown[]), accountSwitchState()];
+        // Use on the third account pins it: Claude's switch turns off.
+        all<HTMLButtonElement>('[data-slot="account-row"] button').filter((element) => text(element) === "Use").at(-1)?.click();
+      },
+      () => {
+        seen.afterUse = accountSwitchState();
         // Back to the agents, then Codex's page.
         button("Providers", pageRoot())?.click();
       },

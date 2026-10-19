@@ -186,11 +186,17 @@ olderModelsOff: Array<ModelRef>,
  */
 accounts: Array<AccountEntry>, 
 /**
- * New work starts on the provider's account whose weekly window resets soonest, and work
- * whose account hits its usage limit carries on with the next such account; only when
- * every account is used up does it move to another provider. Off: the default account.
+ * Agents whose accounts don't switch on their own (their switch off, or an account picked
+ * with Use): their new work starts on their default account. Every other agent's new work
+ * starts on its account whose weekly window resets soonest, and work whose account hits
+ * its usage limit carries on with the next such account.
  */
-switchAccounts: boolean, 
+manualAccounts: Array<ProviderKind>, 
+/**
+ * Work moves to another agent when its own can't take it (every account it may use at
+ * its limit). Off: it waits for the limit to reset.
+ */
+switchProviders: boolean, 
 /**
  * The language dictation listens for, as the speech engine names it ("en", "de"…). Empty:
  * it is detected from the speech.
