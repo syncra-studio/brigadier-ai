@@ -74,21 +74,29 @@ export function PlanChip({ plan, large = false }: { plan: string; large?: boolea
   );
 }
 
-/** An agent's mark in its rounded square; `idle` for one not set up, `dim` for one off. */
+/**
+ * An agent's mark in its rounded square; `idle` for one not set up, `dim` for one off, `large`
+ * beside an agent page's title.
+ */
 export function AgentMark({
   provider,
   idle = false,
   dim = false,
+  large = false,
 }: {
   provider: ProviderKind;
   idle?: boolean;
   dim?: boolean;
+  large?: boolean;
 }) {
   return (
     <span
       aria-hidden
+      data-slot="agent-mark"
+      data-provider={provider}
       className={cn(
-        "rounded-nav flex size-8.5 shrink-0 items-center justify-center",
+        "rounded-nav flex shrink-0 items-center justify-center",
+        large ? "size-11" : "size-8.5",
         idle ? "border-divider border" : "bg-foreground/8",
         dim && "opacity-50",
       )}
@@ -96,7 +104,7 @@ export function AgentMark({
       <ProviderGlyph
         provider={provider}
         className={cn(
-          "size-4.25",
+          large ? "size-5.5" : "size-4.25",
           provider === "codex" && (idle ? "text-muted-foreground" : "text-foreground/85"),
         )}
       />

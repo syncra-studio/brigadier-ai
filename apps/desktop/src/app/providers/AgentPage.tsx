@@ -7,7 +7,7 @@ import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
 import { agentState } from "@/app/onboarding/SetupTerminal";
 import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows";
 import { CLI_NAMES } from "@/app/providers/AgentsOverview";
-import { CheckAgainButton, PlanChip, ProvidersSection, ROW_LINE, ROW_TITLE, StateDot } from "@/app/providers/parts";
+import { AgentMark, CheckAgainButton, PlanChip, ProvidersSection, ROW_LINE, ROW_TITLE, StateDot } from "@/app/providers/parts";
 import { bestFor } from "@/app/routing/models";
 import { SettingsButton, SettingsCard, SettingsPage, settingsRows, SettingsSwitch } from "@/app/settings/parts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -35,8 +35,8 @@ const EXPENSIVE_NOTE =
 const OFF_NOTE = "Off: its models are hidden from the model picker, and it gets no work";
 
 /**
- * An agent's Settings page: Providers to go back, its name and plan, its line, Enabled and Check
- * again; `children` under it.
+ * An agent's Settings page: Providers to go back, its logo, its name and plan, its line, Enabled
+ * and Check again; `children` under it.
  */
 export function AgentSettingsPage({
   provider,
@@ -65,6 +65,7 @@ export function AgentSettingsPage({
   return (
     <SettingsPage
       back={{ label: "Providers", onBack }}
+      mark={<AgentMark provider={provider} idle={state === "install"} dim={!on} large />}
       title={
         <span className="flex items-center gap-2.5">
           {label}

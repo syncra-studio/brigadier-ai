@@ -168,6 +168,21 @@ const locationRow = () => document.querySelector('[data-slot="agent-location"]')
 const cards = () => all('[data-slot="settings-card"]').map(surface);
 const on = () => switchLook(document.querySelector('[data-slot="switch"][data-state="checked"]'));
 const openClaude = () => document.querySelector<HTMLElement>('[data-slot="agent-row"][data-setting="Claude"]')?.click();
+/** The logo before an agent page's title: whose it is, its size, and its tile's look. */
+const headerMark = () => {
+  const header = document.querySelector('[data-slot="settings-page"] header');
+  const mark = header?.querySelector<HTMLElement>('[data-slot="agent-mark"]');
+  const title = header?.querySelector("h1");
+  if (!mark || !title) return null;
+  const box = mark.getBoundingClientRect();
+  return {
+    provider: mark.dataset.provider,
+    glyph: Boolean(mark.querySelector("svg")),
+    size: [box.width, box.height],
+    beforeTitle: box.right <= title.getBoundingClientRect().left,
+    tile: surface(mark),
+  };
+};
 /** Whether the element is in the page's scrolled view. */
 const inView = (element: Element | undefined | null) => {
   if (!element) return false;
@@ -275,6 +290,7 @@ function Fixture() {
           state: text(row.querySelector('[data-slot="agent-state"]')),
           meter: text(row.querySelector('[data-slot="account-usage"]')),
         }));
+        seen.rowMark = surface(document.querySelector('[data-slot="agent-row"] [data-slot="agent-mark"]'));
         seen.notSetUp = all('[data-slot="agent-not-set-up"]').length;
         seen.addAgent = Boolean(button("Add another agent"));
         // The row's switch doesn't open the page.
@@ -289,6 +305,7 @@ function Fixture() {
       },
       () => {
         seen.header = text(document.querySelector('[data-slot="settings-page"] header'));
+        seen.claudeMark = headerMark();
         seen.cli = text(document.querySelector('[data-slot="agent-cli"]'));
         seen.updateEnabled = button("Update")?.disabled === false;
         seen.location = text(document.querySelector('[data-slot="agent-location"]'));
@@ -361,6 +378,14 @@ function Fixture() {
           inUse: text(row).includes("In use"),
           menu: Boolean(row.querySelector('button[aria-label$=": more"]')),
         }));
+        // Back to the agents, then Codex's page.
+        button("Providers", pageRoot())?.click();
+      },
+      () => {
+        document.querySelector<HTMLElement>('[data-slot="agent-row"][data-setting="Codex"]')?.click();
+      },
+      () => {
+        seen.codexMark = headerMark();
         setResult(JSON.stringify(seen));
       },
     ];

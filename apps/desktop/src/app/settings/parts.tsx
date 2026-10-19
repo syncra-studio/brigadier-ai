@@ -42,6 +42,7 @@ import { useApp } from "@/state/store";
 export function SettingsPage({
   title,
   description,
+  mark,
   actions,
   back,
   wide = false,
@@ -51,6 +52,8 @@ export function SettingsPage({
   /** Its name; a node when something sits beside it (an agent's plan). */
   title: ReactNode;
   description?: ReactNode;
+  /** Beside the title and its line, before them (an agent's logo). */
+  mark?: ReactNode;
   actions?: ReactNode;
   /** A page inside another: its name over the title goes back to it. */
   back?: { label: string; onBack: () => void };
@@ -90,9 +93,12 @@ export function SettingsPage({
             </button>
           )}
           <header className="flex shrink-0 items-start gap-4 py-3">
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <h1 className="text-page-title font-medium">{title}</h1>
-              {description && <p className="text-foreground/65 text-sm">{description}</p>}
+            <div className="flex min-w-0 flex-1 items-center gap-3.5">
+              {mark}
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <h1 className="text-page-title font-medium">{title}</h1>
+                {description && <p className="text-foreground/65 text-sm">{description}</p>}
+              </div>
             </div>
             {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
           </header>
@@ -118,6 +124,8 @@ export function SettingsSection({
   /** Shown before the title (an archived group's folder). */
   icon?: ReactNode;
   description?: ReactNode;
+  /** Beside the title and its line, before them (an agent's logo). */
+  mark?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
   className?: string;

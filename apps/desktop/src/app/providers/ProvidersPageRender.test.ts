@@ -26,6 +26,10 @@ test("Providers lists the agents, and an agent's page has its installation, acco
   assert.equal(seen.addAgent, true);
   assert.deepEqual(seen.afterSwitch, { page: false, disabled: ["codex"] });
   assert.equal(seen.header, "ClaudeMaxReady · Claude Code by AnthropicEnabledCheck again");
+  // Its logo sits before its name, in the design's 44px tile drawn as the overview rows' (#386).
+  const rowMark = seen.rowMark as Record<string, string>;
+  assert.ok(rowMark, "the overview rows draw a logo");
+  assert.deepEqual(seen.claudeMark, { provider: "claude", glyph: true, size: [44, 44], beforeTitle: true, tile: rowMark });
   assert.equal(seen.cli, "Claude Code CLIv2.1.0 · v2.1.4 is outUpdate");
   assert.equal(seen.updateEnabled, true);
   assert.equal(seen.location, "Location/usr/local/bin/claudeChange");
@@ -72,6 +76,8 @@ test("Providers lists the agents, and an agent's page has its installation, acco
     { title: masked[1], own: false, inUse: false, menu: true },
     { title: masked[2], own: false, inUse: false, menu: true },
   ]);
+  // Codex's page has its own logo too (#386).
+  assert.deepEqual(seen.codexMark, { provider: "codex", glyph: true, size: [44, 44], beforeTitle: true, tile: rowMark });
 });
 
 /** An extra Claude account named `name`, signed in as `email`. */

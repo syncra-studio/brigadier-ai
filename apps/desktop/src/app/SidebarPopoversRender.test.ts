@@ -56,4 +56,9 @@ test("sidebar: usage list, a provider's limits, and the help menu", { timeout: 6
   assert.equal(look.amber, look.warning);
   assert.deepEqual(look.help, look.canon.menu);
   assert.deepEqual(look.helpItem, look.canon.item);
+  // Help is as wide as the design draws it, never narrower than the app's menus (#386): sized to
+  // its two rows it read as an oval.
+  const helpWidth = look.helpWidth as number;
+  assert.ok(helpWidth >= (look.canon.menuMinWidth as number), `help menu ${helpWidth}px under the shared min-width`);
+  assert.equal(helpWidth, 240);
 });

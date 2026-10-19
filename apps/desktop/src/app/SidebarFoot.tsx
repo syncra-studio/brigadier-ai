@@ -112,6 +112,8 @@ function HelpMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent
         {...(open ? ({ side: "top", align: "end" } as const) : footMenuPlacement(false))}
+        // The design's width: sized to its two rows it read as an oval rather than a menu.
+        className="w-60"
         onCloseAutoFocus={(event) => {
           if (!toFeedback.current) return;
           toFeedback.current = false;

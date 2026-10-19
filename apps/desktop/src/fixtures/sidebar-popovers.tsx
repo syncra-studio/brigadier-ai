@@ -216,6 +216,7 @@ function Fixture() {
       await wait(200);
       seen.help = all('[role="menuitem"]').map(text);
       look.help = surface(q('[data-slot="dropdown-menu-content"]'));
+      look.helpWidth = q('[data-slot="dropdown-menu-content"]')?.getBoundingClientRect().width;
       look.helpItem = rowLook(q('[role="menuitem"]'));
       all('[role="menuitem"]').find((item) => text(item) === "Keyboard shortcuts")?.click();
       await wait(200);
@@ -232,6 +233,7 @@ function Fixture() {
       look.canon = {
         popover: surface(q('[data-slot="canon-popover"]')),
         menu: surface(q('[data-slot="canon-menu"]')),
+        menuMinWidth: Number.parseFloat(getComputedStyle(q('[data-slot="canon-menu"]') as Element).minWidth),
         item: rowLook(q('[data-slot="canon-menu"] [role="menuitem"]')),
         label: labelLook(q('[data-slot="canon-menu"] [data-slot="dropdown-menu-label"]')),
       };
