@@ -589,18 +589,28 @@ pub fn pages_flushed(token: u64) {
 /// same drain-and-acknowledge before the process goes away. The window's pages are not saved
 /// first: this blocks the event loop that would carry its answer.
 pub fn quit_on_exit(app: &AppHandle) {
-    if QUITTING.swap(true, Ordering::AcqRel) {
-        return;
-    }
     let app = app.clone();
-    let stopped = wait_on_runtime(
-        tauri::async_runtime::handle().inner(),
-        async move { stop_daemon(&app).await },
-        EXIT_WAIT,
-    );
-    if stopped.is_none() {
-        tracing::warn!("brigadierd did not answer the quit in time; exiting anyway");
+    on_exit(move || {
+        let stopped = wait_on_runtime(
+            tauri::async_runtime::handle().inner(),
+            async move { stop_daemon(&app).await },
+            EXIT_WAIT,
+        );
+        if stopped.is_none() {
+            tracing::warn!("brigadierd did not answer the quit in time; exiting anyway");
+        }
+    });
+}
+
+/// The app's last event, on every quit: stops the daemon unless an orderly quit already has,
+/// then installs a waiting update. After a quit Apple event AppKit ends the process as soon as
+/// this returns (`terminate:` exits after `applicationWillTerminate:`), so `run_return` never
+/// returns and the update can't wait for it (#349).
+fn on_exit(stop_daemon: impl FnOnce()) {
+    if !QUITTING.swap(true, Ordering::AcqRel) {
+        stop_daemon();
     }
+    crate::updates::finish(daemon_stopped());
 }
 
 /// Longest the main thread waits for the daemon when the process is already exiting: the two
@@ -657,7 +667,24 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    use super::wait_on_runtime;
+    use super::{DAEMON_STOPPED, Ordering, daemon_stopped, on_exit, wait_on_runtime};
+
+    /// A quit Apple event (the Dock, logout, AppleScript) ends the process right after the
+    /// app's last event, so `run_return` never returns: the waiting update goes in at that
+    /// event, once, and the call after `run_return` (Cmd+Q) finds none left (#349).
+    #[test]
+    fn a_quit_that_never_returns_from_the_run_loop_installs_the_waiting_update() {
+        let installs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        crate::updates::wait_counting("0.1.0-nightly.202610190100", installs.clone());
+        on_exit(|| DAEMON_STOPPED.store(true, Ordering::Release));
+        assert_eq!(
+            installs.load(Ordering::Acquire),
+            1,
+            "installed at the last event"
+        );
+        assert!(!crate::updates::finish(daemon_stopped()));
+        assert_eq!(installs.load(Ordering::Acquire), 1, "installed once");
+    }
 
     /// The exit path's wait ends by the clock when every runtime thread is stuck waiting on the
     /// waiting thread, as a webview response or a window getter is during a system quit.

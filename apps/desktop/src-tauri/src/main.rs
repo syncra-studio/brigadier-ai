@@ -908,8 +908,8 @@ fn main() {
         ),
         _ => {}
     });
-    // A waiting nightly update goes in now that the daemon has stopped; "Restart to update"
-    // opens the app again.
+    // A waiting nightly update went in at the last event, after the daemon stopped; "Restart
+    // to update" opens the app again.
     if updates::finish(shell::daemon_stopped()) {
         tauri::process::restart(&env);
     }

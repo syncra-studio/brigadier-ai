@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
-use tauri_plugin_updater::{Update, UpdaterExt};
+use tauri_plugin_updater::UpdaterExt;
 
 /// The first check after launch, then how often.
 const FIRST_CHECK: Duration = Duration::from_secs(60);
@@ -24,8 +24,8 @@ pub const READY_EVENT: &str = "app-update-ready";
 
 /// A downloaded, verified update waiting for the app to quit.
 struct Ready {
-    update: Update,
-    bytes: Vec<u8>,
+    version: String,
+    install: Box<dyn FnOnce() -> tauri_plugin_updater::Result<()> + Send>,
 }
 
 static READY: Mutex<Option<Ready>> = Mutex::new(None);
@@ -80,10 +80,30 @@ async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
     tracing::info!(version = %update.version, "downloading a nightly update");
     let bytes = update.download(|_, _| {}, || {}).await?;
     let version = update.version.clone();
-    *lock() = Some(Ready { update, bytes });
+    wait(version.clone(), move || update.install(&bytes));
     tracing::info!(%version, "a nightly update is ready");
     let _ = app.emit(READY_EVENT, &version);
     Ok(())
+}
+
+/// Keeps an update to install when the app quits.
+fn wait(
+    version: String,
+    install: impl FnOnce() -> tauri_plugin_updater::Result<()> + Send + 'static,
+) {
+    *lock() = Some(Ready {
+        version,
+        install: Box::new(install),
+    });
+}
+
+/// Keeps a stand-in update whose install only counts (for tests of the quit paths).
+#[cfg(test)]
+pub fn wait_counting(version: &str, installs: std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    wait(version.to_owned(), move || {
+        installs.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    });
 }
 
 fn lock() -> std::sync::MutexGuard<'static, Option<Ready>> {
@@ -93,7 +113,7 @@ fn lock() -> std::sync::MutexGuard<'static, Option<Ready>> {
 }
 
 fn waiting() -> Option<String> {
-    lock().as_ref().map(|ready| ready.update.version.clone())
+    lock().as_ref().map(|ready| ready.version.clone())
 }
 
 /// The version of the update waiting for a restart, if any (for a window that opens later).
@@ -109,15 +129,13 @@ pub fn restart_to_update(app: AppHandle) {
     crate::shell::quit(&app, 0);
 }
 
-/// After the app's last event: installs the waiting update when the daemon has stopped, and
-/// says whether to open the app again.
+/// At the app's last event: installs the waiting update when the daemon has stopped (once; a
+/// later call finds none), and says whether to open the app again.
 pub fn finish(daemon_stopped: bool) -> bool {
     if let Some(ready) = lock().take() {
         if daemon_stopped {
-            match ready.update.install(&ready.bytes) {
-                Ok(()) => {
-                    tracing::info!(version = %ready.update.version, "installed the nightly update")
-                }
+            match (ready.install)() {
+                Ok(()) => tracing::info!(version = %ready.version, "installed the nightly update"),
                 Err(err) => tracing::warn!(error = %err, "could not install the nightly update"),
             }
         } else {
