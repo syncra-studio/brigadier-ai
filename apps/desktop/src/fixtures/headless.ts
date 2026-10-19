@@ -220,65 +220,147 @@ function unanswered(log: string): string[] {
 }
 
 /**
- * Renders `fixtures/<page>` in headless Chromium through Vite and returns the text of its
- * `<pre id=resultId>`, the fixture's own JSON. Profiles and Vite's cache use the system
- * temporary folder, never the app's data.
+ * A headless Chromium on a scratch profile in `scratch`, driven over the DevTools protocol: its
+ * page's socket, `call` (a call the browser never answers fails at `deadline`), its log, and
+ * `stop`, which also runs when the test ends.
  */
-export async function renderFixturePage(t: TestContext, page: string, resultId: string, budgetMs = 5000): Promise<string> {
-  const binary = chromium();
-  const { url, scratch, log, stopFirst } = await serveFixtures(t);
+async function openBrowser(
+  t: TestContext,
+  scratch: string,
+  stopFirst: (stop: () => void | Promise<void>) => void,
+  flags: string[],
+  deadline: number,
+): Promise<{ socket: WebSocket; call: (method: string, params?: object) => Promise<unknown>; log: () => string; stop: () => Promise<void> }> {
+  const profile = join(scratch, "profile");
   // One process on macOS: a worker's sandbox lets Chromium look up Mach services but not register
   // the one its child processes rendezvous on, so the multi-process browser aborts there. Linux
   // Chrome crashes (SIGTRAP) in single-process mode, so it keeps the default.
-  const oneProcess = process.platform === "darwin" ? ["--single-process"] : [];
-  // Chrome stopped at the timeout exits cleanly with no DOM, so the failure names the time it ran.
   // Scrollbars hidden: Linux Chrome's take room where macOS's float, and the page lays out alike.
-  const started = Date.now();
-  // In its own process group, which goes whole at the timeout and after the test: a process
-  // Chrome started would otherwise keep its output open, and this waiting, on and on.
-  const chrome = spawn(binary, [
+  const oneProcess = process.platform === "darwin" ? ["--single-process"] : [];
+  const browser = spawn(chromium(), [
     "--headless", "--no-sandbox", ...oneProcess, "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
-    "--enable-logging=stderr",
-    `--user-data-dir=${join(scratch, "profile")}`,
-    "--dump-dom", `--virtual-time-budget=${budgetMs}`,
-    `${url}fixtures/${page}`,
-  ], { stdio: ["ignore", "pipe", "pipe"], detached: true });
-  let stdout = "";
-  let stderr = "";
-  chrome.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-  chrome.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-  const killGroup = () => {
-    try {
-      process.kill(-chrome.pid!, "SIGKILL");
-    } catch {
-      // None of them is left.
+    ...flags, "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank",
+  ], { stdio: ["ignore", "ignore", "pipe"], detached: true });
+  let browserLog = "";
+  browser.stderr.on("data", (chunk: Buffer) => { browserLog += chunk.toString(); });
+  // A throwaway browser on a scratch profile: killed outright (one process ignores SIGTERM), with
+  // the processes it started (its own group: Linux Chrome's renderers and helpers).
+  const stop = async () => {
+    if (browser.exitCode === null && browser.signalCode === null) {
+      const stopped = new Promise((resolve) => browser.once("exit", resolve));
+      process.kill(-browser.pid!, "SIGKILL");
+      await stopped;
+    } else {
+      try {
+        process.kill(-browser.pid!, "SIGKILL");
+      } catch {
+        // None of them is left.
+      }
     }
+    browser.stderr.destroy();
   };
-  const late = setTimeout(killGroup, 45000);
-  stopFirst(() => {
-    clearTimeout(late);
-    killGroup();
+  stopFirst(stop);
+  const port = await new Promise<number>((resolve, reject) => {
+    const poll = setInterval(() => {
+      try {
+        const found = Number(readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0]);
+        if (found > 0) {
+          clearInterval(poll);
+          resolve(found);
+        }
+      } catch {
+        if (Date.now() > deadline || browser.exitCode !== null) {
+          clearInterval(poll);
+          reject(new Error(`Chromium did not start: ${browserLog.slice(-2000)}`));
+        }
+      }
+    }, 100);
   });
-  // How it ended, unless cleanly: its signal, or its exit code.
-  const ended = await new Promise<string | null>((resolve, reject) => {
-    chrome.once("error", reject);
-    chrome.once("exit", (code, signal) => resolve(code === 0 ? null : signal ?? `exit code ${code}`));
+  const targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as { type: string; webSocketDebuggerUrl: string }[];
+  const target = targets.find((candidate) => candidate.type === "page");
+  assert.ok(target, "Chromium has a page");
+  const socket = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    socket.addEventListener("open", resolve, { once: true });
+    socket.addEventListener("error", reject, { once: true });
   });
-  clearTimeout(late);
-  // What it started goes too, and then its output is all in.
-  killGroup();
-  await new Promise((resolve) => {
-    if (chrome.stdout.readableEnded && chrome.stderr.readableEnded) resolve(null);
-    else chrome.once("close", resolve);
+  t.after(() => socket.close());
+  let id = 0;
+  const replies = new Map<number, (value: unknown) => void>();
+  socket.addEventListener("message", (event) => {
+    const message = JSON.parse(String(event.data)) as { id?: number; result?: unknown };
+    if (message.id !== undefined) replies.get(message.id)?.(message.result);
   });
-  // One-process Chromium on macOS can trap in its compositor thread while it shuts down, after
-  // it printed the whole DOM (often after a dialog opened and closed): the page's result
-  // stands. Any other unclean end, a timeout included, is a failure.
-  if (ended !== null && !(oneProcess.length > 0 && ended === "SIGTRAP" && stdout.includes(`<pre id="${resultId}">`))) {
+  // A call the browser never answers (it stopped, or its socket closed) fails at the deadline
+  // instead of waiting on.
+  let closed = false;
+  socket.addEventListener("close", () => { closed = true; });
+  const call = (method: string, params: object = {}) =>
+    new Promise<unknown>((resolve, reject) => {
+      if (closed) return reject(new Error(`Chromium's connection closed before ${method}`));
+      const asked = ++id;
+      const late = setTimeout(() => {
+        replies.delete(asked);
+        reject(new Error(`Chromium didn't answer ${method} by the deadline`));
+      }, Math.max(deadline - Date.now(), 1000));
+      replies.set(asked, (value) => {
+        clearTimeout(late);
+        replies.delete(asked);
+        resolve(value);
+      });
+      socket.send(JSON.stringify({ id: asked, method, params }));
+    });
+  return { socket, call, log: () => browserLog, stop };
+}
+
+/**
+ * Renders `fixtures/<page>` in headless Chromium through Vite and returns the text of its
+ * `<pre id=resultId>`, the fixture's own JSON, from the page's DOM once `budgetMs` of virtual
+ * time have passed (as `--virtual-time-budget` does: its timers jump ahead whenever it is idle
+ * and nothing is loading). Profiles and Vite's cache use the system temporary folder, never the
+ * app's data.
+ */
+export async function renderFixturePage(t: TestContext, page: string, resultId: string, budgetMs = 5000): Promise<string> {
+  const { url, scratch, log, stopFirst } = await serveFixtures(t);
+  // Chrome stopped at the timeout leaves no DOM, so the failure names the time it ran.
+  const started = Date.now();
+  const deadline = started + 45000;
+  const browser = await openBrowser(t, scratch, stopFirst, ["--enable-logging=stderr"], deadline);
+  let expired = false;
+  browser.socket.addEventListener("message", (event) => {
+    const message = JSON.parse(String(event.data)) as { method?: string };
+    if (message.method === "Emulation.virtualTimeBudgetExpired") expired = true;
+  });
+  const evaluate = async (expression: string) =>
+    ((await browser.call("Runtime.evaluate", { expression, returnByValue: true })) as { result: { value: unknown } }).result.value;
+  let stdout: string | null = null;
+  let clock: unknown = null;
+  let failure = "";
+  try {
+    await browser.call("Emulation.setVirtualTimePolicy", { policy: "pause" });
+    await browser.call("Page.navigate", { url: `${url}fixtures/${page}` });
+    await browser.call("Emulation.setVirtualTimePolicy", { policy: "pauseIfNetworkFetchesPending", budget: budgetMs });
+    while (Date.now() < deadline) {
+      // The fixture's clock, not about:blank's before it. A loaded machine's one-process Chrome
+      // can stop sending the page's events, the budget's end among them, while it still answers
+      // (#375): the page's clock, stopped at the budget, says it is spent too.
+      clock = await evaluate(`document.URL === "about:blank" ? null : performance.now()`);
+      if (expired || (typeof clock === "number" && clock >= budgetMs)) {
+        stdout = String(await evaluate("document.documentElement.outerHTML"));
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  } catch (error) {
+    failure = String(error);
+  }
+  // Done with it: it goes now, not at the test's end.
+  await browser.stop();
+  if (stdout === null) {
     assert.fail([
-      `Chrome ended (${ended}) after ${Date.now() - started} ms of its 45000.`,
+      `Chrome ended after ${Date.now() - started} ms of its 45000, its page's clock at ${String(clock)} ms of ${budgetMs}. ${failure}`,
       `Requests Vite never answered: ${unanswered(log()).join(", ") || "none"}`,
-      `Chrome's log:\n${stderr.slice(-4000)}`,
+      `Chrome's log:\n${browser.log().slice(-4000)}`,
     ].join("\n"));
   }
   const serialized = stdout.match(new RegExp(`<pre id="${resultId}">([^<]+)</pre>`))?.[1];
@@ -286,7 +368,7 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
     assert.fail([
       `Fixture did not render its result; Chrome ran ${Date.now() - started} ms of its 45000.`,
       `Requests Vite never answered: ${unanswered(log()).join(", ") || "none"}`,
-      `Chrome's log:\n${stderr.slice(-4000)}`,
+      `Chrome's log:\n${browser.log().slice(-4000)}`,
       `DOM:\n${stdout}`,
     ].join("\n"));
   }
@@ -327,83 +409,10 @@ export async function renderFixtureLive(
   timeoutMs = 60000,
   { reducedMotion = false, latencyMs = 0, slow }: LiveOptions = {},
 ): Promise<string> {
-  const binary = chromium();
   const { url, scratch, log, stopFirst } = await serveFixtures(t);
-  const profile = join(scratch, "profile");
-  const oneProcess = process.platform === "darwin" ? ["--single-process"] : [];
-  const browser = spawn(binary, [
-    "--headless", "--no-sandbox", ...oneProcess, "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
-    "--window-size=1280,976", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank",
-  ], { stdio: ["ignore", "ignore", "pipe"], detached: true });
-  let browserLog = "";
-  browser.stderr.on("data", (chunk: Buffer) => { browserLog += chunk.toString(); });
-  // A throwaway browser on a scratch profile: killed outright (one process ignores SIGTERM), with
-  // the processes it started (its own group: Linux Chrome's renderers and helpers).
-  stopFirst(async () => {
-    if (browser.exitCode === null && browser.signalCode === null) {
-      const stopped = new Promise((resolve) => browser.once("exit", resolve));
-      process.kill(-browser.pid!, "SIGKILL");
-      await stopped;
-    } else {
-      try {
-        process.kill(-browser.pid!, "SIGKILL");
-      } catch {
-        // None of them is left.
-      }
-    }
-    browser.stderr.destroy();
-  });
   const deadline = Date.now() + timeoutMs;
-  const port = await new Promise<number>((resolve, reject) => {
-    const poll = setInterval(() => {
-      try {
-        const found = Number(readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0]);
-        if (found > 0) {
-          clearInterval(poll);
-          resolve(found);
-        }
-      } catch {
-        if (Date.now() > deadline || browser.exitCode !== null) {
-          clearInterval(poll);
-          reject(new Error(`Chromium did not start: ${browserLog.slice(-2000)}`));
-        }
-      }
-    }, 100);
-  });
-  const targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as { type: string; webSocketDebuggerUrl: string }[];
-  const target = targets.find((candidate) => candidate.type === "page");
-  assert.ok(target, "Chromium has a page");
-  const socket = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    socket.addEventListener("open", resolve, { once: true });
-    socket.addEventListener("error", reject, { once: true });
-  });
-  t.after(() => socket.close());
-  let id = 0;
-  const replies = new Map<number, (value: unknown) => void>();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(String(event.data)) as { id?: number; result?: unknown };
-    if (message.id !== undefined) replies.get(message.id)?.(message.result);
-  });
-  // A call the browser never answers (it stopped, or its socket closed) fails at the deadline
-  // instead of waiting on.
-  let closed = false;
-  socket.addEventListener("close", () => { closed = true; });
-  const call = (method: string, params: object) =>
-    new Promise<unknown>((resolve, reject) => {
-      if (closed) return reject(new Error(`Chromium's connection closed before ${method}`));
-      const asked = ++id;
-      const late = setTimeout(() => {
-        replies.delete(asked);
-        reject(new Error(`Chromium didn't answer ${method} by the deadline`));
-      }, Math.max(deadline - Date.now(), 1000));
-      replies.set(asked, (value) => {
-        clearTimeout(late);
-        replies.delete(asked);
-        resolve(value);
-      });
-      socket.send(JSON.stringify({ id: asked, method, params }));
-    });
+  const browser = await openBrowser(t, scratch, stopFirst, ["--window-size=1280,976"], deadline);
+  const { socket, call } = browser;
   // What a page can't do itself, done for it as a user's input would be (`fixtureInput`, in
   // fixtures/input.ts): a wheel turned over a point, the window resized, a key pressed (to
   // whatever has focus, so focus handling is what's tested), a click or a pointer move.
@@ -478,7 +487,7 @@ export async function renderFixtureLive(
   return assert.fail([
     `Fixture did not render its result in ${timeoutMs} ms.`,
     `Requests Vite never answered: ${unanswered(log()).join(", ") || "none"}`,
-    `Chrome's log:\n${browserLog.slice(-4000)}`,
+    `Chrome's log:\n${browser.log().slice(-4000)}`,
   ].join("\n"));
 }
 
