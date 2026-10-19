@@ -10,7 +10,7 @@ import { useSyncExternalStore } from "react";
 import { draftRefs, inlineKey, inlineRefs } from "@/lib/inlineImages";
 import { inlineNumberOf, isPastedFile } from "@/components/assistant-ui/elements/attachment-tile";
 import type { AttachmentRef } from "@/ipc/generated";
-import { formatBytes } from "@/lib/format";
+import { fileName, formatBytes } from "@/lib/format";
 import { addAttachment } from "@/state/actions";
 
 /** Send's tip while attached files are still being stored. */
@@ -92,7 +92,7 @@ export class BlobAttachmentAdapter implements AttachmentAdapter {
     const base = {
       id: crypto.randomUUID(),
       type: kindOf(file.type),
-      name: file.name,
+      name: fileName(file.name),
       contentType: file.type || "application/octet-stream",
       file,
     };
@@ -109,7 +109,7 @@ export class BlobAttachmentAdapter implements AttachmentAdapter {
     }
     yield { ...base, status: { type: "running", reason: "uploading", progress: 0 } };
     try {
-      const ref = await addAttachment(file, isPastedFile(file));
+      const ref = await addAttachment(file, isPastedFile(file), base.name);
       const stored = { ...ref, inline: inlineNumberOf(file) };
       this.refs.set(base.id, stored);
       this.retain([stored]);

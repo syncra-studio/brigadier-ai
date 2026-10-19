@@ -24,6 +24,7 @@ import { ImageContextMenu, ImagePreview, type ViewerImage } from "@/components/a
 
 export { type AttachmentReader, AttachmentReaderContext, type AttachmentSource, useAttachmentUrl };
 export { ImagePreview };
+import { fileName } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
@@ -262,7 +263,7 @@ export function FileTile({
   return (
     <div
       data-slot="attachment-file"
-      title={name}
+      title={fileName(name)}
       className={cn(
         "group/tile border-border w-attachment-card relative flex shrink-0 items-center gap-2 rounded-xl border p-1.5 pe-7",
         className,
@@ -272,7 +273,7 @@ export function FileTile({
         {icon ?? <AttachmentIcon mime={mime} className="size-icon-md" />}
       </span>
       <span className="flex min-w-0 flex-col text-start">
-        <span className="truncate text-sm">{title ?? name}</span>
+        <span className="truncate text-sm">{title ?? fileName(name)}</span>
         <span className="text-muted-foreground truncate text-xs">{detail}</span>
       </span>
       {children}

@@ -2964,7 +2964,8 @@ pub(crate) fn place_inline_pastes(text: &str, pastes: &[(u32, String)]) -> Strin
     out
 }
 
-/// Plain text for titles, previews and quoted snippets; never changes the stored message.
+/// Plain text for titles, previews and quoted snippets: an image reads `[image]`, a text pasted
+/// as a chip "Pasted text"; never changes the stored message.
 pub(crate) fn display_text(text: &str, attachments: &[AttachmentRef]) -> String {
     let mut shown = String::with_capacity(text.len());
     let mut cursor = 0;
@@ -2974,6 +2975,9 @@ pub(crate) fn display_text(text: &str, attachments: &[AttachmentRef]) -> String 
         cursor = range.end;
     }
     shown.push_str(&text[cursor..]);
+    for n in attachments.iter().filter_map(inline_paste) {
+        shown = shown.replace(&paste_marker(n), "Pasted text");
+    }
     shown
 }
 
@@ -3522,6 +3526,50 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn auto_titles_name_a_pasted_text_in_plain_words() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-title-{}", uuid::Uuid::now_v7())));
+        let store = Store::open(brigadier_store::StoreConfig {
+            db_path: dir.join("test.db"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .unwrap();
+        let core = Core::load(store).await.unwrap();
+        let mut pasted = core
+            .add_attachment(
+                "Pasted text.md".into(),
+                "text/markdown".into(),
+                b"x".to_vec(),
+                true,
+            )
+            .await
+            .unwrap();
+        pasted.inline = Some(1);
+        let conversation = core
+            .create_conversation(
+                ConversationId::generate(),
+                ConversationKind::Chat,
+                None,
+                None,
+                None,
+                Origin::default(),
+            )
+            .await
+            .unwrap();
+        let text = "Fa-mi te rog un referat: [Pasted text #1] . Typed [Pasted text #2] stays";
+        let message = core
+            .append_user_message(conversation.id.clone(), text.into(), vec![pasted], vec![])
+            .await
+            .unwrap();
+        assert_eq!(
+            core.conversation(&conversation.id).unwrap().title,
+            title_from("Fa-mi te rog un referat: Pasted text . Typed [Pasted text #2] stays")
+        );
+        assert_eq!(message.text, text);
     }
 
     #[tokio::test]

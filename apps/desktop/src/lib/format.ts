@@ -159,3 +159,16 @@ export function separatesTurn(sentAtMs: number, previousAtMs: number | null, now
 export function shortPath(path: string): string {
   return path.replace(/^(\/Users|\/home)\/[^/]+(?=\/|$)/, "~");
 }
+
+/**
+ * A file's name as people write it: one saved from a web address keeps the address's escapes
+ * ("Lucrul%20individual.docx"), shown decoded. A name that isn't a valid escape stays as it is.
+ */
+export function fileName(name: string): string {
+  if (!/%[0-9A-Fa-f]{2}/.test(name)) return name;
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+}

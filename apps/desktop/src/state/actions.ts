@@ -707,13 +707,14 @@ export async function updateSetup(id: string, setup: Setup): Promise<void> {
 
 /**
  * Stores a file in the daemon's blob store, for attaching to a message. `pasted`: the file is
- * text the user pasted, which goes to the model as part of their message.
+ * text the user pasted, which goes to the model as part of their message. `name`: the name to
+ * store it under, the file's own by default.
  */
-export async function addAttachment(file: File, pasted = false): Promise<AttachmentRef> {
+export async function addAttachment(file: File, pasted = false, name = file.name): Promise<AttachmentRef> {
   const data = await fileToBase64(file);
   const { attachment } = await request({
     method: "addAttachment",
-    name: file.name,
+    name,
     mime: file.type || "application/octet-stream",
     data,
     pasted,

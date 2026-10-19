@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { formatDaySeparator, formatLastUsed, formatSentAt, formatTime, separatesTurn } from "@/lib/format";
+import { fileName, formatDaySeparator, formatLastUsed, formatSentAt, formatTime, separatesTurn } from "@/lib/format";
 
 test("a message from yesterday says Yesterday under it, as its day's separator does", () => {
   // Sunday 10:00 local; the message was sent Saturday 2:37 local.
@@ -48,4 +48,11 @@ test("a repository's last use reads in hours today, then Yesterday, days, weeks"
   assert.equal(formatLastUsed(new Date(2026, 9, 4, 9, 0).getTime(), now), "2 weeks ago");
   assert.equal(formatLastUsed(new Date(2026, 8, 10, 9, 0).getTime(), now), "1 month ago");
   assert.equal(formatLastUsed(new Date(2024, 9, 1, 9, 0).getTime(), now), "2 years ago");
+});
+
+test("a file name saved from a web address shows decoded; any other stays as it is", () => {
+  assert.equal(fileName("Lucrul%20individual%20%C8%99i%20note.docx"), "Lucrul individual și note.docx");
+  assert.equal(fileName("50% off.pdf"), "50% off.pdf");
+  assert.equal(fileName("bad%E0%A4%A.txt"), "bad%E0%A4%A.txt");
+  assert.equal(fileName("plain.txt"), "plain.txt");
 });

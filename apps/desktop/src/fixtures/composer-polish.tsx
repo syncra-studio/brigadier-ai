@@ -176,11 +176,14 @@ async function uploadingCase(seen: Record<string, unknown>) {
   await fixtureInput({ type: "type", text: "see notes" });
   await until("the typed text", () => field()?.textContent === "see notes");
   const files = new DataTransfer();
-  files.items.add(new File(["notes"], "notes.txt", { type: "text/plain" }));
+  // Saved from a web address, its name keeps the address's escapes (issue 429).
+  files.items.add(new File(["notes"], "my%20notes.txt", { type: "text/plain" }));
   field()!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: files, bubbles: true, cancelable: true }));
   await until("the upload", () => finishUpload !== null);
   await sleep(100);
   seen.whileUploading = { disabled: sendButton()?.disabled, tip: sendButton()?.textContent };
+  const tile = document.querySelector<HTMLElement>("[data-slot=attachment-file]");
+  seen.uploadName = { shown: tile?.querySelector(".text-sm")?.textContent, tip: tile?.title, stored: [...attached] };
   await fixtureInput({ type: "key", key: "Enter" });
   await sleep(200);
   seen.enterWhileUploading = sent.some((req) => req.method === "sendMessage");
