@@ -19,7 +19,8 @@
  * - `test-failed`: one that failed, "2 failed, 13 passed, 1 skipped".
  * - `test-uncounted`: one whose runner's summary wasn't found: "Passed".
  * - `turn`: a turn's previews, found as its end finds them: the page and the test run started
- *   while its request ran and the simulator its recording names, not a run started after.
+ *   while its request ran, the simulator its recording names and the run its request started,
+ *   though it was started again later; not a run started after.
  * - `turn-said`: a turn that started nothing, its answer naming an address no preview serves: no
  *   card (#438). `turn-said-stopped`: the address of an older preview, stopped: no card either.
  *   `turn-running`: the address of an older preview still running: its card, route and all.
@@ -95,6 +96,8 @@ const OTHERS = [
   other("preview-later", "test", "npm run e2e", { type: "exited", code: 0, status: "exit 0" }, 9000, "npm run e2e"),
   // Its runner's summary wasn't found: Passed alone.
   other("preview-uncounted", "test", "make check", { type: "exited", code: 0, status: "exit 0" }, 9500, "make check"),
+  // The first turn's, started again (Run again) while the second ran: still the first's (#435).
+  { ...other("preview-again", "test", "npm run lint", { type: "exited", code: 0, status: "exit 0" }, 7000, "npm run lint"), requestId: "turn-1" },
 ];
 
 useBoard.setState({

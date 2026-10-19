@@ -61,6 +61,11 @@ taskId?: TaskId,
  */
 building: boolean, 
 /**
+ * The request whose turn started it (a worker's: its task's), kept when it starts again,
+ * so its card stays on that turn; none when no turn ran.
+ */
+requestId?: string, 
+/**
  * A test run's counts, read from its output when it ended; none when its runner's
  * summary wasn't found.
  */

@@ -637,6 +637,11 @@ pub struct Preview {
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     #[ts(skip)]
     pub env: std::collections::BTreeMap<String, String>,
+    /// The request whose turn started it (a worker's: its task's), kept when it starts again,
+    /// so its card stays on that turn; none when no turn ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub request_id: Option<String>,
     /// A test run's counts, read from its output when it ended; none when its runner's
     /// summary wasn't found.
     #[serde(default, skip_serializing_if = "Option::is_none")]

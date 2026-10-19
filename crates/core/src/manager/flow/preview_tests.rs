@@ -1579,7 +1579,7 @@ async fn user_stops_remove_previews_but_keep_natural_exits() {
 }
 
 /// Start again on an ended preview runs its own command again from its record: the same id,
-/// folder and variables, for the user, and the thread hears of it. A running one, an unknown
+/// folder, variables and request, for the user, and the thread hears of it. A running one, an unknown
 /// one and a second start of one that runs again are refused.
 #[tokio::test]
 async fn start_again_runs_an_ended_previews_own_command_from_its_record() {
@@ -1604,6 +1604,10 @@ async fn start_again_runs_an_ended_previews_own_command_from_its_record() {
         PreviewState::Exited { code: Some(3), .. }
     ));
     assert_eq!(ended.env.get("GREETING").map(String::as_str), Some("hi"));
+    // It keeps the request whose turn started it (#435).
+    let requests: Vec<String> = flow.board().await.requests.keys().cloned().collect();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(ended.request_id.as_ref(), requests.first());
 
     flow.manager
         .restart_preview(id.clone(), ended.id.clone())
@@ -1617,6 +1621,8 @@ async fn start_again_runs_an_ended_previews_own_command_from_its_record() {
         .await;
     let again = &board.previews[&ended.id];
     assert_eq!(board.previews.len(), 1, "the same preview, not a new one");
+    // Still its turn's, though it started again after it.
+    assert_eq!(again.request_id, ended.request_id);
     assert!(again.started_at_ms >= ended.started_at_ms);
     assert_eq!(
         (&again.command, &again.workdir),
@@ -1861,6 +1867,10 @@ async fn a_workers_preview_carries_its_task_and_ends_with_its_folder() {
     assert_eq!(site.name, "site");
     assert!(site.workspace.contains("task-1"), "{}", site.workspace);
     assert_eq!(app.kind, crate::work::PreviewKind::App);
+    // A worker's preview is its task's request's.
+    let request = Flow::task(&board, 1).request_id.clone();
+    assert!(request.is_some());
+    assert_eq!(site.request_id, request);
     // A worker has no read_artifact: its preview replies never point it there.
     for (tool, text) in replies.lock().unwrap().iter() {
         if tool.contains("preview") {

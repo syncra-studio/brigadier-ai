@@ -507,6 +507,21 @@ impl SessionManager {
             }
             None => format!("preview-{}", board.preview_number + 1),
         };
+        // The request it belongs to: started again, its own; a worker's, its task's; the
+        // thread's, its running turn's.
+        let request_id = if let Some(own) = board.previews.get(&preview_id) {
+            own.request_id.clone()
+        } else if let Some(task) = &task {
+            board
+                .tasks
+                .get(task)
+                .and_then(|task| task.request_id.clone())
+        } else {
+            match self.conv(id) {
+                Ok(conv) => conv.running_request().await,
+                Err(_) => None,
+            }
+        };
         let owner = preview_owner(id);
         let ledger = self.runtime.ledger();
         let dir = self.owned_dir(LOG_AREA, &id.0);
@@ -619,6 +634,7 @@ impl SessionManager {
             env: given_env,
             target: target.clone(),
             tests: None,
+            request_id,
         };
         let live = Arc::new(LivePreview {
             conversation: id.clone(),

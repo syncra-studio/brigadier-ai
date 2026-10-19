@@ -75,13 +75,15 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   assert.deepEqual([cases["test-failed"].standing, cases["test-failed"].state], ["2 failed, 13 passed, 1 skipped", "stopped"]);
   assert.deepEqual([cases["test-uncounted"].standing, cases["test-uncounted"].state], ["Passed", "running"]);
   // A turn's previews: the page and the test runs and PDF started while its request ran, the
-  // simulator its recording names, not the run started after it.
+  // simulator its recording names, the run its request started though it ran again during a later
+  // turn (#435), not the run started after it.
   assert.deepEqual(seen.turn, [
     ["Web preview", "localhost:4000"],
     ["iOS Simulator", "iPhone 17"],
     ["Rendered PDF", "out/invoice.pdf"],
     ["Test run", "npm test"],
     ["Test run", "npm test"],
+    ["Test run", "npm run lint"],
   ]);
   // No screenshots: the one line, no chevron.
   assert.deepEqual([cases["no-proofs"].buttons, cases["no-proofs"].heading], [["Open", "Open in"], null]);

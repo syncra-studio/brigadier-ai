@@ -438,13 +438,12 @@ export function TurnPreviews({ requestIds, steps, answered, session }: { request
 }
 
 /**
- * The turn's previews of a sort (`which`): those its proofs were taken of, and those started while
- * its requests ran. One that was its stays its while the card shows, though Start again gives it a
- * new start time.
+ * The turn's previews of a sort (`which`): those its proofs were taken of, and those its requests
+ * started, kept on their record, so Start again later leaves them its (#435). A record from before
+ * that is its when it started while its requests ran, and stays its while the card shows.
  */
 function useTurnPreviews(requestIds: readonly string[], steps: readonly BlockOrchestratorStep[], which: (preview: Preview) => boolean): Preview[] {
   const named = steps.flatMap((step) => (step.kind.type === "proof" && step.kind.preview ? [step.kind.preview] : []));
-  // TODO(#435): a preview's own request, once its record keeps the request that started it.
   const found = useBoard(
     useShallow((s) => {
       const requests = requestIds.flatMap((id) => (s.board?.requests[id] ? [s.board.requests[id]] : []));
@@ -452,7 +451,7 @@ function useTurnPreviews(requestIds: readonly string[], steps: readonly BlockOrc
       const to = requests.some((each) => each.endedAtMs === null) ? Infinity : Math.max(...requests.map((each) => each.endedAtMs ?? 0));
       return Object.values(s.board?.previews ?? {})
         .filter(which)
-        .filter((each) => named.includes(each.id) || (each.startedAtMs >= from && each.startedAtMs <= to))
+        .filter((each) => named.includes(each.id) || (each.requestId !== undefined ? requestIds.includes(each.requestId) : each.startedAtMs >= from && each.startedAtMs <= to))
         .map((each) => each.id);
     }),
   );
