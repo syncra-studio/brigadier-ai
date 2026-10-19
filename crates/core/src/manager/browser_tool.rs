@@ -181,6 +181,11 @@ impl BrowserHub {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// The user's yes to call `key`, taken: it lets exactly one call through.
+    fn take_grant(&self, key: &GrantKey) -> Option<BrowserApproved> {
+        self.grants().remove(key)
+    }
+
     /// The call an op is, for a yes to hold for it alone: clicks and typing only. A keyed digest,
     /// so the card it is stored on holds nothing of a password, card or code typed.
     fn fingerprint(&self, op: &BrowserOp) -> Option<String> {
@@ -485,23 +490,24 @@ impl SessionManager {
         // Asked first, the call goes on once the user says yes; the page may have moved by then,
         // and then it asks again.
         for _ in 0..3 {
-            // A yes the user gave this very call goes with it.
+            // A yes the user gave this very call goes with it, taken: one yes lets one call
+            // through, however many identical calls are under way.
             let mut sent = op.clone();
-            if let Some(key) = &key
-                && let Some(granted) = self.browser.grants().get(key).cloned()
+            let granted = key.as_ref().and_then(|key| self.browser.take_grant(key));
+            if let Some(granted) = &granted
                 && let Some(guard) = guard_of(&mut sent)
             {
-                guard.approved = Some(granted);
+                guard.approved = Some(granted.clone());
             }
             let result = self
                 .browser
                 .run(&conversation_id, task_id.as_ref(), &label, sent, PAUSE_WAIT)
                 .await;
             match &result {
-                // Done: the yes was for once.
-                BrowserResult::Page { .. } => {
-                    if let Some(key) = &key {
-                        self.browser.grants().remove(key);
+                // Still paused, the call never reached the page: its yes waits for the next try.
+                BrowserResult::Paused { .. } => {
+                    if let (Some(key), Some(granted)) = (&key, granted) {
+                        self.browser.grants().entry(key.clone()).or_insert(granted);
                     }
                 }
                 BrowserResult::Closed { tab } => self.browser.forget_tab(&conversation_id, tab),
@@ -512,10 +518,6 @@ impl SessionManager {
                     sensitive,
                     what,
                 } => {
-                    // A yes from another page is void.
-                    if let Some(key) = &key {
-                        self.browser.grants().remove(key);
-                    }
                     let subject = ApprovalSubject::Browser {
                         tab: tab.clone(),
                         url: url.clone(),

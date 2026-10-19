@@ -50,6 +50,16 @@ impl Waiters {
         rx
     }
 
+    /// How many calls wait for card `id`.
+    #[cfg(test)]
+    pub(crate) fn waiting_on(&self, id: &CardId) -> usize {
+        self.cards
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(id)
+            .map_or(0, Vec::len)
+    }
+
     fn take(&self, id: &CardId) -> Vec<oneshot::Sender<CardAnswer>> {
         self.cards
             .lock()

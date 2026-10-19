@@ -820,6 +820,60 @@ async fn a_typed_card_number_is_stored_nowhere() {
     flow.stop().await;
 }
 
+/// #377: two identical calls wait on one card; the user's one yes lets exactly one through, and
+/// the other asks again.
+#[tokio::test]
+async fn one_yes_lets_one_of_two_identical_calls_through() {
+    let flow = Flow::start("browser-tool-twice", Options::default(), quiet()).await;
+    let shop = shop(&flow);
+    let paying = |flow: &Flow| {
+        let (manager, conversation) = (flow.manager.clone(), flow.conversation.clone());
+        tokio::spawn(async move {
+            manager
+                .browser_tool(conversation, None, pay("browser:agent-1"))
+                .await
+        })
+    };
+    let first = paying(&flow);
+    let card = card_number(&flow, 1).await;
+    let second = paying(&flow);
+    for _ in 0..200 {
+        if flow.manager.waiters.waiting_on(&card.id) == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert_eq!(flow.manager.waiters.waiting_on(&card.id), 2);
+    assert_eq!(browser_cards(&flow).await.len(), 1, "both wait on one card");
+
+    flow.manager
+        .set_question_timeout(std::time::Duration::from_millis(500));
+    flow.manager
+        .answer_card(flow.conversation.clone(), card.id.clone(), allow())
+        .await
+        .unwrap();
+    let replies = [first.await.unwrap(), second.await.unwrap()];
+    let paid = replies
+        .iter()
+        .filter(|reply| reply.text.contains("Thanks for your order"))
+        .count();
+    assert_eq!(paid, 1, "{replies:#?}");
+    assert!(
+        replies.iter().any(|reply| reply
+            .text
+            .starts_with("No answer yet: Pay on shop.example?")),
+        "{replies:#?}"
+    );
+    let approved = approved_of(&shop).into_iter().flatten().count();
+    assert_eq!(approved, 1, "one yes reached the page once");
+    assert_eq!(
+        browser_cards(&flow).await.len(),
+        2,
+        "the other call asked again"
+    );
+    flow.stop().await;
+}
+
 /// Q82: with merging on its own, the thread proves a web change with the browser tools: the
 /// preview's page opened in a background tab, the change used, its screenshot attached to the
 /// merge message as proof.
