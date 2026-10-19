@@ -1,6 +1,6 @@
 /**
  * The production context card of a worktree session with something in every section, in the
- * reference order: the project and its Changes row, the workers (two at work, one done), what
+ * reference order: the project and its branch row, the workers (two at work, one done), what
  * runs in the background and the sources; under it, the Job card of the plan's phase at work
  * (Q88). For screenshots and render checks; synthetic IPC, no daemon. `?workers=5` puts five at work (one row).
  */
@@ -116,15 +116,12 @@ async function drive(): Promise<string> {
   seen.jobAfterCard = card()?.nextElementSibling?.querySelector('[data-slot="job-card"]') === job;
   const project = card()!.querySelector('[data-slot="summary-section"]')!;
   seen.project = [...project.querySelectorAll('[data-slot="summary-row"]')].map((row) => row.textContent?.replace(/\s+/g, " ").trim());
-  seen.changesTip = project.querySelector('[data-row="changes"]')?.getAttribute("title");
+  seen.branchTip = project.querySelector('[data-row="branch"]')?.getAttribute("title");
   seen.findingsInCard = card()!.querySelectorAll('[data-slot*="finding"]').length;
   job?.click();
   await frame();
   seen.jobOpens = sessionTabs(id).active;
-  project.querySelector<HTMLButtonElement>('[data-row="changes"]')?.click();
-  await frame();
-  const front = sessionTabs(id).tabs.find((tab) => tab.id === sessionTabs(id).active);
-  seen.changesOpens = front?.kind === "review" ? front.target.type : front?.kind;
+  seen.branchIsButton = project.querySelector('[data-row="branch"]')?.tagName === "BUTTON";
   seen.grew = card()!.getBoundingClientRect().height !== height;
   // Sources: what the session used, the first three, then View all for its searches and pages.
   const sources = [...card()!.querySelectorAll('[data-slot="summary-section"]')].find((section) => section.querySelector("header")?.textContent?.startsWith("Sources"));

@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { browserFocus } from "@/ipc/client";
 import { CHAT_TAB, openFileTab, useSessionTabs } from "@/state/sessionTabs";
 import { isFilesSearchKey, openWorkspacePane, setWorkspacePaneOpen, useWorkspacePaneState, WORKSPACE_PANE_WIDTH_KEY, workspacePaneKey, type WorkspacePaneTab } from "@/state/workspacePane";
+import { useBoard, useCheckoutChanges } from "@/state/board";
 import { useApp } from "@/state/store";
 import { onWorkspaceChanged, prefetchWorkspace, readSource, useCachedEntry, useCheckoutKey, watchWorkspace, type WorkspaceTarget } from "@/state/workspaceCache";
 
@@ -55,8 +56,18 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
     if (enabled && target) prefetchWorkspace(target);
   }, [enabled, target]);
   useEffect(prefetch, [prefetch, checkout]);
-  // How many files Source lists, for its icon.
+  // How many files Source lists, for its icon and the toggle's dot. While the sidebar is closed
+  // nothing watches the checkout: what the board says changed it reads Source again.
   const source = useCachedEntry(checkout)?.source;
+  const moved = useCheckoutChanges(conversationId ?? "");
+  const edited = useBoard((s) => s.board && s.board.conversationId === conversationId
+    ? Object.values(s.board.requests).map((entry) => `${entry.id}:${entry.state.type}:${entry.changes ? JSON.stringify(entry.changes.stat) : ""}`).join()
+    : "");
+  const closed = enabled && !open && target?.type === "conversation" ? target : null;
+  const reread = useCallback(() => {
+    if (closed) readSource(closed).catch(() => undefined);
+  }, [closed]);
+  useEffect(reread, [reread, moved, edited]);
   const changed = useMemo(() => source ? new Set([...source.staged, ...source.changes].map((file) => file.path)).size : 0, [source]);
   // While it shows, the daemon says when the checkout changes, so the views refresh in place.
   // A new connection forgets the old one's watch, so it is asked again after reconnecting.
@@ -115,15 +126,21 @@ export function useWorkspacePane(conversationId: string | null, projectId: strin
 
 export const WorkspacePaneContext = createContext<ReturnType<typeof useWorkspacePane> | null>(null);
 
-/** The toolbar's right sidebar toggle: the left sidebar toggle's icon, mirrored. */
+/**
+ * The toolbar's right sidebar toggle: the left sidebar toggle's icon, mirrored. While the session
+ * has changes Source lists and Source isn't in view, a dot on it points there (Q91).
+ */
 export function WorkspacePaneToggle() {
   const pane = useContext(WorkspacePaneContext);
   const mac = useApp((s) => s.info?.platform === "macos");
   if (!pane?.enabled) return null;
+  const changes = pane.changed > 0 && !(pane.open && pane.active === "source");
   return (
-    <TitlebarButton tooltip="Right sidebar" shortcut={shortcutKeys("right-sidebar", mac)}
+    <TitlebarButton tooltip={changes ? `Right sidebar · ${pane.changed === 1 ? "1 change" : `${pane.changed} changes`} in Source` : "Right sidebar"}
+      shortcut={shortcutKeys("right-sidebar", mac)} aria-label="Right sidebar" className="relative"
       aria-pressed={pane.open} aria-controls="workspace-pane-content" onPointerEnter={pane.prefetch} onClick={pane.toggleOpen}>
       <SidebarGlyph side="right" open={pane.open} />
+      {changes && <span data-slot="source-changes-dot" aria-label="Changes in Source" className="bg-link absolute end-1 top-1 size-2 rounded-full" />}
     </TitlebarButton>
   );
 }

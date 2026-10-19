@@ -320,6 +320,7 @@ function Fixture() {
       await until(() => pane() === "source" && document.querySelector('[data-slot="own-copy-note"]'), "the draft's Source");
       seen.draftSource = buttons('[data-slot="source-panel"]'); seen.draftCommitBox = !!document.querySelector('[aria-label="Commit message"]');
       seen.draftNote = !!document.querySelector('[data-slot="own-copy-note"]');
+      seen.dotOnSource = !!document.querySelector('[data-slot="source-changes-dot"]');
       click("Right sidebar");
 
       await until(() => pane() === null, "the right sidebar to close on Source");
@@ -337,6 +338,8 @@ function Fixture() {
       await until(() => pane() === "search" && focused() === "Search" && sourceCount() === "2", "⇧⌘F to show Search, and Source's count to refresh");
       seen.draftSearch = pane();
       seen.sourceCountInSearch = sourceCount();
+      // Source's changes out of view: the right sidebar's toggle has its dot.
+      seen.dotInSearch = !!document.querySelector('button[aria-label="Right sidebar"] [data-slot="source-changes-dot"]');
       seen.selectedTabs = [...document.querySelectorAll('[data-slot="workspace-pane"] [role="tab"]')].map((tab) => [tab.getAttribute("aria-label"), tab.getAttribute("aria-selected"), getComputedStyle(tab).backgroundColor]);
       seen.searchKeyFocus = focused();
       seen.draftSearchReplace = !!document.querySelector('[data-slot="workspace-pane"] input[aria-label="Replace"]');

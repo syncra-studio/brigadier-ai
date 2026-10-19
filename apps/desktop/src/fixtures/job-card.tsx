@@ -46,7 +46,7 @@ function ContextCard() {
   return (
     <StackCard className="pt-2 pb-2">
       <SummarySection foldKey="fixture-project" title="brigadier-ai">
-        <SummaryRow meta={<span><span className="text-success">+380</span> <span className="text-destructive">−2</span></span>}>Changes</SummaryRow>
+        <SummaryRow meta={<span><span className="text-success">+380</span> <span className="text-destructive">−2</span></span>}>brigadier/web-ui</SummaryRow>
         <SummaryRow meta="2 done">Workers</SummaryRow>
       </SummarySection>
     </StackCard>

@@ -1,6 +1,6 @@
 import { useAui } from "@assistant-ui/react";
 import {
-  Compare,
+  Branch,
   Globe,
   HandRaised,
   Link,
@@ -43,7 +43,7 @@ import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, openSummaryByItself, useSummary } from "@/app/conversation/summaryState";
 import { RightSidebarContext } from "@/app/conversation/RightSidebar";
-import { CHAT_TAB, openPanelTab, openReviewTab, useSessionTabsOf } from "@/state/sessionTabs";
+import { CHAT_TAB, openPanelTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
@@ -826,17 +826,13 @@ export function SummaryFloat({ children }: { children: ReactNode }) {
   );
 }
 
-/**
- * "Changes": what the session's branch changed against its base, +N −N once known; the branch in
- * its tooltip. A click opens the branch's diff in a tab.
- */
-function ChangesRow({ conversationId, branch, diff }: { conversationId: string; branch: string; diff: DiffStat | null }) {
+/** The branch the session's work is on, with its +N −N once known. */
+function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) {
   return (
-    <SummaryRowButton
-      data-row="changes"
+    <SummaryRow
+      data-row="branch"
       title={branch}
-      icon={<Compare />}
-      onClick={() => openReviewTab(conversationId, { type: "branch", staged: false })}
+      icon={<Branch />}
       meta={
         diff &&
         (diff.insertions > 0 || diff.deletions > 0) && (
@@ -847,8 +843,8 @@ function ChangesRow({ conversationId, branch, diff }: { conversationId: string; 
         )
       }
     >
-      Changes
-    </SummaryRowButton>
+      {branch}
+    </SummaryRow>
   );
 }
 
@@ -925,7 +921,7 @@ function SessionSummaryContent({
             title={<span title={checkout}>{project ?? setup.repo}</span>}
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
-            <ChangesRow conversationId={conversation.id} branch={run?.workspace?.branch ?? setup.environment.branch} diff={diff} />
+            <BranchRow branch={run?.workspace?.branch ?? setup.environment.branch} diff={diff} />
             {pullRequest && <PullRequestRow conversationId={conversation.id} pullRequest={pullRequest} />}
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />
