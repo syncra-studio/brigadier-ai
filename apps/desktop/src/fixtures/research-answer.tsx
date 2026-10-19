@@ -186,10 +186,10 @@ async function drive(): Promise<object> {
     report: all("[data-slot=report-link]").map((link) => text(link)),
     bold: all("[data-answer] strong").map((run) => text(run)),
     items: all("[data-answer] li").map((item) => text(item)),
-    preview: text(document.querySelector("[data-slot=web-preview]")),
+    preview: text(document.querySelector("[data-slot=preview-card]")),
   };
   // The web preview opens in the session's browser.
-  document.querySelector<HTMLButtonElement>("[data-slot=web-preview] > button")?.click();
+  document.querySelector<HTMLButtonElement>("[data-slot=preview-open] > button")?.click();
   await wait(100);
   const browser = sessionTabs(ID).tabs.find((each) => each.kind === "browser");
   const browsed = browser?.kind === "browser" ? browser.url : null;

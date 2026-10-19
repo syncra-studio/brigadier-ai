@@ -26,7 +26,7 @@ import { WorkFold } from "@/app/conversation/WorkFold";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { ImagesRow, MadeImages } from "@/app/conversation/activity/ImageRows";
-import { TurnProofs, useTurnMerge } from "@/app/conversation/activity/MergeMessage";
+import { useTurnMerge } from "@/app/conversation/activity/MergeMessage";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
@@ -74,7 +74,7 @@ import { describeTurnError, interruptedByQuit } from "@/app/conversation/turnErr
 import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { webPreviewUrl } from "@/app/conversation/activity/webPreview";
-import { WebPreviewCard } from "@/app/conversation/activity/WebPreviewCard";
+import { PreviewCard } from "@/app/conversation/activity/PreviewCard";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import {
   BranchPicker,
@@ -356,8 +356,8 @@ const UpdateText: FC<TextMessagePartProps> = (props) => (
 );
 
 /**
- * The end of a finished turn under its answer: its proofs as thumbnails, then its Changes card
- * with the merge that took them (or the merge's alone), and what is really wrong with it.
+ * The end of a finished turn under its answer: its Preview card (the page it left running and the
+ * proofs it took), then its Changes card with the merge that took them (or the merge's alone).
  */
 function TurnEnd({ meta }: { meta: BlockMeta }) {
   const merge = useTurnMerge(meta.orchestratorSteps, meta.requestIds);
@@ -370,11 +370,9 @@ function TurnEnd({ meta }: { meta: BlockMeta }) {
     const part = texts[meta.texts.findLastIndex((text) => !text.update)];
     return part?.type === "text" ? webPreviewUrl(part.text) : null;
   });
-  const conversation = useViewConversation();
   return (
     <div data-slot="turn-end" className="mt-activity flex flex-col gap-3 empty:hidden">
-      {preview && <WebPreviewCard url={preview} conversationId={meta.session ? (conversation?.id ?? null) : null} />}
-      <TurnProofs steps={meta.orchestratorSteps} />
+      <PreviewCard url={preview} steps={meta.orchestratorSteps} session={meta.session} />
       {/* Changes is always last, right above the answer's time and actions. */}
       {/* A run's merge shows alone: its files are the run's card's. */}
       {(card || merge?.own) && <ChangesCard requestIds={card ? meta.requestIds : []} merge={merge} />}

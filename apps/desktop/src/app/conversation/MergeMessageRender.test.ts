@@ -4,7 +4,10 @@ import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
 type Seen = {
-  proofs: { kind: string; image: string | null; video: string | null; captionShown: boolean }[];
+  proofs: { kind: string; image: string | null; video: string | null; caption: string }[];
+  inCard: boolean;
+  title: string;
+  beforeChanges: boolean;
   thumbnail: [number, number] | null;
   underAnswer: boolean;
   rows: number;
@@ -21,15 +24,18 @@ type Seen = {
 const render = async (t: Parameters<typeof renderFixturePage>[0], query = "") =>
   JSON.parse(await renderFixturePage(t, `merge-message.html?drive=1${query}`, "merge-message-result", 15000)) as Seen;
 
-// The proof the thread attached shows under the answer as small thumbnails in a row, with no
-// caption under them (the caption names the image in its viewer); no row of its own in the work.
-test("a turn's proofs show as small thumbnails under its answer, without captions", { timeout: 60000 }, async (t) => {
+// The proofs the thread attached show under the answer inside its Preview card, before the
+// Changes card: captioned thumbnails two to a row; no row of their own in the work.
+test("a turn's proofs show captioned in its Preview card under its answer", { timeout: 60000 }, async (t) => {
   const seen = await render(t);
-  assert.deepEqual(seen.proofs, [
-    { kind: "image", image: "The install section, fixed", video: null, captionShown: false },
-    { kind: "video", image: null, video: "data:video/webm;", captionShown: false },
+  assert.deepEqual(seen.proofs.map(({ caption, ...rest }) => ({ ...rest, caption: caption.replace(/\d{1,2}:\d{2}.*$/, "").trim() })), [
+    { kind: "image", image: "The install section, fixed", video: null, caption: "1.The install section, fixed" },
+    { kind: "video", image: null, video: "data:video/webm;", caption: "2.install.webm" },
   ]);
-  assert.deepEqual(seen.thumbnail, [192, 160]);
+  assert.equal(seen.inCard, true);
+  assert.equal(seen.title, "Screenshots and recordings");
+  assert.equal(seen.beforeChanges, true);
+  assert.equal(seen.thumbnail?.[1], 178);
   assert.equal(seen.underAnswer, true);
   assert.equal(seen.rows, 0);
   assert.deepEqual(seen.read, ["proof-shot", "proof-video"]);

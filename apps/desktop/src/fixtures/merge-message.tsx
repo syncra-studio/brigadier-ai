@@ -98,7 +98,8 @@ async function drive() {
   const cards = all('[data-slot="turn-diff"]');
   const proofs = document.querySelector<HTMLElement>('[data-slot="turn-proofs"]');
   const answer = all('[data-slot="aui_message-group"] *').find((each) => text(each).startsWith("Fixed the typo"));
-  const image = proofs?.querySelector("img")?.getBoundingClientRect();
+  // The thumbnail's frame, its border in.
+  const image = proofs?.querySelector("[data-slot=proof] > *")?.getBoundingClientRect();
   // The card with the turn's own files; a merge's own card has none.
   const card = cards.find((each) => each.querySelector('[data-slot="turn-diff-file"]'));
   const seen = {
@@ -106,9 +107,13 @@ async function drive() {
       kind: proof.dataset.kind,
       image: proof.querySelector("img")?.getAttribute("alt") ?? null,
       video: proof.querySelector("video")?.getAttribute("src")?.slice(0, 16) ?? null,
-      // Nothing under a thumbnail: its caption is its name and tooltip.
-      captionShown: !!proof.querySelector("figcaption") || text(proof).includes("install section"),
+      // Under each thumbnail, "1. What it shows" (its file name when the thread gave no caption).
+      caption: text(proof.querySelector("figcaption")),
     })),
+    // The proofs are the Preview card's, and it comes before the Changes card.
+    inCard: !!proofs?.closest('[data-slot="preview-card"]'),
+    title: text(document.querySelector('[data-slot="preview-title"]')),
+    beforeChanges: !!proofs && !!cards[0] && (proofs.compareDocumentPosition(cards[0]) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
     thumbnail: image ? [Math.round(image.width), Math.round(image.height)] : null,
     // Under the first request's answer, after it.
     underAnswer: !!answer && !!proofs && (answer.compareDocumentPosition(proofs) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
