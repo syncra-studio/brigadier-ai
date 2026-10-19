@@ -42,7 +42,7 @@ function Fixture() {
     const stop = setTimeout(() => document.querySelector<HTMLButtonElement>('[data-slot="workers-strip"] button[aria-label="Stop Check active"]')?.click(), 250);
     const timer = setTimeout(() => setResult(JSON.stringify({
       thread: Object.fromEntries([...document.querySelectorAll('main > section[data-task]')].map((row) => [row.getAttribute("data-task"), row.textContent])),
-      summary: document.querySelector('[data-slot="workers-summary"]')?.textContent,
+      summary: document.querySelector('[aria-label="Session workers"]')?.textContent,
       list: document.querySelector('[data-slot="worker-list"]')?.textContent,
       strip: document.querySelector('[data-slot="workers-strip"]')?.textContent,
       stripRows: document.querySelectorAll('[data-slot="workers-strip-row"]').length,

@@ -367,22 +367,25 @@ async function panels() {
   seen.filesOpening = await watch(() => click(toggle), 600, "workspace-pane");
   const pane = rect(one('[data-slot="workspace-pane"]'))!;
   seen.filesOpen = { top: pane.y - headerBottom(), width: pane.w, row: one('[data-slot="workspace-pane"] [role="tablist"]')?.textContent !== undefined && rect(one('[data-slot="workspace-pane"] [role="tablist"]'))!.y - headerBottom() };
-  // The session's context, where its Workers row opens the Workers panel.
-  if (!one('[data-slot="workers-summary"]')) {
+  // The session's context, where its Workers row (or a worker's line) opens the right panel.
+  if (!one(WORKERS_ROW)) {
     click('[data-slot="session-tabs"] button[aria-label="Context"]');
-    await until(() => Boolean(one('[data-slot="workers-summary"]')));
+    await until(() => Boolean(one(WORKERS_ROW)));
     await wait(400);
   }
-  seen.workersOpening = await watch(() => click('[data-slot="workers-summary"]'), 600, "right-sidebar");
+  seen.workersOpening = await watch(() => click(WORKERS_ROW), 600, "right-sidebar");
   const workers = rect(one('[data-slot="right-sidebar"]'))!;
   seen.workersOpen = { top: workers.y - headerBottom(), width: workers.w, state: one('[data-slot="right-sidebar"]')?.getAttribute("data-state"),
-    files: one('[data-slot="workspace-pane"]')?.getAttribute("data-state"), row: rect(one('[data-slot="right-sidebar"] [role="tablist"]'))!.y - headerBottom() };
+    files: one('[data-slot="workspace-pane"]')?.getAttribute("data-state"), row: rect(one('[data-slot="right-sidebar"] [role="tablist"], [data-slot="right-sidebar"] [data-slot="worker-header"]'))!.y - headerBottom() };
   seen.filesClosing = await watch(() => click(toggle), 600, "workspace-pane");
   seen.filesAgain = await watch(() => click(toggle), 600, "workspace-pane");
   seen.workersClosing = await watch(() => click('[data-slot="right-sidebar"] button[aria-label="Close right panel"]'), 600, "right-sidebar");
   seen.filesClosingLast = await watch(() => one('[data-slot="workspace-pane"]')?.getAttribute("data-state") === "expanded" && click(toggle));
   return seen;
 }
+
+/** The context card's Workers row, or, while a few work, a worker's line. */
+const WORKERS_ROW = '[data-slot="workers-summary"], [data-slot="workers-summary-worker"]';
 
 /** The divider before the tabs and what is beside it, the sidebar expanded or folded. */
 function tabsStart() {

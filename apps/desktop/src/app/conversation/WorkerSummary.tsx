@@ -2,7 +2,6 @@ import { type FC, useContext, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { WORKERS_LABEL } from "@/app/conversation/Agents";
-import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { outcomeWords, workerDone } from "@/app/conversation/workerPresentation";
 import {
   AgentsPanelContext,
@@ -87,20 +86,32 @@ export function WorkerDiffs({ conversationId }: { conversationId: string }) {
   return null;
 }
 
-/** What a worker at work is doing now ("$ pnpm build · 4m"), after its name when several work. */
-const WorkerNow: FC<{ taskId: string; named: boolean }> = ({ taskId, named }) => {
-  const { ref, first, firstWorking } = useTaskActivityLine(taskId);
-  const name = useWorkerName(taskId);
-  if (!first) return null;
+/** How many workers at work still get a line each; more read as one row. */
+const WORKER_LINES = 3;
+
+/** A worker at work on one line: its glyph, its name, a soft "working", and its +N −N. */
+const WorkerLineRow: FC<{ task: Task }> = ({ task }) => {
+  const name = useWorkerName(task.id);
+  const stat = useBoard((s) => workerStat(task, s.board?.diffs));
+  const { setPanel } = useContext(AgentsPanelContext);
   return (
-    <div ref={ref} data-slot="workers-summary-activity" className="min-w-0 truncate">
-      {named && name && `${name}: `}
-      <span className={cn(firstWorking && "shimmer")}>{first}</span>
-    </div>
+    <SummaryRowButton
+      data-slot="workers-summary-worker"
+      title={name ?? undefined}
+      onClick={() => setPanel(task.id)}
+      icon={<WorkerGlyph taskId={task.id} className="size-4" />}
+      meta={stat && <Changes insertions={stat.insertions} deletions={stat.deletions} />}
+    >
+      {name} <span className="text-muted-foreground shimmer">working</span>
+    </SummaryRowButton>
   );
 };
 
-/** The summary keeps every worker openable, including helpers and finished workers. */
+/**
+ * The session's workers in the context card: one row of avatars with "N working" or "N done"
+ * (the 10-07 row), or, while a few work, a line each. A click opens the Workers panel, or the
+ * worker's own; what a worker runs shows there, not here.
+ */
 export function WorkersSummary({ conversationId }: { conversationId: string }) {
   const tasks = useBoard(useShallow((s) => s.board?.conversationId === conversationId
     ? Object.values(s.board.tasks).toSorted((a, b) => b.createdAtMs - a.createdAtMs)
@@ -110,29 +121,43 @@ export function WorkersSummary({ conversationId }: { conversationId: string }) {
   const active = tasks.filter((task) => !workerDone(task));
   const finished = outcomeWords(tasks);
   const avatars = active.length ? active : tasks;
+  const lines = active.length > 0 && active.length <= WORKER_LINES;
   return (
     <SummarySection foldKey="workers" title={WORKERS_LABEL} aria-label="Session workers">
-      <SummaryRowButton
-        aria-label="Open workers"
-        data-slot="workers-summary"
-        // Washed while the Workers tab shows, as on hover.
-        data-state={panel !== undefined ? "open" : "closed"}
-        onClick={() => setPanel(null)}
-        className="gap-1.5"
-        icon={
-          <span className="flex items-center gap-1.5">
-            {avatars.slice(0, 4).map((task) => <WorkerGlyph key={task.id} taskId={task.id} className="size-4" />)}
-          </span>
-        }
-        meta={active.length > 0 && finished ? finished : undefined}
-        description={active.length > 0 && (
-          <span className="flex min-w-0 flex-col">
-            {active.slice(0, 3).map((task) => <WorkerNow key={task.id} taskId={task.id} named={active.length > 1} />)}
-          </span>
-        )}
-      >
-        {active.length ? `${active.length} working` : finished}
-      </SummaryRowButton>
+      {lines ? (
+        <>
+          {active.map((task) => <WorkerLineRow key={task.id} task={task} />)}
+          {finished && (
+            <SummaryRowButton
+              aria-label="Open workers"
+              data-slot="workers-summary"
+              data-state={panel !== undefined ? "open" : "closed"}
+              onClick={() => setPanel(null)}
+              muted
+              icon={<WorkerGlyph taskId={tasks.find(workerDone)!.id} className="size-4" />}
+            >
+              {finished}
+            </SummaryRowButton>
+          )}
+        </>
+      ) : (
+        <SummaryRowButton
+          aria-label="Open workers"
+          data-slot="workers-summary"
+          // Washed while the Workers tab shows, as on hover.
+          data-state={panel !== undefined ? "open" : "closed"}
+          onClick={() => setPanel(null)}
+          className="gap-1.5"
+          icon={
+            <span className="flex items-center gap-1.5">
+              {avatars.slice(0, 4).map((task) => <WorkerGlyph key={task.id} taskId={task.id} className="size-4" />)}
+            </span>
+          }
+          meta={active.length > 0 && finished ? finished : undefined}
+        >
+          {active.length ? `${active.length} working` : finished}
+        </SummaryRowButton>
+      )}
     </SummarySection>
   );
 }

@@ -93,29 +93,30 @@ export function SummarySection({
   );
 }
 
-/** A row's look: 13px, a fixed slot for its icon, its meta at the end. */
+/** A row's look: one line, 28px, 13px at the prose weight, a fixed slot for its icon (which
+ * carries its state), its meta at the end. */
 const ROW =
-  "relative flex min-h-row-sm w-full min-w-0 items-center gap-2 py-1 text-start text-label";
+  "relative flex h-row-sm w-full min-w-0 items-center gap-2 text-start text-label font-prose";
 
 /**
  * An interactive row washes on hover and while what it opens is open, the wash a step wider
  * than the text it lines up with.
  */
 const ROW_INTERACTIVE =
-  "rounded-control before:rounded-control hover:before:bg-foreground/5 data-[state=open]:before:bg-foreground/5 active:before:bg-foreground/10 focus-visible:before:ring-ring cursor-pointer outline-none before:absolute before:inset-y-0 before:-inset-x-2 before:-z-10 before:transition-colors focus-visible:before:ring-1";
+  "rounded-control before:rounded-control hover:before:bg-foreground/8 data-[state=open]:before:bg-foreground/8 active:before:bg-foreground/10 focus-visible:before:ring-ring cursor-pointer outline-none before:absolute before:inset-y-0 before:-inset-x-2 before:-z-10 before:transition-colors focus-visible:before:ring-1";
 
 type RowContent = {
-  /** In the icon slot; a 14px icon or a worker's glyph. */
+  /** In the icon slot; a 14px icon (a spinner while it runs) or a worker's glyph. */
   icon?: ReactNode;
-  /** At the row's end: a state in words, +N −N, a count. */
+  /** At the row's end: +N −N, a count, a time. */
   meta?: ReactNode;
-  /** Dimmer: a done step, a link to more. */
+  /** Dimmer: done, a link to more. */
   muted?: boolean;
-  /** A second, smaller line under the label: a worker's state and time. */
-  description?: ReactNode;
+  /** The row's one action, in its meta's place while the row is hovered or focused. */
+  action?: ReactNode;
 };
 
-function RowParts({ icon, meta, description, children }: RowContent & { children: ReactNode }) {
+function RowParts({ icon, meta, action, children }: RowContent & { children: ReactNode }) {
   return (
     <>
       {icon !== undefined && (
@@ -126,20 +127,30 @@ function RowParts({ icon, meta, description, children }: RowContent & { children
           {icon}
         </span>
       )}
-      {description ? (
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate">{children}</span>
-          <span className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs">{description}</span>
-        </span>
-      ) : (
-        <span className="min-w-0 flex-1 truncate">{children}</span>
-      )}
+      <span className="min-w-0 flex-1 truncate">{children}</span>
       {meta !== undefined && meta !== null && meta !== false && (
-        <span className="text-muted-foreground/70 flex shrink-0 items-center gap-1.5 text-xs tabular-nums">
+        <span
+          className={cn(
+            "text-muted-foreground/70 flex shrink-0 items-center gap-1.5 text-xs tabular-nums",
+            action && "group-hover/row:invisible group-focus-within/row:invisible",
+          )}
+        >
           {meta}
         </span>
       )}
     </>
+  );
+}
+
+/** The action's place: over the meta, at the row's end, shown while the row is hovered or focused. */
+function RowAction({ children }: { children: ReactNode }) {
+  return (
+    <span
+      data-slot="summary-row-action"
+      className="absolute inset-y-0 end-0 hidden items-center group-focus-within/row:flex group-hover/row:flex"
+    >
+      {children}
+    </span>
   );
 }
 
@@ -148,7 +159,7 @@ export function SummaryRow({
   icon,
   meta,
   muted,
-  description,
+  action,
   className,
   children,
   ...props
@@ -156,39 +167,50 @@ export function SummaryRow({
   return (
     <div
       data-slot="summary-row"
-      className={cn(ROW, "isolate", muted && "text-muted-foreground", className)}
+      className={cn(ROW, "group/row isolate", muted && "text-muted-foreground", className)}
       {...props}
     >
-      <RowParts icon={icon} meta={meta} description={description}>
+      <RowParts icon={icon} meta={meta} action={action}>
         {children}
       </RowParts>
+      {action && <RowAction>{action}</RowAction>}
     </div>
   );
 }
 
-/** A row of a summary section that does something when clicked. */
+/** A row of a summary section that does something when clicked; its action, if any, beside it. */
 export function SummaryRowButton({
   icon,
   meta,
   muted,
-  description,
+  action,
   className,
   children,
   ...props
 }: ComponentProps<"button"> & RowContent) {
-  return (
+  const button = (
     <button
       type="button"
       data-slot="summary-row"
-      className={cn(ROW, ROW_INTERACTIVE, "isolate", muted && "text-muted-foreground", className)}
+      className={cn(ROW, ROW_INTERACTIVE, "isolate", !action && "group/row", muted && "text-muted-foreground", className)}
       {...props}
     >
-      <RowParts icon={icon} meta={meta} description={description}>
+      <RowParts icon={icon} meta={meta} action={action}>
         {children}
       </RowParts>
     </button>
+  );
+  if (!action) return button;
+  return (
+    <div className="group/row relative isolate flex min-w-0">
+      {button}
+      <RowAction>{action}</RowAction>
+    </div>
   );
 }
 
 /** The wash and focus ring of an interactive summary row, for rows built by hand. */
 export const summaryRowInteractive = ROW_INTERACTIVE;
+
+/** A summary row's look, for rows built by hand. */
+export const summaryRow = ROW;

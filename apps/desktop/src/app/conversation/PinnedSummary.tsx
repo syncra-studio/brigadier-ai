@@ -1,6 +1,9 @@
 import { useAui } from "@assistant-ui/react";
 import {
   Branch,
+  Dock,
+  DotsHorizontal,
+  Folder,
   HandRaised,
   Link,
   Plus,
@@ -9,6 +12,7 @@ import {
   PullRequestMerged,
   PullRequestOpen,
   Tasks,
+  Terminal,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type ReactNode,
@@ -40,7 +44,7 @@ import { ChecksRow, ReviewRows } from "@/app/conversation/ReviewSummaryRow";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, openSummaryByItself, useSummary } from "@/app/conversation/summaryState";
 import { RightSidebarContext } from "@/app/conversation/RightSidebar";
-import { CHAT_TAB, useSessionTabsOf } from "@/state/sessionTabs";
+import { CHAT_TAB, newSessionTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
@@ -58,7 +62,16 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { request } from "@/ipc/client";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { openFolder, request } from "@/ipc/client";
 import { openLink as openWebLink } from "@/state/links";
 import type {
   Conversation,
@@ -196,8 +209,9 @@ function waitingFrom(
 }
 
 /**
- * One thing only the user can do, on one row that opens to its whole text and where it came
- * from; Show at its end for a card. It ends without a Done: when it is over, or with its run.
+ * One thing only the user can do, on one line; its whole text and where it came from in its
+ * tooltip. A click shows what it waits on: the card, or the worker in the panel. It ends without
+ * a Done: when it is over, or with its run.
  */
 function WaitingRow({
   item,
@@ -207,39 +221,24 @@ function WaitingRow({
   conversationId: string;
 }) {
   const tasks = useBoard((s) => s.board?.tasks ?? NO_TASKS);
+  const { setPanel } = useContext(AgentsPanelContext);
   const from = waitingFrom(item, tasks);
-  const [open, setOpen] = useState(false);
   const { source } = item;
-  return (
-    <div className="flex flex-col">
-      <SummaryRow
-        icon={<HandRaised />}
-        description={open && from ? from : undefined}
-        meta={
-          source.type === "card" && (
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => showCard(conversationId, source.cardId)}
-            >
-              Show
-            </Button>
-          )
-        }
-      >
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen(!open)}
-          className={cn(
-            "rounded-control w-full min-w-0 text-start",
-            open ? "whitespace-normal wrap-break-word" : "truncate",
-          )}
-        >
-          <WorkerLine text={item.what} />
-        </button>
-      </SummaryRow>
-    </div>
+  const title = [item.what, from].filter(Boolean).join("\n");
+  const show =
+    source.type === "card"
+      ? () => showCard(conversationId, source.cardId)
+      : source.type === "task" || source.type === "landing"
+        ? () => setPanel(source.taskId)
+        : null;
+  return show ? (
+    <SummaryRowButton title={title} icon={<HandRaised />} onClick={show}>
+      <WorkerLine text={item.what} />
+    </SummaryRowButton>
+  ) : (
+    <SummaryRow title={title} icon={<HandRaised />}>
+      <WorkerLine text={item.what} />
+    </SummaryRow>
   );
 }
 
@@ -612,8 +611,9 @@ function SummaryCard({
 }
 
 /**
- * A session's summary, pinned at the top end of its thread's pane: the project, the branch (with
- * what it changed, for a worktree session), the plan and the workers, and a run's own card. It
+ * A session's summary, pinned at the top end of its thread's pane, in the reference order: the
+ * project (with its ⋯), what the branch changed and how it was reviewed, what waits on the user,
+ * the plan, the workers, what runs in the background and the sources; then a run's own card. It
  * eases in from the pane's end when pinned and out when unpinned. Where the pane has too little
  * room beside the thread's column it hides, and the same cards float over the thread instead,
  * opened from the top bar.
@@ -751,13 +751,57 @@ export function SummaryFloat({ children }: { children: ReactNode }) {
   );
 }
 
+function fail(cause: unknown): void {
+  toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
+}
+
+/**
+ * The project section's ⋯: the session's checkout in a terminal tab, in Finder, or in another
+ * app (Terminal on macOS).
+ */
+function ProjectActions({ conversationId, checkout }: { conversationId: string; checkout: string }) {
+  const mac = useApp((s) => s.info?.platform === "macos");
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <TooltipIconButton tooltip="Project actions" size="icon-xs">
+          <DotsHorizontal />
+        </TooltipIconButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={() => newSessionTab(conversationId, "terminal", checkout)}>
+          <Terminal />
+          Open terminal
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void openFolder(checkout).catch(fail)}>
+          <Folder />
+          {mac ? "Show in Finder" : "Show in file manager"}
+        </DropdownMenuItem>
+        {mac && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <Dock />
+              Open in
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem onSelect={() => void openFolder(checkout, "Terminal").catch(fail)}>
+                <Dock />
+                Terminal
+              </DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /** The branch the session's work is on, with its +N −N once known. */
 function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) {
   return (
     <SummaryRow
       title={branch}
       icon={<Branch />}
-      className="flex-1"
       meta={
         diff &&
         (diff.insertions > 0 || diff.deletions > 0) && (
@@ -859,10 +903,10 @@ function SessionSummaryContent({
     <>
       <SummaryCard scrollKey={`${conversation.id}/context`} active={active}>
         <div className="flex flex-col py-2.5">
-          <ActivitiesSummary conversationId={conversation.id} />
           <SummarySection
             foldKey="project"
             title={<span title={checkout}>{project ?? setup.repo}</span>}
+            action={<ProjectActions conversationId={conversation.id} checkout={checkout} />}
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
             <BranchRow branch={run?.workspace?.branch ?? setup.environment.branch} diff={diff} />
@@ -883,6 +927,7 @@ function SessionSummaryContent({
             />
           )}
           <WorkersSummary conversationId={conversation.id} />
+          <ActivitiesSummary conversationId={conversation.id} />
           <Sources conversationId={conversation.id} />
         </div>
       </SummaryCard>

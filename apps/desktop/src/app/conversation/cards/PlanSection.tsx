@@ -1,13 +1,13 @@
 import { Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
-import { memo, useId, useState } from "react";
+import { memo, useContext, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { planStepStatus, planProgress, stepStates } from "@/app/conversation/planProgress";
 import { taskState } from "@/app/conversation/rowWords";
-import { WorkerChip } from "@/app/conversation/WorkerChip";
+import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { useAction } from "@/app/conversation/useAction";
 import { type AgentPlanStepStatus, StepMark } from "@/components/assistant-ui/elements/agent-plan";
-import { SummarySection, summaryRowInteractive } from "@/components/assistant-ui/elements/summary-section";
+import { SummarySection, summaryRow, summaryRowInteractive } from "@/components/assistant-ui/elements/summary-section";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
@@ -31,7 +31,10 @@ const STEP_WORDS: Record<AgentPlanStepStatus, string> = {
   skipped: "Skipped",
 };
 
-/** A step of the plan on one line, its mark, title and state; it opens to its worker and words. */
+/**
+ * A step of the plan on one line, its mark, title and state; its words and detail in its
+ * tooltip. A step with a worker opens that worker in the panel; nothing grows in the card.
+ */
 function PlanStepRow({
   title,
   detail,
@@ -45,44 +48,31 @@ function PlanStepRow({
   word: string;
   taskId: string | null;
 }) {
-  const id = useId();
-  const [open, setOpen] = useState(false);
+  const { setPanel } = useContext(AgentsPanelContext);
+  const tip = [title, word, detail].filter(Boolean).join("\n");
+  const content = (
+    <>
+      <StepMark status={status} className="h-(--text-label--line-height)" />
+      <span className={cn("min-w-0 flex-1 truncate", status === "done" && "text-muted-foreground")}>{title}</span>
+      <span className="text-muted-foreground/70 shrink-0 text-xs">{STEP_WORDS[status]}</span>
+    </>
+  );
   return (
     <li className="flex flex-col">
-      <button
-        type="button"
-        title={title}
-        aria-expanded={open}
-        aria-controls={id}
-        onClick={() => setOpen(!open)}
-        className={cn(
-          summaryRowInteractive,
-          "relative isolate flex min-h-row-sm min-w-0 items-start gap-2 py-1 text-start text-label",
-        )}
-      >
-        <StepMark status={status} className="h-(--text-label--line-height)" />
-        <span
-          className={cn(
-            "min-w-0 flex-1",
-            open ? "wrap-anywhere" : "truncate",
-            status === "done" && "text-muted-foreground",
-          )}
+      {taskId ? (
+        <button
+          type="button"
+          title={tip}
+          onClick={() => setPanel(taskId)}
+          className={cn(summaryRowInteractive, summaryRow, "isolate")}
         >
-          {title}
-        </span>
-        <span className="text-muted-foreground/70 shrink-0 text-xs leading-(--text-label--line-height)">
-          {STEP_WORDS[status]}
-        </span>
-      </button>
-      <div id={id} hidden={!open} className="flex gap-2 pb-1">
-        {/* Under the title, past the step's mark. */}
-        <span aria-hidden className="w-icon-md shrink-0" />
-        <div className="text-muted-foreground flex min-w-0 flex-1 flex-col items-start gap-1 text-xs">
-          <span>{word}</span>
-          {detail && <p className="whitespace-pre-wrap wrap-anywhere">{detail}</p>}
-          {taskId && <WorkerChip taskId={taskId} className="max-w-full" />}
+          {content}
+        </button>
+      ) : (
+        <div title={tip} className={cn(summaryRow, "isolate")}>
+          {content}
         </div>
-      </div>
+      )}
     </li>
   );
 }

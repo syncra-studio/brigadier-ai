@@ -19,8 +19,9 @@ test("Activities shows each thing running for the session as a row, the dev app 
   assert.deepEqual(seen.rows["run-1"], { label: "Core tests", meta: "Running", elapsed: "2m", state: "working" });
   // A command the thread gave no name reads as its command, cut short.
   assert.equal(seen.rows["run-2"]?.label, "pnpm lint --max-warnings 0 --cache --ca…");
-  // The worker's other work still shows on its own line.
-  assert.match(seen.workerLine ?? "", /cargo clippy --workspace/);
+  // The worker's line names it; what it runs shows in the Workers panel, not the card.
+  assert.doesNotMatch(seen.workerLine ?? "", /cargo clippy --workspace/);
+  assert.match(seen.workerLine ?? "", /working/);
   assert.deepEqual(seen.starting, { label: "Dev app", meta: "Starting", elapsed: "4m", state: "working" });
   assert.deepEqual(seen.running, { label: "Dev app", meta: "Running", elapsed: "4m", state: "working" });
   assert.equal(seen.sameRow, true, "the build and the app are the same row");

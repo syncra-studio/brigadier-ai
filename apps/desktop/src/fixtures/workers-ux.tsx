@@ -110,11 +110,12 @@ if (chat && !query.has("manual")) {
   const result = document.body.appendChild(document.createElement("pre"));
   result.id = "workers-result";
   void (async () => {
-    await until(() => !!document.querySelector('[data-slot="workers-summary"]'));
-    const summaryRow = document.querySelector<HTMLButtonElement>('[data-slot="workers-summary"]');
-    const summary = summaryRow?.textContent?.match(/^\d+ working/)?.[0] ?? null;
-    summaryRow?.click();
-    const fromSummary = await until(() => panelOpen() && !!document.querySelector('[role="tablist"][aria-label="Right panel"]'));
+    // Two at work: a line each in the context card, which opens that worker.
+    await until(() => !!document.querySelector('[data-slot="workers-summary-worker"]'));
+    const lines = [...document.querySelectorAll<HTMLButtonElement>('[data-slot="workers-summary-worker"]')];
+    const summary = lines.map((line) => line.textContent);
+    lines[0]?.click();
+    const fromSummary = await until(() => panelOpen() && shownWorker() === "Worker: Readme draft");
     await closePanel();
     document.querySelector<HTMLButtonElement>('[data-slot="pane-workspace"] button[title="Open File summary"]')?.click();
     await until(() => shownWorker() === "Worker: File summary");

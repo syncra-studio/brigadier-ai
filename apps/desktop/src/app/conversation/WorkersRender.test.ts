@@ -29,7 +29,7 @@ test("a brief gains Show brief when its panel narrows", { timeout: 90000 }, asyn
 test("a Chat shows and opens its workers as a session does: context card, thread, Workers panel; none in the left sidebar", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "workers-ux.html?chat=1&approvals=0", "workers-result", 15000));
   assert.deepEqual(seen, {
-    summary: "2 working",
+    summary: ["Readme draft working", "File summary working"],
     fromSummary: true,
     fromThread: "Worker: File summary",
     sidebar: [],

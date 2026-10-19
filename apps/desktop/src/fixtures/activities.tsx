@@ -87,7 +87,7 @@ async function drive(): Promise<Record<string, unknown>> {
   await frame();
   seen.order = [...(section()?.querySelectorAll("[data-activity]") ?? [])].map((card) => card.getAttribute("data-activity"));
   seen.rows = Object.fromEntries(["preview-1", "preview-2", "run-1", "run-2"].map((activity) => [activity, read(activity)]));
-  seen.workerLine = text(document.querySelector('[data-slot="workers-summary-activity"]'));
+  seen.workerLine = text(document.querySelector('[aria-label="Session workers"]'));
   // The build is done and the app starts, then runs: the same row, the same start.
   const building = row("preview-2");
   send({ type: "previewUpdated", preview: { ...app, building: false } });
