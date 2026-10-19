@@ -136,6 +136,15 @@ macro_rules! clarify_rule {
     };
 }
 
+/// Starting on what the user gave: a message's pasted text and files are part of it, and a
+/// detail an assumption covers is no reason to ask (a Chat asked three questions its pasted
+/// brief and attached Word file already answered, 10-20).
+macro_rules! start_rule {
+    () => {
+        "A message's pasted text and attached files are part of what the user said: read them before you decide anything. Ask only for what is truly missing from the message, its pasted text, its attachments and your memories, and changes the result; a detail you can fill with a reasonable assumption or a placeholder (a name on a cover page, which focus to take, what an attached file is for) is no reason to ask. Otherwise start the work at once, and say your assumptions in one line."
+    };
+}
+
 /// Where a worker's file shows in an answer (Q84): once, inline, as a link that opens it in
 /// Brigadier, where the user saves it. Nothing lists files under or at the end of the answer.
 macro_rules! inline_files {
@@ -175,6 +184,8 @@ macro_rules! chat_thread {
             "This Chat is a thread without a project: it has no repository and changes no code, but it runs workers and asks on cards.
 - ",
             clarify_rule!(),
+            " ",
+            start_rule!(),
             "
 - ",
             research_fan_out!(),
@@ -303,7 +314,7 @@ You are this session's one long-lived thread: you read, search, run commands and
 How to work:
 - Do the work yourself: read the code, make the change, run its checks and commit, at any size you can hold as one coherent change. Start workers only for parts that can run at once, very long jobs (hours, or more than your context should carry), work needing tools you lack (a look at a running app, a visual check), or when the user asks for one. {workers}{computer}
 - Answer code questions yourself from the Brain, code_search, code_refs and a few precise reads, quoting the file:line each point rests on (src/cart.ts:42); explain an error from the code that raises it. Never start a worker for what reading answers.
-- {fan_out} {clarify}
+- {fan_out} {clarify} {start}
 - {fusion}
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) with run_check, not your shell, before your final answer. {CHECK_PREFIXES} Never background a command yourself (`&`, nohup): one still going after a minute goes to the background by itself. Run dev servers and apps with start_preview.
@@ -338,6 +349,7 @@ How to talk to the user:
         voice = VOICE,
         fan_out = research_fan_out!(),
         clarify = clarify_rule!(),
+        start = start_rule!(),
         fusion = fusion_rule!(),
         workers = workers_rule(start_workers).replace("{quiet}", QUIET),
         code_rules = WORKER_CODE_RULES,
@@ -1229,6 +1241,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         ),
         worker: "",
     },
+    Revision {
+        number: START_REVISION,
+        thread: concat!("From now on: ", start_rule!()),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1272,8 +1289,9 @@ const CHAT_GRILLING: &str = grilling_rule!();
 /// with the bottom line and may use optional parts and Ask next, and a fused answer has no
 /// Confidence or Disagreement lines (Q86); 12 a Chat that can make images makes them itself (Q24);
 /// 13 its answer is short and stands alone, sources inline, with no parts or Ask next (Q87); 14
-/// it reads what the app shows with app_state (Q90).
-const CHAT_CONTRACT: u32 = 14;
+/// it reads what the app shows with app_state (Q90); 15 its message's pasted text and files count
+/// as what the user said, and it starts rather than ask what an assumption covers.
+const CHAT_CONTRACT: u32 = 15;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
 /// The first Chat contract with a thread's abilities; a Chat told an older one hears
@@ -1305,6 +1323,9 @@ const CHAT_STYLE_CONTRACT: u32 = 13;
 /// The first Chat contract with app_state (Q90); a Chat told a thread's abilities before hears
 /// [`CHAT_APP_NOTE`] (one told less hears it within [`CHAT_THREAD_NOTE`]).
 const CHAT_APP_CONTRACT: u32 = 14;
+/// The first Chat contract that starts on what the user gave; a Chat told a thread's abilities
+/// before hears [`CHAT_START_NOTE`] (one told less hears it within [`CHAT_THREAD_NOTE`]).
+const CHAT_START_CONTRACT: u32 = 15;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1360,6 +1381,9 @@ const CHAT_APP_NOTE: &str = concat!(
     chat_app_rule!()
 );
 
+/// Tells a Chat that was already a thread to start on what the user gave.
+const CHAT_START_NOTE: &str = concat!("[instructions] From now on: ", start_rule!());
+
 /// Tells a Chat from before how it interviews the user (Q78).
 const CHAT_GRILLING_NOTE: &str = concat!("[instructions] From now on: ", grilling_rule!());
 
@@ -1388,6 +1412,7 @@ const CHAT_FILES_LABEL: &str = "files inline";
 const CHAT_STYLE_LABEL: &str = "answer style";
 const CHAT_IMAGES_LABEL: &str = "images";
 const CHAT_APP_LABEL: &str = "app tools";
+const CHAT_START_LABEL: &str = "start on what was given";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
@@ -1786,6 +1811,9 @@ pub(crate) const ANSWER_STYLE_REVISION: u32 = 118;
 /// The thread knows and drives its own app (Q90): app_state, read_terminal, open_in_app,
 /// terminal_run, show_session, close_tab and suggest_setting, and the rule for using them.
 pub(crate) const APP_TOOLS_REVISION: u32 = 119;
+/// A message's pasted text and files count as what the user said; ask only what is truly
+/// missing, else start with assumptions in one line.
+pub(crate) const START_REVISION: u32 = 120;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -2062,6 +2090,21 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             label: CHAT_APP_LABEL,
             told: Told {
                 contract: Some(CHAT_APP_CONTRACT),
+                ..Told::default()
+            },
+        });
+    }
+    // Told a thread's abilities before it starts on what the user gave (contract 5 to 14); one
+    // told less hears it within the thread note.
+    if now.chat
+        && now.reports
+        && (CHAT_THREAD_CONTRACT..CHAT_START_CONTRACT).contains(&told.contract.unwrap_or(0))
+    {
+        notes.push(Note {
+            text: CHAT_START_NOTE.to_owned(),
+            label: CHAT_START_LABEL,
+            told: Told {
+                contract: Some(CHAT_START_CONTRACT),
                 ..Told::default()
             },
         });
@@ -5739,6 +5782,7 @@ mod environment_tests {
                 CHAT_FILES_LABEL,
                 CHAT_IMAGES_LABEL,
                 CHAT_APP_LABEL,
+                CHAT_START_LABEL,
                 CHAT_STYLE_LABEL
             ]
         );
@@ -5787,6 +5831,7 @@ mod environment_tests {
                 CHAT_FILES_LABEL,
                 CHAT_IMAGES_LABEL,
                 CHAT_APP_LABEL,
+                CHAT_START_LABEL,
                 CHAT_STYLE_LABEL
             ]
         );
@@ -5825,6 +5870,7 @@ mod environment_tests {
                 CHAT_FILES_LABEL,
                 CHAT_IMAGES_LABEL,
                 CHAT_APP_LABEL,
+                CHAT_START_LABEL,
                 CHAT_STYLE_LABEL
             ]
         );
@@ -5867,19 +5913,20 @@ mod environment_tests {
             told.contract = Some(contract);
             let sent = notes(&told, &now);
             assert_eq!(
-                labels(&sent)[labels(&sent).len() - 5..],
+                labels(&sent)[labels(&sent).len() - 6..],
                 [
                     CHAT_FIXES_LABEL,
                     CHAT_FILES_LABEL,
                     CHAT_IMAGES_LABEL,
                     CHAT_APP_LABEL,
+                    CHAT_START_LABEL,
                     CHAT_STYLE_LABEL
                 ]
             );
             took(&mut told, &sent);
             assert_eq!(told.contract, Some(CHAT_CONTRACT));
             assert!(notes(&told, &now).is_empty());
-            let fixes_note = &sent[sent.len() - 5];
+            let fixes_note = &sent[sent.len() - 6];
             for words in fixes {
                 assert!(fixes_note.text.contains(words), "{words}");
                 assert!(note.contains(words), "{words}");
@@ -6008,11 +6055,12 @@ mod environment_tests {
             told.contract = Some(contract);
             let sent = notes(&told, &now);
             assert_eq!(
-                labels(&sent)[labels(&sent).len() - 4..],
+                labels(&sent)[labels(&sent).len() - 5..],
                 [
                     CHAT_FILES_LABEL,
                     CHAT_IMAGES_LABEL,
                     CHAT_APP_LABEL,
+                    CHAT_START_LABEL,
                     CHAT_STYLE_LABEL
                 ]
             );
@@ -6020,7 +6068,7 @@ mod environment_tests {
             assert_eq!(told.contract, Some(CHAT_CONTRACT));
             assert!(notes(&told, &now).is_empty());
             for words in words {
-                assert!(sent[sent.len() - 4].text.contains(words), "{words}");
+                assert!(sent[sent.len() - 5].text.contains(words), "{words}");
             }
         }
         let mut told = now.told();
@@ -6064,8 +6112,13 @@ mod environment_tests {
             told.contract = Some(contract);
             let sent = notes(&told, &now);
             assert_eq!(
-                labels(&sent)[labels(&sent).len() - 3..],
-                [CHAT_IMAGES_LABEL, CHAT_APP_LABEL, CHAT_STYLE_LABEL],
+                labels(&sent)[labels(&sent).len() - 4..],
+                [
+                    CHAT_IMAGES_LABEL,
+                    CHAT_APP_LABEL,
+                    CHAT_START_LABEL,
+                    CHAT_STYLE_LABEL
+                ],
                 "{contract}"
             );
             let all: String = sent.iter().map(|note| note.text.as_str()).collect();
@@ -6108,7 +6161,7 @@ mod environment_tests {
         told.contract = Some(CHAT_IMAGES_CONTRACT);
         assert_eq!(
             labels(&notes(&told, &now)),
-            vec![CHAT_APP_LABEL, CHAT_STYLE_LABEL]
+            vec![CHAT_APP_LABEL, CHAT_START_LABEL, CHAT_STYLE_LABEL]
         );
         assert_eq!(chat(&[]).matches(words).count(), 1);
         assert!(!chat(&[]).contains(retired));
@@ -6184,7 +6237,9 @@ mod environment_tests {
             revision_note(APP_TOOLS_REVISION - 1, true).is_none(),
             "workers hear nothing"
         );
-        assert!(revision_note(APP_TOOLS_REVISION, false).is_none());
+        assert!(
+            revision_note(APP_TOOLS_REVISION, false).is_none_or(|note| !note.contains("app_state"))
+        );
         assert!(!worker_system("").contains("app_state"));
 
         let chat_line = chat_app_rule!();
@@ -6212,6 +6267,65 @@ mod environment_tests {
         let mut told = tab.told();
         told.contract = Some(CHAT_APP_CONTRACT - 1);
         assert!(notes(&told, &tab).is_empty(), "a tab chat has no app tools");
+    }
+
+    /// A Chat asked three questions its pasted brief and attached Word file already answered
+    /// (10-20): a message's pasted text and files count as what the user said, and a detail an
+    /// assumption covers is no reason to ask. New Chats and threads say so; open threads and
+    /// Chats that were threads hear it once; a Chat from before hears it within the thread note;
+    /// a tab chat, which asks nothing, never.
+    #[test]
+    fn chats_and_threads_start_on_what_the_user_gave_rather_than_ask() {
+        let words = [
+            "A message's pasted text and attached files are part of what the user said",
+            "Ask only for what is truly missing from the message, its pasted text, its attachments and your memories",
+            "(a name on a cover page, which focus to take, what an attached file is for) is no reason to ask",
+            "start the work at once, and say your assumptions in one line",
+        ];
+        let rule = thread(
+            &session("approveForMe"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Claude,
+            true,
+        );
+        let note = revision_note(START_REVISION - 1, false).unwrap();
+        assert!(revision_note(START_REVISION - 1, true).is_none());
+        for words in words {
+            assert_eq!(chat(&[]).matches(words).count(), 1, "{words}");
+            assert_eq!(rule.matches(words).count(), 1, "{words}");
+            assert!(note.contains(words), "{words}");
+        }
+        let now = Current::chat(Vec::new());
+        for contract in [
+            0,
+            CHAT_THREAD_CONTRACT - 1,
+            CHAT_THREAD_CONTRACT,
+            CHAT_START_CONTRACT - 1,
+        ] {
+            let mut told = now.told();
+            told.contract = Some(contract);
+            let sent = notes(&told, &now);
+            let all: String = sent.iter().map(|note| note.text.as_str()).collect();
+            assert_eq!(all.matches(words[0]).count(), 1, "{contract}");
+            assert_eq!(
+                labels(&sent).contains(&CHAT_START_LABEL),
+                contract >= CHAT_THREAD_CONTRACT,
+                "{contract}"
+            );
+            took(&mut told, &sent);
+            assert_eq!(told.contract, Some(CHAT_CONTRACT), "{contract}");
+            assert!(notes(&told, &now).is_empty(), "{contract}");
+        }
+        let mut told = now.told();
+        told.contract = Some(CHAT_START_CONTRACT - 1);
+        assert_eq!(labels(&notes(&told, &now)), vec![CHAT_START_LABEL]);
+        let tab = Current::tab_chat();
+        let mut told = tab.told();
+        told.contract = Some(CHAT_START_CONTRACT - 1);
+        assert!(!labels(&notes(&told, &tab)).contains(&CHAT_START_LABEL));
     }
 
     /// The words of the interview rule the tests look for.
