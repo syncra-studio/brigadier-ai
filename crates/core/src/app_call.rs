@@ -43,6 +43,10 @@ pub enum AppOp {
     /// The user asked to see session `session`: the window shows it, as a click on its row in
     /// the sidebar would.
     ShowSession { session: ConversationId },
+    /// Closes the session's tab `tab` (`close_tab`). Unless `confirmed` (the agent opened it,
+    /// or the user said yes on a card), a tab of the user's, one with unsaved edits or a
+    /// terminal stays open and the window says why.
+    CloseTab { tab: String, confirmed: bool },
 }
 
 /// What `open_in_app` opens, checked and named by the daemon.
@@ -120,7 +124,9 @@ impl AppOp {
     pub(crate) fn what(&self) -> &'static str {
         match self {
             Self::Browser { .. } => "its browser",
-            Self::State | Self::Open { .. } | Self::EndRequest { .. } => "its tabs",
+            Self::State | Self::Open { .. } | Self::EndRequest { .. } | Self::CloseTab { .. } => {
+                "its tabs"
+            }
             Self::ShowSession { .. } => "its sessions",
         }
     }
@@ -146,6 +152,20 @@ pub enum AppAnswer {
     /// The window shows the session now; `visible`: it isn't hidden, so the user sees it.
     SessionShown {
         visible: bool,
+    },
+    /// `close_tab` closed the tab.
+    TabClosed {
+        tab: String,
+    },
+    /// The tab is still open: closing it needs the user's yes, or, for a terminal, knowing
+    /// nothing runs in it. `users`: the user opened it (or took it over); `unsaved`: it has
+    /// edits not saved yet.
+    CloseAsks {
+        tab: String,
+        title: String,
+        kind: String,
+        users: bool,
+        unsaved: bool,
     },
     /// The tabs a request's end closed.
     Closed {

@@ -2030,6 +2030,14 @@ pub struct ShowSession {
     pub id: String,
 }
 
+/// `close_tab`: one of the session's tabs closed.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CloseTab {
+    /// The tab's id, as app_state lists it.
+    pub tab: String,
+}
+
 /// An app tool call (Q90), from the thread or a Chat.
 #[derive(Debug, Clone)]
 pub enum AppToolCall {
@@ -2039,6 +2047,7 @@ pub enum AppToolCall {
     Open(OpenInApp),
     TerminalRun(TerminalRun),
     ShowSession(ShowSession),
+    CloseTab(CloseTab),
 }
 
 impl AppToolCall {
@@ -2050,6 +2059,7 @@ impl AppToolCall {
             Self::Open(_) => "open_in_app",
             Self::TerminalRun(_) => "terminal_run",
             Self::ShowSession(_) => "show_session",
+            Self::CloseTab(_) => "close_tab",
         }
     }
 }

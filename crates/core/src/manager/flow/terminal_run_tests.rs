@@ -330,3 +330,170 @@ async fn with_no_window_nothing_is_typed_and_the_new_shell_goes() {
     assert_eq!(*shells.ended.lock().unwrap(), vec!["terminal-3".to_owned()]);
     flow.stop().await;
 }
+
+/// The app's window for `close_tab`: the agent's Browser tab closes at once; anything else
+/// says why it asks, until the call comes confirmed. Each call is kept as (tab, confirmed).
+fn tabs_window(flow: &Flow) -> Arc<Mutex<Vec<(String, bool)>>> {
+    let heard: Arc<Mutex<Vec<(String, bool)>>> = Arc::default();
+    let mut calls = flow.manager.subscribe_app();
+    let manager = flow.manager.clone();
+    let log = heard.clone();
+    tokio::spawn(async move {
+        while let Ok(call) = calls.recv().await {
+            let AppOp::CloseTab { tab, confirmed } = &call.op else {
+                continue;
+            };
+            log.lock().unwrap().push((tab.clone(), *confirmed));
+            let asks = |kind: &str, users, unsaved| AppAnswer::CloseAsks {
+                tab: tab.clone(),
+                title: tab.clone(),
+                kind: kind.into(),
+                users,
+                unsaved,
+            };
+            let answer = match tab.as_str() {
+                _ if *confirmed => AppAnswer::TabClosed { tab: tab.clone() },
+                "browser:agent-1" => AppAnswer::TabClosed { tab: tab.clone() },
+                "file:src/main.rs" => asks("file", true, false),
+                "page:notes" => asks("page", false, true),
+                terminal if terminal.starts_with("terminal:agent-") => {
+                    asks("terminal", false, false)
+                }
+                terminal if terminal.starts_with("terminal:") => asks("terminal", true, false),
+                _ => AppAnswer::Failed {
+                    message: format!("There is no tab {tab} in this session now."),
+                },
+            };
+            manager.app_answer(&call.id, answer);
+        }
+    });
+    heard
+}
+
+fn close(tab: &str) -> AppToolCall {
+    AppToolCall::CloseTab(crate::tools::CloseTab { tab: tab.into() })
+}
+
+/// Runs `call` while the user answers its card with `decision`; the card's question comes back.
+async fn asked(flow: &Flow, call: AppToolCall, decision: ApprovalDecision) -> (ToolReply, String) {
+    let manager = flow.manager.clone();
+    let conversation = flow.conversation.clone();
+    let waiting = tokio::spawn(async move { manager.app_tool(conversation, call).await });
+    let pending = |board: &Board| {
+        board
+            .approvals
+            .values()
+            .find(|approval| approval.state == CardState::Pending)
+            .cloned()
+    };
+    let board = flow
+        .until("the close card", |board| pending(board).is_some())
+        .await;
+    let card = pending(&board).unwrap();
+    let crate::work::ApprovalSubject::Cli { request } = &card.subject else {
+        panic!("not a command card: {:?}", card.subject);
+    };
+    let question = request.reason.clone().unwrap_or_default();
+    flow.manager
+        .answer_card(flow.conversation.clone(), card.id.clone(), decision)
+        .await
+        .unwrap();
+    (waiting.await.unwrap(), question)
+}
+
+#[tokio::test]
+async fn an_agents_tab_closes_at_once_and_one_at_rest_in_its_terminal_too() {
+    let (flow, shells) = start("close-tab-agent", PermissionLevel::FullAccess).await;
+    let heard = tabs_window(&flow);
+    shells.terminals.lock().unwrap().push(TerminalSnapshot {
+        id: "terminal-3".into(),
+        key: Some("terminal:agent-1".into()),
+        cwd: "/repo".into(),
+        busy: Some(false),
+        tail: String::new(),
+    });
+    for tab in ["browser:agent-1", "terminal:agent-1"] {
+        let reply = flow
+            .manager
+            .app_tool(flow.conversation.clone(), close(tab))
+            .await;
+        assert_eq!(reply.text, format!("Closed {tab}."));
+    }
+    assert!(flow.board().await.approvals.is_empty(), "nothing asked");
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            ("browser:agent-1".to_owned(), false),
+            ("terminal:agent-1".to_owned(), false),
+            ("terminal:agent-1".to_owned(), true),
+        ]
+    );
+    for (tab, said) in [
+        ("chat", "never closes"),
+        ("browser:gone", "There is no tab browser:gone"),
+    ] {
+        let reply = flow
+            .manager
+            .app_tool(flow.conversation.clone(), close(tab))
+            .await;
+        assert!(
+            reply.is_error && reply.text.contains(said),
+            "{}",
+            reply.text
+        );
+    }
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn the_users_tab_unsaved_edits_and_a_terminal_that_runs_or_cant_be_told_close_only_on_a_yes()
+{
+    let (flow, shells) = start("close-tab-confirm", PermissionLevel::FullAccess).await;
+    let heard = tabs_window(&flow);
+    shells.terminals.lock().unwrap().extend([
+        TerminalSnapshot {
+            id: "terminal-3".into(),
+            key: Some("terminal:agent-busy".into()),
+            cwd: "/repo".into(),
+            busy: Some(true),
+            tail: String::new(),
+        },
+        TerminalSnapshot {
+            id: "terminal-4".into(),
+            key: Some("terminal:agent-unknown".into()),
+            cwd: "/repo".into(),
+            busy: None,
+            tail: String::new(),
+        },
+    ]);
+    let no = || ApprovalDecision::Deny {
+        message: String::new(),
+    };
+    for (tab, says) in [
+        ("file:src/main.rs", "It's a tab you opened."),
+        ("page:notes", "edits that aren't saved yet"),
+        ("terminal:agent-busy", "A command is running in it"),
+        ("terminal:agent-unknown", "can't be told"),
+        ("terminal:tab-1", "It's a tab you opened."),
+    ] {
+        let (reply, question) = asked(&flow, close(tab), no()).await;
+        assert!(question.contains(says), "{tab}: {question}");
+        assert!(reply.is_error, "{tab}");
+        assert_eq!(reply.text, "The user said no, so the tab stays open.");
+    }
+    assert!(
+        heard
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, confirmed)| !confirmed),
+        "a no closes nothing"
+    );
+    let (reply, _) = asked(&flow, close("file:src/main.rs"), ApprovalDecision::Allow).await;
+    assert_eq!(reply.text, "Closed file:src/main.rs.");
+    assert_eq!(
+        heard.lock().unwrap().last().cloned(),
+        Some(("file:src/main.rs".to_owned(), true))
+    );
+    flow.stop().await;
+}

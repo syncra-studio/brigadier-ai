@@ -30,6 +30,7 @@ mod cards;
 mod checks;
 mod ci;
 mod clean_up;
+mod close_tab;
 mod closing;
 mod cold;
 mod computer_host;

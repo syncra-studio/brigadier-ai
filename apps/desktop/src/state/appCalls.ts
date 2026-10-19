@@ -2,6 +2,7 @@ import { request } from "@/ipc/client";
 import { openConversation } from "@/state/actions";
 import type { AppAnswer, AppCall } from "@/ipc/generated";
 import { closeRequestTabs, type PageHands, runCall } from "@/state/agentBrowser";
+import { closeForAgent } from "@/state/closeForAgent";
 import { openInApp } from "@/state/openInApp";
 import { useApp } from "@/state/store";
 import { windowView } from "@/state/windowView";
@@ -35,5 +36,7 @@ export async function answerOf(call: AppCall, hands?: PageHands): Promise<AppAns
       return { app: "sessionShown", visible: useApp.getState().windowVisible };
     case "endRequest":
       return { app: "closed", tabs: closeRequestTabs(call.conversationId, call.op.request) };
+    case "closeTab":
+      return closeForAgent(call.conversationId, call.op.tab, call.op.confirmed);
   }
 }

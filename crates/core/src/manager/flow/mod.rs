@@ -431,6 +431,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "open_in_app" => ToolCall::App(crate::tools::AppToolCall::Open(arg(name, args))),
         "terminal_run" => ToolCall::App(crate::tools::AppToolCall::TerminalRun(arg(name, args))),
         "show_session" => ToolCall::App(crate::tools::AppToolCall::ShowSession(arg(name, args))),
+        "close_tab" => ToolCall::App(crate::tools::AppToolCall::CloseTab(arg(name, args))),
         "browser_open" => ToolCall::Browser(B::Open(arg(name, args))),
         "browser_navigate" => ToolCall::Browser(B::Navigate(arg(name, args))),
         "browser_read" => ToolCall::Browser(B::Read(arg(name, args))),

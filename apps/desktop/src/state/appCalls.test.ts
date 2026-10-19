@@ -14,10 +14,12 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage, crypto: globalThis.crypto, innerWidth: 1200, innerHeight: 800 } });
 const { runAppCall } = await import("./appCalls");
-const { newSessionTab, openAgentTab, openFileTab, openReviewTab, reviewScope, selectTab, sessionTabs } = await import("./sessionTabs");
+const { newSessionTab, openAgentTab, openFileTab, openPageTab, useSessionTabs, openReviewTab, reviewScope, selectTab, sessionTabs } = await import("./sessionTabs");
 const { useWorkerPanelAsk } = await import("./workerPanel");
 const { answerOf } = await import("./appCalls");
 const { useApp } = await import("./store");
+const { usePageEdits } = await import("./pageEditing");
+const { useAgentPause } = await import("./agentPause");
 
 const AGENT = "app-call-agent-session";
 const USER = "app-call-user-session";
@@ -69,6 +71,7 @@ const EVERY_CALL: AppOp[] = [
   { app: "endRequest", request: "req-1" },
   // The session the user is on already: showing it moves nothing.
   { app: "showSession", session: USER },
+  { app: "closeTab", tab: "terminal:agent-1", confirmed: true },
 ];
 
 test("no app call brings the window forward or moves the user off the session and tab they are on", async () => {
@@ -231,4 +234,43 @@ test("show_session moves the selection to that session, as its sidebar row would
   useApp.setState({ windowVisible: false });
   const hidden = await answerOf(call(AGENT, { app: "showSession", session: USER }));
   assert.deepEqual(hidden, { app: "sessionShown", visible: false }, "a hidden window stays hidden");
+});
+
+test("close_tab closes the agent's tab at once; the user's, an unsaved page and a terminal only once confirmed", async () => {
+  fakeShell();
+  const session = "app-call-close-session";
+  useApp.setState({ selection: { type: "conversation", id: session }, windowVisible: true });
+  const close = async (tab: string, confirmed = false) => answerOf(call(session, { app: "closeTab", tab, confirmed }));
+  const ids = () => sessionTabs(session).tabs.map((tab) => tab.id);
+
+  const agents = openAgentTab(session, "https://example.com/", { label: "The thread", taskId: null });
+  assert.deepEqual(await close(agents), { app: "tabClosed", tab: agents });
+  assert.ok(!ids().includes(agents));
+
+  const theirs = newSessionTab(session, "browser");
+  const asked = await close(theirs);
+  assert.deepEqual(asked.app === "closeAsks" && [asked.users, asked.unsaved, asked.kind], [true, false, "browser"]);
+  assert.ok(ids().includes(theirs), "the user's tab stays open");
+
+  const paused = openAgentTab(session, "https://example.org/", { label: "The thread", taskId: null });
+  useAgentPause.setState({ paused: { [paused]: "user" } });
+  const pausedAsk = await close(paused);
+  assert.equal(pausedAsk.app === "closeAsks" && pausedAsk.users, true, "a tab the user took over is theirs");
+  useAgentPause.setState({ paused: {} });
+
+  const page = openPageTab(session, "page-close-1", "Notes");
+  useSessionTabs.setState((state) => ({ sessions: { ...state.sessions, [session]: { ...state.sessions[session]!, tabs: state.sessions[session]!.tabs.map((tab) => (tab.id === page ? { ...tab, agentOpened: true } : tab)) } } }));
+  usePageEdits.setState({ pages: { "page-close-1": { status: "ready", content: { title: "Notes", emoji: null, body: "x" }, revision: "r1", dirty: true, conflict: null, error: null, version: 1 } } });
+  const pageAsk = await close(page);
+  assert.deepEqual(pageAsk.app === "closeAsks" && [pageAsk.users, pageAsk.unsaved, pageAsk.title], [false, true, "Notes"], "the agent's page, with edits not saved yet");
+
+  const terminal = "terminal:agent-close-1";
+  await answerOf(call(session, { app: "open", target: { kind: "terminal", tab: terminal, cwd: "/repo" }, show: false }));
+  const terminalAsk = await close(terminal);
+  assert.deepEqual(terminalAsk.app === "closeAsks" && [terminalAsk.users, terminalAsk.kind], [false, "terminal"], "the daemon tells whether it runs something");
+
+  for (const tab of [theirs, page, terminal]) assert.deepEqual(await close(tab, true), { app: "tabClosed", tab });
+  assert.deepEqual(ids(), [paused]);
+  assert.equal((await close("chat", true)).app, "failed", "the conversation's own tab never closes");
+  assert.deepEqual(await close("browser:gone", true), { app: "failed", message: "There is no tab browser:gone in this session now." });
 });
