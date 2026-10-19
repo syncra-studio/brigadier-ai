@@ -462,6 +462,7 @@ dependencies = [
  "notify",
  "objc2-core-foundation",
  "objc2-core-graphics",
+ "quick-xml",
  "regex",
  "rusqlite",
  "rusqlite_migration",
@@ -476,6 +477,7 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -7730,6 +7732,7 @@ checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap 2.14.2",
  "memchr",
 ]

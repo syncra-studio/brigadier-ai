@@ -3940,11 +3940,20 @@ impl SessionManager {
     }
 
     /// A Chat's non-image attachment as text in the message: the file itself when it is text
-    /// of a sensible size, otherwise a note saying it could not be read.
+    /// of a sensible size, a Word file's text, otherwise a note saying it could not be read.
     async fn inline_attachment(&self, attachment: &AttachmentRef) -> String {
         let bytes = match attachment.id.parse::<brigadier_store::BlobHash>() {
             Ok(hash) => self.core.store().blobs().get(hash).await.ok().flatten(),
             Err(_) => None,
+        };
+        let bytes = match bytes {
+            Some(bytes) if crate::documents::is_docx(&attachment.name, &attachment.mime) => {
+                match super::blocking(move || Ok(crate::documents::docx_text(&bytes))).await {
+                    Ok(Some(text)) => return inline_document(attachment, "Word document", &text),
+                    _ => None,
+                }
+            }
+            bytes => bytes,
         };
         match bytes.map(String::from_utf8) {
             Some(Ok(content)) if content.len() <= INLINE_TEXT_MAX_BYTES => format!(
@@ -6920,6 +6929,24 @@ fn take_one_request(
 /// [`INLINE_TEXT_MAX_BYTES`], else its start and end around a note of what is left out. In a
 /// session the note (or one after the whole text) names the attachment, so the orchestrator
 /// can give a worker all of it.
+/// A document's text, read out of it, as a Chat's attachment in the message; when it is too
+/// long, its start.
+fn inline_document(attachment: &AttachmentRef, kind: &str, text: &str) -> String {
+    let start = &text[..text.floor_char_boundary(INLINE_TEXT_MAX_BYTES)];
+    let cut = if start.len() < text.len() {
+        format!(
+            "\n[… the rest is left out here, since its text is longer than {} kB]",
+            INLINE_TEXT_MAX_BYTES / 1_000
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "\n\n[attached file \"{}\" ({kind}), its text:]\n{start}{cut}\n[end of \"{}\"]",
+        attachment.name, attachment.name
+    )
+}
+
 fn pasted_inline(text: &str, attachment: &AttachmentRef, kind: ConversationKind) -> String {
     let session = kind == ConversationKind::Session;
     if text.len() <= INLINE_TEXT_MAX_BYTES {

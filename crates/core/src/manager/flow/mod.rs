@@ -2051,6 +2051,8 @@ mod browser_tool_tests;
 #[cfg(test)]
 mod card_tests;
 #[cfg(test)]
+mod chat_attachments_tests;
+#[cfg(test)]
 mod chat_images_tests;
 #[cfg(test)]
 mod chat_thread_tests;

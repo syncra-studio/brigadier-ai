@@ -10,6 +10,7 @@ mod board;
 pub mod browser;
 pub mod computer;
 pub mod digest;
+mod documents;
 pub mod knowledge;
 pub mod ledger;
 mod logging;
