@@ -295,8 +295,15 @@ test("three or more back-to-back calls of a tool with no words of its own fold; 
   const search = said("mcp__linear__search_issues");
   const get = said("mcp__linear__get_issue");
   const read = said("Read", "/a.ts");
-  assert.deepEqual(foldRepeats([read, search, search, search, get, get, read, read, read]), [[0], [1, 2, 3], [4], [5], [6], [7], [8]]);
-  assert.equal(summarize([search, search, search, get, get, read]), "Read files, used search issues 3 times, used get issue 2 times");
+  const deploy = said("deploy_preview");
+  assert.deepEqual(foldRepeats([read, deploy, deploy, deploy, read, read, read]), [[0], [1, 2, 3], [4], [5], [6]]);
+  assert.equal(summarize([deploy, deploy, deploy, read]), "Read files, used deploy preview 3 times");
+  // An integration's tools say the integration, never a raw tool name; what each did and was
+  // given is in its fold.
+  assert.deepEqual(foldRepeats([read, search, search, search, get, get, read, read, read]), [[0], [1, 2, 3, 4, 5], [6], [7], [8]]);
+  assert.equal(summarize([search, search, search, get, get, read]), "Read files, used Linear 5 times");
+  assert.equal(search.given, "search issues · x");
+  assert.equal(said("mcp__claude_ai_Gmail__search_threads").done, "Used Gmail");
   // A tool Brigadier has words for keeps them: no fold, no count.
   const searched = said("search_transcript");
   assert.deepEqual(foldRepeats([searched, searched, searched]), [[0], [1], [2]]);

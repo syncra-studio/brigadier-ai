@@ -10,13 +10,14 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
+import { SourcesTab } from "@/app/conversation/SourcesTab";
 import { AgentsPanelContext, type AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import type { BackgroundRun, Conversation, IntegratedCheck, OrchestratorStep, Plan, Preview, Request, ReviewRun, Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
-import { sessionTabs } from "@/state/sessionTabs";
+import { openPanelTab, sessionTabs, useSessionTabsOf } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const id = "context-rows-fixture";
@@ -60,6 +61,8 @@ useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks, plans: { [p
   previews: { [page.id]: page }, backgroundRuns: { [run.id]: run },
   diffs: { "task-2": { files: [], insertions: 120, deletions: 4 }, "task-3": { files: [], insertions: 48, deletions: 0 } },
   orchestratorSteps: [
+    step({ type: "searchedWeb", query: "express static files" } as OrchestratorStep["kind"], 13),
+    step({ type: "tool", itemId: "t1", name: "mcp__claude_ai_Linear__search_issues", detail: "web ui", status: "completed", throughPosition: 0 } as OrchestratorStep["kind"], 12),
     step({ type: "readPage", url: "https://expressjs.com/en/starter/static-files.html" } as OrchestratorStep["kind"], 12),
     step({ type: "readPage", url: "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/form" } as OrchestratorStep["kind"], 11),
   ] } });
@@ -77,6 +80,9 @@ mockIPC((command, payload) => {
   if (req.method === "getWorkerDiffs") return { method: req.method, diffs: useBoard.getState().board?.diffs ?? {} };
   return { method: req.method };
 });
+
+// `tab=sources` opens the Sources tab, for a screenshot.
+if (params.get("tab") === "sources") openPanelTab(id, { type: "sources" }, "Sources");
 
 const card = () => document.querySelector<HTMLElement>('[data-slot="summary-card"]');
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 50)));
@@ -109,7 +115,22 @@ async function drive(panel: () => AgentsPanelState): Promise<string> {
   const front = sessionTabs(id).tabs.find((tab) => tab.id === sessionTabs(id).active);
   seen.changesOpens = front?.kind === "review" ? front.target.type : front?.kind;
   seen.grew = card()!.getBoundingClientRect().height !== height;
+  // Sources: what the session used, the first three, then View all for its searches and pages.
+  const sources = [...card()!.querySelectorAll('[data-slot="summary-section"]')].find((section) => section.querySelector("header")?.textContent?.startsWith("Sources"));
+  seen.sources = [...(sources?.querySelectorAll('[data-slot="summary-row"]') ?? [])].map((row) => row.textContent?.trim());
+  [...(sources?.querySelectorAll<HTMLButtonElement>('[data-slot="summary-row"]') ?? [])].find((row) => row.textContent?.trim() === "View all")?.click();
+  await frame();
+  seen.sourcesOpens = sessionTabs(id).active;
+  seen.sourcesTab = [...document.querySelectorAll('[data-slot="sources-part"]')].map((part) =>
+    [...part.querySelectorAll("h3, [data-slot=sources-line]")].map((line) => line.textContent?.trim()));
   return JSON.stringify(seen);
+}
+
+/** The Sources tab, while it is in front, as the session's tab bar would show it. */
+function FrontTab() {
+  const tabs = useSessionTabsOf(id);
+  const front = tabs.tabs.find((candidate) => candidate.id === tabs.active);
+  return front?.kind === "panel" && front.view.type === "sources" ? <SourcesTab conversationId={id} /> : null;
 }
 
 function Fixture() {
@@ -130,6 +151,7 @@ function Fixture() {
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="h-titlebar flex items-center px-5 text-sm font-medium">Add the web interface</header>
           <PinnedSummary conversation={conversation} />
+          <FrontTab />
         </div>
       </main>
       </AgentsPanelContext.Provider>

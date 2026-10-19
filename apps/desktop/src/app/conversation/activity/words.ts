@@ -244,15 +244,38 @@ function hostOf(url: string): string {
   }
 }
 
-/** A tool's own words for `other`: what Brigadier calls it, else "Used {name}". */
-function otherWords(short: string, detail: string | null = null): StepWords {
-  const known = OTHER[short];
-  if (known) return { kind: "other", doing: known[0], done: known[1], phrase: known[1] };
-  const action = short
+/** A tool's name as words: "search_issues" is "search issues". */
+function actionWords(short: string): string {
+  return short
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .replace(/[_-]+/g, " ")
     .toLowerCase()
     .trim();
+}
+
+/**
+ * The integration (MCP server) a tool comes from, as the user knows it: `mcp__linear__search_issues`
+ * is "Linear", `mcp__claude_ai_Gmail__…` "Gmail". Brigadier's own tools and plain tools have none.
+ */
+export function connectorName(name: string): string | null {
+  const server = /^mcp__(.+?)__/.exec(name)?.[1]?.replace(/^claude_ai_/i, "");
+  if (!server || server === "brigadier") return null;
+  const words = server.replace(/[_-]+/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : "an integration";
+}
+
+/**
+ * A tool's own words for `other`: what Brigadier calls it; an integration's tool by the
+ * integration ("Used Linear", what it did and was given in its fold); else "Used {name}".
+ */
+function otherWords(short: string, detail: string | null = null, connector: string | null = null): StepWords {
+  const known = OTHER[short];
+  if (known) return { kind: "other", doing: known[0], done: known[1], phrase: known[1] };
+  const action = actionWords(short);
+  if (connector) {
+    const given = [action, detail].filter(Boolean).join(" · ");
+    return { kind: "other", doing: `Using ${connector}`, done: `Used ${connector}`, phrase: `Used ${connector}`, unnamed: true, ...(given && { given }) };
+  }
   const name = action && action !== "tool" ? action : "a tool";
   return { kind: "other", doing: `Using ${name}`, done: `Used ${name}`, phrase: `Used ${name}`, unnamed: true, ...(detail && { given: detail }) };
 }
@@ -293,7 +316,7 @@ export function stepWords(call: StepCall, tasks: Readonly<Record<string, Task>> 
   }
   const preview = PREVIEWS[short];
   if (preview) return { kind: "preview", doing: preview[0], done: preview[1] };
-  return otherWords(short, detail);
+  return otherWords(short, detail, connectorName(call.name));
 }
 
 /**
@@ -541,7 +564,7 @@ function summaryRank(key: string): number {
  * A run of steps in one sentence, comma-joined: edits, then what it read, searched or listed,
  * then commands and the web, then the rest in the order they first came ("Edited a file, read
  * files, ran commands"). Each `other` tool counts as a kind of its own; one Brigadier has no
- * words for says how often it was used ("used search issues 6 times").
+ * words for says how often it was used ("used Linear 6 times").
  */
 export function summarize(steps: readonly StepWords[]): string {
   const parts = segments(steps).map(([key, { words, count }]) =>

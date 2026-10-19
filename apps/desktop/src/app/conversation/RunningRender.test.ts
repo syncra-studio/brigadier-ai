@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
-test("Background lists the previews still there; a row opens its output tab, which pauses, resumes, stops and opens it", { timeout: 60000 }, async (t) => {
+test("Background lists the previews still there; a web preview's Show output opens its output tab, which pauses, resumes, stops and opens it", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "running.html?drive=1", "running-result", 30000)) as {
     section: string; order: string[]; chip: string; pausedIcon: boolean; opened: string; tabText: string; initial: string[];
     paused: string[]; resumed: string[]; windows: string[]; error: string; browser: string; stopped: boolean; ended: string;

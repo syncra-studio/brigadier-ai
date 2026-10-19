@@ -6,6 +6,7 @@
  * `bold=1` writes its breakdown in bold-led lines, as models still sometimes do (#319), with one
  * bold run mid-sentence; `details=0` drops its Details. `old=1` is an answer written before Q87:
  * numbered markers and a trailing `### Sources` list, which now read as plain Markdown.
+ * `preview=1` has the answer name the one local page the turn left running; `preview=2` names two.
  *
  * `drive=1` reads what shows, opens the report, and writes what it saw to
  * `<pre id="research-answer-result">` (ResearchAnswerRender.test.ts reads it). Without it the
@@ -28,6 +29,7 @@ const changed = query.get("changed") === "1";
 const bold = query.get("bold") === "1";
 const detailed = query.get("details") !== "0";
 const old = query.get("old") === "1";
+const previews = Number(query.get("preview") ?? 0);
 const ID = "research-answer";
 const PAGE = "5".repeat(32);
 const begun = Date.now() - 600_000;
@@ -61,6 +63,7 @@ const ANSWER = old
           ]),
       "",
       `The full comparison is in [Full report](brigadier-page:${PAGE}).`,
+      ...(previews ? ["", previews > 1 ? "The page runs at http://localhost:5173/ and its API at http://localhost:3000/." : "Try it at http://localhost:5173/ (still running)."] : []),
       ...(detailed ? ["", "### Details", "Checks: none run. Review: none. Not checked: nothing."] : []),
     ].join("\n");
 
@@ -171,13 +174,20 @@ async function drive(): Promise<object> {
     report: all("[data-slot=report-link]").map((link) => text(link)),
     bold: all("[data-answer] strong").map((run) => text(run)),
     items: all("[data-answer] li").map((item) => text(item)),
+    preview: text(document.querySelector("[data-slot=web-preview]")),
   };
+  // The web preview opens in the session's browser.
+  document.querySelector<HTMLButtonElement>("[data-slot=web-preview] > button")?.click();
+  await wait(100);
+  const browser = sessionTabs(ID).tabs.find((each) => each.kind === "browser");
+  const browsed = browser?.kind === "browser" ? browser.url : null;
   all<HTMLAnchorElement>("[data-slot=report-link]")[0]?.click();
   await until(() => !!document.querySelector("[data-slot=report-dialog]") || sessionTabs(ID).tabs.some((tab) => tab.kind === "page"), 3000);
   await wait(200);
   const tab = sessionTabs(ID).tabs.find((each) => each.kind === "page");
   return {
     ...shown,
+    browsed,
     opened: {
       tab: tab?.kind === "page" ? { pageId: tab.pageId, active: sessionTabs(ID).active === tab.id } : null,
       dialog: text(document.querySelector("[data-slot=report-dialog]")),

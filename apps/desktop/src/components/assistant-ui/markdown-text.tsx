@@ -621,6 +621,15 @@ function LinkMenu({ href }: { href: string }) {
   );
 }
 
+/** A link's site as its hover card names it: "nodejs.org", "localhost:3000". */
+function linkHost(href: string): string {
+  try {
+    return new URL(href).host.replace(/^www\./, "");
+  } catch {
+    return href;
+  }
+}
+
 /** Web links open where Settings › Browser say; anything else that isn't a page is a file. */
 export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, children, ...props }) => {
   const task = useContext(TaskMentionContext);
@@ -663,15 +672,20 @@ export const MarkdownLink: FC<React.ComponentProps<"a">> = ({ className, href, c
     </a>
   );
   if (!href || href.startsWith("#")) return link;
-  // Its address on hover, and a right-click menu.
+  // Its site and whole address on hover (nothing fetched), and a right-click menu.
   return (
     <ContextMenu>
       <Tooltip>
         <TooltipTrigger asChild>
           <ContextMenuTrigger asChild>{link}</ContextMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="top" data-slot="link-address" className="max-w-sm break-all">
-          {mail ? href.replace(/^mailto:/i, "") : href}
+        <TooltipContent side="top" data-slot="link-address" className="max-w-sm flex-col items-start gap-0 text-start break-all">
+          {mail ? href.replace(/^mailto:/i, "") : (
+            <>
+              <span data-slot="link-host" className="font-medium">{linkHost(href)}</span>
+              <span className="text-muted-foreground">{href}</span>
+            </>
+          )}
         </TooltipContent>
       </Tooltip>
       <LinkMenu href={href} />

@@ -15,4 +15,13 @@ test("the context card reads in the reference order, one row-height line per row
   assert.equal(seen.reviewedOpens, "panel:reviews");
   assert.equal(seen.changesOpens, "branch", "Changes opens the branch's diff");
   assert.equal(seen.grew, false);
+  // Sources lists what the session used (integrations, then one Web search), then View all,
+  // which opens the Sources tab with every search and page (Q87).
+  assert.deepEqual(seen.sources, ["Linear", "Web search", "View all"]);
+  assert.equal(seen.sourcesOpens, "panel:sources");
+  assert.deepEqual(seen.sourcesTab, [
+    ["Used", "Linear"],
+    ["Searched 1 time", "express static files"],
+    ["Opened 2 pages", "expressjs.comhttps://expressjs.com/en/starter/static-files.html", "developer.mozilla.orghttps://developer.mozilla.org/en-US/docs/Web/HTML/Element/form"],
+  ]);
 });

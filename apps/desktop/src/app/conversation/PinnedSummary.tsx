@@ -2,8 +2,11 @@ import { useAui } from "@assistant-ui/react";
 import {
   Compare,
   ExclamationMarkCircle,
+  Globe,
   HandRaised,
   Link,
+  Paperclip,
+  Plugin,
   Plus,
   PullRequestClosed,
   PullRequestDraft,
@@ -27,6 +30,7 @@ import { useShallow } from "zustand/react/shallow";
 import { showCard } from "@/app/conversation/ActionCards";
 import { useAskRequest } from "@/app/conversation/activity/askRequest";
 import { revertPullRequest } from "@/app/conversation/activity/revert";
+import { connectorName } from "@/app/conversation/activity/words";
 import { isRunRequest } from "@/app/conversation/blocks";
 import { PlanSection } from "@/app/conversation/cards/PlanSection";
 import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
@@ -126,7 +130,7 @@ function linksIn(text: string): string[] {
   );
 }
 
-function hostOf(url: string): string {
+export function hostOf(url: string): string {
   try {
     return new URL(url).host.replace(/^www\./, "");
   } catch {
@@ -135,8 +139,8 @@ function hostOf(url: string): string {
 }
 
 /**
- * The session's sources, listed in the pinned card: links in the user's messages (as soon as
- * they are sent) and pages the orchestrator read, first seen first.
+ * The session's sources: links in the user's messages (as soon as they are sent), first seen
+ * first; in a session also the pages the thread read.
  */
 function useSources(conversationId: string, session = true): string[] {
   const messages = useApp((s) => s.threads[conversationId]?.items);
@@ -171,10 +175,40 @@ const SourceRow = ({ url }: { url: string }) => (
   </SummaryRowButton>
 );
 
+/** One of what a session used, as its card lists it. */
+export type UsedSource = { key: string; icon: ReactNode; label: string; title: string; open?: () => void };
+
+/**
+ * What a session used, as its card's Sources list it: the files attached to the user's messages,
+ * the links in them, the integrations the thread called, then one "Web search" once it searched
+ * or read a page. The pages themselves are in the Sources tab.
+ */
+export function useUsedSources(conversationId: string): UsedSource[] {
+  const messages = useApp((s) => s.threads[conversationId]?.items);
+  const json = useBoard((s) => {
+    if (s.board?.conversationId !== conversationId) return "[[],false]";
+    const steps = s.board.orchestratorSteps;
+    const connectors = [...new Set(steps.flatMap((step) => (step.kind.type === "tool" ? [connectorName(step.kind.name)] : []).filter((name) => name !== null)))];
+    const web = steps.some((step) => step.kind.type === "searchedWeb" || step.kind.type === "readPage");
+    return JSON.stringify([connectors, web]);
+  });
+  return useMemo(() => {
+    const [connectors, web] = JSON.parse(json) as [string[], boolean];
+    const users = (messages ?? []).filter((message) => message.role === "user");
+    const files = [...new Map(users.flatMap((message) => message.attachments).map((file) => [file.id, file])).values()];
+    const links = [...new Set(users.flatMap((message) => linksIn(message.text)))];
+    return [
+      ...files.map((file): UsedSource => ({ key: `file:${file.id}`, icon: <Paperclip />, label: file.name, title: file.name })),
+      ...links.map((url): UsedSource => ({ key: `link:${url}`, icon: <Link />, label: hostOf(url), title: url, open: () => openLink(url) })),
+      ...connectors.map((name): UsedSource => ({ key: `tool:${name}`, icon: <Plugin />, label: name, title: name })),
+      ...(web ? [{ key: "web", icon: <Globe />, label: "Web search", title: "Web search" }] : []),
+    ];
+  }, [messages, json]);
+}
+
 /** Sources shown before "View all". */
 const SOURCES = 3;
 
-/** "Sources": the first links, "View all" for every one, and "+" to add one to the message. */
 /** Where an item waiting on the user came from, in a few words. */
 function waitingFrom(
   item: WaitingItem,
@@ -268,11 +302,10 @@ function WaitingOnYou({ conversationId }: { conversationId: string }) {
   );
 }
 
-function Sources({ conversationId, session = true }: { conversationId: string; session?: boolean }) {
-  const sources = useSources(conversationId, session);
+/** "+" on Sources: starts a link in the composer, for the user to finish. */
+function useAddSource(): () => void {
   const aui = useAui();
-  if (sources.length === 0) return null;
-  const add = () => {
+  return () => {
     const composer = aui.composer();
     const text = composer.getState().text;
     composer.setText(
@@ -282,16 +315,56 @@ function Sources({ conversationId, session = true }: { conversationId: string; s
       document.querySelector<HTMLElement>(COMPOSER_EDITABLE)?.focus(),
     );
   };
+}
+
+function AddSource() {
+  const add = useAddSource();
+  return (
+    <TooltipIconButton tooltip="Add source" size="icon-xs" onClick={add}>
+      <Plus />
+    </TooltipIconButton>
+  );
+}
+
+/**
+ * A session's "Sources": what it used (attachments, links, integrations, "Web search"), the first
+ * three, then "View all", which opens the Sources tab with every search and page.
+ */
+function SessionSources({ conversationId }: { conversationId: string }) {
+  const used = useUsedSources(conversationId);
+  if (used.length === 0) return null;
+  return (
+    <SummarySection foldKey="sources" title="Sources" count={used.length} action={<AddSource />}>
+      {used.slice(0, SOURCES).map((source) =>
+        source.open ? (
+          <SummaryRowButton key={source.key} title={source.title} icon={source.icon} onClick={source.open}>
+            {source.label}
+          </SummaryRowButton>
+        ) : (
+          <SummaryRow key={source.key} title={source.title} icon={source.icon}>
+            {source.label}
+          </SummaryRow>
+        ),
+      )}
+      {(used.length > SOURCES || used.some((source) => source.key === "web")) && (
+        <SummaryRowButton muted icon={<Link />} onClick={() => openPanelTab(conversationId, { type: "sources" }, "Sources")}>
+          View all
+        </SummaryRowButton>
+      )}
+    </SummarySection>
+  );
+}
+
+/** A Chat's "Sources": the links in the user's messages; "View all" lists every one. */
+function Sources({ conversationId }: { conversationId: string }) {
+  const sources = useSources(conversationId, false);
+  if (sources.length === 0) return null;
   return (
     <SummarySection
       foldKey="sources"
       title="Sources"
       count={sources.length}
-      action={
-        <TooltipIconButton tooltip="Add source" size="icon-xs" onClick={add}>
-          <Plus />
-        </TooltipIconButton>
-      }
+      action={<AddSource />}
     >
       {sources.slice(0, SOURCES).map((url) => (
         <SourceRow key={url} url={url} />
@@ -824,7 +897,7 @@ function ChatSummaryContent({ conversation, active }: { conversation: Conversati
     <div className="flex flex-col py-2.5">
       {empty && <p className="text-muted-foreground px-4 py-1.5 text-sm">Nothing here yet</p>}
       <WorkersSummary conversationId={conversation.id} />
-      <Sources conversationId={conversation.id} session={false} />
+      <Sources conversationId={conversation.id} />
       {attachments.length > 0 && <SummarySection foldKey="attachments" title="Attachments" count={attachments.length}>
         {attachments.map((attachment) => <SummaryRow key={attachment.id}>{attachment.name}</SummaryRow>)}
       </SummarySection>}
@@ -908,7 +981,7 @@ function SessionSummaryContent({
           )}
           <WorkersSummary conversationId={conversation.id} />
           <ActivitiesSummary conversationId={conversation.id} />
-          <Sources conversationId={conversation.id} />
+          <SessionSources conversationId={conversation.id} />
         </div>
       </SummaryCard>
       {/* The run's card sits right under the context card, before any other plan. */}

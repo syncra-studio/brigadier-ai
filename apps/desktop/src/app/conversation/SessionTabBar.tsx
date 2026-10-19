@@ -456,7 +456,7 @@ export function SessionTabBar({
                         : tab.kind === "page" ? <Document className="size-icon-sm shrink-0" />
                         : tab.kind === "mockup" ? <MockupTabIcon conversationId={id} />
                         : tab.kind === "plan" ? <Lightbulb className="size-icon-sm shrink-0" />
-                        : tab.kind === "panel" ? tab.view.type === "output" ? <Terminal className="size-icon-sm shrink-0" /> : <ShieldCheck className="size-icon-sm shrink-0" /> : (
+                        : tab.kind === "panel" ? tab.view.type === "output" ? <Terminal className="size-icon-sm shrink-0" /> : tab.view.type === "sources" ? <Globe className="size-icon-sm shrink-0" /> : <ShieldCheck className="size-icon-sm shrink-0" /> : (
                         <DiffGlyph className="size-icon-sm shrink-0" />
                       )}
                       <span className={cn("session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap", tab.kind === "file" && tab.preview && "italic", tab.kind === "conflict" && tab.view !== "compare" && "text-destructive")}>
@@ -594,6 +594,7 @@ const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ defau
 const MainTerminalTab = lazy(() => import("./MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
 const MockupView = lazy(() => import("./MockupTab").then((module) => ({ default: module.MockupView })));
 const ReviewsTab = lazy(() => import("./ReviewsTab").then((module) => ({ default: module.ReviewsTab })));
+const SourcesTab = lazy(() => import("./SourcesTab").then((module) => ({ default: module.SourcesTab })));
 const PlanTab = lazy(() => import("./PlanTab").then((module) => ({ default: module.PlanTab })));
 const ConflictTab = lazy(() => import("./ConflictTab").then((module) => ({ default: module.ConflictTab })));
 const PageTabView = lazy(() => import("./pages/PageTabView").then((module) => ({ default: module.PageTabView })));
@@ -646,7 +647,8 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
               ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
                 : tab.kind === "plan" ? <PlanTab plan={tab.plan} />
-                : tab.kind === "panel" ? tab.view.type === "output" ? <OutputTab conversationId={conversationId} view={tab.view} /> : <ReviewsTab conversationId={conversationId} />
+                : tab.kind === "panel" ? tab.view.type === "output" ? <OutputTab conversationId={conversationId} view={tab.view} />
+                  : tab.view.type === "sources" ? <SourcesTab conversationId={conversationId} /> : <ReviewsTab conversationId={conversationId} />
                 : tab.kind === "conflict" ? <ConflictTab conversationId={conversationId} tab={tab} />
                 : (
                   <TabWithChat conversationId={conversationId} tab={tab}>

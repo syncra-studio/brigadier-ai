@@ -179,7 +179,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   // right-click opens it outside or copies it, and a file chip's opens it, shows it, copies its
   // path or saves a copy.
   assert.deepEqual(seen.linkExtras, {
-    address: "https://nodejs.org/en/about",
+    address: "nodejs.orghttps://nodejs.org/en/about",
     joined: false,
     dashed: true,
     menu: ["Open in external browser", "Copy link"],

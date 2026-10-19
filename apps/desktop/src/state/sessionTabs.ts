@@ -112,10 +112,12 @@ export type ConflictTabState = {
 export type ConflictView = "conflict" | "compare" | "merge";
 /**
  * A view of the session's own records, opened from a row of its context card or the thread's end:
- * its reviews and checks in full.
+ * its reviews and checks in full, or every source it used.
  */
 export type PanelView =
   | { type: "reviews" }
+  /** Every source the session used: attachments, links, integrations, its searches and the pages it opened. */
+  | { type: "sources" }
   /** What something in the context card's Background prints: a preview's log or a long command's output. */
   | { type: "output"; source: "preview" | "run"; id: string };
 export type PanelTabState = { kind: "panel"; id: string; opener: string | null; view: PanelView; title: string };

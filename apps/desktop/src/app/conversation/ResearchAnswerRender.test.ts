@@ -11,6 +11,8 @@ type Seen = {
   report: (string | null)[];
   bold: (string | null)[];
   items: (string | null)[];
+  preview: string | null;
+  browsed: string | null;
   opened: { tab: { pageId: string | null; active: boolean } | null; dialog: string | null; read: string[] };
 };
 
@@ -51,6 +53,18 @@ test("a session answer whose request changed code keeps Details, its one fold", 
   const seen = await see(t, "kind=session&changed=1");
   assert.deepEqual(seen.folds, ["Details"]);
   assert.deepEqual(seen.links, LINKS);
+});
+
+// Q87: a turn whose answer names exactly one local page left running ends with a web preview
+// that opens it in the session's browser; two pages, or none, and there is no card.
+test("an answer naming one local page gets a web preview that opens in the browser", { timeout: 90000 }, async (t) => {
+  const one = await see(t, "kind=session&preview=1");
+  assert.equal(one.preview, "Web previewlocalhost:5173Open in");
+  assert.equal(one.browsed, "http://localhost:5173/");
+  const two = await see(t, "kind=session&preview=2");
+  assert.equal(two.preview, null);
+  const none = await see(t, "kind=session");
+  assert.equal(none.preview, null);
 });
 
 // An answer written before Q87 reads as plain Markdown: its list of sources shows as written,

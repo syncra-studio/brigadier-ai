@@ -72,8 +72,10 @@ const read = (activity: string) => {
   const button = row(activity);
   return button && { label: text(button.querySelector("span.truncate")), elapsed: text(button.querySelector("span.tabular-nums")), tip: button.title };
 };
-/** A row's one action, shown on hover in its time's place. */
-const stop = (activity: string) => row(activity)?.parentElement?.querySelector<HTMLButtonElement>('[data-slot="summary-row-action"] button') ?? null;
+/** A row's actions, shown on hover in its time's place: Stop, and Show output on a web preview that is up. */
+const action = (activity: string, label: string) =>
+  row(activity)?.parentElement?.querySelector<HTMLButtonElement>(`[data-slot="summary-row-action"] button[aria-label^="${label}"]`) ?? null;
+const stop = (activity: string) => action(activity, "Stop");
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 30)));
 
 async function drive(): Promise<Record<string, unknown>> {
@@ -96,13 +98,25 @@ async function drive(): Promise<Record<string, unknown>> {
   await frame();
   seen.sameRow = building !== null && row("preview-2") === building;
   seen.stops = ["preview-1", "preview-2", "run-1", "run-2"].map((activity) => text(stop(activity)));
-  // A click opens what it prints in a tab; nothing opens in the card.
+  // A web preview that is up opens its page in Brigadier's browser, its output one button away;
+  // anything else opens what it prints in a tab. Nothing opens in the card.
   const height = section()!.getBoundingClientRect().height;
+  const front = () => {
+    const tabs = sessionTabs(id);
+    return tabs.tabs.find((candidate) => candidate.id === tabs.active);
+  };
   row("preview-1")?.click();
   await frame();
-  const tabs = sessionTabs(id);
-  const tab = tabs.tabs.find((candidate) => candidate.id === tabs.active);
+  const browser = front();
+  seen.browsed = browser?.kind === "browser" ? browser.url : browser?.kind ?? null;
+  seen.outputs = ["preview-1", "preview-2", "run-1"].map((activity) => !!action(activity, "Show output"));
+  action("preview-1", "Show output")?.click();
+  await frame();
+  const tab = front();
   seen.opened = tab?.kind === "panel" ? `${tab.id} ${tab.title}` : tab?.kind ?? null;
+  row("preview-2")?.click();
+  await frame();
+  seen.openedApp = sessionTabs(id).active;
   row("run-1")?.click();
   await frame();
   seen.openedRun = sessionTabs(id).active;

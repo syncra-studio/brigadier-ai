@@ -73,6 +73,8 @@ import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { describeTurnError, interruptedByQuit } from "@/app/conversation/turnError";
 import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
+import { webPreviewUrl } from "@/app/conversation/activity/webPreview";
+import { WebPreviewCard } from "@/app/conversation/activity/WebPreviewCard";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import {
   BranchPicker,
@@ -362,8 +364,15 @@ function TurnEnd({ meta }: { meta: BlockMeta }) {
   const merge = useTurnMerge(meta.orchestratorSteps, meta.requestIds);
   // A run's work is merged from its card, never undone behind the run's back.
   const card = meta.session && !isRunRequest(meta.requestId);
+  // The page the turn left running: the one local address its final answer names.
+  const preview = useAuiState((s) => {
+    const part = s.message.parts.findLast((candidate) => candidate.type === "text");
+    return part?.type === "text" ? webPreviewUrl(part.text) : null;
+  });
+  const conversation = useViewConversation();
   return (
     <div data-slot="turn-end" className="mt-activity flex flex-col gap-3 empty:hidden">
+      {preview && <WebPreviewCard url={preview} conversationId={meta.session ? (conversation?.id ?? null) : null} />}
       <TurnProofs steps={meta.orchestratorSteps} />
       {card ? <TurnDiff requestIds={meta.requestIds} merge={merge} /> : merge?.own && <MergeHeader merge={merge.merge} />}
       {merge?.own && <MergeWarning merge={merge.merge} />}

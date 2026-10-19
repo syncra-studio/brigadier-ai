@@ -72,12 +72,13 @@ const press = (label: string, within: ParentNode | null = document) => {
   button?.click();
 };
 const labels = () => [...(tab()?.querySelectorAll("header button") ?? [])].map((button) => button.textContent?.trim());
-/** A row's Stop, in its time's place on hover. */
-const stopRow = (previewId: string) => {
-  const button = row(previewId)?.parentElement?.querySelector<HTMLButtonElement>('[data-slot="summary-row-action"] button');
+/** A row's action, in its time's place on hover: Stop, or a web preview's Show output (its row opens the page). */
+const rowAction = (previewId: string, label: string) => {
+  const button = row(previewId)?.parentElement?.querySelector<HTMLButtonElement>(`[data-slot="summary-row-action"] button[aria-label^="${label}"]`);
   button?.focus();
   button?.click();
 };
+const stopRow = (previewId: string) => rowAction(previewId, "Stop");
 
 /** The output tab in front, as the session's tab bar would show it. */
 function FrontTab() {
@@ -98,7 +99,7 @@ function Fixture() {
       seen.order = [...document.querySelectorAll("[data-activities] [data-activity]")].map((button) => button.getAttribute("data-activity"));
       seen.chip = row("preview-5")?.textContent;
       seen.pausedIcon = !!row("preview-3")?.querySelector("svg");
-      row("preview-4")?.click();
+      rowAction("preview-4", "Show output");
     });
     if (params.has("drive")) {
       at(1000, () => {
@@ -122,7 +123,7 @@ function Fixture() {
         const tabs = sessionTabs(id);
         const browser = tabs.tabs.find((candidate) => candidate.id === tabs.active);
         seen.browser = browser?.kind === "browser" ? browser.url : undefined;
-        row("preview-4")?.click();
+        rowAction("preview-4", "Show output");
       });
       at(2800, () => { press("Stop", tab()?.querySelector("header") ?? null); });
       at(3100, () => {
