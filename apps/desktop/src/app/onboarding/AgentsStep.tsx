@@ -158,7 +158,7 @@ function AgentCard({
     <li
       data-slot="agent-card"
       data-state={waiting ? "waiting" : state}
-      className="bg-card rounded-surface flex min-w-0 items-center gap-3.5 border p-4"
+      className="bg-card rounded-settings flex min-w-0 items-center gap-3.5 border p-4"
     >
       <span className="bg-muted rounded-control size-agent-mark grid shrink-0 place-items-center">
         <ProviderGlyph provider={provider} className="size-6.5" />

@@ -1,5 +1,4 @@
 import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
-import { ArrowRight } from "@openai/apps-sdk-ui/components/Icon";
 
 import { errorText } from "@/app/dialogs/fields";
 import { IntroCanvas, WINDOW_SHAPED } from "@/app/onboarding/IntroCanvas";
@@ -54,8 +53,8 @@ function setPageStaged(staged: boolean): void {
  * faint waves of light moving over it; the window's chrome comes back. Brigadier's mark comes
  * up at the centre, glowing, read just as the music drops, held while the desktop's dim lifts,
  * then fades away; the music's motion stops with it and its chord rings on, breathing. The
- * title comes in a letter at a time; the arrow button under it appears last, with a soft note,
- * and only then can it be used (Enter too, as it takes the focus). The sound settles and fades
+ * title comes in a letter at a time; Continue under it appears last, larger than the steps' own,
+ * with a soft note, and only then can it be used (Enter too, wherever the focus is). The sound settles and fades
  * out a few seconds later, into the name if need be. Elsewhere it plays the same inside the
  * window, without the dim. Escape shows the end at once, as reduced motion does. Continuing fades
  * the title and the waves out, and the name step comes in on the same dark, with the mark above
@@ -206,6 +205,19 @@ export function Welcome({
     leaveTimer.current = setTimeout(() => onContinueRef.current(), reducedMotion() ? 0 : tokenMs("--intro-leave"));
   }, []);
 
+  // Once Continue is there, Enter continues, as on the steps after.
+  useEffect(() => {
+    if (step !== "intro" || !ready) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" || event.isComposing) return;
+      event.preventDefault();
+      const others = event.altKey || event.shiftKey || event.ctrlKey || event.metaKey;
+      if (!event.repeat && !others) leave();
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [step, ready, leave]);
+
   // Leaving with the window still staged (the setup closed) restores it.
   useEffect(
     () => () => {
@@ -270,7 +282,7 @@ export function Welcome({
               }
             }}
           >
-            <ContinueButton ready={ready} arrow onClick={leave} />
+            <ContinueButton ready={ready} intro onClick={leave} />
           </div>
         </div>
       ) : (
@@ -280,6 +292,10 @@ export function Welcome({
   );
 }
 
+/** The intro's Continue: the steps' own at the app's large size, its key's chip grown with it. */
+const INTRO_BUTTON = "gap-3 rounded-full ps-5 pe-2.5";
+const INTRO_KEY = "h-5.5 px-2 in-data-[slot=button]:text-xs";
+
 /** How many letters (spaces aside) the title's lines before `line` hold. */
 function lettersBefore(line: number): number {
   return TITLE.slice(0, line).reduce((sum, text) => sum + text.replaceAll(" ", "").length, 0);
@@ -288,14 +304,14 @@ function lettersBefore(line: number): number {
 function ContinueButton({
   ready,
   busy = false,
-  arrow = false,
+  intro = false,
   onClick,
   form,
 }: {
   ready: boolean;
   busy?: boolean;
-  /** Just an arrow, not the word or its key (Enter still works). */
-  arrow?: boolean;
+  /** The intro's: out of reach (inert) until it has come in, never greyed. */
+  intro?: boolean;
   onClick?: () => void;
   form?: string;
 }) {
@@ -307,17 +323,16 @@ function ContinueButton({
   return (
     <Button
       ref={button}
-      size="lg"
       type={form ? "submit" : "button"}
       form={form}
-      disabled={arrow ? busy : !ready || busy}
+      disabled={intro ? busy : !ready || busy}
       onClick={onClick}
-      aria-label={arrow ? "Continue" : undefined}
-      className={arrow ? "px-7" : PRIMARY_BUTTON}
+      size={intro ? "lg" : "default"}
+      className={intro ? INTRO_BUTTON : PRIMARY_BUTTON}
     >
       {busy && <Spinner className="animate-spin" />}
-      {arrow ? <ArrowRight /> : "Continue"}
-      {!arrow && <Kbd className={PRIMARY_KEY}>↩</Kbd>}
+      Continue
+      <Kbd className={intro ? INTRO_KEY : PRIMARY_KEY}>↩</Kbd>
     </Button>
   );
 }

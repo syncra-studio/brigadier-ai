@@ -2,7 +2,9 @@
  * The first launch's intro, full window over a faked app. It writes the title it shows (its name
  * and its lines) to #onboarding-welcome-result (OnboardingWelcomeRender.test.ts reads it).
  * ?step=name shows the name instead; with ?drive=1 it types spaces, then a name, presses Return
- * and writes what Continue and the field did to #onboarding-name-result.
+ * and writes what Continue and the field did to #onboarding-name-result. The intro with ?drive=1
+ * settles it (Escape), presses Enter with the focus off its button and writes what Continue did
+ * to #onboarding-intro-result.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -17,6 +19,7 @@ mockIPC(() => null);
 const params = new URLSearchParams(location.search);
 const step = params.get("step") === "name" ? "name" : "intro";
 const named: string[] = [];
+let continued = 0;
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const continueOn = () => !(document.querySelector('button[type="submit"]') as HTMLButtonElement | null)?.disabled;
 
@@ -41,11 +44,27 @@ async function driveName(): Promise<string> {
   return JSON.stringify(seen);
 }
 
+const continueButton = () => document.querySelector<HTMLElement>(".welcome-continue");
+
+/** Settles the intro, then presses Enter with the focus elsewhere: Continue's, wherever it is. */
+async function driveIntro(): Promise<string> {
+  for (let tries = 0; !document.querySelector(".welcome-continue") && tries < 50; tries++) await wait(50);
+  await fixtureInput({ type: "key", key: "Escape" });
+  for (let tries = 0; continueButton()?.inert !== false && tries < 50; tries++) await wait(50);
+  const label = continueButton()?.textContent;
+  (document.activeElement as HTMLElement | null)?.blur();
+  await fixtureInput({ type: "key", key: "Enter" });
+  await wait(600);
+  return JSON.stringify({ label, continued });
+}
+
 function Fixture() {
   const [result, setResult] = useState("");
   const [nameResult, setNameResult] = useState("");
+  const [introResult, setIntroResult] = useState("");
   useEffect(() => {
     if (step === "name" && params.has("drive")) void driveName().then(setNameResult);
+    if (step === "intro" && params.has("drive")) void driveIntro().then(setIntroResult);
   }, []);
   useEffect(() => {
     if (step !== "intro") return;
@@ -75,7 +94,7 @@ function Fixture() {
               step={step}
               name=""
               onSound={() => {}}
-              onContinue={() => {}}
+              onContinue={() => continued++}
               onName={async (name) => {
                 named.push(name);
               }}
@@ -85,6 +104,7 @@ function Fixture() {
       </Dialog>
       {result && <pre id="onboarding-welcome-result">{result}</pre>}
       {nameResult && <pre id="onboarding-name-result">{nameResult}</pre>}
+      {introResult && <pre id="onboarding-intro-result">{introResult}</pre>}
     </>
   );
 }

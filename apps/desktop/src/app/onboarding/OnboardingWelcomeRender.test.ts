@@ -9,6 +9,14 @@ test("onboarding: the intro's title", { timeout: 60000 }, async (t) => {
   assert.deepEqual(seen, { name: "Brigadier, at your command.", lines: ["Brigadier,", "at your command."] });
 });
 
+// The intro's Continue is the steps' own, its key Return; Enter continues wherever the focus is.
+test("onboarding: Enter continues from the intro", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(
+    await renderFixtureLive(t, "onboarding-welcome.html?drive=1", "onboarding-intro-result", 20000),
+  ) as Record<string, unknown>;
+  assert.deepEqual(seen, { label: "Continue↩", continued: 1 });
+});
+
 // The name: its field has the focus as it opens; Continue stays off for an empty field or spaces,
 // comes on with a name, shows Return as its key, and Return saves the name, trimmed.
 test("onboarding: the name's Continue", { timeout: 60000 }, async (t) => {
