@@ -6,11 +6,13 @@
 //! - A message sent while no turn runs starts one. While a turn runs it waits in the queue,
 //!   or is steered into the turn when the user asks (a queued message's Steer).
 //! - In a session, a message sent while the newest answer still works (its turn, a worker or
-//!   a card) joins that answer at once: steered into the running turn as the user's message
-//!   (shown inside its block), or carried by the next turn when none runs. Whether it is a
-//!   task of its own or belongs to another session is the thread's to judge as it reads it.
-//!   A message steered in while a command of the thread's runs says so (`held_by`) until that
-//!   command ends and the thread can read it.
+//!   a card) is a follow-up: it waits in the queue, marked deciding, while the orchestrator
+//!   judges it with `route_follow_up`. One that belongs to that answer joins it (steered in,
+//!   shown inside its block); one of its own waits until no answer works, then goes as its
+//!   own request. Judging is optional: a follow-up the orchestrator didn't judge by the end
+//!   of its turn joins that turn's request, and one still unjudged after [`DECIDING_WAIT`]
+//!   (the thread is inside a long command) joins the working answer. A message steered in while a command of the thread's runs says so
+//!   (`held_by`) until that command ends and the thread can read it.
 //! - Worker results arrive as [`Envelope`]s in the inbox. Only final reports, blocking
 //!   questions, card outcomes and task failures ever enter the orchestrator's context;
 //!   worker progress never does. An envelope arriving while the orchestrator is idle starts
@@ -64,6 +66,10 @@ use crate::{Error, Result, now_ms};
 
 /// Text deltas arriving within this window are stored as one event.
 const DELTA_WINDOW: Duration = Duration::from_millis(30);
+
+/// How long a follow-up waits for the thread's judgment before it joins the working answer:
+/// a thread inside a long command can't judge it, and the user shouldn't watch it decide.
+pub(crate) const DECIDING_WAIT: Duration = Duration::from_secs(if cfg!(test) { 3 } else { 20 });
 
 /// How long an envelope that needs nothing now (a landing done, checks passed, a clean review,
 /// a status) waits for others while more of its request still runs, so they wake the thread
@@ -402,6 +408,15 @@ struct ConvState {
     withdrawn: HashSet<TaskId>,
     /// The user messages the running turn carries (resent after a Chat fallback).
     in_turn: Vec<Message>,
+    /// Queued follow-ups the orchestrator is asked about in an inbox envelope, each with the
+    /// request that envelope belongs to.
+    asking: Vec<(String, Option<String>)>,
+    /// Queued follow-ups the running turn was asked about: the ones it leaves undecided wait
+    /// in the queue when it ends.
+    asked: Vec<String>,
+    /// Follow-ups that joined the working answer unjudged after [`DECIDING_WAIT`]: the
+    /// thread's late judgment of one is answered so.
+    joined_unjudged: Vec<String>,
     /// The thread's commands running now (shell, `run`, `run_check`, a Codex shell item), by
     /// item, oldest first: what a message sent into the turn waits behind.
     holding: Vec<(String, HeldBy)>,
@@ -1454,7 +1469,7 @@ impl SessionManager {
             }
             let item = self
                 .core
-                .enqueue(&id, text, attachments, mentions, queue_index)
+                .enqueue(&id, text, attachments, mentions, queue_index, false)
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
@@ -1462,7 +1477,7 @@ impl SessionManager {
             // Back into the paused queue it came from; nothing sends until the user resumes.
             let item = self
                 .core
-                .enqueue(&id, text, attachments, mentions, queue_index)
+                .enqueue(&id, text, attachments, mentions, queue_index, false)
                 .await?;
             return Ok(SendOutcome::Queued(item));
         }
@@ -1497,6 +1512,21 @@ impl SessionManager {
                     .edit_queued(id, item_id, text, attachments, mentions),
             )
             .await
+    }
+
+    /// "Run here" on a message the thread offered as a new tab: it waits like any other and is
+    /// sent once nothing works.
+    pub async fn run_queued_here(
+        &self,
+        id: &ConversationId,
+        item_id: &str,
+    ) -> Result<crate::work::MessageQueue> {
+        let conv = self.conv(id)?;
+        let queue = conv
+            .user_write(self.core.run_queued_here(id, item_id))
+            .await?;
+        self.kick(&conv);
+        Ok(queue)
     }
 
     /// Sends a queued message now, into the running turn or a session's working answer (or
@@ -1546,17 +1576,14 @@ impl SessionManager {
             return Ok(SendOutcome::Sent(message));
         }
         if let Some(working) = working.filter(|_| !paused) {
-            // The newest answer still works: the message joins it now, never waiting to be
-            // judged; the thread reads it in its turn and judges where it belongs.
-            let message = conv
+            let item = conv
                 .user_write(
                     self.core
-                        .append_user_message(id.clone(), text, attachments, mentions),
+                        .enqueue(id, text, attachments, mentions, queue_index, true),
                 )
                 .await?;
-            self.join_working(conv, message.clone(), Some(working))
-                .await;
-            return Ok(SendOutcome::Sent(message));
+            self.ask_follow_up(conv, &item, working).await;
+            return Ok(SendOutcome::Queued(item));
         }
         if busy || paused {
             // An older request's turn runs (the newest answer is done), or the queue is paused:
@@ -1564,7 +1591,7 @@ impl SessionManager {
             let item = conv
                 .user_write(
                     self.core
-                        .enqueue(id, text, attachments, mentions, queue_index),
+                        .enqueue(id, text, attachments, mentions, queue_index, false),
                 )
                 .await?;
             return Ok(SendOutcome::Queued(item));
@@ -1768,10 +1795,87 @@ impl SessionManager {
         }
     }
 
-    /// `route_follow_up`: the orchestrator's judgment of a message still in the queue (sent
-    /// while the queue was paused, or by an older build). One that joins the working answer is
-    /// sent into it now; one of its own waits; one for another session of the project goes
-    /// there. A message sent while the answer works never waits for it: it joins at once.
+    /// Asks the orchestrator whether follow-up `item` belongs to the working answer of request
+    /// `working`: in its running turn, or in a turn of that request's own.
+    async fn ask_follow_up(&self, conv: &Arc<ConvLive>, item: &QueuedMessage, working: String) {
+        let preview = match self.core.board(&conv.id).await {
+            Ok(board) => {
+                // The block's own question: the first request of its steer chain.
+                let mut request = board.requests.get(&working);
+                for _ in 0..board.requests.len() {
+                    match request
+                        .and_then(|of| of.steered_into.as_deref())
+                        .and_then(|into| board.requests.get(into))
+                    {
+                        Some(into) => request = Some(into),
+                        None => break,
+                    }
+                }
+                request.map(|of| of.preview.clone()).unwrap_or_default()
+            }
+            Err(_) => String::new(),
+        };
+        let words = self.core.brief_words(&item.text, &item.attachments).await;
+        let files: Vec<AttachmentRef> = item
+            .attachments
+            .iter()
+            .filter(|attachment| !attachment.pasted)
+            .cloned()
+            .collect();
+        let mut tabs = Vec::new();
+        for tab in self.siblings(&conv.id).unwrap_or_default() {
+            tabs.push(prompts::TabLine {
+                state: self.tab_words(&tab).await.to_owned(),
+                id: tab.id.0,
+                title: tab.title,
+            });
+        }
+        let text = prompts::follow_up(&item.id, &preview, &words, &files, &tabs);
+        let mut state = conv.state.lock().await;
+        let steered = match (&state.cli, state.busy) {
+            (Some(cli), true) => cli
+                .session
+                .steer(TurnInput::text(text.clone()))
+                .await
+                .is_ok(),
+            _ => false,
+        };
+        self.judge_within(conv, &item.id);
+        if steered {
+            state.asked.push(item.id.clone());
+            let held = state.held_by();
+            if held.is_some() {
+                state.held_items.push(item.id.clone());
+            }
+            drop(state);
+            if let Some(held) = held {
+                self.hold(conv, &[], std::slice::from_ref(&item.id), held)
+                    .await;
+            }
+            self.log_injection(
+                &conv.id,
+                InjectionKind::FollowUp,
+                "follow-up".into(),
+                None,
+                text.len(),
+            )
+            .await;
+            return;
+        }
+        state.asking.push((item.id.clone(), Some(working.clone())));
+        drop(state);
+        let envelope = Envelope {
+            kind: InjectionKind::FollowUp,
+            label: "follow-up".into(),
+            task_id: None,
+            text,
+        };
+        self.deliver_for(&conv.id, envelope, Some(working)).await;
+    }
+
+    /// `route_follow_up`: the orchestrator's judgment of a queued follow-up. One that joins
+    /// the working answer is sent into it now; one of its own waits in the queue, offering a
+    /// new session when the thread says so; one for another session of the project goes there.
     pub(crate) async fn route_follow_up(
         &self,
         id: &ConversationId,
@@ -1796,6 +1900,20 @@ impl SessionManager {
             _ => None,
         };
         let conv = self.conv(id)?;
+        {
+            let mut state = conv.state.lock().await;
+            state.asked.retain(|asked| asked != item_id);
+            state.asking.retain(|(asking, _)| asking != item_id);
+            if state.joined_unjudged.iter().any(|joined| joined == item_id) {
+                state.joined_unjudged.retain(|joined| joined != item_id);
+                return Ok(
+                    "It already joined this work after waiting to be judged and reaches you as \
+                     the user's message: act on it and answer it in the final answer with the \
+                     rest."
+                        .into(),
+                );
+            }
+        }
         let queued = self
             .core
             .board(id)
@@ -1810,10 +1928,23 @@ impl SessionManager {
             );
         }
         match route {
-            FollowUpRoute::Wait | FollowUpRoute::NewSession => Ok(
-                "It waits in the queue and reaches you as its own request once this work is done."
-                    .into(),
-            ),
+            FollowUpRoute::Wait => {
+                self.core.settle_queued(id, &[item_id.to_owned()]).await?;
+                Ok(
+                    "It waits in the queue and reaches you as its own request once this work is \
+                     done."
+                        .into(),
+                )
+            }
+            FollowUpRoute::NewSession => {
+                self.core.offer_queued_as_tab(id, item_id).await?;
+                Ok(
+                    "It waits in the queue offering the user \"Open as a new session\" or \
+                     \"Run here\" until they pick: a new session of this project starts with \
+                     it, or it reaches you as its own request once this work is done."
+                        .into(),
+                )
+            }
             FollowUpRoute::Session => match sibling {
                 Some(sibling) => self.move_follow_up(id, item_id, &sibling).await,
                 None => unreachable!("a session route has its session"),
@@ -1837,6 +1968,63 @@ impl SessionManager {
         }
     }
 
+    /// Gives the thread [`DECIDING_WAIT`] to judge follow-up `item_id`; one still unjudged
+    /// then joins the working answer, the thread reading it as soon as it can (a command it
+    /// runs ends), so the user never watches it decide for minutes.
+    fn judge_within(&self, conv: &Arc<ConvLive>, item_id: &str) {
+        let (manager, conv, item_id) = (self.arc(), conv.clone(), item_id.to_owned());
+        self.spawn(async move {
+            tokio::time::sleep(DECIDING_WAIT).await;
+            manager.join_unjudged(&conv, &item_id).await;
+        });
+    }
+
+    async fn join_unjudged(&self, conv: &Arc<ConvLive>, item_id: &str) {
+        {
+            let mut state = conv.state.lock().await;
+            let unjudged = state.asked.iter().any(|asked| asked == item_id)
+                || state.asking.iter().any(|(asking, _)| asking == item_id);
+            if !unjudged {
+                return;
+            }
+            state.asked.retain(|asked| asked != item_id);
+            state.asking.retain(|(asking, _)| asking != item_id);
+            state.joined_unjudged.push(item_id.to_owned());
+            state.held_items.retain(|held| held != item_id);
+        }
+        let working = self.working_request(&conv.id).await;
+        self.join_follow_up(conv, item_id, working).await;
+    }
+
+    /// Follow-up `item_id`, still deciding in the queue, joins request `working`.
+    async fn join_follow_up(&self, conv: &Arc<ConvLive>, item_id: &str, working: Option<String>) {
+        let id = &conv.id;
+        let deciding = self.core.board(id).await.is_ok_and(|board| {
+            board
+                .queue
+                .items
+                .iter()
+                .any(|item| item.id == item_id && item.deciding)
+        });
+        if !deciding {
+            return;
+        }
+        let message = conv
+            .user_write(async {
+                let item = self.core.take_queued(id, item_id).await?;
+                self.core
+                    .append_user_message(id.clone(), item.text, item.attachments, item.mentions)
+                    .await
+            })
+            .await;
+        match message {
+            Ok(message) => self.join_working(conv, message, working).await,
+            Err(err) => {
+                crate::logging::private_trace!(conv.private_logs, warn, "could not join an unjudged follow-up"; conversation = %id, error = %err);
+            }
+        }
+    }
+
     /// Sends a session's next queued message once no answer works (one that only waits on the
     /// user doesn't hold it): returns whether one is now pending. Holds the driver's lock, so
     /// two callers never send two at once.
@@ -1849,7 +2037,10 @@ impl SessionManager {
             return false;
         }
         let ready = match self.core.board(&conv.id).await {
-            Ok(board) => board.queue.next_to_send().is_some(),
+            Ok(board) => board
+                .queue
+                .next_to_send()
+                .is_some_and(|item| !item.deciding),
             Err(_) => false,
         };
         if !ready {
@@ -2811,6 +3002,18 @@ impl SessionManager {
             } else {
                 Vec::new()
             };
+            if let Some((_, request)) = envelopes
+                .iter()
+                .find(|(envelope, _)| envelope.kind == InjectionKind::FollowUp)
+            {
+                // The follow-ups asked about in this request's envelopes: this turn judges them.
+                let request = request.clone();
+                let (asked, asking) = std::mem::take(&mut state.asking)
+                    .into_iter()
+                    .partition::<Vec<_>, _>(|(_, of)| *of == request);
+                state.asking = asking;
+                state.asked.extend(asked.into_iter().map(|(item, _)| item));
+            }
             if users.is_empty() && envelopes.is_empty() && !session {
                 match self.core.pop_queued(&conv.id).await {
                     Ok(Some(item)) => match self.core.append_queued(conv.id.clone(), item).await {
@@ -3107,7 +3310,7 @@ impl SessionManager {
         envelopes: Vec<(Envelope, Option<String>)>,
         message: &str,
     ) {
-        let failed = {
+        let (asked, failed) = {
             let mut state = conv.state.lock().await;
             state.busy = false;
             state.compacting = false;
@@ -3128,8 +3331,12 @@ impl SessionManager {
             let mut inbox = envelopes;
             inbox.append(&mut state.inbox);
             state.inbox = inbox;
-            failed
+            (std::mem::take(&mut state.asked), failed)
         };
+        // Its follow-ups wait in the queue; the carried envelopes ask again.
+        if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);
+        }
         // Said once: by the failed request when there is one, else as a notice. The run names
         // the request, so the app shows no second line for it.
         if failed.is_none() {
@@ -5148,7 +5355,7 @@ impl SessionManager {
         }
         let in_run = self.overnight.active.get(&conv.id).is_some();
         let reborn;
-        let (limit_hit, ended, landed, carried, served, end_commands, unshown) = {
+        let (limit_hit, ended, landed, carried, asked, served, end_commands, unshown) = {
             let mut state = conv.state.lock().await;
             // A Codex command still running when its turn ended goes on as its CLI's job.
             let words = std::mem::take(&mut state.command_words);
@@ -5295,6 +5502,7 @@ impl SessionManager {
                 ended,
                 state.landed,
                 std::mem::take(&mut state.in_turn),
+                std::mem::take(&mut state.asked),
                 served,
                 end_commands,
                 unshown,
@@ -5318,6 +5526,16 @@ impl SessionManager {
         // Replies the turn held for its waits and didn't take go by ordinary delivery.
         self.return_held_replies(conv).await;
         self.release_held(conv).await;
+        // Follow-ups the turn left unsorted join its request (route_follow_up is optional);
+        // after a stop, a failure, a limit or a rebirth they wait in the queue for their own
+        // turn.
+        if status == TurnStatus::Completed && limit_hit.is_none() && reborn.is_none() {
+            for item_id in &asked {
+                self.join_follow_up(conv, item_id, served.clone()).await;
+            }
+        } else if let Err(err) = self.core.settle_queued(&conv.id, &asked).await {
+            crate::logging::private_trace!(conv.private_logs, warn, "could not settle follow-ups"; conversation = %conv.id, error = %err);
+        }
         if let Some(tokens) = reborn {
             // Not from inside the CLI's own event pump: closing the CLI waits for it.
             let (manager, conv, cli) = (self.arc(), conv.clone(), cli.clone());

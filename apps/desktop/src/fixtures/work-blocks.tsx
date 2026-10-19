@@ -116,7 +116,7 @@ const daemon: { messages: Message[]; requests: Record<string, UserRequest>; step
   run: "running",
 };
 const queued: QueuedMessage = {
-  id: "q1", text: "Also check the currency formatting", attachments: [], mentions: [], queuedAtMs: begun, editedAtMs: null,
+  id: "q1", text: "Also check the currency formatting", attachments: [], mentions: [], queuedAtMs: begun, editedAtMs: null, deciding: false,
 };
 
 function view(): View {
@@ -434,7 +434,12 @@ async function driveSteer(): Promise<object> {
   steps([tool("sleep", 1.1, "shell", "sleep 30", "inProgress")]);
   await settle();
   const before = seen();
+  // A follow-up sent meanwhile waits behind the command rather than deciding on and on.
   const held = { command: "sleep 30", sinceMs: Date.now() - 2 * 60_000 };
+  change(() => ({ queue: { items: [{ ...queued, deciding: true, heldBy: held }], paused: false } }));
+  await settle();
+  const deciding = { note: text(one("[data-slot=message-queue-item] [data-slot=held-note]")), shimmer: text(one("[data-slot=message-queue-item] .shimmer")) };
+  change(() => ({ queue: { items: [], paused: false } }));
   // The user steers a message in while the command runs.
   const steered = user("r2", 2, "Use banker's rounding instead", Date.now());
   daemon.messages = [...daemon.messages, steered];
@@ -454,7 +459,7 @@ async function driveSteer(): Promise<object> {
   daemon.requests.r2 = read;
   change((board) => ({ requests: { ...board.requests, r2: read } }));
   await settle();
-  return { before, after, bubble, steerHeld, steerRead: text(one("[data-slot=request-steer] [data-slot=held-note]")) };
+  return { before, after, bubble, deciding, steerHeld, steerRead: text(one("[data-slot=request-steer] [data-slot=held-note]")) };
 }
 
 /** A message steered in before the turn did anything: its bubble sits under the first, above the header. */

@@ -113,13 +113,24 @@ async fn a_reply_after_a_newer_request_waits_and_is_filed_under_the_one_that_ask
         })
         .await;
     let first = first_request(&board);
-    // The user's newer message reaches the thread at once, in a turn of its own that holds
-    // until the reply is in.
+    // The user's newer message is a request of its own (the thread sorts it so), whose turn
+    // holds until the reply is in.
     let hold = Arc::new(Notify::new());
     let held = hold.clone();
     peers.on(&flow.conversation, move |turn| {
         let held = held.clone();
         async move {
+            if let Some(rest) = turn.input.split("[follow-up ").nth(1) {
+                let item = rest.split(']').next().unwrap().to_owned();
+                let routed = turn
+                    .call(
+                        "route_follow_up",
+                        json!({ "follow_up": item, "joins": false }),
+                    )
+                    .await;
+                assert!(!routed.is_error, "{}", routed.text);
+                return Reply::text(crate::manager::prompts::QUIET);
+            }
             if header_id(&turn.input).is_some() {
                 return Reply::text("Noted: names are in `name`.");
             }
@@ -131,7 +142,7 @@ async fn a_reply_after_a_newer_request_waits_and_is_filed_under_the_one_that_ask
     while !peers
         .inputs_of(&flow.conversation)
         .iter()
-        .any(|input| input.contains("rename the file"))
+        .any(|input| input.contains("rename the file") && !input.contains("[follow-up "))
     {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }

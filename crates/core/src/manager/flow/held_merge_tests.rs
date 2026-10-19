@@ -166,24 +166,34 @@ async fn held(name: &str, plan: Plan) -> Held {
                 }
                 said.lock().unwrap().push(turn.input.clone());
                 let log = |text: &str| said.lock().unwrap().push(text.to_owned());
-                // A message sent while the workers write joins their work: the thread, idle
-                // meanwhile, reads it in a turn with what Brigadier adds to it.
-                if turn.input.contains("[merge held] The user's merge") {
-                    let joined = turn.input.clone();
+                // A message sent while the workers write joins their work: it comes steered
+                // into this turn, with what Brigadier adds to it.
+                if let Some(rest) = turn.input.split("[follow-up ").nth(1) {
+                    let id = rest.split(']').next().unwrap();
+                    let reply = turn
+                        .call("route_follow_up", json!({"follow_up": id, "joins": true}))
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    let joined = turn.steered().await.unwrap_or_default();
+                    log(&joined);
                     // The thread judges the user's words while the merge is held (#222): a
                     // "Wait" takes it back, a question about it doesn't.
-                    if joined.contains("Wait, I want to look at it first.") {
-                        let reply = turn
-                            .call(
-                                "stop_merge",
-                                json!({"why": "they want to look at it first"}),
-                            )
-                            .await;
-                        log(&format!("stop_merge: {}", reply.text));
-                        return Reply::text("Stopped the merge, as you asked.");
-                    }
-                    if joined.contains("Is it merged yet or not?") {
-                        return Reply::text("Not merged yet: it merges once the workers finish.");
+                    if joined.contains("[merge held] The user's merge") {
+                        if joined.contains("Wait, I want to look at it first.") {
+                            let reply = turn
+                                .call(
+                                    "stop_merge",
+                                    json!({"why": "they want to look at it first"}),
+                                )
+                                .await;
+                            log(&format!("stop_merge: {}", reply.text));
+                            return Reply::text("Stopped the merge, as you asked.");
+                        }
+                        if joined.contains("Is it merged yet or not?") {
+                            return Reply::text(
+                                "Not merged yet: it merges once the workers finish.",
+                            );
+                        }
                     }
                     return Reply::text(super::super::prompts::QUIET);
                 }

@@ -1246,6 +1246,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: concat!("From now on: ", start_rule!()),
         worker: "",
     },
+    Revision {
+        number: QUEUE_DECIDES_REVISION,
+        thread: "From now on, a message the user sends while you work waits in their queue again and reaches you at once as a [follow-up …] block, which says how to judge it with route_follow_up: \"join\" sends it into this work now, \"wait\" keeps it queued until this work is done, \"new_session\" keeps it queued offering the user \"Open as a new session\", and \"session\" sends it to another session of the project. One you leave unjudged joins this work by itself shortly. This replaces the note that said such a message reaches you as the user's message.",
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1814,6 +1819,9 @@ pub(crate) const APP_TOOLS_REVISION: u32 = 119;
 /// A message's pasted text and files count as what the user said; ask only what is truly
 /// missing, else start with assumptions in one line.
 pub(crate) const START_REVISION: u32 = 120;
+/// A message the user sends while the thread works waits in the queue, Deciding, while the
+/// thread judges it with route_follow_up, as before MESSAGES_JOIN_REVISION (user, 10-20).
+pub(crate) const QUEUE_DECIDES_REVISION: u32 = 121;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -3237,6 +3245,57 @@ fn scratch_note(scratch_gone: bool) -> &'static str {
     } else {
         ""
     }
+}
+
+/// Another session of the session's project, as a [follow-up …] block lists it: its id,
+/// title and state.
+pub(crate) struct TabLine {
+    pub id: String,
+    pub title: String,
+    pub state: String,
+}
+
+/// Tells the orchestrator of a follow-up the user sent while `request` works: it may sort it
+/// with route_follow_up, or answer or act on it itself. `tabs` are the project's other
+/// sessions, where the message may belong instead.
+pub(crate) fn follow_up(
+    id: &str,
+    request: &str,
+    text: &str,
+    attachments: &[crate::work::AttachmentRef],
+    tabs: &[TabLine],
+) -> String {
+    let mut block = format!(
+        "[follow-up {id}] The user sent this while you work on their request \"{request}\":\n{text}"
+    );
+    if !attachments.is_empty() {
+        let names: Vec<&str> = attachments.iter().map(|a| a.name.as_str()).collect();
+        block.push_str(&format!("\n(attached: {})", names.join(", ")));
+    }
+    if !tabs.is_empty() {
+        block.push_str("\nThe other sessions of this project:");
+        for tab in tabs {
+            block.push_str(&format!(
+                "\n- \"{}\" (session {}): {}",
+                tab.title, tab.id, tab.state
+            ));
+        }
+    }
+    let to_tab = if tabs.is_empty() {
+        ""
+    } else {
+        " If it belongs to one of the other sessions, route \"session\" with that session's id \
+         sends it there."
+    };
+    block.push_str(&format!(
+        "\n[/follow-up] If it is a request of its own, call route_follow_up (follow_up \"{id}\") \
+         with route \"wait\": it reaches you once this work is done, or \"new_session\": it \
+         waits offering the user \"Open as a new session\".{to_tab} Otherwise it joins this work (at \
+         once with route \"join\", else shortly by itself) and reaches you as the user's \
+         message; you may also answer or act on it now. If you have nothing to say now, reply \
+         with exactly {QUIET}."
+    ));
+    block
 }
 
 #[cfg(test)]
@@ -5513,6 +5572,71 @@ mod environment_tests {
             "list_sessions with project true",
             "[project] lines",
             "yours to judge",
+        ] {
+            assert!(note.contains(words), "{words}: {note}");
+        }
+    }
+
+    /// A follow-up block lists the project's other sessions with their states and names route
+    /// "session" only when there is one; it never asks for silence.
+    #[test]
+    fn the_follow_up_lists_the_sessions() {
+        let alone = follow_up("q-1", "Build the export", "Also add CSV.", &[], &[]);
+        assert!(alone.contains("route \"wait\"") && alone.contains("\"new_session\""));
+        assert!(!alone.contains("route \"session\"") && !alone.contains("other sessions"));
+        assert!(
+            !alone.contains("tab") && !alone.contains("workspace"),
+            "{alone}"
+        );
+        for gone in [
+            "silently",
+            "write nothing",
+            "don't answer it here",
+            "don't act on it",
+        ] {
+            assert!(!alone.contains(gone), "{gone}: {alone}");
+        }
+        assert!(alone.contains("you may also answer or act on it now"));
+        assert!(alone.ends_with(&format!(
+            "If you have nothing to say now, reply with exactly {QUIET}."
+        )));
+        let tabs = [TabLine {
+            id: "s-2".into(),
+            title: "Redesigning the login".into(),
+            state: "working".into(),
+        }];
+        let block = follow_up("q-1", "Build the export", "Also add CSV.", &[], &tabs);
+        assert!(
+            block.contains("The other sessions of this project:\n- \"Redesigning the login\" (session s-2): working"),
+            "{block}"
+        );
+        assert!(
+            block.contains("route \"session\" with that session's id"),
+            "{block}"
+        );
+        assert!(
+            !block.contains("tab") && !block.contains("workspace"),
+            "{block}"
+        );
+    }
+
+    /// The queue decides again (user, 10-20): open threads hear once that a message sent
+    /// while they work comes as a [follow-up …] block to judge; workers hear nothing.
+    #[test]
+    fn open_threads_hear_once_that_a_message_sent_while_they_work_waits_to_be_judged() {
+        let added = REVISIONS
+            .iter()
+            .find(|revision| revision.number == QUEUE_DECIDES_REVISION)
+            .unwrap();
+        assert!(added.worker.is_empty());
+        let note = revision_note(QUEUE_DECIDES_REVISION - 1, false).unwrap();
+        for words in [
+            "waits in their queue again",
+            "[follow-up …] block",
+            "\"join\"",
+            "\"wait\"",
+            "\"new_session\"",
+            "joins this work by itself shortly",
         ] {
             assert!(note.contains(words), "{words}: {note}");
         }

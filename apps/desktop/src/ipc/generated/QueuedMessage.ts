@@ -8,6 +8,17 @@ import type { Mention } from "./Mention";
  */
 export type QueuedMessage = { id: string, text: string, attachments: Array<AttachmentRef>, mentions: Array<Mention>, queuedAtMs: number, editedAtMs: number | null, 
 /**
- * The thread's command it waits behind: the thread reads it once that command ends.
+ * Sent to a session while its answer works: the orchestrator is judging whether it
+ * belongs to that answer (it joins it) or is a request of its own (it waits here).
  */
-heldBy?: HeldBy, };
+deciding: boolean, 
+/**
+ * The thread's command it waits behind while being judged: the thread reads it once
+ * that command ends.
+ */
+heldBy?: HeldBy, 
+/**
+ * The thread judged it could run apart (`route_follow_up` route "new_session"): it waits for
+ * the user's pick, "Open as a new session" or "Run here", and is never sent until then.
+ */
+offerTab?: boolean, };

@@ -18,7 +18,7 @@ const { sessionTabs, useSessionTabs } = await import("./sessionTabs");
 const { emptyThread, useApp } = await import("./store");
 
 const parent = "session-1";
-const item: QueuedMessage = { id: "queued", text: "Why is the build slow?", attachments: [], mentions: [], queuedAtMs: 20, editedAtMs: null };
+const item: QueuedMessage = { id: "queued", text: "Why is the build slow?", attachments: [], mentions: [], queuedAtMs: 20, editedAtMs: null, deciding: false };
 const other: QueuedMessage = { ...item, id: "first", text: "Also run the tests" };
 
 type Sent = RequestOf<"deleteQueued"> | RequestOf<"openSideChat"> | RequestOf<"sendMessage">;

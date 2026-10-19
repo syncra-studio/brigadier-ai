@@ -1380,6 +1380,12 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
                 .await?;
             Response::SettleMoved
         }
+        Request::RunQueuedHere {
+            conversation_id,
+            item_id,
+        } => Response::RunQueuedHere {
+            queue: sessions.run_queued_here(&conversation_id, &item_id).await?,
+        },
         Request::GetSettledTabs => Response::GetSettledTabs {
             tabs: sessions.settled_tabs().await,
         },
@@ -1479,6 +1485,7 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         request @ (Request::StartSession { .. }
         | Request::StartOfferedSession { .. }
         | Request::SettleMoved { .. }
+        | Request::RunQueuedHere { .. }
         | Request::GetSettledTabs
         | Request::GetMergeUndo { .. }) => heap(|| open_session(sessions, request)).await?,
         Request::ForkConversation {

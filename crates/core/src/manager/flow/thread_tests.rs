@@ -1801,6 +1801,7 @@ async fn a_queued_message_edited_while_the_merge_is_prepared_is_named_in_its_res
             Vec::new(),
             Vec::new(),
             None,
+            false,
         )
         .await
         .unwrap();

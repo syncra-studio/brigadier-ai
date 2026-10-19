@@ -260,16 +260,18 @@ pub struct AnswerWorker {
     pub why: String,
 }
 
-/// `route_follow_up`: sorts a message still waiting in the session's queue.
+/// `route_follow_up`: sorts a message the user sent while the orchestrator works on their
+/// request.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RouteFollowUp {
-    /// The queued message's id.
+    /// The follow-up's id, from its [follow-up …] block.
     pub follow_up: String,
     /// Where it goes. Optional only for the older form, which gave `joins` instead.
     #[serde(default)]
     pub route: Option<FollowUpRoute>,
-    /// For route "session": the other session's id, from list_sessions with project true. `tab` is its older name (rule R).
+    /// For route "session": the other session's id, from the [follow-up …] block or
+    /// list_sessions with project true. `tab` is its older name (rule R).
     #[serde(default, alias = "tab")]
     pub session: Option<String>,
     /// The older form, from before routes (rule R: a session's cached schema still sends it):
@@ -287,8 +289,8 @@ pub enum FollowUpRoute {
     Join,
     /// A request of its own: it waits in the queue until this work is done.
     Wait,
-    /// A request of its own that could run apart: it waits, as with `Wait`. `new_tab` is its
-    /// older name (rule R).
+    /// A request of its own that could run apart: it waits, and offers the user "Open as a
+    /// new session". `new_tab` is its older name (rule R).
     #[serde(alias = "new_tab")]
     NewSession,
     /// It belongs to another session of this project (`session`): it goes there. `tab` is

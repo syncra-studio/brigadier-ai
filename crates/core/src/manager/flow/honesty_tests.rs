@@ -366,28 +366,40 @@ fn bash(command: &str, status: ItemStatus) -> ProviderEvent {
     }
 }
 
-/// A message the user sends while the thread is inside a long command (the 33fbb16e case)
-/// never waits to be judged: it joins the running turn at once as the user's message, says
-/// it waits behind the command, and the thread reads it once the command ends.
+/// The 33fbb16e "deciding" case: a follow-up sent while the thread is inside a long command
+/// says it waits behind it, and with no judgment after the wait it joins the working answer
+/// rather than deciding for minutes; the thread reads it once the command ends, and its late
+/// judgment hears it already joined.
 #[tokio::test]
-async fn a_message_sent_behind_a_long_command_joins_the_running_turn_at_once() {
+async fn a_follow_up_behind_a_long_command_joins_the_working_answer_unjudged() {
     let gate = Arc::new(tokio::sync::Notify::new());
-    let inputs: Log = Default::default();
-    let (release, log) = (gate.clone(), inputs.clone());
+    let (inputs, item): (Log, Arc<Mutex<Option<String>>>) = Default::default();
+    let (release, log, judged) = (gate.clone(), inputs.clone(), item.clone());
     let flow = Flow::start(
-        "honesty-behind-command",
+        "honesty-deciding",
         Options::default(),
         script(move |turn| {
-            let (gate, log) = (gate.clone(), log.clone());
+            let (gate, log, item) = (gate.clone(), log.clone(), item.clone());
             async move {
                 log.lock().unwrap().push(turn.input.clone());
                 turn.emit(bash("cargo test --workspace", ItemStatus::InProgress))
                     .await;
-                let steered = turn.steered().await.unwrap_or_default();
-                log.lock().unwrap().push(steered);
+                // Asked to judge the follow-up, then handed the user's message unjudged.
+                for _ in 0..2 {
+                    let steered = turn.steered().await.unwrap_or_default();
+                    log.lock().unwrap().push(steered);
+                }
                 gate.notified().await;
                 turn.emit(bash("cargo test --workspace", ItemStatus::Completed))
                     .await;
+                let id = item.lock().unwrap().clone().unwrap();
+                let late = turn
+                    .call(
+                        "route_follow_up",
+                        json!({ "follow_up": id, "joins": false }),
+                    )
+                    .await;
+                log.lock().unwrap().push(late.text);
                 Reply::text("The tests pass, and the formatting is clean too.")
             }
         }),
@@ -400,38 +412,37 @@ async fn a_message_sent_behind_a_long_command_joins_the_running_turn_at_once() {
         })
     })
     .await;
-    let outcome = flow
-        .manager
-        .send_message(
-            flow.conversation.clone(),
-            "Also check the formatting.".into(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            None,
-        )
-        .await
-        .unwrap();
-    assert!(
-        matches!(outcome, crate::manager::SendOutcome::Sent(_)),
-        "sent, not queued: {outcome:?}"
-    );
-    let board = flow.core.board(&flow.conversation).await.unwrap();
-    assert!(board.queue.items.is_empty(), "{:?}", board.queue.items);
-    flow.until("the message to say what it waits behind", |board| {
-        board.queue.items.is_empty()
-            && board.requests.values().any(|request| {
-                request.steered_into.is_some()
-                    && request
+    flow.say("Also check the formatting.").await;
+    let board = flow
+        .until("the follow-up to say what it waits behind", |board| {
+            board.queue.items.first().is_some_and(|queued| {
+                queued.deciding
+                    && queued
                         .held_by
                         .as_ref()
                         .is_some_and(|held| held.command == "cargo test --workspace")
             })
-    })
-    .await;
+        })
+        .await;
+    *judged.lock().unwrap() = Some(board.queue.items[0].id.clone());
+    let board = flow
+        .until(
+            "the unjudged follow-up to join the working answer",
+            |board| {
+                board.queue.items.is_empty()
+                    && board.requests.values().any(|request| {
+                        request.steered_into.is_some()
+                            && request
+                                .held_by
+                                .as_ref()
+                                .is_some_and(|held| held.command == "cargo test --workspace")
+                    })
+            },
+        )
+        .await;
+    assert_eq!(board.requests.len(), 2, "{:?}", board.requests);
     release.notify_one();
     let board = flow.settled().await;
-    assert_eq!(board.requests.len(), 2, "{:?}", board.requests);
     assert!(
         board
             .requests
@@ -442,10 +453,90 @@ async fn a_message_sent_behind_a_long_command_joins_the_running_turn_at_once() {
     );
     let inputs = inputs.lock().unwrap().clone();
     assert!(
-        inputs[1].contains("Also check the formatting.") && !inputs[1].contains("[follow-up"),
-        "the user's own message reached the turn: {inputs:#?}"
+        inputs[2].contains("Also check the formatting."),
+        "the user's message joined: {inputs:#?}"
     );
-    assert_eq!(inputs.len(), 2, "no turn of its own after: {inputs:#?}");
+    assert!(
+        inputs[3].starts_with("It already joined this work"),
+        "{inputs:#?}"
+    );
+    flow.stop().await;
+}
+
+/// #437: a message the user sends while the session works waits in the queue, Deciding, and
+/// reaches the thread as a [follow-up …] block to judge, never straight in as the user's
+/// message.
+#[tokio::test]
+async fn a_message_sent_while_the_session_works_waits_in_the_queue_deciding() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let inputs: Log = Default::default();
+    let (release, log) = (gate.clone(), inputs.clone());
+    let flow = Flow::start(
+        "honesty-queue-decides",
+        Options::default(),
+        script(move |turn| {
+            let (gate, log) = (gate.clone(), log.clone());
+            async move {
+                log.lock().unwrap().push(turn.input.clone());
+                turn.emit(bash("cargo test --workspace", ItemStatus::InProgress))
+                    .await;
+                // Asked to judge it, then (left unjudged) handed it as the user's message.
+                for _ in 0..2 {
+                    let steered = turn.steered().await.unwrap_or_default();
+                    log.lock().unwrap().push(steered);
+                }
+                gate.notified().await;
+                turn.emit(bash("cargo test --workspace", ItemStatus::Completed))
+                    .await;
+                Reply::text("The tests pass.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Run the tests.").await;
+    flow.until("the command to run", |board| {
+        board.orchestrator_steps.iter().any(|step| {
+            matches!(&step.kind, crate::work::OrchestratorStepKind::Tool { status, .. } if *status == ItemStatus::InProgress)
+        })
+    })
+    .await;
+    flow.say("Also check the formatting.").await;
+    let board = flow
+        .until("the message to wait in the queue, deciding", |board| {
+            board.queue.items.first().is_some_and(|queued| {
+                queued.deciding && queued.text == "Also check the formatting."
+            })
+        })
+        .await;
+    assert!(
+        board
+            .requests
+            .values()
+            .all(|request| request.steered_into.is_none()),
+        "nothing joined the turn yet: {:?}",
+        board.requests
+    );
+    super::eventually("the thread to be asked to judge it", || {
+        inputs.lock().unwrap().len() > 1
+    })
+    .await;
+    let asked = inputs.lock().unwrap()[1].clone();
+    assert!(
+        asked.starts_with("[follow-up ") && asked.contains("Also check the formatting."),
+        "{asked}"
+    );
+    assert!(asked.contains("route_follow_up"), "{asked}");
+    // Left unjudged, it joins the working answer by itself shortly.
+    flow.until("the unjudged message to join the turn", |board| {
+        board.queue.items.is_empty()
+            && board
+                .requests
+                .values()
+                .any(|request| request.steered_into.is_some())
+    })
+    .await;
+    release.notify_one();
+    flow.settled().await;
     flow.stop().await;
 }
 
@@ -520,15 +611,15 @@ async fn a_steer_behind_a_long_command_says_so_until_the_command_ends() {
     flow.stop().await;
 }
 
-/// A message the user sends while the turn runs reaches that turn right away as the user's
-/// message, as before follow-ups were judged: nothing waits in the queue, it joins the
-/// request the turn serves, and no turn of its own follows.
+/// route_follow_up is optional (#248): a follow-up the thread answers without sorting it,
+/// in a turn that ends before the judging wait is over, joins that turn's request rather
+/// than waiting in the queue as a request of its own.
 #[tokio::test]
-async fn a_message_sent_while_the_turn_runs_reaches_it_as_the_users_message() {
+async fn a_follow_up_left_unsorted_joins_the_request_its_turn_served() {
     let inputs: Log = Default::default();
     let log = inputs.clone();
     let flow = Flow::start(
-        "honesty-joins",
+        "honesty-unsorted",
         Options::default(),
         script(move |turn| {
             let log = log.clone();
@@ -537,25 +628,25 @@ async fn a_message_sent_while_the_turn_runs_reaches_it_as_the_users_message() {
                 if log.lock().unwrap().len() > 1 {
                     return Reply::text("[quiet]");
                 }
-                turn.emit(bash("cargo fmt --check", ItemStatus::Completed))
+                turn.emit(bash("cargo test --workspace", ItemStatus::InProgress))
                     .await;
                 let steered = turn.steered().await.unwrap_or_default();
                 log.lock().unwrap().push(steered);
+                turn.emit(bash("cargo test --workspace", ItemStatus::Completed))
+                    .await;
                 Reply::text("The tests pass, and the formatting is clean too.")
             }
         }),
     )
     .await;
     flow.say("Run the tests.").await;
-    flow.until("the turn to run", |board| {
+    flow.until("the command to run", |board| {
         board.orchestrator_steps.iter().any(|step| {
-            matches!(&step.kind, crate::work::OrchestratorStepKind::Tool { status, .. } if *status == ItemStatus::Completed)
+            matches!(&step.kind, crate::work::OrchestratorStepKind::Tool { status, .. } if *status == ItemStatus::InProgress)
         })
     })
     .await;
     flow.say("Also check the formatting.").await;
-    let board = flow.core.board(&flow.conversation).await.unwrap();
-    assert!(board.queue.items.is_empty(), "{:?}", board.queue.items);
     let board = flow.settled().await;
     assert!(board.queue.items.is_empty(), "{:?}", board.queue.items);
     assert_eq!(board.requests.len(), 2, "{:?}", board.requests);
@@ -564,22 +655,22 @@ async fn a_message_sent_while_the_turn_runs_reaches_it_as_the_users_message() {
             .requests
             .values()
             .any(|request| request.steered_into.is_some()),
-        "it joined the first request: {:?}",
+        "the follow-up joined the first request: {:?}",
         board.requests
     );
     assert!(
         board
             .requests
             .values()
-            .all(|request| request.state == RequestState::Done && request.held_by.is_none()),
+            .all(|request| request.state == RequestState::Done),
         "{:?}",
         board.requests
     );
     let inputs = inputs.lock().unwrap().clone();
-    assert_eq!(inputs.len(), 2, "{inputs:#?}");
+    assert!(inputs[1].contains("[follow-up"), "{inputs:#?}");
     assert!(
-        inputs[1].contains("Also check the formatting.") && !inputs[1].contains("[follow-up"),
-        "the user's message reached the running turn: {inputs:#?}"
+        inputs[2].contains("Also check the formatting."),
+        "the joined message reaches the thread: {inputs:#?}"
     );
     flow.stop().await;
 }

@@ -236,6 +236,7 @@ async fn only_the_latest_messages_page_is_granted_and_a_message_without_one_revo
             Vec::new(),
             from_page(&second),
             None,
+            false,
         )
         .await
         .unwrap();
@@ -253,6 +254,7 @@ async fn only_the_latest_messages_page_is_granted_and_a_message_without_one_revo
             Vec::new(),
             Vec::new(),
             None,
+            false,
         )
         .await
         .unwrap();

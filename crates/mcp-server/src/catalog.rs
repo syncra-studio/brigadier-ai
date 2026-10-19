@@ -79,13 +79,14 @@ the outline, the user's words or the Brain imply; never reopen a decision alread
 the user only what truly only they can decide. `why` is a few words the user reads next to the \
 answer.";
 
-const ROUTE_FOLLOW_UP: &str = "Sort a message still waiting in the user's queue (`follow_up`, \
-its id). A message the user sends while you work never waits for this: it reaches you at once. \
-route \"join\": it belongs to this work; it reaches you now as the user's message, and your final \
-answer covers it too. \"wait\" (or \"new_session\"): a request of its own; it stays in the queue \
-and reaches you once this work is done. \"session\" with `session` (another session's id): it \
-belongs to that session of this project; it goes there as the user's message and this session \
-shows the user a notice with Undo; the result says if that session already merged.";
+const ROUTE_FOLLOW_UP: &str = "Sort a [follow-up …] the user sent while you work on their \
+request. route \"join\": it belongs to this work; it reaches you at once as the user's message, \
+and your final answer covers it too. \"wait\": a request of its own; it waits in the user's queue \
+and reaches you once this work is done. \"new_session\": a request of its own that could run \
+apart; it waits offering the user \"Open as a new session\" or \"Run here\" until they pick \
+(you never start sessions). \"session\" with `session` (another session's id): it belongs to \
+that session of this project; it goes there as the user's message and this session shows the \
+user a notice with Undo; the result says if that session already merged. Optional: one left unsorted joins this work shortly.";
 
 const STOP_WORKER: &str = "Stop a running worker, e.g. when its task is no longer needed or \
 went wrong. Nothing of it lands. `reason` is required: one plain line on why, which the user \

@@ -364,7 +364,10 @@ impl SessionManager {
             && activity.running.is_none()
             && activity.carried.is_empty()
             && !board.queue.paused
-            && board.queue.next_to_send().is_some();
+            && board
+                .queue
+                .next_to_send()
+                .is_some_and(|item| !item.deciding);
         if waiting && !self.answer_working(conversation_id).await {
             self.kick(&conv);
         }
