@@ -2784,7 +2784,8 @@ impl SessionManager {
         let session = conv.kind == ConversationKind::Session;
         // A session's queued message goes once the requests have settled (no answer works).
         let mut sent_queued = false;
-        let (users, envelopes, request, mut user_notes) = loop {
+        // `origin`: the request the envelopes belong to, which their notes speak of.
+        let (users, envelopes, request, origin, mut user_notes) = loop {
             let mut state = conv.state.lock().await;
             if state.busy
                 || state.closing
@@ -2848,9 +2849,17 @@ impl SessionManager {
                 }
                 return;
             }
-            let request = match users.last() {
+            let origin = match users.last() {
                 Some(message) => message.request_id.clone(),
                 None => envelopes[0].1.clone(),
+            };
+            // In a Chat, what comes for an earlier request after the user wrote again is
+            // answered under their newest one, at the thread's end where they look (#440). A
+            // session keeps it with its own request, whose changes, reviews and merge it is.
+            let request = if users.is_empty() && !session {
+                self.newest_request_after(&conv.id, origin.clone()).await
+            } else {
+                origin.clone()
             };
             state.busy = true;
             state.interrupted = false;
@@ -2882,7 +2891,7 @@ impl SessionManager {
                 .collect();
             // Kept under the inbox's lock, like what queues them.
             self.keep_taken(&conv.id, &envelopes).await;
-            break (users, envelopes, request, notes);
+            break (users, envelopes, request, origin, notes);
         };
         let chain = self
             .turn_chain(&conv.id, &users, &envelopes, request.as_deref())
@@ -2953,7 +2962,7 @@ impl SessionManager {
             (reseed, briefing)
         };
         let notes = self
-            .request_notes(&conv.id, &envelopes, request.as_deref())
+            .request_notes(&conv.id, &envelopes, origin.as_deref())
             .await;
         let landed = std::mem::take(&mut conv.state.lock().await.continuing);
         let unsent: Vec<Message> = users

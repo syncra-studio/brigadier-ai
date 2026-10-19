@@ -380,3 +380,85 @@ async fn a_chats_file_comes_from_a_worker_and_opens_from_the_answer() {
     assert_eq!(stored.task_id, task.id);
     flow.stop().await;
 }
+
+/// A worker's report that comes after the user wrote again is answered under their newest
+/// request, at the end of the thread where they look; the earlier request keeps what it said
+/// and still names what the report is for (#440).
+#[tokio::test]
+async fn a_late_report_is_answered_at_the_end_of_the_chat() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let (open, seen) = (gate.clone(), inputs.clone());
+    let flow = Flow::start(
+        "chat-late-report",
+        Options::default(),
+        script(move |turn| {
+            let (open, seen) = (open.clone(), seen.clone());
+            async move {
+                if turn.chat().is_none() {
+                    open.notified().await;
+                    turn.call(
+                        "submit_report",
+                        json!({"summary": "The 0.4 mm brass nozzle prints PETG cleanly."}),
+                    )
+                    .await;
+                    return Reply::text("Reported.");
+                }
+                seen.lock().unwrap().push(turn.input.clone());
+                if turn.input.contains("[report task-1") {
+                    return Reply::text(ANSWER);
+                }
+                if turn.input.contains("any news?") {
+                    return Reply::text("Still on it; I'll send it here.");
+                }
+                turn.call(
+                    "delegate_task",
+                    json!({"effort": "medium", "title": "Compare nozzles", "kind": "research",
+                           "spec": "Compare 3D printer nozzles for PETG."}),
+                )
+                .await;
+                Reply::text("[quiet]")
+            }
+        }),
+    )
+    .await;
+    let chat = new_chat(&flow).await;
+    flow.say_to(&chat, "Which nozzle should I buy for PETG?")
+        .await;
+    flow.until_in(&chat, "the worker to run", |board| {
+        board
+            .tasks
+            .values()
+            .any(|task| task.state == TaskState::Running)
+    })
+    .await;
+    flow.say_to(&chat, "any news?").await;
+    flow.until_in(&chat, "the follow-up to be answered", |board| {
+        board
+            .requests
+            .values()
+            .any(|request| request.preview == "any news?" && request.state == RequestState::Done)
+    })
+    .await;
+    gate.notify_one();
+    let board = answered(&flow, &chat).await;
+    let newest = board.latest_request().unwrap().id.clone();
+    let messages = flow.core.all_messages(&chat).await.unwrap();
+    let answer = messages
+        .iter()
+        .find(|message| message.role == MessageRole::Assistant && message.text == ANSWER)
+        .expect("the answer");
+    assert_eq!(answer.request_id.as_deref(), Some(newest.as_str()));
+    assert_eq!(
+        messages.last().map(|message| message.text.as_str()),
+        Some(ANSWER)
+    );
+    let input = inputs.lock().unwrap().join("\n");
+    assert!(
+        input.contains(
+            "[for the user's earlier request: \"Which nozzle should I buy for PETG?\"]\n[report task-1"
+        ),
+        "{input}"
+    );
+    flow.stop().await;
+}

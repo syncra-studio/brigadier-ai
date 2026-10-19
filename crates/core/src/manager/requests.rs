@@ -63,6 +63,21 @@ impl SessionManager {
         board.latest_request().map(|request| request.id.clone())
     }
 
+    /// The conversation's newest request when the user wrote again after `request`, else
+    /// `request` itself.
+    pub(super) async fn newest_request_after(
+        &self,
+        conversation_id: &ConversationId,
+        request: Option<String>,
+    ) -> Option<String> {
+        let board = self.core.board(conversation_id).await.ok()?;
+        let of = board.requests.get(request.as_deref()?)?;
+        match board.latest_request() {
+            Some(latest) if latest.started_at_ms > of.started_at_ms => Some(latest.id.clone()),
+            _ => request,
+        }
+    }
+
     /// `delegate_task`'s include_request: the message that started `request` and each one
     /// steered into it since, verbatim (what was typed and pasted) and marked by who sent it:
     /// the user, or another session, whose words are its own and never the user's. Files are
