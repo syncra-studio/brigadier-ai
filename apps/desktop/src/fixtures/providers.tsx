@@ -5,7 +5,10 @@ import { createRoot } from "react-dom/client";
 
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { fixtureInput } from "@/fixtures/input";
+import { colourOf, fillsCard, surface, switchLook, wait as pause } from "@/fixtures/look";
 import { accounts, overviews, previewRoutes, projects, rankings, rules, usageView } from "@/fixtures/routingData";
 import type { AgentConnect, ProviderOverview, Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
@@ -21,6 +24,9 @@ import { useUpdates } from "@/state/updates";
  * Without it the page stays as it opens, for screenshots; ?agent=claude opens Claude's page.
  * ?drive=missing starts with Codex not on this computer and walks its Set up (Connect) through
  * a failed install, Try again, its sign-in and the agent coming in, to #providers-result too.
+ * ?drive=look (under renderFixtureLive) reads Settings › General's card and switch, then the
+ * cards, an agent row under the pointer and the switches of Providers and Claude's page, to
+ * #providers-result too.
  */
 const params = new URLSearchParams(location.search);
 // Driven, nothing animates or blurs (see the archived chats fixture).
@@ -32,6 +38,7 @@ if (params.has("drive")) {
 }
 
 const missing = params.get("drive") === "missing";
+const look = params.get("drive") === "look";
 /** Codex as the daemon finds it, in the missing drive: nowhere at first. */
 const missingCodex = (fields: Partial<NonNullable<ProviderOverview["status"]>>) =>
   overviews.map((entry) =>
@@ -157,6 +164,9 @@ const button = (name: string, root: ParentNode = document) =>
 const pageRoot = () => document.querySelector('[data-slot="settings-page"]') ?? document;
 const titles = () => all('[data-slot="account-title"]').map(text);
 const locationRow = () => document.querySelector('[data-slot="agent-location"]') ?? document;
+/** Every card's look, and the first switch that is on's, for the look drive. */
+const cards = () => all('[data-slot="settings-card"]').map(surface);
+const on = () => switchLook(document.querySelector('[data-slot="switch"][data-state="checked"]'));
 const openClaude = () => document.querySelector<HTMLElement>('[data-slot="agent-row"][data-setting="Claude"]')?.click();
 /** Whether the element is in the page's scrolled view. */
 const inView = (element: Element | undefined | null) => {
@@ -183,6 +193,31 @@ function Fixture() {
     }
     if (!params.has("drive")) return;
     const seen: Record<string, unknown> = {};
+    if (look) {
+      void (async () => {
+        openSettings("general");
+        await pause(500);
+        seen.general = { card: surface(document.querySelector('[data-slot="settings-card"]')), switch: on() };
+        openSettings("providers");
+        await pause(500);
+        const row = document.querySelector('[data-slot="agent-row"]');
+        const box = row?.getBoundingClientRect();
+        if (box) await fixtureInput({ type: "pointer", x: box.x + box.width / 3, y: box.y + box.height / 2 });
+        await pause(300);
+        seen.overview = {
+          cards: cards(),
+          switch: on(),
+          hover: row && getComputedStyle(row).backgroundColor,
+          wash: colourOf("bg-foreground/5"),
+          fillsCard: fillsCard(row),
+        };
+        openClaude();
+        await pause(500);
+        seen.agent = { cards: cards(), switch: on() };
+        setResult(JSON.stringify(seen));
+      })();
+      return;
+    }
     const notSetUp = () =>
       all('[data-slot="agent-not-set-up"]').map((row) => ({
         text: text(row.querySelector(".flex-1")),
@@ -345,14 +380,16 @@ function Fixture() {
   }, []);
   return (
     <TooltipProvider>
-      <div className="bg-background text-foreground flex h-screen">
-        <aside className="w-64 shrink-0">
-          <SettingsNav />
-        </aside>
-        <main className="flex h-full min-w-0 flex-1">
-          <div className="min-w-0 flex-1">{page && <SettingsView page={page} />}</div>
-        </main>
-      </div>
+      <SidebarProvider>
+        <div className="bg-background text-foreground flex h-screen w-full">
+          <aside className="w-64 shrink-0">
+            <SettingsNav />
+          </aside>
+          <main className="flex h-full min-w-0 flex-1">
+            <div className="min-w-0 flex-1">{page && <SettingsView page={page} />}</div>
+          </main>
+        </div>
+      </SidebarProvider>
       {result && <pre id="providers-result">{result}</pre>}
     </TooltipProvider>
   );

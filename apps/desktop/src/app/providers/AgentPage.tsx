@@ -7,16 +7,9 @@ import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
 import { agentState } from "@/app/onboarding/SetupTerminal";
 import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows";
 import { CLI_NAMES } from "@/app/providers/AgentsOverview";
-import {
-  CheckAgainButton,
-  PlanChip,
-  ProvidersButton,
-  ProvidersCard,
-  ProvidersSection,
-  StateDot,
-} from "@/app/providers/parts";
+import { CheckAgainButton, PlanChip, ProvidersSection, ROW_LINE, ROW_TITLE, StateDot } from "@/app/providers/parts";
 import { bestFor } from "@/app/routing/models";
-import { SettingsPage, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsButton, SettingsCard, SettingsPage, settingsRows, SettingsSwitch } from "@/app/settings/parts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { pickFile, request } from "@/ipc/client";
 import type { AccountView, MergedModel, ModelInfo, ProviderKind, ProviderOverview } from "@/ipc/generated";
@@ -82,14 +75,14 @@ export function AgentSettingsPage({
         <span data-slot="agent-line" className="flex flex-col gap-1">
           <span className="flex min-w-0 items-center gap-1.75">
             <StateDot tone={tone} />
-            <span className={cn("truncate", tone === "needs" && "text-settings-warning")}>{line}</span>
+            <span className={cn("truncate", tone === "needs" && "text-warning")}>{line}</span>
           </span>
           <ErrorLine error={toggle.error ?? refresh.error} />
         </span>
       }
       actions={
         <>
-          <span className="text-settings-text-secondary flex items-center gap-2.5 text-settings-small">
+          <span className="text-foreground/65 text-label flex items-center gap-2.5">
             Enabled
             <SettingsSwitch
               label={`Use ${label}`}
@@ -145,9 +138,9 @@ export function AgentPage({
         <Installation provider={provider} overview={overview} signIn={signIn} />
       </ProvidersSection>
       <ProvidersSection title="Accounts" aside="Usage refreshes every few minutes">
-        <ProvidersCard>
+        <SettingsCard>
           <ProviderAccounts page provider={provider} views={accounts} now={now} revealed={revealed} />
-        </ProvidersCard>
+        </SettingsCard>
       </ProvidersSection>
       {on && <AgentModels provider={provider} overview={overview} merged={merged} />}
     </div>
@@ -187,9 +180,9 @@ function Installation({
   else if (state === "install") {
     version = "Not installed";
     action = (
-      <ProvidersButton disabled={settingUp} onClick={() => void connectAgent(provider)}>
+      <SettingsButton disabled={settingUp} onClick={() => void connectAgent(provider)}>
         Install
-      </ProvidersButton>
+      </SettingsButton>
     );
   } else {
     const current = status?.version ? `v${status.version}` : "Version unknown";
@@ -199,16 +192,16 @@ function Installation({
     else version = `${current} · up to date`;
     if (state === "signIn") {
       action = (
-        <ProvidersButton disabled={settingUp} onClick={() => void connectAgent(provider)}>
+        <SettingsButton disabled={settingUp} onClick={() => void connectAgent(provider)}>
           Sign in
-        </ProvidersButton>
+        </SettingsButton>
       );
     } else {
       // Always there, as drawn; it runs only an update Brigadier can run itself.
       const runnable = update?.action.type === "run" && update.progress.type !== "updated";
       const updating = update?.progress.type === "updating";
       action = (
-        <ProvidersButton
+        <SettingsButton
           disabled={!runnable || updating}
           title={
             update?.action.type === "manual"
@@ -220,7 +213,7 @@ function Installation({
           onClick={() => update && void startUpdate(update)}
         >
           {updating ? "Updating…" : "Update"}
-        </ProvidersButton>
+        </SettingsButton>
       );
     }
   }
@@ -237,14 +230,12 @@ function Installation({
     });
 
   return (
-    <ProvidersCard>
-      <div data-slot="agent-cli" className="flex flex-col py-4">
+    <SettingsCard>
+      <div data-slot="agent-cli" className="flex flex-col px-4 py-3">
         <div className="flex items-center gap-6">
           <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="text-settings-text text-settings-body font-medium">
-              {CLI_NAMES[provider]}
-            </span>
-            <span className="text-settings-text-secondary text-settings-small">{version}</span>
+            <span className={ROW_TITLE}>{CLI_NAMES[provider]}</span>
+            <span className={ROW_LINE}>{version}</span>
             <ErrorLine error={failed ?? null} />
           </div>
           {action}
@@ -252,11 +243,11 @@ function Installation({
         {state !== "ready" && <ConnectStatus provider={provider} className="pt-3" />}
       </div>
       {state !== "install" && (
-        <div data-slot="agent-location" className="flex items-center gap-6 py-4">
+        <div data-slot="agent-location" className="flex items-center gap-6 px-4 py-3">
           <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="text-settings-text text-settings-body font-medium">Location</span>
+            <span className={ROW_TITLE}>Location</span>
             <span
-              className="text-settings-text-secondary truncate font-mono text-settings-meta"
+              className={cn(ROW_LINE, "truncate font-mono")}
               title={status?.path ?? chosen ?? undefined}
             >
               {/* The one it runs: a chosen file that went away falls back to the one on PATH. */}
@@ -264,12 +255,12 @@ function Installation({
             </span>
             <ErrorLine error={location.error} />
           </div>
-          <ProvidersButton disabled={location.busy} onClick={change}>
+          <SettingsButton disabled={location.busy} onClick={change}>
             Change
-          </ProvidersButton>
+          </SettingsButton>
         </div>
       )}
-    </ProvidersCard>
+    </SettingsCard>
   );
 }
 
@@ -303,9 +294,9 @@ function AgentModels({
   );
   return (
     <ProvidersSection title="Models" aside={aside}>
-      <ProvidersCard>
+      <SettingsCard>
         {models.length === 0 ? (
-          <p className="text-settings-text-secondary py-4 text-settings-body">
+          <p className="text-foreground/65 px-4 py-3 text-sm">
             {state === "checking"
               ? "Checking…"
               : state === "install"
@@ -318,22 +309,22 @@ function AgentModels({
           current.map(row)
         )}
         {older.length > 0 && (
-          <Collapsible className="divide-settings-divider flex flex-col divide-y">
+          <Collapsible className={cn("flex flex-col", settingsRows)}>
             <CollapsibleTrigger
-              className="text-settings-text-secondary hover:text-settings-text group flex w-full items-center gap-2.5 py-3.5 text-settings-body"
+              className="text-foreground/65 hover:text-foreground text-label group flex w-full items-center gap-2.5 px-4 py-3"
             >
               <ChevronRight
                 aria-hidden
-                className="size-3.75 transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
+                className="size-icon-sm transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
               />
               Older models · {older.length}
             </CollapsibleTrigger>
-            <CollapsibleContent className="divide-settings-divider flex flex-col divide-y">
+            <CollapsibleContent className={cn("flex flex-col", settingsRows)}>
               {older.map(row)}
             </CollapsibleContent>
           </Collapsible>
         )}
-      </ProvidersCard>
+      </SettingsCard>
     </ProvidersSection>
   );
 }
@@ -371,20 +362,20 @@ function AgentModelRow({
   merged: readonly MergedModel[] | null;
 }) {
   const { available, toggle, expensive, description, setAvailable } = useModelRow(provider, model, merged);
-  const text = "text-settings-text-secondary text-settings-small";
+  const text = ROW_LINE;
   return (
-    <div data-slot="provider-model" data-setting={model.displayName} className="flex items-center gap-6 py-4">
+    <div data-slot="provider-model" data-setting={model.displayName} className="flex items-center gap-6 px-4 py-3">
       <div className="flex min-w-0 flex-1 flex-col gap-1.25">
         <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
-          <span className="text-settings-text text-settings-body font-medium">{model.displayName}</span>
-          <span className="text-settings-text-secondary font-mono text-settings-meta whitespace-pre">
+          <span className={ROW_TITLE}>{model.displayName}</span>
+          <span className="text-foreground/65 font-mono text-xs whitespace-pre">
             {model.id}
             {model.isDefault && "  ·  default"}
           </span>
         </span>
         {expensive ? (
           <span className={cn(text, "flex items-center gap-1.5")}>
-            <InfoCircle aria-hidden className="size-3.25 shrink-0" />
+            <InfoCircle aria-hidden className="size-icon-xs shrink-0" />
             {EXPENSIVE_NOTE}
           </span>
         ) : (

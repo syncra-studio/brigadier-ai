@@ -5,7 +5,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { SetupTerminal } from "@/app/onboarding/SetupTerminal";
-import { ProvidersButton, UsageMeter } from "@/app/providers/parts";
+import { ROW_LINE, UsageMeter } from "@/app/providers/parts";
 import { SettingsButton, SettingsCard, SettingsRow } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import { hasEmail, maskEmailsIn } from "@/lib/email";
 import { VENDOR_LABELS } from "@/lib/routing";
 import { formatCountdown } from "@/lib/format";
 import { glance, ordered, usageTone, used } from "@/lib/quota";
+import { cn } from "@/lib/utils";
 import {
   accountLabel,
   addAccount,
@@ -158,7 +159,7 @@ export function ProviderAccounts({
   const rows =
     views === null ? (
       page ? (
-        <p className="text-settings-text-secondary py-4.5 text-settings-body">Reading the accounts…</p>
+        <p className="text-foreground/65 px-4 py-3 text-sm">Reading the accounts…</p>
       ) : (
         <SettingsRow label="Reading the accounts…" />
       )
@@ -195,16 +196,16 @@ export function ProviderAccounts({
       <>
         {rows}
         {terminal ? (
-          <div className="py-3.5">{terminal}</div>
+          <div className="px-4 py-3">{terminal}</div>
         ) : (
           <button
             type="button"
             aria-label={addLabel}
             disabled={views === null}
             onClick={() => start(null)}
-            className="text-settings-link flex w-full items-center gap-2 py-3.5 text-settings-body font-medium hover:underline disabled:opacity-50"
+            className="text-link text-label flex w-full items-center gap-2 px-4 py-3 font-medium hover:underline disabled:opacity-50"
           >
-            <Plus aria-hidden className="size-3.5" />
+            <Plus aria-hidden className="size-icon-sm" />
             {addLabel}
           </button>
         )}
@@ -386,40 +387,26 @@ function AccountRow({
     else if (shownEmail !== title) lines.push(title);
     const pageWindows = signedIn && view.quota ? ordered(view.quota) : [];
     return (
-      <div data-slot="account-row" className="flex items-center gap-6 py-4.5">
+      <div data-slot="account-row" className="flex items-center gap-6 px-4 py-3">
         <div className="flex min-w-48 flex-1 flex-col gap-1.25">
           {nameField || (
             <span className="flex min-w-0 items-center gap-2">
               <span
                 data-slot="account-title"
-                className="text-settings-text truncate font-mono text-settings-small"
+                className="text-label truncate font-mono"
               >
                 {shownEmail}
               </span>
-              {hidden && (
-                <button
-                  type="button"
-                  aria-label={revealed ? "Hide email" : "Show email"}
-                  aria-pressed={revealed}
-                  className="text-settings-text-tertiary hover:text-settings-text-secondary shrink-0"
-                  onClick={onReveal}
-                >
-                  {revealed ? <EyeOff className="size-3.25" /> : <Eye className="size-3.25" />}
-                </button>
-              )}
+              {eye}
               {view.default && (
-                <span
-                  data-slot="in-use"
-                  title="New chats start on this account"
-                  className="bg-settings-success-soft text-settings-success rounded-capsule flex shrink-0 items-center gap-1 px-2 py-0.5 text-settings-badge font-medium"
-                >
-                  <CheckMd aria-hidden className="size-2.75" />
+                <Badge data-slot="in-use" variant="success" title="New chats start on this account" className="shrink-0">
+                  <CheckMd aria-hidden />
                   In use
-                </span>
+                </Badge>
               )}
             </span>
           )}
-          <span className="text-settings-text-secondary truncate text-settings-small">
+          <span className={cn(ROW_LINE, "truncate")}>
             {lines.join(" · ")}
           </span>
           {view.error && <span className="text-destructive text-xs">{view.error}</span>}
@@ -433,45 +420,21 @@ function AccountRow({
         </div>
         <div className="flex w-24 shrink-0 items-center justify-end gap-1.5">
           {!signedIn && !own && status?.path ? (
-            <ProvidersButton disabled={busy} onClick={() => id && onSignIn(id)}>
+            <SettingsButton disabled={busy} onClick={() => id && onSignIn(id)}>
               Sign in
-            </ProvidersButton>
+            </SettingsButton>
           ) : (
             !view.default && (
-              <ProvidersButton
+              <SettingsButton
                 disabled={action.busy || !signedIn}
                 title="Start new chats on this account"
                 onClick={() => action.run(() => makeDefaultAccount(provider, id))}
               >
                 Use
-              </ProvidersButton>
+              </SettingsButton>
             )
           )}
-          {own ? (
-            <span aria-hidden className="size-7 shrink-0" />
-          ) : (
-            <DropdownMenu modal={false}>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  aria-label={`${title}: more`}
-                  disabled={action.busy}
-                  className="text-settings-text-secondary hover:bg-settings-raised rounded-providers-menu flex size-7 shrink-0 items-center justify-center"
-                >
-                  <DotsHorizontal className="size-3.75" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem>
-                <DropdownMenuItem disabled={busy} onSelect={() => onSignIn(id)}>
-                  Sign in again
-                </DropdownMenuItem>
-                <DropdownMenuItem variant="destructive" onSelect={() => action.run(() => removeAccount(id))}>
-                  Remove
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          {menu}
         </div>
       </div>
     );

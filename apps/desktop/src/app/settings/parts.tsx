@@ -179,16 +179,16 @@ export function SettingsAdvanced({
   );
 }
 
+/** A card's rows split as its own are: a hairline under each but the last, inset from the edges. */
+export const settingsRows =
+  "*:not-last:relative *:not-last:after:pointer-events-none *:not-last:after:absolute *:not-last:after:inset-x-4 *:not-last:after:bottom-0 *:not-last:after:h-px *:not-last:after:bg-divider";
+
 /** A card of rows; every row but the last has a hairline under it, inset from the card's edges. */
 export function SettingsCard({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <div
       data-slot="settings-card"
-      className={cn(
-        "bg-card border-divider rounded-settings flex flex-col overflow-hidden border",
-        "*:not-last:relative *:not-last:after:pointer-events-none *:not-last:after:absolute *:not-last:after:inset-x-4 *:not-last:after:bottom-0 *:not-last:after:h-px *:not-last:after:bg-divider",
-        className,
-      )}
+      className={cn("bg-card border-divider rounded-settings flex flex-col overflow-hidden border", settingsRows, className)}
     >
       {children}
     </div>

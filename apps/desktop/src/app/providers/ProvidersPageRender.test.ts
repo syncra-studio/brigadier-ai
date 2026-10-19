@@ -139,3 +139,23 @@ test("Providers sets up a missing agent with Connect", { timeout: 60000 }, async
   assert.equal(seen.terminals, 0);
   assert.deepEqual(seen.asked, ["connectAgent codex", "connectAgent codex"]);
 });
+
+// Drawn with every Settings page's parts (#385): its cards are Settings › General's (fill,
+// corners, edge), an agent row under the pointer is washed edge to edge with the shared row
+// wash, and its switches are General's.
+test("Providers draws its cards, rows and switches as Settings › General does", { timeout: 60000 }, async (t) => {
+  const dump = await renderFixtureLive(t, "providers.html?drive=look", "providers-result", 30000);
+  const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as {
+    general: { card: unknown; switch: unknown };
+    overview: { cards: unknown[]; switch: unknown; hover: string; wash: string; fillsCard: boolean };
+    agent: { cards: unknown[]; switch: unknown };
+  };
+  assert.ok(seen.general.card, "General has a card");
+  assert.equal(seen.overview.cards.length, 3);
+  for (const card of [...seen.overview.cards, ...seen.agent.cards]) assert.deepEqual(card, seen.general.card);
+  assert.equal(seen.agent.cards.length, 3);
+  assert.equal(seen.overview.hover, seen.overview.wash);
+  assert.equal(seen.overview.fillsCard, true);
+  assert.deepEqual(seen.overview.switch, seen.general.switch);
+  assert.deepEqual(seen.agent.switch, seen.general.switch);
+});

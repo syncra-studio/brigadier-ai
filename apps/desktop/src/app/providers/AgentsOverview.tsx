@@ -8,14 +8,14 @@ import { agentState } from "@/app/onboarding/SetupTerminal";
 import {
   AgentMark,
   PlanChip,
-  ProvidersButton,
-  ProvidersCard,
   ProvidersSection,
-  SetUpButton,
+  ROW_LINE,
+  ROW_TITLE,
   StateDot,
   UsageMeter,
 } from "@/app/providers/parts";
-import { SettingsSwitch } from "@/app/settings/parts";
+import { SettingsButton, SettingsCard, SettingsRow, SettingsSwitch } from "@/app/settings/parts";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -78,25 +78,20 @@ export function AgentsOverview({
   return (
     <div data-slot="agents-overview" className="flex flex-col gap-10">
       <ProvidersSection title="Fallback">
-        <ProvidersCard>
-          <div data-setting={OVERVIEW_ROWS.switch.label} className="flex items-center gap-6 py-4">
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <span className="text-settings-text text-settings-body font-medium">
-                {OVERVIEW_ROWS.switch.label}
-              </span>
-              <span className="text-settings-text-secondary text-settings-small">
-                {OVERVIEW_ROWS.switch.description}
-              </span>
-              <ErrorLine error={switching.error} />
-            </div>
+        <SettingsCard>
+          <SettingsRow
+            label={OVERVIEW_ROWS.switch.label}
+            description={OVERVIEW_ROWS.switch.description}
+            error={switching.error}
+          >
             <SettingsSwitch
               label={OVERVIEW_ROWS.switch.label}
               checked={settings.switchAccounts}
               disabled={switching.busy}
               onCheckedChange={(next) => switching.run(() => setSetting("switchAccounts", next))}
             />
-          </div>
-        </ProvidersCard>
+          </SettingsRow>
+        </SettingsCard>
       </ProvidersSection>
 
       <ProvidersSection
@@ -104,7 +99,7 @@ export function AgentsOverview({
         aside={
           <button
             type="button"
-            className="text-settings-link flex items-center gap-1 hover:underline"
+            className="text-link flex items-center gap-1 hover:underline"
             onClick={() => openSettings("routing")}
           >
             {OVERVIEW_ROWS.routing}
@@ -112,9 +107,9 @@ export function AgentsOverview({
           </button>
         }
       >
-        <ProvidersCard inset="list">
+        <SettingsCard>
           {installed.length === 0 ? (
-            <p className="text-settings-text-secondary px-3 py-4 text-settings-body">
+            <p className="text-foreground/65 px-4 py-3 text-sm">
               No agent is installed yet.
             </p>
           ) : (
@@ -130,37 +125,35 @@ export function AgentsOverview({
               />
             ))
           )}
-        </ProvidersCard>
+        </SettingsCard>
       </ProvidersSection>
 
       <ProvidersSection title="Not set up" aside={OVERVIEW_ROWS.notSetUp}>
-        <ProvidersCard inset="list">
+        <SettingsCard>
           {missing.map((provider) => (
             <div key={provider} data-slot="agent-not-set-up" className="flex flex-col">
-              <div className="flex items-center gap-3.5 px-3 py-3.5">
+              <div className="flex items-center gap-3.5 px-4 py-3">
                 <AgentMark provider={provider} idle />
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <span className="text-settings-text text-settings-body font-medium">
-                    {VENDOR_LABELS[provider]}
-                  </span>
-                  <span className="text-settings-text-secondary text-settings-small">
+                  <span className={ROW_TITLE}>{VENDOR_LABELS[provider]}</span>
+                  <span className={ROW_LINE}>
                     {CLI_NAMES[provider]} · not installed
                   </span>
                 </div>
-                <SetUpButton disabled={settingUp(provider)} onClick={() => void connectAgent(provider)}>
+                <Button size="sm" disabled={settingUp(provider)} onClick={() => void connectAgent(provider)}>
                   Set up
-                </SetUpButton>
+                </Button>
               </div>
-              <ConnectStatus provider={provider} className="px-3 pb-3.5" />
+              <ConnectStatus provider={provider} className="px-4 pb-3" />
             </div>
           ))}
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="text-settings-link flex w-full items-center gap-2 px-3 py-3.5 text-settings-body font-medium hover:underline"
+                className="text-link text-label flex w-full items-center gap-2 px-4 py-3 font-medium hover:underline"
               >
-                <Plus aria-hidden className="size-3.5" />
+                <Plus aria-hidden className="size-icon-sm" />
                 Add another agent
               </button>
             </DropdownMenuTrigger>
@@ -175,13 +168,13 @@ export function AgentsOverview({
                   >
                     <AgentMark provider={provider} idle />
                     <span className="flex-1">{VENDOR_LABELS[provider]}</span>
-                    {added && <span className="text-muted-foreground text-settings-meta">Added</span>}
+                    {added && <span className="text-muted-foreground text-xs">Added</span>}
                   </DropdownMenuItem>
                 );
               })}
             </DropdownMenuContent>
           </DropdownMenu>
-        </ProvidersCard>
+        </SettingsCard>
       </ProvidersSection>
     </div>
   );
@@ -254,17 +247,12 @@ function AgentRow({
       data-setting={label}
       onClick={onClick}
       onKeyDown={onKeyDown}
-      className="hover:bg-settings-raised/40 flex cursor-default items-center gap-3.5 px-3 py-3.5 transition-colors"
+      className="hover:bg-foreground/5 flex cursor-default items-center gap-3.5 px-4 py-3 transition-colors"
     >
       <AgentMark provider={provider} dim={!on} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="flex min-w-0 items-center gap-2">
-          <span
-            className={cn(
-              "text-settings-body font-medium",
-              on ? "text-settings-text" : "text-settings-text-secondary",
-            )}
-          >
+          <span className={cn(ROW_TITLE, !on && "text-foreground/65")}>
             {label}
           </span>
           {status?.plan && <PlanChip plan={status.plan} />}
@@ -274,8 +262,8 @@ function AgentRow({
           <span
             data-slot="agent-state"
             className={cn(
-              "truncate text-settings-small",
-              tone === "needs" ? "text-settings-warning" : "text-settings-text-secondary",
+              "truncate text-xs",
+              tone === "needs" ? "text-warning" : "text-foreground/65",
             )}
           >
             {line}
@@ -289,14 +277,14 @@ function AgentRow({
         ) : (
           on &&
           state === "signIn" && (
-            <ProvidersButton
+            <SettingsButton
               onClick={(event) => {
                 event.stopPropagation();
                 onOpen(provider, true);
               }}
             >
               Sign in
-            </ProvidersButton>
+            </SettingsButton>
           )
         )}
       </div>
@@ -307,7 +295,7 @@ function AgentRow({
         disabled={toggle.busy}
         onCheckedChange={(next) => toggle.run(() => setProviderOn(provider, next))}
       />
-      <ChevronRight aria-hidden className="text-settings-text-tertiary size-4 shrink-0" />
+      <ChevronRight aria-hidden className="text-muted-foreground size-icon-md shrink-0" />
     </div>
   );
 }
