@@ -45,7 +45,7 @@ test("a session's state comes with the reason its row names", () => {
 });
 
 test("a request that settles ready marks its session ready, a merge merged, and proof and pull requests come along", () => {
-  useSettledTabs.setState({ byTab: { old: { state: "merged" } } });
+  useSettledTabs.setState({ byTab: { old: { state: "merged" }, b: { state: "ready", ahead: 2 } } });
   let seq = 0;
   const envelope = (stream: string, event: EventEnvelope["event"]): EventEnvelope => ({ seq: ++seq, stream, streamSeq: seq, atMs: seq, event });
   applySettledTabEvents([
@@ -66,7 +66,7 @@ test("a request that settles ready marks its session ready, a merge merged, and 
     old: { state: "ready" },
     a: { state: "ready", pullRequest: "open", proof: true },
     b: { state: "merged", proof: false },
-  });
+  }, "a merge drops the old count of commits ahead until git counts again");
   const before = useSettledTabs.getState().byTab;
   applySettledTabEvents([envelope("conversation:a", { type: "requestReady", conversationId: "a", requestId: "r-4", head: "abd" })]);
   assert.equal(useSettledTabs.getState().byTab, before, "nothing new, nothing written");

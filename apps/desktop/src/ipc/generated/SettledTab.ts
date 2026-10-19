@@ -15,4 +15,9 @@ pullRequest?: PullRequestState,
 /**
  * The thread attached proof (`attach_proof`) since its last merge.
  */
-proof?: boolean, };
+proof?: boolean, 
+/**
+ * How many commits its session branch has that its base lacks ("On ‹branch› · 2 commits
+ * ahead"); none when it has no branch of its own or git couldn't tell.
+ */
+ahead?: number, };

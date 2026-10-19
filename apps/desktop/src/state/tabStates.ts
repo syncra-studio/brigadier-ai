@@ -12,6 +12,8 @@ export type Settled = {
   pullRequest?: PullRequestState;
   /** The thread attached proof since its last merge. */
   proof?: boolean;
+  /** Commits its session branch has that its base lacks, as git counted them last. */
+  ahead?: number;
 };
 
 /**
@@ -29,9 +31,14 @@ export async function loadSettledTabs(): Promise<void> {
   const { tabs } = await request({ method: "getSettledTabs" });
   useSettledTabs.setState({
     byTab: Object.fromEntries(
-      tabs.flatMap(({ conversationId, state, pullRequest, proof }) =>
+      tabs.flatMap(({ conversationId, state, pullRequest, proof, ahead }) =>
         state === "ready" || state === "merged" || state === "reverted"
-          ? [[conversationId, { state, ...(pullRequest ? { pullRequest } : {}), ...(proof ? { proof } : {}) }] as const]
+          ? [
+              [
+                conversationId,
+                { state, ...(pullRequest ? { pullRequest } : {}), ...(proof ? { proof } : {}), ...(ahead !== undefined ? { ahead } : {}) },
+              ] as const,
+            ]
           : [],
       ),
     ),
@@ -60,17 +67,30 @@ export function applySettledTabEvents(batch: readonly EventEnvelope[]): void {
     const all = changed ?? useSettledTabs.getState().byTab;
     const current = all[id] ?? {};
     const value = next(current);
-    if (value.state === current.state && value.pullRequest === current.pullRequest && value.proof === current.proof) return;
+    if (
+      value.state === current.state &&
+      value.pullRequest === current.pullRequest &&
+      value.proof === current.proof &&
+      value.ahead === current.ahead
+    )
+      return;
     changed = { ...all, [id]: value };
   };
   for (const { stream, event } of batch) {
     const id = stream.startsWith("conversation:") ? stream.slice("conversation:".length) : null;
-    if (event.type === "requestReady") update(event.conversationId, (current) => ({ ...current, state: "ready" }));
+    if (event.type === "requestReady") {
+      update(event.conversationId, (current) => ({ ...current, state: "ready" }));
+      // Its count of commits ahead moved: git tells.
+      refresh = true;
+    }
     else if (event.type === "pullRequestSeen") {
       const state = event.pullRequest?.state;
       update(event.conversationId, ({ pullRequest: _old, ...current }) => (state ? { ...current, pullRequest: state } : current));
     } else if (event.type === "orchestratorStepped" && id) {
-      if (event.step.kind.type === "merged") update(id, (current) => ({ ...current, state: "merged", proof: false }));
+      if (event.step.kind.type === "merged") {
+        update(id, ({ ahead: _old, ...current }) => ({ ...current, state: "merged", proof: false }));
+        refresh = true;
+      }
       else if (event.step.kind.type === "proof") update(id, (current) => ({ ...current, proof: true }));
     } else if (event.type === "runStateChanged" && event.state === "idle") {
       // A turn may have reverted its merge on the base: git tells.

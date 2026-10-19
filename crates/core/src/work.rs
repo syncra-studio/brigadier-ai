@@ -2075,6 +2075,11 @@ pub struct SettledTab {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub proof: bool,
+    /// How many commits its session branch has that its base lacks ("On ‹branch› · 2 commits
+    /// ahead"); none when it has no branch of its own or git couldn't tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ahead: Option<u32>,
 }
 
 impl TabState {

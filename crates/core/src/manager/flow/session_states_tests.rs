@@ -146,6 +146,7 @@ async fn a_pull_request_is_seen_at_a_turns_end_and_a_connect_and_a_reverted_merg
         (settled.state, settled.pull_request),
         (TabState::Ready, Some(PullRequestState::Open))
     );
+    assert_eq!(settled.ahead, Some(1), "one commit main lacks");
 
     // Closed on GitHub while idle: the connect above looked it up already, so the next one
     // waits its turn; a later one sees it closed.

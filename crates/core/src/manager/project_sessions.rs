@@ -235,6 +235,7 @@ impl SessionManager {
                     state,
                     pull_request: board.pull_request.as_ref().map(|pr| pr.state),
                     proof: board.proof_since_merge(),
+                    ahead,
                 });
             }
         }
