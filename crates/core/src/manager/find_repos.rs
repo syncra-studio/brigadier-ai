@@ -109,7 +109,7 @@ fn suggest_repos(
         .filter_map(|(cwd, used)| Some((usable_folder(&cwd, skipped, protected)?, used)))
         .collect();
     let cwds: Vec<_> = past.iter().map(|(cwd, _)| cwd.clone()).collect();
-    let repos = repos_of(git, &cwds);
+    let repos = repos_of(git, &cwds, home, protected);
     for (cwd, used) in past {
         if let Some(repo) = repos.get(&cwd)
             && usable_root(&repo.root, skipped, protected)
@@ -265,25 +265,9 @@ fn git_activity_ms_with(
     } else {
         protected
     };
-    let Some((mut git, entry)) = git_entry(root, protected) else {
+    let Some(git) = git_dir(root, protected) else {
         return i64::MIN;
     };
-    if entry.is_file() {
-        let Some(target) = std::fs::read_to_string(&git)
-            .ok()
-            .and_then(|text| {
-                text.strip_prefix("gitdir:")
-                    .map(|path| PathBuf::from(path.trim()))
-            })
-            .filter(|path| !path.as_os_str().is_empty())
-            .and_then(|path| protected.canonicalize(&git.parent()?.join(path)))
-        else {
-            return i64::MIN;
-        };
-        git = target;
-    } else if !entry.is_dir() {
-        return i64::MIN;
-    }
     ["index", "HEAD", "logs/HEAD", "FETCH_HEAD"]
         .iter()
         .filter_map(|file| {
@@ -293,6 +277,26 @@ fn git_activity_ms_with(
         .map(ms_since_epoch)
         .max()
         .unwrap_or(i64::MIN)
+}
+
+/// Resolve a repository's Git directory only after checking every link and gitdir target.
+pub(super) fn git_dir(root: &Path, protected: &ProtectedFolders) -> Option<PathBuf> {
+    let (mut git, entry) = git_entry(root, protected)?;
+    if entry.is_file() {
+        let target = std::fs::read_to_string(&git)
+            .ok()
+            .and_then(|text| {
+                text.strip_prefix("gitdir:")
+                    .map(|path| PathBuf::from(path.trim()))
+            })
+            .filter(|path| !path.as_os_str().is_empty())
+            // Git resolves relative gitdir paths from the checkout, even for a linked file.
+            .and_then(|path| protected.canonicalize(&root.join(path)))?;
+        git = target;
+    } else if !entry.is_dir() {
+        return None;
+    }
+    Some(git)
 }
 
 fn ms_since_epoch(time: SystemTime) -> i64 {

@@ -38,7 +38,7 @@ impl SessionManager {
                 })
                 .collect();
             let cwds: Vec<_> = past.iter().map(|(_, _, cwd)| cwd.clone()).collect();
-            let repos = repos_of(&git, &cwds);
+            let repos = repos_of(&git, &cwds, home.as_deref(), &protected);
             let mut found: HashMap<PathBuf, ProjectCandidate> = HashMap::new();
             for (provider, folder, cwd) in past {
                 let Some(repo) = repos.get(&cwd) else {
@@ -134,8 +134,14 @@ const PROBES_AT_ONCE: usize = 8;
 
 /// The repository each of `folders` (canonical) is in, those in none left out. Each folder is
 /// looked up once, a few at a time, the first ones first.
-pub(super) fn repos_of(git: &Git, folders: &[PathBuf]) -> HashMap<PathBuf, FoundRepo> {
+pub(super) fn repos_of(
+    git: &Git,
+    folders: &[PathBuf],
+    home: Option<&Path>,
+    protected: &ProtectedFolders,
+) -> HashMap<PathBuf, FoundRepo> {
     let deadline = Instant::now() + PROBES_BUDGET;
+    let home = home.and_then(|home| protected.canonicalize(home));
     let mut seen = HashSet::new();
     let folders: Vec<&PathBuf> = folders.iter().filter(|dir| seen.insert(*dir)).collect();
     let next = AtomicUsize::new(0);
@@ -148,6 +154,9 @@ pub(super) fn repos_of(git: &Git, folders: &[PathBuf]) -> HashMap<PathBuf, Found
                     if left.is_zero() {
                         break;
                     }
+                    if !git_probe_allowed(folder, home.as_deref(), protected) {
+                        continue;
+                    }
                     if let Ok(Some(repo)) = git.find_repo_within(folder, left.min(PROBE_LIMIT)) {
                         found
                             .lock()
@@ -159,6 +168,28 @@ pub(super) fn repos_of(git: &Git, folders: &[PathBuf]) -> HashMap<PathBuf, Found
         }
     });
     found.into_inner().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Git searches upward from a session folder. Check the first Git entry it would use,
+/// including one at the home folder, before starting a command that could follow it.
+fn git_probe_allowed(folder: &Path, home: Option<&Path>, protected: &ProtectedFolders) -> bool {
+    if protected.is_chosen(folder) {
+        return true;
+    }
+    for ancestor in folder.ancestors() {
+        if protected.covers(ancestor) {
+            return false;
+        }
+        match std::fs::symlink_metadata(ancestor.join(".git")) {
+            Ok(_) => return super::find_repos::git_dir(ancestor, protected).is_some(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return false,
+        }
+        if Some(ancestor) == home {
+            break;
+        }
+    }
+    true
 }
 
 /// `owner/name` from a remote URL (`git@host:owner/name.git`, `https://host/owner/name`),
@@ -190,6 +221,150 @@ fn repo_name(origin: Option<&str>, root: &Path) -> String {
 mod tests {
     use super::*;
 
+    /// A Git entry in the session folder or an ancestor must be checked before Git runs.
+    #[cfg(unix)]
+    #[test]
+    fn past_session_git_links_are_checked_before_running_git() {
+        let dir = std::env::temp_dir().join(format!(
+            "20261018-1945-issues-run-2-w42-past-git-{}",
+            uuid::Uuid::now_v7()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(dir.clone());
+        let home = dir.join("home");
+        let mut env: Vec<_> = std::env::vars_os()
+            .filter(|(key, _)| !key.to_string_lossy().starts_with("GIT_"))
+            .collect();
+        env.extend(
+            [
+                ("GIT_AUTHOR_NAME", "Test"),
+                ("GIT_AUTHOR_EMAIL", "test@example.com"),
+                ("GIT_COMMITTER_NAME", "Test"),
+                ("GIT_COMMITTER_EMAIL", "test@example.com"),
+                ("GIT_CONFIG_GLOBAL", "/dev/null"),
+                ("GIT_CONFIG_NOSYSTEM", "1"),
+            ]
+            .map(|(key, value)| (key.into(), value.into())),
+        );
+        let real = Git::new("git".into(), env.clone());
+        real.init(&home.join("Documents/hidden")).unwrap();
+        real.init(&home.join("storage")).unwrap();
+        // A decoy at the gitfile's resolved parent must not authorize Git's actual target.
+        real.init(&dir.join("Documents/hidden")).unwrap();
+        std::fs::write(
+            home.join("storage/gitfile"),
+            "gitdir: ../../Documents/hidden/.git\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.join("code")).unwrap();
+        std::os::unix::fs::symlink("../Documents/hidden/.git", home.join("code/hop")).unwrap();
+        let log = dir.join("git-runs");
+        let logging = dir.join("git");
+        std::fs::write(
+            &logging,
+            format!("#!/bin/sh\npwd >> '{}'\nexec git \"$@\"\n", log.display()),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&logging).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&logging, permissions).unwrap();
+        let git = Git::new(logging, env);
+        for name in [
+            "direct",
+            "chained",
+            "relative-file",
+            "absolute-file",
+            "linked-file",
+        ] {
+            let root = home.join("code").join(name);
+            std::fs::create_dir_all(root.join("src/nested")).unwrap();
+            let entry = root.join(".git");
+            match name {
+                "direct" => {
+                    std::os::unix::fs::symlink("../../Documents/hidden/.git", entry).unwrap()
+                }
+                "chained" => std::os::unix::fs::symlink("../hop", entry).unwrap(),
+                "relative-file" => {
+                    std::fs::write(entry, "gitdir: ../../Documents/hidden/.git\n").unwrap()
+                }
+                "absolute-file" => std::fs::write(
+                    entry,
+                    format!("gitdir: {}\n", home.join("Documents/hidden/.git").display()),
+                )
+                .unwrap(),
+                _ => std::os::unix::fs::symlink("../../storage/gitfile", entry).unwrap(),
+            }
+            let folders = vec![root.clone(), root.join("src/nested")];
+            let protected = ProtectedFolders::macos(Some(&home), []);
+            let found = repos_of(&git, &folders, Some(&home), &protected);
+            assert!(
+                !log.exists(),
+                "{name}: Git must never follow a guarded entry"
+            );
+            assert!(found.is_empty(), "{name}");
+
+            let protected = ProtectedFolders::macos(Some(&home), [root.clone()]);
+            let found = repos_of(&git, &folders, Some(&home), &protected);
+            assert_eq!(found.len(), folders.len(), "chosen {name}: {found:?}");
+            std::fs::remove_file(&log).unwrap();
+            // The same entry outside a guarded folder remains discoverable.
+            std::fs::remove_file(root.join(".git")).unwrap();
+            std::fs::write(root.join(".git"), "gitdir: ../../storage/.git\n").unwrap();
+            let protected = ProtectedFolders::macos(Some(&home), []);
+            assert_eq!(
+                repos_of(&git, &folders, Some(&home), &protected).len(),
+                folders.len()
+            );
+            std::fs::remove_file(&log).unwrap();
+        }
+        // Git resolves a linked gitfile's relative path from the checkout, not the file.
+        let linked = home.join("code/linked-gitfile");
+        real.init(&linked).unwrap();
+        std::fs::rename(linked.join(".git"), linked.join("meta")).unwrap();
+        std::fs::write(home.join("storage/safe-gitfile"), "gitdir: meta\n").unwrap();
+        std::os::unix::fs::symlink("../../storage/safe-gitfile", linked.join(".git")).unwrap();
+        let protected = ProtectedFolders::macos(Some(&home), []);
+        assert_eq!(
+            repos_of(&git, std::slice::from_ref(&linked), Some(&home), &protected).len(),
+            1
+        );
+        std::fs::remove_file(&log).unwrap();
+
+        // Include the home itself when checking ancestors.
+        std::fs::create_dir_all(home.join("plain/src")).unwrap();
+        std::os::unix::fs::symlink("Documents/hidden/.git", home.join(".git")).unwrap();
+        let protected = ProtectedFolders::macos(Some(&home), []);
+        assert!(repos_of(&git, &[home.join("plain/src")], Some(&home), &protected).is_empty());
+        assert!(
+            !log.exists(),
+            "Git must not follow the home's guarded entry"
+        );
+        std::fs::remove_file(home.join(".git")).unwrap();
+
+        // Ordinary checkouts and real worktree gitdir files still resolve to the main repo.
+        let storage = real.open(&home.join("storage")).unwrap();
+        let worktree = home.join("code/worktree");
+        storage
+            .add_worktree(
+                &worktree,
+                brigadier_git::WorktreeSpec::Detached {
+                    at: storage.resolve("HEAD").unwrap(),
+                },
+            )
+            .unwrap();
+        let folders = [home.join("storage"), worktree];
+        let found = repos_of(&git, &folders, Some(&home), &protected);
+        assert_eq!(found.len(), folders.len());
+        assert!(found.values().all(|repo| repo.root == home.join("storage")));
+    }
+
     #[cfg(unix)]
     #[test]
     fn folders_git_never_answers_for_are_passed_over_without_holding_up_the_rest() {
@@ -205,7 +380,12 @@ mod tests {
         std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
         std::fs::set_permissions(&stuck, permissions).unwrap();
         let started = Instant::now();
-        let found = repos_of(&Git::new(stuck, Vec::new()), &folders);
+        let found = repos_of(
+            &Git::new(stuck, Vec::new()),
+            &folders,
+            None,
+            &ProtectedFolders::default(),
+        );
         let took = started.elapsed();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(found.is_empty());
@@ -231,7 +411,7 @@ mod tests {
         let plain = dir.join("plain").canonicalize().unwrap();
         folders.push(plain.clone());
         folders.push(folders[0].clone());
-        let found = repos_of(&git, &folders);
+        let found = repos_of(&git, &folders, None, &ProtectedFolders::default());
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(found.len(), 40);
         assert!(found.values().all(|repo| repo.root == root));
