@@ -155,10 +155,22 @@ async function until(found: () => boolean, ms = 10_000): Promise<void> {
   for (const end = performance.now() + ms; !found() && performance.now() < end; ) await wait(50);
 }
 
+/** Until the answer stops changing for a second: on a slow machine its deferred Markdown draws late. */
+async function settled(ms = 10_000): Promise<void> {
+  let last = "";
+  let still = 0;
+  for (const end = performance.now() + ms; still < 10 && performance.now() < end; ) {
+    await wait(100);
+    const now = document.querySelector("[data-answer]")?.innerHTML ?? "";
+    still = now === last ? still + 1 : 0;
+    last = now;
+  }
+}
+
 const opened = (query.get("open") ?? "").split(",").filter(Boolean);
 async function openFolds(): Promise<void> {
   await until(() => !!document.querySelector("[data-answer] p, [data-answer] li"));
-  await wait(300);
+  await settled();
   for (const fold of all<HTMLDetailsElement>("[data-answer] details")) {
     const title = text(fold.querySelector("summary")) ?? "";
     if (opened.some((name) => title.toLowerCase().startsWith(name.toLowerCase()))) fold.open = true;
