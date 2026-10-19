@@ -202,14 +202,14 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
   switch (kind.type) {
     case "messaged":
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
-      line = <>Messaged <WorkerName taskId={kind.taskId} glyph={false} /></>;
+      line = <>Messaged <WorkerName taskId={kind.taskId} /></>;
       detail = kind.text ? <Quiet>{kind.text}</Quiet> : undefined;
       break;
     case "answered":
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
       line = (
         <>
-          Answered a question from <WorkerName taskId={kind.taskId} glyph={false} />
+          Answered a question from <WorkerName taskId={kind.taskId} />
         </>
       );
       detail = (
@@ -235,7 +235,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       // The user's own Stop (one worker's, or Stop all) says so on the row; the lead's says why.
       const byUser = kind.reason === USER_STOP_REASON;
       icon = <StopCircle aria-hidden className="size-4 shrink-0" />;
-      line = <>{byUser ? "You stopped" : "Stopped"} <WorkerName taskId={kind.taskId} glyph={false} />{stoppedMs >= 1000 && ` after ${formatDuration(stoppedMs)}`}</>;
+      line = <>{byUser ? "You stopped" : "Stopped"} <WorkerName taskId={kind.taskId} />{stoppedMs >= 1000 && ` after ${formatDuration(stoppedMs)}`}</>;
       detail = kind.reason && !byUser ? <Quiet>{kind.reason}</Quiet> : undefined;
       break;
     }
@@ -244,7 +244,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       line =
         kind.taskIds.length > 0 ? (
           <>
-            Landed {changesFrom(kind.taskIds)} <Names taskIds={kind.taskIds} />
+            Landed {changesFrom(kind.taskIds)} <Names taskIds={kind.taskIds} glyph />
           </>
         ) : (
           <>Landed the changes</>
@@ -259,7 +259,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       icon = <CheckCircle aria-hidden className="size-4 shrink-0" />;
       line = (
         <>
-          Reviewed {changesFrom(kind.taskIds)} <Names taskIds={kind.taskIds} />
+          Reviewed {changesFrom(kind.taskIds)} <Names taskIds={kind.taskIds} glyph />
         </>
       );
       detail = <span>{kind.findings === 0 ? "No findings" : kind.findings === 1 ? "1 finding" : `${kind.findings} findings`}</span>;

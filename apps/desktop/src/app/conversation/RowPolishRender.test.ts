@@ -7,7 +7,7 @@ import { createStore } from "zustand/vanilla";
 
 import type { Task } from "@/ipc/generated";
 
-test("team rows name workers without possessives, say who is still landing, time stopped work, and omit blank Shell opening lines", async () => {
+test("team rows name workers without possessives and with their avatars, say who is still landing, time stopped work, and omit blank Shell opening lines", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { TeamStep, TeamSentence } = await server.ssrLoadModule("/src/app/conversation/activity/TeamSentence.tsx");
@@ -21,13 +21,16 @@ test("team rows name workers without possessives, say who is still landing, time
     // A worker's name is a task title, so a row never makes it possessive ("Add QIF exporter’s
     // change"): it reads "the change from Add QIF exporter", the worker button's accessible name
     // kept whole.
-    const words = { landed: "Landed the change from", reviewed: "Reviewed the change from", answered: "Answered a question from" };
+    const words = { landed: "Landed the change from", reviewed: "Reviewed the change from", answered: "Answered a question from", messaged: "Messaged" };
     for (const kind of [
       { type: "landed", taskIds: ["t1"], commits: 1, branch: "main" },
       { type: "reviewed", taskIds: ["t1"], findings: 0 },
       { type: "answered", taskId: "t1", question: "Proceed?", answer: "Yes" },
+      { type: "messaged", taskId: "t1", text: "Use the shared parser." },
     ] as const) {
       const html = render(React.createElement(TeamStep, { kind }));
+      // Each name carries its worker's avatar, as the team sentences' do (#421).
+      assert.match(html, /data-slot="worker-name"[^>]*><svg[^>]*>/, kind.type);
       assert.match(html, /<span class="min-w-0 truncate">Add QIF exporter<\/span>/);
       assert.doesNotMatch(html, /-ms-1/);
       const text = html.replace(/<[^>]+>/g, "");
