@@ -41,6 +41,7 @@ impl SessionManager {
             AppToolCall::State => Ok(self.app_state_text(&id).await),
             AppToolCall::ReadTerminal(args) => self.read_terminal_text(&id, &args.terminal).await,
             AppToolCall::Open(args) => self.open_in_app(&id, args).await,
+            AppToolCall::TerminalRun(args) => self.terminal_run(&id, args).await,
         };
         match replied {
             Ok(text) => ToolReply::ok(text),
@@ -280,7 +281,7 @@ fn terminal_lines(text: &mut String, terminals: &[TerminalSnapshot]) {
     for terminal in terminals {
         let mut lines = String::new();
         let whose = match terminal.key.as_deref() {
-            Some(key) if key.starts_with("terminal:agent-") => "agent",
+            Some(key) if key.starts_with(super::terminal_run::AGENT_TERMINAL) => "agent",
             Some(key) if key.starts_with("worker:") => "a worker's session",
             _ => "user",
         };

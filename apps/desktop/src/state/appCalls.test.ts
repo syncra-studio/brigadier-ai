@@ -64,6 +64,7 @@ const EVERY_CALL: AppOp[] = [
   { app: "open", target: { kind: "worker", task: "task-1" }, show: true },
   { app: "open", target: { kind: "plan", id: "card-1", outline: false, title: "The plan" }, show: true },
   { app: "open", target: { kind: "page", id: "page-1", title: "Notes" }, show: true },
+  { app: "open", target: { kind: "terminal", tab: "terminal:agent-1", cwd: "/repo" }, show: true },
 ];
 
 test("no app call brings the window forward or moves the user off the session and tab they are on", async () => {
@@ -194,4 +195,22 @@ test("open_in_app reuses the Browser tab already on the page, and a worker's pan
   const notAsked = await opened(session, { kind: "worker", task: "task-7" }, false);
   assert.equal(notAsked.app, "failed");
   assert.equal(useWorkerPanelAsk.getState().ask, null, "not asked to show it: no panel");
+});
+
+test("terminal_run's tab opens behind as the agent's, and a terminal of the user's is left as it was", async () => {
+  fakeShell();
+  const session = "open-in-app-terminal";
+  useApp.setState({ selection: { type: "conversation", id: session }, windowVisible: true });
+  const theirs = newSessionTab(session, "terminal", "/repo");
+  const behind = await opened(session, { kind: "terminal", tab: "terminal:agent-9", cwd: "/repo" }, false);
+  assert.deepEqual(behind, { app: "opened", tab: "terminal:agent-9", front: false, kept: false });
+  const agent = sessionTabs(session).tabs.find((tab) => tab.id === "terminal:agent-9")!;
+  assert.deepEqual([agent.kind, agent.agentOpened, agent.unseen], ["terminal", true, true]);
+  assert.equal(sessionTabs(session).active, theirs);
+  newSessionTab(session, "page");
+  const kept = await opened(session, { kind: "terminal", tab: theirs, cwd: "/repo" }, false);
+  assert.equal(kept.app === "opened" && kept.kept, true, "the user's own terminal tab isn't touched");
+  const shown = await opened(session, { kind: "terminal", tab: theirs, cwd: "/repo" }, true);
+  assert.deepEqual(shown, { app: "opened", tab: theirs, front: true, kept: false }, "asked to watch it: it comes to the front");
+  assert.equal(sessionTabs(session).tabs.find((tab) => tab.id === theirs)!.agentOpened, undefined, "and stays theirs");
 });

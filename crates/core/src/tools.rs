@@ -1961,6 +1961,23 @@ pub enum OpenDiffScope {
     Uncommitted,
 }
 
+/// `terminal_run`: a command typed in a terminal tab the user can watch and take over.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalRun {
+    /// The command, typed as the user would and run with Enter.
+    pub command: String,
+    /// One of the session's terminals, as app_state lists it ("terminal-3"). Left out, your
+    /// own terminal tab (a new one when yours is busy). A terminal of the user's is typed in
+    /// only after they confirm it on a card.
+    #[serde(default)]
+    pub terminal: Option<String>,
+    /// The user asked to watch it: its tab comes to the front when they are on this session.
+    /// Left out, it opens behind the tab they are on, marked new.
+    #[serde(default)]
+    pub show: bool,
+}
+
 /// An app tool call (Q90), from the thread or a Chat.
 #[derive(Debug, Clone)]
 pub enum AppToolCall {
@@ -1968,6 +1985,7 @@ pub enum AppToolCall {
     State,
     ReadTerminal(ReadTerminal),
     Open(OpenInApp),
+    TerminalRun(TerminalRun),
 }
 
 impl AppToolCall {
@@ -1977,6 +1995,7 @@ impl AppToolCall {
             Self::State => "app_state",
             Self::ReadTerminal(_) => "read_terminal",
             Self::Open(_) => "open_in_app",
+            Self::TerminalRun(_) => "terminal_run",
         }
     }
 }

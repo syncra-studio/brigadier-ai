@@ -609,6 +609,7 @@ fn app_call(name: &str, arguments: &Value) -> Option<Result<AppToolCall, ParseEr
         "app_state" => Ok(AppToolCall::State),
         "read_terminal" => args(name, arguments).map(AppToolCall::ReadTerminal),
         "open_in_app" => args(name, arguments).map(AppToolCall::Open),
+        "terminal_run" => args(name, arguments).map(AppToolCall::TerminalRun),
         _ => return None,
     })
 }
@@ -1835,10 +1836,16 @@ mod tests {
                 Ok(ToolCall::App(AppToolCall::Open(open))) if open.show
                     && matches!(open.target, brigadier_core::tools::OpenInAppTarget::Diff { scope: brigadier_core::tools::OpenDiffScope::LastTurn })
             ));
+            let run = serde_json::json!({ "command": "npm run dev", "terminal": "terminal-1" });
+            assert!(matches!(
+                parse_call(role, "terminal_run", run.as_object().cloned()),
+                Ok(ToolCall::App(AppToolCall::TerminalRun(run))) if run.command == "npm run dev"
+                    && run.terminal.as_deref() == Some("terminal-1") && !run.show
+            ));
         }
         for role in [worker(false), worker(true)] {
             assert!(!has_app_tools(&role));
-            for name in ["app_state", "read_terminal", "open_in_app"] {
+            for name in ["app_state", "read_terminal", "open_in_app", "terminal_run"] {
                 assert!(
                     matches!(
                         parse_call(&role, name, terminal.as_object().cloned()),

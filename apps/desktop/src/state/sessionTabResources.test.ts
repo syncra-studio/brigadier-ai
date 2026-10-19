@@ -11,7 +11,7 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
   removeItem: (key: string) => data.delete(key),
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
-const { closeTab, newSessionTab } = await import("./sessionTabs");
+const { closeTab, newSessionTab, openForAgent, openTerminalTab } = await import("./sessionTabs");
 const { endMainTerminal, openMainTerminal } = await import("./sessionTabResources");
 
 type Sent = RequestOf<"openTerminal"> | RequestOf<"closeTerminal">;
@@ -76,4 +76,13 @@ test("restarting a terminal tab whose shell exited starts a new shell", async ()
   assert.deepEqual(opens().map((req) => req.fresh ?? false), [true, true]);
   assert.equal(restarted.scrollback, "");
   closeTab("exited", tab);
+});
+
+test("an agent's terminal tab shows the shell the daemon started for it, with what it typed there", async () => {
+  running.set("terminal:agent-1", "shell-agent");
+  const tab = openForAgent("agent-run", false, () => openTerminalTab("agent-run", "terminal:agent-1", "/repo"));
+  const terminal = await openMainTerminal("agent-run", tab, 80, 24);
+  assert.equal(terminal.id, "shell-agent", "not a new shell in its place");
+  assert.deepEqual(opens().map((req) => req.fresh ?? false), [false]);
+  assert.equal(terminal.scrollback, "startup\r\n");
 });

@@ -3,7 +3,7 @@ import type { Conversation, TerminalInfo } from "@/ipc/generated";
 import { handBack } from "@/state/agentPause";
 import { closePage, useBrowsers } from "@/state/browsers";
 import { forgetDraft } from "@/state/drafts";
-import { changeSessionTab, discardTab, dropBrowserTabs, onDiscardTab, sessionTabs, useSessionTabs, withoutChat } from "@/state/sessionTabs";
+import { changeSessionTab, discardTab, dropBrowserTabs, isAgentTab, onDiscardTab, sessionTabs, useSessionTabs, withoutChat } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { abandonedSideChats } from "@/state/sideChats";
 import { canChat, followTabChats, goneTabChats } from "@/state/tabChats";
@@ -17,7 +17,8 @@ export async function openMainTerminal(conversationId: string, tabId: string, co
   let entry = shells.get(tab.id);
   const started = !entry;
   if (!entry) {
-    const terminal = request({ method: "openTerminal", conversationId, sessionId: tab.id, fresh: true,
+    // An agent's tab shows the shell the daemon started for it, with what it typed there.
+    const terminal = request({ method: "openTerminal", conversationId, sessionId: tab.id, ...(isAgentTab(tab) ? {} : { fresh: true }),
       ...(tab.cwd ? { cwd: tab.cwd } : {}), cols, rows }).then((opened) => {
         changeSessionTab(conversationId, tab.id, (current) => current.kind === "terminal" ? { ...current, cwd: opened.terminal.cwd } : current);
         return opened.terminal;

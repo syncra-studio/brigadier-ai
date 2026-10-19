@@ -60,6 +60,17 @@ pub trait TerminalHost: Send + Sync {
     fn output(&self, _conversation: &str, _id: &str) -> Option<String> {
         None
     }
+
+    /// The shell of `conversation`'s tab `key`, started in `cwd` unless it runs already
+    /// (`terminal_run`): its id. The tab attaches to it when it shows.
+    fn open_shell(&self, _conversation: &str, _key: &str, _cwd: &str) -> Result<String> {
+        Err(Error::Invalid("terminals aren't available here".into()))
+    }
+
+    /// Types `data` into terminal `id`, if it is one of `conversation`'s (`terminal_run`).
+    fn type_in(&self, _conversation: &str, _id: &str, _data: &str) -> Result<()> {
+        Err(Error::Invalid("terminals aren't available here".into()))
+    }
 }
 
 /// One of a conversation's terminals, as [`TerminalHost::list`] gives it.

@@ -34,6 +34,7 @@ mod closing;
 mod cold;
 mod computer_host;
 mod open_in_app;
+mod terminal_run;
 pub use computer_host::ComputerNews;
 mod computer_use;
 mod constraints;

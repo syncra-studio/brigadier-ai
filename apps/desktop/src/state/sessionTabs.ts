@@ -319,6 +319,17 @@ export function openAgentTab(conversationId: string, url: string, driver: Browse
   return id;
 }
 
+/**
+ * A terminal tab `id` on the shell the daemon keeps under that id (an agent's `terminal_run`),
+ * after the tab in front and in front, as the other openers; the tab already there when it is.
+ */
+export function openTerminalTab(conversationId: string, id: string, cwd: string): string {
+  update(conversationId, (current) => current.tabs.some((tab) => tab.id === id)
+    ? { ...current, active: id }
+    : { tabs: insertAfterActive(current, { kind: "terminal", id, opener: current.active, cwd, title: "" }), active: id });
+  return id;
+}
+
 /** The session that has tab `id`. */
 export function sessionWith(id: string): string | null {
   const sessions = useSessionTabs.getState().sessions;

@@ -8,6 +8,7 @@ import {
   openPanelTab,
   openPlanTab,
   openReviewTab,
+  openTerminalTab,
   REVIEW_TAB,
   type ReviewTarget,
   type SessionTab,
@@ -59,6 +60,8 @@ function open(conversationId: string, target: Exclude<OpenTarget, { kind: "worke
       return openPlanTab(conversationId, { type: target.outline ? "outline" : "plan", id: target.id }, target.title);
     case "page":
       return openPageTab(conversationId, target.id, target.title);
+    case "terminal":
+      return openTerminalTab(conversationId, target.tab, target.cwd);
   }
 }
 
@@ -72,6 +75,7 @@ function shows(tab: SessionTab, target: OpenTarget): boolean {
     case "url": return tab.kind === "browser" && sameAddress(tab.url, target.url);
     case "plan": return tab.id === `plan:${target.outline ? "outline" : "plan"}:${target.id}`;
     case "page": return tab.kind === "page" && tab.pageId === target.id;
+    case "terminal": return tab.id === target.tab;
     case "worker": return false;
   }
 }

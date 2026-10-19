@@ -428,6 +428,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "app_state" => ToolCall::App(crate::tools::AppToolCall::State),
         "read_terminal" => ToolCall::App(crate::tools::AppToolCall::ReadTerminal(arg(name, args))),
         "open_in_app" => ToolCall::App(crate::tools::AppToolCall::Open(arg(name, args))),
+        "terminal_run" => ToolCall::App(crate::tools::AppToolCall::TerminalRun(arg(name, args))),
         "browser_open" => ToolCall::Browser(B::Open(arg(name, args))),
         "browser_navigate" => ToolCall::Browser(B::Navigate(arg(name, args))),
         "browser_read" => ToolCall::Browser(B::Read(arg(name, args))),
@@ -2078,6 +2079,7 @@ mod fusion_tests;
 mod grilling_tests;
 mod open_in_app_tests;
 mod personal_memory_tests;
+mod terminal_run_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.
 #[cfg(all(test, debug_assertions))]
 mod fault_tests;

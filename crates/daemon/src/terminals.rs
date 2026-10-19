@@ -607,6 +607,24 @@ impl TerminalHost for Terminals {
         let terminal = self.get(id).ok()?;
         (terminal.conversation == conversation).then(|| lock(&terminal.scrollback).clone())
     }
+
+    fn open_shell(
+        &self,
+        conversation: &str,
+        key: &str,
+        cwd: &str,
+    ) -> brigadier_core::Result<String> {
+        // Sized as a tab starts; the tab resizes it when it shows.
+        self.open_session(conversation, Some(key), cwd.to_owned(), 120, 32)
+            .map(|terminal| terminal.id)
+    }
+
+    fn type_in(&self, conversation: &str, id: &str, data: &str) -> brigadier_core::Result<()> {
+        if self.get(id)?.conversation != conversation {
+            return Err(Error::NotFound(format!("terminal {id}")));
+        }
+        self.write(id, data)
+    }
 }
 
 #[cfg(unix)]
@@ -793,6 +811,41 @@ mod tests {
                 .is_some_and(|text| text.contains("started-42"))
         );
         assert_eq!(terminals.output("other-busy-test", &shell.id), None);
+        terminals.close_all();
+    }
+
+    /// `terminal_run`'s shell: one per tab key, the same when asked again, typed into only
+    /// for its own conversation.
+    #[cfg(unix)]
+    #[test]
+    fn an_agents_tab_shell_is_opened_once_and_typed_into_only_for_its_conversation() {
+        use brigadier_core::manager::TerminalHost;
+
+        let terminals = Terminals::new();
+        let cwd = std::env::temp_dir().display().to_string();
+        let id = terminals
+            .open_shell("run-test", "terminal:agent-1", &cwd)
+            .unwrap();
+        assert_eq!(
+            terminals
+                .open_shell("run-test", "terminal:agent-1", &cwd)
+                .unwrap(),
+            id
+        );
+        assert!(
+            terminals
+                .type_in("other-run-test", &id, "echo nope\r")
+                .is_err()
+        );
+        terminals
+            .type_in("run-test", &id, "echo typed-$((40+2))\r")
+            .unwrap();
+        assert!(eventually(|| terminals
+            .output("run-test", &id)
+            .is_some_and(|text| text.contains("typed-42"))));
+        let listed = terminals.list("run-test");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].key.as_deref(), Some("terminal:agent-1"));
         terminals.close_all();
     }
 

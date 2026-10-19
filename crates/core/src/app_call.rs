@@ -82,6 +82,11 @@ pub enum OpenTarget {
         id: String,
         title: String,
     },
+    /// A terminal tab on the shell the daemon keeps under `tab` (`terminal_run`).
+    Terminal {
+        tab: String,
+        cwd: String,
+    },
 }
 
 /// Which of the agent's changes a diff shows.

@@ -19,6 +19,8 @@ const variants: [string, Partial<ApprovalRequest>][] = [
   ["unscoped-command", { command: "echo done > /outside/file", grant: null }],
   ["narrow", { command: "git push origin main", grant: "git push" }],
   ["long", { command: "./a-very-long-program-name run", grant: "a-very-long-program-name-that-must-truncate-without-hiding-the-other-buttons run" }],
+  // `terminal_run` below Full access, or in a terminal of the user's (Q90): each command asks.
+  ["terminal", { tool: "terminal_run", command: "npm run dev", cwd: "/work/session", reason: "Run this in a terminal tab of its own? It runs outside the sandbox.", escalation: true, grant: null }],
 ];
 const approvals = Object.fromEntries(variants.map(([id, overrides]): [string, ShownApproval] => [id, {
   id, conversationId, taskId: null, requestId: null, position: 0, state: { type: "pending" }, createdAtMs: 0, resolvedAtMs: null,

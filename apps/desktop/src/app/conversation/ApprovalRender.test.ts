@@ -22,7 +22,7 @@ test("approval cards show safe session scopes, dispatch decisions, send a peer m
     ["network", "Allow example.com for this session"],
     ["files", "Allow edits in this folder for this session"],
   ]) assert.deepEqual(seen.buttons[id!], ["DenyEsc", label, "Allow once"]);
-  for (const id of ["outside", "permissions", "tool", "unscoped-command"]) {
+  for (const id of ["outside", "permissions", "tool", "unscoped-command", "terminal"]) {
     assert.deepEqual(seen.buttons[id], ["DenyEsc", "Allow once"]);
   }
   assert.deepEqual(seen.buttons["peer"], ["Don't sendEsc", "Send⏎"]);
