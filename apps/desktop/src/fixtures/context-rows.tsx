@@ -44,7 +44,8 @@ const plan = { ...(Object.values(night.plans)[0] as unknown as Plan), id: "plan-
 const { settled: _settled, ...open } = plan.steps[0]!;
 plan.steps = [
   { ...plan.steps[0]!, title: "Data model and storage", taskId: "task-1", number: 1 },
-  { ...open, title: "API routes", taskId: "task-3", number: 2, endedAtMs: null },
+  // Phase 2 began after the first phase's review and checks.
+  { ...open, title: "API routes", taskId: "task-3", number: 2, startedAtMs: now - 4.5 * MIN, endedAtMs: null },
   { ...open, title: "The web page", taskId: "task-2", number: 3, endedAtMs: null },
 ];
 const review: ReviewRun = { id: "review-1", conversationId: id, requestId: "r1", taskId: null, kind: "code", base: "a1", tip: "b2", author: "claude", reviewer: "codex",

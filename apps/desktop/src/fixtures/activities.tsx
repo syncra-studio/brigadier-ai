@@ -146,7 +146,9 @@ function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
     if (params.has("drive")) void drive().then((seen) => setResult(JSON.stringify(seen)));
-    else send({ type: "previewUpdated", preview: page }, { type: "backgroundRunUpdated", run: tests }, { type: "previewUpdated", preview: app });
+    else send({ type: "previewUpdated", preview: page }, { type: "backgroundRunUpdated", run: tests }, { type: "previewUpdated", preview: app },
+      // `smoke=1`: the worker smoke-tests its own copy of the demo pages: a state of their row.
+      ...(params.has("smoke") ? [{ type: "previewUpdated" as const, preview: { ...page, id: "preview-3", taskId: "task-2", name: "demo pages smoke", command: "PORT=5300 pnpm dev --port 5199", startedAtMs: now - MIN } }] : []));
   }, []);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
