@@ -1,7 +1,8 @@
 /**
- * The sidebar over a faked daemon: the Chats section's "+", updates that leave by themselves, and
- * "Restart to update" in a narrow sidebar.
+ * The sidebar over a faked daemon and shell: the Chats section's "+", updates that leave by
+ * themselves, and Brigadier's own update pill from offered to "Restart to update".
  */
+import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -10,8 +11,9 @@ import { AppSidebar, AppStrip } from "@/app/AppSidebar";
 import { SidebarFoot } from "@/app/SidebarFoot";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { fixtureClick } from "@/fixtures/input";
 import type { AccountsView, EventEnvelope, Request, UpdateItem, UpdateTarget } from "@/ipc/generated";
-import { useAppUpdate } from "@/state/appUpdate";
+import { APP_UPDATE_EVENT, type AppUpdate, startAppUpdate } from "@/state/appUpdate";
 import { applyUpdateEvents } from "@/state/updates";
 import { useApp } from "@/state/store";
 
@@ -19,15 +21,41 @@ import { useApp } from "@/state/store";
  * ?drive=1 clicks the Chats "+", runs a lone agent's update from the pill, runs one of two from
  * the list, and has one fail to start, writing what it saw to #updates-result
  * (SidebarUpdatesRender.test.ts reads it). ?narrow=1 narrows the sidebar as far as it goes, with
- * the two updates and a nightly update waiting, and writes whether "Restart to update" shortens its
- * words inside it, clear of the updates pill. Without any, the page shows two updates, for
- * screenshots.
+ * the two updates and a nightly update ready, and writes whether its pill stays inside, clear of
+ * the agents' pill. ?frames=1 (under renderFixtureLive) has the shell offer a nightly update, clicks
+ * its pill, has the download take a moment and clicks the restart pill, recording the foot's icons
+ * on every frame into #app-update-frames. ?fail=1 has the download fail, then clicks again.
+ * ?app=available|updating|failed|ready shows the nightly update so, beside one agent update, for
+ * screenshots (with ?collapsed=1 on the strip). Without any, the page shows two updates.
  */
 const params = new URLSearchParams(location.search);
+
+const VERSION = "0.1.0-nightly.202610200130";
+/** How long the download takes after the click under ?frames=1. */
+const DOWNLOAD_MS = 600;
+/** The shell's commands the page called, in turn. */
+const shellCalls: string[] = [];
+const shell = (update: AppUpdate | null) => {
+  void emit(APP_UPDATE_EVENT, update);
+};
 
 const calls: Request[] = [];
 let failNext = false;
 mockIPC((command, payload) => {
+  if (command === "app_update") {
+    const state = params.get("app");
+    return state ? ({ state, version: VERSION } as AppUpdate) : null;
+  }
+  if (command === "take_app_update" || command === "restart_to_update") {
+    shellCalls.push(command);
+    if (command === "take_app_update") {
+      // As the shell does: busy at once, then ready (or failed) once the download ends.
+      shell({ state: "updating", version: VERSION });
+      const failed = params.has("fail") && shellCalls.length === 1;
+      setTimeout(() => shell({ state: failed ? "failed" : "ready", version: VERSION }), DOWNLOAD_MS);
+    }
+    return null;
+  }
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   calls.push(req);
@@ -37,7 +65,8 @@ mockIPC((command, payload) => {
     throw new Error("Couldn't reach npm");
   }
   return { method: req.method };
-});
+}, { shouldMockEvents: true });
+void startAppUpdate();
 
 useApp.setState({
   catalogLoaded: true,
@@ -69,7 +98,8 @@ function publish(items: UpdateItem[]): void {
   ] as unknown as EventEnvelope[]);
 }
 
-if (!params.has("drive")) publish([item("claude", "2.0.0", "available"), item("codex", "1.1.0", "available")]);
+if (params.has("frames") || params.has("fail") || params.has("app")) publish([item("codex", "1.1.0", "available")]);
+else if (!params.has("drive")) publish([item("claude", "2.0.0", "available"), item("codex", "1.1.0", "available")]);
 
 const q = <E extends Element = HTMLElement>(selector: string, root: ParentNode = document) =>
   root.querySelector<E & HTMLElement>(selector);
@@ -88,17 +118,21 @@ const rows = () =>
 
 function Fixture() {
   const [result, setResult] = useState<string | null>(null);
+  const [frames, setFrames] = useState<string | null>(null);
+  useEffect(() => {
+    if (params.has("frames")) void recordFrames().then(setFrames);
+    if (params.has("fail")) void failAndRetry().then(setResult);
+  }, []);
   useEffect(() => {
     if (!params.has("narrow")) return;
     const wrapper = q('[data-slot="sidebar-wrapper"]');
     wrapper?.style.setProperty("--sidebar-width", "var(--spacing-sidebar-min)");
-    useAppUpdate.setState({ ready: "0.1.0-nightly.202610170130" });
+    shell({ state: "ready", version: VERSION });
     // Past the sidebar's and the item's own motion.
     const timer = window.setTimeout(() => {
       const restart = q('button[aria-label="Restart to update"]');
       const chip = q('button[aria-label$="updates available"]');
       const sidebar = restart?.closest(".sidebar-panel-width")?.getBoundingClientRect();
-      const words = restart ? q(".truncate", restart) : null;
       const at = restart?.getBoundingClientRect();
       const beside = chip?.getBoundingClientRect();
       setResult(
@@ -107,7 +141,6 @@ function Fixture() {
           inside: Boolean(at && beside && sidebar && Math.max(at.right, beside.right) <= sidebar.right + 0.5),
           // Not on top of the updates pill: after it on its line, or on a line below.
           apart: Boolean(at && beside && (at.left >= beside.right - 0.5 || at.top >= beside.bottom - 0.5)),
-          shortened: Boolean(words && words.scrollWidth > words.clientWidth),
         }),
       );
     }, 1000);
@@ -202,7 +235,7 @@ function Fixture() {
   return (
     <TooltipProvider>
       <div className="bg-chrome flex h-screen flex-col">
-        <SidebarProvider className="relative min-h-0 flex-1 flex-col" defaultOpen>
+        <SidebarProvider className="relative min-h-0 flex-1 flex-col" defaultOpen={!params.has("collapsed")}>
           <div className="relative flex min-h-0 min-w-0 flex-1">
             <SidebarPanel strip={<AppStrip />} foot={<SidebarFoot />}>
               <AppSidebar />
@@ -212,8 +245,79 @@ function Fixture() {
         </SidebarProvider>
       </div>
       {result && <pre id="updates-result">{result}</pre>}
+      {frames && <pre id="app-update-frames">{frames}</pre>}
     </TooltipProvider>
   );
+}
+
+/** Brigadier's own update pill, whatever its state. */
+const appPill = () =>
+  all<HTMLButtonElement>("button[aria-label]").find((button) =>
+    /Brigadier|Restart to update/.test(button.getAttribute("aria-label") ?? ""),
+  );
+
+/** One of the foot's icons on one frame: its name, where it is drawn and how big. */
+type Box = { label: string; x: number; y: number; width: number; height: number; opacity: number; icons: number };
+type Frame = { ms: number; boxes: Box[] };
+
+const round = (value: number) => Math.round(value * 2) / 2;
+
+/** The foot's icons on every frame for `ms` from `act`. */
+function record(ms: number, act: () => unknown): Promise<Frame[]> {
+  return new Promise((resolve) => {
+    const seen: Frame[] = [];
+    const start = performance.now();
+    const tick = () => {
+      const foot = q('button[aria-label="Settings"]')?.parentElement;
+      const boxes = all<HTMLButtonElement>("button[aria-label]", foot ?? document.body).map((button) => {
+        const rect = button.getBoundingClientRect();
+        // Drawn as faded as its most faded wrapper (an item growing in fades with it).
+        let opacity = 1;
+        for (let at: HTMLElement | null = button; at && at !== foot; at = at.parentElement) {
+          opacity *= Number(getComputedStyle(at).opacity);
+        }
+        return {
+          label: button.getAttribute("aria-label") ?? "",
+          x: round(rect.x),
+          y: round(rect.y),
+          width: round(rect.width),
+          height: round(rect.height),
+          opacity: Math.round(opacity * 100) / 100,
+          icons: button.querySelectorAll("svg").length,
+        };
+      });
+      seen.push({ ms: Math.round(performance.now() - start), boxes });
+      if (performance.now() - start < ms) requestAnimationFrame(tick);
+      else resolve(seen);
+    };
+    requestAnimationFrame(tick);
+    void act();
+  });
+}
+
+/** Offered, clicked, downloading, ready, restarted: the foot on every frame of it. */
+async function recordFrames(): Promise<string> {
+  await wait(800);
+  const appear = await record(800, () => shell({ state: "available", version: VERSION }));
+  const updating = await record(DOWNLOAD_MS + 600, () => fixtureClick(appPill()!));
+  await fixtureClick(appPill()!);
+  await wait(100);
+  return JSON.stringify({ appear, updating, calls: shellCalls });
+}
+
+/** A download that fails: the pill says so, and a click tries again. */
+async function failAndRetry(): Promise<string> {
+  await wait(800);
+  shell({ state: "available", version: VERSION });
+  await wait(400);
+  await fixtureClick(appPill()!);
+  await wait(DOWNLOAD_MS + 200);
+  const failed = appPill()?.getAttribute("aria-label");
+  await fixtureClick(appPill()!);
+  await wait(100);
+  const again = appPill()?.getAttribute("aria-label");
+  await wait(DOWNLOAD_MS + 200);
+  return JSON.stringify({ failed, again, after: appPill()?.getAttribute("aria-label"), calls: shellCalls });
 }
 
 function wait(ms: number): Promise<void> {

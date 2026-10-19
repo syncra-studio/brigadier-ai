@@ -75,9 +75,23 @@ export function appInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("app_info");
 }
 
-/** The version of the nightly update downloaded and waiting for a restart, if any. */
-export function appUpdateReady(): Promise<string | null> {
-  return invoke<string | null>("app_update_ready");
+/**
+ * A nightly build's own update, as the shell has it (src-tauri/src/updates.rs): offered,
+ * downloading once the user clicked it, failed to download, or ready for a restart.
+ */
+export type AppUpdate = {
+  state: "available" | "updating" | "failed" | "ready";
+  version: string;
+};
+
+/** The nightly update as the sidebar's foot shows it, if there is one. */
+export function appUpdate(): Promise<AppUpdate | null> {
+  return invoke<AppUpdate | null>("app_update");
+}
+
+/** Downloads the offered nightly update; its progress comes as `app-update` events. */
+export function takeAppUpdate(): Promise<void> {
+  return invoke("take_app_update");
 }
 
 /** Quits, installs the waiting nightly update and opens the app again. */

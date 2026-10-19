@@ -175,8 +175,11 @@ its return at the comparison. Requests never reach a daemon.
 `http://localhost:1426/fixtures/updates.html` shows the expanded sidebar with Claude Code and Codex updates
 waiting, for screenshots. With `?drive=1` it backs `src/app/SidebarUpdatesRender.test.ts` (run by `pnpm test`):
 it clicks the Chats section's "+", runs a lone agent's update from the chip, runs one of two from the list and
-watches the finished row leave the open list by itself, and has an update fail to start. Requests are answered
-in the page and never reach a daemon.
+watches the finished row leave the open list by itself, and has an update fail to start. `?frames=1` has the
+shell offer a nightly update of Brigadier, clicks its pill and records the foot's icons on every frame until it
+is the restart pill; `?fail=1` has that download fail and tries again; `?app=available|updating|failed|ready`
+(with `&collapsed=1` for the strip) shows the pill so, for screenshots. Requests are answered in the page and
+never reach a daemon or the shell's updater.
 
 # A failed turn
 

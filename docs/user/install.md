@@ -32,9 +32,12 @@ an existing Brigadier. To read it first, download it and run `sh install.sh`.
 
 ## Updates
 
-Brigadier updates itself. When a newer release is out, it downloads it in the background and
-shows **Restart to update**; otherwise it installs the update the next time you quit, from the
-menu, with ⌘Q or from the Dock.
+Brigadier checks for new versions by itself, but it asks before it updates. When a newer
+release is out, an update pill shows at the bottom of the sidebar. Click it to download the
+update; once it's ready the pill turns into a restart pill (**Restart to update**) that restarts
+into the new version. If you quit
+instead of restarting, from the menu, with ⌘Q or from the Dock, the update installs as it quits.
+Nothing installs until you click the update pill.
 
 ## Next
 

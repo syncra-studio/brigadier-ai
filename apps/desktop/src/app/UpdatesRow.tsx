@@ -23,6 +23,9 @@ const UPDATE_NAMES: Record<UpdateTarget, string> = {
 
 const CLIS = ["claude", "codex"] as const;
 
+/** The updates pill in the expanded row: outlined, round-ended, filled only on hover. */
+export const FOOT_CHIP = "border-border rounded-full border px-2";
+
 /**
  * Updates at the sidebar's foot, there only while something has a newer version: a chip of a
  * download icon and the outdated app's and agents' marks in the expanded sidebar's row, or a
@@ -74,8 +77,7 @@ export function UpdatesRow() {
               )
             }
             dot={expanded || busy || finished ? null : "bg-foreground"}
-            // In the row, a chip: outlined, round-ended, filled only on hover.
-            className={expanded ? "border-border rounded-full border px-2" : undefined}
+            className={expanded ? FOOT_CHIP : undefined}
             onClick={(event) => {
               if (direct === "menu") return;
               // Runs before the trigger's own click, which then leaves the list closed.

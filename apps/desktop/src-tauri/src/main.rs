@@ -878,7 +878,8 @@ fn main() {
             browser_import::browser_import_sources,
             browser_import::browser_import,
             browser_import::browser_import_open_access,
-            updates::app_update_ready,
+            updates::app_update,
+            updates::take_app_update,
             updates::restart_to_update
         ])
         .build(context)
