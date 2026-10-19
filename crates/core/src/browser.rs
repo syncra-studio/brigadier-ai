@@ -21,13 +21,20 @@ pub struct BrowserCall {
     pub op: BrowserOp,
 }
 
-/// What a call asks of a tab. Every op but `open` names a tab an earlier `open` gave.
+/// What a call asks of a tab. Every op but `open` names a tab of the session: an agent's for
+/// acting, any for reading, a picture and `show`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum BrowserOp {
-    /// Opens `url` in a new Browser tab of the session, behind the one the user is on.
+    /// Opens `url` in a Browser tab of the session, behind the one the user is on: the tab an
+    /// agent already has on that page, else a new one. `request`: the request it is for, at
+    /// whose end it closes unless `keep` (it is for the user).
     Open {
         url: String,
+        #[serde(default)]
+        keep: bool,
+        #[serde(default)]
+        request: Option<String>,
     },
     Navigate {
         tab: String,
@@ -62,6 +69,10 @@ pub enum BrowserOp {
     Close {
         tab: String,
     },
+    /// Brings the tab to the front of its session (the user asked to see it).
+    Show {
+        tab: String,
+    },
 }
 
 impl BrowserOp {
@@ -75,7 +86,8 @@ impl BrowserOp {
             | Self::Click { tab, .. }
             | Self::Type { tab, .. }
             | Self::Screenshot { tab }
-            | Self::Close { tab } => Some(tab),
+            | Self::Close { tab }
+            | Self::Show { tab } => Some(tab),
         }
     }
 }
@@ -134,10 +146,16 @@ pub enum BrowserSensitive {
     rename_all_fields = "camelCase"
 )]
 pub enum BrowserResult {
-    /// The tab's page after the call.
+    /// The tab's page after the call. `user`: the tab is the user's, read only.
     Page {
         tab: String,
         page: BrowserPageRead,
+        #[serde(default)]
+        user: bool,
+    },
+    /// The tab is in front of its session now.
+    Shown {
+        tab: String,
     },
     /// A PNG of the page, base64.
     Shot {

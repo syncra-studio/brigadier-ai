@@ -91,7 +91,11 @@ export type BrowserTabState = {
   driver?: BrowserDriver;
   chat?: TabChatState;
 };
-export type BrowserDriver = { label: string; taskId: string | null };
+/**
+ * An agent works the tab with the browser tool: who, as the user knows it. `request`: the request
+ * it was opened for, at whose end it closes unless `keep` (it is for the user).
+ */
+export type BrowserDriver = { label: string; taskId: string | null; request?: string | null; keep?: boolean };
 export type NewTabState = {
   kind: "newTab"; id: string; opener: string | null;
 };
@@ -302,8 +306,33 @@ export function sideChatName(tab: SideChatTabState, tabs: readonly SessionTab[])
   return order > 0 ? `Side chat ${order + 1}` : "Side chat";
 }
 
-/** A new Browser tab showing `url`, after the tab in front. */
+/** Two addresses of one page: the same but for a trailing slash. */
+export function sameAddress(a: string, b: string): boolean {
+  return Boolean(a.trim()) && bare(a) === bare(b);
+}
+
+function bare(url: string): string {
+  return url.trim().replace(/\/+$/, "");
+}
+
+/** The session's Browser tab on `url`: the one in front if it is, else the first. */
+export function browserTabOn(conversationId: string, url: string): BrowserTabState | undefined {
+  const current = sessionTabs(conversationId);
+  const on = current.tabs.filter((tab): tab is BrowserTabState & AgentMark => tab.kind === "browser" && sameAddress(tab.url, url));
+  return on.find((tab) => tab.id === current.active) ?? on[0];
+}
+
+/**
+ * Shows `url` in a Browser tab of the session, in front: the tab already on that page when there
+ * is one (#418, #425), else a new one after the tab in front. The way a click opens a page in a
+ * session: links, the Web preview card. `agent`: the address came from an agent.
+ */
 export function openBrowserTab(conversationId: string, url: string, agent = false): string {
+  const there = browserTabOn(conversationId, url);
+  if (there) {
+    selectTab(conversationId, there.id);
+    return there.id;
+  }
   const id = `browser:${crypto.randomUUID()}`;
   update(conversationId, (current) => {
     const tab: BrowserTabState = { kind: "browser", id, opener: current.active, url, title: "", ...(agent ? { agent } : {}) };

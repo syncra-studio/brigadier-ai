@@ -7,13 +7,24 @@ import {
 import type { AppCall, BrowserBounds, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult, BrowserSensitive } from "@/ipc/generated";
 import { isPaused } from "@/state/agentPause";
 import { openPage, useBrowsers } from "@/state/browsers";
-import { type BrowserTabState, closeTab, openAgentTab, sessionTabs } from "@/state/sessionTabs";
+import {
+  type BrowserDriver,
+  type BrowserTabState,
+  changeSessionTab,
+  closeTab,
+  isAgentTab,
+  openAgentTab,
+  sameAddress,
+  selectTab,
+  sessionTabs,
+} from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 /**
  * The browser tool's calls (Q74), as the app runs them: an agent's call comes from the daemon,
- * runs on a Browser tab of its session and is answered. `open` makes a normal Browser tab,
- * behind the one in front, with the user's sign-ins; the rest work only on such a tab.
+ * runs on a Browser tab of its session and is answered. `open` uses the agents' tab already on
+ * that page, else makes a normal Browser tab, behind the one in front, with the user's sign-ins;
+ * acting works only on such a tab. The user's own tabs may be read and shown, never worked.
  */
 
 /** A Browser tab's call, as its app call carries it. */
@@ -64,10 +75,41 @@ export async function runCall(call: BrowserCall, hands: PageHands = shell): Prom
   }
 }
 
-/** The tab an earlier `open` gave this session's agents, if it is still open. */
-function agentTab(conversationId: string, id: string): BrowserTabState | null {
+/** The session's Browser tab `id`, if it is still open. */
+function browserTab(conversationId: string, id: string): BrowserTabState | null {
   const tab = sessionTabs(conversationId).tabs.find((each) => each.id === id);
-  return tab?.kind === "browser" && tab.driver ? tab : null;
+  return tab?.kind === "browser" ? tab : null;
+}
+
+/**
+ * A tab an agent's `open` of `url` goes on in, not another one of that page (#418, #424): one an
+ * agent works on it, or one opened from what an agent gave (a preview's address), unless the
+ * user took it over.
+ */
+function adoptable(conversationId: string, url: string): BrowserTabState | undefined {
+  return sessionTabs(conversationId).tabs.find(
+    (tab): tab is BrowserTabState => tab.kind === "browser" && (Boolean(tab.driver) || tab.agent === true) && sameAddress(tab.url, url) && !isPaused(tab.id),
+  );
+}
+
+/** Makes the tab the agent's, for request `request`: one the user clicked open stays for them. */
+function adopt(conversationId: string, tab: BrowserTabState, driver: BrowserDriver): void {
+  const keep = driver.keep === true || (tab.driver ? tab.driver.keep === true : true);
+  changeSessionTab(conversationId, tab.id, (current) => current.kind === "browser" ? { ...current, driver: { ...driver, keep } } : current);
+}
+
+/**
+ * Request `request` of the session ended: the Browser tabs agents opened for it close, except
+ * those kept for the user, the one in front and those the user took over. Returns those closed.
+ */
+export function closeRequestTabs(conversationId: string, request: string): string[] {
+  const current = sessionTabs(conversationId);
+  const gone = current.tabs
+    .filter((tab): tab is BrowserTabState => tab.kind === "browser" && tab.driver?.request === request && !tab.driver.keep)
+    .filter((tab) => tab.id !== current.active && !isPaused(tab.id))
+    .map((tab) => tab.id);
+  for (const tab of gone) closeTab(conversationId, tab);
+  return gone;
 }
 
 /** Where a background tab's page lies: over the session's main area, which it would show in. */
@@ -82,24 +124,38 @@ export function backgroundBounds(): BrowserBounds {
 async function perform(call: BrowserCall, hands: PageHands): Promise<BrowserResult> {
   const { op, conversationId } = call;
   if (op.op === "open") {
-    const tab = openAgentTab(conversationId, op.url, { label: call.label, taskId: call.taskId });
-    await hands.open(tab, op.url, backgroundBounds());
-    await loaded(tab);
+    const driver: BrowserDriver = { label: call.label, taskId: call.taskId, request: op.request, keep: op.keep };
+    const there = adoptable(conversationId, op.url);
+    if (there) adopt(conversationId, there, driver);
+    const tab = there?.id ?? openAgentTab(conversationId, op.url, driver);
+    if (!there || !useBrowsers.getState().pages[tab]) {
+      await hands.open(tab, op.url, backgroundBounds());
+      await loaded(tab);
+    }
     return page(tab, hands);
   }
-  const tab = agentTab(conversationId, op.tab);
-  if (!tab) return failed(`There is no tab ${op.tab} of yours in this session now: open one with browser_open.`);
+  const tab = browserTab(conversationId, op.tab);
+  if (!tab) return failed(`There is no tab ${op.tab} in this session now: open one with browser_open.`);
+  // Showing never moves the window or the session: only which tab the session has in front.
+  if (op.op === "show") {
+    selectTab(conversationId, tab.id);
+    return { result: "shown", tab: tab.id };
+  }
+  const users = !isAgentTab(tab);
+  if (users && op.op !== "read" && op.op !== "screenshot")
+    return failed(`Tab ${tab.id} is the user's: you may read it, not click, type, navigate or close it. Open your own with browser_open.`);
   // The user took it over: nothing is done until they press Continue.
-  if (isPaused(tab.id)) return { result: "paused", tab: tab.id };
+  if (!users && isPaused(tab.id)) return { result: "paused", tab: tab.id };
   // Its page goes with a restart: it loads again where it was.
   if (!useBrowsers.getState().pages[tab.id]) {
     await hands.open(tab.id, tab.url || "about:blank", backgroundBounds());
     await loaded(tab.id);
   }
-  return act(tab.id, op, conversationId, hands);
+  const result = await act(tab.id, op, conversationId, hands);
+  return users && result.result === "page" ? { ...result, user: true } : result;
 }
 
-async function act(tab: string, op: Exclude<BrowserOp, { op: "open" }>, conversationId: string, hands: PageHands): Promise<BrowserResult> {
+async function act(tab: string, op: Exclude<BrowserOp, { op: "open" | "show" }>, conversationId: string, hands: PageHands): Promise<BrowserResult> {
   switch (op.op) {
     case "navigate":
       starting(tab);
@@ -226,7 +282,7 @@ async function page(tab: string, hands: PageHands): Promise<BrowserResult> {
     loading: shown?.loading ?? false,
     text: read.text,
   };
-  return { result: "page", tab, page: result };
+  return { result: "page", tab, page: result, user: false };
 }
 
 /** `bytes` as base64. */

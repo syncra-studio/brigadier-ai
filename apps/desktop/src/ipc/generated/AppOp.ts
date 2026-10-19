@@ -5,4 +5,4 @@ import type { OpenTarget } from "./OpenTarget";
 /**
  * What a call asks of the app.
  */
-export type AppOp = { "app": "browser", op: BrowserOp, } | { "app": "state" } | { "app": "open", target: OpenTarget, show: boolean, };
+export type AppOp = { "app": "browser", op: BrowserOp, } | { "app": "state" } | { "app": "open", target: OpenTarget, show: boolean, } | { "app": "endRequest", request: string, };

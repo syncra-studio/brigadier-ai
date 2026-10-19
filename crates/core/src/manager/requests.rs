@@ -303,6 +303,7 @@ impl SessionManager {
                 // one's stack.
                 Box::pin(self.reconcile_pr_merge(conversation_id, Some(id))).await;
                 self.note_ready(conversation_id, id).await;
+                self.close_request_tabs(conversation_id, id);
                 if !told_overlaps {
                     told_overlaps = true;
                     self.tell_overlaps(conversation_id).await;

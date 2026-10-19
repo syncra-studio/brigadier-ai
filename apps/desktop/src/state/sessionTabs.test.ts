@@ -420,3 +420,14 @@ test("a plan opened full screen is its own tab after the one in front, and openi
   assert.notEqual(outline, plan, "an outline and a plan with the same id are different tabs");
   closeTab("plans", outline); closeTab("plans", plan); closeTab("plans", browser);
 });
+
+test("a page already open in a Browser tab is brought to the front, not opened again (issues 418, 425)", () => {
+  const id = "same-page";
+  const first = openBrowserTab(id, "http://localhost:3000/", true);
+  selectTab(id, CHAT_TAB);
+  assert.equal(openBrowserTab(id, "http://localhost:3000", true), first, "the Web preview card's second click");
+  assert.equal(sessionTabs(id).active, first);
+  const other = openBrowserTab(id, "http://localhost:3000/about");
+  assert.notEqual(other, first, "another page is another tab");
+  assert.equal(sessionTabs(id).tabs.length, 2);
+});

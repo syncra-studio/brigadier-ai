@@ -3,6 +3,7 @@ import type { BrowserGo } from "./BrowserGo";
 import type { BrowserGuard } from "./BrowserGuard";
 
 /**
- * What a call asks of a tab. Every op but `open` names a tab an earlier `open` gave.
+ * What a call asks of a tab. Every op but `open` names a tab of the session: an agent's for
+ * acting, any for reading, a picture and `show`.
  */
-export type BrowserOp = { "op": "open", url: string, } | { "op": "navigate", tab: string, url: string, } | { "op": "go", tab: string, action: BrowserGo, } | { "op": "read", tab: string, } | { "op": "click", tab: string, target: string, guard: BrowserGuard, } | { "op": "type", tab: string, target: string, text: string, submit: boolean, guard: BrowserGuard, } | { "op": "screenshot", tab: string, } | { "op": "close", tab: string, };
+export type BrowserOp = { "op": "open", url: string, keep: boolean, request: string | null, } | { "op": "navigate", tab: string, url: string, } | { "op": "go", tab: string, action: BrowserGo, } | { "op": "read", tab: string, } | { "op": "click", tab: string, target: string, guard: BrowserGuard, } | { "op": "type", tab: string, target: string, text: string, submit: boolean, guard: BrowserGuard, } | { "op": "screenshot", tab: string, } | { "op": "close", tab: string, } | { "op": "show", tab: string, };

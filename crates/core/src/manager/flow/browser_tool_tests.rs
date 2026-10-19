@@ -90,6 +90,7 @@ fn page(tab: &str, text: &str) -> BrowserResult {
             loading: false,
             text: text.into(),
         },
+        user: false,
     }
 }
 
@@ -194,11 +195,13 @@ async fn a_worker_opens_reads_and_pictures_a_page_in_its_sessions_browser() {
     let heard = heard.lock().unwrap().clone();
     let ops: Vec<_> = heard.iter().map(|call| call.op.clone()).collect();
     assert_eq!(ops.len(), 5, "{ops:#?}");
-    assert_eq!(
-        ops[0],
-        BrowserOp::Open {
-            url: "http://127.0.0.1:9/form".into()
-        }
+    assert!(
+        matches!(
+            &ops[0],
+            BrowserOp::Open { url, keep: false, request: Some(_) } if url == "http://127.0.0.1:9/form"
+        ),
+        "{:?}",
+        ops[0]
     );
     assert!(matches!(
         &ops[2],
@@ -259,12 +262,14 @@ async fn the_thread_s_calls_are_its_own_and_bad_calls_never_reach_the_app() {
 
     let opened = call(BrowserToolCall::Open(BrowserOpen {
         url: " https://example.com/ ".into(),
+        keep: false,
     }))
     .await;
     assert!(!opened.is_error, "{}", opened.text);
 
     let not_web = call(BrowserToolCall::Open(BrowserOpen {
         url: "file:///etc/passwd".into(),
+        keep: false,
     }))
     .await;
     assert!(not_web.is_error);
@@ -305,17 +310,17 @@ async fn the_thread_s_calls_are_its_own_and_bad_calls_never_reach_the_app() {
 
     let heard = heard.lock().unwrap().clone();
     let ops: Vec<_> = heard.iter().map(|call| call.op.clone()).collect();
+    assert!(
+        matches!(&ops[0], BrowserOp::Open { url, keep: false, .. } if url == "https://example.com/"),
+        "{:?}",
+        ops[0]
+    );
     assert_eq!(
-        ops,
-        [
-            BrowserOp::Open {
-                url: "https://example.com/".into()
-            },
-            BrowserOp::Go {
-                tab: "browser:agent-1".into(),
-                action: crate::browser::BrowserGo::Back
-            }
-        ]
+        ops[1..],
+        [BrowserOp::Go {
+            tab: "browser:agent-1".into(),
+            action: crate::browser::BrowserGo::Back
+        }]
     );
     assert!(heard.iter().all(|call| call.task_id.is_none()));
     flow.stop().await;
@@ -1066,5 +1071,122 @@ async fn the_thread_attaches_a_preview_s_screenshot_from_the_browser_tool_as_mer
         .unwrap();
     assert_eq!(served, "image/png");
     assert_eq!(data, PNG);
+    flow.stop().await;
+}
+
+/// What a window heard besides Browser calls: each request end, answered as closing one tab.
+fn request_ends(flow: &Flow) -> Arc<Mutex<Vec<String>>> {
+    let ends: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut calls = flow.manager.subscribe_app();
+    let (manager, log) = (flow.manager.clone(), ends.clone());
+    tokio::spawn(async move {
+        while let Ok(call) = calls.recv().await {
+            if let AppOp::EndRequest { request } = call.op {
+                log.lock().unwrap().push(request);
+                manager.app_answer(
+                    &call.id,
+                    AppAnswer::Closed {
+                        tabs: vec!["browser:agent-1".into()],
+                    },
+                );
+            }
+        }
+    });
+    ends
+}
+
+#[tokio::test]
+async fn a_request_s_end_closes_the_tabs_opened_for_it_but_not_those_kept_for_the_user() {
+    let done: Arc<Mutex<std::collections::HashSet<&'static str>>> = Arc::default();
+    let flow = Flow::start(
+        "browser-tool-request-end",
+        Options::default(),
+        script(move |turn| {
+            let done = done.clone();
+            async move {
+                let asked = ["Check the page.", "Show me the page."]
+                    .into_iter()
+                    .find(|asked| turn.input.contains(asked));
+                if turn.is_orchestrator()
+                    && let Some(asked) = asked
+                    && done.lock().unwrap().insert(asked)
+                {
+                    let keep = asked.starts_with("Show me");
+                    let reply = turn
+                        .call(
+                            "browser_open",
+                            json!({"url": "https://example.com/", "keep": keep}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                }
+                Reply::text("Looked.")
+            }
+        }),
+    )
+    .await;
+    let opened = window(&flow);
+    let ends = request_ends(&flow);
+
+    flow.say("Check the page.").await;
+    flow.settled().await;
+    let requests: Vec<String> = flow
+        .core
+        .board(&flow.conversation)
+        .await
+        .unwrap()
+        .requests
+        .keys()
+        .cloned()
+        .collect();
+    let first = requests[0].clone();
+    for _ in 0..100 {
+        if !ends.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(*ends.lock().unwrap(), std::slice::from_ref(&first));
+    assert!(matches!(
+        &opened.lock().unwrap()[0].op,
+        BrowserOp::Open { keep: false, request: Some(request), .. } if *request == first
+    ));
+
+    flow.say("Show me the page.").await;
+    flow.settled().await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(opened.lock().unwrap().len(), 2);
+    assert!(matches!(
+        &opened.lock().unwrap()[1].op,
+        BrowserOp::Open { keep: true, request: Some(request), .. } if *request != first
+    ));
+    assert_eq!(
+        *ends.lock().unwrap(),
+        [first],
+        "a kept tab's request closes nothing"
+    );
+    flow.stop().await;
+}
+
+#[tokio::test]
+async fn only_the_thread_brings_a_tab_to_the_front() {
+    let flow = Flow::start("browser-tool-show", Options::default(), quiet()).await;
+    let heard = window(&flow);
+    let show = || {
+        BrowserToolCall::Show(BrowserTabRef {
+            tab: "browser:agent-1".into(),
+        })
+    };
+    let worker = flow
+        .manager
+        .browser_tool(
+            flow.conversation.clone(),
+            Some(crate::TaskId("t1".into())),
+            show(),
+        )
+        .await;
+    assert!(worker.is_error);
+    assert!(worker.text.contains("Only the thread"), "{}", worker.text);
+    assert!(heard.lock().unwrap().is_empty());
     flow.stop().await;
 }

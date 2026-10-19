@@ -37,6 +37,9 @@ pub enum AppOp {
     /// Opens `target` in the session's tabs (`open_in_app`): in front when `show` (the user
     /// asked to see it) and the user is on the session; else behind, marked new.
     Open { target: OpenTarget, show: bool },
+    /// Request `request` ended: the Browser tabs agents opened for it close, except those kept
+    /// for the user, the one in front and those the user took over.
+    EndRequest { request: String },
 }
 
 /// What `open_in_app` opens, checked and named by the daemon.
@@ -114,7 +117,7 @@ impl AppOp {
     pub(crate) fn what(&self) -> &'static str {
         match self {
             Self::Browser { .. } => "its browser",
-            Self::State | Self::Open { .. } => "its tabs",
+            Self::State | Self::Open { .. } | Self::EndRequest { .. } => "its tabs",
         }
     }
 }
@@ -135,6 +138,10 @@ pub enum AppAnswer {
         tab: Option<String>,
         front: bool,
         kept: bool,
+    },
+    /// The tabs a request's end closed.
+    Closed {
+        tabs: Vec<String>,
     },
     /// Nothing was done: why, in plain words.
     Failed {

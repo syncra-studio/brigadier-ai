@@ -284,7 +284,7 @@ pub struct SessionManager {
     computer_host: computer_host::ComputerHost,
     /// Agents' browser calls on their way to the app ([`browser_tool`]).
     app: Arc<app_call::AppHub>,
-    browser: browser_tool::BrowserHub,
+    browser: Arc<browser_tool::BrowserHub>,
     /// Where "Open in terminal" runs a worker's session (the daemon's terminals).
     terminal_host: std::sync::OnceLock<Arc<dyn takeover::TerminalHost>>,
     /// The user's pages, which a thread may read and change from the page's own composer.
@@ -442,7 +442,7 @@ impl SessionManager {
             closing: closing::Closing::default(),
             computer_use: computer_use::ComputerUse::default(),
             computer_host: computer_host::ComputerHost::default(),
-            browser: browser_tool::BrowserHub::new(app.clone()),
+            browser: Arc::new(browser_tool::BrowserHub::new(app.clone())),
             app,
             terminal_host: std::sync::OnceLock::new(),
             pages: std::sync::OnceLock::new(),

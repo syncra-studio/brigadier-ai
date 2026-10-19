@@ -1,6 +1,6 @@
 import { request } from "@/ipc/client";
 import type { AppAnswer, AppCall } from "@/ipc/generated";
-import { type PageHands, runCall } from "@/state/agentBrowser";
+import { closeRequestTabs, type PageHands, runCall } from "@/state/agentBrowser";
 import { openInApp } from "@/state/openInApp";
 import { windowView } from "@/state/windowView";
 
@@ -27,5 +27,7 @@ export async function answerOf(call: AppCall, hands?: PageHands): Promise<AppAns
       return { app: "state", view: windowView(call.conversationId) };
     case "open":
       return openInApp(call.conversationId, call.op.target, call.op.show);
+    case "endRequest":
+      return { app: "closed", tabs: closeRequestTabs(call.conversationId, call.op.request) };
   }
 }

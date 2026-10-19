@@ -54,7 +54,8 @@ const call = (conversationId: string, op: AppOp): AppCall => ({ id: `app-call-${
 
 /** Every app call the window runs today, on a session the user isn't looking at. */
 const EVERY_CALL: AppOp[] = [
-  { app: "browser", op: { op: "open", url: "http://127.0.0.1:4000/" } },
+  { app: "browser", op: { op: "open", url: "http://127.0.0.1:4000/", keep: false, request: "req-1" } },
+  { app: "browser", op: { op: "show", tab: "browser:agent-1" } },
   { app: "state" },
   { app: "open", target: { kind: "file", path: "src/main.rs", line: 3 }, show: true },
   { app: "open", target: { kind: "diff", scope: "lastTurn" }, show: true },
@@ -65,6 +66,7 @@ const EVERY_CALL: AppOp[] = [
   { app: "open", target: { kind: "plan", id: "card-1", outline: false, title: "The plan" }, show: true },
   { app: "open", target: { kind: "page", id: "page-1", title: "Notes" }, show: true },
   { app: "open", target: { kind: "terminal", tab: "terminal:agent-1", cwd: "/repo" }, show: true },
+  { app: "endRequest", request: "req-1" },
 ];
 
 test("no app call brings the window forward or moves the user off the session and tab they are on", async () => {

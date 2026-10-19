@@ -5,7 +5,7 @@ import type { BrowserSensitive } from "./BrowserSensitive";
 /**
  * What the app answers a call with.
  */
-export type BrowserResult = { "result": "page", tab: string, page: BrowserPageRead, } | { "result": "shot", tab: string, url: string, png: string, } | { "result": "closed", tab: string, } | { "result": "paused", tab: string, } | { "result": "needsApproval", tab: string, url: string, 
+export type BrowserResult = { "result": "page", tab: string, page: BrowserPageRead, user: boolean, } | { "result": "shown", tab: string, } | { "result": "shot", tab: string, url: string, png: string, } | { "result": "closed", tab: string, } | { "result": "paused", tab: string, } | { "result": "needsApproval", tab: string, url: string, 
 /**
  * The page it was asked on: a yes holds for it only.
  */

@@ -11,6 +11,7 @@ import {
   openTerminalTab,
   REVIEW_TAB,
   type ReviewTarget,
+  sameAddress,
   type SessionTab,
   sessionTabs,
 } from "@/state/sessionTabs";
@@ -78,15 +79,6 @@ function shows(tab: SessionTab, target: OpenTarget): boolean {
     case "terminal": return tab.id === target.tab;
     case "worker": return false;
   }
-}
-
-/** Two addresses of one page: the same but for a trailing slash. */
-export function sameAddress(a: string, b: string): boolean {
-  return Boolean(a) && bare(a) === bare(b);
-}
-
-function bare(url: string): string {
-  return url.trim().replace(/\/+$/, "");
 }
 
 function diffTarget(scope: DiffScope): ReviewTarget {
