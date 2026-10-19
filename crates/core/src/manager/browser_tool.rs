@@ -43,6 +43,8 @@ pub(crate) struct BrowserHub {
     /// The user's yes to an action that asked first, until it is done: for that very call, by
     /// that agent, on that tab and page.
     grants: Mutex<HashMap<GrantKey, BrowserApproved>>,
+    /// The key of call fingerprints, never stored: a stored card can't give away what was typed.
+    fingerprint_key: [u8; 32],
 }
 
 /// Whose yes, for which call: the session, the worker (none: the thread), the tab and the
@@ -64,6 +66,12 @@ impl Default for BrowserHub {
             paused: Mutex::default(),
             pause_changed: Notify::new(),
             grants: Mutex::default(),
+            fingerprint_key: {
+                let mut key = [0; 32];
+                key[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+                key[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+                key
+            },
         }
     }
 }
@@ -171,6 +179,26 @@ impl BrowserHub {
         self.grants
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The call an op is, for a yes to hold for it alone: clicks and typing only. A keyed digest,
+    /// so the card it is stored on holds nothing of a password, card or code typed.
+    fn fingerprint(&self, op: &BrowserOp) -> Option<String> {
+        let call = match op {
+            BrowserOp::Click { target, .. } => format!("click\u{1f}{target}"),
+            BrowserOp::Type {
+                target,
+                text,
+                submit,
+                ..
+            } => format!("type\u{1f}{target}\u{1f}{submit}\u{1f}{text}"),
+            _ => return None,
+        };
+        Some(
+            blake3::keyed_hash(&self.fingerprint_key, call.as_bytes())
+                .to_hex()
+                .to_string(),
+        )
     }
 
     /// The tab closed: what was granted on it goes.
@@ -302,20 +330,6 @@ fn said(message: &str) -> String {
         String::new()
     } else {
         format!(" They said: {}", message.trim())
-    }
-}
-
-/// The call an op is, for a yes to hold for it alone: clicks and typing only.
-fn fingerprint(op: &BrowserOp) -> Option<String> {
-    match op {
-        BrowserOp::Click { target, .. } => Some(format!("click\u{1f}{target}")),
-        BrowserOp::Type {
-            target,
-            text,
-            submit,
-            ..
-        } => Some(format!("type\u{1f}{target}\u{1f}{submit}\u{1f}{text}")),
-        _ => None,
     }
 }
 
@@ -461,7 +475,7 @@ impl SessionManager {
             Ok(op) => op,
             Err(message) => return ToolReply::error(message),
         };
-        let key = fingerprint(&op).map(|fingerprint| GrantKey {
+        let key = self.browser.fingerprint(&op).map(|fingerprint| GrantKey {
             conversation_id: conversation_id.clone(),
             task_id: task_id.clone(),
             tab: op.tab().unwrap_or_default().to_owned(),

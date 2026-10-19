@@ -333,6 +333,11 @@ struct Shop {
 }
 
 fn shop(flow: &Flow) -> Arc<Shop> {
+    shop_typing(flow, BrowserSensitive::Credentials)
+}
+
+/// A shop whose every typed field is `typed`: a password, card or code field.
+fn shop_typing(flow: &Flow, typed: BrowserSensitive) -> Arc<Shop> {
     let shop = Arc::new(Shop {
         generation: std::sync::atomic::AtomicU64::new(1),
         heard: Mutex::default(),
@@ -354,7 +359,7 @@ fn shop(flow: &Flow) -> Arc<Shop> {
                         .as_ref()
                         .is_some_and(|yes| yes.generation == generation && yes.url == url);
                     let sensitive = match &call.op {
-                        BrowserOp::Type { .. } => BrowserSensitive::Credentials,
+                        BrowserOp::Type { .. } => typed,
                         _ => guard.declared.unwrap_or(BrowserSensitive::Pay),
                     };
                     if approved {
@@ -728,6 +733,90 @@ async fn a_worker_waits_for_the_user_s_answer_to_a_password() {
         typed[0].text
     );
     assert!(matches!(approved_of(&shop).as_slice(), [None, Some(_)]));
+    flow.stop().await;
+}
+
+/// Every file under `dir` that holds `needle`.
+fn holding(dir: &std::path::Path, needle: &[u8]) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(holding(&path, needle));
+        } else if std::fs::read(&path)
+            .is_ok_and(|bytes| bytes.windows(needle.len()).any(|window| window == needle))
+        {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// #358: a card number a worker types is asked about, typed on the user's yes, and stored
+/// nowhere: not on the card's fingerprint, its event, the board or a worker's log.
+#[tokio::test]
+async fn a_typed_card_number_is_stored_nowhere() {
+    const NUMBER: &str = "4917610000000000";
+    let flow = Flow::start(
+        "browser-tool-card",
+        Options::default(),
+        script(move |turn| async move {
+            if turn.is_orchestrator() {
+                if turn.input.contains("Pay.") {
+                    turn.call(
+                        "delegate_task",
+                        json!({"effort": "medium", "title": "Pay the order",
+                               "kind": "implement", "spec": "Pay.", "provider": "claude"}),
+                    )
+                    .await;
+                }
+                return Reply::text("[quiet]");
+            }
+            if turn.task_number().is_none() || turn.earlier > 0 {
+                return Reply::text("ok");
+            }
+            let card =
+                json!({"tab": "browser:agent-1", "target": "e9", "text": NUMBER, "submit": false});
+            turn.call("browser_type", card).await;
+            turn.call("submit_report", json!({"summary": "Paid.", "changes": []}))
+                .await;
+            Reply::text("Done.")
+        }),
+    )
+    .await;
+    let shop = shop_typing(&flow, BrowserSensitive::Card);
+    flow.say("Pay.").await;
+    let card = card_number(&flow, 1).await;
+    let crate::work::ApprovalSubject::Browser {
+        question,
+        fingerprint,
+        ..
+    } = &card.subject
+    else {
+        unreachable!()
+    };
+    assert_eq!(question, "Enter a payment card on shop.example?");
+    assert!(!fingerprint.contains(NUMBER), "{fingerprint}");
+    flow.manager
+        .answer_card(flow.conversation.clone(), card.id.clone(), allow())
+        .await
+        .unwrap();
+    flow.settled().await;
+    // It was typed, on the user's yes.
+    assert!(matches!(approved_of(&shop).as_slice(), [None, Some(_)]));
+    let typed = shop.heard.lock().unwrap().clone();
+    assert!(
+        matches!(typed.last(), Some(BrowserOp::Type { text, .. }) if text == NUMBER),
+        "{typed:#?}"
+    );
+    let stored = holding(&flow.dir.join("data"), NUMBER.as_bytes());
+    assert!(
+        stored.is_empty(),
+        "the card number is stored in {stored:#?}"
+    );
     flow.stop().await;
 }
 

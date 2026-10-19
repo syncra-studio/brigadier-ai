@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::model::{KeptFile, ProviderEvent};
-use crate::redact::{EventRedactor, Redactor};
+use crate::redact::{EventRedactor, REDACTED, Redactor};
 use crate::{DIFF_CLIP, OUTPUT_CLIP, OUTPUT_KEEP_MAX, clip};
 
 /// Sends a session's events to its listener. Every event passes the session's redactor first,
@@ -27,7 +27,8 @@ impl Events {
     }
 
     /// Sends `event`, redacted. Returns `false` once nobody listens any more.
-    pub(crate) async fn send(&self, event: ProviderEvent) -> bool {
+    pub(crate) async fn send(&self, mut event: ProviderEvent) -> bool {
+        hide_typed_text(&mut event);
         let out = match &self.redactor {
             Some(redactor) => {
                 let mut out = Vec::with_capacity(1);
@@ -47,6 +48,34 @@ impl Events {
         }
         delivered
     }
+}
+
+/// What an agent types with Brigadier's browser tool may be a password, card number or one-time
+/// code; only the page knows which, after the call's event is out. So the text is never kept.
+fn hide_typed_text(event: &mut ProviderEvent) {
+    let ProviderEvent::ToolCall {
+        name,
+        input: Some(input),
+        ..
+    } = event
+    else {
+        return;
+    };
+    // `mcp__brigadier__browser_type` (Claude), `brigadier/browser_type` (Codex).
+    let bare = name.rsplit("__").next().unwrap_or(name);
+    if bare.rsplit('/').next().unwrap_or(bare) != "browser_type" {
+        return;
+    }
+    *input = match serde_json::from_str::<serde_json::Value>(input) {
+        Ok(mut call) => {
+            if let Some(text) = call.get_mut("text") {
+                *text = REDACTED.into();
+            }
+            call.to_string()
+        }
+        // Cut short: none of it is kept.
+        Err(_) => REDACTED.to_owned(),
+    };
 }
 
 /// A result cut to [`OUTPUT_CLIP`] once redaction saw it whole, with the whole of it waiting in
@@ -158,6 +187,50 @@ mod tests {
             "part of the secret was kept"
         );
         assert!(shown.len() <= DIFF_CLIP + 32, "the diff is clipped");
+    }
+
+    /// #358: what an agent types with the browser tool never leaves in its call's event, from
+    /// either CLI, a cut-short call included; other calls keep their input.
+    #[tokio::test]
+    async fn text_typed_with_the_browser_tool_is_never_kept() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let events = Events::new(tx, None);
+        let call = |name: &str, input: &str| ProviderEvent::ToolCall {
+            item_id: "t".into(),
+            name: name.into(),
+            input: Some(input.into()),
+            status: ItemStatus::Completed,
+            output: None,
+            kept: None,
+        };
+        let typed =
+            r#"{"tab":"browser:agent-1","target":"e9","text":"4917610000000000","submit":true}"#;
+        let mut kept = Vec::new();
+        for (name, input) in [
+            ("mcp__brigadier__browser_type", typed),
+            ("brigadier/browser_type", typed),
+            (
+                "mcp__brigadier__browser_type",
+                r#"{"tab":"browser:agent-1","text":"49176100"#,
+            ),
+            (
+                "mcp__brigadier__browser_click",
+                r#"{"target":"e4917610000000000"}"#,
+            ),
+        ] {
+            assert!(events.send(call(name, input)).await);
+            let Some(ProviderEvent::ToolCall { input, .. }) = rx.recv().await else {
+                panic!("no tool call")
+            };
+            kept.push(input.unwrap());
+        }
+        for input in &kept[..3] {
+            assert!(!input.contains("49176100"), "{input}");
+        }
+        assert!(kept[3].contains("4917610000000000"), "{}", kept[3]);
+        let first: serde_json::Value = serde_json::from_str(&kept[0]).unwrap();
+        assert_eq!(first["target"], "e9");
+        assert_eq!(first["text"], REDACTED);
     }
 
     fn command(output: &str, kept: Option<KeptOutput>) -> ProviderEvent {
