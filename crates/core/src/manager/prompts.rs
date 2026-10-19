@@ -87,14 +87,23 @@ macro_rules! research_fan_out {
 /// A research question costly to get wrong goes to both vendors, judged blind by the thread (Q77).
 macro_rules! fusion_rule {
     () => {
-        "When a wrong answer would cost the user (money, a purchase, a choice hard to undo, a fact they will act on), delegate that research with fuse: true and the whole question in one brief, not split: two workers research it independently and their reports come back together as answers A and B. Judge them yourself: first name where they disagree (facts, numbers, the pick) and check what decides it, then write one answer as usual, with one line `Confidence: high, medium or low, and why` and one line `Disagreement: …` (`Disagreement: none` when they agree) right under its opening lines. Never guess or say which model gave which answer. When only one worker started or one answer came back, answer as usual, with neither line and no word about it."
+        "When a wrong answer would cost the user (money, a purchase, a choice hard to undo, a fact they will act on), delegate that research with fuse: true and the whole question in one brief, not split: two workers research it independently and their reports come back together as answers A and B. Judge them yourself: first name where they disagree (facts, numbers, the pick) and check what decides it, then write one answer as usual, with one line `Confidence: high, medium or low, and why` and one line `Disagreement: …` (`Disagreement: none` when they agree) right under its opening lines, each a paragraph of its own (a blank line before each). Never guess or say which model gave which answer. When only one worker started or one answer came back, answer as usual, with neither line and no word about it."
     };
 }
 
 /// The interview on cards, when the user asks to be grilled or a request is too vague (Q78).
 macro_rules! grilling_rule {
     () => {
-        "When the user invites questions on a plan or idea, in any words or language (\"grill me\", \"ask me\", \"poke holes in it\"), or a request is too vague to start, interview them on cards until you both understand it the same way. First map the decisions it needs as a tree, each after the ones it depends on. Look facts up before you ask: read, search, or start research workers, and never ask what a lookup answers; let what you found shape later questions. Ask in numbered rounds, one ask_user card each, titled \"Round N · <topic>\", holding every open question whose prerequisites are settled, each with options and the one you recommend, its why in the option's description. Don't act on the plan (no building, changing, operating or merging) until the user confirms, on a last card, your summary of what was decided; then say what happens next."
+        "When the user invites questions on a plan or idea, in any words or language (\"grill me\", \"ask me\", \"poke holes in it\"), or a request is too vague to start, interview them on cards until you both understand it the same way. First map the decisions it needs as a tree, each after the ones it depends on. Look facts up before you ask: read, search, or start research workers and wait for their reports before the first round's card; never ask what a lookup answers, and let what you found shape later questions. Ask in numbered rounds, one ask_user card each, titled \"Round N · <topic>\", holding every open question whose prerequisites are settled, each with options and the one you recommend (the card marks it Recommended: never write that word yourself), its why in the option's description. Don't act on the plan (no building, changing, operating or merging) until the user confirms, on a last card, your summary of what was decided; then say what happens next."
+    };
+}
+
+/// What the live run of fusion and the interview showed (Q77, Q78): the two lines ran into one
+/// paragraph, the first round was asked before its research came back, and options said
+/// "Recommended" next to the card's own mark.
+macro_rules! fused_interview_fixes {
+    () => {
+        "In a fused answer, the Confidence and Disagreement lines are each a paragraph of their own (a blank line before each). In an interview, when you start research workers to look facts up, wait for their reports before the first round's card. Never write \"Recommended\" in an option: the card marks the one you recommend."
     };
 }
 
@@ -1107,6 +1116,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: concat!("From now on: ", grilling_rule!()),
         worker: "",
     },
+    Revision {
+        number: FUSED_INTERVIEW_FIXES_REVISION,
+        thread: concat!("From now on: ", fused_interview_fixes!()),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1142,8 +1156,8 @@ const CHAT_GRILLING: &str = grilling_rule!();
 /// tab chats the thread's voice and the research answer's format (Q79); 3 its breakdown in
 /// sentences; 4 no bold at the start of any of its lines, colon or not; 5 a Chat is a thread
 /// without a project (Q76: workers, cards, one clarifying card); 6 it fuses a costly question (Q77); 7 it keeps stable personal facts, nothing sensitive (Q78); 8 it interviews on cards, in numbered
-/// rounds, facts looked up first (Q78).
-const CHAT_CONTRACT: u32 = 8;
+/// rounds, facts looked up first (Q78); 9 the live run's fixes to both ([`CHAT_FIXES_NOTE`]).
+const CHAT_CONTRACT: u32 = 9;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
 /// The first Chat contract with the breakdown rule as it is now; a Chat told the voice before
@@ -1161,6 +1175,9 @@ const CHAT_MEMORY_CONTRACT: u32 = 7;
 /// The first Chat contract with the interview on cards; a Chat told an older one hears
 /// [`CHAT_GRILLING_NOTE`].
 const CHAT_GRILLING_CONTRACT: u32 = 8;
+/// The first Chat contract with the live run's fixes to fusion and the interview; a Chat told
+/// fusion's older words hears [`CHAT_FIXES_NOTE`] (one told less hears them within its notes).
+const CHAT_FIXES_CONTRACT: u32 = 9;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1193,6 +1210,9 @@ const CHAT_BREAKDOWN_NOTE: &str = concat!(
 /// Tells a Chat from before it became a thread what it can do now (Q76).
 const CHAT_THREAD_NOTE: &str = concat!("[instructions] From now on: ", chat_thread!());
 
+/// Tells a Chat that heard fusion's and the interview's first words what changed (Q77, Q78).
+const CHAT_FIXES_NOTE: &str = concat!("[instructions] From now on: ", fused_interview_fixes!());
+
 /// Tells a Chat from before how it interviews the user (Q78).
 const CHAT_GRILLING_NOTE: &str = concat!("[instructions] From now on: ", grilling_rule!());
 
@@ -1217,6 +1237,7 @@ const CHAT_THREAD_LABEL: &str = "chat as a thread";
 const CHAT_FUSION_LABEL: &str = "fused answers";
 const CHAT_MEMORY_LABEL: &str = "personal facts";
 const CHAT_GRILLING_LABEL: &str = "interview on cards";
+const CHAT_FIXES_LABEL: &str = "fused answers and interview fixes";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
@@ -1598,6 +1619,9 @@ pub(crate) const FUSION_REVISION: u32 = 113;
 /// The interview on cards: a decision tree, facts looked up first, numbered titled rounds, a
 /// recommendation per question, nothing acted on before a confirm card (Q78).
 pub(crate) const GRILLING_REVISION: u32 = 114;
+/// The live run's fixes: the fused answer's two lines as paragraphs, an interview's first round
+/// after its research, no "Recommended" written in an option (Q77, Q78).
+pub(crate) const FUSED_INTERVIEW_FIXES_REVISION: u32 = 115;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1811,12 +1835,30 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             },
         });
     }
+    // Told fusion's first words (contract 6 to 8); one told less hears the fixed words in the
+    // notes above and here.
+    let heard_fusion =
+        (CHAT_FUSION_CONTRACT..CHAT_FIXES_CONTRACT).contains(&told.contract.unwrap_or(0));
     if now.chat && now.reports && told.contract.unwrap_or(0) < CHAT_GRILLING_CONTRACT {
         notes.push(Note {
             text: CHAT_GRILLING_NOTE.to_owned(),
             label: CHAT_GRILLING_LABEL,
             told: Told {
-                contract: Some(CHAT_GRILLING_CONTRACT),
+                contract: Some(if heard_fusion {
+                    CHAT_GRILLING_CONTRACT
+                } else {
+                    CHAT_FIXES_CONTRACT
+                }),
+                ..Told::default()
+            },
+        });
+    }
+    if now.chat && now.reports && heard_fusion {
+        notes.push(Note {
+            text: CHAT_FIXES_NOTE.to_owned(),
+            label: CHAT_FIXES_LABEL,
+            told: Told {
+                contract: Some(CHAT_FIXES_CONTRACT),
                 ..Told::default()
             },
         });
@@ -5402,7 +5444,10 @@ mod environment_tests {
         let mut told = now.told();
         told.contract = Some(CHAT_MEMORY_CONTRACT - 1);
         let sent = notes(&told, &now);
-        assert_eq!(labels(&sent), vec![CHAT_MEMORY_LABEL, CHAT_GRILLING_LABEL]);
+        assert_eq!(
+            labels(&sent),
+            vec![CHAT_MEMORY_LABEL, CHAT_GRILLING_LABEL, CHAT_FIXES_LABEL]
+        );
         for words in [
             "a stable fact about themselves",
             "where they live, their trade, the tools or devices they use, a preference",
@@ -5429,7 +5474,7 @@ mod environment_tests {
         let mut told = now.told();
         told.contract = Some(CHAT_GRILLING_CONTRACT - 1);
         let sent = notes(&told, &now);
-        assert_eq!(labels(&sent), vec![CHAT_GRILLING_LABEL]);
+        assert_eq!(labels(&sent), vec![CHAT_GRILLING_LABEL, CHAT_FIXES_LABEL]);
         took(&mut told, &sent);
         assert_eq!(told.contract, Some(CHAT_CONTRACT));
         assert!(notes(&told, &now).is_empty());
@@ -5452,6 +5497,40 @@ mod environment_tests {
         }
     }
 
+    /// The live run (Q77, Q78): open threads, and Chats that heard fusion's first words, hear
+    /// the fixes once; a Chat from before fusion hears them within its notes, not twice; new
+    /// instructions hold them.
+    #[test]
+    fn threads_and_chats_hear_once_the_live_runs_fixes_to_fusion_and_the_interview() {
+        let fixes = [
+            "(a blank line before each)",
+            "wait for their reports before the first round's card",
+            "Recommended",
+        ];
+        let note = revision_note(FUSED_INTERVIEW_FIXES_REVISION - 1, false).unwrap();
+        assert!(revision_note(FUSED_INTERVIEW_FIXES_REVISION - 1, true).is_none());
+        let now = Current::chat(Vec::new());
+        for contract in [CHAT_FUSION_CONTRACT, CHAT_FIXES_CONTRACT - 1] {
+            let mut told = now.told();
+            told.contract = Some(contract);
+            let sent = notes(&told, &now);
+            assert_eq!(labels(&sent).last(), Some(&CHAT_FIXES_LABEL));
+            took(&mut told, &sent);
+            assert_eq!(told.contract, Some(CHAT_CONTRACT));
+            assert!(notes(&told, &now).is_empty());
+            for words in fixes {
+                assert!(sent.last().unwrap().text.contains(words), "{words}");
+                assert!(note.contains(words), "{words}");
+            }
+        }
+        let mut told = now.told();
+        told.contract = Some(CHAT_FUSION_CONTRACT - 1);
+        assert!(!labels(&notes(&told, &now)).contains(&CHAT_FIXES_LABEL));
+        for words in &fixes[..2] {
+            assert!(chat(&[]).contains(words), "{words}");
+        }
+    }
+
     /// The words of the interview rule the tests look for.
     const GRILLING_RULES: &[&str] = &[
         "(\"grill me\", \"ask me\", \"poke holes in it\")",
@@ -5460,7 +5539,8 @@ mod environment_tests {
         "start research workers",
         "let what you found shape later questions",
         "titled \"Round N · <topic>\"",
-        "the one you recommend, its why in the option's description",
+        "wait for their reports before the first round's card",
+        "the card marks it Recommended: never write that word yourself",
         "Don't act on the plan (no building, changing, operating or merging) until the user confirms, on a last card",
     ];
 
