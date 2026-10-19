@@ -26,6 +26,8 @@ type Activity = {
   phases: Readonly<Record<string, SessionPhase>>;
   /** Its latest request or its run failed, and nothing ran since. */
   failed: boolean;
+  /** Its latest request was stopped by the user, until another turn starts. */
+  stopped?: boolean;
 };
 
 const IDLE: Activity = {
@@ -36,6 +38,7 @@ const IDLE: Activity = {
   questions: new Set(),
   phases: {},
   failed: false,
+  stopped: false,
 };
 
 const FINAL: ReadonlySet<TaskState> = new Set(["landed", "done", "rejected", "stopped", "failed"]);
@@ -75,6 +78,7 @@ export function fromSnapshot(activity: ConversationActivity): Activity {
     questions: new Set(activity.questions),
     phases: Object.fromEntries(activity.phases),
     failed: activity.failed ?? false,
+    stopped: activity.stopped ?? false,
   };
 }
 
@@ -144,14 +148,15 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
     case "runStateChanged": {
       const running = event.state === "running" || event.state === "starting";
       const failed = event.state === "failed" ? true : running ? false : current.failed;
-      const next = { ...current, run: event.state, failed };
+      const next = { ...current, run: event.state, failed, stopped: running ? false : (current.stopped ?? false) };
       // A call the turn left in progress isn't running any more.
       return running ? next : unphased(next, "tool:");
     }
     case "requestUpdated": {
       const { type } = event.request.state;
       const failed = type === "failed" ? true : type === "working" ? false : current.failed;
-      return failed === current.failed ? current : { ...current, failed };
+      const stopped = type === "stopped";
+      return failed === current.failed && stopped === current.stopped ? current : { ...current, failed, stopped };
     }
     case "taskUpdated": {
       const { id, state, kind, title } = event.task;

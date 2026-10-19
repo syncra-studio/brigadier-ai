@@ -108,8 +108,16 @@ export const TAB_STATE_WORDS: Record<TabState, { one: string; many: string }> = 
   reverted: { one: "Reverted", many: "reverted" },
 };
 
-/** A session's state and, when there is one, why: "Working" and "watching CI". */
-export type SessionStatus = { state: TabState; reason: string | null };
+/** Display words preserve the engine's state ordering while naming failures and open PRs. */
+export const SESSION_STATUS_WORDS = {
+  ...Object.fromEntries(Object.entries(TAB_STATE_WORDS).map(([state, words]) => [state, words.one])) as Record<TabState, string>,
+  prOpen: "PR open",
+  failed: "Failed",
+  stopped: "Stopped",
+};
+
+/** A session's displayed state and, when there is one, why. */
+export type SessionStatus = { state: keyof typeof SESSION_STATUS_WORDS; reason: string | null };
 
 const twoDigits = (value: number) => String(value).padStart(2, "0");
 
@@ -121,7 +129,7 @@ function clock(ms: number): string {
 
 /**
  * Its state with the reason its row's tip names: Working · watching CI / · waiting for reset
- * HH:MM, Needs you · approval / · question / · failed, Ready · PR open, proof attached. How many
+ * HH:MM, Needs you · approval / · question, Failed, Stopped, PR open · proof attached. How many
  * workers it runs is never a reason: workers show in the session itself, not its row or tab.
  * `quotaWait`: its messages wait for a limit, which resets at the time given (null: unknown).
  */
@@ -129,8 +137,14 @@ export function sessionStatus(
   activity: RowActivity,
   quotaWait: { resetsAtMs: number | null } | null,
   settled: Settled | undefined,
+  stopped = false,
 ): SessionStatus | null {
-  const state = tabState(activity, quotaWait !== null, settled?.state);
+  let state: SessionStatus["state"] | null = tabState(activity, quotaWait !== null, settled?.state);
+  if (state === "needsYou" && activity.awaiting === "failed") state = "failed";
+  if (state !== "needsYou" && state !== "working" && state !== "merging" && state !== "failed") {
+    if (stopped) state = "stopped";
+    else if (state !== "merged" && state !== "reverted" && (settled?.pullRequest === "open" || settled?.pullRequest === "draft")) state = "prOpen";
+  }
   if (!state) return null;
   let reason: string | null = null;
   if (state === "needsYou") {
@@ -142,12 +156,8 @@ export function sessionStatus(
     else if (quotaWait && !activity.running) {
       reason = quotaWait.resetsAtMs === null ? "waiting for a usage limit" : `waiting for reset ${clock(quotaWait.resetsAtMs)}`;
     }
-  } else if (state === "ready") {
-    const why = [
-      ...(settled?.pullRequest === "open" || settled?.pullRequest === "draft" ? ["PR open"] : []),
-      ...(settled?.proof ? ["proof attached"] : []),
-    ];
-    reason = why.length > 0 ? why.join(", ") : null;
+  } else if ((state === "ready" || state === "prOpen") && settled?.proof) {
+    reason = "proof attached";
   }
   return { state, reason };
 }
@@ -160,10 +170,12 @@ export function useSessionStatus(id: string): SessionStatus | null {
     return wait ? (wait.resetsAtMs ?? NaN) : null;
   });
   const settled = useSettledTabs((s) => s.byTab[id]);
+  const stopped = useActivity((s) => s.byConversation[id]?.stopped ?? false);
   const status = sessionStatus(
     activity,
     resets === null ? null : { resetsAtMs: Number.isNaN(resets) ? null : resets },
     settled,
+    stopped,
   );
   return status;
 }

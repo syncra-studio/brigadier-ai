@@ -35,4 +35,8 @@ phases: Array<[string, SessionPhase]>,
 /**
  * Its latest request or its run failed, and nothing ran since: it needs the user.
  */
-failed?: boolean, };
+failed?: boolean, 
+/**
+ * Its latest request was stopped by the user, and no turn has started since.
+ */
+stopped?: boolean, };

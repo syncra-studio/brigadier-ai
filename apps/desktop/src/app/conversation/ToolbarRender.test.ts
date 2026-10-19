@@ -8,7 +8,11 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.deepEqual(seen.sessionControls, ["Context", "Terminal", "Right sidebar"]);
   assert.deepEqual(seen.draftControls, ["Context", "Terminal", "Right sidebar"]);
   assert.deepEqual(seen.views, ["Files", "Search", "Source"]);
-  assert.deepEqual(seen.chatControls, ["Context", "Terminal"]);
+  assert.deepEqual(seen.chatControls, ["Chat actions", "Context", "Terminal"]);
+  assert.equal(seen.actionsRest, seen.contextRest, "the actions button shares the toolbar's muted color");
+  for (const field of ["actionsHover", "actionsFocus", "actionsOpen"]) assert.equal(seen[field], seen.contextHover, field);
+  assert.notEqual(seen.actionsRest, seen.actionsHover);
+  assert.equal(seen.actionsClosed, seen.actionsRest);
   assert.equal(seen.files, "files");
   assert.equal(seen.closedFiles, null);
   assert.equal(seen.source, "source");

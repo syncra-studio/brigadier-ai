@@ -29,13 +29,19 @@ test("a session's state comes with the reason its row names", () => {
   assert.deepEqual(sessionStatus(quiet, { resetsAtMs: null }, undefined), { state: "working", reason: "waiting for a usage limit" });
   assert.deepEqual(sessionStatus({ ...quiet, awaiting: "approval" }, null, undefined), { state: "needsYou", reason: "approval" });
   assert.deepEqual(sessionStatus({ ...quiet, awaiting: "input" }, null, undefined), { state: "needsYou", reason: "question" });
-  assert.deepEqual(sessionStatus({ ...quiet, awaiting: "failed" }, null, undefined), { state: "needsYou", reason: "failed" });
+  assert.deepEqual(sessionStatus({ ...quiet, awaiting: "failed" }, null, undefined), { state: "failed", reason: null });
   assert.deepEqual(sessionStatus({ ...quiet, running: true, phase: "merging" }, null, { state: "ready" }), { state: "merging", reason: null });
-  assert.deepEqual(sessionStatus(quiet, null, { state: "ready", pullRequest: "open", proof: true }), { state: "ready", reason: "PR open, proof attached" });
+  assert.deepEqual(sessionStatus(quiet, null, { state: "ready", pullRequest: "open", proof: true }), { state: "prOpen", reason: "proof attached" });
   assert.deepEqual(sessionStatus(quiet, null, { state: "ready", pullRequest: "closed" }), { state: "ready", reason: null });
   assert.deepEqual(sessionStatus(quiet, null, { state: "merged", proof: true }), { state: "merged", reason: null });
   assert.deepEqual(sessionStatus(quiet, null, { state: "reverted" }), { state: "reverted", reason: null });
-  assert.equal(sessionStatus(quiet, null, { pullRequest: "open" }), null, "a pull request alone is no state");
+  assert.deepEqual(sessionStatus(quiet, null, { pullRequest: "open" }), { state: "prOpen", reason: null });
+  assert.deepEqual(sessionStatus(quiet, null, { state: "ready", pullRequest: "draft" }), { state: "prOpen", reason: null });
+  assert.deepEqual(sessionStatus(quiet, null, undefined, true), { state: "stopped", reason: null });
+  assert.deepEqual(sessionStatus({ ...quiet, running: true }, null, undefined, true), { state: "working", reason: null });
+  assert.deepEqual(sessionStatus({ ...quiet, awaiting: "approval" }, null, undefined, true), { state: "needsYou", reason: "approval" });
+  assert.deepEqual(sessionStatus({ ...quiet, awaiting: "failed" }, { resetsAtMs: null }, undefined), { state: "working", reason: "waiting for a usage limit" });
+  assert.deepEqual(sessionStatus(quiet, null, { state: "merged", pullRequest: "open" }), { state: "merged", reason: null });
 });
 
 test("a request that settles ready marks its session ready, a merge merged, and proof and pull requests come along", () => {

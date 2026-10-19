@@ -1,20 +1,14 @@
 import { Spinner } from "@/components/glyphs/spinner";
 import { cn } from "@/lib/utils";
-import { TAB_STATE_WORDS, type SessionStatus, useSessionStatus } from "@/state/tabStates";
+import { SESSION_STATUS_WORDS, type SessionStatus, useSessionStatus } from "@/state/tabStates";
 
 /** "Working · watching CI": a state's words and its reason, on one line. */
 export function statusWords({ state, reason }: SessionStatus): string {
-  const words = TAB_STATE_WORDS[state].one;
+  const words = SESSION_STATUS_WORDS[state];
   return reason ? `${words} · ${reason}` : words;
 }
 
-/**
- * A session's state in its one word or two ("Working", "Needs you", "Merged"): a green pill while
- * it needs the user, a spinner while it works or merges, plain words once settled; its reason
- * ("watching CI", "approval") shows only on hover. `fallback` shows when it has no state. On a
- * sidebar row (`row`) it hides while the row's actions show; on the chat tab it is smaller and
- * quieter. It takes at most two fifths of the row or tab: the title is what tells sessions apart.
- */
+/** A sidebar row pairs its state word with a spinner or dot; a tab shows only the mark. */
 export function SessionStatusLabel({
   conversationId,
   place,
@@ -37,18 +31,21 @@ export function SessionStatusLabel({
       data-status={state}
       title={words}
       className={cn(
-        "flex max-w-2/5 min-w-0 shrink items-center gap-1 overflow-hidden text-2xs whitespace-nowrap",
-        state === "needsYou"
+        "flex items-center gap-1 text-2xs whitespace-nowrap",
+        place === "row" ? "max-w-2/5 min-w-0 shrink overflow-hidden" : "shrink-0",
+        state === "needsYou" && place === "row"
           ? "bg-success/15 text-success rounded-capsule h-pill px-pill-x shrink-0"
-          : state === "ready"
+          : state === "ready" || state === "prOpen"
             ? "text-link"
-            : "text-muted-foreground",
+            : state === "needsYou" ? "text-success" : state === "failed" ? "text-destructive" : "text-muted-foreground",
         place === "tab" && "opacity-80",
         className,
       )}
     >
-      {busy && <Spinner aria-hidden className="size-icon-sm shrink-0 animate-spin motion-reduce:animate-none" />}
-      <span className="shrink-0">{TAB_STATE_WORDS[state].one}</span>
+      {busy
+        ? <Spinner data-slot="status-spinner" aria-hidden className="size-icon-sm shrink-0 animate-spin motion-reduce:animate-none" />
+        : <span data-slot="status-dot" aria-hidden className="bg-current size-1.5 shrink-0 rounded-full" />}
+      {place === "row" && <span data-slot="status-word" className="shrink-0">{SESSION_STATUS_WORDS[state]}</span>}
     </span>
   );
 }

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { type ComposerTarget, ComposerTargetContext } from "@/app/conversation/composerTarget";
+import { ChatActions } from "@/app/conversation/ChatActions";
 import { ConversationToolbar } from "@/app/conversation/ConversationToolbar";
 import { MentionMemory } from "@/app/conversation/Mentions";
 import { NewTabTools } from "@/app/conversation/NewTabTools";
@@ -61,8 +62,14 @@ const target = { mentions } as unknown as ComposerTarget;
 const session: Conversation = { ...conversation, kind: "session", setup: { type: "session", repo: "/fixture", environment: { type: "localCheckout", branch: "fixture" }, permission: "askForApproval", planMode: false, workersSeeUncommitted: null, orchestrator: { provider: "claude", model: null, effort: null } } };
 const previews = useBoard.getState().board!.previews;
 
+const color = (button: HTMLElement) => getComputedStyle(button).color;
+const pointer = async (button?: HTMLElement) => {
+  const bounds = button?.getBoundingClientRect();
+  await fixtureInput({ type: "pointer", x: bounds ? bounds.x + bounds.width / 2 : 10, y: bounds ? bounds.y + bounds.height / 2 : 200 });
+};
+
 function Fixture() {
-  const [kind, setKind] = useState<"session" | "draft" | "chat">("session");
+  const [kind, setKind] = useState<"session" | "draft" | "chat">(new URLSearchParams(location.search).has("chat") ? "chat" : "session");
   const [result, setResult] = useState("");
   const [foldProbe, setFoldProbe] = useState(true);
   const { panel, agents, workspace } = useSidePanel(kind === "draft" ? null : id, kind !== "chat", false, "project");
@@ -335,7 +342,7 @@ function Fixture() {
       seen.draftSearchReplace = !!document.querySelector('[data-slot="workspace-pane"] input[aria-label="Replace"]');
       setKind("chat");
 
-      await until(() => controls().length === 2, "the chat's toolbar");
+      await until(() => controls().length === 3 && controls()[0] === "Chat actions", "the chat's toolbar");
       if (contextPressed() !== "true") click("Context");
 
       await until(() => contextPressed() === "true" && document.querySelector('[data-slot="summary-card"]'), "the chat's Context card");
@@ -349,6 +356,37 @@ function Fixture() {
 
       await until(() => /tokens used/.test(document.querySelector('[data-slot="summary-card"]')?.textContent ?? ""), "the context's usage");
       seen.chatUsage = document.querySelector('[data-slot="summary-card"]')?.textContent;
+      click("Context");
+      await closed("Context to close before checking toolbar colors");
+      const actions = document.querySelector<HTMLButtonElement>('button[aria-label="Chat actions"]')!;
+      const context = document.querySelector<HTMLButtonElement>('button[aria-label="Context"]')!;
+      (document.activeElement as HTMLElement)?.blur();
+      await pointer();
+      await until(() => color(actions) === color(context), "matching muted toolbar colors");
+      seen.actionsRest = color(actions); seen.contextRest = color(context);
+      await pointer(context);
+      await until(() => color(context) !== seen.contextRest && context.getAnimations().length === 0, "the Context hover color");
+      seen.contextHover = color(context);
+      await pointer(actions);
+      await until(() => color(actions) === seen.contextHover, "the actions hover color");
+      seen.actionsHover = color(actions);
+      await pointer();
+      actions.focus();
+      await fixtureInput({ type: "key", key: "Tab", modifiers: ["Shift"] });
+      await fixtureInput({ type: "key", key: "Tab" });
+      await until(() => actions.matches(":focus-visible") && color(actions) === seen.contextHover, "keyboard focus to brighten actions");
+      seen.actionsFocus = color(actions);
+      await fixtureInput({ type: "key", key: "Enter" });
+      await until(() => actions.dataset.state === "open", "the actions menu to open");
+      await until(() => color(actions) === seen.contextHover, "open actions color");
+      seen.actionsOpen = color(actions);
+      await fixtureInput({ type: "key", key: "Escape" });
+      await until(() => !document.querySelector('[role="menu"]'), "the actions menu to close");
+      await task();
+      (document.activeElement as HTMLElement)?.blur();
+      await pointer();
+      await until(() => actions.dataset.state !== "open" && color(actions) === seen.actionsRest, "actions to return to muted");
+      seen.actionsClosed = color(actions);
     })().catch((error: unknown) => {
       seen.error = String(error);
     }).finally(() => {
@@ -364,7 +402,7 @@ function Fixture() {
       {/* As ConversationView lays it out: the top bar across the window, the panels below it. */}
       <div className="bg-background text-foreground flex h-screen min-w-0 flex-1 flex-col">
         <header data-slot="test-toolbar" className="h-titlebar flex shrink-0 items-center justify-end">
-          <TitlebarTips><ConversationToolbar kind={kind === "chat" ? "chat" : "session"} /></TitlebarTips>
+          <TitlebarTips>{kind === "chat" && <ChatActions conversation={conversation} onRename={() => {}} />}<ConversationToolbar kind={kind === "chat" ? "chat" : "session"} /></TitlebarTips>
         </header>
         <div className="flex min-h-0 min-w-0 flex-1">
         <main className="flex min-w-0 flex-1 flex-col">

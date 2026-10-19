@@ -51,14 +51,17 @@ const conversations = [
   session("w8-a", "Old fix", 3),
   session("w9-a", "Ship the release", 2),
   session("w5-a", "Lone worker", 5),
+  session("w10-a", "Ready to review", 1),
+  session("w11-a", "Paused task", 0),
 ];
+if (params.has("chats")) for (const conversation of conversations) { conversation.kind = "chat"; conversation.projectId = null; }
 useApp.setState({
   catalogLoaded: true,
   connection: { status: "connected", daemon: null, reason: null },
   info: { platform: "macos", version: "fixture", processStartMs: 0, smoke: false, firstLaunch: false, budgetTolerance: 1 },
   projects: { [project]: { id: project, name: "brigadier", repos: [], createdAtMs: 0 } as unknown as Project },
   conversations: Object.fromEntries(conversations.map((each) => [each.id, each])),
-  selection: { type: "none" },
+  selection: params.has("manual") ? { type: "conversation", id: "w1-a" } : { type: "none" },
 });
 const activity = (id: string, extra: Partial<ConversationActivity>): [string, ReturnType<typeof fromSnapshot>] =>
   [id, fromSnapshot({ conversationId: id, run: "idle", tasks: [], approvals: [], questions: [], phases: [], ...extra })];
@@ -69,12 +72,13 @@ useActivity.setState({
     activity("w5-a", { run: "running" }),
     activity("w6-a", { approvals: ["a-1"] }),
     activity("w7-a", { failed: true }),
+    activity("w11-a", { stopped: true }),
     activity("w9-a", { run: "running", phases: [["tool:fin-1", "merging"]] }),
   ]),
 });
 let seq = 0;
 const envelope = (stream: string, event: EventEnvelope["event"]): EventEnvelope => ({ seq: ++seq, stream, streamSeq: seq, atMs: seq, event });
-useSettledTabs.setState({ byTab: { "w8-a": { state: "reverted" } } });
+useSettledTabs.setState({ byTab: { "w8-a": { state: "reverted" }, "w10-a": { state: "ready" } } });
 applySettledTabEvents([
   envelope("conversation:w2-a", { type: "requestReady", conversationId: "w2-a", requestId: "r-1", head: "abc" }),
   envelope("conversation:w2-a", { type: "pullRequestSeen", conversationId: "w2-a", pullRequest: { number: 7, title: "Login", url: "https://github.com/o/n/pull/7", state: "open" } }),
@@ -99,6 +103,8 @@ const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~
       status: status ? `${status.dataset.status}:${status.textContent?.trim() ?? ""}` : null,
       tip: status?.title ?? null,
       active: button.dataset.active === "true",
+      mark: status?.querySelector('[data-slot="status-spinner"]') ? "spinner" : status?.querySelector('[data-slot="status-dot"]') ? "dot" : null,
+      words: status?.querySelector('[data-slot="status-word"]')?.textContent ?? null,
     };
   });
 
@@ -120,7 +126,7 @@ const rowWidths = () => [...document.querySelectorAll<HTMLElement>('[data-slot="
   .map((status) => {
     const button = status.closest("button")!;
     const title = button.querySelector("span")!;
-    const words = status.querySelector<HTMLElement>(":scope > span")!;
+    const words = status.querySelector<HTMLElement>('[data-slot="status-word"]')!;
     const style = getComputedStyle(button);
     const inside = button.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
     return {
@@ -162,6 +168,8 @@ async function closeAndReopen() {
   seen.chatTab = chatTab?.querySelector(".session-tab-title")?.textContent?.trim();
   seen.chatTabStatus = chatTab?.querySelector('[data-slot="tab-status"]')?.textContent?.trim();
   const tabStatus = chatTab?.querySelector('[data-slot="tab-status"]');
+  seen.chatTabTip = chatTab?.getAttribute("title");
+  seen.chatTabMark = chatTab?.querySelector('[data-slot="status-spinner"]') ? "spinner" : null;
   seen.chatTabStatusShare = tabStatus && chatTab ? Math.round((tabStatus.getBoundingClientRect().width / chatTab.clientWidth) * 100) : null;
   // An idle session's tab closes quietly: nothing still runs to reopen.
   useToasts.setState({ toasts: [] });
@@ -189,11 +197,33 @@ function OpenBar() {
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
+    if (params.has("states")) {
+      void (async () => {
+        const states = [];
+        await until(() => document.querySelector('[data-slot="row-status"]') !== null);
+        for (const conversation of conversations.filter((each) => each.lifecycle === "active")) {
+          useApp.setState({ selection: { type: "conversation", id: conversation.id } });
+          await until(() => document.querySelector('[data-tab-id="chat"] .session-tab-title')?.textContent === conversation.title);
+          const tab = document.querySelector<HTMLElement>('[data-tab-id="chat"] [role="tab"]')!;
+          const mark = tab.querySelector<HTMLElement>('[data-slot="tab-status"]')!;
+          const row = [...document.querySelectorAll<HTMLElement>('[data-slot="row-status"]')].find((status) => status.closest("button")?.querySelector("span")?.textContent === conversation.title)!;
+          states.push({ title: conversation.title, rowWords: row.querySelector('[data-slot="status-word"]')?.textContent,
+            state: mark.dataset.status, words: mark.textContent, tip: tab.title, rowTip: row.title,
+            rowMark: row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-dot"]') ? "dot" : null,
+            mark: mark.querySelector('[data-slot="status-spinner"]') ? "spinner" : mark.querySelector('[data-slot="status-dot"]') ? "dot" : null,
+            width: mark.getBoundingClientRect().width, titleFlex: getComputedStyle(tab.querySelector('.session-tab-title')!).flexGrow,
+          });
+        }
+        setResult(JSON.stringify(states));
+      })();
+      return;
+    }
     if (params.has("close")) {
       let disposed = false;
       void closeAndReopen().then((seen) => { if (!disposed) setResult(JSON.stringify(seen)); });
       return () => { disposed = true; };
     }
+    if (params.has("manual")) return;
     const timer = setTimeout(async () => {
       const seen: Record<string, unknown> = { rows: rows(), widths: rowWidths(), count: needYou(), workers: workerRows() };
       rowButton("Header")!.click();
@@ -219,7 +249,7 @@ function Fixture() {
             <SidebarPanel strip={<AppStrip />}>
               <AppSidebar />
             </SidebarPanel>
-            <main className="bg-background flex-1">{params.has("close") && <OpenBar />}</main>
+            <main className="bg-background flex-1">{(params.has("close") || params.has("manual") || params.has("states")) && <OpenBar />}</main>
           </div>
         </SidebarProvider>
       </div>

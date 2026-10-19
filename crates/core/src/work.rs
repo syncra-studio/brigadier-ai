@@ -1986,6 +1986,10 @@ pub struct ConversationActivity {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub failed: bool,
+    /// Its latest request was stopped by the user, and no turn has started since.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub stopped: bool,
 }
 
 /// What a conversation is busy with, as its sidebar row names it ("Watching CI").

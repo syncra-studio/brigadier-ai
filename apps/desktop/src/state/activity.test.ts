@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { EventEnvelope, Plan, PlanState } from "@/ipc/generated";
-import { applyActivityEvents, rowActivity, useActivity } from "@/state/activity";
+import { applyActivityEvents, fromSnapshot, rowActivity, useActivity } from "@/state/activity";
 
 const plan = (state: PlanState): EventEnvelope => ({
   stream: "conversation:c1",
@@ -79,4 +79,17 @@ test("a held merge says Merging until it merges", () => {
   applyActivityEvents([stepOn("c4", { type: "mergeHeld", askedIn: "m2" }), stepOn("c4", { type: "mergeHeld", askedIn: "m3" })]);
   applyActivityEvents([stepOn("c4", { type: "mergeCancelled", askedIn: "m3" })]);
   assert.equal(phaseOf("c4"), null);
+});
+
+
+test("a stopped request is named through reconnect and clears when another turn starts", () => {
+  const snapshot = fromSnapshot({ conversationId: "stopped", run: "idle", tasks: [], approvals: [], questions: [], phases: [], stopped: true });
+  useActivity.setState({ byConversation: { stopped: snapshot } });
+  assert.equal(useActivity.getState().byConversation.stopped?.stopped, true);
+  applyActivityEvents([on("stopped", { type: "runStateChanged", conversationId: "stopped", state: "starting" })]);
+  assert.equal(useActivity.getState().byConversation.stopped?.stopped, false);
+  applyActivityEvents([on("stopped", { type: "requestUpdated", request: { conversationId: "stopped", state: { type: "stopped" } } })]);
+  assert.equal(useActivity.getState().byConversation.stopped?.stopped, true);
+  applyActivityEvents([on("stopped", { type: "requestUpdated", request: { conversationId: "stopped", state: { type: "done" } } })]);
+  assert.equal(useActivity.getState().byConversation.stopped?.stopped, false);
 });

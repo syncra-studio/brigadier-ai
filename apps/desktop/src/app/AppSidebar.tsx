@@ -877,11 +877,7 @@ const ProjectRow = memo(function ProjectRow({
   );
 });
 
-/**
- * At the end of a row, its state with the reason on one line ("Working · watching CI", "Needs
- * you · approval", "Ready · PR open"), else a small dot when it finished something since the
- * user last had it open. The row's actions take its place on hover.
- */
+/** A row's state word and mark, with its reason on hover; otherwise its unread dot. */
 function RowStatus({ conversationId }: { conversationId: string }) {
   const seen = useLastOpened((s) => s.at[conversationId]);
   const finishedAtMs = useApp((s) => lastFinished(s.conversations[conversationId]));

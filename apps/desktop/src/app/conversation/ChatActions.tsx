@@ -18,6 +18,7 @@ import { FORK_PLACES } from "@/app/conversation/ForkMenu";
 import { useLatestAnswer } from "@/app/conversation/SlashCommands";
 import { NameDialog } from "@/app/NameDialog";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TitlebarButton } from "@/components/titlebar-button";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
 import {
@@ -151,19 +152,20 @@ export const ChatActions: FC<{
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
+  const ActionsButton = compact ? TooltipIconButton : TitlebarButton;
   const key = (keys: string) =>
     mac ? keys : keys.replace("⌥", "Alt+").replace("⇧", "Shift+").replace("⌘", "Ctrl+");
   return (
     <>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
-          <TooltipIconButton
+          <ActionsButton
             tooltip="Chat actions"
             size={compact ? "icon-xs" : "icon-md"}
             className={className}
           >
             <DotsHorizontal />
-          </TooltipIconButton>
+          </ActionsButton>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {!archived && (

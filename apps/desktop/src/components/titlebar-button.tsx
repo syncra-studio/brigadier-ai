@@ -16,7 +16,7 @@ const TIP_DELAY_MS = 250;
 
 /** The look of a titlebar icon button, for buttons that bring their own behaviour. */
 export const TITLEBAR_BUTTON = cn(
-  "rounded-toolbar-button text-toolbar-foreground hover:bg-toolbar-hover hover:text-foreground active:bg-toolbar-active [&_svg]:size-icon-md transition-colors",
+  "rounded-toolbar-button text-toolbar-foreground hover:bg-toolbar-hover hover:text-foreground focus-visible:text-foreground data-[state=open]:text-foreground data-[state=open]:bg-toolbar-hover active:bg-toolbar-active [&_svg]:size-icon-md transition-colors",
   "aria-pressed:bg-toolbar-pressed aria-pressed:text-foreground aria-pressed:hover:bg-toolbar-pressed-hover",
 );
 

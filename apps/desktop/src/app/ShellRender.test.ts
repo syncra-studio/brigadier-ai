@@ -38,6 +38,11 @@ for (const [name, page] of [["", "shell.html?drive=layout"], [", a widened left 
     const seen = JSON.parse(await renderFixtureLive(t, page, "shell-result", 90000)) as Record<string, unknown>;
     if (process.env.SHELL_SEEN) console.log(JSON.stringify(seen, null, 2));
     assert.equal(seen.error, undefined);
+    const status = seen.sessionStatus as { words: string; tip: string; spinner: boolean; width: number };
+    assert.equal(status.words, "");
+    assert.equal(status.tip, "Tidy the release notes · Working");
+    assert.equal(status.spinner, true);
+    assert.ok(status.width <= 16, "only the mark uses the session title's room");
     for (const run of ["expanded", "folded", "narrow"]) {
       const panels = seen[run] as Panels;
       for (const step of ["filesOpening", "workersOpening", "filesClosing", "filesAgain", "workersClosing", "filesClosingLast"]) {

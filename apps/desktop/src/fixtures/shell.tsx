@@ -27,6 +27,7 @@ import type { Conversation, EventEnvelope, Message, Page, PageContent, Project, 
 import { select } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
 import { newSessionTab, openPageTab, selectTab, useSessionTabs } from "@/state/sessionTabs";
+import { fromSnapshot, useActivity } from "@/state/activity";
 import { emptyThread, useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -90,6 +91,7 @@ useApp.setState((state) => ({
   // The session's summary, pinned: its Workers row opens the Workers panel.
   summaryShown: { [ID]: layout },
 }));
+useActivity.setState({ byConversation: { [ID]: fromSnapshot({ conversationId: ID, run: "running", tasks: [], approvals: [], questions: [], phases: [] }) } });
 useSessionTabs.setState({ sessions: {} });
 // Opened as is (a dev window pointed at this page, for a look at the real window): a long page
 // and a New tab beside the chat.
@@ -408,6 +410,9 @@ async function driveLayout(): Promise<Record<string, unknown>> {
   await until(() => Boolean(one('[data-slot="session-tabs"]')), 8000);
   await wait(800);
   await settle();
+  const tab = one('[data-slot="session-tabs"] [data-tab-id="chat"] [role="tab"]')!;
+  const mark = tab.querySelector<HTMLElement>('[data-slot="tab-status"]')!;
+  seen.sessionStatus = { words: mark.textContent, tip: tab.title, spinner: !!mark.querySelector('[data-slot="status-spinner"]'), width: mark.getBoundingClientRect().width };
   seen.expandedStart = tabsStart();
   seen.expanded = await panels();
   // The sidebar folded: New chat lives in the strip; the divider follows the sidebar toggle.

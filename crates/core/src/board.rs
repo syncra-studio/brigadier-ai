@@ -292,7 +292,12 @@ impl Board {
                 || self.latest_request().is_some_and(|request| {
                     matches!(request.state, crate::work::RequestState::Failed { .. })
                 }));
+        let stopped = !running
+            && self
+                .latest_request()
+                .is_some_and(|request| matches!(request.state, crate::work::RequestState::Stopped));
         (running
+            || stopped
             || failed
             || !tasks.is_empty()
             || !approvals.is_empty()
@@ -307,6 +312,7 @@ impl Board {
             questions,
             phases,
             failed,
+            stopped,
         })
     }
 
@@ -1406,6 +1412,37 @@ mod tab_state_tests {
                 "kind": { "type": "merged", "branch": "brigadier/tab/session", "base": "main", "commits": 1 },
             },
         }))
+    }
+
+    #[test]
+    fn a_stopped_request_keeps_its_sidebar_mark_until_the_next_turn() {
+        let mut board = Board::default();
+        let request = |state: &str| {
+            event(serde_json::json!({
+                "type": "requestUpdated", "request": {
+                    "id": "r1", "conversationId": "tab", "preview": "Do it",
+                    "state": { "type": state }, "startedAtMs": 1, "endedAtMs": 2,
+                    "steeredInto": null, "steeredAfter": null, "undo": null,
+                    "worked": [], "quotaWait": false,
+                },
+            }))
+        };
+        board.apply(&request("stopped"), 1);
+        assert!(
+            board.activity(&id()).unwrap().stopped,
+            "a reconnect reads it"
+        );
+        let mut reloaded = Board::default();
+        reloaded.apply(&request("stopped"), 1);
+        assert!(
+            reloaded.activity(&id()).unwrap().stopped,
+            "replaying the stored request keeps it"
+        );
+        board.apply(&run("running"), 2);
+        assert!(!board.activity(&id()).unwrap().stopped);
+        board.apply(&request("done"), 3);
+        board.apply(&run("idle"), 4);
+        assert!(board.activity(&id()).is_none());
     }
 
     /// A session's open workers come with their titles, for their rows under its sidebar row;

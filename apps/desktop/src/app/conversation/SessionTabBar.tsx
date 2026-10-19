@@ -14,7 +14,7 @@ import {
 
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TitlebarButton } from "@/components/titlebar-button";
-import { SessionStatusLabel } from "@/app/SessionStatus";
+import { SessionStatusLabel, statusWords } from "@/app/SessionStatus";
 import { UNTITLED } from "@/app/TopBar";
 import { sessionTabKey } from "@/state/sessionTabKeys";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
@@ -59,6 +59,7 @@ import {
 } from "@/state/sessionTabs";
 import { useBrowserOn } from "@/state/links";
 import { useApp } from "@/state/store";
+import { useSessionStatus } from "@/state/tabStates";
 import { NewTabTools } from "./NewTabTools";
 import { BrowserTabIcon } from "./BrowserTabIcon";
 
@@ -218,6 +219,7 @@ export function SessionTabBar({
   useMockupTab(id);
   const connection = useApp((s) => s.connection.status);
   const archived = conversation.lifecycle === "archived";
+  const status = useSessionStatus(id);
   const strip = useRef<HTMLDivElement>(null);
   const mac = useApp((s) => s.info?.platform === "macos");
   const cwd = useCheckoutRoot();
@@ -363,7 +365,7 @@ export function SessionTabBar({
               role="tab"
               aria-selected={active === CHAT_TAB}
               tabIndex={active === CHAT_TAB ? 0 : -1}
-              title={archived ? `${chatTitle} (Archived)` : chatTitle}
+              title={archived ? `${chatTitle} (Archived)` : status ? `${chatTitle} · ${statusWords(status)}` : chatTitle}
               aria-label={archived ? `${chatTitle} (Archived)` : undefined}
               onMouseDown={noAutoscroll}
               onMouseUp={(event) => { if (event.button === 1) { event.preventDefault(); closeSession(id); } }}
