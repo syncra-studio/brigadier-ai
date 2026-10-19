@@ -109,6 +109,7 @@ mod sidecars;
 mod source_actions;
 mod status;
 mod takeover;
+mod test_counts;
 mod thread;
 mod thread_images;
 mod thread_items;

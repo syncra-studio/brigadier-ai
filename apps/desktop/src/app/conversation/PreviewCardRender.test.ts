@@ -20,7 +20,7 @@ type Look = {
 };
 type Seen = {
   error?: string;
-  cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only" | "test-output" | "simulator" | "pdf" | "test-run" | "test-failed", Look>;
+  cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only" | "test-output" | "simulator" | "pdf" | "test-run" | "test-failed" | "test-uncounted", Look>;
   turn: [string | null, string | null][];
   said: [string | null, string | null][][];
   noRecord: boolean;
@@ -66,12 +66,14 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   const pdf = cases.pdf;
   assert.deepEqual([pdf.title, pdf.standing, pdf.target, pdf.buttons], ["Rendered PDF", "Ready", "out/invoice.pdf", ["Open"]]);
   const run = cases["test-run"];
-  assert.deepEqual([run.title, run.standing, run.target, run.buttons], ["Test run", "Passed", "npm test", ["Run again", "Fold the proofs"]]);
+  assert.deepEqual([run.title, run.standing, run.target, run.buttons], ["Test run", "15 passed", "npm test", ["Run again", "Fold the proofs"]]);
   assert.deepEqual(run.shell, [
     "$ npm test",
     "✓ rejects a title longer than 200 characters\n✓ accepts years 0000 to 0099\n✓ marks a past due date as overdue\n✓ a todo due today is not overdue\n15 passing (412ms)",
   ]);
-  assert.deepEqual([cases["test-failed"].standing, cases["test-failed"].state], ["Failed", "stopped"]);
+  // A test run's counts as its runner gave them; none found, Passed or Failed alone.
+  assert.deepEqual([cases["test-failed"].standing, cases["test-failed"].state], ["2 failed, 13 passed, 1 skipped", "stopped"]);
+  assert.deepEqual([cases["test-uncounted"].standing, cases["test-uncounted"].state], ["Passed", "running"]);
   // A turn's previews: the page and the test runs and PDF started while its request ran, the
   // simulator its recording names, not the run started after it.
   assert.deepEqual(seen.turn, [

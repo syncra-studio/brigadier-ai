@@ -637,6 +637,20 @@ pub struct Preview {
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     #[ts(skip)]
     pub env: std::collections::BTreeMap<String, String>,
+    /// A test run's counts, read from its output when it ended; none when its runner's
+    /// summary wasn't found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tests: Option<TestCounts>,
+}
+
+/// How many tests a test run passed, failed and skipped, as its runner printed them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCounts {
+    pub passed: u32,
+    pub failed: u32,
+    pub skipped: u32,
 }
 
 /// What a proof is, which decides how it shows.

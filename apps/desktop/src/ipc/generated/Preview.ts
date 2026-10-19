@@ -3,6 +3,7 @@ import type { ConversationId } from "./ConversationId";
 import type { PreviewKind } from "./PreviewKind";
 import type { PreviewState } from "./PreviewState";
 import type { TaskId } from "./TaskId";
+import type { TestCounts } from "./TestCounts";
 
 /**
  * A process the thread or a worker started to show its work (a dev server, the app), owned by
@@ -58,4 +59,9 @@ taskId?: TaskId,
  * hasn't finished: a dev app built and launched in one command reads Building, then
  * Starting.
  */
-building: boolean, };
+building: boolean, 
+/**
+ * A test run's counts, read from its output when it ended; none when its runner's
+ * summary wasn't found.
+ */
+tests?: TestCounts, };

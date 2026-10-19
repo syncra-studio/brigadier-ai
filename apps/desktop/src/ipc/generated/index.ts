@@ -464,6 +464,7 @@ export type { TaskState } from "./TaskState";
 export type { TaskWorkspace } from "./TaskWorkspace";
 export type { TerminalInfo } from "./TerminalInfo";
 export type { TerminalOutput } from "./TerminalOutput";
+export type { TestCounts } from "./TestCounts";
 export type { TextPhase } from "./TextPhase";
 export type { ThinkingSegment } from "./ThinkingSegment";
 export type { ThreadEdits } from "./ThreadEdits";

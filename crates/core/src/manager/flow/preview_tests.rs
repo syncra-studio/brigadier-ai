@@ -1663,7 +1663,8 @@ async fn test_runs_pdfs_and_simulators_are_previews_with_their_targets() {
     let flow = Flow::start("preview-kinds", Options::default(), thread(Arc::default())).await;
     let latest = |board: &Board| board.sorted_previews().pop().unwrap();
 
-    flow.say("start-test echo '3 passed'").await;
+    flow.say("start-test echo '3 passed, 1 skipped in 0.01s'")
+        .await;
     let board = flow
         .until("the test run ended", |board| {
             !board.previews.is_empty() && !latest(board).state.is_live()
@@ -1672,7 +1673,19 @@ async fn test_runs_pdfs_and_simulators_are_previews_with_their_targets() {
     let tests = latest(&board);
     assert_eq!(
         (tests.kind, tests.target.as_deref()),
-        (PreviewKind::Test, Some("echo '3 passed'"))
+        (
+            PreviewKind::Test,
+            Some("echo '3 passed, 1 skipped in 0.01s'")
+        )
+    );
+    // Its counts, from its runner's summary.
+    assert_eq!(
+        tests.tests,
+        Some(crate::work::TestCounts {
+            passed: 3,
+            failed: 0,
+            skipped: 1
+        })
     );
     assert!(
         matches!(tests.state, PreviewState::Exited { code: Some(0), .. }),

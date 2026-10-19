@@ -618,6 +618,7 @@ impl SessionManager {
             building: false,
             env: given_env,
             target: target.clone(),
+            tests: None,
         };
         let live = Arc::new(LivePreview {
             conversation: id.clone(),
@@ -1111,6 +1112,17 @@ impl SessionManager {
                 None
             }
         };
+        // A test run's counts, from its runner's summary.
+        let tests = match live.kind {
+            PreviewKind::Test => {
+                let path = live.log.clone();
+                blocking(move || Ok(read_log(&path).0))
+                    .await
+                    .ok()
+                    .and_then(|bytes| super::test_counts::read(&String::from_utf8_lossy(&bytes)))
+            }
+            _ => None,
+        };
         let _updating = live.updating.lock().await;
         let preview = match self.core.board(id).await {
             Ok(board) => board.previews.get(&live.id).cloned(),
@@ -1174,6 +1186,7 @@ impl SessionManager {
                 .await;
             }
             preview.url = preview.url.or(url);
+            preview.tests = tests;
             preview.state = state;
             preview.building = false;
             preview.ended_at_ms = Some(now_ms());
