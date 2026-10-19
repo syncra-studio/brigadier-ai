@@ -5,7 +5,7 @@
  * changes: in a header of its own (the turn edited nothing it counted), in its Edited files card
  * (?edited=1), or, merged by the next request (?later=1), in the first one's card while the second
  * shows the merge's header. ?warn=1 records an open finding and a failed CI run: one plain line
- * under the merge, which opens the Reviews tab. ?drive=1 writes what the turn shows to
+ * under the merge, which opens the Progress tab. ?drive=1 writes what the turn shows to
  * #merge-message-result, then clicks Revert twice and records what was sent
  * (MergeMessageRender.test.ts reads it).
  */
@@ -83,10 +83,10 @@ useBoard.setState(({ board }) =>
     : {},
 );
 
-// ?open=reviews: the Reviews tab in front, for a look.
+// ?open=reviews: the Progress tab in front, for a look.
 if (params.get("open") === "reviews") {
   const conversationId = useBoard.getState().board?.conversationId;
-  if (conversationId) openPanelTab(conversationId, { type: "reviews" }, "Reviews");
+  if (conversationId) openPanelTab(conversationId, { type: "reviews" }, "Progress");
 }
 
 const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, " ").trim() ?? "";
@@ -114,7 +114,7 @@ async function drive() {
     // No row of its own in the work.
     rows: all('[data-slot="orchestrator-step"]').filter((row) => /readme\.png|install\.webm|attach/i.test(text(row))).length,
     read: [...new Set(read)].toSorted(),
-    // What was checked is in the Reviews tab, never listed in the thread.
+    // What was checked is in the Progress tab, never listed in the thread.
     checkedInThread: !!document.querySelector('[data-slot="merge-checked"]') || /screenshots? or recordings?|Merged on its own/.test(text(document.body)),
     headers: all('[data-slot="merge-header-title"]').map(text),
     card: card ? { title: text(card.querySelector('[data-slot="turn-diff-title"]')), merged: text(card.querySelector('[data-slot="turn-diff-merged"]')), buttons: [...card.querySelectorAll("button:not([aria-label])")].map(text).filter((each) => /Revert|Undo|View changes/.test(each)), rowWords: all('[data-slot="turn-diff-reviewed"]').map(text) } : null,
@@ -129,8 +129,8 @@ async function drive() {
     await wait(200);
     const conversationId = useBoard.getState().board?.conversationId ?? "";
     seen.tab = sessionTabs(conversationId).active;
-    for (let tries = 0; tries < 60 && !document.querySelector('[data-slot="reviews-tab"]'); tries++) await wait(50);
-    seen.reviews = all('[data-slot="reviews-tab"] li').map((line) => `${line.dataset.warn ? "! " : ""}${text(line)}`);
+    for (let tries = 0; tries < 60 && !document.querySelector('[data-slot="job-merge-checked"]'); tries++) await wait(50);
+    seen.reviews = all('[data-slot="job-merge-checked"] li').map((line) => `${line.dataset.warn ? "! " : ""}${text(line)}`);
   }
   seen.revert = await revert();
   return seen;

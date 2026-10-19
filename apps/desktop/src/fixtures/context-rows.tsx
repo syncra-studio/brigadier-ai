@@ -1,12 +1,12 @@
 /**
  * The production context card of a worktree session with something in every section, in the
- * reference order: the project, its Changes and Reviewed rows, the plan, the
- * workers (two at work, one done), what runs in the background and the sources. For screenshots
- * and render checks; synthetic IPC, no daemon. `?workers=5` puts five at work (one row).
+ * reference order: the project and its Changes row, the workers (two at work, one done), what
+ * runs in the background and the sources; under it, the Job card of the plan's phase at work
+ * (Q88). For screenshots and render checks; synthetic IPC, no daemon. `?workers=5` puts five at work (one row).
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
@@ -51,7 +51,7 @@ const review: ReviewRun = { id: "review-1", conversationId: id, requestId: "r1",
   items: [1, 2, 3, 4, 5].map((n) => ({ id: `R1.${n}`, severity: "P2", title: `Finding ${n}`, location: "src/server.js:12", high: false,
     status: { type: "fixed", task: null, why: null, checked: "its test passes at the tip" } })) } as ReviewRun;
 const checks: IntegratedCheck = { id: "check-1", conversationId: id, repo: "/work/todo-app", branch: "brigadier/web-ui", tip: "b2c3d4e5f6a7",
-  dueAtMs: now - 5 * MIN, startedAtMs: now - 5 * MIN, state: { type: "passed", commands: ["npm test"] } } as IntegratedCheck;
+  dueAtMs: now - 5 * MIN, startedAtMs: now - 5 * MIN, endedAtMs: now - 4 * MIN, requests: ["r1"], tasks: [], rerun: false, state: { type: "passed", commands: ["npm test"] } } as IntegratedCheck;
 const page: Preview = { id: "preview-1", conversationId: id, name: "todo app", command: "npm run dev", kind: "web", workdir: "/work/todo-app-web-ui",
   workspace: "/work/todo-app-web-ui", pid: 42, log: null, url: "http://localhost:3000/", state: { type: "running" }, building: false, startedAtMs: now - 3 * MIN, endedAtMs: null };
 const run: BackgroundRun = { id: "run-1", conversationId: id, requestId: "r1", tool: "run_check", name: "api tests", command: "npm test -- --watch",
@@ -88,7 +88,7 @@ const card = () => document.querySelector<HTMLElement>('[data-slot="summary-card
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 50)));
 
 /** What the card shows at rest, and what its clicks do: they open things, never grow the card. */
-async function drive(panel: () => AgentsPanelState): Promise<string> {
+async function drive(): Promise<string> {
   for (let i = 0; i < 100 && !card()?.querySelector('[data-slot="workers-summary-worker"], [data-slot="workers-summary"]'); i++) await frame();
   await frame();
   const seen: Record<string, unknown> = {};
@@ -99,17 +99,18 @@ async function drive(panel: () => AgentsPanelState): Promise<string> {
   seen.odd = rows.filter((row) => Math.round(row.getBoundingClientRect().height) !== 28).map((row) => row.outerHTML.slice(0, 300));
   seen.workers = [...card()!.querySelectorAll('[aria-label="Session workers"] [data-slot^="workers-summary"]')].map((row) => row.textContent);
   const height = card()!.getBoundingClientRect().height;
-  const planStep = [...card()!.querySelectorAll<HTMLButtonElement>('[data-card="plan"] li button')].find((button) => button.textContent?.includes("API routes"));
-  planStep?.click();
-  await frame();
-  seen.stepOpens = panel();
+  seen.planInCard = card()!.querySelectorAll('[data-card="plan"]').length;
+  const job = document.querySelector<HTMLButtonElement>('[aria-label="Context"] [data-slot="job-card"]');
+  seen.job = job?.querySelector('[data-slot="job-progress"] span.truncate')?.textContent ?? null;
+  // The job's card comes right after the context card.
+  seen.jobAfterCard = card()?.nextElementSibling?.querySelector('[data-slot="job-card"]') === job;
   const project = card()!.querySelector('[data-slot="summary-section"]')!;
   seen.project = [...project.querySelectorAll('[data-slot="summary-row"]')].map((row) => row.textContent?.replace(/\s+/g, " ").trim());
   seen.changesTip = project.querySelector('[data-row="changes"]')?.getAttribute("title");
   seen.findingsInCard = card()!.querySelectorAll('[data-slot*="finding"]').length;
-  project.querySelector<HTMLButtonElement>('[data-row="reviewed"]')?.click();
+  job?.click();
   await frame();
-  seen.reviewedOpens = sessionTabs(id).active;
+  seen.jobOpens = sessionTabs(id).active;
   project.querySelector<HTMLButtonElement>('[data-row="changes"]')?.click();
   await frame();
   const front = sessionTabs(id).tabs.find((tab) => tab.id === sessionTabs(id).active);
@@ -137,12 +138,8 @@ function Fixture() {
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
   const [panel, setPanel] = useState<AgentsPanelState>(undefined);
   const [result, setResult] = useState("");
-  const shown = useRef<AgentsPanelState>(undefined);
   useEffect(() => {
-    shown.current = panel;
-  }, [panel]);
-  useEffect(() => {
-    if (params.has("drive")) void drive(() => shown.current).then(setResult);
+    if (params.has("drive")) void drive().then(setResult);
   }, []);
   return (
     <AssistantRuntimeProvider runtime={runtime}>

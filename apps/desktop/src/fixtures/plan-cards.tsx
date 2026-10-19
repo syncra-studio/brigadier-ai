@@ -11,7 +11,6 @@ import { createRoot } from "react-dom/client";
 
 import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
 import { type RunStep, runSteps, type StepMark } from "@/app/conversation/phaseView";
-import { PlanSection } from "@/app/conversation/cards/PlanSection";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
 import { PendingActionCard } from "@/app/conversation/ActionCards";
 import { PinnedSummary, PinnedSummaryToggle, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
@@ -550,10 +549,8 @@ function FixturePage() {
                     className="flex min-w-0 flex-col gap-2"
                   >
                     <h2 className="text-muted-foreground text-sm">{item.name}</h2>
-                    {/* As in the summary's context card. */}
-                    <div className="bg-popover rounded-summary shadow-summary py-2.5">
-                      <PlanSection planIds={[item.id]} />
-                    </div>
+                    {/* As the thread shows it: the context card has no plan section (Q88). */}
+                    <PlanCardLink cardId={item.id} />
                   </section>
                 ))}
                 {overnight.map(({ label, model }) => (
@@ -592,10 +589,14 @@ function FixturePage() {
 
 createRoot(document.getElementById("root")!).render(<FixturePage />);
 
-// For PlanCardsRender.test.ts: the plan sections the page drew once it settled.
+// For PlanCardsRender.test.ts: the plans' rows the page drew once it settled, and any plan
+// section left in a context card.
 setTimeout(() => {
   const result = document.createElement("pre");
   result.id = "plan-cards-result";
-  result.textContent = JSON.stringify([...document.querySelectorAll("[data-card=plan]")].map((card) => card.id));
+  result.textContent = JSON.stringify({
+    rows: [...document.querySelectorAll<HTMLElement>("[data-fixture]")].filter((section) => section.querySelector("[data-slot=plan-row]")).map((section) => section.dataset["fixture"]),
+    inContext: document.querySelectorAll("[aria-label=Context] [data-card=plan]").length,
+  });
   document.body.append(result);
 }, 1000);

@@ -19,7 +19,7 @@ import { useThreadImages } from "@/state/threadImages";
  * recordings it made of the change (`attach_proof`) as small thumbnails in a row, the merge in
  * the Edited files card's header (or a small header of its own when the turn edited nothing), and
  * one plain line when something about the merged code is really wrong. What was checked lives in
- * the Reviews tab.
+ * the Progress tab.
  */
 
 type Proof = Extract<OrchestratorStepKind, { type: "proof" }>;
@@ -117,7 +117,7 @@ export function MergeHeader({ merge }: { merge: Merged }) {
 
 /**
  * The one plain line under a merge when something about the merged code is really wrong (an
- * open finding, a failed check): a click opens the Reviews tab, where every check is.
+ * open finding, a failed check): a click opens the Progress tab, where every check is.
  */
 export function MergeWarning({ merge }: { merge: Merged }) {
   const conversationId = useViewConversation()?.id ?? null;
@@ -127,7 +127,7 @@ export function MergeWarning({ merge }: { merge: Merged }) {
     <button
       type="button"
       data-slot="merge-warning"
-      onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Reviews")}
+      onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")}
       className="text-warning hover:text-foreground flex w-fit items-center gap-1.5 text-start text-sm transition-colors"
     >
       <ExclamationMarkCircle aria-hidden className="size-icon-sm shrink-0" />

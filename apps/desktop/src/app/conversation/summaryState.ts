@@ -6,30 +6,32 @@ import { useApp } from "@/state/store";
 import { useBoard } from "@/state/board";
 
 import { setPinnedSummary } from "@/state/actions";
+import { openPanelTab, openPlanTab } from "@/state/sessionTabs";
 
 export const useSummary = create<{
   layout: "beside" | "shift" | "float";
   /** The layout is the thread pane's own, not the default before it is measured. */
   measured: boolean;
   floating: boolean;
-  /** A plan the thread asked to see; the Plan section shows it until another plan takes over. */
-  plan: string | null;
-}>(() => ({ layout: "beside", measured: false, floating: false, plan: null }));
+}>(() => ({ layout: "beside", measured: false, floating: false }));
 
 /** Where each summary card, and their column, was scrolled to: `<session>/<card>` → offset. */
 export const keptScroll = new Map<string, number>();
 
-/** Open the same card beside the thread or in the narrow window's summary. */
+/**
+ * Open a plan: an overnight run's card beside the thread or in the narrow window's summary, a
+ * plan written as a document in its own tab, a plan of phases alone in the job's tab.
+ */
 export function revealPlan(cardId: string): void {
-  reveal(() => {
-    const run = Object.values(useBoard.getState().board?.overnight ?? {}).find(
-      (candidate) => candidate.state !== "superseded" && candidate.planId === cardId,
-    );
-    if (run) return `overnight-${run.id}`;
-    // The Plan section shows one plan: an earlier one takes its place until another takes over.
-    useSummary.setState({ plan: cardId });
-    return `plan-${cardId}`;
-  });
+  const board = useBoard.getState().board;
+  const run = Object.values(board?.overnight ?? {}).find(
+    (candidate) => candidate.state !== "superseded" && candidate.planId === cardId,
+  );
+  if (run) return reveal(() => `overnight-${run.id}`);
+  const plan = board?.plans[cardId];
+  if (!board || !plan) return;
+  if (plan.body) openPlanTab(board.conversationId, { type: "plan", id: plan.id }, plan.title);
+  else openPanelTab(board.conversationId, { type: "reviews" }, "Progress");
 }
 
 /** Open an overnight run's card, where its Start, Stop, Merge and Continue are. */
@@ -48,7 +50,7 @@ function reveal(elementId: () => string): void {
     requestAnimationFrame(() => {
       const target = document.getElementById(id);
       if (!target) return;
-      // The Plan section may be folded.
+      // Its section may be folded.
       const section = target.closest<HTMLElement>("[data-slot=summary-section][data-folded]");
       section?.querySelector<HTMLButtonElement>(":scope > header > button[aria-expanded]")?.click();
       jumpInThread(target);

@@ -112,9 +112,10 @@ export type ConflictTabState = {
 export type ConflictView = "conflict" | "compare" | "merge";
 /**
  * A view of the session's own records, opened from a row of its context card or the thread's end:
- * its reviews and checks in full, or every source it used.
+ * its job step by step with its reviews and checks in full (Q88), or every source it used.
  */
 export type PanelView =
+  /** The Job card's tab: the job at work and each earlier merge's, with findings and checks. */
   | { type: "reviews" }
   /** Every source the session used: attachments, links, integrations, its searches and the pages it opened. */
   | { type: "sources" }

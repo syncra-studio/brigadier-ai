@@ -1,7 +1,6 @@
 import { useAui } from "@assistant-ui/react";
 import {
   Compare,
-  ExclamationMarkCircle,
   Globe,
   HandRaised,
   Link,
@@ -12,7 +11,6 @@ import {
   PullRequestDraft,
   PullRequestMerged,
   PullRequestOpen,
-  ShieldCheck,
   Tasks,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
@@ -32,7 +30,8 @@ import { useAskRequest } from "@/app/conversation/activity/askRequest";
 import { revertPullRequest } from "@/app/conversation/activity/revert";
 import { connectorName } from "@/app/conversation/activity/words";
 import { isRunRequest } from "@/app/conversation/blocks";
-import { PlanSection } from "@/app/conversation/cards/PlanSection";
+import { JobCard, WaitCard } from "@/app/conversation/cards/JobCard";
+import { useSessionJobs } from "@/app/conversation/boardJob";
 import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
 import {
   overnightActions,
@@ -40,9 +39,7 @@ import {
   useOvernightCards,
   useRunDiff,
 } from "@/app/conversation/overnightAdapter";
-import { contextPlanId, contextPlanIds, latestPlanRequest } from "@/app/conversation/planProgress";
 import { ActivitiesSummary } from "@/app/conversation/Activities";
-import { type ReviewedLine, reviewedLine, useChecksLine, useReviewRow } from "@/app/conversation/reviewStatus";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, openSummaryByItself, useSummary } from "@/app/conversation/summaryState";
 import { RightSidebarContext } from "@/app/conversation/RightSidebar";
@@ -56,7 +53,6 @@ import {
   SummarySection,
 } from "@/components/assistant-ui/elements/summary-section";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Spinner } from "@/components/glyphs/spinner";
 import { TitlebarButton } from "@/components/titlebar-button";
 import { Button } from "@/components/ui/button";
 import {
@@ -75,6 +71,7 @@ import type {
   Task,
   WaitingItem,
 } from "@/ipc/generated";
+import { formatTime } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import {
@@ -82,6 +79,7 @@ import {
   setPinnedSummary,
 } from "@/state/actions";
 import { useBoard } from "@/state/board";
+import { useNow } from "@/hooks/use-now";
 import { summaryShownOf, useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
@@ -675,11 +673,12 @@ function SummaryCard({
 
 /**
  * A session's summary, pinned at the top end of its thread's pane, in the reference order: the
- * project, what the branch changed and how it was reviewed, what waits on the user,
- * the plan, the workers, what runs in the background and the sources; then a run's own card. It
- * eases in from the pane's end when pinned and out when unpinned. Where the pane has too little
- * room beside the thread's column it hides, and the same cards float over the thread instead,
- * opened from the top bar.
+ * project, what the branch changed, what waits on the user, the workers, what runs in the
+ * background and the sources; under it the job at work and what waits on a set time (Q88), then a
+ * run's own card. It eases in from the pane's end when pinned and out when unpinned. Where the
+ * pane has too little room beside the thread's column it hides, and the same cards float over the
+ * thread instead, opened from the top bar. While the context card is hidden, the job's cards
+ * stay, in its place.
  */
 export function PinnedSummary({
   conversation,
@@ -689,6 +688,7 @@ export function PinnedSummary({
   const shown = useApp(summaryShownOf);
   const float = useSummary((s) => s.layout === "float");
   const visible = shown && !float;
+  const floating = useSummary((s) => s.floating);
   // A session's card opens by itself once it has its project and branch to show, never to say
   // there is nothing here yet.
   const measured = useSummary((s) => s.measured);
@@ -731,6 +731,13 @@ export function PinnedSummary({
           {content && <SummaryContent conversation={conversation} active={visible} />}
         </aside>
       </div>
+      {conversation?.kind === "session" && !visible && !(float && floating) && (
+        <div className="pointer-events-none absolute inset-y-0 end-0 z-20 flex max-w-full flex-col">
+          <div aria-label="Job" data-slot="job-stack" className={STACK}>
+            <JobStack conversationId={conversation.id} />
+          </div>
+        </div>
+      )}
       {float && <FloatingSummary conversation={conversation} />}
     </>
   );
@@ -843,39 +850,9 @@ function ChangesRow({ conversationId, branch, diff }: { conversationId: string; 
   );
 }
 
-/** The Reviewed row's icon, by how its reviews and checks stand. */
-const REVIEWED_ICON: Record<ReviewedLine["tone"], ReactNode> = {
-  ok: <ShieldCheck />,
-  running: <Spinner />,
-  warn: <ExclamationMarkCircle className="text-warning" />,
-  failed: <ExclamationMarkCircle className="text-destructive" />,
-};
-
 /**
- * "Reviewed": the session's code reviews and full checks in one line ("Reviewed · 5 fixed", red
- * "Checks failed"); a click opens them in full in the Reviews tab. Nothing opens in the card.
- */
-function ReviewedRow({ conversationId }: { conversationId: string }) {
-  const line = reviewedLine(useReviewRow(conversationId), useChecksLine(conversationId));
-  if (!line) return null;
-  return (
-    <SummaryRowButton
-      data-row="reviewed"
-      data-tone={line.tone}
-      title={line.title || undefined}
-      icon={REVIEWED_ICON[line.tone]}
-      className={cn(line.tone === "failed" && "text-destructive")}
-      onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Reviews")}
-    >
-      {line.text}
-    </SummaryRowButton>
-  );
-}
-
-/**
- * The summary's cards, pinned in the pane or floating from the top bar: the context card (with
- * the session's plan as one of its sections), then the run's card. `active` while they can be
- * seen, for their scroll offsets.
+ * The summary's cards, pinned in the pane or floating from the top bar: the context card, the
+ * job's cards, then the run's card. `active` while they can be seen, for their scroll offsets.
  */
 function SummaryContent({ conversation, active }: { conversation: Conversation | null; active: boolean }) {
   if (!conversation) return <SummaryCard scrollKey="draft/context" active={active}>
@@ -921,23 +898,6 @@ function SessionSummaryContent({
       ? (s.projects[conversation.projectId]?.name ?? null)
       : null,
   );
-  const planIds = useBoard(
-    useShallow((s) => (s.board?.conversationId === conversation.id ? contextPlanIds(s.board.plans) : [])),
-  );
-  const plans = planIds.filter((id) => !overnight.some((card) => card.run.planId === id));
-  const currentPlanId = useBoard((s) => {
-    if (s.board?.conversationId !== conversation.id) return null;
-    return contextPlanId(s.board.plans, plans, latestPlanRequest(s.board.requests));
-  });
-  // A plan the thread asked to see (an earlier plan's "View plan"), until another plan takes over.
-  const shownPlan = useSummary((s) => s.plan);
-  const planId = shownPlan && plans.includes(shownPlan) ? shownPlan : currentPlanId;
-  const lastCurrent = useRef(currentPlanId);
-  useEffect(() => {
-    if (lastCurrent.current === currentPlanId) return;
-    lastCurrent.current = currentPlanId;
-    useSummary.setState({ plan: null });
-  }, [currentPlanId]);
   const run = shownRun(overnight);
   const setup =
     conversation.setup?.type === "session" ? conversation.setup : null;
@@ -964,31 +924,73 @@ function SessionSummaryContent({
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
             <ChangesRow conversationId={conversation.id} branch={run?.workspace?.branch ?? setup.environment.branch} diff={diff} />
-            <ReviewedRow conversationId={conversation.id} />
             {pullRequest && <PullRequestRow conversationId={conversation.id} pullRequest={pullRequest} />}
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />
-          {planId && (
-            <PlanSection
-              planIds={plans}
-              currentPlanId={planId}
-              onShowCurrent={
-                planId !== currentPlanId && currentPlanId
-                  ? () => useSummary.setState({ plan: null })
-                  : undefined
-              }
-            />
-          )}
           <WorkersSummary conversationId={conversation.id} />
           <ActivitiesSummary conversationId={conversation.id} />
           <SessionSources conversationId={conversation.id} />
         </div>
       </SummaryCard>
-      {/* The run's card sits right under the context card, before any other plan. */}
+      <JobStack conversationId={conversation.id} />
+      {/* The run's card sits right under the job's. */}
       {overnight.map((model) => (
         <SummaryCard key={model.run.id} scrollKey={`${conversation.id}/overnight-${model.run.id}`} active={active}>
           <OvernightPlanCard model={model} actions={overnightActions} className={BARE} />
         </SummaryCard>
+      ))}
+    </>
+  );
+}
+
+/** Something the session waits for at a set time: a usage limit's reset, a run's set end. */
+type Wait = { key: string; title: string; reason?: string | undefined; atMs: number };
+
+/** The overnight run states whose set end is still ahead. */
+const RUN_ENDS = new Set(["running", "waitingQuota"]);
+
+/**
+ * What the session waits for at a set time, only where the board holds the time: the thread or
+ * its workers paused until a usage limit resets, an overnight run's set end.
+ */
+function useWaits(conversationId: string): Wait[] {
+  const lead = useApp((s) => s.conversations[conversationId]?.quotaWait ?? null);
+  const json = useBoard((s) => {
+    if (s.board?.conversationId !== conversationId) return "[]";
+    const waits: Wait[] = [];
+    if (lead?.resetsAtMs) waits.push({ key: "lead", title: `Resumes at ${formatTime(lead.resetsAtMs)}`, reason: lead.reason, atMs: lead.resetsAtMs });
+    const paused = Object.values(s.board.tasks)
+      .filter((task) => task.quotaWait?.resetsAtMs)
+      .toSorted((a, b) => a.quotaWait!.resetsAtMs! - b.quotaWait!.resetsAtMs!);
+    const first = paused[0];
+    if (first && !lead) {
+      const at = formatTime(first.quotaWait!.resetsAtMs!);
+      const title = paused.length === 1 ? `${workerName(s.board.tasks, first)} resumes at ${at}` : `${paused.length} workers resume at ${at}`;
+      waits.push({ key: "workers", title, reason: first.quotaWait!.reason, atMs: first.quotaWait!.resetsAtMs! });
+    }
+    for (const run of Object.values(s.board.overnight)) {
+      if (run.windDownAtMs && RUN_ENDS.has(run.state)) {
+        waits.push({ key: `run-${run.id}`, title: `The overnight run wraps up at ${formatTime(run.windDownAtMs)}`, reason: run.name, atMs: run.windDownAtMs });
+      }
+    }
+    return JSON.stringify(waits);
+  });
+  return useMemo(() => JSON.parse(json) as Wait[], [json]);
+}
+
+/**
+ * The session's job while it works through steps (Q88), then what it waits for at a set time:
+ * cards of their own, under the context card or in its place while it is hidden.
+ */
+function JobStack({ conversationId }: { conversationId: string }) {
+  const job = useSessionJobs(conversationId)?.current ?? null;
+  const waits = useWaits(conversationId);
+  const nowMs = useNow(waits.length > 0 ? 30_000 : null);
+  return (
+    <>
+      {job && <JobCard job={job} onOpen={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")} />}
+      {waits.map((wait) => (
+        <WaitCard key={wait.key} title={wait.title} reason={wait.reason} atMs={wait.atMs} nowMs={nowMs} />
       ))}
     </>
   );

@@ -70,8 +70,8 @@ test("a merge in a later turn shows on the edited turn's card and in its own tur
 });
 
 // Something really wrong with the merged code is one plain line under the merge, which opens
-// the Reviews tab where every check is.
-test("an open finding and a failed CI run read as one line that opens the Reviews tab", { timeout: 60000 }, async (t) => {
+// the Progress tab where every check is.
+test("an open finding and a failed CI run read as one line that opens the Progress tab", { timeout: 60000 }, async (t) => {
   const seen = await render(t, "&warn=1");
   assert.deepEqual(seen.warning, ["One review finding is still open and CI failed."]);
   assert.equal(seen.tab, "panel:reviews");

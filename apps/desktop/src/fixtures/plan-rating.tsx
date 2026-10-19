@@ -1,8 +1,7 @@
 /**
  * A standalone Vite entry, excluded from the app entry and production build: a session with a
- * plan and a rated answer, in the app's own conversation view, the plan's section of the context
- * card beside it. IPC is mocked, no daemon: a rating sent comes back on the board as the daemon's
- * event would. It rates the plan, clears that rating, clears the answer's, and writes what it saw
+ * plan and a rated answer, in the app's own conversation view, the plan's card beside it. IPC is
+ * mocked, no daemon: a rating sent comes back on the board as the daemon's event would. It rates the plan, clears that rating, clears the answer's, and writes what it saw
  * as JSON into `<pre id="plan-rating-result">`; `stop=1` holds the page for a screenshot.
  *
  * - A plan has the answer's thumbs button: Good plan / Bad plan; once rated, Clear rating (#127).
@@ -12,7 +11,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
-import { PlanSection } from "@/app/conversation/cards/PlanSection";
+import { PlanDocCard } from "@/app/conversation/cards/PlanDocument";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, ConversationView as View, Message, Plan, Request, UserRequest } from "@/ipc/generated";
@@ -47,7 +46,7 @@ const request = {
 } as unknown as UserRequest;
 const step = (title: string) => ({ title, detail: "", taskId: null, stage: "pending", startedAtMs: null, endedAtMs: null, outline: null });
 const plan = {
-  id: "p1", conversationId: id, requestId: null, position: 1, title: "Move the tax rules into their own module", body: null,
+  id: "p1", conversationId: id, requestId: null, position: 1, title: "Move the tax rules into their own module", body: "# Move the tax rules into their own module\n\nThe rules move to `src/cart/rules.ts`; checkout and basket read them there.",
   state: { type: "approved", by: "user" }, createdAtMs: start, decidedAtMs: start,
   steps: [step("Move the rules to src/cart/rules.ts"), step("Update checkout and basket"), step("Run the cart tests")],
 } as unknown as Plan;
@@ -114,7 +113,7 @@ async function rateWith(button: HTMLElement, pick: string): Promise<string[]> {
 async function drive() {
   const seen: Record<string, unknown> = {};
   try {
-    const planButton = await until("the plan's rate button", () => document.querySelector<HTMLElement>("[data-card=plan] [data-slot=rate-menu]"));
+    const planButton = await until("the plan's rate button", () => document.querySelector<HTMLElement>("[data-slot=plan-card] [data-slot=rate-menu]"));
     seen.planLabel = planButton.querySelector(".sr-only")?.textContent;
     seen.planMenu = await rateWith(planButton, "Good plan");
     await until("the plan rated", () => planButton.dataset.rated === "good");
@@ -144,9 +143,7 @@ createRoot(document.getElementById("root")!).render(
         <ConversationView key={id} selection={{ type: "conversation", id }} />
       </main>
       <aside className="w-90 shrink-0 p-4">
-        <div className="bg-popover rounded-summary shadow-summary py-2.5">
-          <PlanSection planIds={[plan.id]} />
-        </div>
+        <PlanDocCard docRef={{ type: "plan", id: plan.id }} />
       </aside>
     </SidebarProvider>
   </TooltipProvider>,

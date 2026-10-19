@@ -593,7 +593,7 @@ const BrowserTab = lazy(() => import("./BrowserTab").then((module) => ({ default
 const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ default: module.SideChatTab })));
 const MainTerminalTab = lazy(() => import("./MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
 const MockupView = lazy(() => import("./MockupTab").then((module) => ({ default: module.MockupView })));
-const ReviewsTab = lazy(() => import("./ReviewsTab").then((module) => ({ default: module.ReviewsTab })));
+const SessionJobTab = lazy(() => import("./JobTab").then((module) => ({ default: module.SessionJobTab })));
 const SourcesTab = lazy(() => import("./SourcesTab").then((module) => ({ default: module.SourcesTab })));
 const PlanTab = lazy(() => import("./PlanTab").then((module) => ({ default: module.PlanTab })));
 const ConflictTab = lazy(() => import("./ConflictTab").then((module) => ({ default: module.ConflictTab })));
@@ -648,7 +648,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
               ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
                 : tab.kind === "plan" ? <PlanTab plan={tab.plan} />
                 : tab.kind === "panel" ? tab.view.type === "output" ? <OutputTab conversationId={conversationId} view={tab.view} />
-                  : tab.view.type === "sources" ? <SourcesTab conversationId={conversationId} /> : <ReviewsTab conversationId={conversationId} />
+                  : tab.view.type === "sources" ? <SourcesTab conversationId={conversationId} /> : <SessionJobTab conversationId={conversationId} />
                 : tab.kind === "conflict" ? <ConflictTab conversationId={conversationId} tab={tab} />
                 : (
                   <TabWithChat conversationId={conversationId} tab={tab}>

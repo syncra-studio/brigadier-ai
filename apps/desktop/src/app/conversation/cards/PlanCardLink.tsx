@@ -13,7 +13,7 @@ const STATE_WORDS: Record<PlanState["type"], string> = {
 
 /**
  * The plan's one row in the thread history: "View plan: Phase 2 · Fix · approved", which opens
- * the one actionable card under the summary.
+ * the plan: its document in a tab, an overnight run's card, or the job's tab.
  */
 export function PlanCardLink({ cardId }: { cardId: string }) {
   const plan = useBoard((s) => s.board?.plans[cardId]);
