@@ -14,7 +14,7 @@ import {
   useState,
 } from "react";
 import { TextMessagePartProvider, type TextMessagePartProps } from "@assistant-ui/react";
-import { Check, Copy, Document, ExpandLg, Globe, Mail } from "@openai/apps-sdk-ui/components/Icon";
+import { Check, Copy, Document, DownloadSimple, ExpandLg, Globe, Mail } from "@openai/apps-sdk-ui/components/Icon";
 
 import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
 import {
@@ -43,11 +43,12 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { openArtifact, openFolder, openUrl, pageRead, request, revealPath, saveArtifact, saveCopy } from "@/ipc/client";
-import type { Page, StoredCopy } from "@/ipc/generated";
+import type { ArtifactRef, Page } from "@/ipc/generated";
 import { openLink } from "@/state/links";
 import { openPageTab } from "@/state/sessionTabs";
 import { cn } from "@/lib/utils";
@@ -260,60 +261,89 @@ function fileTarget(href: string, root: string | null): { path: string; line: nu
   return { path, line };
 }
 
-/** What a click on a file link found when its file was gone, shown after the chip. */
-type Gone = { stored: StoredCopy | null };
+/** Bytes of a file the reader shows; Save keeps the whole file. */
+const READ_BYTES = 1024 * 1024;
+
+/** A stored file open in the reader: its text, and whether it goes on past what shows. */
+type Reading = { artifact: ArtifactRef; name: string; text: string; cut: boolean };
+
+/** Whether the reader may show it: images, sound, video and PDFs open in their own app. */
+function readable(artifact: ArtifactRef): boolean {
+  return !/^(image|audio|video)\//.test(artifact.mime) && artifact.mime !== "application/pdf";
+}
 
 /**
  * The file-link chip: the file's type icon and its name in link blue, "(line 36)"
  * after it, the absolute path on hover. A click opens the file in the Files tab, or shows it
- * in Finder when it isn't the session's. A worker's file whose scratch folder is gone opens
- * the copy Brigadier stored with its report (BUILD-PLAN A1), with "This file is no longer
- * here" and that copy's Save after the chip; never an error toast.
+ * in Finder when it isn't the session's. A worker's file (`outputs/…`, or its scratch path once
+ * the folder is gone) opens the copy Brigadier stored with its report (BUILD-PLAN A1) inside
+ * Brigadier, in the reader with its Save (Q84); a file that isn't text opens in its own app. A
+ * file that is gone with nothing stored says "This file is no longer here"; never an error toast.
  */
 export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, children }) => {
   const root = useCheckoutRoot();
   const openFile = useContext(OpenFileContext);
   const conversationId = useLinkConversation();
   const atMs = useContext(LinkTimeContext);
-  const [gone, setGone] = useState<Gone | null>(null);
+  const [gone, setGone] = useState(false);
+  const [reading, setReading] = useState<Reading | null>(null);
+  const [tip, setTip] = useState(false);
   const { path, line } = fileTarget(href, root);
-  const open = async () => {
-    const found = conversationId
-      ? await request({
+  const resolve = () =>
+    conversationId
+      ? request({
           method: "resolveFileLink",
           conversationId,
           link: href,
           path,
           ...(atMs === null ? {} : { atMs }),
         }).catch(() => null)
-      : null;
-    // `outputs/` names a stored artifact, not a file in the checkout.
-    if (found?.stored && /^(?:\.\/)?outputs\//.test(href)) {
-      setGone(null);
-      const { artifact } = found.stored;
-      await openArtifact(artifact.id, artifact.fileName ?? artifact.title);
+      : Promise.resolve(null);
+  // `outputs/` names a stored artifact, not a file in the checkout; a scratch path once its
+  // folder is gone opens the copy too.
+  const storedCopy = (found: Awaited<ReturnType<typeof resolve>>) =>
+    found?.stored && (/^(?:\.\/)?outputs\//.test(href) || !found.exists) ? found.stored.artifact : null;
+  const show = async (artifact: ArtifactRef) => {
+    const name = artifact.fileName ?? artifact.title;
+    if (readable(artifact)) {
+      const { text } = await request({ method: "readArtifact", id: artifact.id, offset: 0, limit: READ_BYTES });
+      if (!text.binary) {
+        setReading({ artifact, name, text: text.text, cut: text.totalBytes > READ_BYTES });
+        return;
+      }
+    }
+    await openArtifact(artifact.id, name);
+  };
+  const open = async () => {
+    const found = await resolve();
+    const copy = storedCopy(found);
+    if (copy) {
+      setGone(false);
+      await show(copy);
       return;
     }
     if (found && !found.exists) {
-      setGone(path.startsWith("/") ? { stored: found.stored } : null);
-      if (found.stored) {
-        const { artifact } = found.stored;
-        await openArtifact(artifact.id, artifact.fileName ?? artifact.title);
-      }
+      setGone(path.startsWith("/"));
       return;
     }
-    setGone(null);
+    setGone(false);
     if (openFile(path, line)) return;
     await revealPath(path).catch((error: unknown) => {
       // Gone, with nothing stored (no session to ask, or not a worker's file).
       if (found) throw error;
-      if (path.startsWith("/")) setGone({ stored: null });
+      if (path.startsWith("/")) setGone(true);
     });
+  };
+  // A worker's file has no path to open: its stored copy opens in its own app.
+  const openDefault = async () => {
+    const copy = storedCopy(await resolve());
+    await (copy ? openArtifact(copy.id, copy.fileName ?? copy.title) : openFolder(path));
   };
   return (
     <>
       <ContextMenu>
-      <Tooltip>
+      {/* Its path never stays over the reader, even fading out, where it would take the reader's Escape. */}
+      <Tooltip open={tip && !reading} onOpenChange={setTip}>
         <TooltipTrigger asChild>
           <ContextMenuTrigger asChild>
           <a
@@ -331,42 +361,63 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
           </a>
           </ContextMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="top">{path}</TooltipContent>
+        {!reading && <TooltipContent side="top">{path}</TooltipContent>}
       </Tooltip>
-      <FileChipMenu path={path} line={line} />
+      <FileChipMenu path={path} line={line} openDefault={openDefault} />
       </ContextMenu>
       {gone && (
         <span data-slot="file-chip-gone" className="text-muted-foreground">
           {" "}
-          (This file is no longer here
-          {gone.stored && (
-            <>
-              {"; Brigadier kept a copy: "}
-              <button
-                type="button"
-                data-slot="file-chip-save"
-                onClick={() => {
-                  const { artifact } = gone.stored!;
-                  saveArtifact(artifact.id, artifact.fileName ?? artifact.title).catch(failed);
-                }}
-                className="text-link hover:text-link/80 cursor-pointer"
-              >
-                Save…
-              </button>
-            </>
-          )}
-          )
+          (This file is no longer here)
         </span>
       )}
+      <FileReader reading={reading} onClose={() => setReading(null)} />
     </>
   );
 };
 
 /**
+ * A worker's file opened from an answer (Q84), over the thread as a report opens: Markdown as
+ * the answer shows it, other text as written, and its Save, which asks where it goes.
+ */
+function FileReader({ reading, onClose }: { reading: Reading | null; onClose: () => void }) {
+  const markdown = !!reading && (reading.artifact.mime === "text/markdown" || /\.(md|markdown)$/i.test(reading.name));
+  return (
+    <Dialog open={reading !== null} onOpenChange={(shown) => !shown && onClose()}>
+      <DialogContent data-slot="file-reader" className="max-w-thread flex max-h-full flex-col">
+        <DialogTitle className="truncate pe-6">{reading?.name}</DialogTitle>
+        <div data-slot="file-reader-body" className="min-h-0 flex-1 overflow-y-auto">
+          {reading &&
+            (markdown ? (
+              <ReportBody text={reading.text} />
+            ) : (
+              <pre data-selectable className="bg-code-surface rounded-control overflow-auto p-3 font-mono text-xs whitespace-pre-wrap">
+                {reading.text}
+              </pre>
+            ))}
+          {reading?.cut && <p className="text-muted-foreground pt-2 text-sm">Only the start of this file shows here; Save keeps all of it.</p>}
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            size="sm"
+            data-slot="file-reader-save"
+            onClick={() => reading && saveArtifact(reading.artifact.id, reading.name).catch(failed)}
+          >
+            <DownloadSimple aria-hidden />
+            Save…
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
  * A file chip's right-click menu (inside its `ContextMenu`): open it in the Files tab, its default app or Finder; show it in
  * Finder; copy its path; save a copy to Downloads.
  */
-function FileChipMenu({ path, line }: { path: string; line: number | null }) {
+function FileChipMenu({ path, line, openDefault }: { path: string; line: number | null; openDefault: () => Promise<void> }) {
   const openFile = useContext(OpenFileContext);
   const mac = useApp((s) => s.info?.platform === "macos");
   const finder = mac ? "Finder" : "File manager";
@@ -382,7 +433,7 @@ function FileChipMenu({ path, line }: { path: string; line: number | null }) {
           <ContextMenuSubTrigger>Open in</ContextMenuSubTrigger>
           <ContextMenuSubContent>
             <ContextMenuItem onSelect={() => openFile(path, line)}>Files tab</ContextMenuItem>
-            <ContextMenuItem onSelect={() => openFolder(path).catch(failed)}>Default app</ContextMenuItem>
+            <ContextMenuItem onSelect={() => openDefault().catch(failed)}>Default app</ContextMenuItem>
             <ContextMenuItem onSelect={() => revealPath(path).catch(failed)}>{finder}</ContextMenuItem>
           </ContextMenuSubContent>
         </ContextMenuSub>

@@ -69,7 +69,6 @@ import { HeldNote } from "@/app/conversation/HeldNote";
 import { AnsweredStatus, StatusLine, type ThreadStatusProps, useThreadStatusHead } from "@/app/conversation/ThreadStatus";
 import { TurnDiff, useTurnChanged } from "@/app/conversation/TurnDiff";
 import { linkMarkers, splitSources } from "@/app/conversation/answerSources";
-import { AnswerFiles } from "@/app/conversation/AnswerFiles";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { describeTurnError, interruptedByQuit } from "@/app/conversation/turnError";
 import { useAction } from "@/app/conversation/useAction";
@@ -412,15 +411,6 @@ const ReportText: FC<TextMessagePartProps> = (props) => {
       )}
     </div>
   );
-};
-
-/** The files under the answer at `index`, which it may link corrected copies of. */
-const AnswerFilesOf: FC<{ index: number; requestIds: readonly string[] }> = ({ index, requestIds }) => {
-  const answer = useAuiState((s) => {
-    const part = s.message.parts[index];
-    return part?.type === "text" ? part.text : "";
-  });
-  return <AnswerFiles requestIds={requestIds} answer={answer} />;
 };
 
 /** A reply, card or row in the block's work. */
@@ -938,7 +928,6 @@ export const RequestBlock: FC = () => {
       {!live && <MadeImages steps={meta.orchestratorSteps} />}
       {!live && <MergeMessage steps={meta.orchestratorSteps} />}
       {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestIds={meta.requestIds} />}
-      {!live && answer !== null && <AnswerFilesOf index={answer} requestIds={meta.requestIds} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
       <BlockError meta={meta} live={live} />
       {answer !== null && (

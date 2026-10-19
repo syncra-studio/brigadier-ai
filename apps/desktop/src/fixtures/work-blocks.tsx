@@ -19,6 +19,9 @@
  *   in view.
  * - `drive=filelink` (with `kind=session`): a finished answer's file chip holds still while a later
  *   turn works.
+ * - `drive=answerfile` (`kind=session` for a session): a finished answer names its worker's file once,
+ *   inline (Q84): nothing lists files under it, no Save sits by the link, and the link opens the file
+ *   in the reader, with its Save. `stop=answer|reader` holds the page for a screenshot.
  * - `drive=update` (`kind=session` for a session): an ending that opens with "Update:" and has a
  *   `### Details` section is the answer, its Details folded; the opening line folds into the work.
  *
@@ -48,6 +51,7 @@ import type {
 } from "@/ipc/generated";
 import { answerHtml } from "@/app/conversation/RequestBlock";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
+import { fixtureClick } from "@/fixtures/input";
 import { loadConversation, openConversation } from "@/state/actions";
 import { type Board, type ShownApproval, useBoard } from "@/state/board";
 import { closeTab, sessionTabs } from "@/state/sessionTabs";
@@ -131,10 +135,22 @@ function view(): View {
 let settings = { followUp: "queue" } as Settings;
 let failLoads = drive === "loadfail";
 const calls: string[] = [];
+/** `drive=answerfile`: the worker's file its answer names, as Brigadier stored it. */
+const NOTES = { id: "blob-notes", title: "notes.md", kind: "note", mime: "text/markdown", bytes: 120, fileName: "notes.md" } as const;
+const NOTES_TEXT = "# Rounding cases\n\n- 2.345 rounds to **2.34** (half-even)\n- 2.355 rounds to **2.36**\n- Totals are rounded once, after tax.";
 mockIPC((command, payload) => {
-  if (command !== "ipc_request") return null;
+  if (command !== "ipc_request") {
+    if (command === "save_artifact" || command === "open_artifact") calls.push(`${command} ${(payload as { id: string }).id}`);
+    return command === "save_artifact" ? true : null;
+  }
   const req = (payload as { request: Request }).request;
   switch (req.method) {
+    case "resolveFileLink":
+      calls.push(`${req.method} ${req.link}`);
+      return { method: req.method, exists: false, stored: req.link.endsWith("notes.md") ? { taskId: "w1", artifact: NOTES } : null };
+    case "readArtifact":
+      calls.push(`${req.method} ${req.id}`);
+      return { method: req.method, text: { text: NOTES_TEXT, offset: 0, totalBytes: NOTES_TEXT.length, binary: false } };
     case "getConversation":
       // `drive=loadfail`: the daemon can't give the view until the driver lets it.
       if (failLoads) throw new Error("The daemon did not answer.");
@@ -724,6 +740,50 @@ async function driveFileLink(): Promise<object> {
 }
 
 /**
+ * A finished answer names its worker's file once, inline (Q84): no files under the answer and no
+ * Save by the link; the link opens the file in the reader as the answer shows Markdown, and Save is there.
+ */
+async function driveAnswerFile(): Promise<object> {
+  await settle(600);
+  // The worker that wrote the file, of this request: it once put the file under the answer too.
+  const worker = {
+    ...(Object.values(night.tasks)[0] as unknown as Task), id: "w1", number: 1, title: "Rounding cases", conversationId: ID, state: "done",
+    blockedReason: null, role: null, phase: null, run: null, requestId: "r1", gateLink: null, candidate: null, report: null, quotaWait: null,
+    position: 1.3, createdAtMs: begun + 2000, updatedAtMs: begun + 4000, outputs: [NOTES],
+  } as unknown as Task;
+  const answer: Message = {
+    id: "a1", conversationId: ID, seq: 2, role: "assistant", blob: null, createdAtMs: begun + 5000, attachments: [], mentions: [],
+    text: "Totals now round half-even, once, after tax. The cases I checked are in [notes.md](outputs/task-1/notes.md); the invoice test covers the two that failed.",
+    model: null, requestId: "r1", parentId: "r1", answerAtMs: begun + 5000,
+  };
+  daemon.messages = [...daemon.messages, answer];
+  daemon.run = "idle";
+  useApp.setState((state) => ({ threads: { ...state.threads, [ID]: { ...state.threads[ID]!, items: daemon.messages } } }));
+  change(() => ({ run: "idle", runRequest: null, head: "a1", tasks: { w1: worker } }));
+  request("r1", { state: { type: "done" }, endedAtMs: begun + 5000, worked: [{ fromMs: begun, toMs: begun + 5000 }] });
+  await appear(() => one("[data-slot=file-chip]", turn() ?? document.body));
+  await settle(300);
+  const chips = all("[data-slot=file-chip]", turn() ?? document.body);
+  const link = chips[0]?.closest("p") ?? null;
+  const shown = { underAnswer: !!one("[data-slot=answer-files], [data-slot=answer-file]"), chips: chips.map(text), linkLine: text(link), saveByLink: /Save/.test(text(link) ?? "") };
+  await hold("answer");
+  await fixtureClick(chips[0]!);
+  await appear(() => one("[data-slot=file-reader] [data-slot=file-reader-body] h1"));
+  await settle(200);
+  const reader = one("[data-slot=file-reader]");
+  const opened = {
+    title: text(one("h2", reader ?? document.body)),
+    heading: text(one("[data-slot=file-reader-body] h1", reader ?? document.body)),
+    items: all("[data-slot=file-reader-body] li", reader ?? document.body).map(text),
+    save: text(one("[data-slot=file-reader-save]", reader ?? document.body)),
+  };
+  await hold("reader");
+  await fixtureClick(one("[data-slot=file-reader-save]")!);
+  await appear(() => (calls.some((call) => call.startsWith("save_artifact")) ? document.body : null));
+  return { ...shown, opened, calls: [...calls] };
+}
+
+/**
  * A follow-up that joined a turn as it ended (queued, it ran in the same turn): once all is done,
  * the first request's answer stays in view under its fold, above the follow-up's bubble.
  */
@@ -936,7 +996,7 @@ async function driveTimer(): Promise<object> {
   return { asking, done, noWait: seen() };
 }
 
-void (drive === "implement" ? driveImplement() : drive === "joined" ? driveJoined() : drive === "update" ? driveUpdate() : drive === "filelink" ? driveFileLink() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
+void (drive === "implement" ? driveImplement() : drive === "joined" ? driveJoined() : drive === "update" ? driveUpdate() : drive === "filelink" ? driveFileLink() : drive === "answerfile" ? driveAnswerFile() : drive === "timer" ? driveTimer() : drive === "steer" ? driveSteer() : drive === "early" ? driveEarly() : drive === "hidden" ? driveHidden() : drive === "plan" ? drivePlan() : drive === "denied" ? driveDenied() : drive === "clip" ? driveClip() : drive === "edit" ? driveEdit() : drive === "loadfail" ? driveLoadFail() : drive === "select" ? driveSelect() : drive === "queue" ? driveQueue() : drive === "background" ? driveBackground() : driveTurn())
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

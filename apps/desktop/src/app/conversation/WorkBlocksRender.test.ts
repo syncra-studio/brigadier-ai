@@ -230,6 +230,27 @@ test("a finished answer's file chip holds still while a later turn works: never 
   assert.ok(seen.color, "the chip is there, in link blue");
 });
 
+test("a finished answer names its worker's file once, inline: nothing under the answer, no Save by the link; it opens in the reader, with Save there, in a Chat and a session", { timeout: 180000 }, async (t) => {
+  for (const kind of ["chat", "session"]) {
+    const seen = await drive<{
+      underAnswer: boolean; chips: (string | null)[]; linkLine: string | null; saveByLink: boolean;
+      opened: { title: string | null; heading: string | null; items: (string | null)[]; save: string | null }; calls: string[];
+    }>(t, `drive=answerfile&kind=${kind}`);
+    assert.deepEqual([seen.underAnswer, seen.chips, seen.saveByLink], [false, ["notes.md"], false], kind);
+    assert.equal(seen.linkLine, "Totals now round half-even, once, after tax. The cases I checked are in notes.md; the invoice test covers the two that failed.", kind);
+    // Its Markdown as the answer shows it, and its Save.
+    assert.deepEqual(seen.opened, {
+      title: "notes.md",
+      heading: "Rounding cases",
+      items: ["2.345 rounds to 2.34 (half-even)", "2.355 rounds to 2.36", "Totals are rounded once, after tax."],
+      save: "Save…",
+    }, kind);
+    assert.deepEqual(seen.calls.filter((call) => !call.startsWith("listFiles")), [
+      "resolveFileLink outputs/task-1/notes.md", "readArtifact blob-notes", "save_artifact blob-notes",
+    ], kind);
+  }
+});
+
 test("an ending that opens with Update: is the answer, its own Details folded where it changed code, in a session and a Chat", { timeout: 180000 }, async (t) => {
   for (const kind of ["session", "chat"]) {
     const seen = await drive<{ answers: (string | null)[]; updates: number; quotes: number; details: { summary: string | null; open: boolean }[]; opening: boolean }>(
