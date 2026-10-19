@@ -1,6 +1,9 @@
 /**
- * A long Settings page and a short one in the page frame every Settings page uses, the window's
- * height: the edges fade what scrolls under them as the conversation's do (`scroll-fade.tsx`).
+ * A long Settings page and a short one in the page frame every Settings page uses: the edges
+ * fade what scrolls under them as the conversation's do (`scroll-fade.tsx`). The frame is
+ * FRAME_PX high, not the window's height: a window's view differs by browser (Chrome on Linux
+ * draws 437px of an 800×600 window, its headless shell 600px), and the short page (500px) must
+ * fit with room to spare on every one.
  *
  * ?drive=1 scrolls the long page to its top, its middle and its end, reading at each which edge
  * fades content and the fades' look, then the short page's, to #settings-fade-result
@@ -13,6 +16,8 @@ import { createRoot } from "react-dom/client";
 import { SettingsCard, SettingsPage, SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 
 const params = new URLSearchParams(location.search);
+/** The page frame's height: the short page fits it with 220px to spare, the long one scrolls. */
+const FRAME_PX = 720;
 
 function Page({ sections }: { sections: number }) {
   return (
@@ -108,7 +113,7 @@ function Fixture() {
   }, []);
   return (
     <>
-      <div className="bg-background text-foreground h-screen w-full">
+      <div className="bg-background text-foreground w-full" style={{ height: FRAME_PX }}>
         <Page key={String(short)} sections={short ? 1 : 8} />
       </div>
       {result && <pre id="settings-fade-result">{result}</pre>}
