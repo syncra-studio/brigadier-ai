@@ -19,7 +19,9 @@ export const MOCKUP_TAB = "mockup";
 /** What the Review tab shows: a Source panel group's diffs ("Open Changes"), or one file's diff. */
 export type ReviewTarget =
   | { type: "changes"; staged: boolean }
-  | { type: "file"; path: string; staged: boolean };
+  | { type: "file"; path: string; staged: boolean }
+  /** One commit's own change: a merge's, from its turn's View changes. */
+  | { type: "commit"; commit: string; staged: false };
 
 /**
  * A page, file or browser tab's own chat, beside it in a split: `share` is the chat's part of
@@ -106,7 +108,14 @@ export type ConflictTabState = {
   kind: "conflict"; id: string; opener: string | null; path: string; view: ConflictView;
 };
 export type ConflictView = "conflict" | "compare" | "merge";
-export type SessionTab = FileTab | ReviewTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState | ConflictTabState;
+/**
+ * A view of the session's own records, opened from a row of its context card or the thread's end:
+ * its reviews and checks in full.
+ */
+export type PanelView = { type: "reviews" };
+export type PanelTabState = { kind: "panel"; id: string; opener: string | null; view: PanelView; title: string };
+
+export type SessionTab = FileTab | ReviewTabState | PanelTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState | ConflictTabState;
 export type NewTabKind = "newTab" | "terminal" | "browser" | "sideChat" | "page";
 
 export type SessionTabs = {
@@ -508,6 +517,15 @@ export function openPlanTab(conversationId: string, plan: PlanDocRef, title: str
   return id;
 }
 
+/** Shows `view` in its own tab: the tab already showing it, else a new one after the tab in front. */
+export function openPanelTab(conversationId: string, view: PanelView, title: string): string {
+  const id = `panel:${view.type}`;
+  update(conversationId, (current) => current.tabs.some((tab) => tab.id === id)
+    ? { ...current, active: id, tabs: current.tabs.map((tab) => tab.id === id && tab.kind === "panel" ? { ...tab, title } : tab) }
+    : { tabs: insertAfterActive(current, { kind: "panel", id, opener: current.active, view, title }), active: id });
+  return id;
+}
+
 /** Shows `path`'s conflicts in `view`: its tab when it has one, else a new one after the tab in front. */
 export function openConflictTab(conversationId: string, path: string, view: ConflictView = "conflict"): string {
   const id = `${view}:${path}`;
@@ -662,7 +680,7 @@ export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSave
     const tabs = (session.tabs as (SessionTab | LegacyDocumentTab)[]).flatMap((tab): SessionTab[] => {
       if (tab.kind === "terminal") return [{ ...tab, title: "" }];
       // The old Review tab of every change and its scope picker is gone.
-      if (tab.kind === "review" && tab.target.type !== "changes" && tab.target.type !== "file") return [];
+      if (tab.kind === "review" && tab.target.type !== "changes" && tab.target.type !== "file" && tab.target.type !== "commit") return [];
       // A popup its opener wrote (about:blank) is gone with its page: its tab starts empty.
       if (tab.kind === "browser" && !/^https?:/i.test(tab.url)) return [{ ...tab, url: "" }];
       if (tab.kind !== "document") return [tab];

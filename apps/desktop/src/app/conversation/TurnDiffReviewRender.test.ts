@@ -17,12 +17,13 @@ test("an answer's card reviews its files: Undo All, Keep All, Review Changes, pe
   assert.equal(seen.opened, "file:src/a.ts");
   assert.deepEqual(seen.keptOne.rows.map(([state]) => state), ["kept", "kept", "pending"]);
   assert.deepEqual(seen.asked, ["keepChanges src/a.ts", "undoPendingChanges src/c.ts"]);
-  // Done: the card stays as the turn's record, with no buttons.
-  assert.deepEqual([seen.done.title, seen.done.review, seen.done.buttons], ["Edited 3 files", "· kept 2, undid 1", ["View changed files"]]);
+  // Done: the card stays as the turn's record, with View changes only.
+  assert.deepEqual([seen.done.title, seen.done.review, seen.done.buttons], ["Edited 3 files", "· kept 2, undid 1", ["View changed files", "View changes"]]);
   assert.deepEqual(seen.done.rows, [["kept", "Kept"], ["kept", "Kept"], ["undone", "Undone"]]);
-  // A merge took the files that waited (#288): no Undo or Keep, the rows say Merged.
-  assert.deepEqual([seen.merged.title, seen.merged.review, seen.merged.buttons], ["Edited 3 files", "· kept 1, merged 2", ["View changed files"]]);
-  assert.deepEqual(seen.merged.rows, [["merged", "Merged"], ["kept", "Kept"], ["merged", "Merged"]]);
+  // A merge took the files that waited (#288): no Undo or Keep; the merge's own record says it
+  // merged, once, so no row says Merged.
+  assert.deepEqual([seen.merged.title, seen.merged.review, seen.merged.buttons], ["Edited 3 files", "· kept 1", ["View changed files", "View changes"]]);
+  assert.deepEqual(seen.merged.rows, [["merged", null], ["kept", "Kept"], ["merged", null]]);
   // A file put back as it was after the merge waits from the merged version, though the
   // request's own diff leaves it out (#333): its row is there, with Undo and Keep.
   assert.deepEqual([seen.putBack.title, seen.putBack.review], ["4 Files", "· 1 to review"]);

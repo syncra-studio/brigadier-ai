@@ -141,7 +141,8 @@ export function ReviewTab({
 }) {
   const single = target.type === "file" ? target : null;
   const staged = target.staged;
-  const scope = useMemo<ReviewScope>(() => ({ type: staged ? "staged" : "unstaged" }), [staged]);
+  const commit = target.type === "commit" ? target.commit : null;
+  const scope = useMemo<ReviewScope>(() => (commit ? { type: "commit", commit } : { type: staged ? "staged" : "unstaged" }), [commit, staged]);
   const options = useReview((s) => s.options);
   const [tick, setTick] = useState(0);
   const [wasActive, setWasActive] = useState(active);
@@ -189,7 +190,7 @@ export function ReviewTab({
     <div data-slot="review-tab" className="flex min-h-0 flex-1 flex-col">
       <div className="border-border flex h-control-lg shrink-0 items-center gap-1 border-b px-2">
         <span className="text-muted-foreground px-1.5 text-sm">
-          {staged ? "Staged Changes" : "Changes"}
+          {commit ? `Merge ${commit.slice(0, 7)}` : staged ? "Staged Changes" : "Changes"}
         </span>
         {review && review.files.length > 0 && (
           <Counts insertions={review.insertions} deletions={review.deletions} className="text-sm" />

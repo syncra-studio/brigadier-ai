@@ -130,7 +130,7 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   // The turn's diff card: "Edited 5 files +5 −5" and Undo; the first three files, a
   // folder dim before each name; then all five, and a row opens to its own diff.
   const { turnDiff } = seen;
-  assert.deepEqual([turnDiff.many.title, turnDiff.many.counts, turnDiff.many.buttons], ["Edited 5 files", "+5 −5", ["View changed files", "Undo"]]);
+  assert.deepEqual([turnDiff.many.title, turnDiff.many.counts, turnDiff.many.buttons], ["Edited 5 files", "+5 −5", ["View changed files", "Undo", "View changes"]]);
   assert.deepEqual(turnDiff.many.files, [["", "README.md"], ["src/", "math.js"], ["src/", "strings.js"]]);
   assert.equal(turnDiff.many.more, "Show 2 more files");
   assert.deepEqual(turnDiff.all, { files: 5, more: "Collapse files" });
@@ -142,8 +142,8 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.deepEqual([turnDiff.steered.title, turnDiff.steered.counts], ["Edited 2 files", "+2 −2"]);
   // Undo only where it can take the turn back whole: not across two requests, nor for a landing
   // with no candidate.
-  assert.deepEqual(turnDiff.steered.buttons, ["View changed files"]);
-  assert.deepEqual(turnDiff.direct.buttons, ["View changed files"]);
+  assert.deepEqual(turnDiff.steered.buttons, ["View changed files", "View changes"]);
+  assert.deepEqual(turnDiff.direct.buttons, ["View changed files", "View changes"]);
   // One file: its name is the title, and there is no list.
   assert.deepEqual([turnDiff.one.title, turnDiff.one.files, turnDiff.one.more], ["Edited run.mjs", [], null]);
   // Its title opens the turn's own diff of it in place, as a row would.

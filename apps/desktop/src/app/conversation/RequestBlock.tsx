@@ -2,6 +2,7 @@ import {
   ActionBarPrimitive,
   MessagePrimitive,
   type TextMessagePartProps,
+  TextMessagePartProvider,
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
@@ -25,7 +26,7 @@ import { WorkFold } from "@/app/conversation/WorkFold";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { ImagesRow, MadeImages } from "@/app/conversation/activity/ImageRows";
-import { MergeMessage } from "@/app/conversation/activity/MergeMessage";
+import { MergeHeader, MergeWarning, TurnProofs, useTurnMerge } from "@/app/conversation/activity/MergeMessage";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
@@ -61,6 +62,7 @@ import {
   turnTime,
   waitedTime,
   waitsOnCard,
+  withoutUpdateMark,
 } from "@/app/conversation/blocks";
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
 import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
@@ -344,6 +346,31 @@ function CardEntry({ card }: { card: BlockCard }) {
       <Suspense fallback={null}>
         <CardBody type={card.type} id={card.id} />
       </Suspense>
+    </div>
+  );
+}
+
+/** A late note as the user reads it: its "Update:" marker, which tells it from the answer, left out. */
+const UpdateText: FC<TextMessagePartProps> = (props) => (
+  <TextMessagePartProvider text={withoutUpdateMark(props.text)}>
+    <MessageText {...props} text={withoutUpdateMark(props.text)} />
+  </TextMessagePartProvider>
+);
+
+/**
+ * The end of a finished turn under its answer: its proofs as thumbnails, its Edited files card
+ * with the merge that took them (or the merge's own header), then one plain line when something
+ * about the merged code is really wrong.
+ */
+function TurnEnd({ meta }: { meta: BlockMeta }) {
+  const merge = useTurnMerge(meta.orchestratorSteps, meta.requestIds);
+  // A run's work is merged from its card, never undone behind the run's back.
+  const card = meta.session && !isRunRequest(meta.requestId);
+  return (
+    <div data-slot="turn-end" className="mt-activity flex flex-col gap-3 empty:hidden">
+      <TurnProofs steps={meta.orchestratorSteps} />
+      {card ? <TurnDiff requestIds={meta.requestIds} merge={merge} /> : merge?.own && <MergeHeader merge={merge.merge} />}
+      {merge?.own && <MergeWarning merge={merge.merge} />}
     </div>
   );
 }
@@ -916,14 +943,14 @@ export const RequestBlock: FC = () => {
             )}
             {/* Answered, it may still wait for another session's reply: that line stays under the answer. */}
             {answering !== null && <AnsweredStatus {...status} waiting={meta.state === "waiting"} reopened={meta.state === "working" && reopenedSince(meta.worked, answerAtMs)} />}
-            {/* A late event's "Update: …" line: small, under the answer, never a new answer. */}
+            {/* A late event's note: a plain short paragraph under the answer, never a new answer. */}
             {updates.map((index) => (
               <div
                 key={`update:${index}`}
                 data-slot="answer-update"
-                className="text-foreground/80 border-foreground/15 mt-activity border-s-2 ps-3 text-sm leading-relaxed wrap-break-word"
+                className="text-foreground mt-activity leading-relaxed wrap-break-word"
               >
-                <ReplyText index={index} streaming={false} />
+                <MessagePrimitive.PartByIndex index={index} components={{ Text: UpdateText }} />
               </div>
             ))}
           </>
@@ -933,8 +960,7 @@ export const RequestBlock: FC = () => {
       </StoppedBy.Provider>
       {/* A run's work is merged from its card, never undone behind the run's back. */}
       {!live && <MadeImages steps={meta.orchestratorSteps} />}
-      {!live && <MergeMessage steps={meta.orchestratorSteps} />}
-      {!live && meta.session && !isRunRequest(meta.requestId) && <TurnDiff requestIds={meta.requestIds} />}
+      {!live && <TurnEnd meta={meta} />}
       {!meta.session && <TurnMemories requestIds={meta.requestIds} />}
       <BlockError meta={meta} live={live} />
       {answer !== null && (

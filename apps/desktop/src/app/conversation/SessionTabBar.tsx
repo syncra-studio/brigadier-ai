@@ -1,4 +1,4 @@
-import { Archive, Chat, ChatCompose, Dock, Globe, Lightbulb, Plus, Document, X } from "@openai/apps-sdk-ui/components/Icon";
+import { Archive, Chat, ChatCompose, Dock, Globe, Lightbulb, Plus, Document, ShieldCheck, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -68,6 +68,7 @@ function baseName(path: string): string {
 export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "review") {
     if (tab.target.type === "changes") return tab.target.staged ? "Staged Changes" : "Changes";
+    if (tab.target.type === "commit") return `Merge ${tab.target.commit.slice(0, 7)}`;
     return `${baseName(tab.target.path)} (diff)`;
   }
   if (tab.kind === "newTab") return "New tab";
@@ -77,6 +78,7 @@ export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "page") return tab.title || "Untitled page";
   if (tab.kind === "mockup") return "Mockup";
   if (tab.kind === "plan") return tab.title || "Plan";
+  if (tab.kind === "panel") return tab.title;
   if (tab.kind === "conflict") {
     return tab.view === "compare" ? `${baseName(tab.path)}: Current Changes ↔ Incoming Changes`
       : tab.view === "merge" ? `Merging: ${baseName(tab.path)}` : baseName(tab.path);
@@ -449,7 +451,8 @@ export function SessionTabBar({
                         : tab.kind === "sideChat" ? <ChatCompose className="size-icon-sm shrink-0" />
                         : tab.kind === "page" ? <Document className="size-icon-sm shrink-0" />
                         : tab.kind === "mockup" ? <MockupTabIcon conversationId={id} />
-                        : tab.kind === "plan" ? <Lightbulb className="size-icon-sm shrink-0" /> : (
+                        : tab.kind === "plan" ? <Lightbulb className="size-icon-sm shrink-0" />
+                        : tab.kind === "panel" ? <ShieldCheck className="size-icon-sm shrink-0" /> : (
                         <DiffGlyph className="size-icon-sm shrink-0" />
                       )}
                       <span className={cn("session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap", tab.kind === "file" && tab.preview && "italic", tab.kind === "conflict" && tab.view !== "compare" && "text-destructive")}>
@@ -586,6 +589,7 @@ const BrowserTab = lazy(() => import("./BrowserTab").then((module) => ({ default
 const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ default: module.SideChatTab })));
 const MainTerminalTab = lazy(() => import("./MainTerminalTab").then((module) => ({ default: module.MainTerminalTab })));
 const MockupView = lazy(() => import("./MockupTab").then((module) => ({ default: module.MockupView })));
+const ReviewsTab = lazy(() => import("./ReviewsTab").then((module) => ({ default: module.ReviewsTab })));
 const PlanTab = lazy(() => import("./PlanTab").then((module) => ({ default: module.PlanTab })));
 const ConflictTab = lazy(() => import("./ConflictTab").then((module) => ({ default: module.ConflictTab })));
 const PageTabView = lazy(() => import("./pages/PageTabView").then((module) => ({ default: module.PageTabView })));
@@ -638,6 +642,7 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
                 <div data-main-terminal className="flex min-h-0 flex-1 flex-col"><MainTerminalTab conversationId={conversationId} tab={tab} active={shown} /></div>
               ) : tab.kind === "mockup" ? <MockupView conversationId={conversationId} active={shown} />
                 : tab.kind === "plan" ? <PlanTab plan={tab.plan} />
+                : tab.kind === "panel" ? <ReviewsTab conversationId={conversationId} />
                 : tab.kind === "conflict" ? <ConflictTab conversationId={conversationId} tab={tab} />
                 : (
                   <TabWithChat conversationId={conversationId} tab={tab}>

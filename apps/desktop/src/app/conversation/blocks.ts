@@ -77,6 +77,12 @@ export function isUpdate(text: string): boolean {
   return /^(\*\*|__)?update(\*\*|__)?:/i.test(body) && !/\n[ \t]*\n/.test(body) && !/^#{1,6}[ \t]/m.test(body);
 }
 
+/** A late note's words without its "Update:" marker, first letter up: the marker is for the app. */
+export function withoutUpdateMark(text: string): string {
+  const body = text.trim().replace(/^(\*\*|__)?update(\*\*|__)?:(\*\*|__)?[ \t]*/i, "");
+  return body ? `${body.charAt(0).toUpperCase()}${body.slice(1)}` : text;
+}
+
 /**
  * A row of a block's work that updates in place: a worker's task, with its landing folded into
  * it. An older task's checks open from its row; an older overnight phase's checks are workers

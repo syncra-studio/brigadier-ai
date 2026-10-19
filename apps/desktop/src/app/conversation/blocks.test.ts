@@ -25,6 +25,7 @@ import {
   type SequenceEntry,
   type ThreadNode,
   updateIndices,
+  withoutUpdateMark,
 } from "@/app/conversation/blocks";
 import { splitReport } from "@/app/conversation/phaseView";
 import { checkersOf, checkResult, checksCount, machineWords, taskRowDetail, taskState } from "@/app/conversation/rowWords";
@@ -383,6 +384,15 @@ test("an ending that opens with Update: is the answer, not an update line under 
   assert.equal(isUpdate("Update: CI passed on c9cb8b3.\n- build\n- tests"), true);
   assert.equal(isUpdate("Update: done.\n\nMore words."), false);
   assert.equal(isUpdate("Update: done.\n### Details\n- tests"), false);
+});
+
+test("a late note keeps its marker for the app and reads as plain words, the answer staying the answer", () => {
+  // An answer, then a late note: the answer stays in view, the note under it.
+  const texts = [{ update: false }, { update: isUpdate("Update: CI passed on c9cb8b3.") }];
+  assert.equal(answerIndex(texts, true), 0);
+  assert.deepEqual(updateIndices(texts, 0), [1]);
+  assert.equal(withoutUpdateMark("Update: CI passed on c9cb8b3."), "CI passed on c9cb8b3.");
+  assert.equal(withoutUpdateMark("**Update:** the review's two fixes landed."), "The review's two fixes landed.");
 });
 
 test("a working request shows a reply written after its work in place: only a done one has an answer", () => {

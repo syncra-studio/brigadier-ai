@@ -8,6 +8,7 @@ import { type FC, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
+import { MergeHeader, MergeRevert, MergeViewChanges, mergeWords, type TurnMerge } from "@/app/conversation/activity/MergeMessage";
 import { isFinal } from "@/app/conversation/blocks";
 import { mergeStats } from "@/app/conversation/ComposerCapsule";
 import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
@@ -175,8 +176,8 @@ const FileRow: FC<{
   );
 };
 
-/** Where the review left a file, as its row says it. */
-const REVIEWED: Record<Exclude<FileReview, "pending">, string> = { later: "Changed later", kept: "Kept", undone: "Undone", merged: "Merged" };
+/** Where the review left a file, as its row says it; a merge says so once, in the card's header. */
+const REVIEWED: Record<Exclude<FileReview, "pending">, string | null> = { later: "Changed later", kept: "Kept", undone: "Undone", merged: null };
 
 /**
  * One changed file of a reviewed turn: a row that opens the file's tab (its review while it
@@ -204,7 +205,7 @@ const ReviewRow: FC<{
         </Button>
       </span>
     ) : (
-      state && <span data-slot="turn-diff-reviewed" className="text-muted-foreground shrink-0 text-xs">{REVIEWED[state]}</span>
+      state && REVIEWED[state] && <span data-slot="turn-diff-reviewed" className="text-muted-foreground shrink-0 text-xs">{REVIEWED[state]}</span>
     )}
     {file.binary ? (
       <span className="text-muted-foreground text-xs">binary</span>
@@ -238,14 +239,17 @@ export function useTurnChanged(requestIds: readonly string[]): boolean {
  * The card under a finished turn's answer: "Edited 3 files" (or the one file's name) over
  * "+a −d", which says "View changes ↗" while hovered and opens the first file (a lone file's diff
  * in place), then Undo (where one request's changes can be taken back whole), which turns into
- * Reapply. With more than one file it lists them, the first three, each opening to its diff. It sums what each of the turn's requests
+ * Reapply, and View changes. Once a merge took them (this turn's or a later one's), the header
+ * says so after the counts, with Revert in Undo's place and View changes showing the merge
+ * commit; a turn that merged with nothing of its own counted shows the merge's own header
+ * instead. With more than one file it lists them, the first three, each opening to its diff. It sums what each of the turn's requests
  * recorded of its own changes (the thread's own edits and commands and its workers' landings,
  * never what the user changed meanwhile), and for a request from before that was kept, what its
  * workers landed; a message steered in takes over the worker it speaks to. A turn that changed
  * nothing has no card. A landing with no stats of its own (a worker that landed straight onto
  * the branch) is counted from the Review diff.
  */
-export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) => {
+export const TurnDiff: FC<{ requestIds: readonly string[]; merge?: TurnMerge | null }> = ({ requestIds, merge = null }) => {
   const conversationId = useViewConversation()?.id ?? null;
   // What each request recorded of its own changes.
   const recorded = useBoard(useShallow((s) => requestIds.map((id) => s.board?.requests[id]?.changes ?? null)));
@@ -305,7 +309,8 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
   );
   const diff = known ?? fetched?.stat ?? null;
   const [first] = requests;
-  if (!diff || !conversationId || first === undefined) return null;
+  // A turn that merged with nothing of its own to count still shows its merge, with Revert.
+  if (!diff || !conversationId || first === undefined) return merge?.own ? <MergeHeader merge={merge.merge} /> : null;
 
   // A file the review has that the requests' net diff leaves out (put back as it was after a
   // merge) still gets its row (#333).
@@ -325,6 +330,9 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
   const more = files.length - FIRST_FILES;
   const waiting = files.filter((file) => review[file.path] === "pending").map((file) => file.path);
   const tally = (state: FileReview) => Object.values(review).filter((each) => each === state).length;
+  const merged = merge ? ` · ${mergeWords(merge.merge)}` : "";
+  const reviewed = [tally("kept") > 0 && `kept ${tally("kept")}`, tally("undone") > 0 && `undid ${tally("undone")}`].filter(Boolean).join(", ");
+  const openFirst = () => (!reviewing && one ? flip(only!.path) : openFileTab(conversationId, waiting[0] ?? files[0]!.path));
   // Undo All and Keep All take this card's files that wait, one after another; one refused
   // (its toast says why) leaves the rest to go on.
   const each = (what: "keep" | "undo", paths: readonly string[]) => {
@@ -374,7 +382,7 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
         <button
           type="button"
           aria-label="View changed files"
-          onClick={() => (!reviewing && one ? flip(only!.path) : openFileTab(conversationId, waiting[0] ?? files[0]!.path))}
+          onClick={openFirst}
           className="flex min-w-0 flex-1 items-center gap-3 text-start"
         >
           <span className="bg-foreground/5 text-foreground rounded-control flex size-control-lg shrink-0 items-center justify-center">
@@ -393,16 +401,15 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
                 <span data-slot="turn-diff-review" className="text-muted-foreground">
                   {waiting.length > 0
                     ? ` · ${waiting.length} to review`
-                    : ` · ${[tally("kept") > 0 && `kept ${tally("kept")}`, tally("undone") > 0 && `undid ${tally("undone")}`, tally("merged") > 0 && `merged ${tally("merged")}`].filter(Boolean).join(", ")}`}
+                    : `${reviewed ? ` · ${reviewed}` : ""}${merged}`}
                 </span>
               </span>
             ) : (
               <>
-                <Counts
-                  insertions={diff.insertions}
-                  deletions={diff.deletions}
-                  className="text-xs group-hover/diff:hidden"
-                />
+                <span className="text-xs group-hover/diff:hidden">
+                  <Counts insertions={diff.insertions} deletions={diff.deletions} />
+                  {merged && <span data-slot="turn-diff-merged" className="text-muted-foreground">{merged}</span>}
+                </span>
                 <span className="text-muted-foreground hidden items-center gap-0.5 text-xs group-hover/diff:flex">
                   View changes
                   <ArrowUpRight className="size-icon-xs" />
@@ -424,7 +431,8 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
             </Button>
           </>
         )}
-        {!reviewing && undoable && <Button
+        {merge && !(reviewing && waiting.length > 0) && <MergeRevert merge={merge.merge} />}
+        {!merge && !reviewing && undoable && <Button
           variant="ghost"
           size="sm"
           data-held={held.length || undefined}
@@ -443,6 +451,14 @@ export const TurnDiff: FC<{ requestIds: readonly string[] }> = ({ requestIds }) 
             <ArrowRotateCcw className="size-icon-sm" />
           )}
         </Button>}
+        {!(reviewing && waiting.length > 0) &&
+          (merge ? (
+            <MergeViewChanges merge={merge.merge} />
+          ) : (
+            <Button variant="ghost" size="sm" data-slot="turn-diff-view" onClick={openFirst} className="border-border border font-normal">
+              View changes
+            </Button>
+          ))}
       </div>
       {/* One file of an old card: its title opens the turn's own diff here, as a row would. */}
       {(!one || (!reviewing && opened.size > 0)) && (

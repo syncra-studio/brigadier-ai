@@ -7,9 +7,9 @@
  *   with Undo and Keep while it waits, and "Kept" once kept.
  * - Review Changes opens the first waiting file's tab; a row's Keep keeps that file; Undo All
  *   undoes the rest.
- * - Done: "Edited 3 files", "· kept 2, undid 1", no buttons.
- * - Merged while two files waited: "Edited 3 files", "· kept 1, merged 2", no buttons, those
- *   rows "Merged".
+ * - Done: "Edited 3 files", "· kept 2, undid 1", View changes only.
+ * - Merged while two files waited: "Edited 3 files", "· kept 1", View changes only, those rows
+ *   with no word (the merge says it once).
  * - A file put back as it was after the merge (#333), which the request's own diff leaves out:
  *   "4 Files", "· 1 to review", its row with Undo and Keep; alone, "1 File", "· 1 to review".
  */
