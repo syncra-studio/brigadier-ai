@@ -13,6 +13,9 @@
  *   opens the file, "+7 −2", a dot on the made and the deleted file, the diff numbered.
  * - Images the thread looked at ("Viewed 2 images") and made ("Created an image"), opening to
  *   tiles; the images a turn made, gathered.
+ * - Images being made ("Creating 3 images"): the row open at once, a dot grid in the place of
+ *   each image still being made, beside the one made already; one finishes into its tile in the
+ *   same place, one fails and leaves nothing. `making=1` measures only these.
  * - Background terminals: running, finished (opening to its output), stopped.
  * - A Codex find in a page: "Searched the web for 'LTS' in https://nodejs.org/en".
  * - The turn's changed files from the request's own record: one file named in the title; four
@@ -190,6 +193,20 @@ const shellEdits = tool(16, {
 const findStep = tool(14, { itemId: "find", name: "web_search", detail: "'LTS' in https://nodejs.org/en", item: "web" });
 const views = [tool(20, { itemId: "view-1", name: "view_image", item: "image" }), tool(21, { itemId: "view-2", name: "view_image", item: "image" })];
 const made = [tool(22, { itemId: "made", name: "imagegen", detail: "a purple square", item: "image" })];
+/** Being made: one made already, one that finishes, one that fails, when `settle` says. */
+let settle: () => void = () => {};
+function MakingRow() {
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    settle = () => setSettled(true);
+  }, []);
+  const steps = [
+    tool(23, { itemId: "made-2", name: "imagegen", detail: "a teal square", item: "image" }),
+    tool(24, { itemId: "made-3", name: "imagegen", detail: "an orange square", item: "image", status: settled ? "completed" : "inProgress" }),
+    tool(25, { itemId: "made-4", name: "imagegen", detail: "a red square", item: "image", status: settled ? "failed" : "inProgress" }),
+  ];
+  return <ImagesRow steps={steps} />;
+}
 const bg = (itemId: string, position: number) => tool(position, { itemId, name: "mcp__brigadier__run", detail: "npm run dev -- --port 5173", item: "command" });
 
 /** The live group, its steps moving on as `grow` says: the running commands hear more output. */
@@ -249,6 +266,9 @@ function Page() {
             </Case>
             <Case id="made">
               <ImagesRow steps={made} />
+            </Case>
+            <Case id="making">
+              <MakingRow />
             </Case>
             <Case id="made-gathered">
               <MadeImages steps={[...views, ...made]} />
@@ -353,6 +373,8 @@ async function measure(): Promise<object> {
   await until(() => all("[data-slot=image-tile] img", at("made-gathered")).length === 1);
   out.gathered = all("[data-slot=image-tile] img", at("made-gathered")).map((image) => image.getAttribute("alt"));
 
+  out.making = await measureMaking();
+
   // Background terminals: their words; a finished one opens to its output.
   out.background = all("[data-slot=background-run-row]", at("background")).map((row) => ({
     row: text(row),
@@ -411,6 +433,33 @@ async function measure(): Promise<object> {
   return out;
 }
 
+/**
+ * Images being made, untouched: the row's words and whether it's open, each dot grid's and
+ * tile's box from the row's corner, the dots' animation; then, once they settle, the tiles.
+ */
+async function measureMaking(): Promise<object> {
+  const row = () => one("[data-slot=images-row]", at("making"))!;
+  const grids = () => all("[data-slot=image-generation]", at("making"));
+  const tiles = () => all("[data-slot=image-tile]", at("making"));
+  const box = (element: Element) => {
+    const corner = row().getBoundingClientRect();
+    const { left, top, width, height } = element.getBoundingClientRect();
+    return { x: Math.round(left - corner.left), y: Math.round(top - corner.top), width: Math.round(width), height: Math.round(height) };
+  };
+  await until(() => one("[data-case=making] [data-slot=images-row]"));
+  await until(() => grids().length === 2 && all("img", at("making")).length === 1);
+  const making = {
+    row: text(one("[role=button]", row())),
+    open: row().getAttribute("data-state"),
+    grids: grids().map((grid) => ({ label: grid.getAttribute("aria-label"), box: box(grid) })),
+    tiles: tiles().map(box),
+    animation: getComputedStyle(one("[data-slot=image-generation] span", at("making"))!).animationName,
+  };
+  settle();
+  await until(() => grids().length === 0 && all("img", at("making")).length === 2);
+  return { making, made: { row: text(one("[role=button]", row())), open: row().getAttribute("data-state"), grids: grids().length, tiles: tiles().map(box) } };
+}
+
 /** One case on its own, for a screenshot: its rows opened, once each. */
 async function openCase(): Promise<object> {
   await wait(300);
@@ -429,7 +478,7 @@ async function openCase(): Promise<object> {
   return { opened: query.get("case") };
 }
 
-void (query.get("case") ? openCase() : measure())
+void (query.get("case") ? openCase() : query.get("making") ? measureMaking() : measure())
   .catch((error: unknown) => ({ error: String(error) }))
   .then(async (result) => {
     if (query.get("stop") === "1") await new Promise(() => {});

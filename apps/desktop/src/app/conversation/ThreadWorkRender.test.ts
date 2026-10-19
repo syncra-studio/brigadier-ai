@@ -3,6 +3,31 @@ import { test } from "node:test";
 
 import { renderFixtureLive } from "@/fixtures/headless";
 
+type Box = { x: number; y: number; width: number; height: number };
+type Making = {
+  making: { row: string; open: string | null; grids: { label: string | null; box: Box }[]; tiles: Box[]; animation: string };
+  made: { row: string; open: string | null; grids: number; tiles: Box[] };
+};
+
+/**
+ * Images being made: the row open without a click, a dot grid where each image still being made
+ * goes, at a tile's size beside the one made already; finished, its tile lands in the grid's own
+ * box, and the one that failed leaves nothing.
+ */
+function assertMaking(seen: unknown, animation: string) {
+  const { making, made } = seen as Making;
+  assert.deepEqual([making.row, making.open], ["Creating 3 images", "open"]);
+  assert.deepEqual(making.grids.map((grid) => grid.label), ["Creating an image", "Creating an image"]);
+  const [tile] = making.tiles;
+  assert.ok(tile);
+  assert.deepEqual([tile.width, tile.height], [80, 80]);
+  for (const { box } of making.grids) assert.deepEqual([box.y, box.width, box.height], [tile.y, tile.width, tile.height]);
+  assert.ok(tile.x < making.grids[0]!.box.x && making.grids[0]!.box.x < making.grids[1]!.box.x, JSON.stringify(making));
+  assert.equal(making.animation, animation);
+  assert.deepEqual([made.row, made.open, made.grids], ["Created 3 images", "open", 0]);
+  assert.deepEqual(made.tiles, [tile, making.grids[0]!.box]);
+}
+
 test("the thread's own work reads like the reference thread: running commands stream, a row per edited file, image rows, background terminals, the turn's changes from its own record", { timeout: 120000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "thread-work.html", "thread-work-result", 90000)) as Record<string, unknown> & { error?: string };
   assert.equal(seen.error, undefined);
@@ -52,6 +77,7 @@ test("the thread's own work reads like the reference thread: running commands st
   assert.deepEqual(seen.images, { viewed: "Viewed 2 images", made: "Created an image" });
   assert.deepEqual(seen.viewedTiles, ["Inspected image", "Inspected image"]);
   assert.deepEqual(seen.gathered, ["Created image"]);
+  assertMaking(seen.making, "pulse");
 
   // Background terminals, by how they stand; a finished one opens to its output.
   assert.deepEqual(seen.background, [
@@ -86,4 +112,10 @@ test("the thread's own work reads like the reference thread: running commands st
   // The working request's pill, from its record; a click opens its first file's tab.
   assert.match(String(seen.pill), /^2 files changed ?\+11 −2$/);
   assert.equal(seen.pillTab, "src/math.js");
+});
+
+test("an image being made holds its tile's place without pulsing when the user asks for less motion", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-work.html?making=1", "thread-work-result", 60000, { reducedMotion: true })) as { error?: string };
+  assert.equal(seen.error, undefined);
+  assertMaking(seen, "none");
 });

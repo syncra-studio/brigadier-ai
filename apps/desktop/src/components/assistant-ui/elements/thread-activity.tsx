@@ -25,9 +25,11 @@ function showInGroup(row: HTMLElement) {
 }
 
 /** One row of a thread's activity that opens to its detail when it has one. */
-export function ThreadActivity({ detail, detailClassName, className, children, onOpenChange, ...props }: ComponentProps<"div"> & {
+export function ThreadActivity({ detail, detailClassName, defaultOpen = false, className, children, onOpenChange, ...props }: ComponentProps<"div"> & {
   detail?: ReactNode;
   detailClassName?: string;
+  /** Opened from the start, as if the user had opened it. */
+  defaultOpen?: boolean;
   /** The row opened or closed. */
   onOpenChange?: (open: boolean) => void;
 }) {
@@ -41,7 +43,7 @@ export function ThreadActivity({ detail, detailClassName, className, children, o
     told?.(open);
     if (open) requestAnimationFrame(() => root.current && showInGroup(root.current));
   };
-  return <Collapsible ref={root} {...props} onOpenChange={opened}>
+  return <Collapsible ref={root} {...props} defaultOpen={defaultOpen} onOpenChange={opened}>
     <CollapsibleTrigger asChild>
       <div role="button" tabIndex={0}
         onKeyDown={(event) => {
