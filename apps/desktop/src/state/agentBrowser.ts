@@ -141,9 +141,13 @@ async function perform(call: BrowserCall, hands: PageHands): Promise<BrowserResu
     selectTab(conversationId, tab.id);
     return { result: "shown", tab: tab.id };
   }
-  const users = !isAgentTab(tab);
+  // Worked only with a driver, which the user's input in the tab pauses: one opened just to show
+  // the user (open_in_app) is read until browser_open goes on in it.
+  const users = !tab.driver;
   if (users && op.op !== "read" && op.op !== "screenshot")
-    return failed(`Tab ${tab.id} is the user's: you may read it, not click, type, navigate or close it. Open your own with browser_open.`);
+    return failed(isAgentTab(tab)
+      ? `Tab ${tab.id} was opened for the user to see: you may read it. To work in it, browser_open its address; that goes on in this tab.`
+      : `Tab ${tab.id} is the user's: you may read it, not click, type, navigate or close it. Open your own with browser_open.`);
   // The user took it over: nothing is done until they press Continue.
   if (!users && isPaused(tab.id)) return { result: "paused", tab: tab.id };
   // Its page goes with a restart: it loads again where it was.

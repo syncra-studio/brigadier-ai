@@ -273,6 +273,27 @@ test("the user's own Browser tab may be read and pictured, never worked", async 
   assert.equal(sessionTabs(SESSION).active, CHAT_TAB);
 });
 
+test("a tab opened to show the user is only read until browser_open goes on in it, so the user's input pauses the agent", async () => {
+  useApp.setState((state) => ({ settings: { ...state.settings, browserEnabled: true } }));
+  const shell = fakeShell(reads);
+  const url = "http://127.0.0.1:4000/shown";
+  const shown: AppCall = { id: `app-call-${++calls}`, conversationId: SESSION, taskId: null, label: "", op: { app: "open", target: { kind: "url", url }, show: false } };
+  await runAppCall(shown);
+  const tab = sessionTabs(SESSION).tabs.find((each) => each.kind === "browser" && each.url === url)!.id;
+  const click: BrowserOp = { op: "click", tab, target: "e1", guard: { declared: null, approved: null } };
+  const refused = await answered(shell, click);
+  assert.equal(refused.result, "failed");
+  assert.match((refused as Extract<BrowserResult, { result: "failed" }>).message, /opened for the user to see/);
+  assert.equal(shell.scripts.length, 0, "nothing was done on its page");
+  assert.equal((await answered(shell, { op: "read", tab })).result, "page");
+
+  assert.equal(tabOf(await answered(shell, open(url, "req-a"))), tab, "browser_open goes on in it");
+  assert.equal((await answered(shell, click)).result, "page");
+  userUsed(tab);
+  assert.equal(isPaused(tab), true, "now the user's input pauses the agent");
+  handBack(tab);
+});
+
 test("an open goes on in the agents' tab already on that page, not another one of it (issues 418, 424)", async () => {
   useApp.setState((state) => ({ settings: { ...state.settings, browserEnabled: true } }));
   const shell = fakeShell(reads);
