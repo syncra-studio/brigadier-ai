@@ -26,6 +26,7 @@ type Seen = {
   cancelled: string[];
   revertedOpen: number;
   sent: string[];
+  foldedRevert: [string | null, boolean];
 };
 
 const FIRST = [["public/", "index.html", "+11 −2"], ["src/", "server.js", "+22 −5"], ["src/", "store.js", "+5 −0"]];
@@ -58,6 +59,8 @@ test("the Changes card: merged with a finding, folded, all files, Revert's quest
     ["reverted", "Reverted 6 files", "Undone on main · 4:02 PM", [], ["Redo", "Show the files"]],
   );
   assert.equal(seen.revertedOpen, 3);
+  // Revert on a folded card opens it to its question, never a question hidden in the fold.
+  assert.deepEqual(seen.foldedRevert, ["Revert these 6 files on main?Adds one commit that undoes +88 −7. Work merged after this stays.CancelRevert 6 files", true]);
   // Reverted through the thread (a later merge, the session reads Merged): git's revert says so.
   const thread = cases["thread-reverted"];
   assert.deepEqual([thread.state, thread.title, thread.status, thread.buttons], ["reverted", "Reverted 6 files", "Undone on main · 4:02 PM", ["Redo", "Show the files"]]);

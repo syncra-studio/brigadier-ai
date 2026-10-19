@@ -237,6 +237,10 @@ async function drive() {
   button("reverted", "Redo")?.click();
   await until(() => sent.length >= 3);
   out.sent = sent;
+  // Revert on a folded card opens it to the question.
+  button("collapsed", "Revert")?.click();
+  await until(() => !!look("collapsed").confirm, 2000);
+  out.foldedRevert = [look("collapsed").confirm, !!at("collapsed")?.querySelector("[data-slot=turn-diff][data-open]")];
   return out;
 }
 

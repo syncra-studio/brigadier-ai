@@ -403,7 +403,16 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
     actions = (
       <>
         {revertText && !confirming && !reverting && (
-          <QuietPill className={QUIET} data-slot="merge-revert" title={revertText} onClick={() => setConfirming(true)}>
+          <QuietPill
+            className={QUIET}
+            data-slot="merge-revert"
+            title={revertText}
+            onClick={() => {
+              setConfirming(true);
+              // Folded, the card opens to its question.
+              if (!open) setFold({ reverted, open: true });
+            }}
+          >
             <ArrowRotateCcw aria-hidden className="size-icon-sm" />
             Revert
           </QuietPill>
