@@ -34,13 +34,30 @@
   transition: opacity var(--intro-leave) var(--intro-ease);
 }
 
-.welcome-mark {
+/* The name: the mark over the question and its field, centred between the strip along the top
+   and Continue near the bottom. */
+.welcome-name {
   position: absolute;
-  top: 50%;
-  left: 50%;
+  inset: var(--spacing-titlebar) 0 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.welcome-name-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-inline: 2rem;
+  text-align: center;
+}
+
+.welcome-mark {
   width: var(--intro-mark-size);
   height: var(--intro-mark-size);
-  margin: calc(var(--intro-mark-size) / -2) 0 0 calc(var(--intro-mark-size) / -2);
+  flex-shrink: 0;
   color: var(--foreground);
   pointer-events: none;
 }
@@ -77,30 +94,19 @@
   animation: intro-mark var(--intro-mark-for) linear var(--intro-mark-at) both;
 }
 
-/* Above the name, the mark rests over the question. */
-.welcome[data-step="name"] .welcome-mark {
-  transform: translateY(-5.5rem) scale(var(--intro-mark-rest));
-  animation: onboarding-in var(--onboarding-step-in) var(--intro-ease) both;
-}
-
-/* The heading and its line, centred; or the name form, below the mark's rest. */
+/* The welcome's heading and its button, centred. */
 .welcome-copy {
   position: absolute;
-  top: calc(50% - 1rem);
+  top: 50%;
   left: 0;
   right: 0;
+  translate: 0 -50%;
   margin-inline: auto;
-  width: min(var(--container-onboarding), calc(100% - 4rem));
+  width: calc(100% - 4rem);
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-}
-
-.welcome[data-step="intro"] .welcome-copy {
-  top: 50%;
-  translate: 0 -50%;
-  width: calc(100% - 4rem);
 }
 
 /* The welcome's title: big, bold and white, two centred lines. */
@@ -117,11 +123,13 @@
   display: block;
 }
 
+/* The name's question: 56 over it, 36 under it. */
 .welcome-heading {
+  padding: 3.5rem 0 2.25rem;
   font-size: var(--welcome-heading);
-  line-height: 1.15;
+  line-height: 1.2;
   letter-spacing: var(--onboarding-heading-tracking);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .stagger-word {
@@ -134,19 +142,16 @@
   transform-origin: 0 100%;
 }
 
-/* Level with the steps' footer buttons (parts.tsx: pb-8, gap-3, then a text-xs note), so
-   Continue doesn't jump going from the name to the agents. */
-.welcome-continue {
-  position: absolute;
-  left: 50%;
-  bottom: calc(var(--spacing) * 11 + var(--text-xs--line-height));
-  translate: -50% 0;
+/* The name's Continue, centred 56 above the window's bottom. */
+.welcome-name .welcome-continue {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: center;
+  padding-bottom: 3.5rem;
 }
 
 /* On the welcome, the button sits right under the title. */
 .welcome[data-step="intro"] .welcome-continue {
-  position: static;
-  translate: none;
   margin-top: var(--welcome-title-gap);
 }
 
@@ -164,7 +169,7 @@
 
 /* ── The name, after the intro ─────────────────────────────────────────────────────────── */
 
-.welcome[data-step="name"] .welcome-copy {
+.welcome-name > * {
   animation: onboarding-in var(--onboarding-step-in) var(--intro-ease) both;
 }
 
@@ -231,7 +236,30 @@ html[data-intro="staged"] #root {
   font-size: var(--onboarding-heading);
   line-height: 1.2;
   letter-spacing: var(--onboarding-heading-tracking);
+  font-weight: 600;
+}
+
+.onboarding-heading-small {
+  font-size: var(--onboarding-projects-heading);
+  line-height: 1.2;
+  letter-spacing: var(--onboarding-projects-heading-tracking);
   font-weight: 500;
+}
+
+/* The agents two to a row and the projects three (the design's column), fewer as the window
+   narrows, each card at least its token wide. */
+.onboarding-agent-grid,
+.onboarding-project-grid {
+  display: grid;
+  gap: calc(var(--spacing) * 3);
+}
+
+.onboarding-agent-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--spacing-setup-agent-card), 100%), 1fr));
+}
+
+.onboarding-project-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--spacing-setup-card), 100%), 1fr));
 }
 
 @keyframes onboarding-in {
@@ -242,6 +270,7 @@ html[data-intro="staged"] #root {
 /* Welcome.tsx settles the intro at once under reduced motion; nothing else moves either. */
 @media (prefers-reduced-motion: reduce) {
   .welcome *,
+  .welcome-name > *,
   .onboarding-step > * {
     animation: none !important;
   }

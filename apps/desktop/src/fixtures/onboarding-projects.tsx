@@ -1,8 +1,8 @@
 /**
  * Onboarding's projects step over a faked daemon. ?drive=1 notes what comes selected, adds a
- * folder by hand, clicks Select all then Select none, presses Enter, and writes what it saw and
- * what the daemon was asked to #onboarding-projects-result (OnboardingProjectsRender.test.ts
- * reads it).
+ * folder by hand, unticks a card, presses the Select toggle twice, presses Ctrl+Enter, and writes
+ * what it saw and what the daemon was asked to #onboarding-projects-result
+ * (OnboardingProjectsRender.test.ts reads it). ?many=1 finds a dozen projects, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -21,6 +21,18 @@ const candidates: ProjectCandidate[] = [
   { path: "/w/storefront-web", name: "storefront-web", providers: ["claude"], sessions: 9, lastActiveMs: Date.now() - 3_600_000, projectId: null },
   { path: "/w/billing", name: "billing", providers: ["codex"], sessions: 4, lastActiveMs: Date.now() - 86_400_000, projectId: null },
 ];
+if (params.has("many")) {
+  for (let index = 0; index < 10; index++) {
+    candidates.push({
+      path: `/Users/me/Development/acme-studio/a-rather-long-project-folder-name-${index}`,
+      name: `acme-studio/a-rather-long-repository-name-${index}`,
+      providers: index % 2 ? ["claude", "codex"] : ["claude"],
+      sessions: 12 * (index + 1),
+      lastActiveMs: Date.now() - index * 7_200_000,
+      projectId: null,
+    });
+  }
+}
 
 const calls: string[] = [];
 mockIPC((command, payload) => {
@@ -46,24 +58,37 @@ function Fixture() {
   useEffect(() => {
     if (!params.has("drive")) return;
     void (async () => {
-      for (let tries = 0; !button("Select none") && tries < 50; tries++) await wait(100);
-      const status = () => text(document.querySelector('[role="status"]'));
-      const first = status();
-      const folder = button("Add a folder");
+      for (let tries = 0; !button("Select") && tries < 50; tries++) await wait(100);
+      const toggle = () => button("Select")!;
+      /** The footer's count, the Select toggle's label and the step's action. */
+      const state = () => ({
+        count: text(document.querySelector('footer [role="status"]')),
+        toggle: text(toggle().firstElementChild),
+        action: text(document.querySelector("footer button:last-child")),
+      });
+      const first = state();
+      const folder = button("Add folder");
       if (folder) await fixtureClick(folder);
       for (let tries = 0; !document.body.textContent?.includes("hand-picked") && tries < 50; tries++) await wait(100);
-      const header = text(button("Add a folder")?.parentElement?.previousElementSibling).replace(/\s+/g, " ");
-      const afterAdd = status();
-      const all = button("Select all");
-      if (all) await fixtureClick(all);
-      await wait(200);
-      const none = button("Select none");
-      if (none) await fixtureClick(none);
-      await wait(200);
-      const selected = status();
-      await fixtureInput({ type: "key", key: "Enter" });
+      const header = text(button("Add folder")?.parentElement?.previousElementSibling).replace(/\s+/g, " ");
+      const afterAdd = state();
+      const card = document.querySelector('[role="checkbox"][aria-label="billing"]');
+      if (card) await fixtureClick(card);
+      await wait(100);
+      const unticked = state();
+      // The toggle's place, which must not move as it switches.
+      const at = toggle().getBoundingClientRect().right;
+      await fixtureClick(toggle());
+      await wait(100);
+      const all = state();
+      await fixtureClick(toggle());
+      await wait(100);
+      const none = { ...state(), moved: toggle().getBoundingClientRect().right !== at };
+      await fixtureInput({ type: "key", key: "Enter", modifiers: ["Control"] });
       await wait(300);
-      setResult(JSON.stringify({ first, header, afterAdd, selected, asked: calls.filter((method) => method !== "findProjects") }));
+      setResult(
+        JSON.stringify({ first, header, afterAdd, unticked, all, none, asked: calls.filter((method) => method !== "findProjects") }),
+      );
     })();
   }, []);
   return (
@@ -79,6 +104,7 @@ function Fixture() {
             (event.currentTarget as HTMLElement | null)?.focus();
           }}
         >
+          <div className="h-titlebar shrink-0" />
           <ProjectsStep onBack={() => {}} />
         </DialogContent>
       </Dialog>

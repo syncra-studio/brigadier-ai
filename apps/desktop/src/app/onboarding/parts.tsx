@@ -1,15 +1,15 @@
+import { ArrowLeft, Check } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, type RefObject, useEffect, useRef } from "react";
 
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
 import { DialogTitle } from "@/components/ui/dialog";
-import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 
 /*
- * What the setup's steps after the welcome share: a centred heading with a line under it, a
- * body, and a footer with Back and the step's one action.
+ * What the setup's steps after the name share: a centred heading with a line under it that stays
+ * put, a body that scrolls on its own, and a footer with Back, a count and the step's one action.
  */
 
 /**
@@ -26,23 +26,35 @@ export function useFocusOnMount<T extends HTMLElement>(): RefObject<T | null> {
   return ref;
 }
 
-/** A step's heading: an optional small line over it, then its title and description. */
+/** A step's heading: its title and the line under it, sized as the step's design has it. */
 export function StepHeader({
-  eyebrow,
   title,
   description,
+  size = "large",
 }: {
-  eyebrow?: string | null;
   title: string;
   description: ReactNode;
+  /** The agents' large heading, or the projects' smaller one with a narrower line. */
+  size?: "large" | "small";
 }) {
+  const small = size === "small";
   return (
-    <header className="mx-auto flex max-w-onboarding shrink-0 flex-col items-center px-6 pt-8 text-center">
-      {eyebrow && <p className="text-muted-foreground mb-3 text-sm">{eyebrow}</p>}
+    <header
+      className={cn(
+        "mx-auto flex w-full max-w-onboarding shrink-0 flex-col items-center px-6 text-center",
+        small ? "pt-20" : "pt-18",
+      )}
+    >
       <DialogTitle asChild>
-        <h1 className="onboarding-heading text-balance">{title}</h1>
+        <h1 className={cn("text-balance", small ? "onboarding-heading-small" : "onboarding-heading")}>{title}</h1>
       </DialogTitle>
-      <p aria-live="polite" className="text-muted-foreground mt-3.5 text-lg text-balance">
+      <p
+        aria-live="polite"
+        className={cn(
+          "text-muted-foreground",
+          small ? "max-w-onboarding-subline mt-2.5 text-sm leading-normal" : "mt-3.5 text-lg text-balance",
+        )}
+      >
         {description}
       </p>
     </header>
@@ -53,20 +65,19 @@ export function StepHeader({
 const FOCUS_TAKERS = "button, a[href], input, textarea, select, [contenteditable], [role=menuitem], [role=option]";
 
 /**
- * The footer: Back (also on ⌘[, Alt ← elsewhere), then the step's action (also on ⌘⏎, Ctrl ⏎
- * elsewhere, and on Enter while no control has the focus), each showing its keys, and a quiet
- * line under them.
+ * The footer, across the window under a rule: Back (also on ⌘[, Alt ← elsewhere) at the start
+ * of the step's column; at its end how many are chosen, then the step's action (also on ⌘⏎,
+ * Ctrl ⏎ elsewhere, and on Enter while no control has the focus).
  */
 export function StepFooter({
   onBack,
-  backLabel = "Back",
+  count,
   primary,
-  note,
 }: {
   onBack?: () => void;
-  backLabel?: string;
+  /** "2 of 5 connected". */
+  count?: ReactNode;
   primary?: { label: string; onClick: () => void; disabled?: boolean; busy?: boolean };
-  note?: ReactNode;
 }) {
   const mac = useApp((s) => s.info?.platform === "macos");
   const onClick = primary?.onClick;
@@ -79,8 +90,7 @@ export function StepFooter({
     if (!onClick) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Enter" || event.repeat || event.isComposing) return;
-      // A plain Enter counts too when no control has the focus: one let go of it, as Select
-      // none does once it can't be pressed again.
+      // A plain Enter counts too when no control has the focus: one let go of it.
       const unfocused = event.target instanceof Element && event.target.closest(FOCUS_TAKERS) === null;
       if (!(mac ? event.metaKey : event.ctrlKey) && !unfocused) return;
       event.preventDefault();
@@ -105,70 +115,56 @@ export function StepFooter({
   }, [mac, onBack, backBlocked]);
 
   return (
-    <footer className="flex shrink-0 flex-col items-center gap-3 px-8 pt-4 pb-8">
-      <div className="flex items-center gap-2.5">
+    <footer className="border-divider shrink-0 border-t px-6 py-4">
+      <div className="max-w-onboarding mx-auto flex w-full items-center gap-2">
         {onBack && (
           <Button
-            size="lg"
-            variant="outline"
+            size="sm"
+            variant="ghost"
             aria-keyshortcuts={mac ? "Meta+BracketLeft" : "Alt+ArrowLeft"}
             disabled={backBlocked}
             onClick={onBack}
-            className="gap-2"
+            className="text-muted-foreground -ms-2.5"
           >
-            {backLabel}
-            <Kbd>{mac ? "⌘[" : "Alt ←"}</Kbd>
+            <ArrowLeft />
+            Back
           </Button>
+        )}
+        <span className="flex-1" />
+        {count !== undefined && (
+          <span role="status" className="text-muted-foreground/70 truncate text-xs tabular-nums">
+            {count}
+          </span>
         )}
         {primary && (
           <Button
             ref={primaryRef}
-            size="lg"
+            size="sm"
             aria-keyshortcuts={mac ? "Meta+Enter" : "Control+Enter"}
             disabled={primary.disabled || primary.busy}
             onClick={primary.onClick}
-            className="min-w-32 gap-2"
+            className="ms-3.5"
           >
             {primary.busy && <Spinner className="animate-spin" />}
             {primary.label}
-            <Kbd>{mac ? "⌘⏎" : "Ctrl ⏎"}</Kbd>
           </Button>
         )}
       </div>
-      {note && <div className="text-muted-foreground min-h-4 text-xs">{note}</div>}
     </footer>
   );
 }
 
-/** A small uppercase heading over a group, with how many it holds. */
-export function SectionLabel({
-  label,
-  count,
-  dot = false,
-  className,
-}: {
-  label: string;
-  count?: number | undefined;
-  dot?: boolean;
-  className?: string;
-}) {
+/** A tick box's look (Radix's in dialogs/fields.tsx), for a control that is a whole card. */
+export function TickMark({ checked }: { checked: boolean }) {
   return (
-    <div
+    <span
+      aria-hidden
       className={cn(
-        "text-muted-foreground tracking-eyebrow flex shrink-0 items-center gap-2 text-2xs font-medium uppercase",
-        className,
+        "border-input rounded-xs flex size-icon-md shrink-0 items-center justify-center border",
+        checked && "bg-primary border-primary text-primary-foreground",
       )}
     >
-      {dot && <span aria-hidden="true" className="bg-success size-1.5 shrink-0 rounded-full" />}
-      <span>{label}</span>
-      {count !== undefined && (
-        <>
-          <span aria-hidden="true" className="text-muted-foreground/60">
-            ·
-          </span>
-          <span className="tabular-nums">{count}</span>
-        </>
-      )}
-    </div>
+      {checked && <Check className="size-icon-xs" />}
+    </span>
   );
 }

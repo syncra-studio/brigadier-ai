@@ -1,9 +1,9 @@
-import { Check, FolderPlus } from "@openai/apps-sdk-ui/components/Icon";
+import { FolderOpen } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { SectionLabel, StepFooter, StepHeader } from "@/app/onboarding/parts";
+import { StepFooter, StepHeader, TickMark } from "@/app/onboarding/parts";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
@@ -15,33 +15,16 @@ import { createProject, select } from "@/state/actions";
 import { checkFolder } from "@/state/addProject";
 import { findProjects, finishOnboarding } from "@/state/onboarding";
 
-/** Cards fill as many columns as fit, each at least a setup card wide. */
-const CARD_GRID =
-  "grid grid-cols-[repeat(auto-fill,minmax(var(--spacing-setup-card),1fr))] gap-2.5";
-
-/** The corner check on a card that is chosen. */
-function CardCheck({ className, label }: { className: string; label: string }) {
-  return (
-    <span
-      className={cn(
-        "absolute end-2 top-2 grid size-5 place-items-center rounded-full shadow-hairline",
-        className,
-      )}
-    >
-      <Check className="size-icon-xs" />
-      <span className="sr-only">{label}</span>
-    </span>
-  );
-}
-
 /**
- * The projects to start with, found in the agents' own session history; none come chosen.
- * Adding them finishes the setup and opens the first.
+ * The projects to start with, found in the agents' own session history, all ticked to begin
+ * with: three cards to a row (fewer in a narrow window), and only the cards scroll. One button
+ * ticks the rest or clears them all; Add folder… adds one more, ticked. Adding them finishes the
+ * setup and opens the first; with none ticked the setup finishes without projects.
  */
 export function ProjectsStep({ onBack }: { onBack: () => void }) {
   const [candidates, setCandidates] = useState<ProjectCandidate[] | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  // Folders added with Add a folder…, which the history count leaves out.
+  // Folders added with Add folder…, which the history count leaves out.
   const [byHand, setByHand] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -53,6 +36,7 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
       .then((found) => {
         if (!live) return;
         setCandidates(found);
+        setSelected(new Set(found.filter((candidate) => candidate.projectId === null).map((candidate) => candidate.path)));
       })
       .catch((cause: unknown) => {
         if (!live) return;
@@ -66,7 +50,8 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
 
   const addable = (candidates ?? []).filter((candidate) => candidate.projectId === null);
   const chosen = addable.filter((candidate) => selected.has(candidate.path));
-  const found = addable.filter((candidate) => !byHand.has(candidate.path)).length;
+  const found = (candidates ?? []).filter((candidate) => !byHand.has(candidate.path)).length;
+  const allChosen = addable.length > 0 && chosen.length === addable.length;
 
   const toggle = (path: string, on: boolean) =>
     setSelected((current) => {
@@ -145,80 +130,80 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
   return (
     <div className="onboarding-step flex min-h-0 flex-1 flex-col">
       <StepHeader
+        size="small"
         title="Choose your projects"
         description="These are the repositories you have worked in with Claude Code and Codex. Add the ones you want to use with Brigadier."
       />
-      <div className="max-w-onboarding-detail mx-auto mt-10 flex min-h-0 w-full flex-1 flex-col px-6">
-      <div className="flex min-h-0 flex-1 flex-col gap-3">
-        <div className="flex shrink-0 flex-wrap items-center gap-1">
-          <SectionLabel
-            label="Found in your history"
-            dot={found > 0}
-            count={candidates === null ? undefined : found}
-          />
-          <div className="text-muted-foreground ms-auto flex items-center gap-1 text-xs">
+      <div className="mt-10 flex min-h-0 flex-1 flex-col gap-3">
+        <div className="shrink-0 px-6">
+        <div className="max-w-onboarding mx-auto flex w-full flex-wrap items-center gap-x-1 gap-y-2">
+          <div className="text-muted-foreground/70 flex items-center gap-2 px-1 text-sm">
+            {found > 0 && <span aria-hidden className="bg-success size-1.5 shrink-0 rounded-full" />}
+            <span>Found in your history</span>
+            {candidates !== null && <span className="tabular-nums">{found}</span>}
+          </div>
+          <div className="ms-auto flex items-center gap-1">
             {addable.length > 0 && (
-              <>
-                <span role="status" className="me-1">
-                  {count} selected
-                </span>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  disabled={busy || count === addable.length}
-                  onClick={() => setSelected(new Set(addable.map((c) => c.path)))}
-                >
-                  Select all
-                </Button>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  disabled={busy || count === 0}
-                  onClick={() => setSelected(new Set())}
-                >
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() =>
+                  setSelected(allChosen ? new Set() : new Set(addable.map((candidate) => candidate.path)))
+                }
+                className="text-muted-foreground grid"
+              >
+                {/* Both labels hold the room, so the button never moves as it switches. */}
+                <span className="col-start-1 row-start-1">{allChosen ? "Select none" : "Select all"}</span>
+                <span aria-hidden className="invisible col-start-1 row-start-1">
                   Select none
-                </Button>
-              </>
+                </span>
+              </Button>
             )}
-            <Button size="xs" variant="outline" disabled={busy} onClick={() => void addFolder()}>
-              <FolderPlus />
-              Add a folder…
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => void addFolder()}>
+              <FolderOpen />
+              Add folder…
             </Button>
           </div>
         </div>
-        {candidates === null ? (
-          <div className="text-muted-foreground flex flex-1 flex-col items-center justify-center gap-3 text-sm">
-            <Spinner className="size-icon-md animate-spin" />
-            Looking for projects in your Claude Code and Codex history…
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+          <div className="max-w-onboarding mx-auto flex w-full flex-col gap-3">
+            {candidates === null ? (
+              <div className="text-muted-foreground flex flex-col items-center justify-center gap-3 py-16 text-sm">
+                <Spinner className="size-icon-md animate-spin" />
+                Looking for projects in your Claude Code and Codex history…
+              </div>
+            ) : candidates.length === 0 ? (
+              <p className="text-muted-foreground bg-card rounded-surface border px-4 py-6 text-center text-sm">
+                No repositories found in your Claude Code or Codex history. Add a folder to start
+                with one.
+              </p>
+            ) : (
+              <ul className="onboarding-project-grid">
+                {candidates.map((candidate) => (
+                  <ProjectCard
+                    key={candidate.path}
+                    candidate={candidate}
+                    nowMs={nowMs}
+                    selected={selected.has(candidate.path)}
+                    disabled={busy}
+                    onToggle={() => toggle(candidate.path, !selected.has(candidate.path))}
+                  />
+                ))}
+              </ul>
+            )}
+            {error && (
+              <p role="alert" className="text-destructive text-xs whitespace-pre-wrap">
+                {error}
+              </p>
+            )}
           </div>
-        ) : candidates.length === 0 ? (
-          <p className="text-muted-foreground bg-muted/25 rounded-surface border px-4 py-6 text-center text-sm">
-            No repositories found in your Claude Code or Codex history. Add a folder to start
-            with one.
-          </p>
-        ) : (
-          <ul className={cn(CARD_GRID, "-m-1 min-h-0 flex-1 content-start overflow-y-auto p-1")}>
-            {candidates.map((candidate) => (
-              <ProjectCard
-                key={candidate.path}
-                candidate={candidate}
-                nowMs={nowMs}
-                selected={selected.has(candidate.path)}
-                disabled={busy}
-                onToggle={() => toggle(candidate.path, !selected.has(candidate.path))}
-              />
-            ))}
-          </ul>
-        )}
-        {error && (
-          <p role="alert" className="text-destructive shrink-0 text-xs whitespace-pre-wrap">
-            {error}
-          </p>
-        )}
-      </div>
+        </div>
       </div>
       <StepFooter
         onBack={onBack}
+        count={`${count} of ${addable.length} selected`}
         primary={{
           label: busy
             ? "Adding…"
@@ -256,30 +241,23 @@ function ProjectCard({
     <li className="min-w-0">
       <button
         type="button"
-        aria-pressed={on}
+        role="checkbox"
+        aria-checked={on}
+        aria-label={candidate.name}
         disabled={disabled || added}
         onClick={onToggle}
         className={cn(
-          "rounded-surface relative flex w-full min-w-0 flex-col gap-2 border p-3.5 text-start transition-colors",
-          on
-            ? "border-primary/50 bg-primary/5 ring-primary/20 ring-2"
-            : "bg-muted/30 hover:bg-muted/60",
-          added ? "cursor-default opacity-60" : "disabled:cursor-default",
+          "bg-card rounded-surface flex h-full w-full min-w-0 flex-col gap-1 border p-4 text-start transition-colors",
+          "enabled:hover:bg-muted/60 disabled:cursor-default",
+          added && "opacity-60",
         )}
       >
-        {on && (
-          <CardCheck
-            className="bg-primary text-primary-foreground"
-            label={added ? "Added" : "Selected"}
-          />
-        )}
-        <div className="min-w-0 pe-6">
-          <p className="truncate text-sm font-medium">{candidate.name}</p>
-          <p className="text-muted-foreground mt-0.5 truncate font-mono text-2xs">
-            {shortPath(candidate.path)}
-          </p>
-        </div>
-        <div className="text-muted-foreground flex min-w-0 items-center gap-2 text-xs">
+        <span className="flex w-full min-w-0 items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">{candidate.name}</span>
+          <TickMark checked={on} />
+        </span>
+        <span className="text-muted-foreground/70 w-full truncate font-mono text-xs">{shortPath(candidate.path)}</span>
+        <span className="text-muted-foreground/70 flex min-w-0 items-center gap-1.5 pt-2.5 text-xs">
           {candidate.providers.map((provider) => (
             <span key={provider} title={PROVIDER_LABELS[provider]} className="flex shrink-0">
               <ProviderGlyph provider={provider} className="size-icon-sm" />
@@ -287,7 +265,7 @@ function ProjectCard({
             </span>
           ))}
           <span className="truncate">{added ? "Already added" : activity}</span>
-        </div>
+        </span>
       </button>
     </li>
   );

@@ -1,31 +1,39 @@
-import { ArrowRight, Check, ExclamationMarkCircle, Reload } from "@openai/apps-sdk-ui/components/Icon";
+import { ArrowUpRight, Check } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
-import { useAction } from "@/app/conversation/useAction";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
-import { SectionLabel, StepFooter, StepHeader } from "@/app/onboarding/parts";
+import { StepFooter, StepHeader } from "@/app/onboarding/parts";
 import { type AgentState, agentState, checkAgents } from "@/app/onboarding/SetupTerminal";
-import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useNow } from "@/hooks/use-now";
+import { openUrl } from "@/ipc/client";
 import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
-import { shortPath } from "@/lib/format";
-import { providerStatusText } from "@/lib/setup";
 import { cn } from "@/lib/utils";
-import { accountsOf, loadAccounts, refreshAccounts } from "@/state/accounts";
 import { connectAgent, connecting, useConnect, useConnectProgress } from "@/state/connect";
 import { useApp } from "@/state/store";
 
+// TODO(onboarding): more agents (Gemini CLI, OpenCode, Grok in the design) need detection and
+// sign-in in the daemon first; ProviderKind holds only these two.
 const PROVIDERS: readonly ProviderKind[] = ["claude", "codex"];
 
-/** The note under the step's buttons. */
+// TODO(onboarding): confirm install guide URLs with the user. The app had none; these are the
+// vendors' own install pages. (Connect's in-app installer, state/connect.ts, could be used instead.)
+const INSTALL_GUIDES: Record<ProviderKind, string> = {
+  claude: "https://code.claude.com/docs/en/setup",
+  codex: "https://github.com/openai/codex",
+};
+
+/** The note under the cards. */
 const MORE_LATER = "You can connect more accounts anytime in Settings.";
 
-function useAgents() {
+/** Connected first, then found on this computer, then the rest. */
+const RANK: Record<AgentState, number> = { ready: 0, signIn: 1, install: 2, checking: 3 };
+
+type Agent = { provider: ProviderKind; overview: ProviderOverview | undefined; state: AgentState };
+
+function useAgents(): Agent[] {
   const providers = useApp((s) => s.providers.view?.providers);
   return PROVIDERS.map((provider) => {
     const overview = providers?.find((entry) => entry.provider === provider);
@@ -33,280 +41,167 @@ function useAgents() {
   });
 }
 
+/** "Claude Code", "Claude Code and Codex", "A, B and C". */
+function listNames(names: readonly string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
 /**
- * Connecting the agents: Claude Code and Codex side by side, each with its logo, Connected or
- * Not connected, and the one button that gets it working (Connect: Brigadier installs what is
- * missing and opens the agent's own sign-in) or, once it works, opens its page with its
- * accounts. While an agent's page is open it takes Escape (through `onEscape`), back to both.
+ * Connecting the agents: a card each, two to a row (one in a narrow window), connected ones
+ * first, then those found on this computer, then the rest, in the order the first check found
+ * them. Each card says how its agent stands and offers the one thing it needs next: Sign in
+ * (the agent's own sign-in, in the browser; the card waits until it comes back) or Install (its
+ * install guide, in the browser; the agents are checked again when the window comes back).
+ * Only the cards scroll; Continue needs one connected agent.
  */
-export function AgentsStep({
-  name,
-  onEscape,
-  onBack,
-  onContinue,
-}: {
-  name: string;
-  /** Hands the setup what Escape does first (null: nothing of its own); stable. */
-  onEscape: (handler: (() => boolean) | null) => void;
-  onBack: () => void;
-  onContinue: () => void;
-}) {
+export function AgentsStep({ onBack, onContinue }: { onBack: () => void; onContinue: () => void }) {
   const connected = useApp((s) => s.connection.status === "connected");
+  const mac = useApp((s) => s.info?.platform === "macos");
   const agents = useAgents();
-  const [detail, setDetail] = useState<ProviderKind | null>(null);
-  const recheck = useAction();
+  // The order is set once every agent has been checked, so cards don't jump as they connect.
+  const [order, setOrder] = useState<readonly ProviderKind[] | null>(null);
 
   useEffect(() => {
     if (connected) void checkAgents();
   }, [connected]);
 
+  // Back from an install guide: whatever was installed meanwhile shows.
+  const missing = agents.some((agent) => agent.state === "install");
   useEffect(() => {
-    if (!detail) return;
-    onEscape(() => {
-      setDetail(null);
-      return true;
-    });
-    return () => onEscape(null);
-  }, [detail, onEscape]);
+    if (!missing) return;
+    const onFocus = () => void checkAgents();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [missing]);
 
-  if (detail) {
-    const agent = agents.find((entry) => entry.provider === detail);
-    return (
-      <AgentPage
-        key={detail}
-        provider={detail}
-        overview={agent?.overview}
-        state={agent?.state ?? "checking"}
-        onBack={() => setDetail(null)}
-      />
-    );
-  }
-
-  const ready = agents.filter((agent) => agent.state === "ready").length;
   const allChecked = agents.every((agent) => agent.state !== "checking");
-  const description =
-    ready === agents.length
-      ? "Both agents are ready. You can start right away."
-      : ready > 0
-        ? "You're connected and ready to go. Add the other agent anytime."
-        : allChecked
-          ? "Connect Claude Code or Codex with your own subscription. Brigadier sets up whatever is missing."
-          : "Looking for the agents on this computer…";
+  if (allChecked && order === null) {
+    setOrder(agents.toSorted((a, b) => RANK[a.state] - RANK[b.state]).map((agent) => agent.provider));
+  }
+  const sorted = order
+    ? order.flatMap((provider) => agents.filter((agent) => agent.provider === provider))
+    : agents;
+
+  const ready = agents.filter((agent) => agent.state === "ready");
+  const description = !allChecked && ready.length === 0
+    ? `Looking for the agents on this ${mac ? "Mac" : "computer"}…`
+    : ready.length === 0
+      ? "Connect at least one agent to continue."
+      : `${listNames(ready.map((agent) => PROVIDER_LABELS[agent.provider]))} ${ready.length === 1 ? "is" : "are"} ready. Connect any others you use, or start right away.`;
 
   return (
     <div className="onboarding-step flex min-h-0 flex-1 flex-col">
-      <StepHeader
-        eyebrow={name ? `Nice to meet you, ${name}` : null}
-        title="Connect your agents"
-        description={description}
-      />
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6">
-        <div className="max-w-onboarding-agents mx-auto mt-16 mb-8 grid w-full grid-cols-2 gap-16">
-          {agents.map(({ provider, overview, state }) => (
-            <AgentColumn
-              key={provider}
-              provider={provider}
-              overview={overview}
-              state={state}
-              onOpen={() => setDetail(provider)}
-            />
-          ))}
+      <StepHeader title="Connect your agents" description={description} />
+      <div className="mt-12 min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+        <div className="max-w-onboarding mx-auto flex w-full flex-col gap-3">
+          <ul className="onboarding-agent-grid">
+            {sorted.map(({ provider, overview, state }) => (
+              <AgentCard key={provider} provider={provider} overview={overview} state={state} mac={mac} />
+            ))}
+          </ul>
+          <p className="text-muted-foreground/70 text-xs">{MORE_LATER}</p>
         </div>
-        {ready === 0 && allChecked && (
-          <div className="bg-muted/25 rounded-surface max-w-onboarding-agents mx-auto flex w-full items-center gap-3 border px-4 py-3">
-            <ExclamationMarkCircle className="text-warning size-icon-md shrink-0" />
-            <p className="min-w-0 flex-1 text-sm">
-              Connect at least one agent to continue: your work runs through it.
-            </p>
-            <Button size="sm" variant="ghost" disabled={recheck.busy} onClick={() => recheck.run(checkAgents)}>
-              <Reload />
-              Check again
-            </Button>
-          </div>
-        )}
       </div>
       <StepFooter
         onBack={onBack}
-        primary={{ label: "Continue", onClick: onContinue, disabled: ready === 0 }}
-        note={MORE_LATER}
+        count={`${ready.length} of ${agents.length} connected`}
+        primary={{ label: "Continue", onClick: onContinue, disabled: ready.length === 0 }}
       />
     </div>
   );
 }
 
-/** An agent's logo, bare: large over its column, smaller at the head of its page. */
-function AgentMark({ provider, small = false }: { provider: ProviderKind; small?: boolean }) {
-  return (
-    <ProviderGlyph provider={provider} className={cn("shrink-0", small ? "size-8" : "size-agent-mark")} />
-  );
+/** "Max plan" from the plan the agent reports. */
+function planLine(plan: string | null | undefined): string {
+  // TODO(onboarding): not every login reports its plan (an API key, some Codex logins); those
+  // read "Signed in" until the agent's status carries one.
+  if (!plan) return "Signed in";
+  return `${plan.charAt(0).toUpperCase()}${plan.slice(1)} plan`;
 }
 
-function AgentColumn({
+function AgentCard({
   provider,
   overview,
   state,
-  onOpen,
+  mac,
 }: {
   provider: ProviderKind;
   overview: ProviderOverview | undefined;
   state: AgentState;
-  /** Opens its page (once it is connected). */
-  onOpen: () => void;
+  mac: boolean;
 }) {
   const label = PROVIDER_LABELS[provider];
   const progress = useConnectProgress(provider);
   // Asking to connect failed (the daemon was away): said like a failed Connect.
   const askError = useConnect((s) => s.errors[provider]);
-  const failed = progress?.type === "failed" || askError !== undefined;
+  const error = askError ?? (progress?.type === "failed" ? progress.error : null);
   const ready = state === "ready";
-  // Connect said Connected and the agent's check is on its way: still busy until it arrives.
-  const busy = !ready && (connecting(progress) || progress?.type === "connected");
-  const plan = overview?.status?.plan;
+  // Signing in, or Connected said and the agent's check on its way: the card waits.
+  const waiting = !ready && (connecting(progress) || progress?.type === "connected");
+  const here = mac ? "this Mac" : "this computer";
+
+  const line = error
+    ? error
+    : waiting
+      ? progress?.type === "installing"
+        ? `Installing ${label}…`
+        : "Complete sign-in in your browser"
+      : state === "checking"
+        ? "Checking…"
+        : ready
+          ? planLine(overview?.status?.plan)
+          : state === "signIn"
+            ? `Found on ${here} · Not signed in`
+            : "Not installed";
+
   return (
-    <section data-slot="agent-column" className="flex min-w-0 flex-col items-center text-center">
-      <AgentMark provider={provider} />
-      <h2 className="mt-8 text-xl font-medium">{label}</h2>
-      <p className="text-muted-foreground mt-1.5 mb-6 text-sm">Works with your own subscription.</p>
-      <Button
-        size="lg"
-        disabled={state === "checking" || busy}
-        aria-label={ready ? `Manage ${label}` : undefined}
-        onClick={() => (ready ? onOpen() : void connectAgent(provider))}
-        className={cn(
-          "w-full gap-2",
-          ready && "bg-success/15 text-success hover:bg-success/20",
-        )}
-      >
-        {state === "checking" ? (
-          <>
-            <Spinner className="animate-spin" />
-            Checking…
-          </>
-        ) : ready ? (
-          <>
-            Connected
-            <Check />
-          </>
-        ) : busy ? (
-          <>
-            <Spinner className="animate-spin" />
-            Connecting…
-          </>
-        ) : (
-          <>
-            {failed ? "Try again" : "Connect"}
-            <ArrowRight />
-          </>
-        )}
-      </Button>
-      <div className="mt-2.5 flex min-h-8 w-full flex-col items-center">
-        {busy || failed ? (
-          <ConnectStatus provider={provider} retry={false} className="w-full justify-center text-start" />
-        ) : (
-          <output data-slot="agent-connection" className="text-muted-foreground truncate text-xs">
-            {state === "checking"
-              ? ""
-              : ready
-                ? plan
-                  ? `Connected · ${plan.charAt(0).toUpperCase()}${plan.slice(1)} plan`
-                  : "Connected"
-                : "Not connected"}
-          </output>
-        )}
-      </div>
-    </section>
-  );
-}
-
-/**
- * One agent's page: how it stands (with Check again), Connect while it needs installing or
- * signing in, and once it works its accounts, where another can be added. Leaving it cancels
- * an extra account's sign-in still under way (ProviderAccounts removes an account that never
- * signed in).
- */
-function AgentPage({
-  provider,
-  overview,
-  state,
-  onBack,
-}: {
-  provider: ProviderKind;
-  overview: ProviderOverview | undefined;
-  state: AgentState;
-  onBack: () => void;
-}) {
-  const label = PROVIDER_LABELS[provider];
-  const accounts = useApp((s) => s.accounts?.accounts);
-  const revealed = useRevealedEmails();
-  const now = useNow(30_000);
-  const recheck = useAction();
-  const progress = useConnectProgress(provider);
-  const needs = state === "install" || state === "signIn";
-
-  useEffect(() => {
-    loadAccounts().catch((error: unknown) => console.error("reading the accounts failed", error));
-  }, []);
-
-  const path = overview?.status?.path ?? null;
-  return (
-    <div className="onboarding-step flex min-h-0 flex-1 flex-col">
-      <StepHeader
-        title={`Connect ${label}`}
-        description={`Brigadier works through ${label} on this computer, with your own subscription.`}
-      />
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6">
-        <div className="max-w-onboarding-detail mx-auto mt-10 mb-6 flex w-full flex-col gap-6">
-          <div className="bg-card/40 rounded-surface flex items-center gap-3 border p-4">
-            <AgentMark provider={provider} small />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-base font-medium">{label}</p>
-              <p className="text-muted-foreground mt-0.5 truncate font-mono text-2xs">
-                {path ? shortPath(path) : "Not found on this computer"}
-              </p>
-            </div>
-            {state === "checking" ? (
-              <Spinner className="text-muted-foreground size-icon-sm animate-spin" />
-            ) : (
-              <Badge variant={state === "ready" ? "success" : "warning"}>{providerStatusText(overview)}</Badge>
-            )}
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label={`Check ${label} again`}
-              disabled={recheck.busy}
-              onClick={() => recheck.run(() => Promise.all([checkAgents(), refreshAccounts()]))}
-            >
-              <Reload />
-            </Button>
-          </div>
-          {needs && (
-            <section className="flex flex-col gap-3">
-              <SectionLabel label="Get started" />
-              <div className="bg-muted/25 rounded-surface flex flex-col gap-3 border px-4 py-3">
-                <div className="flex items-center gap-3">
-                  <p className="min-w-0 flex-1 text-sm">{label} isn't connected yet.</p>
-                  <Button size="sm" disabled={connecting(progress)} onClick={() => void connectAgent(provider)}>
-                    Connect
-                  </Button>
-                </div>
-                <ConnectStatus provider={provider} retry={false} />
-              </div>
-            </section>
+    <li
+      data-slot="agent-card"
+      data-state={waiting ? "waiting" : state}
+      className="bg-card rounded-surface flex min-w-0 items-center gap-3.5 border p-4"
+    >
+      <span className="bg-muted rounded-control size-agent-mark grid shrink-0 place-items-center">
+        <ProviderGlyph provider={provider} className="size-6.5" />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <p className="truncate text-base font-medium">{label}</p>
+        <p
+          data-slot="agent-line"
+          role={error ? "alert" : undefined}
+          className={cn(
+            "truncate text-xs",
+            error ? "text-destructive" : ready ? "text-muted-foreground" : "text-muted-foreground/70",
           )}
-          {state === "ready" && (
-            <section className="flex flex-col gap-3">
-              <SectionLabel label="Accounts" />
-              <ProviderAccounts
-                provider={provider}
-                views={accounts ? accountsOf(accounts, provider) : null}
-                now={now}
-                revealed={revealed}
-              />
-            </section>
-          )}
-        </div>
+          title={error ?? undefined}
+        >
+          {line}
+        </p>
       </div>
-      <StepFooter onBack={onBack} backLabel="Back to agents" note={MORE_LATER} />
-    </div>
+      {ready ? (
+        <Badge variant="success" className="h-control-sm px-2.5">
+          <Check />
+          Connected
+        </Badge>
+      ) : waiting ? (
+        <span role="status" className="text-muted-foreground flex shrink-0 items-center gap-1.5 px-1 text-sm font-medium">
+          <Spinner className="size-icon-sm animate-spin" />
+          Waiting…
+        </span>
+      ) : state === "signIn" ? (
+        <Button size="sm" variant="outline" onClick={() => void connectAgent(provider)}>
+          Sign in
+        </Button>
+      ) : state === "install" ? (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => openUrl(INSTALL_GUIDES[provider]).catch((cause: unknown) => console.error(cause))}
+        >
+          Install
+          <ArrowUpRight className="text-muted-foreground size-icon-xs" />
+        </Button>
+      ) : null}
+    </li>
   );
 }

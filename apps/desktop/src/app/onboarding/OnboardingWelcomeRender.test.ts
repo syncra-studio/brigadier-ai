@@ -1,10 +1,27 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { renderFixturePage } from "@/fixtures/headless";
+import { renderFixtureLive, renderFixturePage } from "@/fixtures/headless";
 
 // The first launch's intro greets with its title on two lines, read out as one.
 test("onboarding: the intro's title", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "onboarding-welcome.html", "onboarding-welcome-result", 10000)) as Record<string, unknown>;
   assert.deepEqual(seen, { name: "Brigadier, at your command.", lines: ["Brigadier,", "at your command."] });
+});
+
+// The name: its field has the focus as it opens; Continue stays off for an empty field or spaces,
+// comes on with a name, shows Return as its key, and Return saves the name, trimmed.
+test("onboarding: the name's Continue", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(
+    await renderFixtureLive(t, "onboarding-welcome.html?step=name&drive=1", "onboarding-name-result", 20000),
+  ) as Record<string, unknown>;
+  assert.deepEqual(seen, {
+    focused: true,
+    placeholder: "Your name",
+    empty: false,
+    spaces: false,
+    typed: true,
+    hint: "↩",
+    named: ["Alex"],
+  });
 });

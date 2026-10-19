@@ -56,9 +56,10 @@ function setPageStaged(staged: boolean): void {
  * then fades away; the music's motion stops with it and its chord rings on, breathing. The
  * title comes in a letter at a time; the arrow button under it appears last, with a soft note,
  * and only then can it be used (Enter too, as it takes the focus). The sound settles and fades
- * out a few seconds later, into the name if need be. Elsewhere it plays the same inside the window, without the dim. Escape shows the
- * end at once, as reduced motion does. Continuing fades the title and the waves out, and the
- * name step comes in on the same dark, with the mark above the question.
+ * out a few seconds later, into the name if need be. Elsewhere it plays the same inside the
+ * window, without the dim. Escape shows the end at once, as reduced motion does. Continuing fades
+ * the title and the waves out, and the name step comes in on the same dark, with the mark above
+ * the question.
  */
 export function Welcome({
   step,
@@ -273,12 +274,7 @@ export function Welcome({
           </div>
         </div>
       ) : (
-        <>
-          <div className="welcome-mark" aria-hidden>
-            <BrigadierGlyph />
-          </div>
-          <NameForm name={name} onName={onName} />
-        </>
+        <NameForm name={name} onName={onName} />
       )}
     </div>
   );
@@ -321,12 +317,15 @@ function ContinueButton({
     >
       {busy && <Spinner className="animate-spin" />}
       {arrow ? <ArrowRight /> : "Continue"}
-      {!arrow && <Kbd>⏎</Kbd>}
+      {!arrow && <Kbd>↩</Kbd>}
     </Button>
   );
 }
 
-/** "What should we call you?": one field, Continue (or Enter) saves it. */
+/**
+ * "What should we call you?" under the mark: one borderless field, focused as the step opens;
+ * Continue (or Return) saves it once it holds more than spaces.
+ */
 function NameForm({ name, onName }: { name: string; onName: (name: string) => Promise<void> }) {
   const id = useId();
   const [value, setValue] = useState(name);
@@ -349,10 +348,13 @@ function NameForm({ name, onName }: { name: string; onName: (name: string) => Pr
   };
 
   return (
-    <>
-      <form id={id} className="welcome-copy" onSubmit={(event) => void submit(event)}>
+    <div className="welcome-name">
+      <form id={id} className="welcome-name-body" onSubmit={(event) => void submit(event)}>
+        <div className="welcome-mark" aria-hidden>
+          <BrigadierGlyph />
+        </div>
         <DialogTitle asChild>
-          <h1 className="welcome-heading">What should we call you?</h1>
+          <h1 className="welcome-heading text-balance">What should we call you?</h1>
         </DialogTitle>
         <label htmlFor={`${id}-name`} className="sr-only">
           Your name
@@ -367,7 +369,8 @@ function NameForm({ name, onName }: { name: string; onName: (name: string) => Pr
           disabled={busy}
           aria-invalid={error !== null || undefined}
           onChange={(event) => setValue(event.target.value)}
-          className="h-control-lg mt-8 max-w-xs text-center text-lg"
+          // Borderless: the words alone, centred under the question.
+          className="placeholder:text-muted-foreground/70 focus-visible:bg-transparent disabled:bg-transparent h-auto max-w-xs rounded-none bg-transparent p-0 text-center text-lg outline-none"
         />
         {error && (
           <p role="alert" className="text-destructive mt-3 text-sm">
@@ -378,6 +381,6 @@ function NameForm({ name, onName }: { name: string; onName: (name: string) => Pr
       <div className="welcome-continue">
         <ContinueButton ready={trimmed !== ""} busy={busy} form={id} />
       </div>
-    </>
+    </div>
   );
 }

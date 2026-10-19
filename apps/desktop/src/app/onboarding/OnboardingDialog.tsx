@@ -1,5 +1,5 @@
 import { X } from "@openai/apps-sdk-ui/components/Icon";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AgentsStep } from "@/app/onboarding/AgentsStep";
 import { ProjectsStep } from "@/app/onboarding/ProjectsStep";
@@ -31,7 +31,7 @@ function close(): void {
  * The first launch: a welcome intro with its sound, the name to call the user by, the coding
  * agents Brigadier works through, then the projects to start with. It fills the window and
  * shows until finished; it can't be skipped. Settings can open it again, at the agents, and
- * that run can be closed (its X, or Escape outside an agent's own page).
+ * that run can be closed (its X on the name and the agents, or Escape).
  */
 export function OnboardingDialog() {
   const catalogLoaded = useApp((s) => s.catalogLoaded);
@@ -42,11 +42,6 @@ export function OnboardingDialog() {
   // Not under the startup screen: it would take focus there, unseen.
   const revealed = useRevealed();
   const open = revealed && catalogLoaded && !smoke && (!onboarded || reopened);
-  // Takes Escape first when a step has something of its own to close.
-  const escape = useRef<(() => boolean) | null>(null);
-  const onEscape = useCallback((handler: (() => boolean) | null) => {
-    escape.current = handler;
-  }, []);
 
   // The sound loads under the startup screen, so the intro can start with it.
   const intro = catalogLoaded && !smoke && !onboarded && !introSeen;
@@ -80,11 +75,10 @@ export function OnboardingDialog() {
           }}
           onEscapeKeyDown={(event) => {
             event.preventDefault();
-            if (escape.current?.()) return;
             if (reopened) close();
           }}
         >
-          {open && <Onboarding onEscape={onEscape} />}
+          {open && <Onboarding />}
         </DialogContent>
       </Dialog>
     </>
@@ -98,7 +92,7 @@ function firstStep(reopened: boolean, introSeen: boolean, userName: string): Ste
   return userName ? "agents" : "name";
 }
 
-function Onboarding({ onEscape }: { onEscape: (handler: (() => boolean) | null) => void }) {
+function Onboarding() {
   const userName = useApp((s) => s.settings.userName);
   // A run from Settings: they've met already.
   const reopened = useOnboarding((s) => s.reopened);
@@ -124,7 +118,10 @@ function Onboarding({ onEscape }: { onEscape: (handler: (() => boolean) | null) 
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
-      {step !== "intro" && <TopBar step={step} reached={reached} onStep={go} closable={reopened} />}
+      {step !== "intro" && (
+        // As designed, the projects' strip has no Close: Back and the step's action lead on.
+        <TopBar step={step} reached={reached} onStep={go} closable={reopened && step !== "projects"} />
+      )}
       {step === "intro" || step === "name" ? (
         <Welcome
           step={step}
@@ -144,8 +141,6 @@ function Onboarding({ onEscape }: { onEscape: (handler: (() => boolean) | null) 
         />
       ) : step === "agents" ? (
         <AgentsStep
-          name={reopened ? "" : userName}
-          onEscape={onEscape}
           onBack={() => go("name")}
           onContinue={() => go("projects")}
         />
@@ -166,8 +161,9 @@ const STEP_LABELS: Record<Step, string> = {
 };
 
 /**
- * The strip along the top: the window drags by it, a dot per step (the current one longest;
- * steps already reached can be revisited) and, on a run from Settings, Close at the end.
+ * The strip along the top: the window drags by it, a segment per step (the current one longer
+ * and bright; steps already reached can be revisited) and, on a run from Settings, Close at the
+ * end.
  */
 function TopBar({
   step,
@@ -187,7 +183,7 @@ function TopBar({
       className="h-titlebar relative z-10 grid shrink-0 grid-cols-[1fr_auto_1fr] items-center px-2"
     >
       <TooltipProvider>
-        <nav aria-label="Setup steps" className="col-start-2 flex items-center gap-2">
+        <nav aria-label="Setup steps" className="col-start-2 flex items-center gap-1">
           {STEPS.map((entry, index) => {
             const active = index === current;
             return (
@@ -200,12 +196,8 @@ function TopBar({
                     disabled={index > reached}
                     onClick={() => onStep(entry)}
                     className={cn(
-                      "rounded-capsule relative h-1 transition-all before:absolute before:-inset-x-1 before:-inset-y-2",
-                      active
-                        ? "bg-foreground w-8"
-                        : index < current
-                          ? "bg-muted-foreground/70 hover:bg-foreground/80 w-4"
-                          : "bg-muted-foreground/25 enabled:hover:bg-muted-foreground/45 w-4",
+                      "rounded-capsule relative h-0.75 transition-all before:absolute before:-inset-x-0.5 before:-inset-y-2",
+                      active ? "bg-foreground w-7.5" : "bg-muted enabled:hover:bg-muted-foreground/45 w-3.75",
                     )}
                   />
                 </TooltipTrigger>

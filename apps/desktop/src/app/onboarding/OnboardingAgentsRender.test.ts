@@ -3,55 +3,58 @@ import { test } from "node:test";
 
 import { renderFixtureLive } from "@/fixtures/headless";
 
-// The real step in Chromium over a faked daemon: an agent that isn't on this computer has one
-// Connect; it shows its install going, a plain failure with Try again, its browser sign-in with
-// Cancel, and Connected once the sign-in is noticed. Continue waits for one connected agent
-// only when none is; no developer words anywhere on the step.
-test("onboarding: Connect installs a missing agent and signs it in", { timeout: 60000 }, async (t) => {
-  const dump = await renderFixtureLive(t, "onboarding-agents.html?drive=1", "onboarding-agents-result", 30000);
-  const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
+const parse = (dump: string) =>
+  JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
+
+// The real step in Chromium over a faked daemon: connected agents come first, each card offers
+// the one thing it needs next. Install opens the agent's install guide; once it is installed
+// (seen when the window comes back) the card offers Sign in, waits for the browser's sign-in,
+// says a failure on its line, and turns Connected with its plan once the sign-in is noticed.
+// The cards keep their places; the line under the title follows what's connected.
+test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }, async (t) => {
+  const seen = parse(await renderFixtureLive(t, "onboarding-agents.html?drive=1", "onboarding-agents-result", 30000));
   assert.equal(seen.error, undefined);
-  assert.deepEqual(seen.first, [
-    { name: "Claude Code", button: "Connect", enabled: true, line: "Not connected", actions: [] },
-    { name: "Codex", button: "Connected", enabled: true, line: "Connected · Pro plan", actions: [] },
-  ]);
-  // Codex is connected, so Continue is already on.
-  assert.equal(seen.continueAtFirst, true);
-  assert.deepEqual(seen.installing, {
-    name: "Claude Code",
-    button: "Connecting…",
-    enabled: false,
-    line: "Installing Claude Code… This takes a minute or two.",
-    actions: ["Cancel"],
+  assert.deepEqual(seen.first, {
+    cards: [
+      { name: "Codex", line: "Pro plan", action: "Connected" },
+      { name: "Claude Code", line: "Not installed", action: "Install" },
+    ],
+    subtitle: "Codex is ready. Connect any others you use, or start right away.",
+    count: "1 of 2 connected",
+    continue: true,
   });
-  assert.deepEqual(seen.failed, {
-    name: "Claude Code",
-    button: "Try again",
-    enabled: true,
-    line: "Brigadier couldn't download Claude Code. Check your internet connection, then try again.",
-    actions: [],
-  });
-  assert.deepEqual(seen.signingIn, {
-    name: "Claude Code",
-    button: "Connecting…",
-    enabled: false,
-    line: "Finish signing in to Claude Code in your browser.",
-    actions: ["Cancel"],
-  });
-  assert.deepEqual(seen.cancelled, { name: "Claude Code", button: "Connect", enabled: true, line: "Not connected", actions: [] });
+  assert.deepEqual(seen.found, { name: "Claude Code", line: "Found on this computer · Not signed in", action: "Sign in" });
+  assert.deepEqual(seen.waiting, { name: "Claude Code", line: "Complete sign-in in your browser", action: "Waiting…" });
+  assert.deepEqual(seen.failed, { name: "Claude Code", line: "The sign-in didn't finish. Try again.", action: "Sign in" });
   assert.deepEqual(seen.connected, {
-    name: "Claude Code",
-    button: "Connected",
-    enabled: true,
-    line: "Connected · Max plan",
-    actions: [],
+    cards: [
+      { name: "Codex", line: "Pro plan", action: "Connected" },
+      { name: "Claude Code", line: "Max plan", action: "Connected" },
+    ],
+    subtitle: "Claude Code and Codex are ready. Connect any others you use, or start right away.",
+    count: "2 of 2 connected",
+    continue: true,
   });
-  assert.equal(seen.continueAtEnd, true);
   assert.deepEqual(seen.asked, [
+    "openUrl https://code.claude.com/docs/en/setup",
     "connectAgent claude",
-    "connectAgent claude",
-    "cancelConnect claude",
     "connectAgent claude",
   ]);
   assert.deepEqual(seen.jargon, []);
+});
+
+// With no agent connected, the one found on this computer comes first and Continue waits.
+test("onboarding: no agent connected holds Continue", { timeout: 60000 }, async (t) => {
+  const seen = parse(
+    await renderFixtureLive(t, "onboarding-agents.html?drive=1&codex=signedOut", "onboarding-agents-result", 30000),
+  );
+  assert.deepEqual(seen.first, {
+    cards: [
+      { name: "Codex", line: "Found on this computer · Not signed in", action: "Sign in" },
+      { name: "Claude Code", line: "Not installed", action: "Install" },
+    ],
+    subtitle: "Connect at least one agent to continue.",
+    count: "0 of 2 connected",
+    continue: false,
+  });
 });
