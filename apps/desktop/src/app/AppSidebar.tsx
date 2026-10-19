@@ -858,7 +858,7 @@ function RowStatus({ conversationId }: { conversationId: string }) {
   const open = useApp((s) => s.selection.type === "conversation" && s.selection.id === conversationId);
   const isUnread = unread(finishedAtMs, seen, open);
   const mark = <SidebarActivityMark conversationId={conversationId} unread={isUnread} />;
-  return <SessionStatusLabel conversationId={conversationId} place="row" className={hideOnRowHover}
+  return <SessionStatusLabel conversationId={conversationId} className={hideOnRowHover}
     rowIndicator={mark} fallback={isUnread ? <span data-slot="row-status" data-status="unread" className={hideOnRowHover}>{mark}</span> : null} />;
 }
 

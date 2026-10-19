@@ -84,7 +84,7 @@ test("closing a working session's tab stops nothing and says so in a note; it st
   assert.equal(seen.chatTabStatus, "", "the tab shows no state word");
   assert.equal(seen.chatTabTip, "Lone worker · Working", "the tab's tooltip names the state");
   assert.equal(seen.chatTabMark, "spinner");
-  assert.ok((seen.chatTabStatusShare as number) <= 10, "only a mark takes space beside the title");
+  assert.ok((seen.chatTabStatusShare as number) <= 12, "only a mark takes space beside the title");
   assert.deepEqual(seen.notes, ["Still running. Reopen it from the sidebar."], "closing it leaves a small note");
   assert.equal(seen.dialog, false, "no dialog");
   assert.deepEqual(seen.idleNotes, [], "an idle session closes quietly");
@@ -92,14 +92,13 @@ test("closing a working session's tab stops nothing and says so in a note; it st
 
 
 for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
-  test(`${kind} rows preserve activity, error and unread marks with plain state words (${unread ? "unread" : "read"}); tab indicators stay unchanged`, { timeout: 60000 }, async (t) => {
+  test(`${kind} rows preserve activity, error and unread marks with plain state words (${unread ? "unread" : "read"}); the tab shows the row's own marks without words`, { timeout: 60000 }, async (t) => {
     const seen = JSON.parse(await renderFixturePage(t, `sessions.html?states=1${kind === "chat" ? "&chats=1" : ""}${unread ? "&unread=1" : ""}`, "sessions-result", 20000)) as {
-      title: string; rowWords: string; state: string; words: string; tip: string; rowTip: string; rowMark: string; mark: string; width: number; titleFlex: string; beforeMark: string | null; error: boolean; plain: boolean; unreadSize: number | null; unreadSlot: number | null; spinnerSize: number | null; spinnerSlot: number | null; spinnerDuration: string | null; errorSize: number | null; errorSlot: number | null; leadingError: number | null;
+      title: string; rowWords: string; state: string; words: string; tip: string; rowTip: string; rowMark: string; mark: string | null; dot: boolean; tabError: boolean; width: number; titleFlex: string; beforeMark: string | null; error: boolean; plain: boolean; unreadSize: number | null; unreadSlot: number | null; spinnerSize: number | null; spinnerSlot: number | null; spinnerDuration: string | null; errorSize: number | null; errorSlot: number | null; leadingError: number | null;
     }[];
     assert.deepEqual([...new Set(seen.map((row) => row.rowWords))].toSorted(), ["Working", "Needs you", "Ready", "Merging", "Merged", "PR open", "Failed", "Stopped", "Reverted"].toSorted());
     for (const row of seen) {
-      const mark = row.state === "working" || row.state === "merging" ? "spinner" : "dot";
-      const busy = mark === "spinner";
+      const busy = row.state === "working" || row.state === "merging";
       assert.equal(row.beforeMark, busy ? "spinner" : unread ? "unread" : null, `${row.title}: closed row mark`);
       assert.equal(row.rowMark, busy ? "spinner" : null, `${row.title}: the open row has no unread mark`);
       assert.equal(row.error, row.state === "failed", `${row.title}: errors have a separate leading icon`);
@@ -107,10 +106,13 @@ for (const kind of ["session", "chat"]) for (const unread of [false, true]) {
       if (row.beforeMark === "unread") { assert.equal(row.unreadSize, 8); assert.equal(row.unreadSlot, 20); }
       if (busy) { assert.equal(row.spinnerSize, 16); assert.equal(row.spinnerSlot, 20); assert.equal(row.spinnerDuration, "2s"); }
       if (row.error) { assert.equal(row.errorSize, 16); assert.equal(row.errorSlot, 20); assert.equal(row.leadingError, 4); }
-      assert.equal(row.mark, mark, `${row.title}: tab mark`);
+      // The tab shows exactly the open row's marks (no grey dot of its own), without the words.
+      assert.equal(row.mark, row.rowMark, `${row.title}: the tab's mark is the row's`);
+      assert.equal(row.dot, false, `${row.title}: no dot of the tab's own`);
+      assert.equal(row.tabError, row.error, `${row.title}: the row's error glyph in the tab`);
       assert.equal(row.words, "", `${row.title}: no state word in the tab`);
       assert.equal(row.tip, `${row.title} · ${row.rowTip}`, `${row.title}: the whole tab has the state tooltip`);
-      assert.ok(row.width <= 16, `${row.title}: only a mark beside the title`);
+      assert.ok(row.width <= 20, `${row.title}: only a mark beside the title`);
       assert.equal(row.titleFlex, "1", `${row.title}: the title takes the available width`);
     }
   });

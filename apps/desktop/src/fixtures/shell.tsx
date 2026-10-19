@@ -411,8 +411,9 @@ async function driveLayout(): Promise<Record<string, unknown>> {
   await wait(800);
   await settle();
   const tab = one('[data-slot="session-tabs"] [data-tab-id="chat"] [role="tab"]')!;
-  const mark = tab.querySelector<HTMLElement>('[data-slot="tab-status"]')!;
-  seen.sessionStatus = { words: mark.textContent, tip: tab.title, spinner: !!mark.querySelector('[data-slot="status-spinner"]'), width: mark.getBoundingClientRect().width };
+  const spinner = tab.querySelector<HTMLElement>('[data-slot="status-spinner"]');
+  const title = tab.querySelector(".session-tab-title")?.textContent ?? "";
+  seen.sessionStatus = { words: tab.textContent?.replace(title, "").trim(), tip: tab.title, spinner: !!spinner, width: spinner?.parentElement?.getBoundingClientRect().width ?? 0 };
   seen.projectHeader = one('[data-slot="sidebar-panel"] li > div > button[aria-expanded]')?.textContent?.trim();
   seen.expandedStart = tabsStart();
   seen.expanded = await panels();

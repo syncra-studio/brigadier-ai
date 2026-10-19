@@ -14,7 +14,7 @@ import {
 
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TitlebarButton } from "@/components/titlebar-button";
-import { SessionStatusLabel, statusWords } from "@/app/SessionStatus";
+import { SidebarActivityMark, SidebarError, statusWords } from "@/app/SessionStatus";
 import { UNTITLED } from "@/app/TopBar";
 import { sessionTabKey } from "@/state/sessionTabKeys";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
@@ -59,7 +59,7 @@ import {
 } from "@/state/sessionTabs";
 import { useBrowserOn } from "@/state/links";
 import { useApp } from "@/state/store";
-import { useSessionStatus } from "@/state/tabStates";
+import { useSessionStatus, useSidebarIndicators } from "@/state/tabStates";
 import { NewTabTools } from "./NewTabTools";
 import { BrowserTabIcon } from "./BrowserTabIcon";
 
@@ -220,6 +220,7 @@ export function SessionTabBar({
   const connection = useApp((s) => s.connection.status);
   const archived = conversation.lifecycle === "archived";
   const status = useSessionStatus(id);
+  const { error } = useSidebarIndicators(id);
   const strip = useRef<HTMLDivElement>(null);
   const mac = useApp((s) => s.info?.platform === "macos");
   const cwd = useCheckoutRoot();
@@ -373,9 +374,11 @@ export function SessionTabBar({
               onDoubleClick={archived ? undefined : onRename}
               className="flex h-full min-w-0 flex-1 items-center gap-1 rounded-sm"
             >
-              {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
+              {/* The sidebar row's own marks, without its state words: its error glyph leads, its spinner trails. */}
+              {archived ? <Archive aria-hidden className="size-icon-sm shrink-0" /> : error ? <SidebarError conversationId={id} /> : <Chat aria-hidden className="size-icon-sm shrink-0" />}
               <span className="session-tab-title min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap">{chatTitle}</span>
-              {!archived && <SessionStatusLabel conversationId={id} place="tab" />}
+              {/* The session in front is open: it is never unread. */}
+              {!archived && <SidebarActivityMark conversationId={id} unread={false} />}
             </button>
             <ChatActions
               conversation={conversation}

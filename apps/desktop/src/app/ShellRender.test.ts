@@ -43,7 +43,7 @@ for (const [name, page] of [["", "shell.html?drive=layout"], [", a widened left 
     assert.equal(status.words, "");
     assert.equal(status.tip, "Tidy the release notes · Working");
     assert.equal(status.spinner, true);
-    assert.ok(status.width <= 16, "only the mark uses the session title's room");
+    assert.ok(status.width <= 20, "only the sidebar's mark uses the session title's room");
     for (const run of ["expanded", "folded", "narrow"]) {
       const panels = seen[run] as Panels;
       for (const step of ["filesOpening", "workersOpening", "filesClosing", "filesAgain", "workersClosing", "filesClosingLast"]) {

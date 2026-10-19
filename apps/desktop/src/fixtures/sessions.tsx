@@ -179,8 +179,9 @@ async function closeAndReopen() {
   seen.reopened = useApp.getState().selection;
   const chatTab = document.querySelector('[data-slot="session-tabs"] [data-tab-id="chat"] [role="tab"]');
   seen.chatTab = chatTab?.querySelector(".session-tab-title")?.textContent?.trim();
-  seen.chatTabStatus = chatTab?.querySelector('[data-slot="tab-status"]')?.textContent?.trim();
-  const tabStatus = chatTab?.querySelector('[data-slot="tab-status"]');
+  // Beside the title, only the sidebar row's marks: no words.
+  seen.chatTabStatus = chatTab?.textContent?.replace(seen.chatTab as string, "").trim();
+  const tabStatus = chatTab?.querySelector('[data-slot="status-spinner"]')?.parentElement;
   seen.chatTabTip = chatTab?.getAttribute("title");
   seen.chatTabMark = chatTab?.querySelector('[data-slot="status-spinner"]') ? "spinner" : null;
   seen.chatTabStatusShare = tabStatus && chatTab ? Math.round((tabStatus.getBoundingClientRect().width / chatTab.clientWidth) * 100) : null;
@@ -232,12 +233,15 @@ function Fixture() {
           useApp.setState({ selection: { type: "conversation", id: conversation.id } });
           await until(() => document.querySelector('[data-tab-id="chat"] .session-tab-title')?.textContent === conversation.title);
           const tab = document.querySelector<HTMLElement>('[data-tab-id="chat"] [role="tab"]')!;
-          const mark = tab.querySelector<HTMLElement>('[data-slot="tab-status"]')!;
+          // The tab's marks are the sidebar row's own: its spinner or unread dot, its error glyph.
+          const mark = tab.querySelector<HTMLElement>('[data-slot="status-spinner"], [data-slot="status-unread"]')?.parentElement;
           states.push({ ...info, title: conversation.title, rowWords: row.querySelector('[data-slot="status-word"]')?.textContent,
-            state: mark.dataset.status, words: mark.textContent, tip: tab.title, rowTip: row.title,
+            state: row.dataset.status, words: tab.textContent?.replace(conversation.title, "").trim(), tip: tab.title, rowTip: row.title,
             rowMark: row.querySelector('[data-slot="status-spinner"]') ? "spinner" : row.querySelector('[data-slot="status-unread"]') ? "unread" : null,
-            mark: mark.querySelector('[data-slot="status-spinner"]') ? "spinner" : mark.querySelector('[data-slot="status-dot"]') ? "dot" : null,
-            width: mark.getBoundingClientRect().width, titleFlex: getComputedStyle(tab.querySelector('.session-tab-title')!).flexGrow,
+            mark: tab.querySelector('[data-slot="status-spinner"]') ? "spinner" : tab.querySelector('[data-slot="status-unread"]') ? "unread" : null,
+            dot: tab.querySelector('[data-slot="status-dot"]') !== null,
+            tabError: tab.querySelector('[data-slot="status-error"]') !== null,
+            width: mark?.getBoundingClientRect().width ?? 0, titleFlex: getComputedStyle(tab.querySelector('.session-tab-title')!).flexGrow,
           });
         }
         setResult(JSON.stringify(states));

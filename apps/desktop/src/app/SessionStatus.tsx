@@ -1,4 +1,3 @@
-import { Spinner } from "@/components/glyphs/spinner";
 import { cn } from "@/lib/utils";
 import { SESSION_STATUS_WORDS, type SessionStatus, useSessionStatus, useSidebarIndicators } from "@/state/tabStates";
 
@@ -8,46 +7,30 @@ export function statusWords({ state, reason }: SessionStatus): string {
   return reason ? `${words} · ${reason}` : words;
 }
 
-/** Sidebar state words accompany its activity/unread marks; tabs show only a mark. */
+/** A sidebar row's state word with its activity or unread mark beside it; the tab shows only the marks. */
 export function SessionStatusLabel({
   conversationId,
-  place,
   className,
   fallback = null,
   rowIndicator,
 }: {
   conversationId: string;
-  place: "row" | "tab";
   className?: string;
   fallback?: React.ReactNode;
   rowIndicator?: React.ReactNode;
 }) {
   const status = useSessionStatus(conversationId);
   if (!status) return fallback;
-  const words = statusWords(status);
   const { state } = status;
-  const busy = state === "working" || state === "merging";
   return (
     <span
-      data-slot={place === "row" ? "row-status" : "tab-status"}
+      data-slot="row-status"
       data-status={state}
-      title={words}
-      className={cn(
-        "flex items-center gap-1 text-2xs whitespace-nowrap",
-        place === "row" ? "max-w-2/5 min-w-0 shrink overflow-hidden" : "shrink-0",
-        place === "row" ? "text-muted-foreground" : cn(
-          state === "ready" || state === "prOpen" ? "text-link" : state === "needsYou" ? "text-success" : state === "failed" ? "text-destructive" : "text-muted-foreground",
-          "opacity-80",
-        ),
-        className,
-      )}
+      title={statusWords(status)}
+      className={cn("text-muted-foreground flex max-w-2/5 min-w-0 shrink items-center gap-1 overflow-hidden text-2xs whitespace-nowrap", className)}
     >
-      {place === "row" ? <>
-        <span data-slot="status-word" className="shrink-0">{SESSION_STATUS_WORDS[state]}</span>
-        {rowIndicator}
-      </> : busy
-        ? <Spinner data-slot="status-spinner" aria-hidden className="size-icon-sm shrink-0 animate-spin motion-reduce:animate-none" />
-        : <span data-slot="status-dot" aria-hidden className="bg-current size-1.5 shrink-0 rounded-full" />}
+      <span data-slot="status-word" className="shrink-0">{SESSION_STATUS_WORDS[state]}</span>
+      {rowIndicator}
     </span>
   );
 }
