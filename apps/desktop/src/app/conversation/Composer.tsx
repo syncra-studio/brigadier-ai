@@ -597,6 +597,27 @@ function useEscToStop(canCancel: boolean, dictationOwner: string): boolean {
 
 type SendState = "starting" | "armed" | "stop" | "queue" | "resume" | "send";
 
+/**
+ * How long Stop stays after the model stops being cancellable. A merge lands its workers one by
+ * one and the conversation stops and starts working between them; without this the button
+ * flipped Stop ↔ Send several times a second, each flip easing its glyph in again from nothing,
+ * so it showed as a blank disc.
+ */
+const STOP_HOLD_MS = 700;
+
+/** `on`, staying true for `ms` after it goes false (and false at once if it comes back on). */
+function useHeldOn(on: boolean, ms: number): boolean {
+  const [held, setHeld] = useState(on);
+  // Set while rendering (React's way to adjust state to a prop), not in an effect.
+  if (on && !held) setHeld(true);
+  useEffect(() => {
+    if (on) return;
+    const timer = setTimeout(() => setHeld(false), ms);
+    return () => clearTimeout(timer);
+  }, [on, ms]);
+  return on || held;
+}
+
 /** What ⌘⏎ and ⌘-click on Send do in a project's session. */
 const START_TIP = "Start as a new session";
 
@@ -651,7 +672,8 @@ function SendControls({
     (s) => !!conversationId && s.board?.conversationId === conversationId && s.board.run === "starting",
   );
   const empty = useAuiState((s) => s.composer.isEmpty);
-  const canCancel = useAuiState((s) => s.composer.canCancel);
+  const cancellable = useAuiState((s) => s.composer.canCancel);
+  const canCancel = useHeldOn(cancellable, STOP_HOLD_MS);
   const dictationOwner = conversationId ?? NEW_CHAT_SCOPE;
   const armed = useEscToStop(canCancel, dictationOwner);
   const steers = useApp((s) => s.settings.followUp === "steer");
@@ -679,6 +701,9 @@ function SendControls({
             ? "resume"
             : "send";
   const sending = state === "send" || state === "queue";
+  // Stop is a plain button, not the Cancel primitive: held Stop (nothing to cancel) and live Stop
+  // are then the same element, so a flip between them never remounts it.
+  const cancelling = state === "starting" || state === "armed" || state === "stop";
   const background = sending && projectSession !== null && !empty && (modHeld || chip);
   const tip = state === "queue" && steers ? "Steer" : SEND_TIPS[state];
   const tooltip =
@@ -704,6 +729,10 @@ function SendControls({
       onClick={
         state === "resume"
           ? (onResume ?? undefined)
+          : cancelling
+            ? () => {
+                if (cancellable) aui.composer().cancel();
+              }
           : (event: MouseEvent<HTMLButtonElement>) => {
               const toNewSession = sending && !empty && (mac ? event.metaKey : event.ctrlKey);
               // Into a paused queue it asks first; the Send primitive's own click doesn't send.
@@ -740,13 +769,7 @@ function SendControls({
   return (
     <div className="flex shrink-0 items-center gap-1">
       <DictateButton owner={dictationOwner} />
-      {state === "resume" ? (
-        button
-      ) : state === "starting" || state === "armed" || state === "stop" ? (
-        <ComposerPrimitive.Cancel asChild>{button}</ComposerPrimitive.Cancel>
-      ) : (
-        <ComposerPrimitive.Send asChild>{button}</ComposerPrimitive.Send>
-      )}
+      {state === "resume" || cancelling ? button : <ComposerPrimitive.Send asChild>{button}</ComposerPrimitive.Send>}
     </div>
   );
 }

@@ -503,6 +503,28 @@ async function dropSendCase(seen: Record<string, unknown>) {
   seen.removedWhileUploading = { disabled: sendButton()?.disabled, tip: sendButton()?.textContent };
 }
 
+/**
+ * #400: a merge stops and starts the conversation's work several times a second. Stop stays Stop
+ * throughout, its glyph showing, and the button goes back to Send once the work has stayed over.
+ */
+async function flipsCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  setState({ type: "working" });
+  await until("Stop", () => sendButton()?.dataset.state === "stop", 3000);
+  const states = new Set<string>();
+  for (let flip = 0; flip < 10; flip++) {
+    setState(flip % 2 === 0 ? { type: "done" } : { type: "working" });
+    await sleep(80);
+    states.add(sendButton()?.dataset.state ?? "none");
+  }
+  seen.during = [...states];
+  const glyph = sendButton()?.querySelector("svg");
+  seen.glyph = glyph ? Number(getComputedStyle(glyph.parentElement!).opacity) > 0.9 : false;
+  setState({ type: "done" });
+  await until("Send back", () => sendButton()?.dataset.state === "send", 3000).catch(() => {});
+  seen.after = sendButton()?.dataset.state;
+}
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
   focus: focusCase,
   uploading: uploadingCase,
@@ -513,6 +535,7 @@ const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = 
   drop: dropCase,
   shift: shiftCase,
   dropSend: dropSendCase,
+  flips: flipsCase,
 };
 
 async function drive() {

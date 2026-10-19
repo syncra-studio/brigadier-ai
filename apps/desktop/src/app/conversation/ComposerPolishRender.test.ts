@@ -87,3 +87,10 @@ test("a message sent while a dropped file is still being read waits for it: the 
   assert.deepEqual(seen.nextDraft, { text: "", attachments: 0 });
   assert.deepEqual(seen.removedWhileUploading, { disabled: false, tip: "Send message" });
 });
+
+test("Stop stays Stop, its glyph showing, while a merge stops and starts the work several times a second (issue 400)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "flips");
+  assert.deepEqual(seen.during, ["stop"]);
+  assert.equal(seen.glyph, true);
+  assert.equal(seen.after, "send");
+});
