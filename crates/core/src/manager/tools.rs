@@ -223,11 +223,49 @@ impl SessionManager {
                     }
                     false => (args.spec.clone(), None),
                 };
+                let areas = task_areas(&args.areas)?;
+                let floor = match args.quality.as_deref().map(str::trim) {
+                    None | Some("" | "normal") => None,
+                    Some("high") => Some(brigadier_router::QualityTier::Frontier),
+                    Some(other) => {
+                        return Err(Error::Invalid(format!(
+                            "unknown quality \"{other}\": use \"high\" or leave it out"
+                        )));
+                    }
+                };
+                let needs = if args.image_generation {
+                    vec![brigadier_router::Capability::ImageGeneration]
+                } else {
+                    Vec::new()
+                };
+                let mut attachments =
+                    crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
+                for image in mockup_images {
+                    // Same bytes under another name are still that screen's `mockup-N` file.
+                    if !attachments
+                        .iter()
+                        .any(|given| given.id == image.id && given.name == image.name)
+                    {
+                        attachments.push(image);
+                    }
+                }
                 // A research question costly to get wrong goes to both vendors, when both can
-                // take it (Q77).
+                // take it (Q77), with the same files, areas and quality floor.
                 if args.fuse
                     && let Some(reply) = crate::heap(|| {
-                        self.delegate_fused(id, &args, &spec, effort.clone(), request.clone())
+                        self.delegate_fused(
+                            id,
+                            &args,
+                            super::fusion::FusedBrief {
+                                spec: spec.clone(),
+                                effort: effort.clone(),
+                                request: request.clone(),
+                                attachments: attachments.clone(),
+                                areas: areas.clone(),
+                                floor,
+                                needs: needs.clone(),
+                            },
+                        )
                     })
                     .await?
                 {
@@ -272,32 +310,6 @@ impl SessionManager {
                     }),
                     None => pin(args.provider.as_deref(), args.model, Some(effort))?,
                 };
-                let areas = task_areas(&args.areas)?;
-                let floor = match args.quality.as_deref().map(str::trim) {
-                    None | Some("" | "normal") => None,
-                    Some("high") => Some(brigadier_router::QualityTier::Frontier),
-                    Some(other) => {
-                        return Err(Error::Invalid(format!(
-                            "unknown quality \"{other}\": use \"high\" or leave it out"
-                        )));
-                    }
-                };
-                let needs = if args.image_generation {
-                    vec![brigadier_router::Capability::ImageGeneration]
-                } else {
-                    Vec::new()
-                };
-                let mut attachments =
-                    crate::heap(|| self.find_attachments(id, &args.attachments)).await?;
-                for image in mockup_images {
-                    // Same bytes under another name are still that screen's `mockup-N` file.
-                    if !attachments
-                        .iter()
-                        .any(|given| given.id == image.id && given.name == image.name)
-                    {
-                        attachments.push(image);
-                    }
-                }
                 let avoid = subject
                     .as_ref()
                     .filter(|_| args.kind == TaskKind::Review)

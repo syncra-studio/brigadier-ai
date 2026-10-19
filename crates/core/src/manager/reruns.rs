@@ -135,6 +135,13 @@ impl SessionManager {
                 task.number
             ));
         }
+        // Its rerun would say what ran it, and it is judged against its partner's answer (Q77).
+        if let Some(label) = super::fusion::fused_label(task) {
+            return Err(format!(
+                "task-{} is {label} of a fused pair: it is judged against the other answer, not rerun. Delegate a new task if you want more.",
+                task.number
+            ));
+        }
         if task.rerun.is_some() {
             return Err(format!(
                 "task-{} is already a rerun one tier up; it doesn't rerun again. Delegate a new task if you want more.",

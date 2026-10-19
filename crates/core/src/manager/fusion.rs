@@ -33,6 +33,17 @@ const LONE_NOTE: &str = "[one answer] Only one of the two independent answers to
 /// The pair's two labels, in the order the vendors are assigned.
 const LABELS: [&str; 2] = ["A", "B"];
 
+/// What both workers of a fused pair get: the brief as `delegate_task` resolved it.
+pub(crate) struct FusedBrief {
+    pub spec: String,
+    pub effort: String,
+    pub request: Option<String>,
+    pub attachments: Vec<crate::work::AttachmentRef>,
+    pub areas: Option<Vec<brigadier_router::Area>>,
+    pub floor: Option<brigadier_router::QualityTier>,
+    pub needs: Vec<brigadier_router::Capability>,
+}
+
 /// What a fused task's report does when it comes in.
 pub(crate) enum FusedReport {
     /// Its partner hasn't reported yet: it waits, delivering nothing.
@@ -58,10 +69,17 @@ impl SessionManager {
         &self,
         id: &ConversationId,
         args: &DelegateTask,
-        spec: &str,
-        effort: String,
-        request: Option<String>,
+        brief: FusedBrief,
     ) -> Result<Option<String>> {
+        let FusedBrief {
+            spec,
+            effort,
+            request,
+            attachments,
+            areas,
+            floor,
+            needs,
+        } = brief;
         if args.kind != TaskKind::Research {
             return Err(Error::Invalid(
                 "`fuse` is for research tasks: kind research".into(),
@@ -94,16 +112,16 @@ impl SessionManager {
                     id,
                     args.title.clone(),
                     TaskKind::Research,
-                    spec.to_owned(),
+                    spec.clone(),
                     Some(pin),
                     None,
                     Vec::new(),
                     None,
                     None,
-                    Vec::new(),
-                    None,
-                    None,
-                    Vec::new(),
+                    attachments.clone(),
+                    areas.clone(),
+                    floor,
+                    needs.clone(),
                     TaskExtra {
                         id: Some(ids[index].clone()),
                         request: request.clone(),

@@ -101,10 +101,19 @@ fn fusing(heard: Arc<Mutex<Heard>>, codex_waits: Arc<AtomicBool>, codex: Codex) 
                         format!("task-{n}")
                     })
                     .collect();
-                for task in tasks {
+                for task in &tasks {
                     let read = turn.call("read_report", json!({"task": task})).await;
                     assert!(!read.is_error, "{}", read.text);
                     heard.lock().unwrap().replies.push(read.text);
+                }
+                // A session's fused answer doesn't rerun: its rerun would say what ran it (a
+                // Chat has no rerun_task).
+                if turn.is_orchestrator() && turn.input.contains("[fused answers]") {
+                    let rerun = turn
+                        .call("rerun_task", json!({"task": tasks[0], "why": "no sources"}))
+                        .await;
+                    assert!(rerun.text.contains("of a fused pair"), "{}", rerun.text);
+                    heard.lock().unwrap().replies.push(rerun.text);
                 }
                 return Reply::text(ANSWER);
             }
@@ -250,6 +259,18 @@ async fn a_session_fuses_a_costly_question_too() {
     assert_eq!(reports[0].matches("[report task-").count(), 2);
     assert!(reports[0].contains("[fused answers]"));
     blind(reports[0]);
+    // Its rerun is refused, blind too.
+    assert!(
+        heard
+            .replies
+            .iter()
+            .any(|reply| reply.contains("of a fused pair")),
+        "{:#?}",
+        heard.replies
+    );
+    for reply in &heard.replies {
+        blind(reply);
+    }
     assert_eq!(shown(&flow, &id).await, vec![ANSWER.to_owned()]);
     flow.stop().await;
 }
@@ -424,5 +445,79 @@ async fn a_partner_that_fails_leaves_the_other_to_go_alone() {
     assert!(reports[0].contains("[one answer]"));
     blind(reports[0]);
     assert_eq!(shown(&flow, &chat).await, vec![ANSWER.to_owned()]);
+    flow.stop().await;
+}
+
+/// A fused brief keeps what `delegate_task` was given: both workers get the user's file and
+/// the quality floor asked for.
+#[tokio::test]
+async fn a_fused_pair_keeps_the_files_and_quality_asked_for() {
+    let given: Arc<Mutex<String>> = Arc::default();
+    let flow = Flow::start(
+        "fusion-inputs",
+        Options::default(),
+        script({
+            let given = given.clone();
+            move |turn| {
+                let given = given.clone();
+                async move {
+                    if turn.chat().is_none() && !turn.is_orchestrator() {
+                        turn.call("submit_report", json!({"summary": "Hardened steel."}))
+                            .await;
+                        return Reply::text("Reported.");
+                    }
+                    if turn.input.contains("[report task-") {
+                        return Reply::text(ANSWER);
+                    }
+                    if !turn.input.contains("Which nozzle") {
+                        return Reply::text("[quiet]");
+                    }
+                    let id = given.lock().unwrap().clone();
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "medium", "title": "Nozzle for my printer", "kind": "research",
+                                   "fuse": true, "quality": "high", "attachments": [id],
+                                   "spec": "Which nozzle fits the printer in the attached spec sheet?"}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    Reply::text("[quiet]")
+                }
+            }
+        }),
+    )
+    .await;
+    let chat = new_chat(&flow).await;
+    let sheet = flow
+        .core
+        .add_attachment(
+            "printer-spec.txt".into(),
+            "text/plain".into(),
+            b"Hotend: 0.4 mm, M6 thread.".to_vec(),
+            false,
+        )
+        .await
+        .unwrap();
+    *given.lock().unwrap() = sheet.id.clone();
+    flow.manager
+        .send_message(
+            chat.clone(),
+            "Which nozzle should I buy for carbon fibre PETG?".into(),
+            vec![sheet.clone()],
+            Vec::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    let board = answered(&flow, &chat).await;
+    assert_eq!(board.tasks.len(), 2);
+    for task in board.tasks.values() {
+        assert!(task.fusion.is_some());
+        let names: Vec<&str> = task.attachments.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["printer-spec.txt"]);
+        assert_eq!(task.floor, brigadier_router::QualityTier::Frontier);
+    }
     flow.stop().await;
 }
