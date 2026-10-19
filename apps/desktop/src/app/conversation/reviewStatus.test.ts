@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { batchReviews, checksLine, findingRows, reviewLines, reviewRow, reviewStatus } from "@/app/conversation/reviewStatus";
+import { batchReviews, checksLine, findingRows, reviewedLine, reviewLines, reviewRow, reviewStatus } from "@/app/conversation/reviewStatus";
 import type { Finding, FindingStatus, IntegratedCheck, IntegratedCheckState, MergedUpstream, OrchestratorStep, ReviewRun, ReviewState } from "@/ipc/generated";
 
 const review = (id: string, startedAtMs: number, state: ReviewState, kind: ReviewRun["kind"] = "code"): ReviewRun => ({
@@ -259,4 +259,25 @@ test("the checks line follows the newest run of the session's full checks", () =
   });
   const cut = check("check-12", { type: "interrupted", reason: "a restart" });
   assert.deepEqual(checksLine([failed, cut]), { text: "Checks couldn't run", title: "a restart", failed: true });
+});
+
+test("the reviews and checks read as one row: failed checks first, then what asks for a look, else where they stand", () => {
+  const section = (outcome: string, label: string | null = null) => ({ label, outcome, findings: [] });
+  const row = (...outcomes: string[]) => ({ text: "Review", sections: outcomes.map((said) => section(said)) });
+  const passed = { text: "Checks passed", title: "npm test at abc", failed: false };
+  const failed = { text: "Checks failed: npm test", title: "exit 1 at abc", failed: true };
+  const running = { text: "Checks running…", title: "npm test", failed: false, sinceMs: 1 };
+  assert.equal(reviewedLine(null, null), null);
+  assert.deepEqual(reviewedLine(row("5 fixed"), passed), { text: "Reviewed · 5 fixed", tone: "ok", title: "Review\nChecks passed (npm test at abc)" });
+  assert.equal(reviewedLine(row("5 fixed"), failed)?.text, "Checks failed");
+  assert.equal(reviewedLine(row("5 fixed"), failed)?.tone, "failed");
+  assert.equal(reviewedLine(null, { text: "Checks couldn't run", title: "no disk", failed: true })?.text, "Checks couldn't run");
+  assert.deepEqual(reviewedLine(row("1 open", "clean"), passed)?.text, "Reviewed · 1 open");
+  assert.equal(reviewedLine(row("1 open"), passed)?.tone, "warn");
+  assert.equal(reviewedLine(row("couldn’t run"), null)?.text, "Review couldn’t run");
+  assert.deepEqual(reviewedLine(row("clean", "running…"), null), { text: "Reviewing…", tone: "running", title: "Review" });
+  assert.equal(reviewedLine(row("clean"), running)?.tone, "running");
+  assert.equal(reviewedLine(row("clean"), running)?.text, "Reviewed · clean");
+  assert.deepEqual(reviewedLine(null, passed)?.text, "Checks passed");
+  assert.equal(reviewedLine(null, running)?.tone, "running");
 });

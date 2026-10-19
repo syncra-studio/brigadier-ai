@@ -300,3 +300,34 @@ export function useChecksLine(conversationId: string): ChecksLine | null {
   });
   return useMemo(() => (json ? (JSON.parse(json) as ChecksLine | null) : null), [json]);
 }
+
+/** How the context card's Reviewed row reads: fine, still going, worth a look, or failed. */
+export type ReviewedTone = "ok" | "running" | "warn" | "failed";
+
+/** The context card's one row for the reviews and the full checks (Q87). */
+export type ReviewedLine = { text: string; tone: ReviewedTone; title: string };
+
+/** A batch's outcome that asks for a look: something left open, unverified, new or not run. */
+const LOOK = /open|unverified|new|couldn’t run/;
+
+/**
+ * The reviews and the full checks as one row: failed checks first ("Checks failed", red), then
+ * what the reviews left to look at ("Reviewed · 1 open"), else where they stand ("Reviewing…",
+ * "Reviewed · 5 fixed", "Reviewed · clean"), else the checks alone ("Checks passed"). Of two
+ * batches (before and since a merge), the one that asks for a look speaks, else the newest.
+ * Its tooltip holds every line it stands for; their detail is in the Reviews tab.
+ */
+export function reviewedLine(row: ReviewRow | null, checks: ChecksLine | null): ReviewedLine | null {
+  const outcomes = (row?.sections ?? []).map((section) => section.outcome);
+  const title = [row?.text, checks && `${checks.text} (${checks.title})`].filter(Boolean).join("\n");
+  if (checks?.failed) {
+    return { text: checks.text.startsWith("Checks failed") ? "Checks failed" : checks.text, tone: "failed", title };
+  }
+  const look = outcomes.find((said) => LOOK.test(said));
+  if (look) return { text: look === "couldn’t run" ? "Review couldn’t run" : `Reviewed · ${look}`, tone: "warn", title };
+  const newest = outcomes.at(-1);
+  if (newest === "running…") return { text: "Reviewing…", tone: "running", title };
+  if (newest) return { text: `Reviewed · ${newest}`, tone: checks?.sinceMs === undefined ? "ok" : "running", title };
+  if (checks) return { text: checks.text, tone: checks.sinceMs === undefined ? "ok" : "running", title };
+  return null;
+}
