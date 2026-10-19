@@ -34,6 +34,13 @@ test("image preview geometry, zoom, pan and native download contract", { timeout
   assert.equal(seen.closed, true);
 });
 
+test("the image copy contract waits for a slow clipboard write to finish", { timeout: 90000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "lightbox.html?slow-copy=1", "lightbox-result", 60000, { reducedMotion: true }));
+  assert.equal(seen.error, undefined, seen.stack);
+  assert.deepEqual(seen.copied, { type: "image/png", signature: [137, 80, 78, 71, 13, 10, 26, 10] });
+  assert.deepEqual(seen.copyFailure, ["Could not copy image"]);
+});
+
 for (const [label, query] of [["an image", "drive=open"], ["an attachment read from its file", "drive=open&source=1"]]) {
   test(`the viewer grows out of ${label}'s thumbnail and then holds still: no empty frame, no second fade, one size`, { timeout: 90000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, `lightbox.html?${query}`, "lightbox-result", 60000));

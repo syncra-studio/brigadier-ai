@@ -116,14 +116,22 @@ async function measure() {
   button("Zoom in image").click(); await wait(); const above = scale();
   button("Zoom out image").click(); await wait();
   out.inserted = { fit: fitted, above, below: scale() };
-  let copied: { type: string; signature: number[] } | null = null;
-  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { write: async (items: ClipboardItem[]) => {
-    const png = await items[0]!.getType("image/png");
-    copied = { type: png.type, signature: Array.from(new Uint8Array(await png.arrayBuffer()).slice(0, 8)) };
-  } } });
+  const copied = new Promise<{ type: string; signature: number[] }>((resolve, reject) => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { write: async (items: ClipboardItem[]) => {
+      try {
+        // Exercise a clipboard read that outlasts the fixture's former 200 ms wait.
+        if (query.has("slow-copy")) await wait(500);
+        const png = await items[0]!.getType("image/png");
+        resolve({ type: png.type, signature: Array.from(new Uint8Array(await png.arrayBuffer()).slice(0, 8)) });
+      } catch (error) {
+        reject(error);
+        throw error;
+      }
+    } } });
+  });
   one("[data-slot=image-preview] img").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 400, clientY: 300, button: 2 }));
-  await wait(); menuItem().click(); await wait(200);
-  out.copied = copied;
+  await wait(); menuItem().click();
+  out.copied = await copied;
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { write: () => Promise.reject(new Error("Clipboard unavailable")) } });
   one("[data-slot=image-preview] img").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 400, clientY: 300, button: 2 }));
   await wait(); menuItem().click(); await wait(150);
