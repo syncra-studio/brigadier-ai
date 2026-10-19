@@ -644,6 +644,13 @@ function tableMarkdown(table: HTMLTableElement): string {
   return [line(head), line(head.map(() => "---")), ...body.map(line)].join("\n");
 }
 
+/**
+ * A table cell's width: an import path, URL or identifier wraps anywhere, so it never holds its
+ * column wide enough to squeeze another to a word per line; no column gets narrower than a few
+ * words.
+ */
+const TABLE_CELL = "min-w-24 [overflow-wrap:anywhere]";
+
 /** The table: rules between rows, no outer border; on hover "Expand table" and "Copy table". */
 const Table: FC<React.ComponentProps<"table">> = ({ className, ...props }) => {
   const ref = useRef<HTMLTableElement>(null);
@@ -682,7 +689,7 @@ const Table: FC<React.ComponentProps<"table">> = ({ className, ...props }) => {
   );
 };
 
-const defaultComponents = memoizeMarkdownComponents({
+export const defaultComponents = memoizeMarkdownComponents({
   h1: ({ className, ...props }) => (
     <h1
       className={cn(
@@ -794,6 +801,9 @@ const defaultComponents = memoizeMarkdownComponents({
     <th
       className={cn(
         "aui-md-th border-border border-b px-3 py-2 text-start font-semibold [[align=center]]:text-center [[align=right]]:text-right",
+        TABLE_CELL,
+        // The last header keeps clear of the table's hover buttons (Expand table, Copy table).
+        "last:pe-16",
         className,
       )}
       {...props}
@@ -803,6 +813,7 @@ const defaultComponents = memoizeMarkdownComponents({
     <td
       className={cn(
         "aui-md-td px-3 py-2 text-start align-top [[align=center]]:text-center [[align=right]]:text-right",
+        TABLE_CELL,
         className,
       )}
       {...props}
