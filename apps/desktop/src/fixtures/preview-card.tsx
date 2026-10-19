@@ -21,6 +21,7 @@ import type { ReactNode } from "react";
 import { PreviewCard } from "@/app/conversation/activity/PreviewCard";
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { ViewContext } from "@/app/conversation/viewContext";
+import { driveFold } from "@/fixtures/cardFold";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, Preview, PreviewState, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
@@ -129,7 +130,8 @@ function look(id: string) {
 async function reach() {
   await until(() => document.querySelectorAll("[data-slot=proof] img").length >= (only ? 0 : 6));
   at("collapsed")?.querySelector<HTMLButtonElement>("[data-slot=preview-fold]")?.click();
-  await wait(50);
+  // The folded card's body closes as it animates.
+  await until(() => !at("collapsed") || look("collapsed").captions.length === 0);
   document.body.dataset.reached = "1";
 }
 
@@ -164,7 +166,17 @@ async function drive() {
 }
 
 void reach()
-  .then(() => (query.get("drive") === "1" ? drive() : new Promise<never>(() => {})))
+  .then(() =>
+    query.get("drive") === "1"
+      ? drive()
+      : query.get("drive") === "fold"
+        ? driveFold(
+            at("running")!.querySelector("[data-slot=preview-card]")!,
+            at("running")!.querySelector<HTMLElement>("[data-slot=preview-open] > button")!,
+            () => look("running").captions.length,
+          )
+        : new Promise<never>(() => {}),
+  )
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

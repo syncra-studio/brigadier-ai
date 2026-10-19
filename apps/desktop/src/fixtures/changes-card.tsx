@@ -14,7 +14,8 @@
  * - `merge-only`: a turn that merged with nothing of its own counted: the merge's card.
  *
  * `?case=<id>` shows one case alone (for a screenshot); `?drive=1` writes what each case shows,
- * then clicks through it, to `<pre id="changes-card-result">` (ChangesCardRender.test.ts).
+ * then clicks through it, to `<pre id="changes-card-result">` (ChangesCardRender.test.ts);
+ * `?case=all&drive=fold` folds and opens the card from its header with real clicks (cardFold.ts).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -24,6 +25,7 @@ import type { TurnMerge } from "@/app/conversation/activity/MergeMessage";
 import type { Merged } from "@/app/conversation/activity/revert";
 import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
+import { driveFold } from "@/fixtures/cardFold";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, FileStat, MergeRecord, OrchestratorStep, Request, ReviewRun, UserRequest } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
@@ -193,6 +195,8 @@ async function reach() {
   await wait(50);
   at("reverting")?.querySelector<HTMLButtonElement>("[data-slot=merge-revert-go]")?.click();
   await until(() => (!!only && only !== "reverting") || !!at("reverting")?.querySelector("[role=status]"));
+  // The folded card's body closes as it animates.
+  await until(() => !at("collapsed") || look("collapsed").files.length === 0);
   document.body.dataset.reached = "1";
 }
 
@@ -231,7 +235,13 @@ async function drive() {
 }
 
 void reach()
-  .then(() => (query.get("drive") === "1" ? drive() : new Promise<never>(() => {})))
+  .then(() =>
+    query.get("drive") === "1"
+      ? drive()
+      : query.get("drive") === "fold"
+        ? driveFold(at("all")!.querySelector("[data-slot=turn-diff]")!, button("all", "View changes")!, () => look("all").files.length)
+        : new Promise<never>(() => {}),
+  )
   .catch((error: unknown) => ({ error: String(error) }))
   .then((result) => {
     const out = document.createElement("pre");

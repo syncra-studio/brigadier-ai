@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import type { FoldSeen } from "@/fixtures/cardFold";
 import { renderFixtureLive } from "@/fixtures/headless";
 
 type Look = {
@@ -74,3 +75,20 @@ test("the Changes card: merged with a finding, folded, all files, Revert's quest
     "Redo merge e1e1e1e on main: revert its revert d0d0d0d the way it went in",
   ]);
 });
+
+// The whole header folds and opens the card, its buttons keep their own action, and the body's
+// height and opacity animate, at once with reduced motion.
+for (const reducedMotion of [false, true]) {
+  test(`a click on the header folds and opens the card${reducedMotion ? ", at once with reduced motion" : ", animated"}`, { timeout: 120000 }, async (t) => {
+    const seen = JSON.parse(await renderFixtureLive(t, "changes-card.html?case=all&drive=fold", "changes-card-result", 60000, { reducedMotion })) as FoldSeen & { error?: string };
+    assert.equal(seen.error, undefined);
+    // View changes does its own thing; the card stays open.
+    assert.equal(seen.afterButton, 6);
+    assert.deepEqual(seen.folding, { state: "closed", animation: reducedMotion ? "none" : "collapsible-up" });
+    assert.deepEqual(seen.unfolding, { state: "open", animation: reducedMotion ? "none" : "collapsible-down" });
+    assert.equal(seen.reopened, 6);
+    assert.notEqual(seen.closedWithinMs, null);
+    if (reducedMotion) assert.ok(seen.closedWithinMs! < 100, `closed after ${seen.closedWithinMs} ms`);
+    else assert.ok(seen.closedWithinMs! >= 150, `closed after ${seen.closedWithinMs} ms, not animated`);
+  });
+}

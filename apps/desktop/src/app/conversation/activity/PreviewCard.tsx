@@ -2,6 +2,7 @@ import { ArrowUpRight, ChevronDown, ChevronUp, Globe, ImageSquare, Play } from "
 import { type FC, type ReactNode, useState } from "react";
 
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
+import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { Pill, RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
@@ -213,7 +214,7 @@ export function PreviewCard({ url, steps, session }: { url: string | null; steps
 
   return (
     <StorageCard data-slot="preview-card" data-state={state ? (stopped ? "stopped" : "running") : undefined} data-open={(open && proofs.length > 0) || undefined}>
-      <div className="flex items-center gap-4 py-4">
+      <FoldHeader foldable={proofs.length > 0} onToggle={() => setOpen(!open)} className="flex items-center gap-4 py-4">
         <RoundBadge>{url ? <Globe className={cn(stopped && "text-foreground/65")} /> : <ImageSquare />}</RoundBadge>
         <RowText
           title={<span data-slot="preview-title">{title}</span>}
@@ -238,17 +239,19 @@ export function PreviewCard({ url, steps, session }: { url: string | null; steps
             </button>
           )}
         </div>
-      </div>
-      {open && proofs.length > 0 && (
-        <div data-slot="preview-proofs" className="border-divider flex flex-col gap-3 border-t pt-3.5 pb-4.5 ps-13">
-          {url && (
-            <div className="flex items-center gap-2 text-xs">
-              {/* TODO(w105): where the proofs were taken ("Checked in the browser") once each proof records it. */}
-              <span data-slot="preview-proofs-count" className="text-muted-foreground">{counted}</span>
-            </div>
-          )}
-          <Proofs proofs={proofs} conversationId={viewed} />
-        </div>
+      </FoldHeader>
+      {proofs.length > 0 && (
+        <FoldBody open={open}>
+          <div data-slot="preview-proofs" className="border-divider flex flex-col gap-3 border-t pt-3.5 pb-4.5 ps-13">
+            {url && (
+              <div className="flex items-center gap-2 text-xs">
+                {/* TODO(w105): where the proofs were taken ("Checked in the browser") once each proof records it. */}
+                <span data-slot="preview-proofs-count" className="text-muted-foreground">{counted}</span>
+              </div>
+            )}
+            <Proofs proofs={proofs} conversationId={viewed} />
+          </div>
+        </FoldBody>
       )}
     </StorageCard>
   );

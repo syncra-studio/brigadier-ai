@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import type { FoldSeen } from "@/fixtures/cardFold";
 import { renderFixtureLive } from "@/fixtures/headless";
 
 type Look = {
@@ -60,3 +61,20 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   assert.equal(seen.browserTabs, 1);
   assert.deepEqual(seen.menu, ["Brigadier browser", "Default browser"]);
 });
+
+// The whole header folds and opens the card, its buttons keep their own action, and the body's
+// height and opacity animate, at once with reduced motion.
+for (const reducedMotion of [false, true]) {
+  test(`a click on the header folds and opens the card${reducedMotion ? ", at once with reduced motion" : ", animated"}`, { timeout: 120000 }, async (t) => {
+    const seen = JSON.parse(await renderFixtureLive(t, "preview-card.html?case=running&drive=fold", "preview-card-result", 60000, { reducedMotion })) as FoldSeen & { error?: string };
+    assert.equal(seen.error, undefined);
+    // Open does its own thing; the card stays open.
+    assert.equal(seen.afterButton, 2);
+    assert.deepEqual(seen.folding, { state: "closed", animation: reducedMotion ? "none" : "collapsible-up" });
+    assert.deepEqual(seen.unfolding, { state: "open", animation: reducedMotion ? "none" : "collapsible-down" });
+    assert.equal(seen.reopened, 2);
+    assert.notEqual(seen.closedWithinMs, null);
+    if (reducedMotion) assert.ok(seen.closedWithinMs! < 100, `closed after ${seen.closedWithinMs} ms`);
+    else assert.ok(seen.closedWithinMs! >= 150, `closed after ${seen.closedWithinMs} ms, not animated`);
+  });
+}

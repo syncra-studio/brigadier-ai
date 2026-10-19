@@ -18,6 +18,7 @@ import { mergeWarning } from "@/app/conversation/activity/mergeChecks";
 import { mergeViewTarget, mergeWords, type TurnMerge } from "@/app/conversation/activity/MergeMessage";
 import { type Merged, redoRequest, revertRequest } from "@/app/conversation/activity/revert";
 import { isFinal } from "@/app/conversation/blocks";
+import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
 import { mergeStats } from "@/app/conversation/ComposerCapsule";
 import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
@@ -442,7 +443,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
 
   return (
     <StorageCard data-slot="turn-diff" data-state={reverted ? "reverted" : merged ? "merged" : "branch"} data-open={open || undefined}>
-      <div className="flex items-center gap-4 py-4">
+      <FoldHeader foldable={foldable} onToggle={() => setFold({ reverted, open: !open })} className="flex items-center gap-4 py-4">
         <RoundBadge>
           {reverted ? (
             <ArrowRotateCcw className="text-foreground/65" />
@@ -490,76 +491,78 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
             </button>
           )}
         </div>
-      </div>
-      {open && files.length > 0 && (
-        <ul data-slot="turn-diff-files" className="flex flex-col ps-13">
-          {shown.map((file) => (
-            <FileRow
-              key={file.path}
-              file={file}
-              review={review[file.path]}
-              busy={busy}
-              onOpen={() => openDiff(file.path)}
-              onAct={(what) => each(what, [file.path])}
-            />
-          ))}
-          {more > 0 && (
-            <li className="border-divider border-t pt-2.5 pb-3">
-              <LinkButton data-slot="turn-diff-more" icon={all ? ChevronUp : ChevronDown} className="text-label" onClick={() => setAll((now) => !now)}>
-                {all ? "Show less" : `Show ${more} more ${more === 1 ? "file" : "files"}`}
-              </LinkButton>
-            </li>
-          )}
-        </ul>
-      )}
-      {open && problem && (
-        <div data-slot="merge-warning" className="border-divider flex items-center gap-3 border-t pt-3 pb-3.5 ps-13">
-          <TriangleExclamationErrorWarning aria-hidden className="text-warning size-3.5 shrink-0" />
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span data-slot="merge-warning-title" className="text-warning text-label font-medium">{problem.replace(/\.$/, "")}</span>
-            {finding && (
-              <span data-slot="merge-warning-finding" className="text-muted-foreground truncate text-xs">
-                {finding.id} · {finding.title}
+      </FoldHeader>
+      <FoldBody open={open}>
+        {files.length > 0 && (
+          <ul data-slot="turn-diff-files" className="flex flex-col ps-13">
+            {shown.map((file) => (
+              <FileRow
+                key={file.path}
+                file={file}
+                review={review[file.path]}
+                busy={busy}
+                onOpen={() => openDiff(file.path)}
+                onAct={(what) => each(what, [file.path])}
+              />
+            ))}
+            {more > 0 && (
+              <li className="border-divider border-t pt-2.5 pb-3">
+                <LinkButton data-slot="turn-diff-more" icon={all ? ChevronUp : ChevronDown} className="text-label" onClick={() => setAll((now) => !now)}>
+                  {all ? "Show less" : `Show ${more} more ${more === 1 ? "file" : "files"}`}
+                </LinkButton>
+              </li>
+            )}
+          </ul>
+        )}
+        {problem && (
+          <div data-slot="merge-warning" className="border-divider flex items-center gap-3 border-t pt-3 pb-3.5 ps-13">
+            <TriangleExclamationErrorWarning aria-hidden className="text-warning size-3.5 shrink-0" />
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span data-slot="merge-warning-title" className="text-warning text-label font-medium">{problem.replace(/\.$/, "")}</span>
+              {finding && (
+                <span data-slot="merge-warning-finding" className="text-muted-foreground truncate text-xs">
+                  {finding.id} · {finding.title}
+                </span>
+              )}
+            </div>
+            <QuietPill className={QUIET} data-slot="merge-warning-open" onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")}>
+              {openFindings > 0 ? "Open finding" : "Open Progress"}
+            </QuietPill>
+          </div>
+        )}
+        {merged && (confirming || reverting) && (
+          <div data-slot="merge-revert-confirm" className="border-divider flex items-center gap-3 border-t pt-3.5 pb-4 ps-13">
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="text-foreground text-label font-medium">
+                {files.length > 0 ? `Revert ${files.length === 1 ? "this file" : `these ${files.length} files`} on ${merged.base}?` : `Revert this merge on ${merged.base}?`}
               </span>
+              <span className="text-muted-foreground text-xs">
+                {`Adds one commit that undoes ${files.length > 0 ? `+${counts.insertions} −${counts.deletions}` : "it"}${merged.pr === undefined ? "" : " and pushes it"}. Work merged after this stays.`}
+              </span>
+            </div>
+            {reverting ? (
+              <span role="status" className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-label">
+                <Spinner className="size-icon-sm animate-spin" />
+                Reverting…
+              </span>
+            ) : (
+              <>
+                <QuietPill className={QUIET} onClick={() => setConfirming(false)}>Cancel</QuietPill>
+                <PrimaryPill className={PRIMARY}
+                  data-slot="merge-revert-go"
+                  onClick={() => {
+                    revert.ask();
+                    setSent("sent");
+                    setConfirming(false);
+                  }}
+                >
+                  {files.length === 0 ? "Revert" : files.length === 1 ? "Revert 1 file" : `Revert ${files.length} files`}
+                </PrimaryPill>
+              </>
             )}
           </div>
-          <QuietPill className={QUIET} data-slot="merge-warning-open" onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")}>
-            {openFindings > 0 ? "Open finding" : "Open Progress"}
-          </QuietPill>
-        </div>
-      )}
-      {open && merged && (confirming || reverting) && (
-        <div data-slot="merge-revert-confirm" className="border-divider flex items-center gap-3 border-t pt-3.5 pb-4 ps-13">
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="text-foreground text-label font-medium">
-              {files.length > 0 ? `Revert ${files.length === 1 ? "this file" : `these ${files.length} files`} on ${merged.base}?` : `Revert this merge on ${merged.base}?`}
-            </span>
-            <span className="text-muted-foreground text-xs">
-              {`Adds one commit that undoes ${files.length > 0 ? `+${counts.insertions} −${counts.deletions}` : "it"}${merged.pr === undefined ? "" : " and pushes it"}. Work merged after this stays.`}
-            </span>
-          </div>
-          {reverting ? (
-            <span role="status" className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-label">
-              <Spinner className="size-icon-sm animate-spin" />
-              Reverting…
-            </span>
-          ) : (
-            <>
-              <QuietPill className={QUIET} onClick={() => setConfirming(false)}>Cancel</QuietPill>
-              <PrimaryPill className={PRIMARY}
-                data-slot="merge-revert-go"
-                onClick={() => {
-                  revert.ask();
-                  setSent("sent");
-                  setConfirming(false);
-                }}
-              >
-                {files.length === 0 ? "Revert" : files.length === 1 ? "Revert 1 file" : `Revert ${files.length} files`}
-              </PrimaryPill>
-            </>
-          )}
-        </div>
-      )}
+        )}
+      </FoldBody>
     </StorageCard>
   );
 };
