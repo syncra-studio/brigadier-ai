@@ -212,6 +212,12 @@ async function settle(ms = 50): Promise<void> {
   }
 }
 
+/** Waits for what `find` finds, up to 8s, then goes on either way: the measures say what was missing. */
+async function appear(find: () => Element | null): Promise<void> {
+  const until = performance.now() + 8000;
+  while (!find() && performance.now() < until) await frame();
+}
+
 /** Holds the page at the moment `stop` names, for a screenshot. */
 async function hold(name: string): Promise<void> {
   if (query.get("stop") === name) await new Promise(() => {});
@@ -493,10 +499,14 @@ async function drivePlan(): Promise<object> {
   await settle(600);
   const remounted = seen();
   // Full screen, the plan is its own tab in the tab bar, never the right panel.
-  [...document.querySelectorAll<HTMLButtonElement>("[data-slot=plan-card] button")].find((button) => text(button) === "Open full screen")?.click();
+  const full = [...document.querySelectorAll<HTMLButtonElement>("[data-slot=plan-card] button")].find((button) => text(button) === "Open full screen");
+  full?.click();
   await settle();
+  const planTab = () => one('[role=tabpanel][aria-label="Round half-up"] [data-slot=plan-tab]');
+  // The tab's view loads its code the first time one opens: the tab shows nothing until then.
+  if (full) await appear(planTab);
   const tabs = sessionTabs(ID);
-  const panel = one('[role=tabpanel][aria-label="Round half-up"] [data-slot=plan-tab]');
+  const panel = planTab();
   const opened = {
     canOpen: one("[data-slot=plan-card] [role=button]") !== null,
     active: tabs.active, kinds: tabs.tabs.map((tab) => tab.kind), shown: text(panel)?.includes("Add a test.") ?? false,

@@ -77,7 +77,9 @@ const key = (target: Element, name: string) => target.dispatchEvent(new Keyboard
 async function drive() {
   const seen: Record<string, unknown> = {};
   try {
-    const field = await until("the composer", () => document.querySelector<HTMLElement>("[data-slot=aui_composer-shell] [contenteditable=true]"));
+    // Set up: the editor shows a moment before its plugins wire it to the composer (one of them turns
+    // autocorrect off), and a / typed in between is lost.
+    const field = await until("the composer", () => document.querySelector<HTMLElement>("[data-slot=aui_composer-shell] [contenteditable=true][autocorrect=off]"));
     field.focus();
     document.execCommand("insertText", false, "/");
     const option = await until("the Permissions command", () =>
@@ -94,6 +96,8 @@ async function drive() {
     seen.stillOpen = menu()?.dataset.state;
     key(menu()!, "Escape");
     await until("the menu to close", () => !menu());
+    // Closed, a menu hands the focus back to its pill a moment later, which would take it from what has it then.
+    await until("the focus back on the permission pill", () => document.activeElement?.matches("[data-slot=permission-picker]"));
     // The Model command opens its picker the same way.
     field.focus();
     document.execCommand("insertText", false, "/model");
@@ -104,6 +108,7 @@ async function drive() {
     seen.model = models.isConnected ? models.dataset.state : "gone";
     key(models, "Escape");
     await until("the model picker to close", () => !document.querySelector("[data-slot=model-selector]"));
+    await until("the focus back on the Model pill", () => document.activeElement?.matches("[data-slot=model-selector-trigger]"));
     const pill = document.querySelector<HTMLElement>("[data-slot=permission-picker]")!;
     pill.focus();
     key(pill, "ArrowUp");

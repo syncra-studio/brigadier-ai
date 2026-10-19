@@ -9,8 +9,8 @@ type Seen = {
   commentary: string | null; commentaryShimmers: boolean; answer: string | null; answerInWork: boolean; statusAfterAnswer: boolean; statusInWork: boolean;
 };
 
-async function drive<T>(t: test.TestContext, query: string): Promise<T> {
-  const seen = JSON.parse(await renderFixtureLive(t, `work-blocks.html?${query}`, "work-blocks-result", 90000)) as T & { error?: string };
+async function drive<T>(t: test.TestContext, query: string, options?: Parameters<typeof renderFixtureLive>[4]): Promise<T> {
+  const seen = JSON.parse(await renderFixtureLive(t, `work-blocks.html?${query}`, "work-blocks-result", 90000, options)) as T & { error?: string };
   assert.equal(seen.error, undefined);
   return seen;
 }
@@ -106,7 +106,8 @@ test("a turn that ends in a plan keeps its work open, and the user's choice outl
 });
 
 test("a session's plan opens full screen in its own tab, not the right panel", { timeout: 120000 }, async (t) => {
-  const seen = await drive<{ opened: Record<string, unknown> }>(t, "drive=plan&kind=session");
+  // The tab's code slow to come, as from a busy machine's server (#380).
+  const seen = await drive<{ opened: Record<string, unknown> }>(t, "drive=plan&kind=session", { slow: { url: "/PlanTab.tsx", ms: 1500 } });
   assert.deepEqual(seen.opened, { canOpen: true, active: "plan:plan:plan", kinds: ["plan"], shown: true, tab: "Round half-up", rightPanel: false });
 });
 

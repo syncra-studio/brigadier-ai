@@ -249,7 +249,8 @@ if (diffTest) {
     chip!.click();
     for (let i = 0; i < 100 && lines().length < 6 * 40; i++) await wait(50);
     await wait(300);
-    const dialog = find("[role=dialog]")!;
+    // The diff's dialog: a pinned summary floats as a popover (also a dialog) once the worker's panel narrows the thread.
+    const dialog = find("[role=dialog][data-slot=dialog-content]")!;
     const box = dialog.getBoundingClientRect();
     const list = find("[data-slot=artifact-diff]");
     result.textContent = JSON.stringify({
