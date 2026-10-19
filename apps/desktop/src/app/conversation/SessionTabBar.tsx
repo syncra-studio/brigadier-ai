@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/context-menu";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { Conversation } from "@/ipc/generated";
+import { preloadable } from "@/lib/preloadable";
 import { cn } from "@/lib/utils";
 import { closeSession } from "@/state/actions";
 import {
@@ -559,12 +560,17 @@ function useCloseLock(alone: boolean) {
   };
 }
 
-const FileTabView = lazy(() =>
-  import("@/app/conversation/FileTabView").then((module) => ({ default: module.FileTabView })),
-);
-const ReviewTab = lazy(() =>
-  import("@/app/conversation/ReviewTab").then((module) => ({ default: module.ReviewTab })),
-);
+// Warmed at idle, so a file from the tree and View changes show on the first frame
+// (`preloadCodeTabs`): a lazy view would hold its blank fallback for a moment more.
+const file = preloadable(() => import("@/app/conversation/FileTabView").then((module) => module.FileTabView));
+const FileTabView = file.View;
+const review = preloadable(() => import("@/app/conversation/ReviewTab").then((module) => module.ReviewTab));
+const ReviewTab = review.View;
+
+/** Loads the file and Review tabs' code ahead of their first opening. */
+export function preloadCodeTabs(): Promise<unknown> {
+  return Promise.all([file.preload(), review.preload()]);
+}
 
 const BrowserTab = lazy(() => import("./BrowserTab").then((module) => ({ default: module.BrowserTab })));
 const SideChatTab = lazy(() => import("./SideChatTab").then((module) => ({ default: module.SideChatTab })));

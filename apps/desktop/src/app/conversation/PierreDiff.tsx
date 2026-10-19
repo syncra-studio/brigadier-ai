@@ -1,7 +1,9 @@
+import { getSharedHighlighter } from "@pierre/diffs";
 import { type DiffLineAnnotation, type FileDiffOptions, MultiFileDiff, PatchDiff } from "@pierre/diffs/react";
 import { type CSSProperties, type ReactNode, useMemo } from "react";
 
 import type { DiffSource, DiffViewProps } from "@/app/conversation/diffView";
+import { COMMON_LANGUAGES, WARM_PIECES, yieldToPage } from "@/lib/highlight";
 
 /**
  * The diff engine itself, loaded on demand through `DiffView` so it and its highlighter never
@@ -18,6 +20,26 @@ const LOOK = {
   "--diffs-tab-size": "2",
 } as CSSProperties;
 
+/**
+ * The engine's highlighter: shiki's WebAssembly one, several times faster in WebKit than its
+ * JavaScript one (see `@/lib/highlight`).
+ */
+const HIGHLIGHTER = "shiki-wasm";
+
+/**
+ * Loads the diff engine's highlighter, its theme and the common grammars ahead of the first diff,
+ * TypeScript's patterns compiled on a sample, a piece at a time (see `WARM_SAMPLE`).
+ */
+export async function warmDiffs(): Promise<void> {
+  const shiki = await getSharedHighlighter({ themes: ["pierre-dark"], langs: [...COMMON_LANGUAGES], preferredHighlighter: HIGHLIGHTER });
+  for (const lang of ["typescript", "tsx"]) {
+    for (const piece of WARM_PIECES) {
+      shiki.codeToTokens(piece, { lang, theme: "pierre-dark" });
+      await yieldToPage();
+    }
+  }
+}
+
 /** The theme paints its own near-black; the diff sits on the thread's background instead. */
 const ON_THREAD = "pre { --diffs-bg: var(--background) !important; background-color: var(--background) !important; }";
 
@@ -26,6 +48,7 @@ export default function PierreDiff<T>({ source, look, annotations, renderAnnotat
     () => ({
       theme: "pierre-dark",
       themeType: "dark",
+      preferredHighlighter: HIGHLIGHTER,
       disableFileHeader: true,
       disableLineNumbers: !look.numbered,
       diffStyle: look.split ? "split" : "unified",

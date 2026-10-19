@@ -1,10 +1,12 @@
 /**
- * Syntax highlighting for the thread's code blocks, with shiki's core and its JavaScript
- * regex engine (no WebAssembly). Loaded on demand, each grammar too, so the first paint never
- * waits for it; only the common languages below ship with the app.
+ * Syntax highlighting for the thread's code blocks and file tabs, with shiki's core and its
+ * WebAssembly regex engine: in WebKit the JavaScript one took ~1.5 s to colour a first file and
+ * ~120 ms each one after, this one ~0.2 s and ~15 ms. Loaded on demand, each grammar too, so the
+ * first paint never waits for it, and warmed at idle (`warmHighlight`); only the common
+ * languages below ship with the app.
  */
 import { createHighlighterCore, type HighlighterCore, type LanguageRegistration } from "shiki/core";
-import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import { createOnigurumaEngine } from "shiki/engine/oniguruma";
 
 import type { Token } from "@/lib/languages";
 
@@ -77,7 +79,7 @@ function core(): Promise<HighlighterCore> {
   highlighter ??= createHighlighterCore({
     themes: [import("shiki/themes/github-dark-default.mjs")],
     langs: [],
-    engine: createJavaScriptRegexEngine(),
+    engine: createOnigurumaEngine(import("shiki/wasm")),
   });
   return highlighter;
 }
@@ -102,4 +104,58 @@ export async function highlight(code: string, language: string): Promise<Token[]
         italic: ((token.fontStyle ?? 0) & ITALIC) !== 0,
       })),
     );
+}
+
+/** The languages most code here is in: warmed at idle, so their files show colours with their text. */
+export const COMMON_LANGUAGES = ["typescript", "tsx", "javascript", "json", "rust", "python", "css", "html", "bash", "toml", "yaml"] as const;
+
+/**
+ * A few lines of TypeScript with the constructs most files use. The regex engine compiles each
+ * of a grammar's patterns the first time a line needs it: coloured at idle, these leave a first
+ * file little to compile (~130 ms → ~50 ms for a 300-line one).
+ */
+export const WARM_SAMPLE = `import { type FC, useEffect } from "react";
+// A line comment
+/** A doc comment with {@link Thing}. */
+export interface Props<T extends object = {}> { readonly id: string; items?: T[]; onPick: (item: T, index: number) => void }
+type Pair = [left: number, right: string] | null;
+enum Kind { One = 1, Two = "two" }
+export class Store<T> extends Base implements Thing {
+  private static count = 0;
+  #secret = 0x1f;
+  constructor(public readonly name: string) { super(); }
+  async load(path: string): Promise<T | undefined> {
+    const found = await fetch(\`/api/\${encodeURIComponent(path)}?q=\${1 + 2.5e3}\`);
+    if (!found.ok) throw new Error("not found: " + path);
+    return (await found.json()) as T;
+  }
+  get size(): number { return this.items?.length ?? 0; }
+}
+export const Card: FC<Props<{ a: 1 }>> = ({ id, items = [], onPick }) => {
+  useEffect(() => { const timer = setTimeout(() => void 0, 10); return () => clearTimeout(timer); }, []);
+  const words = items.filter((item, n) => n % 2 === 0 && /^[a-z]+$/i.test(String(item))).map(({ a }) => a);
+  return (
+    <div data-slot="card" className={cn("flex", id && "gap-1")} onClick={() => onPick(items[0]!, 0)}>
+      {words.length > 0 ? <span title={\`\${words.length} words\`}>{words.join(", ")}</span> : null}
+    </div>
+  );
+};
+for (let i = 0; i < 3; i++) { switch (typeof i) { case "number": break; default: continue; } }
+export default Card satisfies unknown;
+`;
+
+/** `WARM_SAMPLE` in its top-level statements: each colours apart, so warming never holds the page long. */
+export const WARM_PIECES = WARM_SAMPLE.split(/\n(?=[^\s}])/);
+
+/** Hands the page back for a moment, so input between two pieces of warming isn't held. */
+export const yieldToPage = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/** Loads the highlighter and each common grammar ahead of the first file; TypeScript's patterns compile on a sample. */
+export async function warmHighlight(): Promise<void> {
+  for (const language of COMMON_LANGUAGES) {
+    for (const piece of language === "typescript" || language === "tsx" ? WARM_PIECES : ["x"]) {
+      await highlight(piece, language);
+      await yieldToPage();
+    }
+  }
 }

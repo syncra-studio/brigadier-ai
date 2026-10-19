@@ -30,3 +30,11 @@ test("the Review tab's diff: numbered and coloured, folds that open, word diffs,
   assert.equal(seen.plus, true);
   assert.equal(seen.composer, "`src/values.ts` line 3:\n> export const value3 = Math.round(3 * 100) / 100;\n\n");
 });
+
+// Warmed at idle (#410), View changes draws the diff in its colours at once: no plain lines
+// first, and no moment waiting for the diff engine or its highlighter.
+test("warmed, the Review tab's diff draws in its colours at once", { timeout: 120000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "review-diff.html?warm=1", "review-diff-result", 90000)) as { error?: string; plain: boolean; firstColoured: boolean | null };
+  assert.equal(seen.error, undefined);
+  assert.deepEqual(seen, { plain: false, firstColoured: true });
+});

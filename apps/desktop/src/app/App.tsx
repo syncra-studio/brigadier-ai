@@ -25,6 +25,7 @@ import { appReady, nowEpochMs } from "@/ipc/client";
 import { waitForAgents } from "@/lib/agentsReady";
 import { nextPaint, setFrameSampling } from "@/lib/perf";
 import { whenIdle } from "@/lib/preloadable";
+import { warmCode } from "@/lib/warmCode";
 import { markMounted, revealApp } from "@/lib/splash";
 import { markStartup } from "@/lib/startup";
 import { setMetricsStreaming, toggleInspector, toggleSettings } from "@/state/actions";
@@ -97,7 +98,10 @@ export function App() {
         markStartup("revealed");
         // Settings, once the app is up and idle: it then opens on the next frame. (The smoke
         // check opens it straight away, and measures the app as it is.)
-        if (!useApp.getState().info?.smoke) whenIdle(warmSettings);
+        if (!useApp.getState().info?.smoke) {
+          whenIdle(warmSettings);
+          whenIdle(() => void warmCode().catch((error: unknown) => console.error("warming the code views failed", error)), 2000);
+        }
         whenIdle(allowComputerMenu);
         return appReady(nowEpochMs());
       })

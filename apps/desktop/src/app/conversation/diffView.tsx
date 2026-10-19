@@ -1,5 +1,6 @@
-import { lazy, type ReactNode, Suspense } from "react";
+import { type ReactNode, Suspense } from "react";
 
+import { preloadable } from "@/lib/preloadable";
 import { cn } from "@/lib/utils";
 
 /**
@@ -32,7 +33,13 @@ export type DiffViewProps<T> = {
   className?: string;
 };
 
-const PierreDiff = lazy(() => import("@/app/conversation/PierreDiff"));
+// Once its code is in (warmed at idle), a diff draws at once: a lazy view would hold its plain
+// lines for a moment more.
+const engine = preloadable(() => import("@/app/conversation/PierreDiff").then((module) => module.default as (props: DiffViewProps<unknown>) => ReactNode));
+const PierreDiff = engine.View;
+
+/** Loads the diff engine's code ahead of the first diff. */
+export const preloadDiffView = engine.preload;
 
 export function DiffView<T>(props: DiffViewProps<T>) {
   return (

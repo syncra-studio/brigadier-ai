@@ -9,6 +9,8 @@
  * - Wrap: a long line scrolls, then wraps.
  * - Split: old and new side by side.
  * - Add to chat: the "+" by a hovered line's number puts the line, quoted, into the composer.
+ * - `warm=1`: what the app warms at idle loaded first; the diff then draws in its colours at
+ *   once, never as plain lines first.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useAui, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -134,13 +136,35 @@ async function measure() {
   return out;
 }
 
-createRoot(document.getElementById("root")!).render(
-  <TooltipProvider>
-    <Fixture />
-  </TooltipProvider>,
-);
+/** Warmed first: whether the plain lines ever showed, and whether the first lines drawn were coloured. */
+async function warmed() {
+  let plain = false;
+  const watch = new MutationObserver(() => {
+    plain ||= document.querySelector('[data-slot="diff-plain"]') !== null;
+  });
+  watch.observe(document.body, { childList: true, subtree: true });
+  render();
+  let first: boolean | null = null;
+  for (const end = performance.now() + 8000; performance.now() < end && first === null; ) {
+    // Checked on each task, not each frame: the lines arrive within one.
+    if (inside("[data-content] > [data-line]").length > 0) first = look().coloured;
+    else await wait(1);
+  }
+  watch.disconnect();
+  return { plain, firstColoured: first };
+}
 
-void measure()
+function render() {
+  createRoot(document.getElementById("root")!).render(
+    <TooltipProvider>
+      <Fixture />
+    </TooltipProvider>,
+  );
+}
+
+const run = query.get("warm") === "1" ? import("@/lib/warmCode").then((module) => module.warmCode()).then(warmed) : (render(), measure());
+
+void run
   .catch((error: unknown) => ({ error: String(error) }))
   .then(async (result) => {
     if (query.get("stop") === "1") await new Promise(() => {});
