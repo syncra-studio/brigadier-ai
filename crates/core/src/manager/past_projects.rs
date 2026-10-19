@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use brigadier_git::{FoundRepo, Git};
 use brigadier_providers::ProviderKind;
 
+use super::protected_folders::ProtectedFolders;
 use super::{SessionManager, blocking};
 use crate::Result;
 use crate::model::ProjectCandidate;
@@ -19,17 +20,21 @@ impl SessionManager {
     /// repository are left out, and so are Brigadier's own (its data and temporary folders).
     pub async fn find_projects(&self) -> Result<Vec<ProjectCandidate>> {
         let past = self.runtime.past_folders().await;
+        let home = self.runtime.cli_env().home();
         let projects = self.core.catalog().projects;
         let git = self.git.clone();
         let data_dir = self.data_dir.clone();
         blocking(move || {
             let skipped = skipped_roots(&data_dir);
-            let is_skipped = |path: &Path| skipped.iter().any(|root| path.starts_with(root));
+            let chosen = projects
+                .iter()
+                .flat_map(|project| project.repos.iter().map(|repo| PathBuf::from(&repo.path)));
+            let protected = ProtectedFolders::here(home.as_deref(), chosen);
             let past: Vec<_> = past
                 .into_iter()
                 .filter_map(|(provider, folder)| {
-                    let cwd = folder.cwd.canonicalize().ok()?;
-                    (!is_skipped(&cwd)).then_some((provider, folder, cwd))
+                    let cwd = usable_folder(&folder.cwd, &skipped, &protected)?;
+                    Some((provider, folder, cwd))
                 })
                 .collect();
             let cwds: Vec<_> = past.iter().map(|(_, _, cwd)| cwd.clone()).collect();
@@ -39,7 +44,7 @@ impl SessionManager {
                 let Some(repo) = repos.get(&cwd) else {
                     continue;
                 };
-                if is_skipped(&repo.root) {
+                if !usable_root(&repo.root, &skipped, &protected) {
                     continue;
                 }
                 let candidate = found.entry(repo.root.clone()).or_insert_with(|| {
@@ -97,6 +102,30 @@ pub(super) fn skipped_roots(data_dir: &Path) -> BTreeSet<PathBuf> {
         .into_iter()
         .map(|root| root.canonicalize().unwrap_or(root))
         .collect()
+}
+
+/// A past session's folder, canonical, when the scan may look at it: not Brigadier's own, and
+/// not in a folder macOS asks the user about, which is told from the path before the folder is
+/// touched (resolving it reads the disk) and again once it is.
+pub(super) fn usable_folder(
+    cwd: &Path,
+    skipped: &BTreeSet<PathBuf>,
+    protected: &ProtectedFolders,
+) -> Option<PathBuf> {
+    if protected.covers(cwd) {
+        return None;
+    }
+    let cwd = cwd.canonicalize().ok()?;
+    usable_root(&cwd, skipped, protected).then_some(cwd)
+}
+
+/// Whether a canonical folder is neither Brigadier's own nor in one macOS asks about.
+pub(super) fn usable_root(
+    path: &Path,
+    skipped: &BTreeSet<PathBuf>,
+    protected: &ProtectedFolders,
+) -> bool {
+    !skipped.iter().any(|root| path.starts_with(root)) && !protected.covers(path)
 }
 
 /// How long git may take to say which repository one past session's folder is in, and all of

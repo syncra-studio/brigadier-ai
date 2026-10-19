@@ -644,21 +644,8 @@ impl Session {
                 });
                 return Ok(Flow::Continue);
             }
-            // Long: answered beside the connection's other requests. A site's icon waits on the
-            // site itself, which may take its whole timeout; the repositories on this computer
-            // take a look through the code folders; the tabs' settled states read git
-            // in every tab.
-            request @ (Request::SiteIcon { .. }
-            | Request::FindRepos
-            | Request::ScanStorage { .. }
-            | Request::PreviewDelete { .. }
-            | Request::CleanStorage { .. }
-            | Request::PreviewRemoveProject { .. }
-            | Request::RemoveProject { .. }
-            | Request::FreeUpProjects { .. }
-            | Request::PreviewUninstall { .. }
-            | Request::Uninstall { .. }
-            | Request::GetSettledTabs) => {
+            // Long: answered beside the connection's other requests.
+            request if answered_beside(&request) => {
                 let daemon = self.daemon.clone();
                 let late = self.late_tx.clone();
                 self.daemon.supervisor.spawn(async move {
@@ -1394,6 +1381,33 @@ fn internal(err: brigadier_store::Error) -> IpcError {
 /// Every await here goes through [`heap`]: one frame holds all of them in an unoptimized build,
 /// and before it the dispatch alone took 1.26 MB of a runtime thread's 2 MiB stack, so a
 /// message to a session overflowed it.
+/// Whether `request` may take long, so it is answered beside the connection's other requests
+/// rather than before them. A site's icon waits on the site itself, which may take its whole
+/// timeout; the tabs' settled states read git in every tab; the requests that read the user's
+/// folders (the first run's project scan, Add project's) run git there and may wait on a
+/// macOS privacy prompt nobody has answered yet.
+fn answered_beside(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::SiteIcon { .. }
+            | Request::FindProjects
+            | Request::FindRepos
+            | Request::GetRepoInfo { .. }
+            | Request::BrowseFolders { .. }
+            | Request::CheckFolder { .. }
+            | Request::AddProject { .. }
+            | Request::ScanStorage { .. }
+            | Request::PreviewDelete { .. }
+            | Request::CleanStorage { .. }
+            | Request::PreviewRemoveProject { .. }
+            | Request::RemoveProject { .. }
+            | Request::FreeUpProjects { .. }
+            | Request::PreviewUninstall { .. }
+            | Request::Uninstall { .. }
+            | Request::GetSettledTabs
+    )
+}
+
 async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Response, IpcError> {
     let core = &daemon.core;
     let sessions = &daemon.sessions;
@@ -2816,6 +2830,33 @@ mod tests {
             .unwrap();
         let _ = std::fs::remove_dir_all(&models);
         assert!(matches!(update, Some(DictationUpdate::Downloaded)));
+    }
+
+    /// The first run's project scan ran git in a folder macOS then asked the user about, and
+    /// while the prompt waited every request after it on the connection timed out: Continue
+    /// without projects (its settings write rolled back) and Add project. The requests that
+    /// read the user's folders are answered beside the others; a settings write still is in
+    /// turn.
+    #[test]
+    fn a_stuck_folder_scan_holds_up_no_other_request() {
+        let path = || "/Users/someone/Documents/app".to_owned();
+        for request in [
+            Request::FindProjects,
+            Request::FindRepos,
+            Request::GetRepoInfo { path: path() },
+            Request::BrowseFolders { path: path() },
+            Request::CheckFolder { path: path() },
+            Request::AddProject {
+                path: path(),
+                name: String::new(),
+                init: false,
+            },
+        ] {
+            assert!(answered_beside(&request), "{request:?} is answered beside");
+        }
+        let settings = Box::new(brigadier_core::model::Settings::default());
+        assert!(!answered_beside(&Request::UpdateSettings { settings }));
+        assert!(!answered_beside(&Request::GetCatalog));
     }
 
     /// Every await of `handle_request` goes through [`heap`]: an unoptimized build keeps all

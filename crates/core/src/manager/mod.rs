@@ -80,6 +80,7 @@ mod preview_ready;
 mod project_removal;
 mod project_sessions;
 mod prompts;
+mod protected_folders;
 mod protection;
 mod pull_request;
 mod quiet;
