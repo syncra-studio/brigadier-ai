@@ -94,6 +94,63 @@ async fn a_pull_request_waiting_for_its_checks_is_recorded_when_github_merges_it
     queued_then_merged("merge-queue-auto", true).await;
 }
 
+/// Request settlement starts watching before it records RequestReady. If that recording
+/// takes longer than a poll, the watcher must survive the gap, even on the first request.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_pull_request_watch_survives_until_the_request_is_recorded_ready() {
+    let scratch: Arc<OnceLock<PathBuf>> = Arc::default();
+    let (shipped, finish) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let (dir, ran, done) = (scratch.clone(), shipped.clone(), finish.clone());
+    let flow = Flow::start(
+        "20261018-1945-issues-run-2-w38-merge-queue-ready-gap",
+        Options::default(),
+        script(move |turn| {
+            let (dir, ran, done) = (dir.clone(), ran.clone(), done.clone());
+            async move {
+                if turn.is_orchestrator() && turn.input.contains("Ship the notes.") {
+                    ship(&turn.add_dirs[0], dir.get().unwrap(), true).await;
+                    ran.notify_one();
+                    done.notified().await;
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    let root = with_origin(&flow);
+    scratch.set(root.clone()).unwrap();
+    flow.say("Ship the notes.").await;
+    shipped.notified().await;
+    assert!(flow.board().await.unmerged_ready().is_empty());
+    // The same order as settle_requests: reconcile first, then record readiness. Holding
+    // the turn here makes the otherwise load-dependent gap span several polling ticks.
+    flow.manager
+        .reconcile_pr_merge(&flow.conversation, None)
+        .await;
+    let conv = flow.manager.conv(&flow.conversation).unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(
+        conv.pr_watch.load(std::sync::atomic::Ordering::SeqCst),
+        "the first poll must not abandon a request still settling"
+    );
+    finish.notify_one();
+    let board = flow.settled().await;
+    let request = board.latest_request().unwrap().id.clone();
+    let workspace = PathBuf::from(flow.manager.checkout_dir(&flow.conversation).unwrap());
+    let head = git(&workspace, &["rev-parse", "HEAD"]);
+    let branch = git(&workspace, &["branch", "--show-current"]);
+    let squash = squash_merge(&root.join("origin.git"), &root, &branch);
+    list(&root, "MERGED", &head, false, Some(&squash));
+    let board = flow
+        .until("the merge recorded after delayed readiness", |board| {
+            !merges(board).is_empty()
+        })
+        .await;
+    assert_eq!(merges(&board), [(Some(7), vec![request])]);
+    flow.stop().await;
+}
+
 async fn queued_then_merged(name: &str, auto: bool) {
     let scratch: Arc<OnceLock<PathBuf>> = Arc::default();
     let dir = scratch.clone();

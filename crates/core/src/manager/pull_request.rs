@@ -16,7 +16,7 @@ use super::conversation::ConvLive;
 use super::{SessionManager, blocking, git_error};
 use crate::Result;
 use crate::model::ConversationId;
-use crate::work::{PullRequest, PullRequestCi, PullRequestState};
+use crate::work::{PullRequest, PullRequestCi, PullRequestState, RequestState};
 
 /// How long `gh` may take (it asks GitHub) before the row is left out.
 const GH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -296,12 +296,17 @@ impl SessionManager {
                 return;
             }
             // Recorded or merged here meanwhile: nothing left to watch for.
-            let ready = self
-                .core
-                .board(&conv.id)
-                .await
-                .is_ok_and(|board| !board.unmerged_ready().is_empty());
-            if !ready {
+            let Ok(board) = self.core.board(&conv.id).await else {
+                return;
+            };
+            if board.unmerged_ready().is_empty() {
+                // Settlement starts this watch before note_ready records its first ready
+                // request. A slow settlement must not lose the watch on its first poll.
+                if board.requests.values().any(|request| {
+                    matches!(request.state, RequestState::Working | RequestState::Waiting)
+                }) {
+                    continue;
+                }
                 return;
             }
             let Some(SessionPr { found, base, .. }) = self.session_pr(&conv.id).await else {
