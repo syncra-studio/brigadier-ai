@@ -287,8 +287,15 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
           ...(atMs === null ? {} : { atMs }),
         }).catch(() => null)
       : null;
+    // `outputs/` names a stored artifact, not a file in the checkout.
+    if (found?.stored && /^(?:\.\/)?outputs\//.test(href)) {
+      setGone(null);
+      const { artifact } = found.stored;
+      await openArtifact(artifact.id, artifact.fileName ?? artifact.title);
+      return;
+    }
     if (found && !found.exists) {
-      setGone({ stored: found.stored });
+      setGone(path.startsWith("/") ? { stored: found.stored } : null);
       if (found.stored) {
         const { artifact } = found.stored;
         await openArtifact(artifact.id, artifact.fileName ?? artifact.title);
@@ -300,7 +307,7 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
     await revealPath(path).catch((error: unknown) => {
       // Gone, with nothing stored (no session to ask, or not a worker's file).
       if (found) throw error;
-      setGone({ stored: null });
+      if (path.startsWith("/")) setGone({ stored: null });
     });
   };
   return (

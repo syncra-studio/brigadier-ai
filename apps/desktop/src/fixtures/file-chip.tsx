@@ -2,8 +2,10 @@
  * File links in an answer whose files are gone (BUILD-PLAN A1): a link into a worker's removed
  * scratch folder opens the copy Brigadier stored, and both dead links say "This file is no
  * longer here", the stored one with its Save. A chip in a message passes when the message was
- * written, so an `outputs/` link opens the task of its time. In a table's narrow column, a
- * chip's icon stays on its name's line. Driven with real clicks; IPC is mocked, no daemon.
+ * written, so an `outputs/` link opens the task of its time.
+ * Stored `outputs/` links open without a missing-file notice in Chats and sessions. In a
+ * table's narrow column, a chip's icon stays on its name's line. Driven with real clicks;
+ * IPC is mocked, no daemon.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -13,12 +15,28 @@ import { FileChip } from "@/components/assistant-ui/markdown-text";
 import { Toaster } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
-import type { Request } from "@/ipc/generated";
+import type { Conversation, Request } from "@/ipc/generated";
+import { useApp } from "@/state/store";
+
+const session = new URLSearchParams(location.search).has("session");
+const conversation: Conversation = {
+  id: "chat-1", kind: session ? "session" : "chat", projectId: session ? "project-1" : null,
+  title: "File links", pinnedAtMs: null, createdAtMs: 0, updatedAtMs: 0, lifecycle: "active",
+  forkedFrom: null, sideOf: null, fallback: null, quotaWait: null,
+  setup: session ? {
+    type: "session", repo: "/repo", environment: { type: "localCheckout", branch: "main" },
+    permission: "fullAccess", orchestrator: { provider: "claude", model: null, effort: null },
+    workersSeeUncommitted: null, planMode: false,
+  } : null,
+};
+useApp.setState({ conversations: { [conversation.id]: conversation }, selection: { type: "conversation", id: conversation.id } });
 
 const scratch = "/var/folders/xy/T/brigadier/scratch/task-1";
 const links = {
   stored: `${scratch}/outputs/rounding.md:3`,
   lost: "/tmp/file-chip-fixture/never-kept.md",
+  outputs: "outputs/task-1/rounding.md",
+  dotOutputs: "./outputs/task-1/rounding.md",
 };
 const stored = {
   taskId: "task-1",
@@ -33,8 +51,8 @@ mockIPC((command, payload) => {
   }
   const req = (payload as { request: Request }).request;
   if (req.method === "resolveFileLink") {
-    calls.push({ method: req.method, conversationId: req.conversationId, link: req.link, atMs: req.atMs });
-    return { method: req.method, exists: false, stored: req.link.startsWith(scratch) ? stored : null };
+    calls.push({ method: req.method, conversationId: req.conversationId, link: req.link, path: req.path, atMs: req.atMs });
+    return { method: req.method, exists: false, stored: req.link.startsWith(scratch) || /^(?:\.\/)?outputs\//.test(req.link) ? stored : null };
   }
   return { method: req.method };
 });
@@ -93,8 +111,13 @@ try {
   seen.cellIconOnNameLine = Math.abs(icon.top + icon.height / 2 - (first.top + first.height / 2)) < 4;
   seen.before = Object.fromEntries(Object.keys(links).map((id) => [id, notice(id)]));
   for (const id of Object.keys(links)) {
+    const before = calls.length;
     await fixtureClick(row(id).querySelector("[data-slot=file-chip]")!);
-    await until(`the notice on ${id}`, () => notice(id) !== null);
+    if (id === "outputs" || id === "dotOutputs") {
+      await until(`the stored copy of ${id} to open`, () => calls.slice(before).some((call) => (call as { command?: string }).command === "open_artifact"));
+    } else {
+      await until(`the notice on ${id}`, () => notice(id) !== null);
+    }
   }
   seen.after = Object.fromEntries(Object.keys(links).map((id) => [id, notice(id)]));
   seen.saves = Object.fromEntries(Object.keys(links).map((id) => [id, !!row(id).querySelector("[data-slot=file-chip-save]")]));
