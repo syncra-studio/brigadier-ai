@@ -67,6 +67,8 @@ const EVERY_CALL: AppOp[] = [
   { app: "open", target: { kind: "page", id: "page-1", title: "Notes" }, show: true },
   { app: "open", target: { kind: "terminal", tab: "terminal:agent-1", cwd: "/repo" }, show: true },
   { app: "endRequest", request: "req-1" },
+  // The session the user is on already: showing it moves nothing.
+  { app: "showSession", session: USER },
 ];
 
 test("no app call brings the window forward or moves the user off the session and tab they are on", async () => {
@@ -215,4 +217,18 @@ test("terminal_run's tab opens behind as the agent's, and a terminal of the user
   const shown = await opened(session, { kind: "terminal", tab: theirs, cwd: "/repo" }, true);
   assert.deepEqual(shown, { app: "opened", tab: theirs, front: true, kept: false }, "asked to watch it: it comes to the front");
   assert.equal(sessionTabs(session).tabs.find((tab) => tab.id === theirs)!.agentOpened, undefined, "and stays theirs");
+});
+
+test("show_session moves the selection to that session, as its sidebar row would, and never the window", async () => {
+  useApp.setState({ selection: { type: "conversation", id: USER }, windowVisible: true });
+  const shell = fakeShell();
+  const answer = await answerOf(call(AGENT, { app: "showSession", session: "app-call-api-session" }));
+  assert.deepEqual(answer, { app: "sessionShown", visible: true });
+  assert.deepEqual(useApp.getState().selection, { type: "conversation", id: "app-call-api-session" });
+  const focusing = shell.commands.filter((command) => /focus|activate|unminimize|set_?show|window\|show/i.test(command));
+  assert.deepEqual(focusing, [], "nothing asked the window to come forward");
+
+  useApp.setState({ windowVisible: false });
+  const hidden = await answerOf(call(AGENT, { app: "showSession", session: USER }));
+  assert.deepEqual(hidden, { app: "sessionShown", visible: false }, "a hidden window stays hidden");
 });

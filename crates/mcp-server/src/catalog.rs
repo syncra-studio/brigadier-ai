@@ -613,6 +613,7 @@ fn app_call(name: &str, arguments: &Value) -> Option<Result<AppToolCall, ParseEr
         "read_terminal" => args(name, arguments).map(AppToolCall::ReadTerminal),
         "open_in_app" => args(name, arguments).map(AppToolCall::Open),
         "terminal_run" => args(name, arguments).map(AppToolCall::TerminalRun),
+        "show_session" => args(name, arguments).map(AppToolCall::ShowSession),
         _ => return None,
     })
 }

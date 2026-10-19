@@ -1984,6 +1984,14 @@ pub struct TerminalRun {
     pub show: bool,
 }
 
+/// `show_session`: another session, shown when the user asked to see it.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ShowSession {
+    /// The session's id, from list_sessions.
+    pub id: String,
+}
+
 /// An app tool call (Q90), from the thread or a Chat.
 #[derive(Debug, Clone)]
 pub enum AppToolCall {
@@ -1992,6 +2000,7 @@ pub enum AppToolCall {
     ReadTerminal(ReadTerminal),
     Open(OpenInApp),
     TerminalRun(TerminalRun),
+    ShowSession(ShowSession),
 }
 
 impl AppToolCall {
@@ -2002,6 +2011,7 @@ impl AppToolCall {
             Self::ReadTerminal(_) => "read_terminal",
             Self::Open(_) => "open_in_app",
             Self::TerminalRun(_) => "terminal_run",
+            Self::ShowSession(_) => "show_session",
         }
     }
 }

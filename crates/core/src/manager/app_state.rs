@@ -42,6 +42,7 @@ impl SessionManager {
             AppToolCall::ReadTerminal(args) => self.read_terminal_text(&id, &args.terminal).await,
             AppToolCall::Open(args) => self.open_in_app(&id, args).await,
             AppToolCall::TerminalRun(args) => self.terminal_run(&id, args).await,
+            AppToolCall::ShowSession(args) => self.show_session(&id, &args.id).await,
         };
         match replied {
             Ok(text) => ToolReply::ok(text),

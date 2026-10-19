@@ -429,6 +429,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "read_terminal" => ToolCall::App(crate::tools::AppToolCall::ReadTerminal(arg(name, args))),
         "open_in_app" => ToolCall::App(crate::tools::AppToolCall::Open(arg(name, args))),
         "terminal_run" => ToolCall::App(crate::tools::AppToolCall::TerminalRun(arg(name, args))),
+        "show_session" => ToolCall::App(crate::tools::AppToolCall::ShowSession(arg(name, args))),
         "browser_open" => ToolCall::Browser(B::Open(arg(name, args))),
         "browser_navigate" => ToolCall::Browser(B::Navigate(arg(name, args))),
         "browser_read" => ToolCall::Browser(B::Read(arg(name, args))),

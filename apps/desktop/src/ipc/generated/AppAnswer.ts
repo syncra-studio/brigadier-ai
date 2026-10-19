@@ -5,4 +5,4 @@ import type { WindowView } from "./WindowView";
 /**
  * What the app answers a call with.
  */
-export type AppAnswer = { "app": "browser", result: BrowserResult, } | { "app": "state", view: WindowView, } | { "app": "opened", tab: string | null, front: boolean, kept: boolean, } | { "app": "closed", tabs: Array<string>, } | { "app": "failed", message: string, };
+export type AppAnswer = { "app": "browser", result: BrowserResult, } | { "app": "state", view: WindowView, } | { "app": "opened", tab: string | null, front: boolean, kept: boolean, } | { "app": "sessionShown", visible: boolean, } | { "app": "closed", tabs: Array<string>, } | { "app": "failed", message: string, };

@@ -239,3 +239,56 @@ async fn the_uncommitted_diff_holds_staged_unstaged_and_new_files() {
     }
     flow.stop().await;
 }
+
+async fn show(flow: &Flow, id: &str) -> ToolReply {
+    flow.manager
+        .app_tool(
+            flow.conversation.clone(),
+            AppToolCall::ShowSession(crate::tools::ShowSession { id: id.into() }),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn show_session_asks_the_window_for_another_session_and_says_so_plainly() {
+    let flow = Flow::start("show-session", Options::default(), quiet()).await;
+    let closed = show(&flow, "anything").await;
+    assert!(closed.is_error);
+    assert!(
+        closed.text.contains("No session with that id"),
+        "{}",
+        closed.text
+    );
+    let other = flow
+        .add_session("API work", None, brigadier_providers::ProviderKind::Claude)
+        .await;
+    let no_window = show(&flow, &other.0).await;
+    assert!(no_window.is_error);
+    assert!(
+        no_window.text.contains("window isn't open"),
+        "{}",
+        no_window.text
+    );
+
+    let heard: Arc<Mutex<Vec<AppOp>>> = Arc::default();
+    let mut calls = flow.manager.subscribe_app();
+    let (manager, log) = (flow.manager.clone(), heard.clone());
+    tokio::spawn(async move {
+        while let Ok(call) = calls.recv().await {
+            log.lock().unwrap().push(call.op.clone());
+            manager.app_answer(&call.id, AppAnswer::SessionShown { visible: true });
+        }
+    });
+    let shown = show(&flow, &other.0).await;
+    assert!(!shown.is_error, "{}", shown.text);
+    assert_eq!(shown.text, "Brigadier shows the session \"API work\" now.");
+    let own = show(&flow, &flow.conversation.0).await;
+    assert!(own.is_error);
+    assert!(own.text.contains("That is this session"), "{}", own.text);
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [AppOp::ShowSession { session: other }],
+        "only the real other session reached the window"
+    );
+    flow.stop().await;
+}

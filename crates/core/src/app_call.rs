@@ -40,6 +40,9 @@ pub enum AppOp {
     /// Request `request` ended: the Browser tabs agents opened for it close, except those kept
     /// for the user, the one in front and those the user took over.
     EndRequest { request: String },
+    /// The user asked to see session `session`: the window shows it, as a click on its row in
+    /// the sidebar would.
+    ShowSession { session: ConversationId },
 }
 
 /// What `open_in_app` opens, checked and named by the daemon.
@@ -118,6 +121,7 @@ impl AppOp {
         match self {
             Self::Browser { .. } => "its browser",
             Self::State | Self::Open { .. } | Self::EndRequest { .. } => "its tabs",
+            Self::ShowSession { .. } => "its sessions",
         }
     }
 }
@@ -138,6 +142,10 @@ pub enum AppAnswer {
         tab: Option<String>,
         front: bool,
         kept: bool,
+    },
+    /// The window shows the session now; `visible`: it isn't hidden, so the user sees it.
+    SessionShown {
+        visible: bool,
     },
     /// The tabs a request's end closed.
     Closed {
