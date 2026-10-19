@@ -228,7 +228,6 @@ impl BrowserHub {
         match answer {
             AppAnswer::Browser { result } => result,
             AppAnswer::Failed { message } => BrowserResult::Failed { message },
-            #[allow(unreachable_patterns)]
             _ => failed("The app answered a browser call with something else."),
         }
     }
@@ -670,7 +669,7 @@ impl SessionManager {
     }
 
     /// The agent as the user knows it: its task's or thread's title.
-    async fn browser_label(
+    pub(super) async fn browser_label(
         &self,
         conversation_id: &ConversationId,
         task: Option<&TaskId>,
@@ -853,7 +852,9 @@ mod tests {
         let (hub, log) = (hub.clone(), heard.clone());
         tokio::spawn(async move {
             while let Ok(call) = window.recv().await {
-                let AppOp::Browser { op } = call.op;
+                let AppOp::Browser { op } = call.op else {
+                    continue;
+                };
                 let tab = op.tab().unwrap_or_default().to_owned();
                 log.lock().unwrap().push(op);
                 hub.answer(&call.id, page(&tab));

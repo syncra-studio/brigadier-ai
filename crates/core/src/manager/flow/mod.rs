@@ -425,6 +425,8 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "wait_for_replies" => ToolCall::Orchestrator(O::WaitForReplies(arg(name, args))),
         "read_session" => ToolCall::Orchestrator(O::ReadSession(arg(name, args))),
         "settle_wait" => ToolCall::Orchestrator(O::SettleWait(arg(name, args))),
+        "app_state" => ToolCall::App(crate::tools::AppToolCall::State),
+        "read_terminal" => ToolCall::App(crate::tools::AppToolCall::ReadTerminal(arg(name, args))),
         "browser_open" => ToolCall::Browser(B::Open(arg(name, args))),
         "browser_navigate" => ToolCall::Browser(B::Navigate(arg(name, args))),
         "browser_read" => ToolCall::Browser(B::Read(arg(name, args))),
@@ -2026,6 +2028,8 @@ mod accounts_tests;
 #[cfg(test)]
 mod answer_tests;
 #[cfg(test)]
+mod app_state_tests;
+#[cfg(test)]
 mod auto_merge_tests;
 #[cfg(test)]
 mod background_tests;
@@ -2039,7 +2043,6 @@ mod brain_first_tests;
 mod branch_prefix_tests;
 #[cfg(test)]
 mod browser_switch_tests;
-#[cfg(test)]
 mod browser_tool_tests;
 #[cfg(test)]
 mod card_tests;

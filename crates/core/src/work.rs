@@ -575,6 +575,8 @@ pub enum OutputSource {
     /// A Codex thread's own shell command's whole output, as it streamed, when it was longer
     /// than the CLI's event kept.
     Shell,
+    /// One of the session's terminals, as `read_terminal` read it (Q90).
+    Terminal,
 }
 
 // ----- previews -----------------------------------------------------------------------------

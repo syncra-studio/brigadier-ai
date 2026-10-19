@@ -64,7 +64,7 @@ function fakeShell(answer: (op: Record<string, unknown>) => unknown) {
       case "ipc_request": {
         const sent = args.request as Extract<Request, { method: "appAnswer" }>;
         if (sent.method === "appAnswer")
-          answers.push({ id: sent.id, result: sent.result.app === "browser" ? sent.result.result : { result: "failed", message: sent.result.message } });
+          answers.push({ id: sent.id, result: sent.result.app === "browser" ? sent.result.result : { result: "failed", message: sent.result.app === "failed" ? sent.result.message : sent.result.app } });
         const told = args.request as Request;
         if (told.method === "browserPaused") paused.push({ tab: told.tab, paused: told.paused });
         return { method: sent.method };

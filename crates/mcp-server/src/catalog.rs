@@ -4,7 +4,7 @@
 use std::sync::{Arc, OnceLock};
 
 use brigadier_core::tools::{
-    AnswerWorker, ApproveOutline, AskOrchestrator, AskUser, AttachProof, BrowserClick,
+    AnswerWorker, AppToolCall, ApproveOutline, AskOrchestrator, AskUser, AttachProof, BrowserClick,
     BrowserNavigate, BrowserOpen, BrowserTabRef, BrowserToolCall, BrowserType, CHAT_THREAD_TOOLS,
     ChatCall, CiPush, CodeRefs, CodeSearch, DelegateTask, EndRun, FinishSession, JobCall,
     LandPhase, ListSessions, MessageSession, MessageWorker, NoteForUser, OfferFeedback,
@@ -593,6 +593,25 @@ pub fn has_browser_tools(role: &Role) -> bool {
     )
 }
 
+/// Whether `role` may call the app tools (Q90): the thread (and its note fork, which lists what
+/// the thread does) and a Chat. Workers work in their worktrees; the user watches the thread.
+pub fn has_app_tools(role: &Role) -> bool {
+    matches!(
+        role,
+        Role::Orchestrator { .. } | Role::NoteFork { .. } | Role::Chat { .. }
+    )
+}
+
+/// An app tool's call, or `None` for any other tool.
+fn app_call(name: &str, arguments: &Value) -> Option<Result<AppToolCall, ParseError>> {
+    let arguments = arguments.clone();
+    Some(match name {
+        "app_state" => Ok(AppToolCall::State),
+        "read_terminal" => args(name, arguments).map(AppToolCall::ReadTerminal),
+        _ => return None,
+    })
+}
+
 /// A browser tool's call, or `None` for any other tool.
 fn browser_call(name: &str, arguments: &Value) -> Option<Result<BrowserToolCall, ParseError>> {
     let arguments = arguments.clone();
@@ -1082,6 +1101,11 @@ pub fn parse_call(
         && let Some(call) = browser_call(name, &arguments)
     {
         return call.map(ToolCall::Browser);
+    }
+    if has_app_tools(role)
+        && let Some(call) = app_call(name, &arguments)
+    {
+        return call.map(ToolCall::App);
     }
     match role {
         Role::Orchestrator { run, .. } | Role::NoteFork { run, .. } => {
@@ -1781,6 +1805,43 @@ mod tests {
             parse_call(&chat, "browser_open", open.as_object().cloned()),
             Ok(ToolCall::Browser(BrowserToolCall::Open(_)))
         ));
+    }
+
+    /// The app tools (Q90) are the thread's and a Chat's: a worker can't even name one.
+    #[test]
+    fn only_threads_and_chats_make_app_calls() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        let chat = Role::Chat {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+        };
+        let terminal = serde_json::json!({ "terminal": "terminal-1" });
+        for role in [&thread, &chat] {
+            assert!(has_app_tools(role));
+            assert!(matches!(
+                parse_call(role, "app_state", None),
+                Ok(ToolCall::App(AppToolCall::State))
+            ));
+            assert!(matches!(
+                parse_call(role, "read_terminal", terminal.as_object().cloned()),
+                Ok(ToolCall::App(AppToolCall::ReadTerminal(read))) if read.terminal == "terminal-1"
+            ));
+        }
+        for role in [worker(false), worker(true)] {
+            assert!(!has_app_tools(&role));
+            for name in ["app_state", "read_terminal"] {
+                assert!(
+                    matches!(
+                        parse_call(&role, name, terminal.as_object().cloned()),
+                        Err(ParseError::UnknownTool(_))
+                    ),
+                    "a worker parsed {name}"
+                );
+                assert!(!tools_for(&role).iter().any(|tool| tool.name == name));
+            }
+        }
     }
 
     /// A Chat lists the thread's worker and card tools besides its own, and nothing of git,

@@ -37,6 +37,7 @@ fn browser_call(call: AppCall) -> Option<BrowserCall> {
             label: call.label,
             op,
         }),
+        _ => None,
     }
 }
 

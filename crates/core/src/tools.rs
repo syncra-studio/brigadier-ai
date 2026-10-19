@@ -1904,6 +1904,32 @@ pub struct BrowserType {
     pub asks: Option<BrowserAsks>,
 }
 
+/// `read_terminal`: one of the session's terminals.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadTerminal {
+    /// The terminal, as app_state lists it ("terminal-3").
+    pub terminal: String,
+}
+
+/// An app tool call (Q90), from the thread or a Chat.
+#[derive(Debug, Clone)]
+pub enum AppToolCall {
+    /// `app_state`: what the session has open in the app now.
+    State,
+    ReadTerminal(ReadTerminal),
+}
+
+impl AppToolCall {
+    /// The MCP tool name.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::State => "app_state",
+            Self::ReadTerminal(_) => "read_terminal",
+        }
+    }
+}
+
 /// A browser tool call, from the thread or a worker.
 #[derive(Debug, Clone)]
 pub enum BrowserToolCall {
@@ -1938,6 +1964,8 @@ pub enum ToolCall {
     Worker(WorkerCall),
     /// The browser tools, the thread's and its workers' alike.
     Browser(BrowserToolCall),
+    /// The app tools (Q90): the thread's and a Chat's, never a worker's.
+    App(AppToolCall),
     Job(JobCall),
     Chat(ChatCall),
     TabChat(TabChatCall),

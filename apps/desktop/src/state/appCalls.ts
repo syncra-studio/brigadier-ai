@@ -1,6 +1,7 @@
 import { request } from "@/ipc/client";
 import type { AppAnswer, AppCall } from "@/ipc/generated";
 import { type PageHands, runCall } from "@/state/agentBrowser";
+import { windowView } from "@/state/windowView";
 
 /**
  * The app calls (Q90): what an agent asks of this window, done here as the user's click would
@@ -21,5 +22,7 @@ export async function answerOf(call: AppCall, hands?: PageHands): Promise<AppAns
   switch (call.op.app) {
     case "browser":
       return { app: "browser", result: await runCall({ ...call, op: call.op.op }, hands) };
+    case "state":
+      return { app: "state", view: windowView(call.conversationId) };
   }
 }

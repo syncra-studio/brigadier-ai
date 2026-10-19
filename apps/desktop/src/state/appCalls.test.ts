@@ -14,7 +14,8 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage, crypto: globalThis.crypto, innerWidth: 1200, innerHeight: 800 } });
 const { runAppCall } = await import("./appCalls");
-const { newSessionTab, sessionTabs } = await import("./sessionTabs");
+const { newSessionTab, openAgentTab, sessionTabs } = await import("./sessionTabs");
+const { answerOf } = await import("./appCalls");
 const { useApp } = await import("./store");
 
 const AGENT = "app-call-agent-session";
@@ -53,6 +54,7 @@ const call = (conversationId: string, op: AppOp): AppCall => ({ id: `app-call-${
 /** Every app call the window runs today, on a session the user isn't looking at. */
 const EVERY_CALL: AppOp[] = [
   { app: "browser", op: { op: "open", url: "http://127.0.0.1:4000/" } },
+  { app: "state" },
 ];
 
 test("no app call brings the window forward or moves the user off the session and tab they are on", async () => {
@@ -68,4 +70,30 @@ test("no app call brings the window forward or moves the user off the session an
   assert.equal(sessionTabs(USER).active, theirs, "and so does their tab");
   const focusing = shell.commands.filter((command) => /focus|activate|unminimize|set_?show|window\|show/i.test(command));
   assert.deepEqual(focusing, [], "nothing asked the window to come forward");
+});
+
+test("the state call tells the session's tabs, whose each is, and whether it is on screen", async () => {
+  fakeShell();
+  const session = "app-call-state-session";
+  useApp.setState({ selection: { type: "conversation", id: session }, windowVisible: true });
+  const terminal = newSessionTab(session, "terminal", "/repo");
+  const agent = openAgentTab(session, "https://example.com/", { label: "The thread", taskId: null });
+  const shown = await answerOf(call(session, { app: "state" }));
+  assert.equal(shown.app, "state");
+  const view = (shown as Extract<typeof shown, { app: "state" }>).view;
+  assert.equal(view.onScreen, true);
+  assert.equal(view.front, terminal, "the user's terminal stays in front; the agent's tab opened behind");
+  assert.deepEqual(view.tabs.map((tab) => [tab.id, tab.kind, tab.agent, tab.url]), [
+    [terminal, "terminal", false, null],
+    [agent, "browser", true, "https://example.com/"],
+  ]);
+  assert.equal(view.tabs[0]!.title, "repo");
+
+  useApp.setState({ selection: { type: "conversation", id: USER } });
+  const elsewhere = await answerOf(call(session, { app: "state" }));
+  assert.equal((elsewhere as Extract<typeof elsewhere, { app: "state" }>).view.onScreen, false, "the user is on another session");
+  useApp.setState({ selection: { type: "conversation", id: session }, windowVisible: false });
+  const hidden = await answerOf(call(session, { app: "state" }));
+  assert.equal((hidden as Extract<typeof hidden, { app: "state" }>).view.onScreen, false, "the window is hidden");
+  useApp.setState({ windowVisible: true });
 });

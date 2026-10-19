@@ -4,4 +4,4 @@ import type { BrowserOp } from "./BrowserOp";
 /**
  * What a call asks of the app.
  */
-export type AppOp = { "app": "browser", op: BrowserOp, };
+export type AppOp = { "app": "browser", op: BrowserOp, } | { "app": "state" };

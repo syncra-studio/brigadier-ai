@@ -123,7 +123,14 @@ export type PanelView =
   | { type: "output"; source: "preview" | "run"; id: string };
 export type PanelTabState = { kind: "panel"; id: string; opener: string | null; view: PanelView; title: string };
 
-export type SessionTab = FileTab | ReviewTabState | PanelTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState | ConflictTabState;
+/** Any tab may say an agent opened it (Q90): it is the agent's to close; every other tab is the user's. */
+export type AgentMark = { agentOpened?: boolean };
+export type SessionTab = (FileTab | ReviewTabState | PanelTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState | ConflictTabState) & AgentMark;
+
+/** Whether an agent opened `tab`: by an app call, or with the browser tool. */
+export function isAgentTab(tab: SessionTab): boolean {
+  return tab.agentOpened === true || (tab.kind === "browser" && Boolean(tab.driver));
+}
 export type NewTabKind = "newTab" | "terminal" | "browser" | "sideChat" | "page";
 
 export type SessionTabs = {

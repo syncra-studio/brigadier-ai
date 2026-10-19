@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use brigadier_core::Error;
-use brigadier_core::manager::{HostedTerminal, TerminalHost};
+use brigadier_core::manager::{HostedTerminal, TerminalHost, TerminalSnapshot};
 use brigadier_ipc::protocol::{TerminalInfo, TerminalOutput};
 use brigadier_providers::TerminalCommand;
 use brigadier_sandbox::Platform;
@@ -26,6 +26,8 @@ const SCROLLBACK: usize = 256 * 1024;
 /// Output chunks a connection may fall behind by before it misses some.
 const FEED: usize = 1024;
 const READ_CHUNK: usize = 16 * 1024;
+/// How much of a terminal's latest output a snapshot carries, in bytes.
+const SNAPSHOT_TAIL: usize = 4 * 1024;
 /// How long an ended terminal's process has to be reaped after its tree was killed.
 const TERMINATE_WAIT: Duration = Duration::from_secs(5);
 /// How often, and how many times, an ended shell is checked for its exit code.
@@ -71,6 +73,34 @@ impl Terminal {
             shell: self.shell.clone(),
             cwd: self.cwd.clone(),
             scrollback: lock(&self.scrollback).clone(),
+        }
+    }
+
+    /// Whether a command runs in front of its shell: the pty's foreground process group is
+    /// another than the shell's own. A worker's terminal runs its CLI, so it always is busy.
+    fn busy(&self) -> Option<bool> {
+        if self
+            .session
+            .as_deref()
+            .is_some_and(|key| key.starts_with("worker:"))
+        {
+            return Some(true);
+        }
+        foreground_busy(lock(&self.master).as_ref(), self.pid)
+    }
+
+    fn snapshot(&self) -> TerminalSnapshot {
+        let scrollback = lock(&self.scrollback);
+        let mut from = scrollback.len().saturating_sub(SNAPSHOT_TAIL);
+        while !scrollback.is_char_boundary(from) {
+            from += 1;
+        }
+        TerminalSnapshot {
+            id: self.id.clone(),
+            key: self.session.clone(),
+            cwd: self.cwd.clone(),
+            busy: self.busy(),
+            tail: scrollback[from..].to_owned(),
         }
     }
 
@@ -552,6 +582,44 @@ impl TerminalHost for Terminals {
             }
         })
     }
+
+    fn list(&self, conversation: &str) -> Vec<TerminalSnapshot> {
+        let mut terminals: Vec<Arc<Terminal>> = lock(&self.live)
+            .values()
+            .filter(|terminal| terminal.conversation == conversation)
+            .cloned()
+            .collect();
+        // Started in order: their ids count up.
+        terminals.sort_by_key(|terminal| {
+            terminal
+                .id
+                .trim_start_matches("terminal-")
+                .parse::<u64>()
+                .unwrap_or(u64::MAX)
+        });
+        terminals
+            .iter()
+            .map(|terminal| terminal.snapshot())
+            .collect()
+    }
+
+    fn output(&self, conversation: &str, id: &str) -> Option<String> {
+        let terminal = self.get(id).ok()?;
+        (terminal.conversation == conversation).then(|| lock(&terminal.scrollback).clone())
+    }
+}
+
+#[cfg(unix)]
+fn foreground_busy(master: &(dyn MasterPty + Send), pid: Option<u32>) -> Option<bool> {
+    let leader = master.process_group_leader()?;
+    let pid = pid?;
+    Some(u32::try_from(leader).ok()? != pid)
+}
+
+/// Windows' pseudo console doesn't say what runs in front.
+#[cfg(not(unix))]
+fn foreground_busy(_master: &(dyn MasterPty + Send), _pid: Option<u32>) -> Option<bool> {
+    None
 }
 
 /// The ended shell's exit code. Its output closed, so it is exiting; one that lingers past
@@ -674,6 +742,58 @@ mod tests {
         assert!(terminals.get(&other.id).is_ok());
         terminals.close_all();
         assert_eq!(terminals.count(), 0);
+    }
+
+    /// Polls `check` for up to ten seconds.
+    #[cfg(unix)]
+    fn eventually(mut check: impl FnMut() -> bool) -> bool {
+        for _ in 0..200 {
+            if check() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        false
+    }
+
+    /// An idle shell reads idle, a command in front of it reads busy, and only the
+    /// conversation's own terminals are listed and read (Q90's `app_state`/`read_terminal`).
+    #[cfg(unix)]
+    #[test]
+    fn a_shell_reads_idle_until_a_command_runs_in_front_of_it() {
+        use brigadier_core::manager::TerminalHost;
+
+        let terminals = Terminals::new();
+        let cwd = std::env::temp_dir().display().to_string();
+        let shell = terminals
+            .open_session("busy-test", Some("terminal:tab"), cwd.clone(), 80, 24)
+            .unwrap();
+        terminals
+            .open_session("other-busy-test", Some("terminal:tab"), cwd, 80, 24)
+            .unwrap();
+        let busy = || terminals.list("busy-test")[0].busy;
+        assert!(eventually(|| busy() == Some(false)), "{:?}", busy());
+        terminals
+            .write(&shell.id, "echo started-$((40+2)); sleep 30\n")
+            .unwrap();
+        assert!(eventually(|| busy() == Some(true)), "{:?}", busy());
+        assert!(eventually(|| terminals.list("busy-test")[0]
+            .tail
+            .contains("started-42")));
+        let listed = terminals.list("busy-test");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, shell.id);
+        assert_eq!(listed[0].key.as_deref(), Some("terminal:tab"));
+        // Ctrl-C ends the command: the shell is in front again.
+        terminals.write(&shell.id, "\u{3}").unwrap();
+        assert!(eventually(|| busy() == Some(false)), "{:?}", busy());
+        assert!(
+            terminals
+                .output("busy-test", &shell.id)
+                .is_some_and(|text| text.contains("started-42"))
+        );
+        assert_eq!(terminals.output("other-busy-test", &shell.id), None);
+        terminals.close_all();
     }
 
     #[cfg(unix)]

@@ -192,6 +192,7 @@ impl SessionManager {
                 "a command's full output"
             }
             OutputSource::Preview => "a preview's log",
+            OutputSource::Terminal => "a terminal's output",
         };
         Ok(Some((output.blob.clone(), name.into())))
     }

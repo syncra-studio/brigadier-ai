@@ -18,6 +18,7 @@
 mod accounts;
 mod add_project;
 mod app_call;
+mod app_state;
 mod background_runs;
 mod brain_first;
 mod brain_jobs;
@@ -152,7 +153,7 @@ pub(crate) use conversation::interrupted_by_quit;
 pub(crate) use integrated_checks::integrated_check_number;
 pub(crate) use landing::held_merge;
 pub use side_chat::BrowserPage;
-pub use takeover::{HostedTerminal, TerminalHost, WorkerTerminal};
+pub use takeover::{HostedTerminal, TerminalHost, TerminalSnapshot, WorkerTerminal};
 pub use tool_output::{HOOK_GRANT_ENV, HookOutput, OUTPUT_MAX_BYTES, STOP_GRANT_ENV};
 pub use uninstall::TearDown;
 
@@ -988,6 +989,15 @@ impl ToolHost for SessionManager {
                 (Role::Chat { conversation_id }, ToolCall::Browser(call)) => {
                     crate::heap(|| manager.browser_tool(conversation_id, None, call)).await
                 }
+                // The app tools (Q90) are the thread's and a Chat's: workers work in their
+                // worktrees, and the user watches the thread.
+                (
+                    Role::Orchestrator {
+                        conversation_id, ..
+                    }
+                    | Role::Chat { conversation_id },
+                    ToolCall::App(call),
+                ) => crate::heap(|| manager.app_tool(conversation_id, call)).await,
                 (
                     Role::TabChat {
                         conversation_id, ..
