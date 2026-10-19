@@ -67,10 +67,18 @@ mockIPC((command, payload) => {
 const section = () => document.querySelector<HTMLElement>("[data-activities]");
 const row = (activity: string) => section()?.querySelector<HTMLElement>(`[data-activity="${activity}"]`) ?? null;
 const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? null;
-/** A row as it reads: what it is for, its time, its tooltip. */
+/** A row as it reads: what it is for, its state in a word, whether its icon moves, its time, its tooltip. */
 const read = (activity: string) => {
   const button = row(activity);
-  return button && { label: text(button.querySelector("span.truncate")), elapsed: text(button.querySelector("span.tabular-nums")), tip: button.title };
+  const name = button?.querySelector("span.truncate");
+  const state = name?.querySelector("[data-state]");
+  return button && {
+    label: name?.firstChild?.textContent?.trim() ?? null,
+    state: text(state),
+    moving: button.querySelector(".motion-safe\\:animate-spin") !== null,
+    elapsed: text(button.querySelector("span.tabular-nums")),
+    tip: button.title,
+  };
 };
 /** A row's actions, shown on hover in its time's place: Stop, and Show output on a web preview that is up. */
 const action = (activity: string, label: string) =>

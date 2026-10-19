@@ -1,7 +1,9 @@
-import { Pause, Terminal } from "@openai/apps-sdk-ui/components/Icon";
+import { CheckCircleDashed, Flask, Pause, PlayCircle, Terminal } from "@openai/apps-sdk-ui/components/Icon";
+import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { type BackgroundRow, type BackgroundState, backgroundRows, CHANGING } from "@/app/conversation/backgroundRows";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { previewActive, previewWord } from "@/app/conversation/previewStatus";
 import { workerName } from "@/app/conversation/rowWords";
@@ -9,17 +11,26 @@ import { SummaryRowButton, SummarySection } from "@/components/assistant-ui/elem
 import { Spinner } from "@/components/glyphs/spinner";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
-import type { BackgroundRun, Preview, Task } from "@/ipc/generated";
+import type { Preview } from "@/ipc/generated";
 import { stopBackgroundRun, stopPreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { openLink } from "@/state/links";
 import { openPanelTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
+import { cn } from "@/lib/utils";
 
 /** One thing running for the session: a preview (the thread's or a worker's) or a long command. */
-type Activity =
-  | { type: "preview"; id: string; startedAtMs: number; preview: Preview; worker: string | null }
-  | { type: "run"; id: string; startedAtMs: number; run: BackgroundRun };
+type Activity = BackgroundRow;
+
+/** A row's icon for its state: it moves only while the process is on its way to another state. */
+const STATE_ICON: Record<BackgroundState, ReactNode> = {
+  building: <Spinner className="motion-safe:animate-spin" />,
+  starting: <Spinner className="motion-safe:animate-spin" />,
+  running: <PlayCircle />,
+  paused: <Pause />,
+  "smoke testing": <Flask />,
+  checking: <CheckCircleDashed />,
+};
 
 /** What a row is for, first letter up: "Dev app", "Core tests". A command stands as it is. */
 const title = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
@@ -30,11 +41,13 @@ const label = (activity: Activity) =>
     : activity.run.name ? title(activity.run.name) : commandWords(activity.run.command);
 
 /**
- * "Background": what still runs for the session after its turn, one line each: the thread's and
- * the workers' previews and the thread's long commands, with a spinner, how long it has gone, and
- * Stop on hover. A click on a web preview that is up opens its page in the browser (Brigadier's,
- * by Settings › Browser), with what it prints one button away; any other row opens what it prints
- * in a tab. A thing that ends leaves the card; the thread's fold keeps its history.
+ * "Background": what still runs for the session after its turn, one row per process: the
+ * thread's and the workers' previews and the thread's long commands, each with its state in a
+ * word and an icon (a worker's copy of an app or a browser at it is a state of the app's row),
+ * how long it has gone, and Stop on hover. A click on a web preview that is up opens its page in
+ * the browser (Brigadier's, by Settings › Browser), with what it prints one button away; any
+ * other row opens what it prints in a tab. A thing that ends leaves the card; the thread's fold
+ * keeps its history.
  */
 export function ActivitiesSummary({ conversationId }: { conversationId: string }) {
   const previews = useBoard(useShallow((s) => s.board?.conversationId === conversationId
@@ -44,13 +57,7 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
     ? Object.values(s.board.backgroundRuns).filter((run) => run.state.type === "running")
     : []));
   const tasks = useBoard((s) => s.board?.conversationId === conversationId ? s.board.tasks : null);
-  const activities: Activity[] = [
-    ...previews.map((preview): Activity => {
-      const task: Task | undefined = preview.taskId ? tasks?.[preview.taskId] : undefined;
-      return { type: "preview", id: preview.id, startedAtMs: preview.startedAtMs, preview, worker: task && tasks ? workerName(tasks, task) : null };
-    }),
-    ...runs.map((run): Activity => ({ type: "run", id: run.id, startedAtMs: run.startedAtMs, run })),
-  ].toSorted((a, b) => b.startedAtMs - a.startedAtMs || b.id.localeCompare(a.id));
+  const activities = backgroundRows(previews, runs, tasks, (task) => (tasks ? workerName(tasks, task) : null));
   // A row that starts reads the clock in the same render, never a stale one that would show 0s
   // until the next tick.
   const since = activities.map((activity) => `${activity.id}@${activity.startedAtMs}`).join();
@@ -76,9 +83,12 @@ export function ActivitiesSummary({ conversationId }: { conversationId: string }
 
 function BackgroundRow({ conversationId, activity, now }: { conversationId: string; activity: Activity; now: number }) {
   const name = label(activity);
-  const paused = activity.type === "preview" && activity.preview.state.type === "paused";
   const tip = activity.type === "preview"
-    ? [`${previewWord(activity.preview)}: ${activity.preview.command}`, activity.worker && `From ${activity.worker}`].filter(Boolean).join("\n")
+    ? [
+      `${previewWord(activity.preview)}: ${activity.preview.command}`,
+      activity.worker && `From ${activity.worker}`,
+      ...activity.with.map((copy: Preview) => `${title(copy.name)}: ${copy.command}`),
+    ].filter(Boolean).join("\n")
     : activity.run.command;
   const stop = activity.type === "preview"
     ? () => stopPreview(conversationId, activity.id)
@@ -89,7 +99,7 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
     <SummaryRowButton
       data-activity={activity.id}
       title={tip}
-      icon={paused ? <Pause /> : <Spinner />}
+      icon={STATE_ICON[activity.state]}
       meta={elapsedWords(now - activity.startedAtMs)}
       action={
         <>
@@ -106,6 +116,7 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
         : output}
     >
       {name}
+      <span data-state={activity.state} className={cn("text-muted-foreground", CHANGING.has(activity.state) && "shimmer")}> {activity.state}</span>
     </SummaryRowButton>
   );
 }
