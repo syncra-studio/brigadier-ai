@@ -946,7 +946,7 @@ impl Core {
     }
 
     /// Stores an attachment in the blob store. `pasted` marks text pasted into the composer,
-    /// which must be UTF-8 plain text.
+    /// which must be UTF-8 text: plain, or Markdown (rich text pasted).
     pub async fn add_attachment(
         &self,
         name: String,
@@ -969,10 +969,9 @@ impl Core {
         } else {
             mime.trim().to_owned()
         };
-        if pasted && (!mime.starts_with("text/plain") || std::str::from_utf8(&bytes).is_err()) {
-            return Err(Error::Invalid(
-                "pasted text must be UTF-8 plain text".into(),
-            ));
+        let text = mime.starts_with("text/plain") || mime.starts_with("text/markdown");
+        if pasted && (!text || std::str::from_utf8(&bytes).is_err()) {
+            return Err(Error::Invalid("pasted text must be UTF-8 text".into()));
         }
         let size = bytes.len() as u64;
         let hash = self.store.blobs().put(bytes).await?;
@@ -3492,6 +3491,37 @@ mod tests {
         let board = core.board(&id).await.unwrap();
         assert!(board.waiting.is_empty());
         assert!(board.sorted_waiting().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pasted_text_is_stored_plain_or_markdown() {
+        let dir =
+            Temp(std::env::temp_dir().join(format!("brigadier-paste-{}", uuid::Uuid::now_v7())));
+        let store = Store::open(brigadier_store::StoreConfig {
+            db_path: dir.join("test.db"),
+            blobs_dir: dir.join("blobs"),
+            readers: 1,
+        })
+        .unwrap();
+        let core = Core::load(store).await.unwrap();
+        for (name, mime) in [
+            ("Pasted text.txt", "text/plain"),
+            ("Pasted text.md", "text/markdown"),
+        ] {
+            let stored = core
+                .add_attachment(name.into(), mime.into(), b"# Title".to_vec(), true)
+                .await
+                .unwrap();
+            assert!(stored.pasted);
+            assert_eq!(stored.mime, mime);
+        }
+        for (mime, bytes) in [("image/png", b"x".to_vec()), ("text/plain", vec![0xff])] {
+            assert!(
+                core.add_attachment("Pasted text".into(), mime.into(), bytes, true)
+                    .await
+                    .is_err()
+            );
+        }
     }
 
     #[tokio::test]
