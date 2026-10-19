@@ -53,7 +53,7 @@ export function JobProgress({
     <div
       data-slot="job-progress"
       data-state={outcome?.status ?? "running"}
-      className={cn("flex w-full min-w-0 flex-col gap-2", className)}
+      className={cn("flex w-full min-w-0 flex-col gap-2 text-sm", className)}
       {...props}
     >
       <div className="flex min-w-0 items-center gap-2">
@@ -68,7 +68,7 @@ export function JobProgress({
         ) : (
           <Spinner className="text-muted-foreground size-icon-sm shrink-0 motion-safe:animate-spin" />
         )}
-        <span className={cn("min-w-0 flex-1 truncate text-sm", running && "shimmer")}>{title}</span>
+        <span className={cn("min-w-0 flex-1 truncate", running && "shimmer")}>{title}</span>
         {meta && <span className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}>{meta}</span>}
       </div>
       <span

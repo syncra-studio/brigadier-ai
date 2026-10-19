@@ -16,7 +16,9 @@ test("voice settings: microphone, language, words and the speech model; Read alo
   assert.deepEqual(seen.wordsSaved, ["Brigadier", "Jane Doe"]);
   assert.deepEqual(seen.wordsAfterRemove, { saved: ["Jane Doe"], fields: ["Jane Doe"] });
   assert.equal(seen.modelFirst, "Speech modelNot downloaded yet, 141.0 MB; it downloads when you first dictate, or nowDownload");
-  assert.equal(seen.downloading, "Speech modelDownloading… 47.0 MB of 141.0 MBCancel");
+  // The download reads as its progress: the bytes so far, of the whole, over a bar.
+  assert.equal(seen.downloading, "Speech modelDownloading…47.0 MB of 141.0 MBCancel");
+  assert.equal(seen.downloadBar, "33");
   assert.equal(seen.cancelled, seen.modelFirst);
   assert.equal(seen.afterDrop, seen.modelFirst);
   assert.equal(seen.downloaded, "Speech modelDownloaded, 141.0 MB; dictation runs on this computer with itRemove");

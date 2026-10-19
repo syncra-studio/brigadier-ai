@@ -11,6 +11,7 @@ import {
   SettingsSelect,
 } from "@/app/settings/parts";
 import { cleanWords, languageChoices, microphoneChoices } from "@/app/settings/voice";
+import { JobProgress } from "@/components/assistant-ui/elements/job-progress";
 import { formatBytes } from "@/lib/format";
 import {
   cancelSpeechModelDownload,
@@ -205,7 +206,15 @@ function SpeechModelRow() {
   const line = !status
     ? "Looking…"
     : model
-      ? `Downloading… ${formatBytes(model.received)} of ${formatBytes(model.total || status.modelBytes)}`
+      ? (
+          <JobProgress
+            className="gap-1.5 pt-1 text-xs"
+            title="Downloading…"
+            done={model.received}
+            total={model.total || status.modelBytes}
+            meta={`${formatBytes(model.received)} of ${formatBytes(model.total || status.modelBytes)}`}
+          />
+        )
       : status.installed
         ? `Downloaded, ${size}; dictation runs on this computer with it`
         : `Not downloaded yet, ${size}; it downloads when you first dictate, or now`;

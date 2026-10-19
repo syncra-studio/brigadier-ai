@@ -157,6 +157,11 @@ const modelLine = () => text(row("Speech model"));
 function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
+    // `?downloading`: the speech model a third downloaded, to look at.
+    if (params.has("downloading")) {
+      const timer = setTimeout(() => onDictationUpdate({ type: "download", received: 47 * MB, total: 141 * MB }), 300);
+      return () => clearTimeout(timer);
+    }
     if (!params.has("drive")) return;
     const seen: Record<string, unknown> = {};
     const steps: (() => void | "menu" | Promise<void>)[] = [
@@ -203,6 +208,7 @@ function Fixture() {
       },
       () => {
         seen.downloading = modelLine();
+        seen.downloadBar = row("Speech model")?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow") ?? null;
         button("Cancel")?.click();
         onDictationUpdate({ type: "downloadStopped", message: null });
       },
