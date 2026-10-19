@@ -445,13 +445,16 @@ impl Runtime {
     }
 
     /// Chooses each provider's lead account again; a provider whose lead changed has its
-    /// overview recorded again (its quota is the new lead's).
-    pub(super) async fn update_leads(&self) {
+    /// overview recorded again (its quota is the new lead's). Answers whether any lead changed
+    /// (Settings → Accounts then marks another account in use).
+    pub(super) async fn update_leads(&self) -> bool {
+        let mut moved = false;
         for kind in ProviderKind::ALL {
             let lead = self.launch_account(kind, None);
             if !self.monitor.set_lead(lead) {
                 continue;
             }
+            moved = true;
             let overview = {
                 let mut state = self.state();
                 let Some(overview) = state.overviews.get_mut(&kind) else {
@@ -462,6 +465,7 @@ impl Runtime {
             };
             self.record_overview(overview).await;
         }
+        moved
     }
 
     /// Settings → Accounts as it stands.
@@ -471,9 +475,11 @@ impl Runtime {
         let mut accounts = Vec::new();
         for kind in ProviderKind::ALL {
             let own = AccountRef::own(kind);
+            let lead = self.monitor.lead(kind);
             let overview = self.overview(kind);
             let checking = self.state().refreshing.contains(&kind);
             accounts.push(AccountView {
+                in_use: own == lead,
                 quota: self.monitor.current_for(&own, now),
                 quota_at_ms: self.monitor.read_at(&own),
                 default: settings.default_account(kind).is_none(),
@@ -498,6 +504,7 @@ impl Runtime {
                 let account = AccountRef::new(kind, Some(entry.id.clone()));
                 let live = live.get(&entry.id);
                 accounts.push(AccountView {
+                    in_use: account == lead,
                     quota: self.monitor.current_for(&account, now),
                     quota_at_ms: self.monitor.read_at(&account),
                     default: entry.default,

@@ -1056,6 +1056,10 @@ pub struct AccountView {
     pub name: String,
     /// Its provider's default: with switching off, work on that provider runs here.
     pub default: bool,
+    /// New work of its provider starts on it now, as the engine chooses (switching on: the
+    /// soonest weekly reset among those that can take work): the provider's lead account,
+    /// whose quota the Usage menu shows.
+    pub in_use: bool,
     /// Its login, as the CLI last reported it; unknown until first checked.
     pub status: Option<ProviderStatus>,
     /// Its quota now; unknown until first read.

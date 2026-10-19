@@ -17,6 +17,12 @@ name: string,
  */
 default: boolean, 
 /**
+ * New work of its provider starts on it now, as the engine chooses (switching on: the
+ * soonest weekly reset among those that can take work): the provider's lead account,
+ * whose quota the Usage menu shows.
+ */
+inUse: boolean, 
+/**
  * Its login, as the CLI last reported it; unknown until first checked.
  */
 status: ProviderStatus | null, 

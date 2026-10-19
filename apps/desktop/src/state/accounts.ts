@@ -101,7 +101,7 @@ export type AccountRowView = { view: AccountView; ownLogin: boolean };
 /**
  * One row per account. When this computer's login is signed in to an account also added here,
  * the two are one row in the login's place: the added account's, saying it is this computer's
- * login, in use when either is.
+ * login, in use (and the default) when either is.
  */
 export function oneRowPerAccount(views: readonly AccountView[]): AccountRowView[] {
   const twins = new Map<AccountView, AccountView>();
@@ -122,7 +122,7 @@ export function oneRowPerAccount(views: readonly AccountView[]): AccountRowView[
     if (merged.has(view)) return [];
     const twin = twins.get(view);
     if (!twin) return [{ view, ownLogin: view.account.account === undefined }];
-    return [{ view: { ...twin, default: twin.default || view.default }, ownLogin: true }];
+    return [{ view: { ...twin, default: twin.default || view.default, inUse: twin.inUse || view.inUse }, ownLogin: true }];
   });
 }
 

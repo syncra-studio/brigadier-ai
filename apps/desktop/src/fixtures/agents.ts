@@ -88,5 +88,7 @@ export function account(
     checkedGeneration: 0,
     error: null,
     ...fields,
+    // New work starts on the default unless the fixture says otherwise (switching picked another).
+    inUse: fields.inUse ?? fields.default ?? id === undefined,
   };
 }

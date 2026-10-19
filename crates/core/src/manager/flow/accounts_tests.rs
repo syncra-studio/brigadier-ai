@@ -749,6 +749,157 @@ async fn a_running_thread_keeps_its_account_when_another_resets_sooner() {
     flow.stop().await;
 }
 
+/// Notes `account`'s quota as a live report would: its weekly window `used` % and resetting in
+/// `hours`, its 5-hour one barely used.
+async fn report_weekly(flow: &Flow, account: Option<&str>, used: f64, hours: i64) {
+    use brigadier_providers::{QuotaSnapshot, QuotaSource, QuotaWindow};
+
+    let now = crate::now_ms();
+    let window = |id: &str, minutes: i64, used_percent: f64, resets_at_ms: i64| QuotaWindow {
+        id: id.into(),
+        label: id.into(),
+        used_percent,
+        resets_at_ms: Some(resets_at_ms),
+        window_minutes: Some(minutes),
+        bucket: None,
+        model: None,
+    };
+    let provider = ProviderKind::Claude;
+    flow.manager
+        .runtime
+        .note_quota_snapshot(
+            &crate::accounts::AccountRef::new(provider, account.map(Into::into)),
+            QuotaSnapshot {
+                provider,
+                windows: vec![
+                    window("five_hour", 300, 1.0, now + 3_600_000),
+                    window("seven_day", 7 * 24 * 60, used, now + hours * 3_600_000),
+                ],
+                limit: None,
+                observed_at_ms: now,
+                source: QuotaSource::Event,
+            },
+        )
+        .await;
+}
+
+/// The account Settings marks in use, and the weekly use the Usage menu shows for Claude.
+async fn in_use(flow: &Flow) -> (Vec<Option<String>>, Option<f64>) {
+    let marked = flow
+        .manager
+        .runtime
+        .accounts_view()
+        .accounts
+        .into_iter()
+        .filter(|view| view.account.provider == ProviderKind::Claude && view.in_use)
+        .map(|view| view.account.account)
+        .collect();
+    let weekly = flow
+        .manager
+        .runtime
+        .overview(ProviderKind::Claude)
+        .and_then(|overview| overview.quota)
+        .and_then(|quota| {
+            quota
+                .windows
+                .into_iter()
+                .find(|window| window.id == "seven_day")
+        })
+        .map(|window| window.used_percent);
+    (marked, weekly)
+}
+
+/// The account the last published Settings → Accounts marks in use.
+async fn published_in_use(flow: &Flow) -> Vec<Option<String>> {
+    let page = flow
+        .core
+        .store()
+        .read_stream(
+            crate::model::streams::ACCOUNTS.into(),
+            brigadier_store::StreamPage {
+                limit: 1,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    page.first()
+        .map(|event| crate::sessions::decode(event).unwrap())
+        .and_then(|event| match event {
+            DomainEvent::AccountsChecked { accounts } => Some(accounts),
+            _ => None,
+        })
+        .map(|view| {
+            view.accounts
+                .into_iter()
+                .filter(|view| view.account.provider == ProviderKind::Claude && view.in_use)
+                .map(|view| view.account.account)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn settings_and_the_usage_menu_mark_the_account_new_work_starts_on() {
+    let log = Log::default();
+    let flow = Flow::start(
+        "accounts-in-use",
+        Options::default(),
+        logging(&log, |_| Reply::text("Done.")),
+    )
+    .await;
+    flow.add_accounts(
+        &[
+            (ProviderKind::Claude, "acct-b"),
+            (ProviderKind::Claude, "acct-c"),
+        ],
+        true,
+    )
+    .await;
+    // The user's own login is the default; the second account's week ends first; the third is
+    // used up.
+    report_weekly(&flow, None, 7.0, 37).await;
+    report_weekly(&flow, Some("acct-c"), 100.0, 34).await;
+    report_weekly(&flow, Some("acct-b"), 94.0, 4).await;
+    assert_eq!(
+        flow.manager
+            .runtime
+            .launch_account(ProviderKind::Claude, None)
+            .account
+            .as_deref(),
+        Some("acct-b")
+    );
+    // One account in use, the one new work starts on, and the menu shows its use.
+    assert_eq!(
+        in_use(&flow).await,
+        (vec![Some("acct-b".into())], Some(94.0))
+    );
+    assert_eq!(published_in_use(&flow).await, vec![Some("acct-b".into())]);
+    flow.say("First.").await;
+    flow.settled().await;
+    assert_eq!(seen(&log)[0].account.as_deref(), Some("acct-b"));
+
+    // It runs out: new work starts on the next, and both places follow at once.
+    report_weekly(&flow, Some("acct-b"), 100.0, 4).await;
+    assert_eq!(in_use(&flow).await, (vec![None], Some(7.0)));
+    assert_eq!(published_in_use(&flow).await, vec![None]);
+
+    // With switching off, work runs on the default: the account picked with Use.
+    let mut settings = flow.core.settings();
+    settings.switch_accounts = false;
+    for entry in &mut settings.accounts {
+        entry.default = entry.id == "acct-c";
+    }
+    flow.core.update_settings(settings).await.unwrap();
+    flow.manager.runtime.sync_accounts().await;
+    assert_eq!(
+        in_use(&flow).await,
+        (vec![Some("acct-c".into())], Some(100.0))
+    );
+    assert_eq!(published_in_use(&flow).await, vec![Some("acct-c".into())]);
+    flow.stop().await;
+}
+
 async fn chat_on(flow: &Flow, provider: ProviderKind, account: Option<&str>) -> ConversationId {
     flow.manager
         .create_conversation(

@@ -183,7 +183,7 @@ export function AgentsOverview({
 /** The window of the account in use that is nearest its limit, for the agent's row. */
 export function busiestWindow(views: readonly AccountView[]): QuotaWindow | null {
   const rows = oneRowPerAccount(views);
-  const inUse = rows.find(({ view }) => view.default)?.view ?? rows[0]?.view;
+  const inUse = rows.find(({ view }) => view.inUse)?.view ?? rows[0]?.view;
   const windows = inUse?.status?.loggedIn ? (inUse.quota?.windows ?? []) : [];
   return windows.reduce<QuotaWindow | null>((top, window) => (top && used(top) >= used(window) ? top : window), null);
 }

@@ -278,7 +278,8 @@ export function accountNames(
 
 /**
  * One account: who it is (its email masked until its eye is pressed), its plan and a bar for
- * how much of each window is used, then Use (or In use for the one new chats start on).
+ * how much of each window is used, then Use (or In use for the one new chats start on, as the
+ * engine picks it: with switching on, not always the one picked with Use).
  * Rename, Sign in again and Remove sit in its menu.
  */
 function AccountRow({
@@ -352,11 +353,11 @@ function AccountRow({
       <SettingsButton disabled={busy} onClick={() => id && onSignIn(id)}>
         Sign in
       </SettingsButton>
-    ) : view.default ? (
+    ) : view.inUse ? (
       <Badge variant="secondary" title="New chats start on this account">
         In use
       </Badge>
-    ) : (
+    ) : view.default ? null : (
       <SettingsButton
         disabled={action.busy || !signedIn}
         title="Start new chats on this account"
@@ -418,7 +419,7 @@ function AccountRow({
                 {shownEmail}
               </span>
               {eye}
-              {view.default && (
+              {view.inUse && (
                 <Badge data-slot="in-use" variant="success" title="New chats start on this account" className="shrink-0">
                   <CheckMd aria-hidden />
                   In use

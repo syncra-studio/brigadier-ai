@@ -366,8 +366,8 @@ function Fixture() {
         const [own, ...rest] = listed;
         if (!own?.status) return;
         const status = { ...own.status, email: "STEPHEN.GOLBAN@EXAMPLE.COM" };
-        const twin = { ...own, account: { provider: own.account.provider, account: "acct-twin" }, default: true, status };
-        listed = [{ ...own, default: false }, ...rest, twin];
+        const twin = { ...own, account: { provider: own.account.provider, account: "acct-twin" }, default: true, inUse: true, status };
+        listed = [{ ...own, default: false, inUse: false }, ...rest, twin];
         useApp.setState({ accounts: { accounts: listed, warnings: [] } });
         openSettings("accounts");
       },
@@ -378,6 +378,19 @@ function Fixture() {
           inUse: text(row).includes("In use"),
           menu: Boolean(row.querySelector('button[aria-label$=": more"]')),
         }));
+        // Switching starts new work on the second account, not the one picked with Use: In use
+        // follows the engine's pick (#432).
+        const [own, second, ...others] = listed;
+        if (!own || !second) return;
+        useApp.setState({
+          accounts: {
+            accounts: [{ ...own, default: true, inUse: false }, { ...second, inUse: true }, ...others.map((view) => ({ ...view, default: false, inUse: false }))],
+            warnings: [],
+          },
+        });
+      },
+      () => {
+        seen.switched = all('[data-slot="account-row"]').map((row) => Boolean(row.querySelector('[data-slot="in-use"]')));
         // Back to the agents, then Codex's page.
         button("Providers", pageRoot())?.click();
       },

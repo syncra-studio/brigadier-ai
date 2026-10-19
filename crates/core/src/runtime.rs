@@ -443,8 +443,8 @@ impl Runtime {
     /// time of the last such record kept per stream: a live update is recorded at most every
     /// [`QUOTA_RECORD_INTERVAL_MS`].
     async fn quota_moved(&self, kind: ProviderKind, throttle: Option<i64>) {
-        // A new lead records its overview itself.
-        self.update_leads().await;
+        // A new lead records its overview itself, and is marked in use in Settings at once.
+        let moved = self.update_leads().await;
         let (overview, accounts) = {
             let mut state = self.state();
             let Some(overview) = state.overviews.get_mut(&kind) else {
@@ -460,7 +460,8 @@ impl Runtime {
                         *last = now;
                         overview
                     });
-                    let accounts = now - state.accounts_recorded_ms >= QUOTA_RECORD_INTERVAL_MS;
+                    let accounts =
+                        moved || now - state.accounts_recorded_ms >= QUOTA_RECORD_INTERVAL_MS;
                     if accounts {
                         state.accounts_recorded_ms = now;
                     }
