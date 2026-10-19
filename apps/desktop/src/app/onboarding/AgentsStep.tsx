@@ -2,7 +2,7 @@ import { ArrowUpRight, Check } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { StepFooter, StepHeader } from "@/app/onboarding/parts";
+import { RAISED_BUTTON, StepFooter, StepHeader } from "@/app/onboarding/parts";
 import { type AgentState, agentState, checkAgents } from "@/app/onboarding/SetupTerminal";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -178,23 +178,24 @@ function AgentCard({
         </p>
       </div>
       {ready ? (
-        <Badge variant="success" className="h-control-sm px-2.5">
+        <Badge variant="success" className="bg-success/10 h-7 gap-1.5 px-2.5">
           <Check />
           Connected
         </Badge>
       ) : waiting ? (
-        <span role="status" className="text-muted-foreground flex shrink-0 items-center gap-1.5 px-1 text-sm font-medium">
-          <Spinner className="size-icon-sm animate-spin" />
+        <span role="status" className="text-muted-foreground text-label flex h-7.5 shrink-0 items-center gap-1.75 px-1 font-medium">
+          <Spinner className="size-3.25 animate-spin" />
           Waiting…
         </span>
       ) : state === "signIn" ? (
-        <Button size="sm" variant="outline" onClick={() => void connectAgent(provider)}>
+        <Button size="sm" variant="outline" className={RAISED_BUTTON} onClick={() => void connectAgent(provider)}>
           Sign in
         </Button>
       ) : state === "install" ? (
         <Button
           size="sm"
           variant="outline"
+          className={RAISED_BUTTON}
           onClick={() => openUrl(INSTALL_GUIDES[provider]).catch((cause: unknown) => console.error(cause))}
         >
           Install

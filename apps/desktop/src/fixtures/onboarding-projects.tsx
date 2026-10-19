@@ -1,8 +1,9 @@
 /**
  * Onboarding's projects step over a faked daemon. ?drive=1 notes what comes selected, adds a
- * folder by hand, unticks a card, presses the Select toggle twice, presses Ctrl+Enter, and writes
+ * folder by hand, unticks a card, presses the Select toggle twice, presses Enter on a card, and writes
  * what it saw and what the daemon was asked to #onboarding-projects-result
- * (OnboardingProjectsRender.test.ts reads it). ?many=1 finds a dozen projects, for screenshots.
+ * (OnboardingProjectsRender.test.ts reads it). ?many=1 finds a dozen projects, for screenshots;
+ * ?mac=1 reads as on a Mac.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -48,6 +49,8 @@ mockIPC((command, payload) => {
 });
 
 useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
+// ?mac=1 reads as on a Mac ("this Mac", ⌘ shortcuts), for screenshots.
+if (params.has("mac")) useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as typeof state.info }));
 
 const text = (element: Element | null | undefined) => element?.textContent?.trim() ?? "";
 const button = (name: string) => [...document.querySelectorAll("button")].find((b) => text(b).startsWith(name));
@@ -84,10 +87,13 @@ function Fixture() {
       await fixtureClick(toggle());
       await wait(100);
       const none = { ...state(), moved: toggle().getBoundingClientRect().right !== at };
-      await fixtureInput({ type: "key", key: "Enter", modifiers: ["Control"] });
+      // Enter on a card goes on and leaves the card as it was (Space ticks it).
+      (document.querySelector('[role="checkbox"][aria-label="billing"]') as HTMLElement).focus();
+      await fixtureInput({ type: "key", key: "Enter" });
       await wait(300);
+      const enter = { billing: document.querySelector('[role="checkbox"][aria-label="billing"]')?.getAttribute("aria-checked") };
       setResult(
-        JSON.stringify({ first, header, afterAdd, unticked, all, none, asked: calls.filter((method) => method !== "findProjects") }),
+        JSON.stringify({ first, header, afterAdd, unticked, all, none, enter, asked: calls.filter((method) => method !== "findProjects") }),
       );
     })();
   }, []);

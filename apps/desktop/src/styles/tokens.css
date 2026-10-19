@@ -110,7 +110,7 @@
  *               max-h-picker                  a dialog that picks from a list (capped, then it scrolls)
  *               setup-card, setup-agent-card  a setup project or agent card's minimum width in
  *                                             its auto-filled grid
- *               max-w-onboarding{,-subline}   the first-run setup's column, its projects' line
+ *               max-w-onboarding              the first-run setup's column
  *               size-agent-mark               an agent's logo tile in the setup
  *   Radii       rounded-control (buttons, inputs), rounded-surface (menus, popovers),
  *               rounded-dialog, rounded-thread (message bubbles), rounded-composer (the composer
@@ -450,7 +450,6 @@
   --container-setup: min(68rem, calc(100vw - 2rem));
   /* The first-run setup's column and its projects' line, from the user's design. */
   --container-onboarding: 51rem;
-  --container-onboarding-subline: 32.5rem;
   --container-thread: 46rem;
   --container-settings: 60rem;
   --container-settings-wide: 80rem;
@@ -1024,13 +1023,11 @@
   --onboarding-step-in: 0.35s;
   --onboarding-rise: 0.5rem;
   --onboarding-stagger: 50ms;
-  /* The steps' headings, each as the user's design sizes it: the name's question, the
-     agents', then the projects' (smaller and lighter). */
+  /* The steps' headings: the name's question, then the agents' and the projects' alike (the
+     agents' size in the user's design). */
   --welcome-heading: 3rem;
   --onboarding-heading: 2.75rem;
   --onboarding-heading-tracking: -0.032em;
-  --onboarding-projects-heading: 1.875rem;
-  --onboarding-projects-heading-tracking: -0.01em;
   /* The welcome's two-line title, and the button's distance under it. */
   --welcome-title: clamp(2.75rem, 6vw, 4.75rem);
   --welcome-title-tracking: -0.035em;

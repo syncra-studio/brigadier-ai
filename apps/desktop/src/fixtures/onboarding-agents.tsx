@@ -16,7 +16,7 @@ import { AgentsStep } from "@/app/onboarding/AgentsStep";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { OVERVIEWS, status } from "@/fixtures/agents";
-import { fixtureClick } from "@/fixtures/input";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { AgentConnect, ProviderKind, ProviderOverview, ProviderStatus, Request } from "@/ipc/generated";
 import { applyConnectEvents } from "@/state/connect";
 import { useApp } from "@/state/store";
@@ -86,9 +86,12 @@ mockIPC((command, payload) => {
 });
 
 useApp.setState({ connection: { status: "connected", daemon: null, reason: null } });
+// ?mac=1 reads as on a Mac ("this Mac", ⌘ shortcuts), for screenshots.
+if (params.has("mac")) useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as typeof state.info }));
 show();
 if (params.get("waiting") === "claude") claudeAt({ type: "signingIn" });
 
+let continued = 0;
 const text = (element: Element | null | undefined) => element?.textContent?.trim() ?? "";
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const cards = () => [...document.querySelectorAll('[data-slot="agent-card"]')];
@@ -121,7 +124,7 @@ function step() {
   return {
     subtitle: text(document.querySelector("header p")),
     count: text(document.querySelector('footer [role="status"]')),
-    continue: !(button("Continue") as HTMLButtonElement | undefined)?.disabled,
+    continue: !document.querySelector<HTMLButtonElement>("footer button:last-child")?.disabled,
   };
 }
 
@@ -136,6 +139,11 @@ function Fixture() {
         seen.first = { cards: [card(0), card(1)], ...step() };
 
         if (params.get("codex") === "signedOut") {
+          // Enter is Continue's alone: on a card's Sign in it neither signs in nor, held back, goes on.
+          (button("Sign in") as HTMLButtonElement).focus();
+          await fixtureInput({ type: "key", key: "Enter" });
+          await wait(200);
+          seen.enter = { continued, asked };
           setResult(JSON.stringify(seen));
           return;
         }
@@ -186,7 +194,7 @@ function Fixture() {
           }}
         >
           <div className="h-titlebar shrink-0" />
-          <AgentsStep onBack={() => {}} onContinue={() => {}} />
+          <AgentsStep onBack={() => {}} onContinue={() => continued++} />
         </DialogContent>
       </Dialog>
       {result && <pre id="onboarding-agents-result" className="fixed bottom-0 z-50">{result}</pre>}

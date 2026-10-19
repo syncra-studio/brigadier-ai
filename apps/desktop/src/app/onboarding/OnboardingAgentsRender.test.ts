@@ -43,7 +43,8 @@ test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }
   assert.deepEqual(seen.jargon, []);
 });
 
-// With no agent connected, the one found on this computer comes first and Continue waits.
+// With no agent connected, the one found on this computer comes first and Continue waits, on
+// Enter too.
 test("onboarding: no agent connected holds Continue", { timeout: 60000 }, async (t) => {
   const seen = parse(
     await renderFixtureLive(t, "onboarding-agents.html?drive=1&codex=signedOut", "onboarding-agents-result", 30000),
@@ -57,4 +58,6 @@ test("onboarding: no agent connected holds Continue", { timeout: 60000 }, async 
     count: "0 of 2 connected",
     continue: false,
   });
+  // Enter on Sign in is Continue's, held back: nothing signs in, nothing goes on.
+  assert.deepEqual(seen.enter, { continued: 0, asked: [] });
 });

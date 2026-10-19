@@ -3,6 +3,7 @@ import { type ReactNode, type RefObject, useEffect, useRef } from "react";
 
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
@@ -26,51 +27,40 @@ export function useFocusOnMount<T extends HTMLElement>(): RefObject<T | null> {
   return ref;
 }
 
-/** A step's heading: its title and the line under it, sized as the step's design has it. */
-export function StepHeader({
-  title,
-  description,
-  size = "large",
-}: {
-  title: string;
-  description: ReactNode;
-  /** The agents' large heading, or the projects' smaller one with a narrower line. */
-  size?: "large" | "small";
-}) {
-  const small = size === "small";
+/** A step's heading: its title and the line under it, alike on the agents and the projects. */
+export function StepHeader({ title, description }: { title: string; description: ReactNode }) {
   return (
-    <header
-      className={cn(
-        "mx-auto flex w-full max-w-onboarding shrink-0 flex-col items-center px-6 text-center",
-        small ? "pt-20" : "pt-18",
-      )}
-    >
+    <header className="mx-auto flex w-full max-w-onboarding shrink-0 flex-col items-center px-6 pt-18 text-center">
       <DialogTitle asChild>
-        <h1 className={cn("text-balance", small ? "onboarding-heading-small" : "onboarding-heading")}>{title}</h1>
+        <h1 className="onboarding-heading text-balance">{title}</h1>
       </DialogTitle>
-      <p
-        aria-live="polite"
-        className={cn(
-          "text-muted-foreground",
-          small ? "max-w-onboarding-subline mt-2.5 text-sm leading-normal" : "mt-3.5 text-lg text-balance",
-        )}
-      >
+      <p aria-live="polite" className="text-muted-foreground mt-3.5 text-lg text-balance">
         {description}
       </p>
     </header>
   );
 }
 
-/** The footer's buttons, as the design draws them: 30 high, round-ended, 13px. */
-const FOOTER_BUTTON = "h-7.5 rounded-full text-label";
+/** The setup's buttons, as the design draws them: 30 high, round-ended, 13px. */
+export const PILL_BUTTON = "h-7.5 rounded-full text-label";
 
-/** What takes a plain Enter itself, so the footer leaves it be. */
-const FOCUS_TAKERS = "button, a[href], input, textarea, select, [contenteditable], [role=menuitem], [role=option]";
+/** Each step's main button, as the design draws the name's Continue: 36 high, 16 before the words,
+ * 8 after its key, which sits in a chip. */
+export const PRIMARY_BUTTON = "text-label h-9 gap-2.5 rounded-full ps-4 pe-2";
+export const PRIMARY_KEY = "in-data-[slot=button]:text-2xs px-1.5";
+
+/** Its quieter ones (Sign in, Install, Add folder…) on `variant="outline"`: a raised fill in a
+ * hairline, 12 to a side. */
+export const RAISED_BUTTON = cn(PILL_BUTTON, "border-input border px-3 gap-1.5");
+
+/** Where Enter belongs to what's open (a menu, a list), not to the step. */
+const OWN_ENTER = "[role=menu], [role=listbox], [role=combobox]";
 
 /**
  * The footer, across the window under a rule: Back (also on ⌘[, Alt ← elsewhere) at the start
- * of the step's column; at its end how many are chosen, then the step's action (also on ⌘⏎,
- * Ctrl ⏎ elsewhere, and on Enter while no control has the focus).
+ * of the step's column; at its end how many are chosen, then the step's action. Enter is the
+ * action's alone on these steps (⌘⏎, Ctrl ⏎ elsewhere, too): wherever the focus is, it goes on
+ * and never presses the focused card or button, which Space still does.
  */
 export function StepFooter({
   onBack,
@@ -92,15 +82,17 @@ export function StepFooter({
   useEffect(() => {
     if (!onClick) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Enter" || event.repeat || event.isComposing) return;
-      // A plain Enter counts too when no control has the focus: one let go of it.
-      const unfocused = event.target instanceof Element && event.target.closest(FOCUS_TAKERS) === null;
-      if (!(mac ? event.metaKey : event.ctrlKey) && !unfocused) return;
+      if (event.key !== "Enter" || event.isComposing) return;
+      if (event.target instanceof Element && event.target.closest(OWN_ENTER)) return;
+      // Ahead of the focused control, so it isn't pressed.
       event.preventDefault();
-      if (!blocked) onClick();
+      event.stopPropagation();
+      const others = event.altKey || event.shiftKey || (mac ? event.ctrlKey : event.metaKey);
+      // Plain, or with the platform's own modifier; never a held one.
+      if (!event.repeat && !others && !blocked) onClick();
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [mac, onClick, blocked]);
 
   useEffect(() => {
@@ -127,7 +119,7 @@ export function StepFooter({
             aria-keyshortcuts={mac ? "Meta+BracketLeft" : "Alt+ArrowLeft"}
             disabled={backBlocked}
             onClick={onBack}
-            className={cn(FOOTER_BUTTON, "text-muted-foreground gap-1.75 ps-2.5 pe-3")}
+            className={cn(PILL_BUTTON, "text-muted-foreground gap-1.75 ps-2.5 pe-3")}
           >
             <ArrowLeft className="size-3.25" />
             Back
@@ -143,13 +135,14 @@ export function StepFooter({
           <Button
             ref={primaryRef}
             size="sm"
-            aria-keyshortcuts={mac ? "Meta+Enter" : "Control+Enter"}
+            aria-keyshortcuts={mac ? "Enter Meta+Enter" : "Enter Control+Enter"}
             disabled={primary.disabled || primary.busy}
             onClick={primary.onClick}
-            className={cn(FOOTER_BUTTON, "ms-3.5 gap-1.75 px-3.5")}
+            className={cn(PRIMARY_BUTTON, "ms-3.5")}
           >
             {primary.busy && <Spinner className="animate-spin" />}
             {primary.label}
+            <Kbd className={PRIMARY_KEY}>↩</Kbd>
           </Button>
         )}
       </div>

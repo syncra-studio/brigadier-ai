@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { StepFooter, StepHeader, TickMark } from "@/app/onboarding/parts";
+import { PILL_BUTTON, RAISED_BUTTON, StepFooter, StepHeader, TickMark } from "@/app/onboarding/parts";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
@@ -130,38 +130,46 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
   return (
     <div className="onboarding-step flex min-h-0 flex-1 flex-col">
       <StepHeader
-        size="small"
         title="Choose your projects"
         description="These are the repositories you have worked in with Claude Code and Codex. Add the ones you want to use with Brigadier."
       />
-      <div className="mt-10 flex min-h-0 flex-1 flex-col gap-3">
+      <div className="mt-12 flex min-h-0 flex-1 flex-col gap-3">
         <div className="shrink-0 px-6">
         <div className="max-w-onboarding mx-auto flex w-full flex-wrap items-center gap-x-1 gap-y-2">
-          <div className="text-muted-foreground/70 flex items-center gap-2 px-1 text-sm">
+          <div className="text-muted-foreground/70 text-label flex items-center gap-2 px-1">
             {found > 0 && <span aria-hidden className="bg-success size-1.5 shrink-0 rounded-full" />}
             <span>Found in your history</span>
             {candidates !== null && <span className="tabular-nums">{found}</span>}
           </div>
           <div className="ms-auto flex items-center gap-1">
             {addable.length > 0 && (
-              <Button
-                size="sm"
-                variant="ghost"
+              // Words alone, as designed: hovered they brighten, with no pill behind them.
+              <button
+                type="button"
                 disabled={busy}
                 onClick={() =>
                   setSelected(allChosen ? new Set() : new Set(addable.map((candidate) => candidate.path)))
                 }
-                className="text-muted-foreground grid"
+                className={cn(
+                  PILL_BUTTON,
+                  "text-muted-foreground enabled:hover:text-foreground grid items-center px-2.5 font-medium transition-colors disabled:opacity-50",
+                )}
               >
                 {/* Both labels hold the room, so the button never moves as it switches. */}
                 <span className="col-start-1 row-start-1">{allChosen ? "Select none" : "Select all"}</span>
                 <span aria-hidden className="invisible col-start-1 row-start-1">
                   Select none
                 </span>
-              </Button>
+              </button>
             )}
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => void addFolder()}>
-              <FolderOpen />
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => void addFolder()}
+              className={cn(RAISED_BUTTON, "gap-1.75")}
+            >
+              <FolderOpen className="size-3.25" />
               Add folder…
             </Button>
           </div>

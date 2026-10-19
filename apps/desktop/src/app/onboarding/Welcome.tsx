@@ -3,7 +3,7 @@ import { ArrowRight } from "@openai/apps-sdk-ui/components/Icon";
 
 import { errorText } from "@/app/dialogs/fields";
 import { IntroCanvas, WINDOW_SHAPED } from "@/app/onboarding/IntroCanvas";
-import { useFocusOnMount } from "@/app/onboarding/parts";
+import { PRIMARY_BUTTON, PRIMARY_KEY, useFocusOnMount } from "@/app/onboarding/parts";
 import { StaggerText } from "@/app/onboarding/StaggerText";
 import { playWelcomeSound, preloadWelcomeSound } from "@/app/onboarding/welcomeSound";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
@@ -313,12 +313,11 @@ function ContinueButton({
       disabled={arrow ? busy : !ready || busy}
       onClick={onClick}
       aria-label={arrow ? "Continue" : undefined}
-      // The name's Continue as the design draws it: 36 high, round-ended, 13px, its key in a chip.
-      className={arrow ? "px-7" : "text-label h-9 gap-2.5 rounded-full ps-4 pe-2"}
+      className={arrow ? "px-7" : PRIMARY_BUTTON}
     >
       {busy && <Spinner className="animate-spin" />}
       {arrow ? <ArrowRight /> : "Continue"}
-      {!arrow && <Kbd className="in-data-[slot=button]:text-2xs px-1.5">↩</Kbd>}
+      {!arrow && <Kbd className={PRIMARY_KEY}>↩</Kbd>}
     </Button>
   );
 }

@@ -213,9 +213,10 @@ function TopBar({
           variant="ghost"
           aria-label="Close setup"
           onClick={close}
-          className="text-muted-foreground hover:text-foreground justify-self-end"
+          // As designed: round, 28 across, 20 in from the window's edge.
+          className="text-muted-foreground hover:text-foreground me-3 size-7 justify-self-end rounded-full"
         >
-          <X />
+          <X className="size-3.75" />
         </Button>
       )}
     </div>

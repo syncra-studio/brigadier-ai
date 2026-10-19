@@ -239,13 +239,6 @@ html[data-intro="staged"] #root {
   font-weight: 600;
 }
 
-.onboarding-heading-small {
-  font-size: var(--onboarding-projects-heading);
-  line-height: 1.2;
-  letter-spacing: var(--onboarding-projects-heading-tracking);
-  font-weight: 500;
-}
-
 /* The agents two to a row and the projects three (the design's column), fewer as the window
    narrows, each card at least its token wide. */
 .onboarding-agent-grid,
