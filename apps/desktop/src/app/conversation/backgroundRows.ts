@@ -10,9 +10,6 @@ import type { BackgroundRun, Preview, Task } from "@/ipc/generated";
 
 export type BackgroundState = "building" | "starting" | "running" | "paused" | "smoke testing" | "checking";
 
-/** The states a process passes through on its way to another: their icon moves. */
-export const CHANGING: ReadonlySet<BackgroundState> = new Set(["building", "starting"]);
-
 export type BackgroundRow =
   | { type: "preview"; id: string; startedAtMs: number; preview: Preview; state: BackgroundState; worker: string | null; with: Preview[] }
   | { type: "run"; id: string; startedAtMs: number; run: BackgroundRun; state: BackgroundState };

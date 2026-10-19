@@ -2,7 +2,9 @@
  * The production context card's Background section, fed from board data and the events that
  * change it: the thread's web preview, a worker's dev app (building, then starting, then running,
  * as its preview events say), the thread's named long command and an unnamed one. With `drive=1`
- * it opens their output, stops two, ends them, and writes what it saw. Synthetic IPC; no daemon.
+ * it opens their output, stops two, ends them, and writes what it saw. With `states=1` it shows a
+ * row in each state (building, starting, running, paused, smoke testing, checking) and writes how
+ * each one's icon and word look and move. Synthetic IPC; no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -86,6 +88,39 @@ const action = (activity: string, label: string) =>
 const stop = (activity: string) => action(activity, "Stop");
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 30)));
 
+/** One row in each state: a build, an app starting, the thread's page up, a paused app, an app a
+ * worker smoke-tests, and a check. */
+const { taskId: _worker, ...own } = app;
+const states = {
+  building: app,
+  starting: { ...own, id: "preview-4", name: "api server", command: "node server.js", building: false, startedAtMs: now - 5 * MIN } as Preview,
+  running: page,
+  paused: { ...own, id: "preview-5", name: "storybook", command: "pnpm storybook", building: false, state: { type: "paused" }, startedAtMs: now - 20 * MIN } as Preview,
+  "smoke testing": { ...own, id: "preview-6", name: "todo app", command: "pnpm start", building: false, state: { type: "running" }, startedAtMs: now - 30 * MIN } as Preview,
+};
+const smoke: Preview = { ...states["smoke testing"], id: "preview-7", taskId: "task-2", name: "todo app smoke", command: "PORT=5301 pnpm start", startedAtMs: now - MIN };
+
+const moves = (node: Element | null | undefined) => !!node && getComputedStyle(node).animationName !== "none";
+
+/** How each state's row looks: its icon, whether that icon moves, whether its word shimmers. */
+async function readStates(): Promise<Record<string, unknown>> {
+  for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
+  send(...Object.values(states).map((preview) => ({ type: "previewUpdated" as const, preview })), { type: "previewUpdated", preview: smoke },
+    { type: "backgroundRunUpdated", run: tests });
+  await frame();
+  return Object.fromEntries([...(section()?.querySelectorAll<HTMLElement>("[data-activity]") ?? [])].map((button) => {
+    const icon = button.querySelector("[data-icon]");
+    const word = button.querySelector("[data-state]");
+    return [word?.getAttribute("data-state"), {
+      icon: icon?.getAttribute("data-icon") ?? null,
+      moving: !!icon && [icon, ...icon.children].some(moves),
+      green: !!icon?.querySelector(".bg-success"),
+      shimmer: word?.classList.contains("shimmer") ?? false,
+      sweeping: moves(word),
+    }];
+  }));
+}
+
 async function drive(): Promise<Record<string, unknown>> {
   const seen: Record<string, unknown> = {};
   for (const end = Date.now() + 5000; Date.now() < end && !document.querySelector('[data-slot="summary-card"]'); ) await frame();
@@ -146,6 +181,8 @@ function Fixture() {
   const [result, setResult] = useState("");
   useEffect(() => {
     if (params.has("drive")) void drive().then((seen) => setResult(JSON.stringify(seen)));
+    // `shot=1` leaves the result off the page, for a screenshot.
+    else if (params.has("states")) void readStates().then((seen) => params.has("shot") || setResult(JSON.stringify(seen)));
     else send({ type: "previewUpdated", preview: page }, { type: "backgroundRunUpdated", run: tests }, { type: "previewUpdated", preview: app },
       // `smoke=1`: the worker smoke-tests its own copy of the demo pages: a state of their row.
       ...(params.has("smoke") ? [{ type: "previewUpdated" as const, preview: { ...page, id: "preview-3", taskId: "task-2", name: "demo pages smoke", command: "PORT=5300 pnpm dev --port 5199", startedAtMs: now - MIN } }] : []));

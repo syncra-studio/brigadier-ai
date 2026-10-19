@@ -1,9 +1,8 @@
-import { CheckCircleDashed, Flask, Pause, PlayCircle, Terminal } from "@openai/apps-sdk-ui/components/Icon";
-import type { ReactNode } from "react";
+import { Pause, Terminal } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { type BackgroundRow, type BackgroundState, backgroundRows, CHANGING } from "@/app/conversation/backgroundRows";
+import { type BackgroundRow, type BackgroundState, backgroundRows } from "@/app/conversation/backgroundRows";
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { previewActive, previewWord } from "@/app/conversation/previewStatus";
 import { workerName } from "@/app/conversation/rowWords";
@@ -22,15 +21,25 @@ import { cn } from "@/lib/utils";
 /** One thing running for the session: a preview (the thread's or a worker's) or a long command. */
 type Activity = BackgroundRow;
 
-/** A row's icon for its state: it moves only while the process is on its way to another state. */
-const STATE_ICON: Record<BackgroundState, ReactNode> = {
-  building: <Spinner className="motion-safe:animate-spin" />,
-  starting: <Spinner className="motion-safe:animate-spin" />,
-  running: <PlayCircle />,
-  paused: <Pause />,
-  "smoke testing": <Flask />,
-  checking: <CheckCircleDashed />,
-};
+/** A process at work: its word shimmers. Paused, it rests. */
+const live = (state: BackgroundState) => state !== "paused";
+
+/**
+ * A row's icon for its state: a spinner while the process is on its way somewhere (building,
+ * starting, a smoke test or a check of it), a steady green dot once it is up, a pause sign while
+ * it is held. With less motion, nothing spins or pulses.
+ */
+function StateIcon({ state }: { state: BackgroundState }) {
+  if (state === "running") {
+    return (
+      <span data-icon="live" aria-hidden className="flex size-icon-md items-center justify-center">
+        <span className="size-2 rounded-full bg-success motion-safe:animate-pulse" />
+      </span>
+    );
+  }
+  if (state === "paused") return <Pause data-icon="paused" />;
+  return <Spinner data-icon="spinner" className="motion-safe:animate-spin" />;
+}
 
 /** What a row is for, first letter up: "Dev app", "Core tests". A command stands as it is. */
 const title = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);
@@ -99,7 +108,7 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
     <SummaryRowButton
       data-activity={activity.id}
       title={tip}
-      icon={STATE_ICON[activity.state]}
+      icon={<StateIcon state={activity.state} />}
       meta={elapsedWords(now - activity.startedAtMs)}
       action={
         <>
@@ -116,7 +125,7 @@ function BackgroundRow({ conversationId, activity, now }: { conversationId: stri
         : output}
     >
       {name}
-      <span data-state={activity.state} className={cn("text-muted-foreground", CHANGING.has(activity.state) && "shimmer")}> {activity.state}</span>
+      <span data-state={activity.state} className={cn("text-muted-foreground", live(activity.state) && "shimmer")}> {activity.state}</span>
     </SummaryRowButton>
   );
 }

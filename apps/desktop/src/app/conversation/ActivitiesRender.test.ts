@@ -14,10 +14,10 @@ test("Background lists what still runs, one line each with its state and Stop on
   // Newest first: the previews and the thread's long commands in one list.
   assert.deepEqual(seen.order, ["run-1", "run-2", "preview-2", "preview-1"]);
   assert.deepEqual(seen.rows["preview-1"], { label: "Demo pages", state: "running", moving: false, elapsed: "12m", tip: "Showing: pnpm dev --port 5199" });
-  // Only a row on its way to another state has a moving icon.
+  // A build and a check spin; the page that is up shows its live dot.
   assert.deepEqual([seen.rows["preview-2"]?.label, seen.rows["preview-2"]?.state, seen.rows["preview-2"]?.moving], ["Dev app", "building", true]);
   assert.match(seen.rows["preview-2"]?.tip ?? "", /^Building: pnpm tauri build[^]*\nFrom Demo of the fixes$/);
-  assert.deepEqual(seen.rows["run-1"], { label: "Core tests", state: "checking", moving: false, elapsed: "2m", tip: "cargo test -p brigadier-core" });
+  assert.deepEqual(seen.rows["run-1"], { label: "Core tests", state: "checking", moving: true, elapsed: "2m", tip: "cargo test -p brigadier-core" });
   // A command the thread gave no name reads as its command, cut short.
   assert.equal(seen.rows["run-2"]?.label, "pnpm lint --max-warnings 0 --cache --ca…");
   assert.deepEqual(seen.heights, [28], "one line each");
@@ -35,4 +35,25 @@ test("Background lists what still runs, one line each with its state and Stop on
   assert.equal(seen.grew, false, "nothing opens in the card");
   assert.deepEqual(seen.calls, ["stopBackgroundRun run-1", "stopPreview preview-1"]);
   assert.deepEqual(seen.left, ["run-2", "preview-2"], "what ended left the card");
+});
+
+type Look = { icon: string | null; moving: boolean; green: boolean; shimmer: boolean; sweeping: boolean };
+
+test("Background rows: a spinner while a process is on its way, a green live dot once it is up, a pause sign while held; the word shimmers while it works, and nothing moves with less motion", { timeout: 120000 }, async (t) => {
+  const looks = JSON.parse(await renderFixtureLive(t, "activities.html?states=1", "activities-result", 60000)) as Record<string, Look>;
+  const busy: Look = { icon: "spinner", moving: true, green: false, shimmer: true, sweeping: true };
+  const expected: Record<string, Look> = {
+    building: busy,
+    starting: busy,
+    "smoke testing": busy,
+    checking: busy,
+    running: { icon: "live", moving: true, green: true, shimmer: true, sweeping: true },
+    paused: { icon: "paused", moving: false, green: false, shimmer: false, sweeping: false },
+  };
+  assert.deepEqual(looks, expected);
+  const still = JSON.parse(await renderFixtureLive(t, "activities.html?states=1", "activities-result", 60000, { reducedMotion: true })) as Record<string, Look>;
+  for (const [state, look] of Object.entries(still)) {
+    assert.deepEqual([look.moving, look.sweeping], [false, false], `${state} is still with less motion`);
+    assert.equal(look.icon, expected[state]?.icon, `${state} keeps its icon`);
+  }
 });
