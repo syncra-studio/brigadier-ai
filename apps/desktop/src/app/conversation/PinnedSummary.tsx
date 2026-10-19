@@ -97,13 +97,15 @@ function useSessionDiff(
   conversationId: string,
   worktree: boolean,
 ): { stat: DiffStat; commits: number } | null {
-  // Landings, the thread's own requests ending (it commits too) and merges move the branch.
+  // Landings, the thread's own requests ending, its commits meanwhile (a fix it makes before the
+  // request ends) and merges move the branch.
   const landed = useBoard(
     (s) =>
       Object.values(s.board?.tasks ?? {}).filter((task) => task.state === "landed").length +
       Object.values(s.board?.requests ?? {}).filter((asked) => asked.state.type === "done").length +
       (s.board?.orchestratorSteps ?? []).filter((step) => step.kind.type === "merged").length,
   );
+  const tip = useBoard((s) => s.board?.threadTip ?? null);
   const [stat, setStat] = useState<{ stat: DiffStat; commits: number } | null>(null);
   useEffect(() => {
     if (!worktree) return;
@@ -117,7 +119,7 @@ function useSessionDiff(
     };
     // Each landing changes the branch: read it again.
     // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [conversationId, worktree, landed]);
+  }, [conversationId, worktree, landed, tip]);
   return worktree ? stat : null;
 }
 

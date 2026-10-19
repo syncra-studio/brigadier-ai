@@ -117,6 +117,8 @@ export type Board = {
   runRequest: string | null;
   /** The last message of the branch the thread shows. */
   head: string | null;
+  /** The session branch's tip after the thread's last commit seen since the view was read: it moves with each of its commits. */
+  threadTip: string | null;
   /** What the orchestrator (or a Chat's model) is doing right now, in a few words. */
   doing: string | null;
   /** How full the conversation model's context is; absent until its CLI first said. */
@@ -293,6 +295,7 @@ export function emptyBoard(conversationId: string): Board {
     runError: null,
     runRequest: null,
     head: null,
+    threadTip: null,
     doing: null,
     context: null,
     streaming: null,
@@ -411,6 +414,7 @@ export function boardFromView(
     runError: keep?.runError ?? null,
     runRequest: view.runRequest,
     head: view.head,
+    threadTip: keep?.threadTip ?? null,
     doing: keep?.doing ?? null,
     context: view.context,
     streaming: view.streaming,
@@ -517,6 +521,8 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       };
     case "branchSwitched":
       return { ...board, head: event.head };
+    case "threadCommitsSeen":
+      return { ...board, threadTip: event.tip };
     case "thinkingDelta": {
       const known = board.thinking.find((segment) => segment.itemId === event.itemId);
       if (known && streamSeq <= known.throughPosition) return board;
