@@ -264,6 +264,19 @@ async function workingCase(seen: Record<string, unknown>) {
   seen.justStarted = placeholder();
   await until("a second in", () => placeholder()?.startsWith("Working for") ?? false, 3000).catch(() => {});
   seen.secondIn = placeholder();
+  // #366: once it only waits for the answer to its question card, nothing working, no timer.
+  const at = Date.now() - 125_000;
+  useBoard.setState(({ board }) =>
+    board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, startedAtMs: at, worked: [{ fromMs: at, toMs: null }] } } } } : {},
+  );
+  await until("the timer", () => placeholder()?.startsWith("Working for 2m") ?? false, 3000).catch(() => {});
+  useBoard.setState(({ board }) =>
+    board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, state: { type: "waiting" }, worked: [{ fromMs: at, toMs: at + 60_000 }], waited: [{ fromMs: at + 60_000, toMs: null }] } } } } : {},
+  );
+  await until("the usual words", () => placeholder() === seen.idle, 3000).catch(() => {});
+  // Then a second more, past the next tick.
+  await sleep(1100);
+  seen.onCard = placeholder();
 }
 
 /** The Dictate button's state ("dictate", "downloading", …). */

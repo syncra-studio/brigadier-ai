@@ -220,6 +220,14 @@ export function disposeSideBoard(store: BoardStore): void {
  * what a session's user sends now waits in the queue while the orchestrator sorts it.
  */
 export function workingRequest(board: Board): string | null {
+  return liveRequest(board)?.newest ?? null;
+}
+
+/**
+ * The newest request's id and the request of its steer chain that still works or waits, if any
+ * (see [`workingRequest`]).
+ */
+export function liveRequest(board: Board): { newest: string; live: UserRequest } | null {
   const requests = Object.values(board.requests);
   const latest = requests.reduce<UserRequest | null>(
     (newest, request) =>
@@ -233,7 +241,7 @@ export function workingRequest(board: Board): string | null {
   let request = latest;
   // A steer chain is short; the bound only guards against a cycle in stored data.
   for (let hops = 0; request && hops < requests.length; hops += 1) {
-    if (request.state.type === "working" || request.state.type === "waiting") return latest?.id ?? null;
+    if (latest && (request.state.type === "working" || request.state.type === "waiting")) return { newest: latest.id, live: request };
     request = request.steeredInto ? (board.requests[request.steeredInto] ?? null) : null;
   }
   return null;

@@ -64,6 +64,7 @@ import { StatusCard, StatusCardContext } from "@/app/conversation/StatusCard";
 import { askPausedSend, PausedSendDialog } from "@/app/conversation/PausedSend";
 import { NewSessionChip, PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } from "@/app/conversation/PlusMenu";
 import { ViewContext } from "@/app/conversation/viewContext";
+import { requestWaitsOnCard } from "@/app/conversation/blocks";
 import { SelectionPill } from "@/app/conversation/SelectionPill";
 import { ComposerRail, ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
 import { ComposerAttachments } from "@/components/assistant-ui/elements/attachment";
@@ -79,7 +80,7 @@ import { whenRevealed } from "@/lib/splash";
 import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { setSetting } from "@/state/settings";
-import { useBoard, workingRequest } from "@/state/board";
+import { liveRequest, useBoard } from "@/state/board";
 import {
   cancelDictation,
   type DictationPhase,
@@ -285,14 +286,16 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
 
 /**
  * "Working for 2m 5s" while the conversation's request works, from its first second on, ticking
- * each second; null otherwise.
+ * each second; null otherwise, and while it only waits for the user's answer to its question card
+ * (#366): nothing works then.
  */
 function useWorkingFor(conversationId: string | null): string | null {
   const startedAtMs = useBoard((s) => {
     const board = s.board;
     if (!conversationId || board?.conversationId !== conversationId) return null;
-    const id = workingRequest(board);
-    return id ? (board.requests[id]?.startedAtMs ?? null) : null;
+    const live = liveRequest(board);
+    if (!live || requestWaitsOnCard(live.live)) return null;
+    return board.requests[live.newest]?.startedAtMs ?? null;
   });
   // The time, read as a request starts working (or the composer opens on one), then on each whole
   // second of its work; none shows until it was read for this request.
