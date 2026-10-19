@@ -61,6 +61,9 @@ export function StepHeader({
   );
 }
 
+/** The footer's buttons, as the design draws them: 30 high, round-ended, 13px. */
+const FOOTER_BUTTON = "h-7.5 rounded-full text-label";
+
 /** What takes a plain Enter itself, so the footer leaves it be. */
 const FOCUS_TAKERS = "button, a[href], input, textarea, select, [contenteditable], [role=menuitem], [role=option]";
 
@@ -124,9 +127,9 @@ export function StepFooter({
             aria-keyshortcuts={mac ? "Meta+BracketLeft" : "Alt+ArrowLeft"}
             disabled={backBlocked}
             onClick={onBack}
-            className="text-muted-foreground -ms-2.5"
+            className={cn(FOOTER_BUTTON, "text-muted-foreground gap-1.75 ps-2.5 pe-3")}
           >
-            <ArrowLeft />
+            <ArrowLeft className="size-3.25" />
             Back
           </Button>
         )}
@@ -143,7 +146,7 @@ export function StepFooter({
             aria-keyshortcuts={mac ? "Meta+Enter" : "Control+Enter"}
             disabled={primary.disabled || primary.busy}
             onClick={primary.onClick}
-            className="ms-3.5"
+            className={cn(FOOTER_BUTTON, "ms-3.5 gap-1.75 px-3.5")}
           >
             {primary.busy && <Spinner className="animate-spin" />}
             {primary.label}
@@ -154,14 +157,15 @@ export function StepFooter({
   );
 }
 
-/** A tick box's look (Radix's in dialogs/fields.tsx), for a control that is a whole card. */
+/** A tick box's look (Radix's in dialogs/fields.tsx), for a control that is a whole card; ticked, it
+ * takes the links' blue, as the design has it. */
 export function TickMark({ checked }: { checked: boolean }) {
   return (
     <span
       aria-hidden
       className={cn(
         "border-input rounded-xs flex size-icon-md shrink-0 items-center justify-center border",
-        checked && "bg-primary border-primary text-primary-foreground",
+        checked && "bg-link border-link text-foreground",
       )}
     >
       {checked && <Check className="size-icon-xs" />}

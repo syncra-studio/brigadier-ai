@@ -313,11 +313,12 @@ function ContinueButton({
       disabled={arrow ? busy : !ready || busy}
       onClick={onClick}
       aria-label={arrow ? "Continue" : undefined}
-      className={arrow ? "px-7" : "min-w-32 gap-2"}
+      // The name's Continue as the design draws it: 36 high, round-ended, 13px, its key in a chip.
+      className={arrow ? "px-7" : "text-label h-9 gap-2.5 rounded-full ps-4 pe-2"}
     >
       {busy && <Spinner className="animate-spin" />}
       {arrow ? <ArrowRight /> : "Continue"}
-      {!arrow && <Kbd>↩</Kbd>}
+      {!arrow && <Kbd className="in-data-[slot=button]:text-2xs px-1.5">↩</Kbd>}
     </Button>
   );
 }
