@@ -170,6 +170,14 @@ macro_rules! inline_files {
     };
 }
 
+/// Who makes an image a Chat's user wants (Q24): the Chat itself where its CLI makes images
+/// (Codex), else a research worker.
+macro_rules! chat_images {
+    () => {
+        "An image the user wants: when you have an image generation tool of your own, make it yourself, and it shows in this Chat; otherwise a research worker makes it in its outputs folder."
+    };
+}
+
 /// What a Chat can do as a thread without a project (Q76), in its instructions and in the note
 /// that tells a Chat from before.
 macro_rules! chat_thread {
@@ -186,7 +194,9 @@ macro_rules! chat_thread {
             fusion_rule!(),
             "
 - Start a worker with delegate_task: kind research (it searches the web, compares and writes files) or operate (it uses an app on this computer or a website, with target and end_state). A Chat has no repository, so no other kind. Then reply exactly [quiet]: each report comes later as a message ([report task-N …]), a worker's question as [question from task-N], which you answer with answer_worker. Write your answer from the reports.
-- You write no files yourself. A file the user wants (a list, a table, a document, an image) is made by a research worker in its outputs folder. ",
+- You write no files yourself. A file the user wants (a list, a table, a document) is made by a research worker in its outputs folder. ",
+            chat_images!(),
+            " ",
             inline_files!(),
             " Never give the user a folder or file path, nor link a file you haven't seen in a report.
 - With the browser tools listed, read or use a few pages yourself; a long browsing job goes to an operate worker."
@@ -1230,8 +1240,8 @@ const CHAT_GRILLING: &str = grilling_rule!();
 /// rounds, facts looked up first (Q78); 9 the live run's fixes to both ([`CHAT_FIXES_NOTE`]); 10
 /// it names each file once, inline, with no Save under the answer (Q84); 11 its answer leads
 /// with the bottom line and may use optional parts and Ask next, and a fused answer has no
-/// Confidence or Disagreement lines (Q86).
-const CHAT_CONTRACT: u32 = 11;
+/// Confidence or Disagreement lines (Q86); 12 a Chat that can make images makes them itself (Q24).
+const CHAT_CONTRACT: u32 = 12;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
 /// The first Chat contract with a thread's abilities; a Chat told an older one hears
@@ -1255,6 +1265,10 @@ const CHAT_FILES_CONTRACT: u32 = 10;
 /// The first Chat contract with the answer's optional parts (Q86); a Chat or tab chat told the
 /// voice before hears [`chat_parts_note`] (one told less hears them within the voice's note).
 const CHAT_PARTS_CONTRACT: u32 = 11;
+/// The first Chat contract where a Chat makes an image itself when it can (Q24); a Chat told a
+/// thread's abilities before hears [`CHAT_IMAGES_NOTE`] (one told less hears it within
+/// [`CHAT_THREAD_NOTE`]).
+const CHAT_IMAGES_CONTRACT: u32 = 12;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1307,6 +1321,9 @@ const CHAT_FIXES_NOTE: &str = concat!("[instructions] From now on: ", fused_inte
 /// Tells a Chat that was already a thread where a file shows in its answer now (Q84).
 const CHAT_FILES_NOTE: &str = concat!("[instructions] From now on: ", inline_files!());
 
+/// Tells a Chat that was already a thread who makes the images it's asked for (Q24).
+const CHAT_IMAGES_NOTE: &str = concat!("[instructions] From now on: ", chat_images!());
+
 /// Tells a Chat from before how it interviews the user (Q78).
 const CHAT_GRILLING_NOTE: &str = concat!("[instructions] From now on: ", grilling_rule!());
 
@@ -1333,6 +1350,7 @@ const CHAT_GRILLING_LABEL: &str = "interview on cards";
 const CHAT_FIXES_LABEL: &str = "fused answers and interview fixes";
 const CHAT_FILES_LABEL: &str = "files inline";
 const CHAT_PARTS_LABEL: &str = "answer parts";
+const CHAT_IMAGES_LABEL: &str = "images";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
@@ -1891,8 +1909,9 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
         notes.push(Note {
             text: chat_voice_note(now.reports),
             label: CHAT_VOICE_LABEL,
+            // A tab chat's instructions say nothing more since.
             told: Told {
-                contract: Some(CHAT_PARTS_CONTRACT),
+                contract: Some(CHAT_CONTRACT),
                 ..Told::default()
             },
         });
@@ -1971,9 +1990,10 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             },
         });
     }
-    // Told the voice before the answer's parts (contract 2 to 10): last, so its contract is the
-    // one the log keeps. Fusion's words only to a Chat that heard their first ones; one told
-    // less hears them within the thread or fusion note.
+    // Told the voice before the answer's parts (contract 2 to 10): last but the images note, so
+    // its contract is the one the log keeps (a Chat told less than a thread's abilities heard
+    // about images within the thread note). Fusion's words only to a Chat that heard their
+    // first ones; one told less hears them within the thread or fusion note.
     if now.chat && (CHAT_VOICE_CONTRACT..CHAT_PARTS_CONTRACT).contains(&told.contract.unwrap_or(0))
     {
         notes.push(Note {
@@ -1982,7 +2002,22 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             ),
             label: CHAT_PARTS_LABEL,
             told: Told {
-                contract: Some(CHAT_PARTS_CONTRACT),
+                contract: Some(CHAT_CONTRACT),
+                ..Told::default()
+            },
+        });
+    }
+    // Told a thread's abilities with images made only by workers (contract 5 to 11); one told
+    // less hears it within the thread note.
+    if now.chat
+        && now.reports
+        && (CHAT_THREAD_CONTRACT..CHAT_IMAGES_CONTRACT).contains(&told.contract.unwrap_or(0))
+    {
+        notes.push(Note {
+            text: CHAT_IMAGES_NOTE.to_owned(),
+            label: CHAT_IMAGES_LABEL,
+            told: Told {
+                contract: Some(CHAT_IMAGES_CONTRACT),
                 ..Told::default()
             },
         });
@@ -5554,7 +5589,8 @@ mod environment_tests {
                 CHAT_MEMORY_LABEL,
                 CHAT_GRILLING_LABEL,
                 CHAT_FILES_LABEL,
-                CHAT_PARTS_LABEL
+                CHAT_PARTS_LABEL,
+                CHAT_IMAGES_LABEL
             ]
         );
         for words in FUSION_RULES {
@@ -5600,7 +5636,8 @@ mod environment_tests {
                 CHAT_GRILLING_LABEL,
                 CHAT_FIXES_LABEL,
                 CHAT_FILES_LABEL,
-                CHAT_PARTS_LABEL
+                CHAT_PARTS_LABEL,
+                CHAT_IMAGES_LABEL
             ]
         );
         for words in [
@@ -5636,7 +5673,8 @@ mod environment_tests {
                 CHAT_GRILLING_LABEL,
                 CHAT_FIXES_LABEL,
                 CHAT_FILES_LABEL,
-                CHAT_PARTS_LABEL
+                CHAT_PARTS_LABEL,
+                CHAT_IMAGES_LABEL
             ]
         );
         took(&mut told, &sent);
@@ -5678,13 +5716,18 @@ mod environment_tests {
             told.contract = Some(contract);
             let sent = notes(&told, &now);
             assert_eq!(
-                labels(&sent)[labels(&sent).len() - 3..],
-                [CHAT_FIXES_LABEL, CHAT_FILES_LABEL, CHAT_PARTS_LABEL]
+                labels(&sent)[labels(&sent).len() - 4..],
+                [
+                    CHAT_FIXES_LABEL,
+                    CHAT_FILES_LABEL,
+                    CHAT_PARTS_LABEL,
+                    CHAT_IMAGES_LABEL
+                ]
             );
             took(&mut told, &sent);
             assert_eq!(told.contract, Some(CHAT_CONTRACT));
             assert!(notes(&told, &now).is_empty());
-            let fixes_note = &sent[sent.len() - 3];
+            let fixes_note = &sent[sent.len() - 4];
             for words in fixes {
                 assert!(fixes_note.text.contains(words), "{words}");
                 assert!(note.contains(words), "{words}");
@@ -5819,14 +5862,14 @@ mod environment_tests {
             told.contract = Some(contract);
             let sent = notes(&told, &now);
             assert_eq!(
-                labels(&sent)[labels(&sent).len() - 2..],
-                [CHAT_FILES_LABEL, CHAT_PARTS_LABEL]
+                labels(&sent)[labels(&sent).len() - 3..],
+                [CHAT_FILES_LABEL, CHAT_PARTS_LABEL, CHAT_IMAGES_LABEL]
             );
             took(&mut told, &sent);
             assert_eq!(told.contract, Some(CHAT_CONTRACT));
             assert!(notes(&told, &now).is_empty());
             for words in words {
-                assert!(sent[sent.len() - 2].text.contains(words), "{words}");
+                assert!(sent[sent.len() - 3].text.contains(words), "{words}");
             }
         }
         let mut told = now.told();
@@ -5856,6 +5899,54 @@ mod environment_tests {
             assert!(!prompt.contains("Save… under your answer"));
             assert!(!prompt.contains("Save… shows under your answer"));
         }
+    }
+
+    /// Q24: a Chat that can make images makes them itself. Chats that were threads hear so once,
+    /// last; a Chat from before hears it within the thread note; a tab chat hears nothing of it.
+    #[test]
+    fn chats_hear_once_that_they_make_images_themselves_when_they_can() {
+        let words = "when you have an image generation tool of your own, make it yourself";
+        let retired = "(a list, a table, a document, an image)";
+        let now = Current::chat(Vec::new());
+        for contract in [CHAT_THREAD_CONTRACT, CHAT_IMAGES_CONTRACT - 1] {
+            let mut told = now.told();
+            told.contract = Some(contract);
+            let sent = notes(&told, &now);
+            assert_eq!(labels(&sent).last(), Some(&CHAT_IMAGES_LABEL), "{contract}");
+            let all: String = sent.iter().map(|note| note.text.as_str()).collect();
+            assert_eq!(all.matches(words).count(), 1, "{contract}");
+            took(&mut told, &sent);
+            assert_eq!(told.contract, Some(CHAT_CONTRACT));
+            assert!(notes(&told, &now).is_empty());
+        }
+        for contract in [0, CHAT_VOICE_CONTRACT, CHAT_THREAD_CONTRACT - 1] {
+            let mut told = now.told();
+            told.contract = Some(contract);
+            let sent = notes(&told, &now);
+            assert!(!labels(&sent).contains(&CHAT_IMAGES_LABEL), "{contract}");
+            let all: String = sent.iter().map(|note| note.text.as_str()).collect();
+            assert_eq!(all.matches(words).count(), 1, "{contract}");
+            assert!(!all.contains(retired), "{contract}");
+            took(&mut told, &sent);
+            assert_eq!(told.contract, Some(CHAT_CONTRACT), "{contract}");
+        }
+        let tab = Current::tab_chat();
+        for contract in [0, CHAT_THREAD_CONTRACT] {
+            let mut told = tab.told();
+            told.contract = Some(contract);
+            let sent = notes(&told, &tab);
+            assert!(
+                !sent.iter().any(|note| note.text.contains(words)),
+                "{contract}"
+            );
+            took(&mut told, &sent);
+            assert_eq!(told.contract, Some(CHAT_CONTRACT), "{contract}");
+        }
+        let mut told = tab.told();
+        told.contract = Some(CHAT_IMAGES_CONTRACT - 1);
+        assert!(notes(&told, &tab).is_empty());
+        assert_eq!(chat(&[]).matches(words).count(), 1);
+        assert!(!chat(&[]).contains(retired));
     }
 
     /// The words of the interview rule the tests look for.
