@@ -2,36 +2,31 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderFixtureLive } from "@/fixtures/headless";
 
-type Row = { label: string; meta: string; elapsed: string; state: string } | null;
+type Row = { label: string; elapsed: string; tip: string } | null;
 
-test("Activities shows each thing running for the session as a row, the dev app one row from build to app, with Stop, Open and a folded count", { timeout: 90000 }, async (t) => {
+test("Background lists what still runs, one line each with Stop on hover; a click opens its output in a tab, and what ends leaves the card", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?drive=1", "activities-result", 60000)) as {
-    empty: boolean; order: string[]; rows: Record<string, Row>; workerLine: string | null;
-    starting: Row; running: Row; sameRow: boolean;
-    appLine: string | null; appButtons: string[]; pageButtons: string[]; runButtons: string[];
-    opened: string | null; previews: boolean; calls: string[]; folded: string | null;
+    empty: boolean; title: string; order: string[]; rows: Record<string, Row>; heights: number[]; workerLine: string | null; sameRow: boolean;
+    stops: string[]; opened: string | null; openedRun: string; grew: boolean; calls: string[]; left: string[];
   };
   assert.equal(seen.empty, true, "nothing running, no section");
-  // Running first, newest first: the previews and the thread's long commands in one list.
+  assert.equal(seen.title, "Background");
+  // Newest first: the previews and the thread's long commands in one list.
   assert.deepEqual(seen.order, ["run-1", "run-2", "preview-2", "preview-1"]);
-  assert.deepEqual(seen.rows["preview-1"], { label: "Demo pages", meta: "Showing", elapsed: "12m", state: "working" });
-  assert.deepEqual(seen.rows["preview-2"], { label: "Dev app", meta: "Building", elapsed: "4m", state: "working" });
-  assert.deepEqual(seen.rows["run-1"], { label: "Core tests", meta: "Running", elapsed: "2m", state: "working" });
+  assert.deepEqual(seen.rows["preview-1"], { label: "Demo pages", elapsed: "12m", tip: "Showing: pnpm dev --port 5199" });
+  assert.equal(seen.rows["preview-2"]?.label, "Dev app");
+  assert.match(seen.rows["preview-2"]?.tip ?? "", /^Building: pnpm tauri build[^]*\nFrom Demo of the fixes$/);
+  assert.deepEqual(seen.rows["run-1"], { label: "Core tests", elapsed: "2m", tip: "cargo test -p brigadier-core" });
   // A command the thread gave no name reads as its command, cut short.
   assert.equal(seen.rows["run-2"]?.label, "pnpm lint --max-warnings 0 --cache --ca…");
+  assert.deepEqual(seen.heights, [28], "one line each");
   // The worker's line names it; what it runs shows in the Workers panel, not the card.
   assert.doesNotMatch(seen.workerLine ?? "", /cargo clippy --workspace/);
-  assert.match(seen.workerLine ?? "", /working/);
-  assert.deepEqual(seen.starting, { label: "Dev app", meta: "Starting", elapsed: "4m", state: "working" });
-  assert.deepEqual(seen.running, { label: "Dev app", meta: "Running", elapsed: "4m", state: "working" });
   assert.equal(seen.sameRow, true, "the build and the app are the same row");
-  // Opened: one command line naming the worker, and Stop; Open only for a page that is up.
-  assert.match(seen.appLine ?? "", /^Demo of the fixes ·\s*pnpm tauri build --debug --bundles app/);
-  assert.deepEqual(seen.appButtons, ["Stop"]);
-  assert.deepEqual(seen.pageButtons, ["Open", "Stop"]);
-  assert.deepEqual(seen.runButtons, ["Stop"]);
-  assert.equal(seen.opened, "http://localhost:5199/");
-  assert.equal(seen.previews, true, "the command line opens the previews and their logs");
+  assert.deepEqual(seen.stops, ["Stop", "Stop", "Stop", "Stop"]);
+  assert.equal(seen.opened, "panel:output:preview:preview-1 Demo pages");
+  assert.equal(seen.openedRun, "panel:output:run:run-1");
+  assert.equal(seen.grew, false, "nothing opens in the card");
   assert.deepEqual(seen.calls, ["stopBackgroundRun run-1", "stopPreview preview-1"]);
-  assert.match(seen.folded ?? "", /^Activities\s*· 4 running/);
+  assert.deepEqual(seen.left, ["run-2", "preview-2"], "what ended left the card");
 });

@@ -114,7 +114,10 @@ export type ConflictView = "conflict" | "compare" | "merge";
  * A view of the session's own records, opened from a row of its context card or the thread's end:
  * its reviews and checks in full.
  */
-export type PanelView = { type: "reviews" };
+export type PanelView =
+  | { type: "reviews" }
+  /** What something in the context card's Background prints: a preview's log or a long command's output. */
+  | { type: "output"; source: "preview" | "run"; id: string };
 export type PanelTabState = { kind: "panel"; id: string; opener: string | null; view: PanelView; title: string };
 
 export type SessionTab = FileTab | ReviewTabState | PanelTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState | ConflictTabState;
@@ -521,7 +524,7 @@ export function openPlanTab(conversationId: string, plan: PlanDocRef, title: str
 
 /** Shows `view` in its own tab: the tab already showing it, else a new one after the tab in front. */
 export function openPanelTab(conversationId: string, view: PanelView, title: string): string {
-  const id = `panel:${view.type}`;
+  const id = view.type === "output" ? `panel:output:${view.source}:${view.id}` : `panel:${view.type}`;
   update(conversationId, (current) => current.tabs.some((tab) => tab.id === id)
     ? { ...current, active: id, tabs: current.tabs.map((tab) => tab.id === id && tab.kind === "panel" ? { ...tab, title } : tab) }
     : { tabs: insertAfterActive(current, { kind: "panel", id, opener: current.active, view, title }), active: id });

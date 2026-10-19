@@ -48,7 +48,7 @@ test("toolbar order, right sidebar, its keys, Files search, draft project folder
   assert.equal(seen.openShown, seen.openWidth);
   assert.equal(seen.closingShown, "", "closing gives the room back at once");
   assert.equal(seen.closedShown, "");
-  for (const field of ["preferenceKept", "besideOpened", "closedKept", "returnClosed", "loadingClosed", "loadedClosed", "updateClosed", "backgroundClosed", "narrowClosed", "nestedOpened", "nestedDismissed"]) assert.equal(seen[field], true, field);
+  for (const field of ["preferenceKept", "besideOpened", "closedKept", "returnClosed", "loadingClosed", "loadedClosed", "updateClosed", "backgroundClosed", "narrowClosed", "rowOpensTab", "rowClosesCard"]) assert.equal(seen[field], true, field);
   for (const field of ["fileTabClosed", "browserTabClosed", "chatReturnClosed", "activitiesUnfolded", "activitiesFoldKept"]) assert.equal(seen[field], true, field);
   assert.equal(seen.manualOpenFocus, "Context");
   assert.equal(seen.manualEscapeFocus, "Context");

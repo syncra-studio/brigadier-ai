@@ -2,7 +2,6 @@
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
-import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
 import { type ComposerTarget, ComposerTargetContext } from "@/app/conversation/composerTarget";
@@ -22,7 +21,7 @@ import { SidebarProvider } from "@/components/ui/sidebar";
 import type { Conversation, EventEnvelope, Request } from "@/ipc/generated";
 import { setPinnedSummary } from "@/state/actions";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
-import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";
+import { CHAT_TAB, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { emitWorkspaceChanged } from "@/state/workspaceCache";
 
@@ -114,13 +113,8 @@ function Fixture() {
     // The right panel stays in the page while closed, and the room it takes is its full width
     // from the moment it opens rather than the sliding width, frame by frame.
     const shown = () => document.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]')?.style.getPropertyValue("--right-sidebar-shown");
-    // The preview's Activities row; opened, its command line opens the previews.
-    const chip = () => document.querySelector<HTMLButtonElement>('[data-slot="summary-card"] [data-activity] > button');
-    const showPreviews = () => {
-      const header = chip();
-      if (header?.getAttribute("aria-expanded") === "false") flushSync(() => header.click());
-      header?.parentElement?.querySelector<HTMLButtonElement>('[data-slot="task-card-transcript"] button')?.click();
-    };
+    // The preview's Background row; a click opens its output in a tab.
+    const chip = () => document.querySelector<HTMLButtonElement>('[data-slot="summary-card"] button[data-activity]');
     const arrival = (previewId: string, conversationId = id) => {
       const events = [{ stream: `conversation:${conversationId}`, event: { type: "previewUpdated", preview: { ...previews.preview!, id: previewId, conversationId } } }] as EventEnvelope[];
       revealNewPreviews(events);
@@ -133,7 +127,6 @@ function Fixture() {
       await until(() => !floating() && !document.querySelector('[data-slot="summary-card"]'), what);
       await task();
     };
-    const previewsOpen = () => !!document.querySelector('[role="dialog"][aria-label="Previews"][data-state="open"]');
     const buttons = (scope: string) => [...document.querySelectorAll(`${scope} button`)].map((button) => button.textContent?.trim());
     const sourceCount = () => document.querySelector('[data-slot="workspace-pane"] [data-slot="source-count"]')?.textContent ?? null;
     const contextPressed = () => document.querySelector('button[aria-label="Context"]')?.getAttribute("aria-pressed");
@@ -286,14 +279,16 @@ function Fixture() {
       click("Context");
 
       await until(() => floating() && chip(), "Context to open the card again");
-      showPreviews();
+      chip()?.click();
 
-      await until(previewsOpen, "the previews to open");
-      seen.nestedOpened = previewsOpen() && !!chip();
-      escape();
+      // The row moves on to its output's tab: the floating card makes way.
+      await closed("the output tab to take over");
+      seen.rowOpensTab = sessionTabs(id).active.startsWith("panel:output:preview:");
+      seen.rowClosesCard = !floating();
+      click("Context");
 
-      await until(() => !previewsOpen(), "Escape to close the previews");
-      seen.previewSection = chip()?.closest("[data-activities]")?.querySelector("header")?.textContent === "Activities"; seen.nestedDismissed = !previewsOpen() && !!chip(); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } });
+      await until(() => floating() && chip(), "Context to open the card over the output tab");
+      seen.previewSection = chip()?.closest("[data-activities]")?.querySelector("header")?.textContent?.startsWith("Background"); seen.previewRight = right(); click("Right sidebar"); useBoard.setState({ board: { ...useBoard.getState().board!, previews: {} } });
 
       await until(() => !chip(), "the previews to clear");
       seen.previewCleared = !chip() && !document.querySelector("[data-activities]"); useBoard.setState({ board: { ...useBoard.getState().board!, previews } });

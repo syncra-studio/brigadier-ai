@@ -1,8 +1,8 @@
 /**
- * The production context card's Activities section, fed from board data and the events that
+ * The production context card's Background section, fed from board data and the events that
  * change it: the thread's web preview, a worker's dev app (building, then starting, then running,
  * as its preview events say), the thread's named long command and an unnamed one. With `drive=1`
- * it opens, stops, opens a page and folds, and writes what it saw. Synthetic IPC; no daemon.
+ * it opens their output, stops two, ends them, and writes what it saw. Synthetic IPC; no daemon.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -67,15 +67,13 @@ mockIPC((command, payload) => {
 const section = () => document.querySelector<HTMLElement>("[data-activities]");
 const row = (activity: string) => section()?.querySelector<HTMLElement>(`[data-activity="${activity}"]`) ?? null;
 const text = (node: Element | null | undefined) => node?.textContent?.trim() ?? null;
-/** A row as it reads: what it is for, its state word, its time. */
+/** A row as it reads: what it is for, its time, its tooltip. */
 const read = (activity: string) => {
-  const card = row(activity);
-  const words = card?.querySelectorAll(":scope > button span.truncate");
-  return card && { label: text(words?.[0]), meta: text(words?.[1]), elapsed: text(card.querySelector(":scope > button span.tabular-nums")), state: card.getAttribute("data-state") };
+  const button = row(activity);
+  return button && { label: text(button.querySelector("span.truncate")), elapsed: text(button.querySelector("span.tabular-nums")), tip: button.title };
 };
-const buttons = (activity: string) => [...(row(activity)?.querySelectorAll('[data-slot="task-card-actions"] button') ?? [])].map((button) => text(button));
-const press = (activity: string, label: string) => [...(row(activity)?.querySelectorAll<HTMLButtonElement>('[data-slot="task-card-actions"] button') ?? [])]
-  .find((button) => text(button) === label)?.click();
+/** A row's one action, shown on hover in its time's place. */
+const stop = (activity: string) => row(activity)?.parentElement?.querySelector<HTMLButtonElement>('[data-slot="summary-row-action"] button') ?? null;
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 30)));
 
 async function drive(): Promise<Record<string, unknown>> {
@@ -85,46 +83,39 @@ async function drive(): Promise<Record<string, unknown>> {
   send({ type: "previewUpdated", preview: page }, { type: "backgroundRunUpdated", run: tests }, { type: "backgroundRunUpdated", run: lint },
     { type: "previewUpdated", preview: app });
   await frame();
+  seen.title = text(section()?.querySelector("header button[aria-controls]"));
   seen.order = [...(section()?.querySelectorAll("[data-activity]") ?? [])].map((card) => card.getAttribute("data-activity"));
   seen.rows = Object.fromEntries(["preview-1", "preview-2", "run-1", "run-2"].map((activity) => [activity, read(activity)]));
+  seen.heights = [...new Set([...(section()?.querySelectorAll<HTMLElement>("[data-activity]") ?? [])].map((button) => Math.round(button.getBoundingClientRect().height)))];
   seen.workerLine = text(document.querySelector('[aria-label="Session workers"]'));
-  // The build is done and the app starts, then runs: the same row, the same start.
+  // The build is done and the app starts, then runs: the same row.
   const building = row("preview-2");
   send({ type: "previewUpdated", preview: { ...app, building: false } });
   await frame();
-  seen.starting = read("preview-2");
   send({ type: "previewUpdated", preview: { ...app, building: false, state: { type: "running" } } });
   await frame();
-  seen.running = read("preview-2");
   seen.sameRow = building !== null && row("preview-2") === building;
-  // Opened: one command line, its worker named, Stop; a page that is up has Open too.
-  row("preview-2")?.querySelector<HTMLButtonElement>(":scope > button")?.click();
-  row("preview-1")?.querySelector<HTMLButtonElement>(":scope > button")?.click();
-  row("run-1")?.querySelector<HTMLButtonElement>(":scope > button")?.click();
-  await frame();
-  seen.appLine = text(row("preview-2")?.querySelector('[data-slot="task-card-transcript"]'));
-  seen.appButtons = buttons("preview-2");
-  seen.pageButtons = buttons("preview-1");
-  seen.runButtons = buttons("run-1");
-  press("preview-1", "Open");
+  seen.stops = ["preview-1", "preview-2", "run-1", "run-2"].map((activity) => text(stop(activity)));
+  // A click opens what it prints in a tab; nothing opens in the card.
+  const height = section()!.getBoundingClientRect().height;
+  row("preview-1")?.click();
   await frame();
   const tabs = sessionTabs(id);
   const tab = tabs.tabs.find((candidate) => candidate.id === tabs.active);
-  seen.opened = tab?.kind === "browser" ? tab.url : null;
-  // The command line opens the session's previews, with their logs.
-  row("preview-2")?.querySelector<HTMLButtonElement>('[data-slot="task-card-transcript"] button')?.click();
+  seen.opened = tab?.kind === "panel" ? `${tab.id} ${tab.title}` : tab?.kind ?? null;
+  row("run-1")?.click();
   await frame();
-  seen.previews = !!document.querySelector('[role="dialog"][aria-label="Previews"]');
-  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  await frame();
-  press("preview-1", "Stop");
-  press("run-1", "Stop");
+  seen.openedRun = sessionTabs(id).active;
+  seen.grew = section()!.getBoundingClientRect().height !== height;
+  stop("preview-1")?.click();
+  stop("run-1")?.click();
   for (const end = Date.now() + 3000; Date.now() < end && calls.length < 2; ) await frame();
   seen.calls = calls.toSorted();
-  // Folded, the header counts what runs.
-  section()?.querySelector<HTMLButtonElement>("header button")?.click();
+  // What ends leaves the card.
+  send({ type: "previewUpdated", preview: { ...page, state: { type: "stopped", reason: "the user stopped it" }, endedAtMs: Date.now() } },
+    { type: "backgroundRunUpdated", run: { ...tests, state: { type: "finished", status: "exit 0" }, endedAtMs: Date.now() } as BackgroundRun });
   await frame();
-  seen.folded = text(section()?.querySelector("header"));
+  seen.left = [...(section()?.querySelectorAll("[data-activity]") ?? [])].map((card) => card.getAttribute("data-activity"));
   return seen;
 }
 

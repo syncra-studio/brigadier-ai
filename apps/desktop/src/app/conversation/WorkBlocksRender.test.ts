@@ -205,7 +205,7 @@ test("a check gone to the background keeps its request working, says what runs a
   assert.equal(seen.running.said, true);
   assert.deepEqual([seen.running.status, seen.running.statusInWork], ["Running cargo test --workspace · 6m", true]);
   // The context card's Activities row: the command, its state, its time; opened, Stop.
-  assert.match(seen.running.row ?? "", /cargo test --workspace.*Running.*6m/);
+  assert.match(seen.running.row ?? "", /cargo test --workspace.*6m/);
   assert.equal(seen.running.elapsed, "6m");
   assert.deepEqual(seen.calls, ["stopBackgroundRun run-1"]);
   // The result's answer settles it: no live line, no row, the answer outside the folded work.

@@ -942,10 +942,6 @@ export async function resumePreview(conversationId: string, previewId: string): 
   await request({ method: "resumePreview", conversationId, previewId });
 }
 
-export async function clearPreviews(conversationId: string): Promise<void> {
-  await request({ method: "clearPreviews", conversationId });
-}
-
 export async function previewLogTail(conversationId: string, previewId: string): Promise<{ tail: string; url: string | null }> {
   const { tail, url } = await request({ method: "previewLog", conversationId, previewId, lines: 80 });
   return { tail, url };

@@ -1,19 +1,21 @@
-/** Production Running panel with five preview states and synthetic IPC; no daemon. */
+/**
+ * The production context card's Background rows for five previews (three still there, two ended)
+ * and the output tab a row opens, with Pause, Resume, Stop and Open; synthetic IPC, no daemon.
+ */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
-import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
 import { AgentStatus, type AgentState } from "@/components/assistant-ui/elements/agent-status";
-import { BackgroundInbox } from "@/components/assistant-ui/elements/background-inbox";
+import { OutputTab } from "@/app/conversation/OutputTab";
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { previewActive } from "@/app/conversation/previewStatus";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, Preview, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
-import { sessionTabs } from "@/state/sessionTabs";
+import { sessionTabs, useSessionTabsOf } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const id = "running-fixture";
@@ -49,8 +51,7 @@ mockIPC((command, payload) => {
   };
   if (req.method === "pausePreview" && failPause) throw new Error("The preview has ended.");
   const board = useBoard.getState().board!;
-  let previews = { ...board.previews };
-  if (req.method === "clearPreviews") previews = Object.fromEntries(Object.entries(previews).filter(([, row]) => previewActive(row.state)));
+  const previews = { ...board.previews };
   if (req.method === "pausePreview" || req.method === "resumePreview" || req.method === "stopPreview") {
     for (const [key, row] of Object.entries(previews)) {
       if ((req.previewId === null || key === req.previewId) && previewActive(row.state)) {
@@ -62,20 +63,28 @@ mockIPC((command, payload) => {
   useBoard.setState({ board: { ...board, previews } });
   return { method: req.method };
 });
-const row = (name: string) => document.querySelector(`article[aria-label="${name}"]`);
-const press = (label: string, within: ParentNode = document) => {
-  const button = [...within.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent?.trim() === label);
+/** A preview's Background row, by its id. */
+const row = (previewId: string) => document.querySelector<HTMLButtonElement>(`[data-slot="summary-card"] button[data-activity="${previewId}"]`);
+const tab = () => document.querySelector<HTMLElement>('[data-slot="output-tab"]');
+const press = (label: string, within: ParentNode | null = document) => {
+  const button = [...(within?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((candidate) => candidate.textContent?.trim() === label);
   button?.focus();
   button?.click();
 };
-/** The newest preview's Activities row, opened, and its command line, which opens the previews. */
-const showPreviews = () => {
-  const card = document.querySelector('[data-slot="summary-card"] [data-activity]');
-  const header = card?.querySelector<HTMLButtonElement>(":scope > button");
-  if (header?.getAttribute("aria-expanded") === "false") flushSync(() => header.click());
-  card?.querySelector<HTMLButtonElement>('[data-slot="task-card-transcript"] button')?.click();
+const labels = () => [...(tab()?.querySelectorAll("header button") ?? [])].map((button) => button.textContent?.trim());
+/** A row's Stop, in its time's place on hover. */
+const stopRow = (previewId: string) => {
+  const button = row(previewId)?.parentElement?.querySelector<HTMLButtonElement>('[data-slot="summary-row-action"] button');
+  button?.focus();
+  button?.click();
 };
-const labels = (name: string) => [...(row(name)?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim());
+
+/** The output tab in front, as the session's tab bar would show it. */
+function FrontTab() {
+  const tabs = useSessionTabsOf(id);
+  const front = tabs.tabs.find((candidate) => candidate.id === tabs.active);
+  return front?.kind === "panel" && front.view.type === "output" ? <OutputTab conversationId={id} view={front.view} /> : null;
+}
 
 function Fixture() {
   const runtime = useExternalStoreRuntime<ThreadMessage>({ messages: [], onNew: async () => {} });
@@ -85,47 +94,45 @@ function Fixture() {
     const timers: ReturnType<typeof setTimeout>[] = [];
     const at = (ms: number, action: () => void) => timers.push(setTimeout(action, ms));
     at(500, () => {
-      seen.section = document.querySelector('[data-activities] > header')?.textContent;
-      seen.chip = document.querySelector('[data-slot="summary-card"] [data-activity] > button')?.textContent;
-      showPreviews();
-    });
-    at(1000, () => {
-      press("Show log", row("Web app")!);
-      if (!params.has("drive")) return;
-      seen.inboxHeader = document.querySelector('[data-slot="background-inbox"] > div')?.textContent;
-      seen.initial = rows.map((preview) => ({ name: preview.name, text: row(preview.name)?.textContent, actions: labels(preview.name), indicator: row(preview.name)?.querySelector('[data-slot="background-inbox-indicator"]')?.getAttribute("data-state") }));
-      press("Pause", row("Web app")!);
+      seen.section = document.querySelector("[data-activities] > header button[aria-controls]")?.textContent;
+      seen.order = [...document.querySelectorAll("[data-activities] [data-activity]")].map((button) => button.getAttribute("data-activity"));
+      seen.chip = row("preview-5")?.textContent;
+      seen.pausedIcon = !!row("preview-3")?.querySelector("svg");
+      row("preview-4")?.click();
     });
     if (params.has("drive")) {
-      at(1300, () => { seen.paused = labels("Web app"); press("Resume", row("Web app")!); });
+      at(1000, () => {
+        seen.opened = sessionTabs(id).active;
+        seen.tabText = tab()?.textContent;
+        seen.initial = labels();
+        press("Pause", tab()?.querySelector("header") ?? null);
+      });
+      at(1300, () => { seen.paused = labels(); press("Resume", tab()?.querySelector("header") ?? null); });
       at(1600, () => {
-        seen.resumed = labels("Web app");
+        seen.resumed = labels();
         const info = useApp.getState().info!;
         useApp.setState({ info: { ...info, platform: "windows" } });
       });
-      at(1900, () => { seen.windows = labels("Web app"); useApp.setState({ info: { ...useApp.getState().info!, platform: "macos" } }); });
-      at(2200, () => { failPause = true; press("Pause", row("Web app")!); });
+      at(1900, () => { seen.windows = labels(); useApp.setState({ info: { ...useApp.getState().info!, platform: "macos" } }); });
+      at(2200, () => { failPause = true; press("Pause", tab()?.querySelector("header") ?? null); });
       at(2500, () => {
-        seen.error = row("Web app")?.querySelector('[role="alert"]')?.textContent;
+        seen.error = tab()?.querySelector('[role="alert"]')?.textContent;
         failPause = false;
-        press("http://localhost:5173/", row("Web app")!);
+        press("Open", tab()?.querySelector("header") ?? null);
         const tabs = sessionTabs(id);
-        const browser = tabs.tabs.find((tab) => tab.id === tabs.active);
+        const browser = tabs.tabs.find((candidate) => candidate.id === tabs.active);
         seen.browser = browser?.kind === "browser" ? browser.url : undefined;
+        row("preview-4")?.click();
       });
-      at(2800, () => {
-        seen.linkClosed = !document.querySelector('[aria-label="Session previews"]');
-        showPreviews();
+      at(2800, () => { press("Stop", tab()?.querySelector("header") ?? null); });
+      at(3100, () => {
+        seen.stopped = !row("preview-4");
+        seen.ended = tab()?.textContent;
+        stopRow("preview-3");
       });
-      at(3000, () => { press("Clear finished"); });
-      at(3300, () => { seen.cleared = Object.keys(useBoard.getState().board!.previews); press("Stop", row("Web app")!); });
-      at(3600, () => { seen.stopped = !row("Web app"); press("Stop all"); });
-      at(3900, () => { seen.allStopped = Object.keys(useBoard.getState().board!.previews).length === 0;
+      at(3400, () => {
         seen.focusAfterStop = document.activeElement?.getAttribute("data-slot");
-        seen.sectionRemoved = !document.querySelector("[data-activities]"); });
-      at(4200, () => {
-        seen.empty = document.querySelector('[aria-label="Session previews"]')?.textContent ?? "No previews";
-        seen.calls = calls.filter((call) => ["pausePreview", "resumePreview", "stopPreview", "clearPreviews"].includes(call.method)).map((call) => call.method);
+        seen.calls = calls.filter((call) => ["pausePreview", "resumePreview", "stopPreview"].includes(call.method)).map((call) => call.method);
         // Reactivate after a long idle period without waiting a minute in the fixture.
         const stopped = { ...rows[0]!, state: { type: "exited" as const, code: 0, status: "exit 0" }, endedAtMs: now - 60000 };
         useBoard.setState({ board: { ...useBoard.getState().board!, previews: { [stopped.id]: stopped } } });
@@ -135,29 +142,33 @@ function Fixture() {
       const chipTexts: string[] = [];
       const watch = new MutationObserver((records) => {
         for (const record of records) {
+          // The section comes back with its row: the row's text as it first reads.
+          for (const node of record.addedNodes) {
+            if (node instanceof Element) for (const added of node.querySelectorAll("[data-activity]")) chipTexts.push(added.textContent ?? "");
+          }
           if (!(record.target instanceof Node) || !record.target.parentElement?.closest("[data-activity]") && !(record.target instanceof Element && record.target.closest("[data-activity]"))) continue;
           if (record.oldValue !== null) chipTexts.push(record.oldValue);
           if (record.type === "characterData") chipTexts.push(record.target.textContent ?? "");
           for (const node of record.addedNodes) chipTexts.push(node.textContent ?? "");
         }
       });
-      at(4400, () => {
+      at(3600, () => {
+        seen.endedLeft = !document.querySelector("[data-activities]");
         watch.observe(document.body, { subtree: true, childList: true, characterData: true, characterDataOldValue: true });
         Date.now = () => now + 120000;
         const started = { ...rows[0]!, startedAtMs: now + 60000 };
         useBoard.setState({ board: { ...useBoard.getState().board!, previews: { [started.id]: started } } });
       });
-      at(4550, () => {
-        seen.reactivated = document.querySelector("[data-activity] > button")?.textContent;
+      at(3750, () => {
+        seen.reactivated = row("preview-5")?.textContent;
         watch.disconnect();
         seen.reactivatedTexts = chipTexts;
         Date.now = realNow;
-        showPreviews();
+        stopRow("preview-5");
       });
-      at(4800, () => { press("Stop", row("Brigadier dev app")!); });
-      at(5100, () => {
+      at(4050, () => {
         seen.lastStopFocus = document.activeElement?.getAttribute("data-slot");
-        seen.lastStopRemoved = !document.querySelector("[data-activities]") && !document.querySelector('[data-slot="background-inbox"]');
+        seen.lastStopRemoved = !document.querySelector("[data-activities]");
         setResult(JSON.stringify(seen));
       });
     }
@@ -170,10 +181,7 @@ function Fixture() {
           <header className="h-titlebar flex items-center justify-between gap-3 px-5">
             <span className="text-sm font-medium">Build the web app</span>
           </header>
-          <div className="mx-auto max-w-xl space-y-4 px-6 py-12 text-sm">
-            <p>The web app is ready to preview.</p>
-            <p className="text-muted-foreground">Open its local address from Activities. Pause a preview to hold it, or stop it when you are finished.</p>
-          </div>
+          <FrontTab />
           <PinnedSummary conversation={conversation} />
         </div>
       </main>
@@ -182,15 +190,9 @@ function Fixture() {
   );
 }
 function Reference() {
-  const kind = params.get("reference");
   return <main className="bg-background text-foreground flex h-screen items-center justify-center">
-    {kind === "agent-status" ? <AgentStatus state={(params.get("state") ?? "working") as AgentState}
-      label={params.get("label") ?? "Refactoring composer"} elapsed={params.get("elapsed") ?? "0s"} /> :
-      <BackgroundInbox runs={[
-        { id: "1", title: "Audit the adapters for parity gaps", state: "ready", elapsed: "4m", summary: "6 gaps found" },
-        { id: "2", title: "Regenerate the API reference", state: "running", elapsed: "1m" },
-        { id: "3", title: "Bump dependencies", state: "failed", elapsed: "2m", summary: "lockfile conflict" },
-      ]} />}
+    <AgentStatus state={(params.get("state") ?? "working") as AgentState}
+      label={params.get("label") ?? "Refactoring composer"} elapsed={params.get("elapsed") ?? "0s"} />
   </main>;
 }
 createRoot(document.getElementById("root")!).render(params.has("reference") ? <Reference /> : <TooltipProvider><SidebarProvider defaultOpen={false}><Fixture /></SidebarProvider></TooltipProvider>);
