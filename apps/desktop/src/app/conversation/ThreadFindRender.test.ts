@@ -237,3 +237,12 @@ test("Find counts matches in pages not loaded without loading them; a step to on
   assert.equal(seen.entered.loads, 4);
   shownCentred(seen.entered.place, "quokka");
 });
+
+test("Find stepping back into an older page keeps the counted match past 250 results", { timeout: 180000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "thread-find.html?drive=older-capped", "thread-find-result", 150000));
+  assert.equal(seen.error, undefined);
+  assert.deepEqual(seen.before, { label: "11 / 250+ results", turn: 21, occurrence: 1, loads: 0, size: 240 }, JSON.stringify(seen));
+  assert.deepEqual(seen.back, { label: "10 / 250+ results", turn: 20, occurrence: 60, loads: 1, size: 250 });
+  assert.deepEqual(seen.previous, { label: "9 / 250+ results", turn: 20, occurrence: 59, loads: 1, size: 250 });
+  assert.deepEqual(seen.next, seen.back);
+});

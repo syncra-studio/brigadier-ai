@@ -155,7 +155,7 @@ function olderAt(found: Found, index: number): MessageMatch | null {
   return null;
 }
 
-/** The matches of `query` in the text `root` shows, top to bottom, the first `MAX_RESULTS` of them. */
+/** The matches of `query` in the text `root` shows, top to bottom, the newest `MAX_RESULTS` of them. */
 export function findIn(root: Element, query: string): FindResult {
   if (query === "") return NONE;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
@@ -192,9 +192,16 @@ export function findIn(root: Element, query: string): FindResult {
     const node = nodes[low];
     return node ? [node, at - (starts[low] ?? 0)] : null;
   };
-  const ranges: Range[] = [];
+  // Like the engine, retain the newest matches, still ordered from oldest to newest.
+  const positions: number[] = [];
+  let count = 0;
   for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + needle.length)) {
-    if (ranges.length === MAX_RESULTS) return { ranges, more: true };
+    positions[count % MAX_RESULTS] = at;
+    count++;
+  }
+  const ranges: Range[] = [];
+  for (let index = Math.max(0, count - MAX_RESULTS); index < count; index++) {
+    const at = positions[index % MAX_RESULTS]!;
     const start = locate(at);
     const end = locate(at + needle.length - 1);
     if (!start || !end) break;
@@ -203,7 +210,7 @@ export function findIn(root: Element, query: string): FindResult {
     range.setEnd(end[0], end[1] + 1);
     ranges.push(range);
   }
-  return { ranges, more: false };
+  return { ranges, more: count > MAX_RESULTS };
 }
 
 function reducedMotion(): boolean {

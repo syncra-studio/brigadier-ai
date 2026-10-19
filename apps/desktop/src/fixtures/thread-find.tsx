@@ -40,7 +40,8 @@ const FOLDS = new URLSearchParams(location.search).get("drive") === "folds";
 /** `?drive=groups`: a turn did three steps, grouped in one row. */
 const GROUPS = new URLSearchParams(location.search).get("drive") === "groups";
 /** `?drive=older`: older pages load, `OLDER_PAGE` messages each. */
-const OLDER = new URLSearchParams(location.search).get("drive") === "older";
+const CAPPED = new URLSearchParams(location.search).get("drive") === "older-capped";
+const OLDER = CAPPED || new URLSearchParams(location.search).get("drive") === "older";
 const OLDER_PAGE = 10;
 type Work = readonly (readonly [string, string])[];
 const WORK_TURNS: ReadonlyMap<number, Work> = GROUPS
@@ -67,6 +68,11 @@ function userText(turn: number): string {
 }
 
 function answerText(turn: number): string {
+  if (CAPPED) {
+    // Keep the first loaded match away from the top's automatic history loader.
+    const lead = turn === TURNS - FIRST_TURNS ? "A paragraph before the first loaded match.\n\n".repeat(30) : "";
+    return lead + `Answer ${turn + 1}. ` + Array.from({ length: turn < TURNS - FIRST_TURNS ? 60 : 6 }, (_, index) => `${index + 1}:pipit`).join(" ");
+  }
   const words = [`Answer ${turn + 1}. The clock goes tick tick tick tick tick tick tick all day.`];
   if (NEEDLE_TURNS.has(turn)) words.push("A needle in this answer.");
   if (turn === 45) words.push("A solitary word.");
@@ -725,6 +731,40 @@ async function drive(): Promise<void> {
       await until(() => bar() === null);
       await settle(100);
       result["closed"] = { group: groupOf(50), kept: blockOf(50)?.querySelector('[data-slot="work-group-kept"]') !== null };
+    } else if (CAPPED) {
+      // 240 loaded matches; the next older page adds 300, passing the cap inside that page.
+      select({ type: "conversation", id: "long" });
+      await settle(LOAD_MS + 400);
+      press(document.body, "KeyF", { meta: true });
+      await until(() => bar() !== null);
+      await settle(100);
+      await find("pipit");
+      await until(() => label()?.endsWith("/ 250+ results") === true);
+      await settle(100);
+      for (let step = 0; step < 250 && label() !== "11 / 250+ results"; step++) {
+        const before = label();
+        press(field()!, "Enter", { shift: true });
+        await until(() => label() !== before);
+      }
+      await settle(100);
+      const current = () => {
+        const range = activeMatch();
+        const prefix = document.createRange();
+        if (range) {
+          prefix.selectNodeContents(range.startContainer.parentElement!.closest('[data-role="assistant"]')!);
+          prefix.setEnd(range.startContainer, range.startOffset);
+        }
+        return { label: label(), turn: activeTurn(), occurrence: prefix.toString().split("pipit").length, loads, size: matches()?.size };
+      };
+      result["before"] = current();
+      press(field()!, "Enter", { shift: true });
+      await until(() => activeTurn() === 20);
+      await settle(100);
+      result["back"] = current();
+      await stepWith("Enter", { shift: true });
+      result["previous"] = current();
+      await stepWith("Enter");
+      result["next"] = current();
     } else if (OLDER) {
       // Words in pages not loaded: counted with the thread's own without loading; a step to one loads down to it.
       select({ type: "conversation", id: "long" });
