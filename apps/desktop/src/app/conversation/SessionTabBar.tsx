@@ -595,7 +595,9 @@ export function SessionTabViews({ conversationId }: { conversationId: string }) 
             role="tabpanel"
             aria-label={tabTitle(tab, tabs)}
             inert={!shown}
-            className={cn("bg-background absolute inset-0 flex flex-col", !shown && "invisible")}
+            // Behind, nothing in it transitions: a button's `transition-all` would keep it
+            // visible over the thread a moment longer (#417).
+            className={cn("bg-background absolute inset-0 flex flex-col", !shown && "invisible [&_*]:transition-none!")}
           >
             <Suspense fallback={null}>
               {tab.kind === "file" ? (
