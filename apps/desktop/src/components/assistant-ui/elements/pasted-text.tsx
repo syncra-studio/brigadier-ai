@@ -17,6 +17,7 @@ import {
 } from "@/components/assistant-ui/elements/attachment-tile";
 import { pastedTextLabel } from "@/components/assistant-ui/elements/chipText";
 import { composerInlineNumber } from "@/components/assistant-ui/elements/inline-image";
+import { bound, editing, rebound } from "@/components/assistant-ui/elements/pasteBinding";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import type { AttachmentRef } from "@/ipc/generated";
@@ -139,18 +140,34 @@ function PastedTextEditor({
  * go into the message as they are made, under the same number, or a sent message's, read only.
  */
 export function PastedTextView({ n, paste }: { n: number; paste: AttachmentRef | null }) {
-  const { source, swap } = useComposerPaste(n);
-  // Read once: an edit swaps the composer's attachment, which the editor already shows.
-  const [from] = useState(paste ? { ref: paste } : source);
+  const { attachment, source, swap } = useComposerPaste(n);
+  // Read once: an edit swaps the composer's attachment, which the editor already shows. Another
+  // text under the number (this one was sent or removed) is read afresh.
+  const [from, setFrom] = useState(paste ? { ref: paste } : source);
+  const binding = useRef(bound(attachment?.id));
+  const [generation, setGeneration] = useState(0);
   const latest = useRef(swap);
   useEffect(() => {
     latest.current = swap;
   }, [swap]);
   const pending = useRef<string | null>(null);
   const timer = useRef<number | undefined>(undefined);
+  const id = attachment?.id;
+  useEffect(() => {
+    if (paste) return;
+    const next = rebound(binding.current, id);
+    if (next.generation !== binding.current.generation) {
+      window.clearTimeout(timer.current);
+      pending.current = null;
+      setFrom(source);
+      setGeneration(next.generation);
+    }
+    binding.current = next;
+  }, [paste, id, source]);
   const flush = useCallback(() => {
     window.clearTimeout(timer.current);
     if (pending.current === null) return;
+    binding.current = editing(binding.current);
     latest.current(pending.current);
     pending.current = null;
   }, []);
@@ -168,7 +185,7 @@ export function PastedTextView({ n, paste }: { n: number; paste: AttachmentRef |
   return (
     <div className="page-tab" data-slot="pasted-text-view">
       {from ? (
-        <PastedTextEditor source={from} title={label} onEdit={paste ? undefined : edit} />
+        <PastedTextEditor key={generation} source={from} title={label} onEdit={paste ? undefined : edit} />
       ) : (
         <p className="text-muted-foreground p-6 text-sm">This pasted text is no longer in the message.</p>
       )}
