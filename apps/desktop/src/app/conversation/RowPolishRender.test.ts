@@ -7,10 +7,10 @@ import { createStore } from "zustand/vanilla";
 
 import type { Task } from "@/ipc/generated";
 
-test("team rows join possessives to names, time stopped work, and omit blank Shell opening lines", async () => {
+test("team rows name workers without possessives, say who is still landing, time stopped work, and omit blank Shell opening lines", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
-    const { TeamStep } = await server.ssrLoadModule("/src/app/conversation/activity/TeamSentence.tsx");
+    const { TeamStep, TeamSentence } = await server.ssrLoadModule("/src/app/conversation/activity/TeamSentence.tsx");
     const { ShellBox } = await server.ssrLoadModule("/src/app/conversation/activity/StepDetail.tsx");
     const { emptyBoard, BoardStoreContext } = await server.ssrLoadModule("/src/state/board.ts");
     const task = { id: "t1", number: 1, title: "Add QIF exporter", kind: "implement", state: "stopped",
@@ -18,19 +18,40 @@ test("team rows join possessives to names, time stopped work, and omit blank She
     const store = createStore(() => ({ board: { ...emptyBoard("c"), tasks: { t1: task } }, orchestrator: null }));
     const render = (node: React.ReactNode) => ReactDOMServer.renderToStaticMarkup(
       React.createElement(BoardStoreContext.Provider, { value: store }, node));
-    // The name and its possessive must be one text run, not separate flex items whose gap is
-    // closed only visually. This also preserves the worker button's accessible name.
+    // A worker's name is a task title, so a row never makes it possessive ("Add QIF exporter’s
+    // change"): it reads "the change from Add QIF exporter", the worker button's accessible name
+    // kept whole.
+    const words = { landed: "Landed the change from", reviewed: "Reviewed the change from", answered: "Answered a question from" };
     for (const kind of [
       { type: "landed", taskIds: ["t1"], commits: 1, branch: "main" },
       { type: "reviewed", taskIds: ["t1"], findings: 0 },
       { type: "answered", taskId: "t1", question: "Proceed?", answer: "Yes" },
-    ]) {
+    ] as const) {
       const html = render(React.createElement(TeamStep, { kind }));
-      assert.match(html, /Add QIF exporter’s (?:change|question)</);
+      assert.match(html, /<span class="min-w-0 truncate">Add QIF exporter<\/span>/);
       assert.doesNotMatch(html, /-ms-1/);
       const text = html.replace(/<[^>]+>/g, "");
-      assert.equal(text, `${kind.type === "landed" ? "Landed" : kind.type === "reviewed" ? "Reviewed" : "Answered"} Add QIF exporter’s ${kind.type === "answered" ? "question" : "change"}`);
+      assert.equal(text, `${words[kind.type]} Add QIF exporter`);
     }
+    // Several workers: "the changes from A and B", never "A and B’ changes".
+    const two = { ...task, id: "t2", title: "Clear completed button" } as unknown as Task;
+    const twoStore = createStore(() => ({ board: { ...emptyBoard("c"), tasks: { t1: task, t2: two } }, orchestrator: null }));
+    const landedTwo = ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: twoStore },
+      React.createElement(TeamStep, { kind: { type: "landed", taskIds: ["t1", "t2"], commits: 2, branch: "main" } })));
+    assert.equal(landedTwo.replace(/<[^>]+>/g, ""), "Landed the changes from Add QIF exporter and Clear completed button");
+    // A wave that finished while one of its workers' change is still landing says so, and reads
+    // "finished" once that one has landed.
+    const sentence = (state: string) => {
+      const three = { ...task, id: "t3", title: "Validate todo titles", state } as unknown as Task;
+      const done = { ...task, state: "landed" } as unknown as Task;
+      const doneTwo = { ...two, state: "landed" } as unknown as Task;
+      const waveStore = createStore(() => ({ board: { ...emptyBoard("c"), tasks: { t1: done, t2: doneTwo, t3: three } }, orchestrator: null }));
+      return ReactDOMServer.renderToStaticMarkup(React.createElement(BoardStoreContext.Provider, { value: waveStore },
+        React.createElement(TeamSentence, { row: { type: "task", taskId: "t1", taskIds: ["t1", "t2", "t3"], kind: "finished", position: 0, wave: true } })))
+        .replace(/<[^>]+>/g, "");
+    };
+    assert.equal(sentence("landing"), "Add QIF exporter and Clear completed button finished, Validate todo titles is landing");
+    assert.equal(sentence("landed"), "Add QIF exporter, Clear completed button and Validate todo titles finished");
     const stopped = render(React.createElement(TeamStep, { kind: { type: "stopped", taskId: "t1", reason: "Enough" }, atMs: 9000 }));
     assert.match(stopped, /after 4s/);
     // A handoff's earlier attempt counts; a restart after the stop doesn't change the row.

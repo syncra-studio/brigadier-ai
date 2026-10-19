@@ -23,10 +23,10 @@ import { useBoard } from "@/state/board";
  * A worker's name as a button that opens its thread, with its glyph unless the sentence shows
  * the glyphs up front. The one way a worker is named in the thread, the live line and the strip.
  */
-export const WorkerName: FC<{ taskId: string; glyph?: boolean; suffix?: string }> = ({ taskId, glyph = true, suffix = "" }) => {
+export const WorkerName: FC<{ taskId: string; glyph?: boolean }> = ({ taskId, glyph = true }) => {
   const { setPanel } = useContext(AgentsPanelContext);
   const name = useWorkerName(taskId);
-  if (name === null) return <span className="shrink-0">{`a worker${suffix}`}</span>;
+  if (name === null) return <span className="shrink-0">a worker</span>;
   return (
     <button
       type="button"
@@ -39,21 +39,25 @@ export const WorkerName: FC<{ taskId: string; glyph?: boolean; suffix?: string }
       className="text-foreground/90 hover:text-foreground rounded-control inline-flex max-w-full min-w-0 items-center gap-1 align-bottom"
     >
       {glyph && <WorkerGlyph taskId={taskId} className="size-icon-xs shrink-0" />}
-      <span className="min-w-0 truncate">{name + suffix}</span>
+      <span className="min-w-0 truncate">{name}</span>
     </button>
   );
 };
 
-/** "A", "A and B", "A, B and C"; past three, "A, B and 4 more", the more opening the Workers list. */
-export const Names: FC<{ taskIds: readonly string[]; glyph?: boolean; suffix?: string }> = ({ taskIds, glyph = false, suffix = "" }) => {
+/**
+ * "A", "A and B", "A, B and C"; past three, "A, B and 4 more", the more opening the Workers list.
+ * Names are task titles ("Validate todo titles"), so a sentence never makes them possessive: it
+ * says "the change from A", not "A's change".
+ */
+export const Names: FC<{ taskIds: readonly string[]; glyph?: boolean }> = ({ taskIds, glyph = false }) => {
   const { setPanel } = useContext(AgentsPanelContext);
   const named = taskIds.length > 3 ? taskIds.slice(0, 2) : taskIds;
   const more = taskIds.length - named.length;
-  const parts: ReactNode[] = named.map((id, index) => <WorkerName key={id} taskId={id} glyph={glyph} suffix={more === 0 && index === named.length - 1 ? suffix : ""} />);
+  const parts: ReactNode[] = named.map((id) => <WorkerName key={id} taskId={id} glyph={glyph} />);
   if (more > 0) {
     parts.push(
       <button key="more" type="button" className="hover:text-foreground rounded-control" onClick={() => setPanel(null)}>
-        {`${more} more${suffix}`}
+        {`${more} more`}
       </button>,
     );
   }
@@ -126,6 +130,10 @@ export const TeamSentence: FC<{ row: BlockRow }> = ({ row }) => {
   const known = tasks.filter((task): task is Task => !!task);
   if (known.length === 0) return null;
   const word = row.kind === undefined && known[0] ? lifecycleWordOf(known[0]) : lifecycleWord(row.kind);
+  // A worker that finished its work but whose change is still being landed isn't finished yet:
+  // the sentence says so until it lands.
+  const landing = word === "finished" ? ids.filter((_, index) => tasks[index]?.state === "landing") : [];
+  const done = ids.filter((id) => !landing.includes(id));
   return (
     <ThreadActivity
       data-slot="task-row"
@@ -137,7 +145,20 @@ export const TeamSentence: FC<{ row: BlockRow }> = ({ row }) => {
       <Glyphs taskIds={ids} />
       {/* One line: a sentence too long for it truncates; its detail names every worker. */}
       <span className="min-w-0 truncate">
-        <Names taskIds={ids} /> {verb(word, tasks)}
+        {landing.length === 0 ? (
+          <>
+            <Names taskIds={ids} /> {verb(word, tasks)}
+          </>
+        ) : (
+          <>
+            {done.length > 0 && (
+              <>
+                <Names taskIds={done} /> {verb(word, done.map((id) => tasks[ids.indexOf(id)]))},{" "}
+              </>
+            )}
+            <Names taskIds={landing} /> {landing.length > 1 ? "are landing" : "is landing"}
+          </>
+        )}
       </span>
     </ThreadActivity>
   );
@@ -163,6 +184,9 @@ const Quiet: FC<{ children: ReactNode }> = ({ children }) => (
   <p className="bg-code-surface rounded-control text-foreground/80 max-h-60 overflow-y-auto px-3 py-2 whitespace-pre-wrap">{children}</p>
 );
 
+/** "the change from", "the changes from": what a Landed or Reviewed row names before its workers. */
+const changesFrom = (taskIds: readonly string[]) => (taskIds.length > 1 ? "the changes from" : "the change from");
+
 /** A row of the lead managing its team: "Messaged Thread rows", "Stopped Fix uploads"; it opens to what it said. */
 export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = ({ kind, atMs }) => {
   // How long the worker had run when it was stopped: its attempts up to the step's own time, so
@@ -185,7 +209,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
       line = (
         <>
-          Answered <WorkerName taskId={kind.taskId} glyph={false} suffix="’s question" />
+          Answered a question from <WorkerName taskId={kind.taskId} glyph={false} />
         </>
       );
       detail = (
@@ -220,7 +244,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       line =
         kind.taskIds.length > 0 ? (
           <>
-            Landed <Names taskIds={kind.taskIds} suffix={kind.taskIds.length > 1 ? "’ changes" : "’s change"} />
+            Landed {changesFrom(kind.taskIds)} <Names taskIds={kind.taskIds} />
           </>
         ) : (
           <>Landed the changes</>
@@ -235,7 +259,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       icon = <CheckCircle aria-hidden className="size-4 shrink-0" />;
       line = (
         <>
-          Reviewed <Names taskIds={kind.taskIds} suffix={kind.taskIds.length > 1 ? "’ changes" : "’s change"} />
+          Reviewed {changesFrom(kind.taskIds)} <Names taskIds={kind.taskIds} />
         </>
       );
       detail = <span>{kind.findings === 0 ? "No findings" : kind.findings === 1 ? "1 finding" : `${kind.findings} findings`}</span>;

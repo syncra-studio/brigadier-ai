@@ -139,9 +139,9 @@ fold just closes over the same groups (this fixes §2.4).
 
 | Today | New |
 | --- | --- |
-| Read Diff of task-1 | hidden (the team sentence "Reviewed Sidebar hide mode's change" covers it, §3.4) |
+| Read Diff of task-1 | hidden (the team sentence "Reviewed the change from Sidebar hide mode" covers it, §3.4) |
 | Read {worker}'s report | hidden |
-| Landed 1 commit on brigadier/…/session | team sentence: "Landed Sidebar hide mode's change" with "1 commit" in its detail |
+| Landed 1 commit on brigadier/…/session | team sentence: "Landed the change from Sidebar hide mode" with "1 commit" in its detail |
 | Finished the session | hidden: the `Merged` step the user asked for in words says it ("Merged {branch} into {base}") |
 | Called note_for_user / remember | hidden; their effect shows in "Waiting on you" or the Brain |
 
@@ -180,8 +180,8 @@ Workers show as **sentences**, never cards, in the same row recipe as everything
 | `Messaged` | Messaged Thread rows | the message text |
 | `Answered` | Answered Thread rows's question | question, answer and why |
 | `stop_worker` | Stopped Fix uploads | the reason |
-| `Accepted` / `Landed` | Landed Sidebar hide mode's change | commits and branch |
-| a review result | Reviewed Sidebar hide mode's change | the findings count; opens the review |
+| `Accepted` / `Landed` | Landed the change from Sidebar hide mode | commits and branch |
+| a review result | Reviewed the change from Sidebar hide mode | the findings count; opens the review |
 
 **While a worker runs**, its start sentence doesn't change. Its live progress shows in the live line (§3.5), the
 Workers strip (§3.5) and its own thread (§3.6). It no longer shows as extra rows in the main thread.
