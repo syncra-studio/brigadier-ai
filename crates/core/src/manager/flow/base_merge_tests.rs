@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::thread_tests::commit_in_workspace;
-use super::{Flow, Options, Reply, Turn, git};
+use super::{FakeBehavior, Flow, Options, Reply, Turn, git};
 use crate::model::{Environment, Setup};
 use crate::work::{OrchestratorStepKind, Task, TaskState};
 
@@ -96,7 +96,12 @@ async fn merge_base(turn: &Turn, worker: Worker) -> Reply {
     }
     turn.git(&["add", "-A"]);
     turn.git(&["commit", "-q", "--no-edit"]);
-    report(turn, json!({})).await
+    let reported = report(turn, json!({})).await;
+    if worker == Worker::Markers {
+        // Its turn still runs as the landing sends it back: that comes in as a steer (#19).
+        turn.until_steered().await;
+    }
+    reported
 }
 
 /// The same worker, sent back by the landing's check.
@@ -132,7 +137,14 @@ async fn conflicting_session(worker: Worker, sides: Sides) -> Flow {
     let delegated = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flow = Flow::start(
         "base-merge",
-        Options::default(),
+        Options {
+            // The landing's send-back may come while the worker's turn still ends.
+            behavior: Arc::new(FakeBehavior {
+                take_in_steers: true,
+                ..FakeBehavior::default()
+            }),
+            ..Options::default()
+        },
         Arc::new(move |turn| {
             let delegated = delegated.clone();
             Box::pin(async move {

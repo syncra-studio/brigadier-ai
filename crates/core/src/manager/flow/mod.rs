@@ -39,6 +39,7 @@ use crate::work::{RequestState, Task};
 static PATIENCE: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(crate::test_patience);
 
 /// One turn a scripted CLI is asked to take.
+#[derive(Clone)]
 pub(crate) struct Turn {
     pub provider: ProviderKind,
     /// Brigadier's instructions for the session (its system prompt addition), and a worker's
@@ -289,6 +290,18 @@ impl Turn {
             .flatten()
     }
 
+    /// Waits until a message is steered into this running turn, leaving it unread for the
+    /// turn to take in once its script ends.
+    pub async fn until_steered(&self) {
+        tokio::time::timeout(*PATIENCE, async {
+            while self.steers.lock().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("a message steered in");
+    }
+
     /// Reports the session's context size mid-turn, as a CLI does after each model call.
     pub async fn report_context(&self, tokens: i64) {
         let _ = self
@@ -514,6 +527,10 @@ pub(crate) struct FakeBehavior {
     /// Codex also lists a light model, so cheap work routes to it.
     pub light_model: bool,
     pub refuse_steers: bool,
+    /// A message steered into a turn that its script never read is taken in once the script
+    /// ends: the script runs again on it, in the same turn, as a real CLI's model works on.
+    /// Off, it is dropped.
+    pub take_in_steers: bool,
     pub cleanup: bool,
     pub fail_cleanup: std::sync::atomic::AtomicBool,
     pub cleanup_error: Mutex<Option<String>>,
@@ -912,8 +929,9 @@ struct FakeSession {
     answers: Answers,
     /// A worker's task, from its first message.
     brief: Mutex<Option<String>>,
-    /// A turn is running: a steer joins it rather than starting another.
-    running: Arc<std::sync::atomic::AtomicBool>,
+    /// A turn is running: a steer joins it rather than starting another. Held while a steer
+    /// joins, and while a turn ending finds none unread, so none is lost in between.
+    running: Arc<Mutex<bool>>,
     /// Steers into a running turn, which the turn may read ([`Turn::steered`]).
     steer_tx: mpsc::UnboundedSender<String>,
     steers: Steers,
@@ -924,6 +942,14 @@ impl FakeSession {
     fn sender(&self) -> Option<mpsc::Sender<ProviderEvent>> {
         self.events.lock().unwrap().clone()
     }
+}
+
+/// What was steered into a turn and not read yet.
+fn unread_steers(steers: &Steers) -> Vec<String> {
+    let Ok(mut steers) = steers.try_lock() else {
+        return Vec::new();
+    };
+    std::iter::from_fn(|| steers.try_recv().ok()).collect()
 }
 
 fn input_text(input: &TurnInput) -> String {
@@ -1004,41 +1030,70 @@ impl ProviderSession for FakeSession {
             };
             let script = self.script.clone();
             let running = self.running.clone();
-            running.store(true, std::sync::atomic::Ordering::SeqCst);
+            *running.lock().unwrap() = true;
+            let steers = self.steers.clone();
+            let take_in_steers = self.behavior.take_in_steers;
             let stops = self.stops.clone();
             stops.0.store(false, std::sync::atomic::Ordering::SeqCst);
             tokio::spawn(async move {
                 let _ = tx.send(ProviderEvent::TurnStarted { turn_id: None }).await;
-                let reply = script(turn).await;
-                if let Some(used) = reply.context_tokens {
-                    let _ = tx
-                        .send(ProviderEvent::ContextSize {
-                            used_tokens: used,
-                            window_tokens: Some(1_000_000),
-                        })
-                        .await;
-                }
-                if !reply.text.is_empty() {
-                    let item_id = uuid::Uuid::new_v4().to_string();
-                    if reply.answer {
+                let mut turn = turn;
+                let reply = loop {
+                    let again = turn.clone();
+                    let mut reply = script(turn).await;
+                    if let Some(used) = reply.context_tokens {
                         let _ = tx
-                            .send(ProviderEvent::MessageDelta {
-                                item_id: item_id.clone(),
-                                text: reply.text.clone(),
-                                phase: Some(brigadier_providers::TextPhase::Answer),
+                            .send(ProviderEvent::ContextSize {
+                                used_tokens: used,
+                                window_tokens: Some(1_000_000),
                             })
                             .await;
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     }
-                    let _ = tx
-                        .send(ProviderEvent::Message {
-                            item_id,
-                            role: Speaker::Assistant,
-                            text: reply.text,
-                        })
-                        .await;
-                }
-                running.store(false, std::sync::atomic::Ordering::SeqCst);
+                    if !reply.text.is_empty() {
+                        let item_id = uuid::Uuid::new_v4().to_string();
+                        if reply.answer {
+                            let _ = tx
+                                .send(ProviderEvent::MessageDelta {
+                                    item_id: item_id.clone(),
+                                    text: reply.text.clone(),
+                                    phase: Some(brigadier_providers::TextPhase::Answer),
+                                })
+                                .await;
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        }
+                        let _ = tx
+                            .send(ProviderEvent::Message {
+                                item_id,
+                                role: Speaker::Assistant,
+                                text: std::mem::take(&mut reply.text),
+                            })
+                            .await;
+                    }
+                    // A message steered in that the script never read, taken in
+                    // ([`FakeBehavior::take_in_steers`]) unless the turn ends otherwise.
+                    let ends = !take_in_steers
+                        || reply.crash.is_some()
+                        || reply.limit.is_some()
+                        || reply.error.is_some()
+                        || stops.0.load(std::sync::atomic::Ordering::SeqCst);
+                    let unread = {
+                        let mut running = running.lock().unwrap();
+                        let unread = if ends {
+                            Vec::new()
+                        } else {
+                            unread_steers(&steers)
+                        };
+                        *running = !unread.is_empty();
+                        unread
+                    };
+                    if unread.is_empty() {
+                        break reply;
+                    }
+                    turn = Turn {
+                        input: unread.join("\n"),
+                        ..again
+                    };
+                };
                 if let Some(signal) = reply.crash {
                     let _ = tx
                         .send(ProviderEvent::Exited {
@@ -1102,13 +1157,16 @@ impl ProviderSession for FakeSession {
                 Err(brigadier_providers::Error::Invalid("steer refused".into()))
             });
         }
-        // A running turn reads it if its script asks for it ([`Turn::steered`]); otherwise its
-        // reply is already decided and the steer changes nothing.
-        if self.running.load(std::sync::atomic::Ordering::SeqCst) {
+        // A running turn reads it if its script asks for it ([`Turn::steered`]), or takes it in
+        // once its script ends ([`FakeBehavior::take_in_steers`]); otherwise its reply is
+        // already decided and the steer changes nothing.
+        let running = self.running.lock().unwrap();
+        if *running {
             transcribe(&self.transcript, true, &input_text(&input));
             let _ = self.steer_tx.send(input_text(&input));
             return Box::pin(async { Ok(()) });
         }
+        drop(running);
         self.send(input)
     }
 
@@ -1120,7 +1178,7 @@ impl ProviderSession for FakeSession {
     }
 
     fn interrupt(&self) -> BoxFuture<'_, brigadier_providers::Result<()>> {
-        if self.running.load(std::sync::atomic::Ordering::SeqCst) {
+        if *self.running.lock().unwrap() {
             self.stops
                 .0
                 .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1144,7 +1202,7 @@ impl ProviderSession for FakeSession {
         Box::pin(async move {
             // Its running turn ends with it, as a real CLI's does with its process: a script
             // waiting for its stop sees it.
-            if self.running.load(std::sync::atomic::Ordering::SeqCst) {
+            if *self.running.lock().unwrap() {
                 self.stops
                     .0
                     .store(true, std::sync::atomic::Ordering::SeqCst);
