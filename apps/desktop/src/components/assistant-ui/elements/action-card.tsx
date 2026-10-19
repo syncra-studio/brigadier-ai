@@ -91,12 +91,15 @@ export function ActionCardTitle({ children, detail }: { children: ReactNode; det
 /** A question card's header: the question, then × that puts it aside. */
 export function ActionCardQuestion({
   children,
+  kind,
   detail,
   aside,
   onDismiss,
   dismissLabel = "Dismiss",
 }: {
   children: ReactNode;
+  /** A few words over the question: a round's title ("Round 2 · Budget"). */
+  kind?: ReactNode;
   detail?: ReactNode;
   /** Beside the dismiss button (a round's pager). */
   aside?: ReactNode;
@@ -106,7 +109,12 @@ export function ActionCardQuestion({
 }) {
   return (
     <div className="flex items-start justify-between gap-2 ps-4 pe-3 pt-4 pb-2">
-      <div role="alert" aria-atomic="true" className="flex min-w-0 flex-1">
+      <div role="alert" aria-atomic="true" className="flex min-w-0 flex-1 flex-col gap-1">
+        {kind && (
+          <p data-slot="action-card-kind" className="text-foreground/65 text-code leading-5">
+            {kind}
+          </p>
+        )}
         <ActionCardTitle detail={detail}>{children}</ActionCardTitle>
       </div>
       {aside}

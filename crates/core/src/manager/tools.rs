@@ -450,8 +450,15 @@ impl SessionManager {
                     None => None,
                 };
                 let asked = items.len();
-                crate::heap(|| self.open_round(id, task_id, QuestionKind::Orchestrator, items))
-                    .await?;
+                let title = args
+                    .title
+                    .as_deref()
+                    .map(|title| super::brains::one_line(title, 80))
+                    .filter(|title| !title.is_empty());
+                crate::heap(|| {
+                    self.open_round(id, task_id, QuestionKind::Orchestrator, items, title)
+                })
+                .await?;
                 Ok(format!(
                     "Asked the user {} on one card. Reply with exactly {} now. The answers arrive as an [answer] message in this request; carry on with anything that doesn't depend on them.",
                     if asked == 1 {

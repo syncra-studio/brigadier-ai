@@ -1200,6 +1200,10 @@ pub struct Question {
     /// A round's answers, one per item, once answered.
     #[serde(default)]
     pub answers: Vec<String>,
+    /// A few words over the card, for a round of a series ("Round 2 · Budget").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
     pub created_at_ms: i64,
     pub answered_at_ms: Option<i64>,
     /// A merge card the user answered in their own words: the user message they went as (a

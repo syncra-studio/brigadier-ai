@@ -93,6 +93,8 @@ test("a question's row says it asks while open, and how many it asked once answe
   };
   assert.equal(questionRowWords(round), "Asked 3 questions");
   assert.equal(questionRowWords({ ...round, answer: null, answers: [], answeredAtMs: null }), "Asking questions");
+  // An interview's round names itself once answered (Q78).
+  assert.equal(questionRowWords({ ...round, title: "Round 2 · Budget" }), "Asked 3 questions · Round 2 · Budget");
   // Withdrawn, and the merge card, keep their words.
   assert.equal(questionRowWords({ ...watch, answeredAtMs: 2 }), "Asked 1 question · withdrawn");
 });

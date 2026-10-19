@@ -1482,6 +1482,7 @@ mod tab_state_tests {
                 items: Vec::new(),
                 answer: None,
                 answers: Vec::new(),
+                title: None,
                 created_at_ms: 0,
                 answered_at_ms: None,
                 words_id: None,

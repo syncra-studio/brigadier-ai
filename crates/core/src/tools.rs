@@ -421,6 +421,9 @@ pub struct AskUser {
     /// The task that waits for the answers, if any (other tasks continue).
     #[serde(default)]
     pub task: Option<String>,
+    /// Optional: a few words over the card, for a round of a series ("Round 2 · Budget").
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// One question of an `ask_user` round.

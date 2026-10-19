@@ -91,6 +91,13 @@ macro_rules! fusion_rule {
     };
 }
 
+/// The interview on cards, when the user asks to be grilled or a request is too vague (Q78).
+macro_rules! grilling_rule {
+    () => {
+        "When the user invites questions on a plan or idea, in any words or language (\"grill me\", \"ask me\", \"poke holes in it\"), or a request is too vague to start, interview them on cards until you both understand it the same way. First map the decisions it needs as a tree, each after the ones it depends on. Look facts up before you ask: read, search, or start research workers, and never ask what a lookup answers; let what you found shape later questions. Ask in numbered rounds, one ask_user card each, titled \"Round N · <topic>\", holding every open question whose prerequisites are settled, each with options and the one you recommend, its why in the option's description. Don't act on the plan (no building, changing, operating or merging) until the user confirms, on a last card, your summary of what was decided; then say what happens next."
+    };
+}
+
 /// What a Chat keeps about the user across Chats and sessions (Q78).
 macro_rules! personal_memory {
     () => {
@@ -352,7 +359,7 @@ pub(crate) const COMPUTER_ROUTING: &str = "\n- On this Mac workers can open apps
 const MOCKUPS: &str = "- A visible UI change that isn't a small fix (a new control, panel, screen or layout): first ask_user \"Want a mockup first?\" (Yes / Skip); delegate_task says how a mockup goes.";
 
 /// How the thread interviews the user: rounds of question cards over a tree of decisions.
-const GRILLING: &str = "\n- When the user invites questions, in any words or language (\"grill me\", \"ask me\"), or a request is too vague to start, interview them in rounds of one ask_user card, each holding every open question whose prerequisites are settled. Look facts up yourself. End with what was decided and what happens next.";
+const GRILLING: &str = concat!("\n- ", grilling_rule!());
 
 /// How the thread's instructions start (tests find its sessions by it).
 pub(crate) const THREAD_OPENING: &str = "You lead a Brigadier session";
@@ -1095,6 +1102,11 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: concat!("From now on: ", fusion_rule!()),
         worker: "",
     },
+    Revision {
+        number: GRILLING_REVISION,
+        thread: concat!("From now on: ", grilling_rule!()),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1123,11 +1135,15 @@ pub(crate) fn revision_note(told: u32, worker: bool) -> Option<String> {
 /// What a Chat keeps about the user (Q78).
 const PERSONAL_MEMORY: &str = personal_memory!();
 
+/// A Chat's interview on cards (Q78).
+const CHAT_GRILLING: &str = grilling_rule!();
+
 /// A Chat's contract: its instructions didn't change with the thread's. Version 2 gives Chats and
 /// tab chats the thread's voice and the research answer's format (Q79); 3 its breakdown in
 /// sentences; 4 no bold at the start of any of its lines, colon or not; 5 a Chat is a thread
-/// without a project (Q76: workers, cards, one clarifying card); 6 it fuses a costly question (Q77); 7 it keeps stable personal facts, nothing sensitive (Q78).
-const CHAT_CONTRACT: u32 = 7;
+/// without a project (Q76: workers, cards, one clarifying card); 6 it fuses a costly question (Q77); 7 it keeps stable personal facts, nothing sensitive (Q78); 8 it interviews on cards, in numbered
+/// rounds, facts looked up first (Q78).
+const CHAT_CONTRACT: u32 = 8;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
 /// The first Chat contract with the breakdown rule as it is now; a Chat told the voice before
@@ -1142,6 +1158,9 @@ const CHAT_FUSION_CONTRACT: u32 = 6;
 /// The first Chat contract with personal facts as they are now; a Chat told an older one hears
 /// [`CHAT_MEMORY_NOTE`].
 const CHAT_MEMORY_CONTRACT: u32 = 7;
+/// The first Chat contract with the interview on cards; a Chat told an older one hears
+/// [`CHAT_GRILLING_NOTE`].
+const CHAT_GRILLING_CONTRACT: u32 = 8;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1174,6 +1193,9 @@ const CHAT_BREAKDOWN_NOTE: &str = concat!(
 /// Tells a Chat from before it became a thread what it can do now (Q76).
 const CHAT_THREAD_NOTE: &str = concat!("[instructions] From now on: ", chat_thread!());
 
+/// Tells a Chat from before how it interviews the user (Q78).
+const CHAT_GRILLING_NOTE: &str = concat!("[instructions] From now on: ", grilling_rule!());
+
 /// Tells a Chat from before what it keeps about the user (Q78).
 const CHAT_MEMORY_NOTE: &str = concat!("[instructions] From now on: ", personal_memory!());
 
@@ -1194,6 +1216,7 @@ const CHAT_BREAKDOWN_LABEL: &str = "research breakdown";
 const CHAT_THREAD_LABEL: &str = "chat as a thread";
 const CHAT_FUSION_LABEL: &str = "fused answers";
 const CHAT_MEMORY_LABEL: &str = "personal facts";
+const CHAT_GRILLING_LABEL: &str = "interview on cards";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
 const RUN_LABEL: &str = "overnight run";
@@ -1572,6 +1595,9 @@ pub(crate) const CLARIFY_REVISION: u32 = 111;
 pub(crate) const VISIBLE_PROOF_REVISION: u32 = 112;
 /// A research question costly to get wrong is fused: both vendors, judged blind (Q77).
 pub(crate) const FUSION_REVISION: u32 = 113;
+/// The interview on cards: a decision tree, facts looked up first, numbered titled rounds, a
+/// recommendation per question, nothing acted on before a confirm card (Q78).
+pub(crate) const GRILLING_REVISION: u32 = 114;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1781,6 +1807,16 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             label: CHAT_MEMORY_LABEL,
             told: Told {
                 contract: Some(CHAT_MEMORY_CONTRACT),
+                ..Told::default()
+            },
+        });
+    }
+    if now.chat && now.reports && told.contract.unwrap_or(0) < CHAT_GRILLING_CONTRACT {
+        notes.push(Note {
+            text: CHAT_GRILLING_NOTE.to_owned(),
+            label: CHAT_GRILLING_LABEL,
+            told: Told {
+                contract: Some(CHAT_GRILLING_CONTRACT),
                 ..Told::default()
             },
         });
@@ -2548,7 +2584,7 @@ pub(crate) fn tab_chat(target: &crate::model::TabTarget, checkout: &str) -> Stri
 
 pub(crate) fn chat(memories: &[String]) -> String {
     let mut text = format!(
-        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{CHAT_THREAD}\n{PERSONAL_MEMORY}\n{CHAT_AUTHORITY}{CHAT_VOICE}",
+        "You are a helpful assistant in Brigadier, a desktop app. Today is {}. You may search the web when current information helps; say where facts came from.\n{CHAT_THREAD}\n- {CHAT_GRILLING}\n{PERSONAL_MEMORY}\n{CHAT_AUTHORITY}{CHAT_VOICE}",
         today()
     );
     if !memories.is_empty() {
@@ -3956,8 +3992,9 @@ mod environment_tests {
         // then to 13,900 for offering out-of-scope work as a session (Q73), and to 14,100 for no
         // bold-led breakdown line, even where what the thread read has one (#319), and to 14,500
         // for one clarifying card before research (Q78), and to 15,300 for fusing a costly
-        // research question, judged blind (Q77).
-        assert!(codex.len() < 15_300, "{}", codex.len());
+        // research question, judged blind (Q77), and to 16,000 for the interview on cards: a
+        // decision tree, facts looked up first, numbered rounds and a confirm card (Q78).
+        assert!(codex.len() < 16_000, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -4832,6 +4869,7 @@ mod environment_tests {
                 CHAT_VOICE_LABEL,
                 CHAT_THREAD_LABEL,
                 CHAT_MEMORY_LABEL,
+                CHAT_GRILLING_LABEL,
                 PREFERENCES_LABEL
             ]
         );
@@ -5242,7 +5280,11 @@ mod environment_tests {
             let sent = notes(&told, &now);
             // A Chat hears that it is a thread too (Q76); a tab chat isn't one.
             let thread = |labels: Vec<&'static str>| match reports {
-                true => [labels, vec![CHAT_THREAD_LABEL, CHAT_MEMORY_LABEL]].concat(),
+                true => [
+                    labels,
+                    vec![CHAT_THREAD_LABEL, CHAT_MEMORY_LABEL, CHAT_GRILLING_LABEL],
+                ]
+                .concat(),
                 false => labels,
             };
             assert_eq!(labels(&sent), thread(vec![CHAT_VOICE_LABEL]));
@@ -5282,7 +5324,10 @@ mod environment_tests {
         assert_eq!(told.contract, Some(CHAT_CONTRACT));
         told.contract = Some(CHAT_THREAD_CONTRACT - 1);
         let sent = notes(&told, &now);
-        assert_eq!(labels(&sent), vec![CHAT_THREAD_LABEL, CHAT_MEMORY_LABEL]);
+        assert_eq!(
+            labels(&sent),
+            vec![CHAT_THREAD_LABEL, CHAT_MEMORY_LABEL, CHAT_GRILLING_LABEL]
+        );
         for words in CHAT_THREAD_RULES {
             assert!(sent[0].text.contains(words), "{words}");
             assert!(chat(&[]).contains(words), "{words}");
@@ -5323,7 +5368,10 @@ mod environment_tests {
         let mut told = now.told();
         told.contract = Some(CHAT_FUSION_CONTRACT - 1);
         let sent = notes(&told, &now);
-        assert_eq!(labels(&sent), vec![CHAT_FUSION_LABEL, CHAT_MEMORY_LABEL]);
+        assert_eq!(
+            labels(&sent),
+            vec![CHAT_FUSION_LABEL, CHAT_MEMORY_LABEL, CHAT_GRILLING_LABEL]
+        );
         for words in FUSION_RULES {
             assert!(sent[0].text.contains(words), "{words}");
             assert!(chat(&[]).contains(words), "{words}");
@@ -5333,7 +5381,10 @@ mod environment_tests {
         assert!(notes(&told, &now).is_empty());
         told.contract = Some(CHAT_THREAD_CONTRACT - 1);
         let sent = notes(&told, &now);
-        assert_eq!(labels(&sent), vec![CHAT_THREAD_LABEL, CHAT_MEMORY_LABEL]);
+        assert_eq!(
+            labels(&sent),
+            vec![CHAT_THREAD_LABEL, CHAT_MEMORY_LABEL, CHAT_GRILLING_LABEL]
+        );
         assert_eq!(sent[0].text.matches(FUSION_RULES[0]).count(), 1);
         took(&mut told, &sent);
         assert!(notes(&told, &now).is_empty());
@@ -5351,7 +5402,7 @@ mod environment_tests {
         let mut told = now.told();
         told.contract = Some(CHAT_MEMORY_CONTRACT - 1);
         let sent = notes(&told, &now);
-        assert_eq!(labels(&sent), vec![CHAT_MEMORY_LABEL]);
+        assert_eq!(labels(&sent), vec![CHAT_MEMORY_LABEL, CHAT_GRILLING_LABEL]);
         for words in [
             "a stable fact about themselves",
             "where they live, their trade, the tools or devices they use, a preference",
@@ -5369,6 +5420,49 @@ mod environment_tests {
         told.contract = Some(CHAT_MEMORY_CONTRACT - 1);
         assert!(notes(&told, &tab).is_empty());
     }
+
+    /// Q78: a Chat told contract 7 hears once how it interviews on cards; open threads hear it
+    /// once, workers nothing; new Chats' and threads' instructions say it.
+    #[test]
+    fn chats_and_threads_from_before_hear_once_to_interview_on_cards() {
+        let now = Current::chat(Vec::new());
+        let mut told = now.told();
+        told.contract = Some(CHAT_GRILLING_CONTRACT - 1);
+        let sent = notes(&told, &now);
+        assert_eq!(labels(&sent), vec![CHAT_GRILLING_LABEL]);
+        took(&mut told, &sent);
+        assert_eq!(told.contract, Some(CHAT_CONTRACT));
+        assert!(notes(&told, &now).is_empty());
+        let note = revision_note(GRILLING_REVISION - 1, false).unwrap();
+        assert!(revision_note(GRILLING_REVISION - 1, true).is_none());
+        let rule = thread(
+            &session("approveForMe"),
+            None,
+            &[],
+            None,
+            None,
+            ProviderKind::Claude,
+            true,
+        );
+        for words in GRILLING_RULES {
+            assert!(sent[0].text.contains(words), "{words}");
+            assert!(chat(&[]).contains(words), "{words}");
+            assert!(note.contains(words), "{words}");
+            assert!(rule.contains(words), "{words}");
+        }
+    }
+
+    /// The words of the interview rule the tests look for.
+    const GRILLING_RULES: &[&str] = &[
+        "(\"grill me\", \"ask me\", \"poke holes in it\")",
+        "map the decisions it needs as a tree",
+        "Look facts up before you ask",
+        "start research workers",
+        "let what you found shape later questions",
+        "titled \"Round N · <topic>\"",
+        "the one you recommend, its why in the option's description",
+        "Don't act on the plan (no building, changing, operating or merging) until the user confirms, on a last card",
+    ];
 
     /// Q77: open threads hear the fusion rule once, workers nothing; a new thread's
     /// instructions hold it.

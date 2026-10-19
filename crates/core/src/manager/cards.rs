@@ -341,6 +341,7 @@ impl SessionManager {
             options,
             recommended,
             Vec::new(),
+            None,
         )
         .await
     }
@@ -352,6 +353,7 @@ impl SessionManager {
         task_id: Option<TaskId>,
         kind: QuestionKind,
         items: Vec<QuestionItem>,
+        title: Option<String>,
     ) -> Result<(Question, oneshot::Receiver<CardAnswer>)> {
         let text = items
             .iter()
@@ -366,6 +368,7 @@ impl SessionManager {
             Vec::new(),
             None,
             items,
+            title,
         )
         .await
     }
@@ -380,6 +383,7 @@ impl SessionManager {
         options: Vec<String>,
         recommended: Option<u32>,
         items: Vec<QuestionItem>,
+        title: Option<String>,
     ) -> Result<(Question, oneshot::Receiver<CardAnswer>)> {
         let request_id = self.request_for(conversation_id, task_id.as_ref()).await;
         let question = Question {
@@ -395,6 +399,7 @@ impl SessionManager {
             items,
             answer: None,
             answers: Vec::new(),
+            title,
             created_at_ms: now_ms(),
             answered_at_ms: None,
             words_id: None,

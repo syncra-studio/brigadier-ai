@@ -70,7 +70,7 @@ export function questionRowWords(question: Question): string {
     case "orchestrator": {
       const count = questionRound(question).length;
       if (open) return count === 1 ? "Asking a question" : "Asking questions";
-      const asked = `Asked ${count} ${count === 1 ? "question" : "questions"}`;
+      const asked = `Asked ${count} ${count === 1 ? "question" : "questions"}${question.title ? ` · ${question.title}` : ""}`;
       return question.answer === null ? `${asked} · withdrawn` : asked;
     }
   }

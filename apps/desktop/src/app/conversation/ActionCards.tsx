@@ -780,6 +780,7 @@ function CardDictate({ owner, disabled }: { owner: string; disabled: boolean }) 
 function ChoiceCard({
   name,
   title,
+  kind,
   detail,
   extra,
   choices,
@@ -804,6 +805,8 @@ function ChoiceCard({
 }: {
   name: "question" | "plan";
   title: ReactNode;
+  /** A few words over the question (a round's title). */
+  kind?: ReactNode;
   detail?: ReactNode;
   /** Between the question and the answers (the files asked about). */
   extra?: ReactNode;
@@ -955,6 +958,7 @@ function ChoiceCard({
             else if (idle) onClose.run();
           }}
           dismissLabel={onClose?.label}
+          kind={kind}
           detail={detail}
           aside={pager}
         >
@@ -1124,6 +1128,7 @@ function QuestionAction({
           ? uncommitted.title
           : <CodeSpans text={item.text} />
       }
+      kind={question.title}
       detail={
         uncommitted ? (
           "Brigadier asks once, before a worker starts from them. They are never committed either way."

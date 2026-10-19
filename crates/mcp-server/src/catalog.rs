@@ -101,7 +101,8 @@ const ASK_USER: &str = "Ask the user what only they can decide (a product choice
 requirement) on one card: 1 to 6 questions, each with 2 to 4 options and the one you recommend; \
 they can always type their own answer. Returns at once: reply with exactly [quiet]; the answers \
 come as an [answer] message in this request. `task`: the task that waits for them, so other work \
-continues.";
+continues; `title`: a few words over the card for a round of a series (an interview's \"Round 2 · \
+Budget\").";
 
 const READ_REPORT: &str = "Read a task's final report again: summary, changes, decisions, \
 verification, open questions and artifact ids. A report from another session of this project \

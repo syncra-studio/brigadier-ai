@@ -39,7 +39,11 @@ answer: string | null,
 /**
  * A round's answers, one per item, once answered.
  */
-answers: Array<string>, createdAtMs: number, answeredAtMs: number | null, 
+answers: Array<string>, 
+/**
+ * A few words over the card, for a round of a series ("Round 2 · Budget").
+ */
+title?: string, createdAtMs: number, answeredAtMs: number | null, 
 /**
  * A merge card the user answered in their own words: the user message they went as (a
  * new request), its queued message while it waits, or the card's own id while they are on

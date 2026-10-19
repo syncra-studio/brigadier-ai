@@ -132,6 +132,7 @@ async fn plant_merge_card(flow: &Flow, answer: Option<&str>) -> Question {
         items: Vec::new(),
         answer: answer.map(str::to_owned),
         answers: answer.map(|a| vec![a.to_owned()]).unwrap_or_default(),
+        title: None,
         created_at_ms: now,
         answered_at_ms: answer.map(|_| now),
         words_id: None,
