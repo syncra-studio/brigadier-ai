@@ -147,11 +147,11 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
   assert.match(rendering.thread.blocked!, /Check blocked is waiting/);
   assert.match(rendering.thread.completed!, /Check completed finished/);
   assert.match(rendering.thread.stopped!, /Check stopped stopped/);
-  // Three at work: a line each (name and a soft "working"), then the finished ones in one row;
-  // what each runs stays in the Workers panel.
+  // Three at work: a line each (name, and a soft "working" only while it works), then the
+  // finished ones in one row; what each runs stays in the Workers panel.
   assert.match(rendering.summary, /Check active working/);
-  assert.match(rendering.summary, /Check blocked working/);
-  assert.match(rendering.summary, /Check queued working/);
+  assert.match(rendering.summary, /Check blocked(?! working)/);
+  assert.match(rendering.summary, /Check queued(?! working)/);
   assert.match(rendering.summary, /1 done · 1 stopped/);
   assert.doesNotMatch(rendering.summary, /\$ /);
   // The Workers panel lists them as the reference does: Active, then Done, one line each; what a

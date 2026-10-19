@@ -2,7 +2,7 @@ import { type FC, useContext, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { WORKERS_LABEL } from "@/app/conversation/Agents";
-import { outcomeWords, workerDone } from "@/app/conversation/workerPresentation";
+import { outcomeWords, workerDone, workerWorking } from "@/app/conversation/workerPresentation";
 import {
   AgentsPanelContext,
   useWorkerName,
@@ -89,7 +89,7 @@ export function WorkerDiffs({ conversationId }: { conversationId: string }) {
 /** How many workers at work still get a line each; more read as one row. */
 const WORKER_LINES = 3;
 
-/** A worker at work on one line: its glyph, its name, a soft "working", and its +N −N. */
+/** A worker at work on one line: its glyph, its name, a soft "working" while it works, and its +N −N. */
 const WorkerLineRow: FC<{ task: Task }> = ({ task }) => {
   const name = useWorkerName(task.id);
   const stat = useBoard((s) => workerStat(task, s.board?.diffs));
@@ -102,7 +102,7 @@ const WorkerLineRow: FC<{ task: Task }> = ({ task }) => {
       icon={<WorkerGlyph taskId={task.id} className="size-4" />}
       meta={stat && <Changes insertions={stat.insertions} deletions={stat.deletions} />}
     >
-      {name} <span className="text-muted-foreground shimmer">working</span>
+      {name}{workerWorking(task) && <span className="text-muted-foreground shimmer"> working</span>}
     </SummaryRowButton>
   );
 };
