@@ -1209,7 +1209,7 @@ pub struct SuggestSetting {
 pub enum SuggestedSetting {
     /// This session's permission level.
     Permission,
-    /// The built-in browser (Settings › Browser).
+    /// Settings › Browser, on or off.
     Browser,
     /// Merging on its own when the work is ready (Settings › Git).
     MergeOnOwn,
@@ -1436,6 +1436,13 @@ pub const THREAD_TOOLS: &[&str] = &[
     "wait_for_replies",
     "read_session",
     "settle_wait",
+    "suggest_setting",
+    "app_state",
+    "read_terminal",
+    "open_in_app",
+    "terminal_run",
+    "show_session",
+    "close_tab",
 ];
 
 /// The thread's tools a Chat has too (Q76): a Chat is a thread without a project, so it runs
@@ -1989,7 +1996,7 @@ pub enum OpenInAppTarget {
     Progress,
     /// What a preview or a background run prints ("preview-1", "run-2").
     Output { id: String },
-    /// A page on the web, or a preview's address, in a Browser tab.
+    /// A page on the web, or a preview's address.
     Url { url: String },
     /// A worker's panel in the Workers sidebar (only ever in front).
     Worker { task: String },

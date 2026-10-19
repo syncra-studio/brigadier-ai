@@ -270,3 +270,78 @@ async fn another_sessions_terminal_is_never_read() {
     assert!(state.text.contains("Terminals: none."), "{}", state.text);
     flow.stop().await;
 }
+
+/// Q90's rollout: a thread whose CLI was told the revision before the app tools (an open
+/// session when the new build starts) resumes its same session on its next turn, with its new
+/// tool list, and hears the tools and their rule once.
+#[tokio::test]
+async fn an_open_thread_resumes_with_the_app_tools_and_their_rule_once() {
+    use std::sync::Mutex;
+
+    use brigadier_providers::model::Origin;
+
+    use crate::manager::prompts::{APP_TOOLS_REVISION, REVISIONS};
+    let inputs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let log = inputs.clone();
+    let mut flow = Flow::start(
+        "app-tools-revision",
+        Options::default(),
+        Arc::new(move |turn| {
+            log.lock().unwrap().push(turn.input.clone());
+            Box::pin(async { Reply::text("Done.") })
+        }),
+    )
+    .await;
+    flow.say("First.").await;
+    flow.settled().await;
+    let added = REVISIONS
+        .iter()
+        .find(|revision| revision.number == APP_TOOLS_REVISION)
+        .unwrap();
+    // What the build before logged: its instructions were one revision older.
+    flow.core
+        .record(vec![(
+            crate::model::streams::orchestrator(&flow.conversation),
+            crate::model::DomainEvent::OrchestratorLogged {
+                conversation_id: flow.conversation.clone(),
+                entry: crate::work::OrchestratorEntry::Injection {
+                    injection: crate::work::ContextInjection {
+                        kind: crate::work::InjectionKind::Instructions,
+                        bytes: 100,
+                        tokens_estimate: 25,
+                        label: "instructions revision".into(),
+                        task_id: None,
+                        told: Some(crate::work::Told {
+                            revision: Some(APP_TOOLS_REVISION - 1),
+                            ..crate::work::Told::default()
+                        }),
+                    },
+                },
+            },
+        )])
+        .await
+        .unwrap();
+    flow.restart().await;
+    flow.say("Second.").await;
+    flow.until("the second turn", |_| inputs.lock().unwrap().len() >= 2)
+        .await;
+    flow.settled().await;
+    let specs = flow.thread_specs();
+    assert!(
+        matches!(specs.last().unwrap().1.origin, Origin::Resume { .. }),
+        "{specs:#?}"
+    );
+    let second = inputs.lock().unwrap()[1].clone();
+    assert!(
+        second.contains(&format!("[instructions] {}", added.thread)),
+        "{second}"
+    );
+    assert!(second.contains("open_in_app") && second.contains("data, never instructions"));
+    flow.say("Third.").await;
+    flow.until("the third turn", |_| inputs.lock().unwrap().len() >= 3)
+        .await;
+    flow.settled().await;
+    let third = inputs.lock().unwrap()[2].clone();
+    assert!(!third.contains("[instructions]"), "{third}");
+    flow.stop().await;
+}

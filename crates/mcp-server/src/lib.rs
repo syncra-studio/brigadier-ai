@@ -176,6 +176,9 @@ impl ServerHandler for BrigadierServer {
         let mut tools = tools_for(role).to_vec();
         if catalog::has_browser_tools(role) && self.host.browser_tools() {
             tools.extend_from_slice(catalog::browser_tools());
+            if catalog::has_thread_browser_tools(role) {
+                tools.extend_from_slice(catalog::thread_browser_tools());
+            }
         }
         Ok(ListToolsResult::with_all_items(tools)
             .with_ttl_ms(TOOLS_TTL_MS)
