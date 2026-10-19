@@ -152,7 +152,7 @@ fn suggest_repos(
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.clone()),
-                last_used_ms: used.max(git_activity_ms(&root)).max(0),
+                last_used_ms: used.max(git_activity_ms(&root, protected)).max(0),
                 project_id: projects
                     .iter()
                     .find(|(_, repo)| *repo == root)
@@ -214,7 +214,13 @@ fn look_for_repos(
             if protected.covers(&path) {
                 continue;
             }
-            if path.join(".git").is_dir() {
+            let unguarded = ProtectedFolders::default();
+            let repo_protected = if protected.is_chosen(&path) {
+                &unguarded
+            } else {
+                protected
+            };
+            if git_entry(&path, repo_protected).is_some_and(|(_, entry)| entry.is_dir()) {
                 repos.push(canonical(&path));
             } else if depth > 1 {
                 queue.push_back((path, depth - 1));
@@ -224,13 +230,66 @@ fn look_for_repos(
     repos
 }
 
+/// Inspect `.git` without following a link until every hop has been checked. Worktree
+/// files remain files here, so the bounded scan still lists only main checkouts.
+fn git_entry(root: &Path, protected: &ProtectedFolders) -> Option<(PathBuf, std::fs::Metadata)> {
+    let path = root.join(".git");
+    if protected.covers(&path) {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if metadata.file_type().is_symlink() {
+        let path = protected.canonicalize(&path)?;
+        let metadata = std::fs::symlink_metadata(&path).ok()?;
+        Some((path, metadata))
+    } else {
+        Some((path, metadata))
+    }
+}
+
 /// When git last touched the repository: its index, HEAD and their logs, in ms since the
 /// epoch (`i64::MIN` when none can be read).
-fn git_activity_ms(root: &Path) -> i64 {
-    let git = root.join(".git");
+fn git_activity_ms(root: &Path, protected: &ProtectedFolders) -> i64 {
+    git_activity_ms_with(root, protected, |path| std::fs::metadata(path))
+}
+
+fn git_activity_ms_with(
+    root: &Path,
+    protected: &ProtectedFolders,
+    mut metadata: impl FnMut(&Path) -> std::io::Result<std::fs::Metadata>,
+) -> i64 {
+    // Choosing a project authorizes reading its Git directory, including an external one.
+    let unguarded = ProtectedFolders::default();
+    let protected = if protected.is_chosen(root) {
+        &unguarded
+    } else {
+        protected
+    };
+    let Some((mut git, entry)) = git_entry(root, protected) else {
+        return i64::MIN;
+    };
+    if entry.is_file() {
+        let Some(target) = std::fs::read_to_string(&git)
+            .ok()
+            .and_then(|text| {
+                text.strip_prefix("gitdir:")
+                    .map(|path| PathBuf::from(path.trim()))
+            })
+            .filter(|path| !path.as_os_str().is_empty())
+            .and_then(|path| protected.canonicalize(&git.parent()?.join(path)))
+        else {
+            return i64::MIN;
+        };
+        git = target;
+    } else if !entry.is_dir() {
+        return i64::MIN;
+    }
     ["index", "HEAD", "logs/HEAD", "FETCH_HEAD"]
         .iter()
-        .filter_map(|file| std::fs::metadata(git.join(file)).ok()?.modified().ok())
+        .filter_map(|file| {
+            let path = protected.canonicalize(&git.join(file))?;
+            metadata(&path).ok()?.modified().ok()
+        })
         .map(ms_since_epoch)
         .max()
         .unwrap_or(i64::MIN)
@@ -255,8 +314,10 @@ mod tests {
 
     impl Temp {
         fn new() -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("brigadier-find-repos-{}", uuid::Uuid::now_v7()));
+            let dir = std::env::temp_dir().join(format!(
+                "20261018-1945-issues-run-2-w41-find-repos-{}",
+                uuid::Uuid::now_v7()
+            ));
             std::fs::create_dir_all(&dir).unwrap();
             Self(canonical(&dir))
         }
@@ -448,13 +509,123 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn git_links_into_guarded_folders_are_not_listed() {
+        let temp = Temp::new();
+        let home = temp.0.join("home");
+        repo(&home.join("Documents/hidden"));
+        repo(&home.join("code/ordinary"));
+        std::fs::create_dir_all(home.join("code/app")).unwrap();
+        std::os::unix::fs::symlink("../../Documents/hidden/.git", home.join("code/app/.git"))
+            .unwrap();
+        let protected = ProtectedFolders::macos(Some(&home), []);
+        assert_eq!(
+            look_for_repos(
+                &[(home.join("code"), CODE_DEPTH)],
+                &protected,
+                Instant::now() + LOOK_BUDGET,
+            ),
+            vec![home.join("code/ordinary")],
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_links_into_guarded_folders_have_no_activity_reads() {
+        let temp = Temp::new();
+        let home = temp.0.join("home");
+        repo(&home.join("Documents/hidden"));
+        std::fs::write(
+            home.join("Documents/hidden/.git/HEAD"),
+            "ref: refs/heads/main",
+        )
+        .unwrap();
+        std::fs::create_dir_all(home.join("code")).unwrap();
+        std::os::unix::fs::symlink("../Documents/hidden/.git", home.join("code/hop")).unwrap();
+        let protected = ProtectedFolders::macos(Some(&home), []);
+        for name in ["direct", "chained", "relative-file", "absolute-file"] {
+            let root = home.join("code").join(name);
+            std::fs::create_dir_all(&root).unwrap();
+            let entry = root.join(".git");
+            match name {
+                "direct" => {
+                    std::os::unix::fs::symlink("../../Documents/hidden/.git", entry).unwrap()
+                }
+                "chained" => std::os::unix::fs::symlink("../hop", entry).unwrap(),
+                "relative-file" => {
+                    std::fs::write(entry, "gitdir: ../../Documents/hidden/.git\n").unwrap()
+                }
+                _ => std::fs::write(
+                    entry,
+                    format!("gitdir: {}\n", home.join("Documents/hidden/.git").display()),
+                )
+                .unwrap(),
+            }
+            let mut reads = Vec::new();
+            assert_eq!(
+                git_activity_ms_with(&root, &protected, |path| {
+                    reads.push(path.to_owned());
+                    std::fs::metadata(path)
+                }),
+                i64::MIN,
+                "{name}",
+            );
+            assert!(
+                reads.is_empty(),
+                "{name} must not stat the target: {reads:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_git_links_worktree_files_and_chosen_projects_keep_their_activity() {
+        let temp = Temp::new();
+        let home = temp.0.join("home");
+        let ordinary = home.join("code/ordinary");
+        let linked = home.join("code/linked");
+        let worktree = home.join("code/worktree");
+        let chosen = home.join("code/chosen");
+        repo(&ordinary);
+        repo(&home.join("storage"));
+        repo(&home.join("Documents/hidden"));
+        for path in [&linked, &worktree, &chosen] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        for path in [
+            &ordinary,
+            &home.join("storage"),
+            &home.join("Documents/hidden"),
+        ] {
+            std::fs::write(path.join(".git/HEAD"), "ref: refs/heads/main").unwrap();
+        }
+        std::os::unix::fs::symlink("../../storage/.git", linked.join(".git")).unwrap();
+        std::fs::write(worktree.join(".git"), "gitdir: ../../storage/.git\n").unwrap();
+        std::os::unix::fs::symlink("../../Documents/hidden/.git", chosen.join(".git")).unwrap();
+        let protected = ProtectedFolders::macos(Some(&home), [chosen.clone()]);
+        for path in [&ordinary, &linked, &worktree, &chosen] {
+            assert!(git_activity_ms(path, &protected) > 0, "{}", path.display());
+        }
+        let mut found = look_for_repos(
+            &[(home.join("code"), CODE_DEPTH)],
+            &protected,
+            Instant::now() + LOOK_BUDGET,
+        );
+        found.sort();
+        assert_eq!(found, vec![chosen, linked, ordinary]);
+    }
+
     #[test]
     fn git_activity_is_the_newest_of_its_files() {
         let dir = Temp::new();
-        assert_eq!(git_activity_ms(&dir.0), i64::MIN);
+        assert_eq!(
+            git_activity_ms(&dir.0, &ProtectedFolders::default()),
+            i64::MIN
+        );
         repo(&dir.0);
         std::fs::write(dir.0.join(".git/HEAD"), "ref: refs/heads/main").unwrap();
         let now = ms_since_epoch(SystemTime::now());
-        assert!((now - git_activity_ms(&dir.0)).abs() < 60_000);
+        assert!((now - git_activity_ms(&dir.0, &ProtectedFolders::default())).abs() < 60_000);
     }
 }

@@ -135,6 +135,11 @@ impl ProtectedFolders {
         (!self.covers(&path)).then_some(path)
     }
 
+    /// Whether the user chose this repository or a parent project folder.
+    pub(super) fn is_chosen(&self, path: &Path) -> bool {
+        self.chosen.iter().any(|chosen| within(path, chosen))
+    }
+
     /// Whether `path` is in a guarded folder the user didn't choose, told from the path alone:
     /// nothing on disk is read, not even to follow a link. A relative path is, as there is no
     /// telling where it is.
@@ -245,6 +250,34 @@ mod tests {
         );
         std::fs::remove_dir_all(&home).unwrap();
         assert!(canonicalized.is_empty(), "resolved {canonicalized:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_links_are_rejected_before_target_metadata() {
+        let home = std::env::temp_dir().join(format!(
+            "20261018-1945-issues-run-2-w41-git-links-{}",
+            uuid::Uuid::now_v7()
+        ));
+        std::fs::create_dir_all(home.join("Documents/git")).unwrap();
+        std::fs::create_dir_all(home.join("code/app")).unwrap();
+        let home = home.canonicalize().unwrap();
+        std::os::unix::fs::symlink("../../Documents/git", home.join("code/app/.git")).unwrap();
+        std::os::unix::fs::symlink("app/.git", home.join("code/hop")).unwrap();
+        let protected = ProtectedFolders::macos(Some(&home), []);
+        let mut reads = Vec::new();
+        for path in ["code/app/.git", "code/hop", "code/app/.git/HEAD"] {
+            assert!(
+                protected
+                    .canonicalize_with(&home.join(path), |path| {
+                        reads.push(path.to_owned());
+                        path.canonicalize()
+                    })
+                    .is_none()
+            );
+        }
+        std::fs::remove_dir_all(&home).unwrap();
+        assert!(reads.is_empty(), "must not stat through .git: {reads:?}");
     }
 
     #[cfg(unix)]
