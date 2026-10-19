@@ -415,7 +415,7 @@ function StandInPill({
           data-slot="stand-in-model"
           aria-label={`${text}. ${fallback.reason} Open Providers.`}
           onClick={() => openSettings("providers")}
-          className="h-pill px-pill rounded-capsule bg-warning/15 text-warning hover:bg-warning/25 inline-flex max-w-sm min-w-0 shrink items-center gap-1 text-xs transition-colors"
+          className="h-pill px-pill-x rounded-capsule bg-warning/15 text-warning hover:bg-warning/25 inline-flex max-w-sm min-w-0 shrink items-center gap-1 text-xs transition-colors"
         >
           <Shuffle aria-hidden className="size-icon-xs shrink-0" />
           {/* A narrow composer keeps the icon; the rest is on hover. */}
@@ -451,7 +451,7 @@ function WaitingPill({ wait }: { wait: QuotaWait }) {
           data-slot="quota-wait-pill"
           aria-label={`${text}. ${reason} Open Routing settings.`}
           onClick={() => openSettings("routing")}
-          className="h-pill px-pill rounded-capsule bg-warning/15 text-warning hover:bg-warning/25 inline-flex max-w-sm min-w-0 shrink items-center gap-1 text-xs transition-colors"
+          className="h-pill px-pill-x rounded-capsule bg-warning/15 text-warning hover:bg-warning/25 inline-flex max-w-sm min-w-0 shrink items-center gap-1 text-xs transition-colors"
         >
           <Clock aria-hidden className="size-icon-xs shrink-0" />
           {/* A narrow composer keeps the icon; the rest is on hover. */}
