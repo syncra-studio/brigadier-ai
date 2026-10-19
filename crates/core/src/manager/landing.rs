@@ -847,31 +847,37 @@ impl SessionManager {
     }
 
     async fn landed(&self, task: &Task, target: &str, from: &Oid, new_tip: &Oid, commits: u32) {
-        self.refresh_changes(
-            &task.conversation_id,
-            task.request_id.as_deref(),
-            super::request_changes::Refresh::Landing { from, tip: new_tip },
-        )
+        // Each step on the heap: an unoptimized build gives every inline `.await` its own stack
+        // slots at once, and this frame alone took a fifth of a runtime thread's stack (#356).
+        crate::heap(|| {
+            self.refresh_changes(
+                &task.conversation_id,
+                task.request_id.as_deref(),
+                super::request_changes::Refresh::Landing { from, tip: new_tip },
+            )
+        })
         .await;
         // Counted before the task is final, until its review is stored: a held merge waits.
         let review_due = self.conv(&task.conversation_id).ok().map(ReviewDue::new);
         // The thread's own commits below the landing get their review; the landing has its own.
         if let Ok(repo) = self.task_repo(task) {
-            self.thread_branch_landed(&task.conversation_id, &repo, target, from, new_tip)
-                .await;
-        }
-        let tasks = self.landed_with(task).await;
-        // The session's own landing on a held merge's branch is covered by its consent.
-        self.move_held_merge(&task.conversation_id, target, from, new_tip)
+            crate::heap(|| {
+                self.thread_branch_landed(&task.conversation_id, &repo, target, from, new_tip)
+            })
             .await;
+        }
+        let tasks = crate::heap(|| self.landed_with(task)).await;
+        // The session's own landing on a held merge's branch is covered by its consent.
+        crate::heap(|| self.move_held_merge(&task.conversation_id, target, from, new_tip)).await;
         // A fix of landed work's review findings gets no review of its own, only the
         // targeted re-check of a finding the thread marked high (SESSION-FIXES-PLAN.md Q6.1).
         let fixed = match (&task.role, &task.subject) {
-            (Some(crate::work::WorkerRole::Fix), Some(subject)) => self
-                .task_by_id(&task.conversation_id, subject)
-                .await
-                .ok()
-                .filter(|subject| subject.landed.is_some()),
+            (Some(crate::work::WorkerRole::Fix), Some(subject)) => {
+                crate::heap(|| self.task_by_id(&task.conversation_id, subject))
+                    .await
+                    .ok()
+                    .filter(|subject| subject.landed.is_some())
+            }
             _ => None,
         };
         // The landed workers stay resumable for their review's findings, kept before the
@@ -880,18 +886,19 @@ impl SessionManager {
         // to the same session.
         let mut held = std::collections::HashSet::new();
         for landed in &tasks {
-            if self.hold_for_review(landed, target, fixed.is_some()).await {
+            if crate::heap(|| self.hold_for_review(landed, target, fixed.is_some())).await {
                 held.insert(landed.id.clone());
             }
         }
         for landed in &tasks {
-            let updated = self
-                .update_task(&landed.conversation_id, &landed.id, |t| {
+            let updated = crate::heap(|| {
+                self.update_task(&landed.conversation_id, &landed.id, |t| {
                     t.landed = Some(new_tip.0.clone());
                     t.landing = None;
                     t.landing_from = None;
                 })
-                .await;
+            })
+            .await;
             // Its report enters the Brain now, at the commit that landed.
             if let Ok(updated) = &updated
                 && let Some(report) = &updated.report
@@ -899,40 +906,41 @@ impl SessionManager {
                 self.learn_report(updated, report, None);
             }
         }
-        self.orchestrator_step(
-            &task.conversation_id,
-            OrchestratorStepKind::Landed {
-                task_ids: tasks.iter().map(|t| t.id.clone()).collect(),
-                commits,
-                branch: target.to_owned(),
-                head: new_tip.0.clone(),
-            },
-        )
+        crate::heap(|| {
+            self.orchestrator_step(
+                &task.conversation_id,
+                OrchestratorStepKind::Landed {
+                    task_ids: tasks.iter().map(|t| t.id.clone()).collect(),
+                    commits,
+                    branch: target.to_owned(),
+                    head: new_tip.0.clone(),
+                },
+            )
+        })
         .await;
-        let request = self
-            .request_for(&task.conversation_id, Some(&task.id))
-            .await;
-        self.record_decision(
-            &task.conversation_id,
-            request,
-            DecisionSource::Task {
-                task_id: task.id.clone(),
-            },
-            DecisionKind::Routine,
-            landed_line(task, target),
-            format!("{} landed fast-forward.", commits_word(commits)),
-        )
+        let request = crate::heap(|| self.request_for(&task.conversation_id, Some(&task.id))).await;
+        crate::heap(|| {
+            self.record_decision(
+                &task.conversation_id,
+                request,
+                DecisionSource::Task {
+                    task_id: task.id.clone(),
+                },
+                DecisionKind::Routine,
+                landed_line(task, target),
+                format!("{} landed fast-forward.", commits_word(commits)),
+            )
+        })
         .await;
         for landed in &tasks {
-            self.set_phase_stage(landed, PhaseStage::Done).await;
+            crate::heap(|| self.set_phase_stage(landed, PhaseStage::Done)).await;
         }
         // The session's full checks are due at the new tip: once, in the background, for
         // every landing close to it (SESSION-FIXES-PLAN.md §11).
         if let Ok(repo) = self.task_repo(task) {
-            let request = self
-                .request_for(&task.conversation_id, Some(&task.id))
-                .await;
-            self.checks_due(&task.conversation_id, &repo, target, new_tip, request)
+            let request =
+                crate::heap(|| self.request_for(&task.conversation_id, Some(&task.id))).await;
+            crate::heap(|| self.checks_due(&task.conversation_id, &repo, target, new_tip, request))
                 .await;
         }
         // The task branches are fully on the target now; they were Brigadier's, so they go
@@ -948,7 +956,7 @@ impl SessionManager {
         for landed in &tasks {
             let branch = landed.workspace.as_ref().and_then(|w| w.branch.clone());
             let rebuilt = rebuilt.clone();
-            self.dispose_task(landed, TaskState::Landed).await;
+            crate::heap(|| self.dispose_task(landed, TaskState::Landed)).await;
             // A held branch goes when its batch settles.
             let branch = branch.filter(|_| !held.contains(&landed.id));
             if let (Some(branch), Ok(repo)) = (branch, self.task_repo(landed)) {
