@@ -131,7 +131,7 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
     <div className="onboarding-step flex min-h-0 flex-1 flex-col">
       <StepHeader
         title="Choose your projects"
-        description="These are the repositories you have worked in with Claude Code and Codex. Add the ones you want to use with Brigadier."
+        description="Pick the projects you want to work on."
       />
       <div className="mt-12 flex min-h-0 flex-1 flex-col gap-3">
         <div className="shrink-0 px-6">
@@ -180,12 +180,11 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
             {candidates === null ? (
               <div className="text-muted-foreground flex flex-col items-center justify-center gap-3 py-16 text-sm">
                 <Spinner className="size-icon-md animate-spin" />
-                Looking for projects in your Claude Code and Codex history…
+                Looking for projects in your history…
               </div>
             ) : candidates.length === 0 ? (
               <p className="text-muted-foreground bg-card rounded-surface border px-4 py-6 text-center text-sm">
-                No repositories found in your Claude Code or Codex history. Add a folder to start
-                with one.
+                No repositories found in your history. Add a folder to start with one.
               </p>
             ) : (
               <ul className="onboarding-project-grid">
