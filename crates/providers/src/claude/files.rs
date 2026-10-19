@@ -963,12 +963,104 @@ mod staging_tests {
 mod link_tests {
     use super::*;
 
+    const GIT_PATHS: &[&str] = &[
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_PREFIX",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ];
+
+    /// Run the real link fixture in a child; inherited Git paths must not reach the caller.
+    #[test]
+    fn link_git_helpers_leave_the_callers_repository_untouched() {
+        let scratch = std::env::temp_dir().join(format!(
+            "20261018-1945-issues-run-2-w42-provider-git-env-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let caller = scratch.join("caller");
+        std::fs::create_dir_all(&caller).unwrap();
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(scratch.clone());
+        std::fs::create_dir_all(scratch.join("temp")).unwrap();
+        let caller_git = |args: &[&str]| {
+            let mut command = std::process::Command::new("git");
+            for key in GIT_PATHS {
+                command.env_remove(key);
+            }
+            let output = command
+                .current_dir(&caller)
+                .args([
+                    "-c",
+                    "user.name=T",
+                    "-c",
+                    "user.email=t@example.com",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            output.stdout
+        };
+        caller_git(&["init", "-q"]);
+        std::fs::write(caller.join("caller.txt"), "keep this\n").unwrap();
+        caller_git(&["add", "caller.txt"]);
+        caller_git(&["commit", "-qm", "Caller"]);
+        let head = caller_git(&["rev-parse", "HEAD"]);
+        let index = std::fs::read(caller.join(".git/index")).unwrap();
+        for all_paths in [false, true] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            for key in GIT_PATHS {
+                command.env_remove(key);
+            }
+            command
+                .args([
+                    "--exact",
+                    &format!(
+                        "{}::a_sessions_folder_links_the_projects_own_setup",
+                        module_path!().split_once("::").unwrap().1
+                    ),
+                    "--nocapture",
+                ])
+                .env("GIT_DIR", caller.join(".git"))
+                .env("TMPDIR", scratch.join("temp"));
+            if all_paths {
+                command
+                    .env("GIT_COMMON_DIR", caller.join(".git"))
+                    .env("GIT_WORK_TREE", &caller)
+                    .env("GIT_INDEX_FILE", caller.join(".git/index"))
+                    .env("GIT_OBJECT_DIRECTORY", caller.join(".git/objects"))
+                    .env(
+                        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                        caller.join(".git/objects"),
+                    )
+                    .env("GIT_PREFIX", "caller/");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(caller_git(&["rev-parse", "HEAD"]), head);
+            assert_eq!(std::fs::read(caller.join(".git/index")).unwrap(), index);
+            assert!(output.status.success(), "{output:?}");
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        }
+    }
+
     fn git(dir: &Path, args: &[&str]) {
-        let status = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .status()
-            .unwrap();
+        let mut command = std::process::Command::new("git");
+        for key in GIT_PATHS {
+            command.env_remove(key);
+        }
+        let status = command.args(args).current_dir(dir).status().unwrap();
         assert!(status.success(), "git {args:?}");
     }
 

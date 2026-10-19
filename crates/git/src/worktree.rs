@@ -653,6 +653,16 @@ mod tests {
     use crate::{Git, LandOutcome, LandRequest, Oid, Repo, SeriesOutcome, Worktree, WorktreeSpec};
     use std::{ffi::OsString, fs, path::PathBuf};
 
+    const GIT_PATHS: &[&str] = &[
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_PREFIX",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ];
+
     const AUTHOR: &str = "--author=Worker <worker@example.com>";
     const DATE: &str = "--date=2001-02-03T04:05:06+0100";
 
@@ -795,6 +805,48 @@ mod tests {
         assert!(paths(&f.wt.repo, &kept).contains(&"notes.md".to_owned()));
     }
 
+    /// Use a disposable caller and a child test process, never the shared test environment.
+    #[test]
+    fn worktree_git_helpers_leave_the_callers_repository_untouched() {
+        let f = fixture("20261018-1945-issues-run-2-w42-git-env");
+        let caller = f.repo.root().to_owned();
+        let head = text(&f.repo, &["rev-parse", "HEAD"]);
+        let index = fs::read(caller.join(".git/index")).unwrap();
+        for all_paths in [false, true] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            for key in GIT_PATHS {
+                command.env_remove(key);
+            }
+            command
+                .args([
+                    "--exact",
+                    &format!(
+                        "{}::commits_on_no_branch_are_told_apart",
+                        module_path!().split_once("::").unwrap().1
+                    ),
+                    "--nocapture",
+                ])
+                .env("GIT_DIR", caller.join(".git"));
+            if all_paths {
+                command
+                    .env("GIT_COMMON_DIR", caller.join(".git"))
+                    .env("GIT_WORK_TREE", &caller)
+                    .env("GIT_INDEX_FILE", caller.join(".git/index"))
+                    .env("GIT_OBJECT_DIRECTORY", caller.join(".git/objects"))
+                    .env(
+                        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                        caller.join(".git/objects"),
+                    )
+                    .env("GIT_PREFIX", "caller/");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(text(&f.repo, &["rev-parse", "HEAD"]), head);
+            assert_eq!(std::fs::read(caller.join(".git/index")).unwrap(), index);
+            assert!(output.status.success(), "{output:?}");
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        }
+    }
+
     #[test]
     fn commits_on_no_branch_are_told_apart() {
         let f = fixture("only-here");
@@ -810,7 +862,11 @@ mod tests {
         assert!(!f.wt.commits_only_here().expect("told"));
         // A commit made on the detached checkout is on no branch.
         let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
+            let mut command = std::process::Command::new("git");
+            for key in GIT_PATHS {
+                command.env_remove(key);
+            }
+            let out = command
                 .current_dir(wt.repo.root())
                 .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
                 .args(args)
