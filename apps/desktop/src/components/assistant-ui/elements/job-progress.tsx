@@ -186,11 +186,11 @@ export function JobProgress({
                 className={cn(
                   mono,
                   "inline-flex items-center gap-1",
-                  at === "failed" ? "text-destructive" : at === "pending" ? "text-muted-foreground" : "text-foreground",
+                  at === "failed" ? "text-destructive" : at === "active" ? "text-foreground" : "text-muted-foreground",
                 )}
               >
                 <StageMark state={at} />
-                <span className={cn(at === "active" && "shimmer motion-reduce:animate-none")}>{item.name}</span>
+                <span className={cn(at === "active" && "shimmer shimmer-step motion-reduce:animate-none")}>{item.name}</span>
               </span>
             );
           })}

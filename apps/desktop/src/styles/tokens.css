@@ -769,6 +769,8 @@
   --find-match-active: oklch(0.66 0.18 50 / 85%);
   /* "Awaiting approval": live words, fainter than the work's. */
   --live-text-quiet: color-mix(in oklab, var(--foreground) 30%, transparent);
+  /* The Job card's step at work: live words, brighter than the steps around it. */
+  --live-step: color-mix(in oklab, var(--foreground) 85%, transparent);
   /* The titlebar's icon buttons: the glyph at rest, and the wash while hovered, held down,
      switched on (aria-pressed) and switched on and hovered. All follow the foreground, so a
      light theme gets its own. */
