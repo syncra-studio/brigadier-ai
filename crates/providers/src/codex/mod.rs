@@ -183,9 +183,7 @@ impl Codex {
         match read.account? {
             p::Account::Chatgpt { email, plan_type } => Some((
                 email.filter(|email| !email.is_empty()),
-                serde_json::to_value(plan_type)
-                    .ok()
-                    .and_then(|plan| plan.as_str().map(str::to_owned)),
+                plan_name(plan_type).map(str::to_owned),
             )),
             p::Account::ApiKey | p::Account::AmazonBedrock { .. } => Some((None, None)),
         }
@@ -325,6 +323,28 @@ impl Codex {
         reader.abort();
         result
     }
+}
+
+/// The plan's name as people know it, for "Connected · Pro plan"; none when Codex doesn't know.
+fn plan_name(plan: p::PlanType) -> Option<&'static str> {
+    use p::PlanType as P;
+    Some(match plan {
+        P::Free => "Free",
+        P::Go => "Go",
+        P::Plus => "Plus",
+        P::Pro => "Pro",
+        P::Prolite => "Pro Lite",
+        P::Promax => "Pro Max",
+        P::Team => "Team",
+        P::SelfServeBusinessProlite | P::SelfServeBusinessUsageBased | P::Business => "Business",
+        P::Ent26 | P::EnterpriseCbpAutomation | P::EnterpriseCbpUsageBased | P::Enterprise => {
+            "Enterprise"
+        }
+        P::Edu => "Edu",
+        P::EduPlus => "Edu Plus",
+        P::EduPro => "Edu Pro",
+        P::Unknown => return None,
+    })
 }
 
 /// `codex app-server`'s arguments for a session (`None`: a control connection).
@@ -2252,6 +2272,18 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plans_read_as_people_name_them() {
+        assert_eq!(plan_name(p::PlanType::Prolite), Some("Pro Lite"));
+        assert_eq!(plan_name(p::PlanType::Plus), Some("Plus"));
+        assert_eq!(
+            plan_name(p::PlanType::SelfServeBusinessUsageBased),
+            Some("Business")
+        );
+        assert_eq!(plan_name(p::PlanType::Ent26), Some("Enterprise"));
+        assert_eq!(plan_name(p::PlanType::Unknown), None);
+    }
 
     /// Codex's own browser stays off for every session: agents never get a browser of their
     /// own beside Brigadier's (the user's alone, gated by Settings › Browser).

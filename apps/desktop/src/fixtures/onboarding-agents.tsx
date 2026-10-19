@@ -4,7 +4,8 @@
  * (offline), Try again, the install, the browser sign-in, Cancel, Connect again and the sign-in
  * being noticed, writing what each column said at every step to #onboarding-agents-result
  * (OnboardingAgentsRender.test.ts reads it). The faked daemon moves on only when the drive says,
- * so every step is read as it stands. Without it the step stays as it opens, for screenshots.
+ * so every step is read as it stands. Without it the step stays as it opens, for screenshots;
+ * ?plan= names the plan Codex reports.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -38,7 +39,7 @@ function showClaude() {
       view: {
         providers: [
           { ...claude, status: claudeStatus },
-          { ...codex, status: status("codex", { plan: "pro" }) },
+          { ...codex, status: status("codex", { plan: params.get("plan") ?? "pro" }) },
         ],
         sessions: [],
         fixtures: [],
