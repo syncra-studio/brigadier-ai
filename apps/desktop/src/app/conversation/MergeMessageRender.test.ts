@@ -29,8 +29,8 @@ const render = async (t: Parameters<typeof renderFixturePage>[0], query = "") =>
 test("a turn's proofs show captioned in its Preview card under its answer", { timeout: 60000 }, async (t) => {
   const seen = await render(t);
   assert.deepEqual(seen.proofs.map(({ caption, ...rest }) => ({ ...rest, caption: caption.replace(/\d{1,2}:\d{2}.*$/, "").trim() })), [
-    { kind: "image", image: "The install section, fixed", video: null, caption: "1.The install section, fixed" },
-    { kind: "video", image: null, video: "data:video/webm;", caption: "2.install.webm" },
+    { kind: "screenshot", image: "The install section, fixed", video: null, caption: "1.The install section, fixed" },
+    { kind: "recording", image: null, video: "data:video/webm;", caption: "2.install.webm" },
   ]);
   assert.equal(seen.inCard, true);
   assert.equal(seen.title, "Screenshots and recordings");

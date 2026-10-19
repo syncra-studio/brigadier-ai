@@ -12,13 +12,15 @@ type Look = {
   count: string | null;
   buttons: string[];
   heading: string | null;
+  where: string | null;
+  shell: [string | null, string | null] | null;
   captions: string[];
   thumb: number | null;
   fit: string | null;
 };
 type Seen = {
   error?: string;
-  cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only", Look>;
+  cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only" | "test-output", Look>;
   opened: string | null;
   browserTabs: number;
   menu: string[];
@@ -37,7 +39,7 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   const running = cases.running;
   assert.deepEqual([running.state, running.title, running.standing, running.target, running.count], ["running", "Web preview", "Running", "localhost:3000", null]);
   assert.deepEqual(running.buttons, ["Open", "Open in", "Fold the proofs"]);
-  assert.equal(running.heading, "2 screenshots");
+  assert.deepEqual([running.where, running.heading], ["Checked in the browser", "2 screenshots"]);
   assert.deepEqual(running.captions, CAPTIONS);
   assert.equal(running.thumb, 178);
   assert.equal(running.fit, "50% 0%");
@@ -56,6 +58,14 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   const alone = cases["proofs-only"];
   assert.deepEqual([alone.title, alone.count, alone.buttons], ["Screenshots and recordings", "1 screenshot, 1 recording", ["Fold the proofs"]]);
   assert.deepEqual(alone.captions, ["1. The install section, fixed 10:11 PM", "2. install.webm 10:13 PM"]);
+  // A test run's output: its last five lines under its command, counted as a log.
+  const tests = cases["test-output"];
+  assert.deepEqual([tests.title, tests.count, tests.buttons], ["Test output", "1 log", ["Fold the proofs"]]);
+  assert.deepEqual(tests.shell, [
+    "$ npm test",
+    "✓ rejects a title longer than 200 characters\n✓ accepts years 0000 to 0099\n✓ marks a past due date as overdue\n✓ a todo due today is not overdue\n15 passing (412ms)",
+  ]);
+  assert.deepEqual(tests.captions, ["1. The todo tests 10:15 PM"]);
   // Open goes where local pages go (a Browser tab of the session); ▾ picks where.
   assert.equal(seen.opened, "http://localhost:3000/");
   assert.equal(seen.browserTabs, 1);

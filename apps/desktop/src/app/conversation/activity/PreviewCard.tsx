@@ -1,14 +1,15 @@
-import { ArrowUpRight, ChevronDown, ChevronUp, Globe, ImageSquare, Play } from "@openai/apps-sdk-ui/components/Icon";
+import { ArrowUpRight, ChevronDown, ChevronUp, Globe, ImageSquare, Play, Terminal } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useState } from "react";
 
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
+import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { Pill, RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { buttonVariants } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import type { OrchestratorStepKind, Preview } from "@/ipc/generated";
+import type { OrchestratorStepKind, Preview, ProofKind } from "@/ipc/generated";
 import { openUrl } from "@/ipc/client";
 import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -35,16 +36,51 @@ function failed(cause: unknown): void {
   toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
 }
 
-/** "2 screenshots", "1 recording", "2 screenshots, 1 recording". */
+/** What a proof is: as it was recorded, else (a proof from before that) by its file's type. */
+function kindOf(proof: Proof): ProofKind {
+  if (proof.kind) return proof.kind;
+  return proof.mime.startsWith("video/") ? "recording" : proof.mime.startsWith("image/") ? "screenshot" : "log";
+}
+
+/** Log and test output: read as text, not looked at. */
+const printed = (proof: Proof) => ["log", "test"].includes(kindOf(proof));
+
+/** Each kind of proof, by how it is counted: test output counts as a log. */
+const NOUNS = [
+  { kinds: ["screenshot"], one: "screenshot", many: "screenshots" },
+  { kinds: ["recording"], one: "recording", many: "recordings" },
+  { kinds: ["log", "test"], one: "log", many: "logs" },
+];
+
+/** "2 screenshots", "1 recording", "2 screenshots, 1 recording", "1 log". */
 function proofCount(proofs: readonly Proof[]): string {
-  const videos = proofs.filter((proof) => proof.mime.startsWith("video/")).length;
-  const images = proofs.length - videos;
-  return [
-    images > 0 && `${images} ${images === 1 ? "screenshot" : "screenshots"}`,
-    videos > 0 && `${videos} ${videos === 1 ? "recording" : "recordings"}`,
-  ]
-    .filter(Boolean)
-    .join(", ");
+  return NOUNS.flatMap(({ kinds, one, many }) => {
+    const count = proofs.filter((proof) => kinds.includes(kindOf(proof))).length;
+    return count > 0 ? [`${count} ${count === 1 ? one : many}`] : [];
+  }).join(", ");
+}
+
+/** A card of proofs alone, by what they are: "Screenshots", "Screenshots and recordings", "Test output". */
+function proofsTitle(proofs: readonly Proof[]): string {
+  if (proofs.every((proof) => kindOf(proof) === "test")) return "Test output";
+  const nouns = NOUNS.filter(({ kinds }) => proofs.some((proof) => kinds.includes(kindOf(proof)))).map(({ many }) => many);
+  const words = nouns.length > 1 ? `${nouns.slice(0, -1).join(", ")} and ${nouns.at(-1)}` : (nouns[0] ?? "");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Where the proofs were taken, when they all say and it is one place: "Checked in the browser". */
+function takenWhere(proofs: readonly Proof[]): string | null {
+  if (proofs.length === 0 || proofs.some(printed)) return null;
+  return proofs.every((proof) => proof.takenOn !== undefined && /^https?:\/\//.test(proof.takenOn)) ? "Checked in the browser" : null;
+}
+
+/** The lines of log or test output shown: its last ones. */
+const LAST_LINES = 5;
+
+/** A text file read as a data URL, as words. */
+function textOf(url: string): string {
+  const data = url.slice(url.indexOf(",") + 1);
+  return new TextDecoder().decode(Uint8Array.from(atob(data), (char) => char.charCodeAt(0)));
 }
 
 /** A preview record for the page: a local server on the same port, the latest one started. */
@@ -108,23 +144,27 @@ const OpenPill: FC<{ url: string; conversationId: string | null }> = ({ url, con
 /** The proofs, two to a row: each cropped to the top of what it shows, "1. What it shows" and when under it. */
 const Proofs: FC<{ proofs: readonly { proof: Proof; atMs: number | undefined }[]; conversationId: string | null }> = ({ proofs, conversationId }) => {
   const media = useThreadImages(conversationId, proofs.map(({ proof }) => proof.id));
-  const images = proofs.flatMap(({ proof }, index) => (proof.mime.startsWith("image/") ? [{ name: proof.caption ?? proof.name, url: media[index]?.url ?? null }] : []));
+  const images = proofs.flatMap(({ proof }, index) => (kindOf(proof) === "screenshot" ? [{ name: proof.caption ?? proof.name, url: media[index]?.url ?? null }] : []));
   const frame = "border-border block h-44.5 w-full overflow-hidden rounded-lg border";
   return (
     <div data-slot="turn-proofs" className="grid grid-cols-2 gap-3">
       {proofs.map(({ proof, atMs }, index) => {
         const { url, error } = media[index] ?? { url: null, error: null };
-        // TODO(w105): what the proof shows when the thread gave no caption, and its kind (log, test output).
+        // What it shows in the thread's words; a proof taken without them goes by its file's name.
         const label = proof.caption ?? proof.name;
-        const kind = proof.mime.startsWith("video/") ? "video" : "image";
+        const kind = kindOf(proof);
         let shown: ReactNode;
-        if (!url) {
+        if (url && printed(proof)) {
+          // Its last lines, under the command or file it came from.
+          const lines = textOf(url).trimEnd().split("\n");
+          shown = <ShellBox command={proof.takenOn ?? proof.name} output={lines.slice(-LAST_LINES).join("\n")} status="inProgress" exit={null} />;
+        } else if (!url) {
           shown = (
             <div title={error ?? label} className={cn(frame, "bg-foreground/5 text-muted-foreground flex items-center justify-center p-1 text-center text-xs")}>
               {error ? "Not available" : <span className="shimmer">Loading</span>}
             </div>
           );
-        } else if (kind === "video") {
+        } else if (kind === "recording") {
           shown = <video src={url} controls muted playsInline preload="metadata" aria-label={label} title={label} className={cn(frame, "object-cover object-top")} />;
         } else {
           const at = images.findIndex((image) => image.url === url);
@@ -138,7 +178,7 @@ const Proofs: FC<{ proofs: readonly { proof: Proof; atMs: number | undefined }[]
           );
         }
         return (
-          <figure key={proof.id} data-slot="proof" data-kind={kind} data-caption={proof.caption} className="flex min-w-0 flex-col gap-2">
+          <figure key={proof.id} data-slot="proof" data-kind={kind} data-caption={proof.caption} className={cn("flex min-w-0 flex-col gap-2", printed(proof) && "col-span-2")}>
             {shown}
             <figcaption className="flex min-w-0 items-center gap-1.5 text-xs">
               <span className="text-muted-foreground shrink-0">{index + 1}.</span>
@@ -160,7 +200,7 @@ const Proofs: FC<{ proofs: readonly { proof: Proof; atMs: number | undefined }[]
 export function PreviewCard({ url, steps, session }: { url: string | null; steps: readonly BlockOrchestratorStep[]; session: boolean }) {
   const viewed = useViewConversation()?.id ?? null;
   const conversationId = session ? viewed : null;
-  const proofs = steps.flatMap((step) => (step.kind.type === "proof" ? [{ proof: step.kind as Proof, atMs: step.atMs }] : []));
+  const proofs = steps.flatMap((step) => (step.kind.type === "proof" ? [{ proof: step.kind as Proof, atMs: (step.kind as Proof).takenAtMs ?? step.atMs }] : []));
   const record = useBoard((s) =>
     url ? Object.values(s.board?.previews ?? {}).filter((each) => samePage(each, url)).toSorted((a, b) => a.startedAtMs - b.startedAtMs).at(-1) ?? null : null,
   );
@@ -171,8 +211,9 @@ export function PreviewCard({ url, steps, session }: { url: string | null; steps
   const state = record ? standing(record) : null;
   const stopped = state !== null && !state.live && record?.state.type !== "starting";
   const address = url?.replace(/^https?:\/\//, "").replace(/\/$/, "") ?? null;
-  const videosOnly = proofs.length > 0 && proofs.every(({ proof }) => proof.mime.startsWith("video/"));
-  const title = url ? "Web preview" : videosOnly ? "Recordings" : proofs.some(({ proof }) => proof.mime.startsWith("video/")) ? "Screenshots and recordings" : "Screenshots";
+  const title = url ? "Web preview" : proofsTitle(proofs.map(({ proof }) => proof));
+  const where = takenWhere(proofs.map(({ proof }) => proof));
+  const logsOnly = proofs.length > 0 && proofs.every(({ proof }) => printed(proof));
 
   let action: ReactNode = null;
   if (url && record?.state.type === "paused" && viewed) {
@@ -215,7 +256,7 @@ export function PreviewCard({ url, steps, session }: { url: string | null; steps
   return (
     <StorageCard data-slot="preview-card" data-state={state ? (stopped ? "stopped" : "running") : undefined} data-open={(open && proofs.length > 0) || undefined}>
       <FoldHeader foldable={proofs.length > 0} onToggle={() => setOpen(!open)} className="flex items-center gap-4 py-4">
-        <RoundBadge>{url ? <Globe className={cn(stopped && "text-foreground/65")} /> : <ImageSquare />}</RoundBadge>
+        <RoundBadge>{url ? <Globe className={cn(stopped && "text-foreground/65")} /> : logsOnly ? <Terminal /> : <ImageSquare />}</RoundBadge>
         <RowText
           title={<span data-slot="preview-title">{title}</span>}
           line={
@@ -245,7 +286,7 @@ export function PreviewCard({ url, steps, session }: { url: string | null; steps
           <div data-slot="preview-proofs" className="border-divider flex flex-col gap-3 border-t pt-3.5 pb-4.5 ps-13">
             {url && (
               <div className="flex items-center gap-2 text-xs">
-                {/* TODO(w105): where the proofs were taken ("Checked in the browser") once each proof records it. */}
+                {where && <span data-slot="preview-proofs-where" className="text-foreground/65 font-medium">{where}</span>}
                 <span data-slot="preview-proofs-count" className="text-muted-foreground">{counted}</span>
               </div>
             )}

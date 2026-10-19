@@ -2,14 +2,17 @@
  * A standalone Vite entry, excluded from the app entry and production build: the Preview card in
  * each of its states, as the user's design has them (`K53xQ`). IPC is mocked, no daemon.
  *
- * - `running`: a web preview running at localhost:3000 with two captioned screenshots; Open, its
- *   ▾ and the fold chevron.
+ * - `running`: a web preview running at localhost:3000 with two captioned screenshots taken in
+ *   the browser ("Checked in the browser", each at its own time); Open, its ▾ and the fold chevron.
  * - `collapsed`: the same, folded: the header counts the screenshots.
  * - `paused`: the page paused: Start again, the screenshots kept.
  * - `stopped`: the page stopped: no Open, the screenshots kept.
  * - `no-proofs`: running, no screenshots: the header line alone, no chevron.
  * - `no-record`: a page with no preview record: the address alone, no state.
- * - `proofs-only`: proofs with no page left running: "Screenshots and recordings".
+ * - `proofs-only`: proofs with no page left running, from before proofs kept their kind and
+ *   place: "Screenshots and recordings".
+ * - `test-output`: a test run's output as a proof: "Test output", its last five lines under its
+ *   command.
  *
  * `?case=<id>` shows one case alone (for a screenshot); `?drive=1` writes what each case shows,
  * then clicks through it, to `<pre id="preview-card-result">` (PreviewCardRender.test.ts).
@@ -40,11 +43,14 @@ const page = (title: string) =>
       `</svg>`,
   );
 
+const TEST_LOG = ["> todo@1.0.0 test", "> node --test", "", "✓ rejects a title longer than 200 characters", "✓ accepts years 0000 to 0099", "✓ marks a past due date as overdue", "✓ a todo due today is not overdue", "15 passing (412ms)", ""].join("\n");
+
 const calls: string[] = [];
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   if (req.method === "readThreadImage") {
+    if (req.itemId === "test-log") return { method: req.method, data: btoa(String.fromCharCode(...new TextEncoder().encode(TEST_LOG))), mime: "text/plain" };
     const video = req.itemId.includes("video");
     return { method: req.method, data: video ? btoa("not a real recording") : page(req.itemId), mime: video ? "video/webm" : "image/svg+xml" };
   }
@@ -68,11 +74,21 @@ useBoard.setState({
 useApp.setState({ selection: { type: "conversation", id: CHAT } });
 
 const at22 = new Date(2026, 9, 19, 22, 11).getTime();
+// A proof is attached a few minutes after it was taken: its caption reads the time it was taken.
 const shot = (id: string, caption: string | undefined, minute: number): BlockOrchestratorStep => ({
-  position: minute, atMs: at22 + minute * 60_000, kind: { type: "proof", id, name: `${id}.png`, mime: "image/png", ...(caption ? { caption } : {}) },
+  position: minute,
+  atMs: at22 + (minute + 5) * 60_000,
+  kind: { type: "proof", id, name: `${id}.png`, mime: "image/png", kind: "screenshot", takenOn: "http://localhost:3000/", takenAtMs: at22 + minute * 60_000, ...(caption ? { caption } : {}) },
 });
 const SHOTS = [shot("todo-added", "Added a todo with a due date", 0), shot("todo-checked", "Checked off an overdue todo", 1)];
-const MIXED = [shot("readme", "The install section, fixed", 0), { position: 2, atMs: at22 + 120_000, kind: { type: "proof", id: "install-video", name: "install.webm", mime: "video/webm" } } as BlockOrchestratorStep];
+// From before proofs kept their kind, place and time.
+const MIXED = [
+  { position: 0, atMs: at22, kind: { type: "proof", id: "readme", name: "readme.png", mime: "image/png", caption: "The install section, fixed" } },
+  { position: 2, atMs: at22 + 120_000, kind: { type: "proof", id: "install-video", name: "install.webm", mime: "video/webm" } },
+] as BlockOrchestratorStep[];
+const TESTS = [
+  { position: 0, atMs: at22 + 240_000, kind: { type: "proof", id: "test-log", name: "test.log", mime: "text/plain", kind: "test", takenOn: "npm test", caption: "The todo tests", takenAtMs: at22 + 240_000 } },
+] as BlockOrchestratorStep[];
 
 const session = { id: CHAT, kind: "session", title: "Due dates", setup: { type: "session" } } as unknown as Conversation;
 
@@ -84,6 +100,7 @@ const CASES: { id: string; node: ReactNode }[] = [
   { id: "no-proofs", node: <PreviewCard url="http://localhost:3000/" steps={[]} session /> },
   { id: "no-record", node: <PreviewCard url="http://localhost:5173/" steps={[]} session /> },
   { id: "proofs-only", node: <PreviewCard url={null} steps={MIXED} session /> },
+  { id: "test-output", node: <PreviewCard url={null} steps={TESTS} session /> },
 ];
 
 const only = query.get("case");
@@ -119,6 +136,8 @@ function look(id: string) {
     count: words(card?.querySelector("[data-slot=preview-count]")),
     buttons: [...(card?.querySelectorAll("button") ?? [])].filter((each) => !each.closest("[data-slot=proof]")).map((each) => each.getAttribute("aria-label") ?? words(each)),
     heading: words(card?.querySelector("[data-slot=preview-proofs-count]")),
+    where: words(card?.querySelector("[data-slot=preview-proofs-where]")),
+    shell: card?.querySelector("[data-slot=shell-card]") ? [words(card.querySelector("[data-slot=shell-command]")), card.querySelector("[data-slot=shell-output] pre")?.textContent ?? null] : null,
     captions: [...(card?.querySelectorAll("[data-slot=proof] figcaption") ?? [])].map((each) => [...each.children].map((part) => words(part)).join(" ")),
     thumb: thumb ? Math.round(thumb.height) : null,
     // Cropped to the top of the page: the image fills its frame, its top at the frame's.
@@ -128,7 +147,7 @@ function look(id: string) {
 
 /** The states that need a click to reach: folded. */
 async function reach() {
-  await until(() => document.querySelectorAll("[data-slot=proof] img").length >= (only ? 0 : 6));
+  await until(() => document.querySelectorAll("[data-slot=proof] img").length >= (only ? 0 : 6) && (!!only || !!document.querySelector("[data-slot=shell-output]")));
   at("collapsed")?.querySelector<HTMLButtonElement>("[data-slot=preview-fold]")?.click();
   // The folded card's body closes as it animates.
   await until(() => !at("collapsed") || look("collapsed").captions.length === 0);
