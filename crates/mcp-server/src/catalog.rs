@@ -1149,6 +1149,7 @@ pub fn parse_call(
                 "suggest_full_access" => {
                     OrchestratorCall::SuggestFullAccess(args(name, arguments)?)
                 }
+                "suggest_setting" => OrchestratorCall::SuggestSetting(args(name, arguments)?),
                 "offer_feedback" => OrchestratorCall::OfferFeedback(args(name, arguments)?),
                 "offer_session" => OrchestratorCall::OfferSession(args(name, arguments)?),
                 "list_tasks" => OrchestratorCall::ListTasks,
@@ -1655,6 +1656,40 @@ mod tests {
                 Ok(ToolCall::Orchestrator(OrchestratorCall::SuggestFullAccess(args)))
                     if args.reason == "Installing Homebrew writes outside the project"
             ));
+        }
+    }
+
+    /// suggest_setting takes the permission level, the browser and merging on its own; any
+    /// other setting (voice, models, providers, computer use…) doesn't parse.
+    #[test]
+    fn a_suggested_setting_is_one_of_the_few_the_thread_may_suggest() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        for setting in ["permission", "browser", "merge_on_own"] {
+            let arguments = serde_json::json!({ "setting": setting, "value": "on", "reason": "r" });
+            assert!(
+                matches!(
+                    parse_call(&thread, "suggest_setting", arguments.as_object().cloned()),
+                    Ok(ToolCall::Orchestrator(OrchestratorCall::SuggestSetting(_)))
+                ),
+                "{setting}"
+            );
+        }
+        for setting in [
+            "voice",
+            "model",
+            "providers",
+            "computer_use",
+            "shortcuts",
+            "storage",
+        ] {
+            let arguments = serde_json::json!({ "setting": setting, "value": "on", "reason": "r" });
+            assert!(
+                parse_call(&thread, "suggest_setting", arguments.as_object().cloned()).is_err(),
+                "{setting}"
+            );
         }
     }
 

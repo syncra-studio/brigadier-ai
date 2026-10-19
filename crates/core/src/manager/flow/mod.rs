@@ -391,6 +391,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
         "record_findings" => ToolCall::Orchestrator(O::RecordFindings(arg(name, args))),
         "suggest_full_access" => ToolCall::Orchestrator(O::SuggestFullAccess(arg(name, args))),
+        "suggest_setting" => ToolCall::Orchestrator(O::SuggestSetting(arg(name, args))),
         "offer_feedback" => ToolCall::Orchestrator(O::OfferFeedback(arg(name, args))),
         "offer_session" => ToolCall::Orchestrator(O::OfferSession(arg(name, args))),
         "route_follow_up" => ToolCall::Orchestrator(O::RouteFollowUp(arg(name, args))),

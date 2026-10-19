@@ -418,6 +418,7 @@ export type { SearchUpdate } from "./SearchUpdate";
 export type { SendOutcome } from "./SendOutcome";
 export type { ServerFrame } from "./ServerFrame";
 export type { SessionPhase } from "./SessionPhase";
+export type { SettingChange } from "./SettingChange";
 export type { Settings } from "./Settings";
 export type { SettledTab } from "./SettledTab";
 export type { Setup } from "./Setup";

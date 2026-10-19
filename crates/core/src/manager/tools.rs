@@ -623,6 +623,9 @@ impl SessionManager {
             OrchestratorCall::SuggestFullAccess(args) => {
                 crate::heap(|| self.suggest_full_access(id, &args.reason)).await
             }
+            OrchestratorCall::SuggestSetting(args) => {
+                crate::heap(|| self.suggest_setting(id, args)).await
+            }
             OrchestratorCall::OfferFeedback(args) => {
                 crate::heap(|| self.offer_feedback(id, args)).await
             }
@@ -1120,6 +1123,104 @@ impl SessionManager {
         )
         .await;
         Ok("Showed the user a notice with a button that switches this session to Full access. Say in a line what waits on it, and carry on with what doesn't need it; if they switch, a [settings] note tells you.".into())
+    }
+
+    /// `suggest_setting`: a card in the thread with one settings change and a button that makes
+    /// it; nothing changes until the user presses it. Full access is `suggest_full_access`'s
+    /// notice. Once per change and request, and only where the change would change something.
+    pub(crate) async fn suggest_setting(
+        &self,
+        id: &ConversationId,
+        args: crate::tools::SuggestSetting,
+    ) -> Result<String> {
+        use crate::tools::SuggestedSetting;
+        use crate::work::SettingChange;
+        let reason = args.reason.trim();
+        if reason.is_empty() {
+            return Err(Error::Invalid("`reason` is empty".into()));
+        }
+        let value = args
+            .value
+            .trim()
+            .to_ascii_lowercase()
+            .replace([' ', '-'], "_");
+        let switch = || match value.as_str() {
+            "on" | "true" => Ok(true),
+            "off" | "false" => Ok(false),
+            _ => Err(Error::Invalid(
+                "`value` is \"on\" or \"off\" for this setting".into(),
+            )),
+        };
+        let settings = self.core.settings();
+        let (change, already) = match args.setting {
+            SuggestedSetting::Permission => {
+                let level = match value.as_str() {
+                    "full_access" => return self.suggest_full_access(id, reason).await,
+                    "ask_for_approval" => PermissionLevel::AskForApproval,
+                    "approve_for_me" => PermissionLevel::ApproveForMe,
+                    _ => {
+                        return Err(Error::Invalid(
+                            "`value` for permission is \"ask_for_approval\", \"approve_for_me\" or \"full_access\"".into(),
+                        ));
+                    }
+                };
+                if !matches!(
+                    self.core.conversation(id)?.setup,
+                    Some(crate::model::Setup::Session { .. })
+                ) {
+                    return Err(Error::Invalid(
+                        "only a session has a permission level".into(),
+                    ));
+                }
+                (
+                    SettingChange::Permission { level },
+                    self.permission(id) == level,
+                )
+            }
+            SuggestedSetting::Browser => {
+                let on = switch()?;
+                (
+                    SettingChange::Browser { on },
+                    settings.browser_enabled == on,
+                )
+            }
+            SuggestedSetting::MergeOnOwn => {
+                let on = switch()?;
+                (SettingChange::MergeOnOwn { on }, settings.auto_merge == on)
+            }
+        };
+        if already {
+            return Err(Error::Invalid(
+                "The setting is that way already: nothing to suggest.".into(),
+            ));
+        }
+        if self.overnight.active.get(id).is_some() {
+            return Err(Error::Invalid(
+                "An overnight run is going and nobody can press the button: list it with note_for_user, kind waiting.".into(),
+            ));
+        }
+        let request = self.request_for(id, None).await;
+        let conv = self.conv(id)?;
+        let _notice = conv.full_access_notice.lock().await;
+        let board = self.core.board(id).await?;
+        if board.orchestrator_steps.iter().any(|step| {
+            step.request_id == request
+                && matches!(&step.kind, OrchestratorStepKind::SettingSuggested { change: shown, .. } if *shown == change)
+        }) {
+            return Err(Error::Invalid(
+                "The card is already shown for this request: don't show it again.".into(),
+            ));
+        }
+        self.orchestrator_step_in(
+            id,
+            request,
+            OrchestratorStepKind::SettingSuggested {
+                change,
+                reason: reason.to_owned(),
+            },
+        )
+        .await;
+        Ok("Showed the user a card with the change and a button that makes it; nothing changes unless they press it. Say in a line what waits on it, and carry on with what doesn't; if they change it, a [settings] note tells you.".into())
     }
 
     /// `offer_feedback`: a card in the thread with a report to Brigadier's developers, which

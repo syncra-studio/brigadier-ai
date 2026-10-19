@@ -81,6 +81,7 @@ const PLUMBING = new Set([
   "ask_user",
   "propose_merge",
   "suggest_full_access",
+  "suggest_setting",
   "offer_feedback",
   "submit_report",
   // Its row comes from the message's record, or says why it was refused.

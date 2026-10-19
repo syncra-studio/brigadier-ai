@@ -1173,6 +1173,31 @@ pub struct SuggestFullAccess {
     pub reason: String,
 }
 
+/// `suggest_setting`: a card with one settings change and a button that makes it, when the
+/// user's request needs it. Only these settings; anything else is the user's own.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SuggestSetting {
+    pub setting: SuggestedSetting,
+    /// permission: "ask_for_approval", "approve_for_me" or "full_access"; browser and
+    /// merge_on_own: "on" or "off".
+    pub value: String,
+    /// One line for the user: why the change helps with what they asked.
+    pub reason: String,
+}
+
+/// The settings `suggest_setting` may suggest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SuggestedSetting {
+    /// This session's permission level.
+    Permission,
+    /// The built-in browser (Settings › Browser).
+    Browser,
+    /// Merging on its own when the work is ready (Settings › Git).
+    MergeOnOwn,
+}
+
 /// `offer_feedback`: the user seems annoyed with Brigadier itself; the thread offers them a
 /// report to its developers, drafted from the conversation, as a card they send or dismiss.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1308,6 +1333,7 @@ pub enum OrchestratorCall {
     CiStatus(CiPush),
     WatchCi(CiPush),
     SuggestFullAccess(SuggestFullAccess),
+    SuggestSetting(SuggestSetting),
     OfferFeedback(OfferFeedback),
     OfferSession(OfferSession),
     ListTasks,
@@ -1445,6 +1471,7 @@ impl OrchestratorCall {
             Self::CiStatus(_) => "ci_status",
             Self::WatchCi(_) => "watch_ci",
             Self::SuggestFullAccess(_) => "suggest_full_access",
+            Self::SuggestSetting(_) => "suggest_setting",
             Self::OfferFeedback(_) => "offer_feedback",
             Self::OfferSession(_) => "offer_session",
             Self::ListTasks => "list_tasks",

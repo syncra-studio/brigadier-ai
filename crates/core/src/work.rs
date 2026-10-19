@@ -2374,6 +2374,12 @@ pub enum OrchestratorStepKind {
     /// A notice that something the user asked for needs more than the session's sandbox
     /// allows (`suggest_full_access`), with a button that switches the session to Full access.
     FullAccessSuggested { reason: String },
+    /// A card with a change of one of the few settings the thread may suggest
+    /// (`suggest_setting`) and one button that makes it; nothing changes until it is pressed.
+    SettingSuggested {
+        change: SettingChange,
+        reason: String,
+    },
     /// A report to Brigadier's developers the thread drafted when the user seemed annoyed with
     /// Brigadier (`offer_feedback`), for them to send, edit first or dismiss. Open until a
     /// `FeedbackAnswered` with its `id`.
@@ -3740,6 +3746,24 @@ pub enum OrchestratorEntry {
         /// The note (blob hash).
         note_blob: String,
     },
+}
+
+/// A settings change the thread suggests on a card (Q90): this session's permission level,
+/// the built-in browser, or merging on its own. Nothing else is the agent's to suggest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "setting",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SettingChange {
+    Permission {
+        level: crate::model::PermissionLevel,
+    },
+    /// Settings › Browser's switch.
+    Browser { on: bool },
+    /// Settings › Git's "Merge on its own when the work is ready".
+    MergeOnOwn { on: bool },
 }
 
 #[cfg(test)]

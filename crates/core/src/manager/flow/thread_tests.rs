@@ -3707,3 +3707,107 @@ async fn ci_push_review_does_not_repeat_when_a_user_message_arrives_during_revie
     );
     flow.stop().await;
 }
+
+/// `suggest_setting` (Q90): a card per change, which changes nothing on its own; Full access is
+/// the sandbox notice; a setting that is that way already, or a value it doesn't take, is
+/// refused, and a setting outside the few it may suggest doesn't parse.
+#[tokio::test]
+async fn the_thread_suggests_a_setting_on_a_card_that_changes_nothing_until_pressed() {
+    let replies: Arc<Mutex<Vec<(bool, String)>>> = Arc::default();
+    let log = replies.clone();
+    let flow = Flow::start(
+        "thread-suggest-setting",
+        Options {
+            permission: PermissionLevel::AskForApproval,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.is_orchestrator() {
+                    for (setting, value) in [
+                        ("merge_on_own", "on"),
+                        ("merge_on_own", "on"),
+                        ("browser", "on"),
+                        ("browser", "off"),
+                        ("permission", "approve_for_me"),
+                        ("permission", "ask_for_approval"),
+                        ("permission", "full_access"),
+                        ("browser", "maybe"),
+                    ] {
+                        let reply = turn
+                            .call(
+                                "suggest_setting",
+                                json!({"setting": setting, "value": value, "reason": "It helps."}),
+                            )
+                            .await;
+                        log.lock().unwrap().push((reply.is_error, reply.text));
+                    }
+                }
+                Reply::text("Asked.")
+            }
+        }),
+    )
+    .await;
+    let before = flow.core.settings();
+    assert!(before.browser_enabled && !before.auto_merge);
+    flow.say("Merge it yourself from now on.").await;
+    let board = flow.settled().await;
+    let replies = replies.lock().unwrap().clone();
+    let errors: Vec<bool> = replies.iter().map(|reply| reply.0).collect();
+    assert_eq!(
+        errors,
+        [false, true, true, false, false, true, false, true],
+        "{replies:#?}"
+    );
+    assert!(replies[1].1.contains("already shown"), "{}", replies[1].1);
+    assert!(
+        replies[2].1.contains("that way already"),
+        "{}",
+        replies[2].1
+    );
+    assert!(
+        replies[7].1.contains("\"on\" or \"off\""),
+        "{}",
+        replies[7].1
+    );
+    let cards: Vec<_> = board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            OrchestratorStepKind::SettingSuggested { change, .. } => Some(change.clone()),
+            OrchestratorStepKind::FullAccessSuggested { .. } => {
+                Some(crate::work::SettingChange::Permission {
+                    level: PermissionLevel::FullAccess,
+                })
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        cards,
+        [
+            crate::work::SettingChange::MergeOnOwn { on: true },
+            crate::work::SettingChange::Browser { on: false },
+            crate::work::SettingChange::Permission {
+                level: PermissionLevel::ApproveForMe
+            },
+            crate::work::SettingChange::Permission {
+                level: PermissionLevel::FullAccess
+            },
+        ]
+    );
+    // Nothing changed: only the user's press does that.
+    let after = flow.core.settings();
+    assert_eq!(
+        (after.browser_enabled, after.auto_merge),
+        (before.browser_enabled, before.auto_merge)
+    );
+    let Some(Setup::Session { permission, .. }) =
+        flow.core.conversation(&flow.conversation).unwrap().setup
+    else {
+        panic!("a session");
+    };
+    assert_eq!(permission, PermissionLevel::AskForApproval);
+    flow.stop().await;
+}
