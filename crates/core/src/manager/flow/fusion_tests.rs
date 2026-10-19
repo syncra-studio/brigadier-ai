@@ -521,3 +521,104 @@ async fn a_fused_pair_keeps_the_files_and_quality_asked_for() {
     }
     flow.stop().await;
 }
+
+/// #378: both of a fused pair write the same file name. Each report gives the link to its own
+/// copy, blind, and the answer's links open the right one.
+#[tokio::test]
+async fn a_fused_pair_s_files_of_one_name_each_open_from_the_answer() {
+    let heard: Arc<Mutex<String>> = Arc::default();
+    let flow = Flow::start(
+        "fusion-files",
+        Options::default(),
+        script({
+            let heard = heard.clone();
+            move |turn| {
+                let heard = heard.clone();
+                async move {
+                    if turn.chat().is_none() && !turn.is_orchestrator() {
+                        let price = match turn.provider {
+                            ProviderKind::Claude => "25",
+                            ProviderKind::Codex => "40",
+                        };
+                        std::fs::create_dir_all(turn.cwd.join("outputs")).unwrap();
+                        std::fs::write(
+                            turn.cwd.join("outputs/compare.csv"),
+                            format!("nozzle,price\nhardened steel,{price}\n"),
+                        )
+                        .unwrap();
+                        turn.call(
+                            "submit_report",
+                            json!({"summary": "The table is in outputs/compare.csv."}),
+                        )
+                        .await;
+                        return Reply::text("Reported.");
+                    }
+                    if turn.input.contains("[report task-") {
+                        *heard.lock().unwrap() = turn.input.clone();
+                        let links: Vec<&str> = turn
+                            .input
+                            .split("link it as ")
+                            .skip(1)
+                            .filter_map(|rest| rest.split_whitespace().next())
+                            .collect();
+                        return Reply::text(format!("The tables: {}.", links.join(" and ")));
+                    }
+                    if !turn.input.contains("Which nozzle") {
+                        return Reply::text("[quiet]");
+                    }
+                    let reply = turn
+                        .call(
+                            "delegate_task",
+                            json!({"effort": "medium", "title": "Nozzle prices", "kind": "research",
+                                   "fuse": true, "spec": "Compare nozzle prices in a CSV."}),
+                        )
+                        .await;
+                    assert!(!reply.is_error, "{}", reply.text);
+                    Reply::text("[quiet]")
+                }
+            }
+        }),
+    )
+    .await;
+    let chat = new_chat(&flow).await;
+    flow.say_to(&chat, "Which nozzle is cheapest? Make me a table.")
+        .await;
+    let board = answered(&flow, &chat).await;
+    let input = heard.lock().unwrap().clone();
+    blind(&input);
+    let answer = shown(&flow, &chat).await.join("\n");
+    let mut prices = Vec::new();
+    for task in board.tasks.values() {
+        let link = format!("outputs/task-{}/compare.csv", task.number);
+        assert!(
+            input.contains(&format!("link it as [compare.csv]({link})")),
+            "{input}"
+        );
+        assert!(answer.contains(&link), "{answer}");
+        let stored = flow
+            .manager
+            .stored_output(&chat, &link, None)
+            .await
+            .unwrap()
+            .expect("the answer's link opens a stored copy");
+        assert_eq!(stored.task_id, task.id, "{link} opens its own task's copy");
+        let bytes = flow
+            .core
+            .store()
+            .blobs()
+            .get(stored.artifact.id.parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        prices.push(String::from_utf8(bytes).unwrap());
+    }
+    prices.sort();
+    assert_eq!(
+        prices,
+        [
+            "nozzle,price\nhardened steel,25\n",
+            "nozzle,price\nhardened steel,40\n"
+        ]
+    );
+    flow.stop().await;
+}

@@ -6,7 +6,8 @@ import { fileNameOf } from "@/app/conversation/FileList";
  * The files a finished request's answer hands over, offered with Save under it (BUILD-PLAN A2):
  * the stored outputs of its workers that the answer links (`outputs/notes.md`, or the path in a
  * worker's scratch folder), one per file name, the latest task's copy, in the order the tasks
- * started. The rest of the workers' outputs (screenshots, scripts, notes) stay on their task
+ * started; a link naming its task (`outputs/task-3/notes.md`) offers that task's copy instead, as
+ * many as are linked, so both of a fused pair's same-named files are (#378). The rest of the workers' outputs (screenshots, scripts, notes) stay on their task
  * cards (#218). A file the answer also links by its destination name or link label somewhere
  * else (the thread's corrected copy in its workspace, BUILD-PLAN A6) is the deliverable, so the
  * worker's original isn't offered as if it were.
@@ -27,19 +28,22 @@ export function answerFiles(tasks: readonly Task[], requestIds: readonly string[
   const scratch = ordered.flatMap((task) => (task.workspace?.scratch ? [task.workspace.scratch.replace(/\/$/, "")] : []));
   const { linked, corrected } = linkedNames(answer, scratch);
   // `outputs/task-3/notes.md` names task-3's copy, whichever later task has one of that name: the
-  // thread's corrected copy of task-3's file (#27).
-  const pinned = [...linked].flatMap((stored) => {
+  // thread's corrected copy of task-3's file (#27), or one of a fused pair's two (#378).
+  const pinned = new Map<string, ArtifactRef[]>();
+  for (const stored of linked) {
     const found = /^task-(\d+)\/(?:.*\/)?([^/]+)$/.exec(stored);
-    return found?.[1] && found[2] ? [{ number: Number(found[1]), name: found[2] }] : [];
-  });
-  for (const { number, name } of pinned) {
+    if (!found?.[1] || !found[2]) continue;
+    const [number, name] = [Number(found[1]), found[2]];
     const output = ordered.find((task) => task.number === number)?.outputs.find((each) => fileNameOf(each) === name);
-    if (output) {
-      byName.set(name, output);
-      linked.add(name);
-    }
+    if (output) pinned.set(name, [...(pinned.get(name) ?? []), output]);
   }
-  return [...byName.entries()].filter(([name]) => linked.has(name) && !corrected.has(name)).map(([, output]) => output);
+  const position = (output: ArtifactRef) => ordered.findIndex((task) => task.outputs.includes(output));
+  return [...byName.entries()].flatMap(([name, output]) => {
+    if (corrected.has(name)) return [];
+    const copies = pinned.get(name);
+    if (copies) return copies.toSorted((a, b) => position(a) - position(b));
+    return linked.has(name) ? [output] : [];
+  });
 }
 
 /**

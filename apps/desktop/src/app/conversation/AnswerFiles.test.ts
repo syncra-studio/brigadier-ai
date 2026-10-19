@@ -36,6 +36,11 @@ test("a finished answer offers Save… for each file of its request's workers it
     const numbered = Object.values(tasks).map((each) => ({ ...each, number: each.position }) as Task);
     assert.deepEqual((answerFiles(numbered, ["r1"], "[rates](outputs/task-1/rates.md)") as ArtifactRef[]).map((output) => output.id), ["rates-1"]);
     assert.deepEqual((answerFiles(numbered, ["r1"], "[rates](outputs/rates.md)") as ArtifactRef[]).map((output) => output.id), ["rates-2"]);
+    // #378: a fused pair both wrote rates.md; the answer links each one's copy, and both are offered.
+    const both = "[A's](outputs/task-2/rates.md) and [B's](outputs/task-1/rates.md)";
+    assert.deepEqual((answerFiles(numbered, ["r1"], both) as ArtifactRef[]).map((output) => output.id), ["rates-1", "rates-2"]);
+    assert.deepEqual((answerFiles(numbered, ["r1"], `${both}, [notes](outputs/notes.md)`) as ArtifactRef[]).map((output) => output.id),
+      ["notes", "rates-1", "rates-2"]);
 
     // A6: the thread fixed rates.md and links its corrected copy in its workspace, so the
     // worker's original isn't offered; a link to the stored output itself changes nothing.

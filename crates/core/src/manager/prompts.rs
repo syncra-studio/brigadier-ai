@@ -2773,15 +2773,7 @@ fn short_report(task: &Task, report: &Report, route: &str) -> String {
         "Outputs (the user saves them from the task card; read_artifact reads them; link one as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy)",
         task.outputs
             .iter()
-            .map(|o| {
-                format!(
-                    "{} ({}, {} bytes): {}",
-                    o.id,
-                    o.mime,
-                    o.bytes,
-                    cut(&o.title, 120)
-                )
-            })
+            .map(|o| output_line(task, o, &cut(&o.title, 120)))
             .collect(),
         &mut text,
     );
@@ -2791,6 +2783,26 @@ fn short_report(task: &Task, report: &Report, route: &str) -> String {
         task.number
     ));
     text
+}
+
+/// One of a report's outputs as the thread reads it. Both of a fused pair work on one brief and
+/// often write the same file name, so each of theirs comes with the link that opens its own
+/// copy (#378).
+fn output_line(task: &Task, output: &ArtifactRef, title: &str) -> String {
+    let line = format!(
+        "{} ({}, {} bytes): {title}",
+        output.id, output.mime, output.bytes
+    );
+    let (Some(_), Some(name)) = (&task.fusion, output.file_name.as_deref()) else {
+        return line;
+    };
+    let link = format!("outputs/task-{}/{name}", task.number);
+    let link = if name.contains(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '<' | '>')) {
+        format!("<{link}>")
+    } else {
+        link
+    };
+    format!("{line}; link it as [{name}]({link})")
 }
 
 /// How a report's "needs the user" list is headed: an overnight run's are listed for the user
@@ -2874,10 +2886,7 @@ pub(crate) fn report_text(task: &Task, report: &Report, route: &str) -> String {
             "\nOutputs (the user opens and saves them from the task card; read_artifact reads them; link one as [notes.md](outputs/notes.md), which keeps opening Brigadier's copy after its scratch folder goes, never by its scratch path):",
         );
         for output in &task.outputs {
-            text.push_str(&format!(
-                "\n- {} ({}, {} bytes): {}",
-                output.id, output.mime, output.bytes, output.title
-            ));
+            text.push_str(&format!("\n- {}", output_line(task, output, &output.title)));
         }
     }
     text.push_str("\n[/report]");
