@@ -71,7 +71,12 @@ export function usageTone(
   { limitReached = false, normal = {} }: { limitReached?: boolean; normal?: Partial<UsageTone> } = {},
 ): UsageTone & { level: UsageLevel } {
   const level = usageLevel(percentUsed, limitReached);
-  return { level, ...(level === "normal" ? { ...NORMAL_TONE, ...normal } : USAGE_TONES[level]) };
+  return { level, ...levelTone(level, normal) };
+}
+
+/** A level's colours, for a place that sets its own levels; `normal` as `usageTone`'s. */
+export function levelTone(level: UsageLevel, normal: Partial<UsageTone> = {}): UsageTone {
+  return level === "normal" ? { ...NORMAL_TONE, ...normal } : USAGE_TONES[level];
 }
 
 /**

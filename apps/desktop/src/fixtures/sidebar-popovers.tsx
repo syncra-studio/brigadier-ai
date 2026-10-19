@@ -3,8 +3,9 @@
  * the help menu. ?drive=1 checks the foot row (Help last, flush right, no feedback icon), the
  * list (most used first, the tightest limit, amber past 75%), opening one provider at a time,
  * Providers ›, a provider that needs signing in, and the help menu's two rows, writing what it
- * saw to #popovers-result (SidebarPopoversRender.test.ts reads it). ?show=usage, ?show=details
- * or ?show=help leaves that one open, for screenshots.
+ * saw to #popovers-result (SidebarPopoversRender.test.ts reads it), then opens a plain popover and
+ * menu built from the shared parts and reads how each is drawn beside the usage list and help menu.
+ * ?show=usage, ?show=details or ?show=help leaves that one open, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -13,8 +14,18 @@ import { createRoot } from "react-dom/client";
 import { AppSidebar, AppStrip } from "@/app/AppSidebar";
 import { FeedbackDialog } from "@/app/feedback/FeedbackDialog";
 import { SidebarFoot } from "@/app/SidebarFoot";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+  itemBase,
+} from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { colourOf, surface } from "@/fixtures/look";
 import type { AccountsView, ProviderKind, ProviderOverview, QuotaWindow, Request } from "@/ipc/generated";
 import { useAgentPageAsk } from "@/state/agentPage";
 import { useFeedbackUi } from "@/state/feedback";
@@ -109,14 +120,30 @@ const helpButton = () => q<HTMLButtonElement>('button[aria-label="Help"]');
 const usageRows = () =>
   all('[data-slot="usage-row"]').map((row) => ({
     words: [...row.children].map(text).filter(Boolean),
-    amber: Boolean(q('[data-slot="usage-value"].text-settings-warning', row)),
+    amber: Boolean(q('[data-slot="usage-value"][data-level="warning"]', row)),
   }));
 const limits = () => all('[data-slot="usage-limit"]').map((row) => [...row.children].map(text).filter(Boolean));
+/** A row's size, corners and type, to set beside a shared menu row's. */
+const rowLook = (row: Element | null | undefined) => {
+  if (!row) return null;
+  const css = getComputedStyle(row);
+  return { height: row.getBoundingClientRect().height, radius: css.borderTopLeftRadius, font: css.fontSize };
+};
+/** A label's colour and type. */
+const labelLook = (label: Element | null | undefined) => {
+  if (!label) return null;
+  const css = getComputedStyle(label);
+  return { colour: css.color, font: css.fontSize, family: css.fontFamily, case: css.textTransform };
+};
+/** The wash a shared menu row takes when pointed at. */
+const MENU_WASH = /focus:(bg-\S+)/.exec(itemBase)?.[1] ?? "";
 const rowNamed = (name: string) =>
   all<HTMLButtonElement>('[data-slot="usage-row"]').find((row) => text(row).startsWith(name));
 
 function Fixture() {
   const [result, setResult] = useState("");
+  // The shared popover and menu, opened at the end of the drive to read how they're drawn.
+  const [canon, setCanon] = useState(false);
   useEffect(() => {
     const show = params.get("show");
     if (!show) return;
@@ -156,6 +183,14 @@ function Fixture() {
       await wait(200);
       seen.header = text(q('[data-slot="usage-popover"] > div'));
       seen.rows = usageRows();
+      const look: Record<string, unknown> = {
+        usage: surface(q('[data-slot="usage-popover"]')),
+        usageRow: rowLook(q('[data-slot="usage-row"]')),
+        usageLabel: labelLook(q('[data-slot="usage-popover"] > div > span')),
+        usageWash: all('[data-slot="usage-row"]').every((entry) => entry.classList.contains(`hover:${MENU_WASH}`)),
+        amber: getComputedStyle(q('[data-slot="usage-value"][data-level="warning"]') ?? document.body).color,
+        warning: colourOf("text-warning", "color"),
+      };
       rowNamed("Claude Code")?.click();
       await wait(100);
       seen.claudeOpen = { rows: usageRows().map((entry) => entry.words), limits: limits() };
@@ -180,6 +215,8 @@ function Fixture() {
       press(helpButton());
       await wait(200);
       seen.help = all('[role="menuitem"]').map(text);
+      look.help = surface(q('[data-slot="dropdown-menu-content"]'));
+      look.helpItem = rowLook(q('[role="menuitem"]'));
       all('[role="menuitem"]').find((item) => text(item) === "Keyboard shortcuts")?.click();
       await wait(200);
       seen.shortcuts = useApp.getState().selection;
@@ -188,6 +225,17 @@ function Fixture() {
       all('[role="menuitem"]').find((item) => text(item) === "Send feedback…")?.click();
       await wait(300);
       seen.feedback = useFeedbackUi.getState().open;
+      useFeedbackUi.setState({ open: false });
+      await wait(200);
+      setCanon(true);
+      await wait(300);
+      look.canon = {
+        popover: surface(q('[data-slot="canon-popover"]')),
+        menu: surface(q('[data-slot="canon-menu"]')),
+        item: rowLook(q('[data-slot="canon-menu"] [role="menuitem"]')),
+        label: labelLook(q('[data-slot="canon-menu"] [data-slot="dropdown-menu-label"]')),
+      };
+      seen.look = look;
       if (!stopped) setResult(JSON.stringify(seen));
     })();
     return () => {
@@ -207,6 +255,21 @@ function Fixture() {
         </SidebarProvider>
         <FeedbackDialog />
       </div>
+      {canon && (
+        <>
+          <Popover open>
+            <PopoverTrigger className="fixed top-2 left-2" />
+            <PopoverContent data-slot="canon-popover">A popover</PopoverContent>
+          </Popover>
+          <DropdownMenu open modal={false}>
+            <DropdownMenuTrigger className="fixed top-2 right-2" />
+            <DropdownMenuContent data-slot="canon-menu">
+              <DropdownMenuLabel>Label</DropdownMenuLabel>
+              <DropdownMenuItem>An item</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
+      )}
       {result && <pre id="popovers-result">{result}</pre>}
     </TooltipProvider>
   );

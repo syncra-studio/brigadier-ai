@@ -44,4 +44,16 @@ test("sidebar: usage list, a provider's limits, and the help menu", { timeout: 6
   assert.deepEqual(seen.help, ["Send feedback…", "Keyboard shortcuts"]);
   assert.deepEqual(seen.shortcuts, { type: "settings", page: "shortcuts" });
   assert.equal(seen.feedback, true);
+
+  // Drawn with the app's shared parts (#385): the usage list is a shared popover with menu rows
+  // and a menu label, its amber the shared warning; Help is a shared menu with its rows.
+  const look = seen.look as Record<string, unknown> & { canon: Record<string, unknown> };
+  assert.ok(look.canon.popover && look.canon.menu && look.canon.item, "the shared popover and menu opened");
+  assert.deepEqual(look.usage, look.canon.popover);
+  assert.deepEqual(look.usageRow, look.canon.item);
+  assert.deepEqual(look.usageLabel, look.canon.label);
+  assert.equal(look.usageWash, true);
+  assert.equal(look.amber, look.warning);
+  assert.deepEqual(look.help, look.canon.menu);
+  assert.deepEqual(look.helpItem, look.canon.item);
 });

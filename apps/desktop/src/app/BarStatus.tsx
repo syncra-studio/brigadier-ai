@@ -8,12 +8,13 @@ import { StateDot } from "@/app/providers/parts";
 import { Segmented } from "@/app/settings/parts";
 import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
+import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSidebar } from "@/components/ui/sidebar";
 import { Switch } from "@/components/ui/switch";
 import type { ProviderKind, ProviderOverview, QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
-import { ordered, USAGE_DANGER_FROM, usageLevel, used, windowTitle } from "@/lib/quota";
+import { levelTone, ordered, USAGE_DANGER_FROM, type UsageLevel, usageLevel, used, windowTitle } from "@/lib/quota";
 import { cn } from "@/lib/utils";
 import { loadAccounts } from "@/state/accounts";
 import { loadProviders, openSettings, refreshProviders } from "@/state/actions";
@@ -113,7 +114,7 @@ function tightest(windows: readonly QuotaWindow[]): QuotaWindow | null {
 }
 
 /** A share's colour in the list: amber past 75% used, red at a reached limit or from 90%. */
-function shareTone(percent: number, limitReached = false): "normal" | "warning" | "danger" {
+function shareTone(percent: number, limitReached = false): UsageLevel {
   if (limitReached || percent >= USAGE_DANGER_FROM) return "danger";
   return percent > USAGE_AMBER_PAST ? "warning" : "normal";
 }
@@ -203,22 +204,22 @@ export function UsageMenu() {
         data-slot="usage-popover"
         {...footMenuPlacement(expanded)}
         alignOffset={expanded ? -rowStart : 0}
-        className="bg-settings-raised border-settings-ring shadow-foot-popover w-90 border p-0 ring-0"
+        className="w-90"
       >
-        <div className="flex items-center justify-between px-5 pt-3.5 pb-1.5">
-          <span className="text-settings-body text-settings-text-secondary">Usage</span>
+        <div className="flex items-center justify-between px-2 py-1.5">
+          <span className="text-muted-foreground font-mono text-2xs font-medium tracking-wide uppercase">Usage</span>
           <button
             type="button"
             onClick={() => go(() => openSettings("providers"))}
-            className="text-settings-small text-settings-link flex items-center gap-1 font-medium hover:underline"
+            className="text-link flex items-center gap-1 text-xs font-medium hover:underline"
           >
             Providers
-            <ChevronRight className="size-3.25" />
+            <ChevronRight className="size-icon-xs" />
           </button>
         </div>
-        <div className="flex flex-col px-1.5 pb-2">
+        <div className="flex flex-col">
           {entries.length === 0 ? (
-            <p className="text-settings-small text-settings-text-tertiary px-3.5 py-2">No agent has reported usage yet.</p>
+            <p className="text-muted-foreground px-2 py-1.5 text-xs">No agent has reported usage yet.</p>
           ) : (
             entries.map((entry) => (
               <ProviderUsage
@@ -245,32 +246,19 @@ function offsetInRow(button: HTMLElement | null): number {
   return Math.max(0, button.getBoundingClientRect().left - start);
 }
 
-/** A limit's thin bar and its share, amber past 75% used. */
+/** A limit's thin bar and its share, amber past 75% used, in usage's shared colours. */
 function Share({ percent, limitReached = false }: { percent: number; limitReached?: boolean }) {
-  const tone = shareTone(percent, limitReached);
+  const level = shareTone(percent, limitReached);
+  const look = levelTone(level, percent === 0 ? { text: "text-muted-foreground" } : {});
   return (
     <>
-      <span aria-hidden className="bg-settings-ring rounded-providers-bar h-0.75 w-11 shrink-0 overflow-hidden">
-        <span
-          className={cn(
-            "rounded-providers-bar block h-full",
-            tone === "danger" ? "bg-destructive" : tone === "warning" ? "bg-settings-warning" : "bg-usage-bar",
-          )}
-          style={{ width: `${percent}%` }}
-        />
+      <span aria-hidden className="bg-muted rounded-capsule h-1 w-11 shrink-0 overflow-hidden">
+        <span className={cn("rounded-capsule block h-full", look.fill)} style={{ width: `${percent}%` }} />
       </span>
       <span
         data-slot="usage-value"
-        className={cn(
-          "text-settings-small w-8.5 shrink-0 text-end font-medium",
-          tone === "danger"
-            ? "text-destructive"
-            : tone === "warning"
-              ? "text-settings-warning"
-              : percent === 0
-                ? "text-settings-text-tertiary"
-                : "text-settings-text",
-        )}
+        data-level={level}
+        className={cn("w-8.5 shrink-0 text-end text-xs font-medium tabular-nums", look.text)}
       >
         {percent}%
       </span>
@@ -300,26 +288,22 @@ function ProviderUsage({
   const mark = (
     <ProviderGlyph
       provider={entry.provider}
-      className={cn("size-3.75 shrink-0", entry.provider === "codex" && "text-settings-glyph")}
+      className="size-icon-md shrink-0"
     />
   );
-  const row = "flex h-8.5 w-full items-center gap-2.5 rounded-full px-3.5";
+  const row = "h-control-sm rounded-capsule flex w-full items-center gap-2 px-2 text-sm";
   if (entry.needs) {
     return (
       <div data-slot="usage-row" className={row}>
         {mark}
-        <span className="text-settings-body text-settings-text truncate">{name}</span>
+        <span className="truncate">{name}</span>
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
           <StateDot tone="needs" />
-          <span className="text-settings-small text-settings-warning truncate">Not signed in</span>
+          <span className="text-warning truncate text-xs">Not signed in</span>
         </span>
-        <button
-          type="button"
-          onClick={onSignIn}
-          className="bg-settings-raised border-settings-ring text-settings-meta text-settings-text hover:bg-settings-ring h-6 shrink-0 rounded-full border px-2.5 font-medium transition-colors"
-        >
+        <Button type="button" variant="outline" size="xs" onClick={onSignIn} className="shrink-0">
           Sign in
-        </button>
+        </Button>
       </div>
     );
   }
@@ -334,20 +318,20 @@ function ProviderUsage({
         data-slot="usage-row"
         aria-expanded={open}
         onClick={onToggle}
-        className={cn(row, "hover:bg-settings-ring text-start transition-colors")}
+        className={cn(row, "hover:bg-foreground/8 text-start")}
       >
         {mark}
-        <span className="text-settings-body text-settings-text truncate">{name}</span>
+        <span className="truncate">{name}</span>
         {open ? (
           <>
-            <span className="text-settings-small text-settings-text-tertiary min-w-0 flex-1 truncate">
+            <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
               {windows.length} {windows.length === 1 ? "limit" : "limits"}
             </span>
-            <ChevronUp className="text-settings-text-secondary size-3.5 shrink-0" />
+            <ChevronUp className="text-muted-foreground size-icon-sm shrink-0" />
           </>
         ) : (
           <>
-            <span className="text-settings-small text-settings-text-tertiary min-w-0 flex-1 truncate">
+            <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
               {[windowTitle(top), topResets].filter(Boolean).join(" · ")}
             </span>
             <Share percent={used(top)} limitReached={limitReached} />
@@ -359,10 +343,10 @@ function ProviderUsage({
           <div
             key={window.id}
             data-slot="usage-limit"
-            className="flex h-7.5 items-center gap-2.5 rounded-full ps-9.75 pe-3.5"
+            className="h-control-sm flex items-center gap-2 ps-8 pe-2 text-xs"
           >
-            <span className="text-settings-small text-settings-text-secondary truncate">{windowTitle(window)}</span>
-            <span className="text-settings-small text-settings-text-tertiary min-w-0 flex-1 truncate">
+            <span className="text-foreground/65 truncate">{windowTitle(window)}</span>
+            <span className="text-muted-foreground min-w-0 flex-1 truncate">
               {resets(window)}
             </span>
             <Share percent={used(window)} limitReached={limitReached && used(window) >= 100} />

@@ -99,10 +99,6 @@ function Moving({
   );
 }
 
-/** A help menu row: the design's light words, filled while pointed at. */
-const helpItem =
-  "h-8.5 gap-2.5 px-3.5 text-settings-body text-menu-label focus:bg-settings-ring focus:text-settings-text [&_svg]:size-3.75 [&_svg]:text-settings-text-secondary focus:[&_svg]:text-settings-text";
-
 /** Help at the sidebar's foot: a question mark that opens Send feedback… and Keyboard shortcuts. */
 function HelpMenu() {
   const { open } = useSidebar();
@@ -116,7 +112,6 @@ function HelpMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent
         {...(open ? ({ side: "top", align: "end" } as const) : footMenuPlacement(false))}
-        className="bg-settings-raised border-settings-ring shadow-foot-popover flex w-60 flex-col gap-0.5 border p-1.5 ring-0"
         onCloseAutoFocus={(event) => {
           if (!toFeedback.current) return;
           toFeedback.current = false;
@@ -125,7 +120,6 @@ function HelpMenu() {
         }}
       >
         <DropdownMenuItem
-          className={helpItem}
           onSelect={() => {
             toFeedback.current = true;
           }}
@@ -133,7 +127,7 @@ function HelpMenu() {
           <Comment />
           Send feedback…
         </DropdownMenuItem>
-        <DropdownMenuItem className={helpItem} onSelect={() => openSettings("shortcuts")}>
+        <DropdownMenuItem onSelect={() => openSettings("shortcuts")}>
           <Keyboard />
           Keyboard shortcuts
         </DropdownMenuItem>
