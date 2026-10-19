@@ -12,7 +12,7 @@ import { ConversationView } from "@/app/ConversationView";
 import { FolderDropZone } from "@/app/FolderDropZone";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { Conversation, ConversationView as View, Message, Request, UserRequest } from "@/ipc/generated";
+import type { Conversation, ConversationView as View, Message, Request, RunState, UserRequest } from "@/ipc/generated";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { select } from "@/state/actions";
 import { useBoard } from "@/state/board";
@@ -133,6 +133,9 @@ const setState = (state: UserRequest["state"]) =>
   useBoard.setState(({ board }) =>
     board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, state } } } } : {},
   );
+
+/** The conversation's model's state, as the daemon would publish it. */
+const setRun = (run: RunState) => useBoard.setState(({ board }) => (board ? { board: { ...board, run } } : {}));
 
 /** What has the keyboard, by its label. */
 const focused = () => document.activeElement?.getAttribute("aria-label") ?? document.activeElement?.tagName ?? null;
@@ -525,6 +528,36 @@ async function flipsCase(seen: Record<string, unknown>) {
   seen.after = sendButton()?.dataset.state;
 }
 
+/**
+ * #422: a session's model starts again for each worker report and landing while the work goes
+ * on. Its first start shows the starting spinner; every later one keeps Stop, never dimming.
+ */
+async function restartsCase(seen: Record<string, unknown>) {
+  await until("the editor", () => field() !== null);
+  setState({ type: "working" });
+  setRun("starting");
+  await until("the first start", () => sendButton()?.dataset.state === "starting", 3000);
+  seen.first = sendButton()?.dataset.state;
+  setRun("running");
+  await until("Stop", () => sendButton()?.dataset.state === "stop", 3000);
+  const states = new Set<string>();
+  for (const run of ["idle", "starting", "running", "idle", "starting", "running"] as const) {
+    setRun(run);
+    await sleep(80);
+    states.add(sendButton()?.dataset.state ?? "none");
+  }
+  seen.during = [...states];
+  setRun("idle");
+  setState({ type: "done" });
+  await until("Send back", () => sendButton()?.dataset.state === "send", 3000).catch(() => {});
+  seen.after = sendButton()?.dataset.state;
+  // The next request's first start shows the spinner again.
+  setState({ type: "working" });
+  setRun("starting");
+  await until("the next start", () => sendButton()?.dataset.state === "starting", 3000).catch(() => {});
+  seen.next = sendButton()?.dataset.state;
+}
+
 const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = {
   focus: focusCase,
   uploading: uploadingCase,
@@ -536,6 +569,7 @@ const CASES: Record<string, (seen: Record<string, unknown>) => Promise<void>> = 
   shift: shiftCase,
   dropSend: dropSendCase,
   flips: flipsCase,
+  restarts: restartsCase,
 };
 
 async function drive() {

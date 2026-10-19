@@ -73,7 +73,7 @@ import { ContextRing } from "@/components/assistant-ui/context-ring";
 import { ShieldExclamation } from "@/components/glyphs/permission-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import type { Conversation } from "@/ipc/generated";
+import type { Conversation, RunState } from "@/ipc/generated";
 import type { ComposerProps } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { whenRevealed } from "@/lib/splash";
@@ -612,6 +612,19 @@ function useHeldOn(on: boolean, ms: number): boolean {
   return on || held;
 }
 
+/**
+ * Whether the model is starting for the first time in this stretch of work (`working`). A
+ * session's model starts again for each worker report and landing; those starts keep Stop, so
+ * the button doesn't dim to the spinner and back mid-work (#422).
+ */
+function useFirstStart(run: RunState | null, working: boolean): boolean {
+  const [ran, setRan] = useState(false);
+  // Set while rendering (React's way to adjust state to a prop), not in an effect.
+  if (working && run === "running" && !ran) setRan(true);
+  if (!working && ran) setRan(false);
+  return run === "starting" && !ran;
+}
+
 /** What ⌘⏎ and ⌘-click on Send do in a project's session. */
 const START_TIP = "Start as a new session";
 
@@ -662,12 +675,13 @@ function SendControls({
   const aui = useAui();
   const target = useContext(ComposerTargetContext);
   const conversationId = target?.conversation?.id ?? null;
-  const starting = useBoard(
-    (s) => !!conversationId && s.board?.conversationId === conversationId && s.board.run === "starting",
+  const run = useBoard((s) =>
+    !!conversationId && s.board?.conversationId === conversationId ? s.board.run : null,
   );
   const empty = useAuiState((s) => s.composer.isEmpty);
   const cancellable = useAuiState((s) => s.composer.canCancel);
   const canCancel = useHeldOn(cancellable, STOP_HOLD_MS);
+  const starting = useFirstStart(run, canCancel);
   const dictationOwner = conversationId ?? NEW_CHAT_SCOPE;
   const armed = useEscToStop(canCancel, dictationOwner);
   const steers = useApp((s) => s.settings.followUp === "steer");

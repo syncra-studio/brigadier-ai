@@ -94,3 +94,11 @@ test("Stop stays Stop, its glyph showing, while a merge stops and starts the wor
   assert.equal(seen.glyph, true);
   assert.equal(seen.after, "send");
 });
+
+test("Stop stays Stop while a session's model starts again mid-work; only the work's first start shows the spinner (issue 422)", { timeout: 90000 }, async (t) => {
+  const seen = await polish(t, "restarts");
+  assert.equal(seen.first, "starting");
+  assert.deepEqual(seen.during, ["stop"]);
+  assert.equal(seen.after, "send");
+  assert.equal(seen.next, "starting");
+});
