@@ -102,10 +102,10 @@ export function Rules({ routes, groups }: { routes: RoutePreview[] | null; group
               {rule.effect === "never" ? <BanIcon /> : <PreferIcon />}
               <span className="flex min-w-0 flex-1 flex-col gap-1">
                 <span className="flex min-w-0 items-center gap-2">
-                  <span className="text-settings-body text-settings-text truncate font-medium">{ruleTitle(rule, names)}</span>
+                  <span className="text-label text-foreground truncate font-medium">{ruleTitle(rule, names)}</span>
                   {rule.id === fresh && <Badge tone="link">New</Badge>}
                 </span>
-                <span className="text-settings-small text-settings-text-secondary truncate">
+                <span className="text-xs text-foreground/65 truncate">
                   {ruleLine(rule, names, isNewModelRule(rule))}
                 </span>
               </span>
@@ -114,7 +114,7 @@ export function Rules({ routes, groups }: { routes: RoutePreview[] | null; group
                   <button
                     type="button"
                     aria-label={`${ruleTitle(rule, names)}: actions`}
-                    className="text-settings-text-tertiary hover:text-settings-text flex shrink-0 items-center"
+                    className="text-muted-foreground hover:text-foreground flex shrink-0 items-center"
                   >
                     <DotsHorizontal aria-hidden className="size-3.75" />
                   </button>
@@ -130,7 +130,7 @@ export function Rules({ routes, groups }: { routes: RoutePreview[] | null; group
         </Card>
       )}
       {remove.error && (
-        <p role="alert" className="text-destructive text-settings-small">
+        <p role="alert" className="text-destructive text-xs">
           {remove.error}
         </p>
       )}
@@ -176,7 +176,7 @@ function DraftRow({
     <div data-slot="routing-rule-form" className="flex flex-col gap-3 py-4">
       <div className="flex items-center gap-3.5">
         {draft.effect === "never" ? <BanIcon /> : <PreferIcon />}
-        <div className="text-settings-body text-settings-text-secondary flex min-w-0 flex-1 flex-wrap items-center gap-2">
+        <div className="text-label text-foreground/65 flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <PillSelect label="What the rule does" value={draft.effect} options={EFFECTS} onChange={(effect) => set({ effect })} />
           use
           <DropdownMenu modal={false}>
@@ -203,7 +203,7 @@ function DraftRow({
         </Note>
       )}
       {add.error && (
-        <p role="alert" className="text-destructive text-settings-small">
+        <p role="alert" className="text-destructive text-xs">
           {add.error}
         </p>
       )}

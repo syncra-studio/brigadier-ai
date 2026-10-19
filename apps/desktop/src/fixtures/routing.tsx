@@ -11,7 +11,9 @@ import { revealSetting } from "@/app/settings/reveal";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
 import { Toaster } from "@/components/ui/toast";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { surface } from "@/fixtures/look";
 import { accounts, overviews, previewRoutes, projects, rankings, rules, usageView } from "@/fixtures/routingData";
 import type { RankingsRefresh, Request, RoutePreview } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
@@ -27,7 +29,9 @@ import { useToasts } from "@/state/toasts";
  * for screenshots: ?auto=<category> sets a kind to Automatic first, ?kind=<name> opens a kind,
  * ?more=strength|steps opens a row of More, ?rule=1|2|2b|3 shows a rule being added (a draft, its
  * preview, a clash, added). ?drive=1&edge=1 instead opens Research while it waits with no order
- * of its own and asks for My order, then reads a ratings refresh that failed.
+ * of its own and asks for My order, then reads a ratings refresh that failed. ?drive=look reads
+ * Settings › General's card, select and chosen pill, then Routing's cards, a select and the chosen
+ * pill of an opened kind, to #routing-result too.
  */
 const params = new URLSearchParams(location.search);
 if (params.has("drive")) {
@@ -39,6 +43,13 @@ if (params.has("drive")) {
 
 const auto = params.get("auto");
 const edge = params.has("edge");
+const look = params.get("drive") === "look";
+/** A card's, a select's and a chosen pill's look, under `root`. */
+const looks = (root: ParentNode, cards: string) => ({
+  cards: all(cards, root).map(surface),
+  select: surface(root.querySelector('[data-slot="settings-page"] button[aria-haspopup="menu"]')),
+  chosen: surface(root.querySelector('[data-slot="settings-page"] button[role="radio"][data-state="on"]')),
+});
 useApp.setState((state) => ({
   info: { ...state.info, platform: "macos" } as typeof state.info,
   connection: { ...state.connection, status: "connected" } as typeof state.connection,
@@ -159,6 +170,19 @@ function Fixture() {
           if (more === "steps") revealSetting(ROUTING_PAGE_ROWS.steps.label);
         },
         ...(params.has("rule") ? ruleSteps(params.get("rule") ?? "") : []),
+      ];
+    } else if (look) {
+      steps = [
+        () => openSettings("general"),
+        () => {
+          seen.general = looks(document, '[data-slot="settings-card"]');
+          openSettings("routing");
+        },
+        () => kindButton("Review changes")?.click(),
+        () => {
+          seen.routing = looks(document, '[data-slot="who-does-what"], [data-slot="routing-rules"], [data-slot="routing-more"]');
+          setResult(JSON.stringify(seen));
+        },
       ];
     } else if (edge) {
       steps = [
@@ -306,14 +330,16 @@ function Fixture() {
   }, []);
   return (
     <TooltipProvider>
-      <div className="bg-background text-foreground flex h-screen">
-        <aside className="w-64 shrink-0">
-          <SettingsNav />
-        </aside>
-        <main className="flex h-full min-w-0 flex-1">
-          <div className="min-w-0 flex-1">{page && <SettingsView page={page} />}</div>
-        </main>
-      </div>
+      <SidebarProvider>
+        <div className="bg-background text-foreground flex h-screen w-full">
+          <aside className="w-64 shrink-0">
+            <SettingsNav />
+          </aside>
+          <main className="flex h-full min-w-0 flex-1">
+            <div className="min-w-0 flex-1">{page && <SettingsView page={page} />}</div>
+          </main>
+        </div>
+      </SidebarProvider>
       <Toaster className="top-2" />
       {result && <pre id="routing-result">{result}</pre>}
     </TooltipProvider>

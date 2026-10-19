@@ -115,3 +115,18 @@ test("Routing starts an empty order when nothing runs, and says why a refresh fa
   assert.equal(seen.addModel, true);
   assert.equal(seen.failure, "The refresh failed, so the ratings didn't change: the research model timed out");
 });
+
+// Drawn with every Settings page's parts (#385): its cards are Settings › General's (fill,
+// corners, edge), its selects General's select and its chosen pill General's.
+test("Routing draws its cards, selects and choices as Settings › General does", { timeout: 60000 }, async (t) => {
+  const dump = await renderFixtureLive(t, "routing.html?drive=look", "routing-result", 30000);
+  const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<
+    "general" | "routing",
+    { cards: unknown[]; select: unknown; chosen: unknown }
+  >;
+  assert.ok(seen.general.cards[0] && seen.general.select && seen.general.chosen, "General has a card, a select and a choice");
+  assert.equal(seen.routing.cards.length, 3);
+  for (const card of seen.routing.cards) assert.deepEqual(card, seen.general.cards[0]);
+  assert.deepEqual(seen.routing.select, seen.general.select);
+  assert.deepEqual(seen.routing.chosen, seen.general.chosen);
+});

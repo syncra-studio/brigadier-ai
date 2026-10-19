@@ -117,7 +117,7 @@ export function More({
           onToggle={() => toggle("strength")}
         >
           <div data-slot="model-strength" className="flex flex-col ps-7.5">
-            <div className="border-settings-divider flex items-center gap-6 border-y py-3.5">
+            <div className="border-divider flex items-center gap-6 border-y py-3.5">
               <RowText quiet title="Kind of work" description="Which work to rank the models for" />
               <PillSelect
                 label="The kind of work the models are ranked for"
@@ -127,7 +127,7 @@ export function More({
                 align="end"
               />
             </div>
-            {!view && <p className="text-settings-small text-settings-text-tertiary py-3">Reading the models…</p>}
+            {!view && <p className="text-xs text-muted-foreground py-3">Reading the models…</p>}
             {ranked.map(({ model, strength }, index) => {
               const dim = faded(model, category);
               const isPicked = picked?.provider === model.provider && picked.model === model.id;
@@ -137,28 +137,28 @@ export function More({
                   data-slot="strength-row"
                   className={cn(HAIRLINE_BOTTOM, "flex items-center gap-3.5 py-3")}
                 >
-                  <span className="text-settings-meta text-settings-text-tertiary w-3.5 shrink-0 font-mono">{index + 1}</span>
+                  <span className="text-xs text-muted-foreground w-3.5 shrink-0 font-mono">{index + 1}</span>
                   <span className={cn("flex min-w-0 flex-1 items-center gap-2.5", dim && "opacity-50")}>
                     <Glyph provider={model.provider} className="size-3.75" />
                     <span className="flex min-w-0 items-center gap-2">
-                      <span data-slot="strength-name" className="text-settings-body text-settings-text truncate font-medium">
+                      <span data-slot="strength-name" className="text-label text-foreground truncate font-medium">
                         {model.displayName}
                       </span>
-                      <span className="text-settings-small text-settings-text-tertiary shrink-0">
+                      <span className="text-xs text-muted-foreground shrink-0">
                         {TIER_LABELS[tierFor(model, category)]}
                       </span>
                     </span>
                   </span>
-                  <span aria-hidden className={cn("bg-settings-track h-1 w-105 shrink rounded-full", dim && "opacity-50")}>
+                  <span aria-hidden className={cn("bg-muted h-1 w-105 shrink rounded-full", dim && "opacity-50")}>
                     <span
-                      className={cn("block h-full rounded-full", isPicked ? "bg-settings-text" : "bg-settings-bar")}
+                      className={cn("block h-full rounded-full", isPicked ? "bg-foreground" : "bg-muted-foreground/60")}
                       style={{ width: `${Math.max(0, Math.min(10, strength)) * 10}%` }}
                     />
                   </span>
                   <span
                     className={cn(
-                      "text-settings-meta w-7.5 shrink-0 text-end font-mono font-medium",
-                      dim ? "text-settings-text-tertiary" : "text-settings-text",
+                      "text-xs w-7.5 shrink-0 text-end font-mono font-medium",
+                      dim ? "text-muted-foreground" : "text-foreground",
                     )}
                   >
                     {strength.toFixed(1)}
@@ -176,13 +176,13 @@ export function More({
               );
             })}
             <div className="flex items-center gap-3.5 py-3">
-              <span className="text-settings-meta text-settings-text-tertiary min-w-0 flex-1">
+              <span className="text-xs text-muted-foreground min-w-0 flex-1">
                 {registry ? `Ratings updated ${day(registry.updated)}` : "Ratings"}
                 {registry?.checkedAtMs != null && ` · checked ${since(registry.checkedAtMs, now)}`}
               </span>
               <LinkButton
                 data-setting={MORE_ROWS.refresh.label}
-                className="text-settings-meta gap-1.5 font-medium"
+                className="text-xs gap-1.5 font-medium"
                 disabled={running || starting.busy || refresh === null}
                 onClick={() => starting.run(start)}
               >
@@ -194,7 +194,7 @@ export function More({
               </LinkButton>
             </div>
             {failure && (
-              <p role="alert" className="text-destructive text-settings-meta pb-3">
+              <p role="alert" className="text-destructive text-xs pb-3">
                 {failure}
               </p>
             )}
@@ -212,8 +212,8 @@ export function More({
                 <li key={step} className="flex gap-3.5 py-2.5">
                   <StepNumber>{index + 1}</StepNumber>
                   <span className="flex min-w-0 flex-1 flex-col gap-0.75 pt-0.5">
-                    <span className="text-settings-body text-settings-text">{step}</span>
-                    <span className="text-settings-small text-settings-text-secondary">{hint}</span>
+                    <span className="text-label text-foreground">{step}</span>
+                    <span className="text-xs text-foreground/65">{hint}</span>
                   </span>
                 </li>
               ))}
@@ -247,11 +247,11 @@ function MoreRowHead({
         type="button"
         aria-expanded={open}
         onClick={onToggle}
-        className="flex w-full items-center gap-3.5 py-3.5 text-start [&>svg:first-child]:text-settings-text-secondary [&>svg:first-child]:size-4 [&>svg:first-child]:shrink-0"
+        className="flex w-full items-center gap-3.5 py-3.5 text-start [&>svg:first-child]:text-foreground/65 [&>svg:first-child]:size-4 [&>svg:first-child]:shrink-0"
       >
         {icon}
         <RowText title={row.label} description={row.description} />
-        {summary && !open && <span className="text-settings-small text-settings-text-tertiary shrink-0">{summary}</span>}
+        {summary && !open && <span className="text-xs text-muted-foreground shrink-0">{summary}</span>}
         <OpenChevron open={open} />
       </button>
       {open && children}

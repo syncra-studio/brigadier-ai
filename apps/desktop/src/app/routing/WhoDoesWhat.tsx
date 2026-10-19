@@ -165,7 +165,7 @@ function KindRow({
   return (
     <div data-slot="routing-kind" data-open={open || undefined} className="flex flex-col">
       <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-3.5 py-3.5 text-start">
-        <Icon aria-hidden className="text-settings-text-secondary size-4 shrink-0" />
+        <Icon aria-hidden className="text-foreground/65 size-4 shrink-0" />
         <RowText title={PLAIN_KIND_NAMES[category]} description={line} />
         <NowPick category={category} route={route} groups={groups} now={now} />
         <OpenChevron open={open} />
@@ -191,21 +191,21 @@ function NowPick({
 }) {
   // A chat's own model, or a review's for each vendor's change, varies.
   if (category === "chat" || reviewers(route)) {
-    return <span className="text-settings-small text-settings-text-tertiary shrink-0">Varies</span>;
+    return <span className="text-xs text-muted-foreground shrink-0">Varies</span>;
   }
   if (!route) return null;
   const outcome = route.outcome;
   return (
     <span data-slot="now-pick" className="flex shrink-0 items-center gap-2">
-      <span className="text-settings-meta text-settings-text-tertiary">Now</span>
+      <span className="text-xs text-muted-foreground">Now</span>
       {outcome.type === "wait" ? (
-        <span className="text-settings-small text-settings-warning">
+        <span className="text-xs text-warning">
           Waits{outcome.resetsAtMs !== null && ` · ${formatCountdown(outcome.resetsAtMs, now)}`}
         </span>
       ) : (
         <span className="flex items-center gap-1.75">
           <Glyph provider={outcome.choice.provider} className="size-3.5" />
-          <span className="text-settings-small text-settings-text">
+          <span className="text-xs text-foreground">
             {shortModelName(groups, outcome.choice.provider, outcome.choice.model ?? "")}
           </span>
         </span>
@@ -293,7 +293,7 @@ function WhoPicks({
         <AutoPicks category={category} route={route} groups={groups} onSeeStrengths={onSeeStrengths} />
       )}
       {action.error && (
-        <p role="alert" className="text-destructive text-settings-small pb-3">
+        <p role="alert" className="text-destructive text-xs pb-3">
           {action.error}
         </p>
       )}
@@ -328,10 +328,10 @@ function AutoPicks({
     <div data-slot="auto-picks" className={cn(HAIRLINE_TOP, "flex flex-col pt-1 pb-3")}>
       {eligible.map((candidate, index) => (
         <div key={`${candidate.provider}/${candidate.model}`} data-slot="auto-pick" className="flex h-10 items-center gap-3">
-          <span className="text-settings-meta text-settings-text-tertiary w-2 shrink-0 font-mono">{index + 1}</span>
+          <span className="text-xs text-muted-foreground w-2 shrink-0 font-mono">{index + 1}</span>
           <span className="flex min-w-0 flex-1 items-center gap-2">
             <Glyph provider={candidate.provider} className="size-3.5" />
-            <span className="text-settings-body text-settings-text truncate">{name(candidate.provider, candidate.model)}</span>
+            <span className="text-label text-foreground truncate">{name(candidate.provider, candidate.model)}</span>
           </span>
           {byAuthor ? (
             byAuthor.has(`${candidate.provider}/${candidate.model}`) && (
@@ -342,18 +342,18 @@ function AutoPicks({
           ) : (
             picked &&
             index === 1 && (
-              <span className="text-settings-small text-settings-text-tertiary truncate">
+              <span className="text-xs text-muted-foreground truncate">
                 Next if {name(picked.provider, picked.model)} can't run
               </span>
             )
           )}
-          <span className="text-settings-meta text-settings-text w-7.5 shrink-0 text-end font-mono font-medium">
+          <span className="text-xs text-foreground w-7.5 shrink-0 text-end font-mono font-medium">
             {candidate.score?.toFixed(1)}
           </span>
         </div>
       ))}
       {skipped.length > 0 && (
-        <p className="text-settings-small text-settings-text-tertiary pt-1">
+        <p className="text-xs text-muted-foreground pt-1">
           Skipped: {joinWords(skipped.map((candidate) => name(candidate.provider, candidate.model)))}{" "}
           {skipped.length === 1 ? "is" : "are"} below the {TIER_LABELS[floor]} tier this work needs.{" "}
           <LinkButton onClick={onSeeStrengths}>See strengths</LinkButton>
@@ -417,7 +417,7 @@ function OrderList({
       </ol>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
-          <LinkButton className="text-settings-small h-9 w-fit gap-2 ps-6.5 font-medium">
+          <LinkButton className="text-xs h-9 w-fit gap-2 ps-6.5 font-medium">
             <Plus aria-hidden className="size-3.5" />
             Add model
           </LinkButton>
@@ -468,7 +468,7 @@ function OrderPlace({
   const candidate = route?.candidates.find((found) => found.provider === target.provider && found.model === resolved);
   const effort = entry.effort ?? candidate?.effort ?? null;
   return (
-    <li data-slot="ranked-place" className={cn("flex h-11 items-center gap-3 rounded-lg", dragging && "bg-settings-raised")}>
+    <li data-slot="ranked-place" className={cn("flex h-11 items-center gap-3 rounded-lg", dragging && "bg-foreground/8")}>
       <button
         type="button"
         aria-label={`Move ${name} (${position} of ${count}); drag, or press up and down`}
@@ -477,12 +477,12 @@ function OrderPlace({
         className="flex h-full cursor-grab touch-none items-center gap-3 active:cursor-grabbing disabled:cursor-default"
         {...grip}
       >
-        <GripIcon className="text-settings-grip" />
-        <span className="text-settings-meta text-settings-text-tertiary w-2 font-mono">{position}</span>
+        <GripIcon className="text-muted-foreground" />
+        <span className="text-xs text-muted-foreground w-2 font-mono">{position}</span>
       </button>
       <span className="flex min-w-0 flex-1 items-center gap-2">
         <Glyph provider={target.provider} className="size-3.5" />
-        <span className="text-settings-body text-settings-text truncate">{name}</span>
+        <span className="text-label text-foreground truncate">{name}</span>
       </span>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
@@ -507,7 +507,7 @@ function OrderPlace({
           <button
             type="button"
             aria-label={`${name}: actions`}
-            className="text-settings-text-tertiary hover:text-settings-text flex h-full shrink-0 items-center"
+            className="text-muted-foreground hover:text-foreground flex h-full shrink-0 items-center"
           >
             <DotsHorizontal aria-hidden className="size-3.75" />
           </button>

@@ -179,6 +179,9 @@ export function SettingsAdvanced({
   );
 }
 
+/** A card's surface: every Settings page's fill, edge and corners. */
+export const settingsCard = "bg-card border-divider rounded-settings flex flex-col overflow-hidden border";
+
 /** A card's rows split as its own are: a hairline under each but the last, inset from the edges. */
 export const settingsRows =
   "*:not-last:relative *:not-last:after:pointer-events-none *:not-last:after:absolute *:not-last:after:inset-x-4 *:not-last:after:bottom-0 *:not-last:after:h-px *:not-last:after:bg-divider";
@@ -188,7 +191,7 @@ export function SettingsCard({ children, className }: { children: ReactNode; cla
   return (
     <div
       data-slot="settings-card"
-      className={cn("bg-card border-divider rounded-settings flex flex-col overflow-hidden border", settingsRows, className)}
+      className={cn(settingsCard, settingsRows, className)}
     >
       {children}
     </div>

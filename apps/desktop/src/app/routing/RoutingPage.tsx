@@ -56,7 +56,7 @@ export function RoutingPage() {
       title="Routing"
       description="Which model takes each kind of work. Brigadier picks automatically; change only what you want to."
       actions={
-        <span className="text-settings-small text-settings-text-tertiary flex items-center gap-1.5 pt-2.25">
+        <span className="text-xs text-muted-foreground flex items-center gap-1.5 pt-2.25">
           <Info aria-hidden className="size-3.25" />
           Applies to new work only
         </span>
