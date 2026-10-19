@@ -44,45 +44,62 @@ fn thread(replies: Replies) -> Script {
                 return Reply::text("Done.");
             }
             let input = turn.input.clone();
-            let (tool, args) =
-                if let Some(command) = input.lines().find_map(|line| line.strip_prefix("start ")) {
-                    (
-                        "start_preview",
-                        json!({ "command": command, "name": "site" }),
-                    )
-                } else if let Some(command) = input
-                    .lines()
-                    .find_map(|line| line.strip_prefix("start-app "))
-                {
-                    (
-                        "start_preview",
-                        json!({ "command": command, "name": "app", "kind": "app" }),
-                    )
-                } else if let Some(command) = input
-                    .lines()
-                    .find_map(|line| line.strip_prefix("start-for-user "))
-                {
-                    (
-                        "start_preview",
-                        json!({ "command": command, "name": "site", "purpose": "user" }),
-                    )
-                } else if let Some(command) = input
-                    .lines()
-                    .find_map(|line| line.strip_prefix("start-with-env "))
-                {
-                    (
-                        "start_preview",
-                        json!({ "command": command, "name": "site", "env": {"GREETING": "hi"} }),
-                    )
-                } else if input.contains("Please stop it.") {
-                    ("stop_preview", json!({}))
-                } else if input.contains("Please merge.") {
-                    ("finish_session", json!({ "user_words": "Please merge." }))
-                } else if input.contains("Show me the log.") {
-                    ("preview_log", json!({}))
-                } else {
-                    return Reply::text("[quiet]");
-                };
+            let (tool, args) = if let Some(command) =
+                input.lines().find_map(|line| line.strip_prefix("start "))
+            {
+                (
+                    "start_preview",
+                    json!({ "command": command, "name": "site" }),
+                )
+            } else if let Some(command) = input
+                .lines()
+                .find_map(|line| line.strip_prefix("start-app "))
+            {
+                (
+                    "start_preview",
+                    json!({ "command": command, "name": "app", "kind": "app" }),
+                )
+            } else if let Some(command) = input
+                .lines()
+                .find_map(|line| line.strip_prefix("start-for-user "))
+            {
+                (
+                    "start_preview",
+                    json!({ "command": command, "name": "site", "purpose": "user" }),
+                )
+            } else if let Some(command) = input
+                .lines()
+                .find_map(|line| line.strip_prefix("start-with-env "))
+            {
+                (
+                    "start_preview",
+                    json!({ "command": command, "name": "site", "env": {"GREETING": "hi"} }),
+                )
+            } else if let Some(command) = input
+                .lines()
+                .find_map(|line| line.strip_prefix("start-test "))
+            {
+                (
+                    "start_preview",
+                    json!({ "command": command, "name": "tests", "kind": "test" }),
+                )
+            } else if let Some(command) = input
+                .lines()
+                .find_map(|line| line.strip_prefix("start-pdf "))
+            {
+                (
+                    "start_preview",
+                    json!({ "command": command, "name": "report", "kind": "pdf", "target": "out.pdf" }),
+                )
+            } else if input.contains("Please stop it.") {
+                ("stop_preview", json!({}))
+            } else if input.contains("Please merge.") {
+                ("finish_session", json!({ "user_words": "Please merge." }))
+            } else if input.contains("Show me the log.") {
+                ("preview_log", json!({}))
+            } else {
+                return Reply::text("[quiet]");
+            };
             let reply = turn.call(tool, args).await;
             replies
                 .lock()
@@ -583,6 +600,7 @@ async fn a_stop_during_a_start_refuses_it_and_a_late_log_snapshot_keeps_the_end(
             env: None,
             workdir: None,
             kind: None,
+            target: None,
             purpose: None,
         };
         manager.start_preview(&id, args).await
@@ -1633,6 +1651,70 @@ async fn start_again_runs_an_ended_previews_own_command_from_its_record() {
         .await
         .unwrap();
     gone(&flow, child).await;
+    flow.stop().await;
+}
+
+/// Besides web pages and apps, a preview is a test run (running once started, its command its
+/// target, done when it ends well), a rendered PDF (ready once its file is there) or an iOS
+/// simulator run, read from its command with its device.
+#[tokio::test]
+async fn test_runs_pdfs_and_simulators_are_previews_with_their_targets() {
+    use crate::work::PreviewKind;
+    let flow = Flow::start("preview-kinds", Options::default(), thread(Arc::default())).await;
+    let latest = |board: &Board| board.sorted_previews().pop().unwrap();
+
+    flow.say("start-test echo '3 passed'").await;
+    let board = flow
+        .until("the test run ended", |board| {
+            !board.previews.is_empty() && !latest(board).state.is_live()
+        })
+        .await;
+    let tests = latest(&board);
+    assert_eq!(
+        (tests.kind, tests.target.as_deref()),
+        (PreviewKind::Test, Some("echo '3 passed'"))
+    );
+    assert!(
+        matches!(tests.state, PreviewState::Exited { code: Some(0), .. }),
+        "{:?}",
+        tests.state
+    );
+
+    flow.say("start-pdf sleep 1; echo pdf > out.pdf; sleep 600")
+        .await;
+    let board = flow
+        .until("the PDF is there", |board| {
+            latest(board).kind == PreviewKind::Pdf && latest(board).state == PreviewState::Running
+        })
+        .await;
+    let pdf = latest(&board);
+    assert_eq!(pdf.target.as_deref(), Some("out.pdf"));
+    assert!(
+        workspace(&flow).join("out.pdf").is_file(),
+        "ready once it is there"
+    );
+    flow.manager
+        .stop_preview(flow.conversation.clone(), Some(pdf.id.clone()))
+        .await
+        .unwrap();
+
+    flow.say("start true simctl boot 'iPhone 16'; sleep 600")
+        .await;
+    let board = flow
+        .until("the simulator run", |board| {
+            latest(board).kind == PreviewKind::Simulator
+                && latest(board).state == PreviewState::Running
+        })
+        .await;
+    let simulator = latest(&board);
+    assert_eq!(
+        (simulator.target.as_deref(), simulator.url.as_deref()),
+        (Some("iPhone 16"), None)
+    );
+    flow.manager
+        .stop_preview(flow.conversation.clone(), None)
+        .await
+        .unwrap();
     flow.stop().await;
 }
 

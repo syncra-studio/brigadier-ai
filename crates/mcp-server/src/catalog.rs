@@ -406,7 +406,9 @@ group. It starts as Starting and reads running only once it is ready (a web prev
 port answers, or an app's window opens): until preview_log says it is running, tell the user \
 it is starting, not that it runs. `kind` \"app\" (inferred for `tauri dev` and Electron) is a \
 desktop app with its own window and no URL; for \"web\" tell the user where to look (the URL \
-and port). It stops when you call stop_preview, when the user presses Stop, and when the \
+and port). \"simulator\" is an app run in an iOS simulator (its device as `target`), \"pdf\" a \
+rendered PDF (its file as `target`, ready once it is there), \"test\" a test run the user \
+watches to its result; each is inferred from its command when left out. It stops when you call stop_preview, when the user presses Stop, and when the \
 session is merged (unless `purpose` is \"user\"), archived or deleted; for one-off commands use your shell instead. Users may \
 pause previews; preview_log gives the logs. Running Brigadier itself, use a new \
 BRIGADIER_DATA_DIR under /tmp and a dev identity, never ai.brigadier.app. macOS GUI previews below \

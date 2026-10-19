@@ -41,6 +41,9 @@ test("an activity's state word: building, starting, running for an app, showing 
   assert.equal(previewWord(web({ type: "starting" })), "Starting");
   assert.equal(previewWord(web({ type: "running" })), "Showing");
   assert.equal(previewWord(app({ type: "running" })), "Running");
+  for (const kind of ["simulator", "pdf", "test"] as const) {
+    assert.equal(previewWord({ ...preview(kind, { type: "running" }), kind }), "Running", kind);
+  }
   assert.equal(previewWord(web({ type: "paused" })), "Paused");
   assert.equal(previewWord(web({ type: "exited", code: 0, status: "exit 0" })), "Stopped");
   assert.equal(previewWord(web({ type: "stopped", reason: "by the user" } as PreviewState)), "Stopped");

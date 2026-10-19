@@ -38,10 +38,119 @@ pub(super) fn infer_kind(command: &str) -> PreviewKind {
             || (program(word, "electron-vite") && next == "dev")
             || word.contains(".app/contents/macos/")
     });
+    let after = |at: usize, wanted: &dyn Fn(&str) -> bool| {
+        words.iter().skip(at + 1).take(3).any(|word| wanted(word))
+    };
+    let runners = [
+        "cargo",
+        "npm",
+        "pnpm",
+        "yarn",
+        "bun",
+        "go",
+        "swift",
+        "dotnet",
+        "deno",
+        "mix",
+        "xcodebuild",
+        "gradle",
+        "gradlew",
+        "mvn",
+        "make",
+        "flutter",
+    ];
+    let test = words.iter().enumerate().any(|(at, word)| {
+        [
+            "pytest", "jest", "vitest", "rspec", "phpunit", "mocha", "ctest",
+        ]
+        .iter()
+        .any(|name| program(word, name))
+            || (runners.iter().any(|name| program(word, name))
+                && after(at, &|next| {
+                    next == "test" || next == "nextest" || next.starts_with("test:")
+                }))
+    });
+    let simulator = words.iter().enumerate().any(|(at, word)| {
+        *word == "simctl"
+            || (program(word, "xcodebuild") && words.iter().any(|w| w.contains("simulator")))
+            || (*word == "simulator" && at > 0 && words[at - 1] == "-a")
+    });
     if app {
         PreviewKind::App
+    } else if test {
+        PreviewKind::Test
+    } else if simulator {
+        PreviewKind::Simulator
+    } else if words.iter().any(|word| word.ends_with(".pdf")) {
+        PreviewKind::Pdf
     } else {
         PreviewKind::Web
+    }
+}
+
+/// The command's words as a shell splits them, quotes taken off and case kept.
+fn shell_words(command: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut started = false;
+    for c in command.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => word.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                started = true;
+            }
+            (None, c) if c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')') => {
+                if started || !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+                started = false;
+            }
+            (None, c) => word.push(c),
+        }
+    }
+    if started || !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// What a preview of `kind` started by `command` shows when that isn't a URL: a simulator's
+/// device (a destination's `name=`, `simctl`'s device, else "iOS Simulator"), a PDF's file
+/// (the command's last `.pdf`), a test run's command.
+pub(super) fn infer_target(kind: PreviewKind, command: &str) -> Option<String> {
+    let words = shell_words(command);
+    match kind {
+        PreviewKind::Web | PreviewKind::App => None,
+        PreviewKind::Test => Some(command.trim().to_owned()),
+        PreviewKind::Pdf => words
+            .iter()
+            .rfind(|word| word.to_lowercase().ends_with(".pdf"))
+            .cloned(),
+        PreviewKind::Simulator => {
+            let named = words.iter().find_map(|word| {
+                let at = word.find("name=")?;
+                let name = word[at + "name=".len()..].split(',').next()?.trim();
+                (!name.is_empty()).then(|| name.to_owned())
+            });
+            let device = || {
+                let at = words.iter().position(|word| word == "simctl")?;
+                let verb = words.get(at + 1)?;
+                ["boot", "launch", "install", "openurl", "io"]
+                    .contains(&verb.as_str())
+                    .then(|| words.get(at + 2))
+                    .flatten()
+                    .filter(|device| !device.starts_with('-') && device.as_str() != "booted")
+                    .cloned()
+            };
+            Some(
+                named
+                    .or_else(device)
+                    .unwrap_or_else(|| "iOS Simulator".to_owned()),
+            )
+        }
     }
 }
 
@@ -305,6 +414,62 @@ mod tests {
             "electron-vite build",
         ] {
             assert_eq!(infer_kind(web), PreviewKind::Web, "{web}");
+        }
+    }
+
+    /// Test commands are test runs, simulator commands simulators and a `.pdf` a PDF, each
+    /// with what it shows; an app's dev command stays an app.
+    #[test]
+    fn test_runs_simulators_and_pdfs_are_read_from_their_commands() {
+        for (command, kind, target) in [
+            (
+                "cargo test -p core",
+                PreviewKind::Test,
+                Some("cargo test -p core"),
+            ),
+            (
+                "pnpm --filter app test",
+                PreviewKind::Test,
+                Some("pnpm --filter app test"),
+            ),
+            (
+                "npm run test:unit",
+                PreviewKind::Test,
+                Some("npm run test:unit"),
+            ),
+            (
+                "python3 -m pytest -q",
+                PreviewKind::Test,
+                Some("python3 -m pytest -q"),
+            ),
+            ("go test ./...", PreviewKind::Test, Some("go test ./...")),
+            (
+                "xcodebuild -scheme Todo -destination 'platform=iOS Simulator,name=iPhone 16' build && xcrun simctl launch booted ai.todo",
+                PreviewKind::Simulator,
+                Some("iPhone 16"),
+            ),
+            (
+                "xcrun simctl boot \"iPad Air\"",
+                PreviewKind::Simulator,
+                Some("iPad Air"),
+            ),
+            (
+                "open -a Simulator",
+                PreviewKind::Simulator,
+                Some("iOS Simulator"),
+            ),
+            (
+                "pandoc README.md -o out/Report.pdf && open out/Report.pdf",
+                PreviewKind::Pdf,
+                Some("out/Report.pdf"),
+            ),
+            ("pnpm dev", PreviewKind::Web, None),
+            ("pnpm tauri dev", PreviewKind::App, None),
+            ("pnpm testing-server", PreviewKind::Web, None),
+        ] {
+            let found = infer_kind(command);
+            assert_eq!(found, kind, "{command}");
+            assert_eq!(infer_target(found, command).as_deref(), target, "{command}");
         }
     }
 

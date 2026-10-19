@@ -617,6 +617,11 @@ pub struct Preview {
     pub url: Option<String>,
     #[serde(default)]
     pub kind: PreviewKind,
+    /// What it shows when that isn't a URL: a simulator's device ("iPhone 16"), a PDF's file,
+    /// a test run's command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target: Option<String>,
     /// The worker that started it, in its own worktree or scratch folder; none for the
     /// thread's. A worker's preview stops with its task's folder, not with the thread's
     /// workspace.
@@ -660,6 +665,13 @@ pub enum PreviewKind {
     Web,
     /// A desktop app that opens its own window (`tauri dev`, Electron): ready once it does.
     App,
+    /// An app run in an iOS simulator (`xcrun simctl`, `xcodebuild` for a simulator): running
+    /// once started; its device is its `target`.
+    Simulator,
+    /// A rendered PDF: ready once its file (its `target`) is there.
+    Pdf,
+    /// A test run: running once started, it ends with its result; its log is its output.
+    Test,
 }
 
 /// Where a preview stands.

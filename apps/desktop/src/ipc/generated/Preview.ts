@@ -43,6 +43,11 @@ log: string | null,
  */
 url?: string, kind: PreviewKind, 
 /**
+ * What it shows when that isn't a URL: a simulator's device ("iPhone 16"), a PDF's file,
+ * a test run's command.
+ */
+target?: string, 
+/**
  * The worker that started it, in its own worktree or scratch folder; none for the
  * thread's. A worker's preview stops with its task's folder, not with the thread's
  * workspace.

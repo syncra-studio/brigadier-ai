@@ -3,4 +3,4 @@
 /**
  * What a preview shows the user, which decides when it is ready and whether it has a URL.
  */
-export type PreviewKind = "web" | "app";
+export type PreviewKind = "web" | "app" | "simulator" | "pdf" | "test";

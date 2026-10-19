@@ -35,12 +35,12 @@ export function latestLine(tail: string): string {
   return lines.findLast(Boolean) ?? "";
 }
 
-/** A preview's state in a word. A web page that is up is showing; an app is running. */
+/** A preview's state in a word. A web page that is up is showing; an app, a simulator, a PDF or a test run is running. */
 export function previewWord(preview: Preview): string {
   const { state } = preview;
   switch (state.type) {
     case "starting": return preview.building ? "Building" : "Starting";
-    case "running": return preview.kind === "app" ? "Running" : "Showing";
+    case "running": return preview.kind === "web" ? "Showing" : "Running";
     case "paused": return "Paused";
     case "stopped": return "Stopped";
     case "exited": return state.code === 0 ? "Stopped" : "Failed";

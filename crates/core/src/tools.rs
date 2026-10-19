@@ -657,10 +657,16 @@ pub struct StartPreview {
     #[serde(default)]
     pub workdir: Option<String>,
     /// "web" for a page the user opens in a browser, "app" for a desktop app that opens its own
-    /// window (it gets no URL). Left out, `tauri dev` and Electron commands are "app", anything
-    /// else "web".
+    /// window (it gets no URL), "simulator" for an app run in an iOS simulator, "pdf" for a
+    /// rendered PDF, "test" for a test run the user watches to its result. Left out, it is read
+    /// from the command: `tauri dev` and Electron are "app", `simctl` or a simulator
+    /// destination "simulator", a test command "test", a `.pdf` file "pdf", anything else "web".
     #[serde(default)]
     pub kind: Option<crate::work::PreviewKind>,
+    /// What it shows when that isn't a URL: the simulator's device ("iPhone 16"), the PDF's
+    /// path. Read from the command when left out; a test run's is its command.
+    #[serde(default)]
+    pub target: Option<String>,
     /// Why it runs: "user" when the user asked to see it or to keep it running, so the merge
     /// of the session's work leaves it running; "proof" (the default) when you started it to
     /// check or show your change, so that merge stops it.

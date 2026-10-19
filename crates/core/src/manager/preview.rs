@@ -104,6 +104,8 @@ pub(crate) struct LivePreview {
     pid: u32,
     kind: PreviewKind,
     workspace: PathBuf,
+    /// A PDF preview's file: it is ready once that is there.
+    pdf: Option<PathBuf>,
     log: PathBuf,
     /// Cancelled once it is ready to look at (it moved from Starting to Running).
     ready: CancellationToken,
@@ -381,6 +383,7 @@ impl SessionManager {
             env: Some(env),
             workdir: Some(preview.workdir.clone()),
             kind: Some(preview.kind),
+            target: preview.target.clone(),
             purpose: Some(crate::tools::PreviewPurpose::User),
         };
         self.start_preview_as(&id, args, starter, stops, Some(preview_id.clone()))
@@ -444,6 +447,11 @@ impl SessionManager {
         let kind = args
             .kind
             .unwrap_or_else(|| super::preview_ready::infer_kind(&command));
+        let target = args
+            .target
+            .map(|target| target.trim().to_owned())
+            .filter(|target| !target.is_empty())
+            .or_else(|| super::preview_ready::infer_target(kind, &command));
         let for_user = args.purpose == Some(crate::tools::PreviewPurpose::User);
         let mut env = args.env.unwrap_or_default();
         // As given, for a start again: what Brigadier adds is added again then.
@@ -609,6 +617,7 @@ impl SessionManager {
             task_id: task.clone(),
             building: false,
             env: given_env,
+            target: target.clone(),
         };
         let live = Arc::new(LivePreview {
             conversation: id.clone(),
@@ -618,6 +627,9 @@ impl SessionManager {
             pid,
             kind,
             workspace,
+            pdf: target
+                .filter(|_| kind == PreviewKind::Pdf)
+                .map(|file| workdir.join(file)),
             log,
             ready: CancellationToken::new(),
             reason: Mutex::default(),
@@ -705,6 +717,17 @@ impl SessionManager {
             PreviewKind::App => {
                 " It is a desktop app: it opens its own window and gets no URL, so never send \
                  the user to an address it prints."
+            }
+            PreviewKind::Simulator => {
+                " It runs in an iOS simulator, which the user sees in Simulator: it gets no URL."
+            }
+            PreviewKind::Pdf => {
+                " It renders a PDF: the user opens that file, not an address; it is ready once \
+                 the file is there."
+            }
+            PreviewKind::Test => {
+                " It is a test run: it ends with its result, which the user reads in its log; \
+                 attach_proof its output with kind \"test\" when it proves the change."
             }
             PreviewKind::Web => "",
         };
@@ -927,6 +950,18 @@ impl SessionManager {
     /// while it isn't.
     async fn preview_ready(&self, live: &LivePreview) -> Option<Option<String>> {
         use super::preview_ready as ready;
+        match live.kind {
+            // Nothing of theirs to wait for: running once started.
+            PreviewKind::Simulator | PreviewKind::Test => return Some(None),
+            PreviewKind::Pdf => {
+                let file = live.pdf.clone()?;
+                return blocking(move || Ok(file.is_file()))
+                    .await
+                    .unwrap_or(false)
+                    .then_some(None);
+            }
+            PreviewKind::Web | PreviewKind::App => {}
+        }
         let web = live.kind == PreviewKind::Web;
         if !web && !ready::SEES_WINDOWS {
             return Some(None);
@@ -1072,7 +1107,9 @@ impl SessionManager {
         let path = live.log.clone();
         let url = match live.kind {
             PreviewKind::Web => blocking(move || Ok(log_url(&path))).await.ok().flatten(),
-            PreviewKind::App => None,
+            PreviewKind::App | PreviewKind::Simulator | PreviewKind::Pdf | PreviewKind::Test => {
+                None
+            }
         };
         let _updating = live.updating.lock().await;
         let preview = match self.core.board(id).await {
@@ -1082,7 +1119,13 @@ impl SessionManager {
         if let Some(mut preview) = preview {
             // Natural exits stay in the list. User stops send their note after removal,
             // when the ID is no longer available and the stored log is ready.
+            // A test run or a PDF's render that ends well has done what it was for.
+            let finished = matches!(live.kind, PreviewKind::Test | PreviewKind::Pdf)
+                && matches!(state, PreviewState::Exited { code: Some(0), .. });
             let told = match &state {
+                PreviewState::Exited { status, .. } if finished => {
+                    Some(format!("finished ({status})"))
+                }
                 PreviewState::Exited { status, .. } => Some(format!("ended on its own ({status})")),
                 _ => None,
             };
@@ -1094,8 +1137,8 @@ impl SessionManager {
                 start.ending = true;
                 start.answered
             };
-            if let (PreviewState::Exited { status, .. }, true, None) =
-                (&state, answered, &live.task)
+            if let (PreviewState::Exited { status, .. }, true, None, false) =
+                (&state, answered, &live.task, finished)
             {
                 let path = live.log.clone();
                 let last = blocking(move || Ok(read_log(&path).0))
@@ -1924,6 +1967,7 @@ impl SessionManager {
                 pid: preview.pid.unwrap_or_default(),
                 kind: preview.kind,
                 workspace: PathBuf::from(&preview.workspace),
+                pdf: None,
                 log: dir.join(format!("{}.log", preview.id)),
                 ready: CancellationToken::new(),
                 reason: Mutex::new(Some("Brigadier quit".into())),
@@ -2610,6 +2654,8 @@ fn waits_for(kind: PreviewKind) -> &'static str {
              opens a window"
         }
         PreviewKind::App => "it opens its window",
+        PreviewKind::Simulator | PreviewKind::Test => "it has started",
+        PreviewKind::Pdf => "its PDF file is there",
     }
 }
 
@@ -2777,6 +2823,7 @@ while True: time.sleep(0.03)
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
+            pdf: None,
             ready: CancellationToken::new(),
             log: flow.repo.join("unused.log"),
             reason: Mutex::default(),
@@ -2901,6 +2948,7 @@ while True:
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
+            pdf: None,
             ready: CancellationToken::new(),
             log: flow.repo.join("unused.log"),
             reason: Mutex::default(),
@@ -2972,6 +3020,7 @@ while True:
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
+            pdf: None,
             ready: CancellationToken::new(),
             log: flow.repo.join("unused.log"),
             reason: Mutex::default(),
@@ -3041,6 +3090,7 @@ while True:
             pid: child.id(),
             kind: PreviewKind::Web,
             workspace: flow.repo.clone(),
+            pdf: None,
             ready: CancellationToken::new(),
             log: flow.repo.join("unused.log"),
             reason: Mutex::default(),
