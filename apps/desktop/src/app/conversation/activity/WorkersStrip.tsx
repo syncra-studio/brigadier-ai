@@ -1,6 +1,5 @@
 import { ChevronRight, StopCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, memo, useContext, useMemo, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
 
 import { lastReplies, type StripView, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
 import { StopWorker } from "@/app/conversation/activity/StopWorker";
@@ -29,11 +28,8 @@ function Elapsed({ taskId }: { taskId: string }) {
   return <span className="text-foreground/50 shrink-0 tabular-nums">{formatDuration(Math.max(0, now - start))}</span>;
 }
 
-/**
- * One worker: `[g] Name · what it is at · 1m 2s · +12 −3`, and its Stop while it runs. Opens its
- * thread. A row of the strip and of the worker's card in the thread.
- */
-export const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
+/** One worker: `[g] Name · what it is at · 1m 2s · +12 −3`, and its Stop while it runs. Opens its thread. */
+const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
   const name = useWorkerName(taskId);
   const { setPanel } = useContext(AgentsPanelContext);
   const { ref, first, firstWorking } = useTaskActivityLine(taskId, false);
@@ -51,7 +47,6 @@ export const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
       <button
         type="button"
         data-slot="workers-strip-row"
-        data-task={taskId}
         onClick={() => setPanel(taskId)}
         className="hover:bg-foreground/5 rounded-control min-h-row flex min-w-0 flex-1 items-center gap-1.5 px-2 text-start text-sm"
       >
@@ -146,23 +141,6 @@ export const WorkersStrip: FC<{ conversationId: string; view: StripView }> = ({ 
           {view.rows.map((id) => <StripRow key={id} taskId={id} />)}
         </ul>
       )}
-    </div>
-  );
-};
-
-/**
- * The workers the thread started, as a card where it started them (Q81): one row each with what
- * it is at, its time and changes while it works, then how it ended. It stays in view once the
- * turn is answered; each row opens its worker.
- */
-export const WorkerCard: FC<{ taskIds: readonly string[] }> = ({ taskIds }) => {
-  const known = useBoard(useShallow((s) => taskIds.filter((id) => !!s.board?.tasks[id])));
-  if (known.length === 0) return null;
-  return (
-    <div data-slot="worker-card" className="bg-rail border-foreground/10 rounded-surface my-1 border px-1 py-1">
-      <ul className="flex flex-col">
-        {known.map((id) => <StripRow key={id} taskId={id} />)}
-      </ul>
     </div>
   );
 };

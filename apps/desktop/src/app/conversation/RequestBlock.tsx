@@ -51,7 +51,6 @@ import {
   endsWithPlan,
   blockSequence,
   foldsAway,
-  startsWorkers,
   isFinal,
   isImageStep,
   isLive,
@@ -65,7 +64,6 @@ import {
 } from "@/app/conversation/blocks";
 import { type PhaseView, phaseViewOf, splitReport } from "@/app/conversation/phaseView";
 import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
-import { WorkerCard } from "@/app/conversation/activity/WorkersStrip";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { HeldNote } from "@/app/conversation/HeldNote";
 import { AnsweredStatus, StatusLine, type ThreadStatusProps, useThreadStatusHead } from "@/app/conversation/ThreadStatus";
@@ -455,8 +453,7 @@ const SequenceEntry: FC<{ entry: Entry; streaming: boolean; commentary?: boolean
     case "compaction":
       return <CompactionRow compaction={entry.compaction} />;
     case "row":
-      // A start is the workers' card: what they are at, live, then how they ended.
-      return startsWorkers(entry) ? <WorkerCard taskIds={entry.row.taskIds ?? [entry.row.taskId]} /> : <TeamSentence row={entry.row} />;
+      return <TeamSentence row={entry.row} />;
     case "gap":
       return <TimeSeparator atMs={entry.atMs} className="py-2" />;
   }
@@ -780,19 +777,18 @@ export const RequestBlock: FC = () => {
   const updates = updateIndices(meta.texts, answer);
   // Decide which peer send is still in flight where the live row state is known.
   const activity = turnActivity(sequence, false);
-  // The answer, kept cards, workers' cards and access notices stay outside the fold: the cards
-  // where they came, under the fold of their run of work; the answer and its updates under all.
-  const stays = (item: Activity<LeadStep, Entry>) => done && item.type !== "group" && item.entry.kind !== "text" && !foldsAway(item.entry, answer);
-  const inParts = done ? activity.filter((item) => item.type === "group" || item.entry.kind !== "text" || foldsAway(item.entry, answer)) : activity;
-  const allParts = keepJoinedAnswers(workParts(inParts, live && !done), done, (index) => {
+  // The answer, kept cards and access notices stay outside the fold.
+  const folded = activity.filter((item) => item.type === "group" || foldsAway(item.entry, answer));
+  const kept = sequence.filter((entry) => entry.kind !== "text" && !foldsAway(entry, answer));
+  const allParts = keepJoinedAnswers(workParts(done ? folded : activity, live && !done), done, (index) => {
     const text = meta.texts[index];
     return !!text && !text.commentary && !text.update;
-  }, stays);
+  });
   // Bubbles the user sent before any work came sit under their message, above the header.
   const leading = allParts.findIndex((part) => part.type !== "steer");
   const before = allParts.slice(0, leading < 0 ? allParts.length : leading);
   const parts = allParts.slice(before.length);
-  const foldable = done && parts.some((part) => part.type === "work" && part.items.some((item) => !stays(item)));
+  const foldable = done && parts.some((part) => part.type === "work" && part.items.length > 0);
   // A turn that ends in a plan keeps its work open, the plan read with the steps that led to it.
   const open = fold.open ?? endsWithPlan(sequence);
   const outcome = done ? (phase?.outcome ?? null) : null;
@@ -866,14 +862,13 @@ export const RequestBlock: FC = () => {
             </div>
           ) : (
             <Fragment key={`work:${index}`}>
-            {(!done || part.items.some((item) => !stays(item))) && (
             <WorkFold open={!done || open} searched={searched}>
               <div
                 data-slot="request-work"
                 className={cn("gap-activity flex min-w-0 flex-col", (header || index > 0) && "pt-activity")}
               >
                 <ActivityItems
-                  activity={done ? part.items.filter((item) => !stays(item)) : part.items}
+                  activity={part.items}
                   requestIds={meta.requestIds}
                   live={live && !done && index === parts.length - 1 ? status : null}
                   thought={liveThought?.kind === "thinking" ? liveThought.segment.text : null}
@@ -885,12 +880,6 @@ export const RequestBlock: FC = () => {
                 />
               </div>
             </WorkFold>
-            )}
-            {part.items.filter(stays).map((item) => item.type !== "group" && (
-              <div key={entryKey(item.entry)} className="pt-activity flex min-w-0 flex-col">
-                <SequenceEntry entry={item.entry} streaming={false} />
-              </div>
-            ))}
             {/* The answer its request came to before a follow-up joined it: in view, as the last one's is. */}
             {part.answer && (
               <div data-slot="joined-answer" className="group/joined pt-activity flex min-w-0 flex-col">
@@ -905,6 +894,11 @@ export const RequestBlock: FC = () => {
         )}
         {done && (
           <>
+            {kept.map((entry) => (
+              <div key={entryKey(entry)} className="pt-activity flex min-w-0 flex-col">
+                <SequenceEntry entry={entry} streaming={false} />
+              </div>
+            ))}
             {outcome && (
               <p data-slot="phase-outcome" className="text-foreground pt-activity text-sm leading-relaxed wrap-break-word">
                 {outcome}
@@ -997,20 +991,13 @@ type WorkPart = { type: "work"; items: Activity<LeadStep, Entry>[]; answer?: Ent
  * under its run's fold instead of folding away with the work. Only the turn's own last answer
  * stood outside the fold before.
  */
-function keepJoinedAnswers(
-  parts: WorkPart[],
-  done: boolean,
-  answers: (index: number) => boolean,
-  stays: (item: Activity<LeadStep, Entry>) => boolean,
-): WorkPart[] {
+function keepJoinedAnswers(parts: WorkPart[], done: boolean, answers: (index: number) => boolean): WorkPart[] {
   if (!done) return parts;
   return parts.map((part, index) => {
     if (part.type !== "work" || parts[index + 1]?.type !== "steer") return part;
-    // Its last reply, past the cards that stay in view anyway.
-    const at = part.items.findLastIndex((item) => !stays(item));
-    const last = part.items[at];
+    const last = part.items.at(-1);
     if (last?.type !== "entry" || last.entry.kind !== "text" || !answers(last.entry.index)) return part;
-    return { type: "work", items: part.items.toSpliced(at, 1), answer: last.entry };
+    return { type: "work", items: part.items.slice(0, -1), answer: last.entry };
   });
 }
 

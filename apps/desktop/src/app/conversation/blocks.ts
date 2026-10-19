@@ -1204,11 +1204,6 @@ export function endsWithPlan(sequence: readonly SequenceEntry[]): boolean {
   return false;
 }
 
-/** Whether an entry is the start of workers (a wave's too, once they all came to one word): their card. */
-export function startsWorkers(entry: SequenceEntry): boolean {
-  return entry.kind === "row" && (lifecycleWord(entry.row.kind) === "started" || !!entry.row.wave);
-}
-
 /**
  * Whether an entry of a finished block folds under "Worked for …": everything but its answer
  * and the cards, access notices and feedback offers that stay in view (decisions, failures, what
@@ -1217,8 +1212,6 @@ export function startsWorkers(entry: SequenceEntry): boolean {
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  // So do the workers the thread started: their card says how each ended.
-  if (startsWorkers(entry)) return false;
   if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested" || step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }

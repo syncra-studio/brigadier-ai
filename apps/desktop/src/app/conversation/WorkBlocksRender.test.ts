@@ -257,17 +257,19 @@ test("a follow-up that joined a turn as it ended leaves the first answer in view
   assert.equal(seen.firstActionsOpacity, "1");
 });
 
-test("a worker the thread starts is a card where it started: live while it works, in view with how it ended once answered", { timeout: 120000 }, async (t) => {
+test("a worker the thread starts is a team sentence among its work, folded with it once answered, never a card", { timeout: 120000 }, async (t) => {
   const seen = await drive<{
-    workerLive: { shown: boolean; name: string | null };
-    workerDone: { shown: boolean; words: string | null; underBubble: boolean; aboveAnswer: boolean };
+    workerLive: { shown: boolean; words: string | null; card: boolean };
+    workerDone: { rows: (string | null)[]; shown: boolean; card: boolean };
+    header: string | null;
   }>(t, "drive=joined&kind=session");
   assert.equal(seen.workerLive.shown, true, JSON.stringify(seen));
-  assert.match(seen.workerLive.name ?? "", /Changelog check/);
-  assert.equal(seen.workerDone.shown, true, JSON.stringify(seen));
-  assert.match(seen.workerDone.words ?? "", /Changelog check.*finished/);
-  assert.equal(seen.workerDone.underBubble, true, JSON.stringify(seen));
-  assert.equal(seen.workerDone.aboveAnswer, true, JSON.stringify(seen));
+  assert.match(seen.workerLive.words ?? "", /Changelog check/);
+  assert.equal(seen.workerLive.card, false, JSON.stringify(seen));
+  // Answered, it is work under the closed "Worked for …" like the rest.
+  assert.match(seen.header ?? "", /^Worked for/);
+  assert.equal(seen.workerDone.shown, false, JSON.stringify(seen));
+  assert.equal(seen.workerDone.card, false, JSON.stringify(seen));
 });
 
 test("a plan approved: its request's new steps show under the plan as they come", { timeout: 120000 }, async (t) => {

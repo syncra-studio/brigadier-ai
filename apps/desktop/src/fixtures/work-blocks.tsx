@@ -739,7 +739,7 @@ async function driveJoined(): Promise<object> {
   change((board) => ({ requests: { ...board.requests, r2: daemon.requests.r2! }, head: "r2" }));
   await settle();
   steps([...daemon.steps, { ...tool("edit", 3.1, "Edit", "/repo/CHANGELOG.md", "completed"), requestId: "r2" } as OrchestratorStep]);
-  // The follow-up starts a worker: its card in the thread, where it started, says what it is at (Q81).
+  // The follow-up starts a worker: a team sentence among its work, as any worker row.
   const worker = (state: Task["state"]): Task => ({
     ...(Object.values(night.tasks)[0] as unknown as Task), id: "w1", number: 1, title: "Changelog check", conversationId: ID, state,
     blockedReason: null, role: null, phase: null, run: null, attempts: [{ startedAtMs: Date.now() - 2000, endedAtMs: null } as unknown as Task["attempts"][number]],
@@ -747,8 +747,8 @@ async function driveJoined(): Promise<object> {
   } as Task);
   change(() => ({ tasks: { w1: worker("running") }, workerSteps: [{ taskId: "w1", requestId: "r2", kind: "started", atMs: Date.now(), position: 3.2 }] }));
   await settle(300);
-  const liveCard = one("[data-slot=worker-card]", turn() ?? document.body);
-  const workerLive = { shown: !!liveCard && visible(liveCard), name: text(one("[data-task=w1]", liveCard ?? document.body)) };
+  const liveRow = one("[data-slot=task-row][data-kind=started]", turn() ?? document.body);
+  const workerLive = { shown: !!liveRow && visible(liveRow), words: text(liveRow), card: !!one("[data-slot=worker-card]") };
   change((board) => ({
     tasks: { w1: worker("done") },
     workerSteps: [...board.workerSteps, { taskId: "w1", requestId: "r2", kind: "finished", atMs: Date.now(), position: 3.3 }],
@@ -769,17 +769,15 @@ async function driveJoined(): Promise<object> {
     all("[data-slot=aui_assistant-message-content]", block).some((element) => text(element)?.includes(words) && element.getClientRects().length > 0 && !element.closest("[data-slot=request-fold][data-fold=closed], [hidden]"));
   const firstAnswer = all("[data-slot=joined-answer]", block)[0] ?? null;
   const bubble = one("[data-slot=request-steer]", block);
-  const card = one("[data-slot=worker-card]", block);
-  const lastAnswer = all("[data-answer]", block).at(-1) ?? null;
+  const rows = all("[data-slot=task-row]", block);
   const firstActions = firstAnswer ? one("[data-slot=answer-actions]", firstAnswer) : null;
   return {
     workerLive,
-    // Answered, the worker's card stays in view, under the bubble that started it, above the answer.
+    // Answered, the worker's rows are work like the rest: under the closed fold, no card.
     workerDone: {
-      shown: !!card && visible(card),
-      words: text(card),
-      underBubble: !!card && !!bubble && !!(bubble.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING),
-      aboveAnswer: !!card && !!lastAnswer && !!(card.compareDocumentPosition(lastAnswer) & Node.DOCUMENT_POSITION_FOLLOWING),
+      rows: rows.map((row) => text(row)),
+      shown: rows.some(visible),
+      card: !!one("[data-slot=worker-card]"),
     },
     // The answer the follow-up joined has its own actions, shown without a hover.
     firstActions: all("button", firstActions ?? document.createElement("div")).map((button) => button.getAttribute("aria-label") ?? text(one(".sr-only", button))),

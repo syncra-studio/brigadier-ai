@@ -127,8 +127,8 @@ if (stress && !query.has("manual")) {
     };
   };
   void (async () => {
-    await ready('[data-slot="worker-card"] button[data-task="t1"]');
-    find('[data-slot="worker-card"] button[data-task="t1"]')!.click();
+    await ready('button[title="Open File summary"]');
+    find('button[title="Open File summary"]')!.click();
     await ready('[data-slot="worker-brief"] .aui-md');
     await ready('[data-slot="worker-thread"] pre');
     await wait(500);
@@ -186,7 +186,7 @@ if (stress && !query.has("manual")) {
     useBoard.setState(({ board: current }) => ({ board: { ...current!, tasks: { ...current!.tasks,
       t1: { ...current!.tasks.t1!, spec: "Inspect the desktop worker panel and make its header compact. Keep its close button and model details easy to reach when the sidebar gets narrow." },
     } } }));
-    find('[data-slot="worker-card"] button[data-task="t1"]')!.click();
+    find('button[title="Open File summary"]')!.click();
     await ready('[data-slot="worker-brief"] .aui-md');
     sidebar.style.setProperty("--right-sidebar-width", "600px");
     if (query.has("live-resize")) await new Promise(requestAnimationFrame);
@@ -222,8 +222,8 @@ if (headerTest) {
   const result = document.body.appendChild(document.createElement("pre"));
   result.id = "workers-header-result";
   void (async () => {
-    for (let i = 0; i < 100 && !find('[data-slot="worker-card"] button[data-task="t1"]'); i++) await wait(50);
-    find('[data-slot="worker-card"] button[data-task="t1"]')!.click();
+    for (let i = 0; i < 100 && !find('button[title^="Open Add the project"]'); i++) await wait(50);
+    find('button[title^="Open Add the project"]')!.click();
     for (let i = 0; i < 100 && !find('[data-slot="worker-header"] h2'); i++) await wait(50);
     await wait(500);
     const header = find('[data-slot="worker-header"]')!;
@@ -239,8 +239,8 @@ if (diffTest) {
   const result = document.body.appendChild(document.createElement("pre"));
   result.id = "workers-diff-result";
   void (async () => {
-    for (let i = 0; i < 100 && !find('[data-slot="worker-card"] button[data-task="t1"]'); i++) await wait(50);
-    find('[data-slot="worker-card"] button[data-task="t1"]')!.click();
+    for (let i = 0; i < 100 && !find('button[title="Open File summary"]'); i++) await wait(50);
+    find('button[title="Open File summary"]')!.click();
     let chip: HTMLElement | undefined;
     for (let i = 0; i < 100 && !chip; i++) {
       chip = [...document.querySelectorAll<HTMLElement>("[data-slot=file-list] button")].find((button) => button.textContent?.includes("task-1.diff"));
