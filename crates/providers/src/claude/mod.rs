@@ -1044,18 +1044,23 @@ impl Provider for Claude {
                 );
                 return status;
             };
-            status.version = self.version().await;
-            status.compacts = status
-                .version
-                .as_deref()
-                .is_some_and(|version| version_at_least(version, COMPACT_SINCE));
             let spec = self
                 .env
                 .spec(&binary)
                 .arg("auth")
                 .arg("status")
                 .arg("--json");
-            match process::run(&self.platform, &spec, STATUS_TIMEOUT).await {
+            // Side by side: Connect asks this the moment a sign-in may have finished.
+            let (version, auth) = tokio::join!(
+                self.version(),
+                process::run(&self.platform, &spec, STATUS_TIMEOUT)
+            );
+            status.version = version;
+            status.compacts = status
+                .version
+                .as_deref()
+                .is_some_and(|version| version_at_least(version, COMPACT_SINCE));
+            match auth {
                 Ok(output) => match serde_json::from_str::<Value>(output.stdout.trim()) {
                     Ok(auth) => {
                         status.logged_in =

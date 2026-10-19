@@ -76,6 +76,8 @@ pub struct CliProcess {
     stdin: tokio::sync::Mutex<Option<ChildStdin>>,
     exit: watch::Receiver<Option<Exit>>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
+    /// How many lines it has written to stderr.
+    stderr_lines: watch::Receiver<u64>,
     recorder: Option<Arc<Recorder>>,
     tree: Arc<Tree>,
 }
@@ -255,6 +257,7 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
 
     let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
     let tail = stderr_tail.clone();
+    let (stderr_count, stderr_lines) = watch::channel(0);
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(mut line)) = reader.next_line().await {
@@ -271,6 +274,8 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
                 tail.pop_front();
             }
             tail.push_back(line);
+            drop(tail);
+            stderr_count.send_modify(|count| *count += 1);
         }
     });
 
@@ -329,6 +334,7 @@ pub fn spawn(platform: Arc<dyn Platform>, spec: &SpawnSpec, options: Options) ->
             stdin: tokio::sync::Mutex::new(stdin),
             exit,
             stderr_tail,
+            stderr_lines,
             recorder,
             tree,
         }),
@@ -402,6 +408,11 @@ impl CliProcess {
                 signal: None,
             },
         }
+    }
+
+    /// Changes each time the CLI writes a line to stderr (its tail has it by then).
+    pub fn stderr_lines(&self) -> watch::Receiver<u64> {
+        self.stderr_lines.clone()
     }
 
     /// The last lines the CLI wrote to stderr.

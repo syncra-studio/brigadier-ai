@@ -840,6 +840,35 @@ impl Runtime {
         }
     }
 
+    /// Publishes `status`, just learned elsewhere (Connect's sign-in), when it changes whether
+    /// the provider is found or signed in, so that shows without waiting for a whole check.
+    pub async fn note_status(&self, status: ProviderStatus) {
+        let previous = self.overview(status.provider);
+        let changed = previous
+            .as_ref()
+            .and_then(|overview| overview.status.as_ref())
+            .is_none_or(|previous| {
+                previous.logged_in != status.logged_in || previous.path != status.path
+            });
+        if !changed {
+            return;
+        }
+        let overview = ProviderOverview {
+            provider: status.provider,
+            models: previous
+                .as_ref()
+                .and_then(|overview| overview.models.clone()),
+            quota: previous
+                .as_ref()
+                .and_then(|overview| overview.quota.clone()),
+            usage: None,
+            status: Some(status),
+            error: None,
+            checked_at_ms: Some(now_ms()),
+        };
+        self.record_overview(overview).await;
+    }
+
     /// Checks every provider and every extra account again, and answers the generation that
     /// says when that is done: each account reports the generation its last finished check
     /// began in, and a check already running when this is asked runs once more after it.

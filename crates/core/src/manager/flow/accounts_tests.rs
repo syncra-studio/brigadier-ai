@@ -1063,6 +1063,40 @@ async fn an_extra_login_makes_a_signed_out_provider_ready_and_starts_its_chat() 
     }
 }
 
+/// Connect's sign-in hands over the status that says it is signed in: the provider shows as
+/// signed in at once, its models kept, before any check runs.
+#[tokio::test]
+async fn a_status_from_a_sign_in_shows_at_once() {
+    let provider = ProviderKind::Claude;
+    let flow = Flow::start(
+        "accounts-noted-status",
+        Options {
+            behavior: Arc::new(super::FakeBehavior {
+                signed_out: Mutex::default(),
+                ..Default::default()
+            }),
+            ..Options::default()
+        },
+        logging(&Log::default(), |_| Reply::text("ok")),
+    )
+    .await;
+    flow.behavior.signed_out.lock().unwrap().push(provider);
+    flow.manager.runtime.refresh_providers(Some(provider));
+    flow.until("the own login is checked as signed out", |_| {
+        !flow.manager.runtime.provider_signed_in(provider)
+    })
+    .await;
+    let before = flow.manager.runtime.overview(provider).unwrap();
+    let mut status = before.status.clone().unwrap();
+    status.logged_in = true;
+    flow.manager.runtime.note_status(status.clone()).await;
+    let after = flow.manager.runtime.overview(provider).unwrap();
+    assert_eq!(after.status, Some(status));
+    assert_eq!(after.models, before.models);
+    assert!(flow.manager.runtime.provider_signed_in(provider));
+    flow.stop().await;
+}
+
 #[tokio::test]
 async fn an_unsent_steer_survives_an_account_switch_without_repeating_landed_messages() {
     for provider in ProviderKind::ALL {

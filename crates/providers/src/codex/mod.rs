@@ -518,13 +518,18 @@ impl Provider for Codex {
                 );
                 return status;
             };
-            status.version = self.version().await;
+            let spec = self.env.spec(&binary).arg("login").arg("status");
+            // Side by side: Connect asks this the moment a sign-in may have finished.
+            let (version, login) = tokio::join!(
+                self.version(),
+                process::run(&self.platform, &spec, STATUS_TIMEOUT)
+            );
+            status.version = version;
             status.compacts = status
                 .version
                 .as_deref()
                 .is_some_and(|version| version_at_least(version, COMPACT_SINCE));
-            let spec = self.env.spec(&binary).arg("login").arg("status");
-            match process::run(&self.platform, &spec, STATUS_TIMEOUT).await {
+            match login {
                 Ok(output) => {
                     // `codex login status` prints to stderr on some versions.
                     let text = format!("{}\n{}", output.stdout, output.stderr);

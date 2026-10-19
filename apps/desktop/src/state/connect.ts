@@ -36,14 +36,21 @@ export function connecting(progress: ConnectProgress | null): boolean {
   return progress?.type === "installing" || progress?.type === "signingIn";
 }
 
+/** Agents whose ask to connect is on its way: a second click before it lands sends nothing. */
+const asking = new Set<ProviderKind>();
+
 /** Starts (or, after a failure, retries) connecting `provider`. */
 export async function connectAgent(provider: ProviderKind): Promise<void> {
+  if (asking.has(provider)) return;
+  asking.add(provider);
   useConnect.setState(({ errors }) => ({ errors: { ...errors, [provider]: undefined } }));
   try {
     await request({ method: "connectAgent", provider });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     useConnect.setState(({ errors }) => ({ errors: { ...errors, [provider]: message } }));
+  } finally {
+    asking.delete(provider);
   }
 }
 

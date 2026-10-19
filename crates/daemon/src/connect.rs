@@ -1,7 +1,8 @@
 //! Connect: one step that gets an agent working, from the first-run setup or Providers. When
 //! its binary is missing, the vendor's own native installer runs; then, unless it is signed in
-//! already, the vendor's own sign-in, which opens its page in the browser and is checked every
-//! few seconds until the agent says it is signed in. Each agent's progress is published as
+//! already, the vendor's own sign-in, which opens its page in the browser; the agent is asked
+//! whether it is signed in each time the sign-in prints a line (it says so the moment the login
+//! is stored) or ends, and every few seconds besides. Each agent's progress is published as
 //! `agentConnectChanged`; failures are one plain sentence (what the installer printed goes to
 //! the log only). Connect again after a failure retries; Cancel stops it.
 //!
@@ -53,15 +54,22 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// How long a connected agent's row waits for its overview before it goes anyway.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
-/// How often the agent is asked whether it is signed in yet.
+/// How often the agent is asked whether it is signed in yet, besides each time its sign-in
+/// prints a line or ends.
 const POLL_EVERY: Duration = Duration::from_secs(3);
+/// A sign-in that ended well is asked this many times, this far apart, before it counts as not
+/// signed in: its login may land a moment after.
+const SETTLE_TRIES: u32 = 4;
+const SETTLE_EVERY: Duration = Duration::from_millis(250);
+/// Once signed in, how long its sign-in may take to end by itself before it is stopped.
+const LINGER: Duration = Duration::from_secs(20);
 /// After asking a process to end, how long before it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(2);
 /// The installer's last lines kept for the log.
 const TAIL_LINES: usize = 30;
 /// How often the sign-in is checked for the link it wants opened.
 #[cfg(unix)]
-const LINK_EVERY: Duration = Duration::from_millis(200);
+const LINK_EVERY: Duration = Duration::from_millis(20);
 
 /// Every agent's Connect: how it goes, and how to stop the one running.
 #[derive(Default)]
@@ -201,8 +209,9 @@ pub fn start(daemon: &Arc<Daemon>, provider: ProviderKind) -> Result<(), String>
     } else {
         ConnectProgress::SigningIn
     };
+    // Already connecting: that one goes on, and a second sign-in never starts.
     let Some((attempt, cancel)) = daemon.connects.begin(provider, progress) else {
-        return Err(format!("{} is already connecting", provider.label()));
+        return Ok(());
     };
     let daemon = daemon.clone();
     tokio::spawn(async move {
@@ -215,22 +224,32 @@ pub fn start(daemon: &Arc<Daemon>, provider: ProviderKind) -> Result<(), String>
                 tokio::spawn(async move { publish(&reporter).await });
             }
         };
-        let outcome = connect(&ops, provider, &cancel, &report).await;
-        let outcome = if outcome == Some(ConnectProgress::Connected) {
-            // Its row says Connected until its overview (signed in, its models) is in, then
-            // goes: the overview says Connected from then on, and a later sign-out shows as one.
-            if daemon
-                .connects
-                .report(provider, attempt, ConnectProgress::Connected)
-            {
-                publish(&daemon).await;
+        let ended = connect(&ops, provider, &cancel, &report).await;
+        let outcome = match ended {
+            Some(Ended {
+                progress: ConnectProgress::Connected,
+                status,
+            }) => {
+                // Its row says Connected until its overview (signed in, its models) is in, then
+                // goes: the overview says Connected from then on, and a later sign-out shows as
+                // one. The status that said so is the overview's at once; the check adds the rest.
+                if daemon
+                    .connects
+                    .report(provider, attempt, ConnectProgress::Connected)
+                {
+                    publish(&daemon).await;
+                }
+                if let Some(status) = status {
+                    daemon.runtime.note_status(status).await;
+                }
+                daemon.runtime.check_provider(provider, CHECK_TIMEOUT).await;
+                None
             }
-            daemon.runtime.check_provider(provider, CHECK_TIMEOUT).await;
-            None
-        } else {
-            // Its overview (found or not, signed in or not) is published by the check.
-            daemon.runtime.refresh_providers(Some(provider));
-            outcome
+            ended => {
+                // Its overview (found or not, signed in or not) is published by the check.
+                daemon.runtime.refresh_providers(Some(provider));
+                ended.map(|ended| ended.progress)
+            }
         };
         if daemon.connects.finish(provider, attempt, outcome) {
             publish(&daemon).await;
@@ -280,6 +299,8 @@ struct Ops {
     install_timeout: Duration,
     sign_in_timeout: Duration,
     poll: Duration,
+    /// Once signed in, how long its sign-in may take to end by itself.
+    linger: Duration,
     /// Opens the vendor's sign-in page in the browser.
     #[cfg(unix)]
     open_link: Arc<dyn Fn(&str) + Send + Sync>,
@@ -299,6 +320,7 @@ impl Ops {
             install_timeout: INSTALL_TIMEOUT,
             sign_in_timeout: SIGN_IN_TIMEOUT,
             poll: POLL_EVERY,
+            linger: LINGER,
             #[cfg(unix)]
             open_link: Arc::new(open_in_browser),
         }
@@ -378,6 +400,29 @@ impl Drop for LinkCatcher {
     }
 }
 
+/// How a Connect ended: its last step, and when connected, the status that says so.
+#[derive(Debug)]
+struct Ended {
+    progress: ConnectProgress,
+    status: Option<ProviderStatus>,
+}
+
+impl Ended {
+    fn connected(status: ProviderStatus) -> Self {
+        Self {
+            progress: ConnectProgress::Connected,
+            status: Some(status),
+        }
+    }
+
+    fn failed(step: ConnectStep, error: String) -> Self {
+        Self {
+            progress: ConnectProgress::Failed { step, error },
+            status: None,
+        }
+    }
+}
+
 /// Connects `provider`: installs it when it is missing, then signs it in unless it is. Each
 /// step is reported as it begins. Answers how it ended, or `None` once cancelled.
 async fn connect(
@@ -385,8 +430,8 @@ async fn connect(
     provider: ProviderKind,
     cancel: &CancellationToken,
     report: &(dyn Fn(ConnectProgress) + Send + Sync),
-) -> Option<ConnectProgress> {
-    let failed = |step, error: String| Some(ConnectProgress::Failed { step, error });
+) -> Option<Ended> {
+    let failed = |step, error: String| Some(Ended::failed(step, error));
     let label = provider.label();
     let mut status = (ops.status)(provider).await;
     if status.path.is_none() {
@@ -406,7 +451,7 @@ async fn connect(
         }
     }
     if status.logged_in {
-        return Some(ConnectProgress::Connected);
+        return Some(Ended::connected(status));
     }
     if cancel.is_cancelled() {
         return None;
@@ -534,21 +579,20 @@ fn install_error(provider: ProviderKind, output: &str) -> String {
     format!("{label} couldn't be installed. Try again.")
 }
 
-/// Runs the vendor's sign-in (it opens the browser) and asks the agent every `poll` whether it
-/// is signed in, until it is, the sign-in ends without it, or it is given up on.
+/// Runs the vendor's sign-in (it opens the browser) and answers once the agent says it is
+/// signed in, the sign-in ends without it, or it is given up on. The agent is asked the moment
+/// the sign-in prints a line: each CLI prints one as soon as the login is stored (Claude Code's
+/// "Login successful.", Codex's "Successfully logged in" on stderr), and Claude Code then takes
+/// seconds more to exit. Asked too when it ends, and every `poll` for a sign-in that finished
+/// without a word.
 async fn sign_in(
     ops: &Ops,
     provider: ProviderKind,
     binary: PathBuf,
     cancel: &CancellationToken,
-) -> Option<ConnectProgress> {
+) -> Option<Ended> {
     let label = provider.label();
-    let failed = |error: String| {
-        Some(ConnectProgress::Failed {
-            step: ConnectStep::SignIn,
-            error,
-        })
-    };
+    let failed = |error: String| Some(Ended::failed(ConnectStep::SignIn, error));
     let mut spec = ops.env.spec(&binary);
     spec.args = provider
         .login_command()
@@ -572,9 +616,11 @@ async fn sign_in(
         }
     };
     let child: Arc<CliProcess> = spawned.process;
-    // Its lines (the link it opened) aren't shown; read so it never blocks on them.
+    // Its lines aren't shown: each only says the agent is worth asking now.
     let mut lines = spawned.stdout;
-    let drain = tokio::spawn(async move { while lines.recv().await.is_some() {} });
+    let mut stdout_open = true;
+    let mut errors = child.stderr_lines();
+    let mut stderr_open = true;
     // The link it wants opened, opened by Brigadier the moment it arrives.
     #[cfg(unix)]
     let opener = tokio::spawn({
@@ -593,34 +639,81 @@ async fn sign_in(
     });
     let given_up = tokio::time::sleep(ops.sign_in_timeout);
     tokio::pin!(given_up);
+    let mut poll = tokio::time::interval_at(tokio::time::Instant::now() + ops.poll, ops.poll);
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let outcome = loop {
         tokio::select! {
+            biased;
+            () = cancel.cancelled() => break None,
             exit = child.exited() => {
                 // It ends by itself once signed in; one that ends any other way didn't sign in.
-                if (ops.status)(provider).await.logged_in {
-                    break Some(ConnectProgress::Connected);
+                if let Some(status) = settled(ops, provider, exit.code == Some(0)).await {
+                    break Some(Ended::connected(status));
                 }
                 tracing::info!(%provider, code = ?exit.code, stderr = ?child.stderr_tail(), "the sign-in ended without signing in");
                 break failed(format!("Signing in to {label} didn't finish. Try again."));
             }
-            () = cancel.cancelled() => break None,
             () = &mut given_up => {
                 break failed(format!("Signing in to {label} took too long. Try again."));
             }
-            () = tokio::time::sleep(ops.poll) => {
-                if (ops.status)(provider).await.logged_in {
-                    break Some(ConnectProgress::Connected);
+            line = lines.recv(), if stdout_open => {
+                if line.is_none() {
+                    stdout_open = false;
+                    continue;
+                }
+                // Lines that came together are one reason to ask.
+                while lines.try_recv().is_ok() {}
+            }
+            changed = errors.changed(), if stderr_open => {
+                if changed.is_err() {
+                    stderr_open = false;
+                    continue;
                 }
             }
+            _ = poll.tick() => {}
+        }
+        let status = (ops.status)(provider).await;
+        if status.logged_in {
+            break Some(Ended::connected(status));
         }
     };
-    if child.is_running() {
-        child.shutdown(STOP_GRACE).await;
-    }
-    drain.abort();
     #[cfg(unix)]
     opener.abort();
+    if child.is_running() {
+        if outcome.as_ref().is_some_and(|ended| ended.status.is_some()) {
+            // Signed in: it ends by itself once it has sent what it sends (Claude Code's take
+            // seconds); stopped only if it doesn't. Read meanwhile, so it never blocks.
+            let linger = ops.linger;
+            tokio::spawn(async move {
+                let drain = async { while lines.recv().await.is_some() {} };
+                let ended = tokio::time::timeout(linger, async {
+                    tokio::join!(drain, child.exited());
+                });
+                if ended.await.is_err() {
+                    child.shutdown(STOP_GRACE).await;
+                }
+            });
+        } else {
+            child.shutdown(STOP_GRACE).await;
+        }
+    }
     outcome
+}
+
+/// The agent's status once its sign-in ended: one that ended well may store its login a moment
+/// after, so it is asked a few times. Some when signed in.
+async fn settled(ops: &Ops, provider: ProviderKind, ended_well: bool) -> Option<ProviderStatus> {
+    let tries = if ended_well { SETTLE_TRIES } else { 1 };
+    for attempt in 0..tries {
+        if attempt > 0 {
+            tokio::time::sleep(SETTLE_EVERY).await;
+        }
+        let status = (ops.status)(provider).await;
+        if status.logged_in {
+            return Some(status);
+        }
+    }
+    None
 }
 
 #[cfg(all(test, unix))]
@@ -669,12 +762,19 @@ mod tests {
     /// reports its version, says it is signed in once `signed-in` exists, and its sign-in does
     /// what `login-mode` says: `finish` (signs in, then ends), `stay` (signs in and keeps
     /// running, as the real one can while the page is open), `quit` (ends without signing in),
-    /// `wait` (never signs in, never ends).
+    /// `wait` (never signs in, never ends), `linger` (as Claude Code's: signs in, says so, then
+    /// takes seconds to end), `quick` (as Codex's: signs in, says so on stderr, ends), `late`
+    /// (ends well, signed in only by the third time it is asked after), `never` (ends well, never signs in).
     const FAKE_CLAUDE: &str = r#"#!/bin/sh
 home="$HOME"
+now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
 case "$1 $2" in
   "--version "*) echo "2.1.302 (Claude Code)" ;;
   "auth status")
+    if [ -f "$home/late" ]; then
+      echo asked >> "$home/late"
+      [ "$(wc -l < "$home/late")" -ge 3 ] && rm "$home/late" && touch "$home/signed-in"
+    fi
     if [ -f "$home/signed-in" ]; then
       echo '{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max","email":"me@example.com"}'
     else
@@ -692,6 +792,10 @@ case "$1 $2" in
       finish) sleep 1; touch "$home/signed-in" ;;
       stay) touch "$home/signed-in"; sleep 60 ;;
       quit) exit 1 ;;
+      linger) sleep 1; touch "$home/signed-in"; now > "$home/confirmed-at"; echo "Login successful."; sleep 6 ;;
+      late) touch "$home/late"; exit 0 ;;
+      never) exit 0 ;;
+      quick) sleep 1; touch "$home/signed-in"; now > "$home/confirmed-at"; echo "Successfully logged in" >&2 ;;
       *) sleep 60 ;;
     esac ;;
 esac
@@ -749,6 +853,7 @@ echo "Claude Code successfully installed!"
             install_timeout: Duration::from_secs(20),
             sign_in_timeout: Duration::from_secs(20),
             poll: Duration::from_millis(100),
+            linger: Duration::from_millis(500),
             open_link: Arc::new(move |link| {
                 std::fs::write(opened.join("opened"), link).unwrap();
             }),
@@ -768,7 +873,8 @@ echo "Claude Code successfully installed!"
             connect(ops, ProviderKind::Claude, &cancel, &report),
         )
         .await
-        .expect("Connect ends");
+        .expect("Connect ends")
+        .map(|ended| ended.progress);
         let seen = seen.lock().unwrap().clone();
         (outcome, seen)
     }
@@ -974,14 +1080,26 @@ echo "asked: $answer" > "$HOME/asked"
         );
         // Noticed by the check, long before the sign-in would end by itself.
         assert!(started.elapsed() < Duration::from_secs(20));
-        let leftover = std::process::Command::new("pgrep")
+        // Given its while to end by itself, then stopped.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while sign_in_runs(&home) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the sign-in process still runs"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    fn sign_in_runs(home: &Home) -> bool {
+        let found = std::process::Command::new("pgrep")
             .args([
                 "-f",
                 &home.0.join(".local/bin/claude").display().to_string(),
             ])
             .output()
             .unwrap();
-        assert!(leftover.stdout.is_empty(), "the sign-in process still runs");
+        !found.stdout.is_empty()
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1040,15 +1158,58 @@ echo "asked: $answer" > "$HOME/asked"
         )
         .await
         .expect("cancel ends it");
-        assert_eq!(outcome, None);
-        let leftover = std::process::Command::new("pgrep")
-            .args([
-                "-f",
-                &home.0.join(".local/bin/claude").display().to_string(),
-            ])
-            .output()
-            .unwrap();
-        assert!(leftover.stdout.is_empty(), "the sign-in process still runs");
+        assert!(outcome.is_none());
+        assert!(!sign_in_runs(&home), "the sign-in process still runs");
+    }
+
+    /// The real sign-ins once the page is confirmed: Claude Code stores the login, prints
+    /// "Login successful." and takes seconds more to exit (`linger`); Codex prints its line on
+    /// stderr and exits (`quick`). Connected follows at once, without waiting for the exit or
+    /// the next check: the slow check here never comes in time.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn connected_follows_the_agents_own_confirmation_at_once() {
+        for mode in ["linger", "quick"] {
+            let home = Home::new(mode);
+            std::fs::write(home.0.join("login-mode"), mode).unwrap();
+            let mut ops = ops(&home);
+            ops.poll = Duration::from_secs(60);
+            let (outcome, _) = run(&ops).await;
+            let done = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64();
+            assert_eq!(outcome, Some(ConnectProgress::Connected));
+            let confirmed: f64 = std::fs::read_to_string(home.0.join("confirmed-at"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let lag = done - confirmed;
+            eprintln!("{mode}: Connected {lag:.3}s after the agent's confirmation");
+            assert!(lag < 1.0, "{mode}: Connected {lag:.3}s after");
+        }
+    }
+
+    /// A sign-in that ends well a moment before its login is stored still connects; one that
+    /// ends well without ever storing it fails, after a short wait.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sign_in_that_ends_well_waits_a_moment_for_its_login() {
+        let home = Home::new("late");
+        std::fs::write(home.0.join("login-mode"), "late").unwrap();
+        let mut ops = ops(&home);
+        ops.poll = Duration::from_secs(60);
+        let (outcome, _) = run(&ops).await;
+        assert_eq!(outcome, Some(ConnectProgress::Connected));
+
+        std::fs::remove_file(home.0.join("signed-in")).unwrap();
+        std::fs::write(home.0.join("login-mode"), "never").unwrap();
+        let (outcome, _) = run(&ops).await;
+        assert_eq!(
+            outcome,
+            failed(
+                ConnectStep::SignIn,
+                "Signing in to Claude Code didn't finish. Try again."
+            )
+        );
     }
 
     #[test]
