@@ -790,6 +790,9 @@ async fn a_revert_from_the_merge_message_is_one_request_and_the_threads_revert_l
             } else if let Some(rest) = turn.input.split("Revert merge ").nth(1) {
                 let sha = rest.split_whitespace().next().unwrap();
                 git(workspace, &["revert", "--no-edit", sha]);
+            } else if let Some(rest) = turn.input.split("revert its revert ").nth(1) {
+                let sha = rest.split_whitespace().next().unwrap();
+                git(workspace, &["revert", "--no-edit", sha]);
             } else {
                 return Reply::text("Noted.");
             }
@@ -820,5 +823,44 @@ async fn a_revert_from_the_merge_message_is_one_request_and_the_threads_revert_l
         .filter(|message| message.role == crate::model::MessageRole::User && message.text == revert)
         .count();
     assert_eq!(asked, 1);
+
+    // The merge reads reverted, by the thread's revert; Redo's request puts it back the same
+    // way, as a merge of its own, and the merge reads redone.
+    let undo = flow
+        .manager
+        .merge_undo(&flow.conversation, &merged)
+        .await
+        .unwrap()
+        .expect("reverted");
+    assert_eq!(undo.redone_by, None);
+    let revert_commit = &undo.reverted_by;
+    assert!(
+        git(&flow.repo, &["log", "-1", "--format=%B", revert_commit])
+            .contains(&format!("This reverts commit {merged}")),
+        "the thread's revert"
+    );
+    let redo = format!(
+        "Redo merge {} on main: revert its revert {} the way it went in",
+        &merged[..7],
+        &revert_commit[..7]
+    );
+    flow.say(&redo).await;
+    let board = flow.settled().await;
+    assert!(
+        super::thread_tests::on_main(&flow, "NOTES.md"),
+        "back on main"
+    );
+    assert_eq!(merges(&board).len(), 3, "{:?}", merges(&board));
+    let undo = flow
+        .manager
+        .merge_undo(&flow.conversation, &merged)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&undo.reverted_by, revert_commit);
+    assert!(
+        undo.redone_by.is_some() && undo.redone_at_ms.is_some(),
+        "{undo:?}"
+    );
     flow.stop().await;
 }
