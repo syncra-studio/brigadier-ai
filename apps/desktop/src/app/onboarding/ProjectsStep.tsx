@@ -15,10 +15,6 @@ import { createProject, select } from "@/state/actions";
 import { checkFolder } from "@/state/addProject";
 import { findProjects, finishOnboarding } from "@/state/onboarding";
 
-/** Suggested (preselected) projects: worked in at least this often within the last month. */
-const SUGGESTED_SESSIONS = 3;
-const SUGGESTED_WITHIN_MS = 30 * 86_400_000;
-
 /** Cards fill as many columns as fit, each at least a setup card wide. */
 const CARD_GRID =
   "grid grid-cols-[repeat(auto-fill,minmax(var(--spacing-setup-card),1fr))] gap-2.5";
@@ -38,21 +34,15 @@ function CardCheck({ className, label }: { className: string; label: string }) {
   );
 }
 
-function suggested(candidate: ProjectCandidate, nowMs: number): boolean {
-  return (
-    candidate.projectId === null &&
-    candidate.sessions >= SUGGESTED_SESSIONS &&
-    nowMs - candidate.lastActiveMs <= SUGGESTED_WITHIN_MS
-  );
-}
-
 /**
- * The projects to start with, found in the agents' own session history; the ones worked in
- * often lately come chosen. Adding them finishes the setup and opens the first.
+ * The projects to start with, found in the agents' own session history; none come chosen.
+ * Adding them finishes the setup and opens the first.
  */
 export function ProjectsStep({ onBack }: { onBack: () => void }) {
   const [candidates, setCandidates] = useState<ProjectCandidate[] | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  // Folders added with Add a folder…, which the history count leaves out.
+  const [byHand, setByHand] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [nowMs] = useState(Date.now);
@@ -63,7 +53,6 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
       .then((found) => {
         if (!live) return;
         setCandidates(found);
-        setSelected(new Set(found.filter((c) => suggested(c, nowMs)).map((c) => c.path)));
       })
       .catch((cause: unknown) => {
         if (!live) return;
@@ -73,10 +62,11 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
     return () => {
       live = false;
     };
-  }, [nowMs]);
+  }, []);
 
   const addable = (candidates ?? []).filter((candidate) => candidate.projectId === null);
   const chosen = addable.filter((candidate) => selected.has(candidate.path));
+  const found = addable.filter((candidate) => !byHand.has(candidate.path)).length;
 
   const toggle = (path: string, on: boolean) =>
     setSelected((current) => {
@@ -100,6 +90,9 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
       }
       const repo = { path: check.root, name: check.name };
       const project = check.projectId ? { id: check.projectId } : null;
+      if (!candidates?.some((candidate) => candidate.path === repo.path)) {
+        setByHand((current) => new Set(current).add(repo.path));
+      }
       setCandidates((current) => {
         const list = current ?? [];
         if (list.some((candidate) => candidate.path === repo.path)) return list;
@@ -160,8 +153,8 @@ export function ProjectsStep({ onBack }: { onBack: () => void }) {
         <div className="flex shrink-0 flex-wrap items-center gap-1">
           <SectionLabel
             label="Found in your history"
-            dot={addable.length > 0}
-            count={candidates === null ? undefined : addable.length}
+            dot={found > 0}
+            count={candidates === null ? undefined : found}
           />
           <div className="text-muted-foreground ms-auto flex items-center gap-1 text-xs">
             {addable.length > 0 && (

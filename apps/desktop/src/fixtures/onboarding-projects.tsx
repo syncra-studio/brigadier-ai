@@ -1,7 +1,8 @@
 /**
- * Onboarding's projects step over a faked daemon. ?drive=1 clicks Select none, then presses Enter,
- * and writes what was selected and what the daemon was asked to #onboarding-projects-result
- * (OnboardingProjectsRender.test.ts reads it).
+ * Onboarding's projects step over a faked daemon. ?drive=1 notes what comes selected, adds a
+ * folder by hand, clicks Select all then Select none, presses Enter, and writes what it saw and
+ * what the daemon was asked to #onboarding-projects-result (OnboardingProjectsRender.test.ts
+ * reads it).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -23,10 +24,14 @@ const candidates: ProjectCandidate[] = [
 
 const calls: string[] = [];
 mockIPC((command, payload) => {
+  if (command === "pick_folder") return "/w/hand-picked";
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   calls.push(req.method);
   if (req.method === "findProjects") return { method: req.method, candidates };
+  if (req.method === "checkFolder") {
+    return { method: req.method, check: { kind: "repo", root: "/w/hand-picked", name: "hand-picked", nested: false, projectId: null } };
+  }
   return { method: req.method };
 });
 
@@ -42,13 +47,23 @@ function Fixture() {
     if (!params.has("drive")) return;
     void (async () => {
       for (let tries = 0; !button("Select none") && tries < 50; tries++) await wait(100);
+      const status = () => text(document.querySelector('[role="status"]'));
+      const first = status();
+      const folder = button("Add a folder");
+      if (folder) await fixtureClick(folder);
+      for (let tries = 0; !document.body.textContent?.includes("hand-picked") && tries < 50; tries++) await wait(100);
+      const header = text(button("Add a folder")?.parentElement?.previousElementSibling).replace(/\s+/g, " ");
+      const afterAdd = status();
+      const all = button("Select all");
+      if (all) await fixtureClick(all);
+      await wait(200);
       const none = button("Select none");
       if (none) await fixtureClick(none);
       await wait(200);
-      const selected = text(document.querySelector('[role="status"]'));
+      const selected = status();
       await fixtureInput({ type: "key", key: "Enter" });
       await wait(300);
-      setResult(JSON.stringify({ selected, asked: calls.filter((method) => method !== "findProjects") }));
+      setResult(JSON.stringify({ first, header, afterAdd, selected, asked: calls.filter((method) => method !== "findProjects") }));
     })();
   }, []);
   return (
