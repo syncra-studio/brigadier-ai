@@ -7,6 +7,8 @@ function baseName(path: string): string {
 /** The name a session tab shows. */
 export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "review") {
+    // A Changes card's file row: the file's part of a commit's or a turn's change.
+    if ((tab.target.type === "commit" || tab.target.type === "lastTurn") && tab.target.path) return `${baseName(tab.target.path)} (diff)`;
     if (tab.target.type === "changes") return tab.target.staged ? "Staged Changes" : "Changes";
     if (tab.target.type === "branch") return "Changes";
     if (tab.target.type === "lastTurn") return "Last turn";

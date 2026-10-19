@@ -33,7 +33,7 @@ import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadS
 import type { LeadStep } from "@/app/conversation/activity/group";
 import { ComposerCapsule } from "@/app/conversation/ComposerCapsule";
 import { ComposerTargetContext, type ComposerTarget } from "@/app/conversation/composerTarget";
-import { TurnDiff } from "@/app/conversation/TurnDiff";
+import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { OpenFileContext } from "@/components/assistant-ui/file-links";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -294,10 +294,10 @@ function Page() {
               <LeadStepRow step={bg("bg-stopped", 32)} />
             </Case>
             <Case id="turn-diff-one">
-              <TurnDiff requestIds={["one"]} />
+              <ChangesCard requestIds={["one"]} />
             </Case>
             <Case id="turn-diff-four">
-              <TurnDiff requestIds={["four"]} />
+              <ChangesCard requestIds={["four"]} />
             </Case>
             <Case id="pill">
               <ComposerTargetContext.Provider value={capsuleTarget}>
@@ -416,7 +416,7 @@ async function measure(): Promise<object> {
     counts: text(one("[data-slot=turn-diff-counts]", at(id))),
     files: all("[data-slot=turn-diff-file]", at(id)).length,
     more: text(one("[data-slot=turn-diff-more]", at(id))),
-    undo: all("button", at(id)).find((button) => /Undo|Reapply/.test(button.textContent ?? "")) ?? null,
+    undo: all("button", at(id)).find((button) => /Discard|Reapply/.test(button.textContent ?? "")) ?? null,
   });
   const oneCard = card("turn-diff-one");
   const fourCard = card("turn-diff-four");

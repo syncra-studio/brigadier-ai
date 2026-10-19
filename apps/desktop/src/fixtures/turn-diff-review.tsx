@@ -7,16 +7,16 @@
  *   with Undo and Keep while it waits, and "Kept" once kept.
  * - Review Changes opens the first waiting file's tab; a row's Keep keeps that file; Undo All
  *   undoes the rest.
- * - Done: "Edited 3 files", "· kept 2, undid 1", View changes only.
- * - Merged while two files waited: "Edited 3 files", "· kept 1", View changes only, those rows
+ * - Done: "Edited 3 files", "kept 2, undid 1", its rows each opening their diff.
+ * - Merged while two files waited: "Edited 3 files", "kept 1", those rows
  *   with no word (the merge says it once).
  * - A file put back as it was after the merge (#333), which the request's own diff leaves out:
- *   "4 Files", "· 1 to review", its row with Undo and Keep; alone, "1 File", "· 1 to review".
+ *   "4 Files", "1 to review", its row with Undo and Keep; alone, "1 File", "1 to review".
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { TurnDiff } from "@/app/conversation/TurnDiff";
+import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation, FileReview, Request, UserRequest } from "@/ipc/generated";
@@ -80,7 +80,7 @@ function look() {
   const card = document.querySelector("[data-slot=turn-diff]");
   return {
     title: words(card?.querySelector("[data-slot=turn-diff-title]")),
-    review: words(card?.querySelector("[data-slot=turn-diff-review]")),
+    review: words(card?.querySelector("[data-slot=turn-diff-status]")),
     buttons: [...(card?.querySelectorAll("button") ?? [])]
       .filter((button) => !button.closest("[data-slot=turn-diff-file]"))
       .map((button) => button.getAttribute("aria-label") ?? words(button)),
@@ -107,7 +107,7 @@ async function measure() {
   out.merged = look();
   review = { ...review, "src/d.ts": "pending" };
   show();
-  await until(() => look().review === "· 1 to review");
+  await until(() => look().review === "1 to review");
   [...document.querySelectorAll("button")].find((button) => words(button) === "Show 1 more file")?.click();
   await until(() => rows().length === 4);
   out.putBack = look();
@@ -124,7 +124,7 @@ createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     <ViewContext.Provider value={view}>
       <div className="w-160 p-6">
-        <TurnDiff requestIds={["r1"]} />
+        <ChangesCard requestIds={["r1"]} />
       </div>
     </ViewContext.Provider>
   </TooltipProvider>,

@@ -1,13 +1,12 @@
 /**
  * A finished turn's end in a production ConversationView (the finished phase flow): the first
  * request merged its pull request on its own, and its reply carries the thread's proof, a
- * screenshot and a recording (`attach_proof`), as thumbnails, then the merge with Revert and View
- * changes: in a header of its own (the turn edited nothing it counted), in its Edited files card
- * (?edited=1), or, merged by the next request (?later=1), in the first one's card while the second
- * shows the merge's header. ?warn=1 records an open finding and a failed CI run: one plain line
- * under the merge, which opens the Progress tab. ?drive=1 writes what the turn shows to
- * #merge-message-result, then clicks Revert twice and records what was sent
- * (MergeMessageRender.test.ts reads it).
+ * screenshot and a recording (`attach_proof`), as thumbnails, then the merge in its Changes card
+ * with Revert and View changes: the merge's own (the turn edited nothing it counted), its files'
+ * (?edited=1), or, merged by the next request (?later=1), the first one's files' while the second
+ * shows the merge's own. ?warn=1 records an open finding and a failed CI run: the card's footer
+ * row, which opens the Progress tab. ?drive=1 writes what the turn shows to #merge-message-result,
+ * then clicks Revert, confirms twice and records what was sent (MergeMessageRender.test.ts reads it).
  */
 import type { MergeRecord, OrchestratorStep } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
@@ -96,10 +95,12 @@ async function drive() {
   for (let tries = 0; tries < 100 && !document.querySelector('[data-slot="turn-proofs"] img, [data-slot="turn-proofs"] video'); tries++) await wait(50);
   for (let tries = 0; tries < 60 && !document.querySelector('[data-slot="merge-revert"]'); tries++) await wait(50);
   await wait(300);
+  const cards = all('[data-slot="turn-diff"]');
   const proofs = document.querySelector<HTMLElement>('[data-slot="turn-proofs"]');
   const answer = all('[data-slot="aui_message-group"] *').find((each) => text(each).startsWith("Fixed the typo"));
   const image = proofs?.querySelector("img")?.getBoundingClientRect();
-  const card = document.querySelector('[data-slot="turn-diff"]');
+  // The card with the turn's own files; a merge's own card has none.
+  const card = cards.find((each) => each.querySelector('[data-slot="turn-diff-file"]'));
   const seen = {
     proofs: [...(proofs?.querySelectorAll<HTMLElement>('[data-slot="proof"]') ?? [])].map((proof) => ({
       kind: proof.dataset.kind,
@@ -116,14 +117,14 @@ async function drive() {
     read: [...new Set(read)].toSorted(),
     // What was checked is in the Progress tab, never listed in the thread.
     checkedInThread: !!document.querySelector('[data-slot="merge-checked"]') || /screenshots? or recordings?|Merged on its own/.test(text(document.body)),
-    headers: all('[data-slot="merge-header-title"]').map(text),
-    card: card ? { title: text(card.querySelector('[data-slot="turn-diff-title"]')), merged: text(card.querySelector('[data-slot="turn-diff-merged"]')), buttons: [...card.querySelectorAll("button:not([aria-label])")].map(text).filter((each) => /Revert|Undo|View changes/.test(each)), rowWords: all('[data-slot="turn-diff-reviewed"]').map(text) } : null,
-    warning: all('[data-slot="merge-warning"]').map(text),
+    headers: cards.filter((each) => !each.querySelector('[data-slot="turn-diff-file"]')).map((each) => text(each.querySelector('[data-slot="turn-diff-title"]'))),
+    card: card ? { title: text(card.querySelector('[data-slot="turn-diff-title"]')), merged: text(card.querySelector('[data-slot="turn-diff-status"]')), buttons: [...card.querySelectorAll("button:not([aria-label])")].map(text).filter((each) => /Revert|Discard|View changes/.test(each)), rowWords: all('[data-slot="turn-diff-reviewed"]').map(text) } : null,
+    warning: all('[data-slot="merge-warning-title"]').map(text),
     tab: null as string | null,
     reviews: [] as string[],
     revert: null as unknown,
   };
-  const warning = document.querySelector<HTMLButtonElement>('[data-slot="merge-warning"]');
+  const warning = document.querySelector<HTMLButtonElement>('[data-slot="merge-warning-open"]');
   if (warning) {
     warning.click();
     await wait(200);
@@ -138,15 +139,17 @@ async function drive() {
 
 const revertButton = () => document.querySelector<HTMLButtonElement>('button[data-slot="merge-revert"]');
 
-/** The first Revert, clicked twice: one request sent, then it reads as asked. */
+/** The first Revert: it asks in the card's footer; confirmed twice, one request is sent and it reads Reverting…. */
 async function revert() {
-  const button = revertButton;
-  const shown = text(button());
-  button()?.click();
-  button()?.click();
-  for (let tries = 0; tries < 60 && !document.querySelector('span[data-slot="merge-revert"]'); tries++) await wait(50);
+  const shown = text(revertButton());
+  revertButton()?.click();
+  for (let tries = 0; tries < 60 && !document.querySelector('[data-slot="merge-revert-go"]'); tries++) await wait(50);
+  const go = document.querySelector<HTMLButtonElement>('[data-slot="merge-revert-go"]');
+  go?.click();
+  go?.click();
+  for (let tries = 0; tries < 60 && sent.length === 0; tries++) await wait(50);
   await wait(400);
-  return { shown, sent, after: all('[data-slot="merge-revert"]').map(text) };
+  return { shown, sent, after: all('[data-slot="merge-revert-confirm"] [role=status]').map(text) };
 }
 
 if (params.has("drive")) {

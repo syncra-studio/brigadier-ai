@@ -35,10 +35,10 @@ test("a turn's proofs show as small thumbnails under its answer, without caption
   assert.deepEqual(seen.read, ["proof-shot", "proof-video"]);
 });
 
-// What was checked never lists in the thread, and nothing is wrong here: no warning line. A turn
-// that merged with no files of its own counted shows the merge in a header of its own, Revert in
-// it; Revert sends the thread its fixed request once.
-test("a merge with nothing counted shows its own header with Revert, and no Checked list", { timeout: 60000 }, async (t) => {
+// What was checked never lists in the thread, and nothing is wrong here: no footer row. A turn
+// that merged with no files of its own counted shows the merge's own Changes card, Revert in it;
+// Revert asks in the card's footer, then sends the thread its fixed request once.
+test("a merge with nothing counted shows its own Changes card with Revert, and no Checked list", { timeout: 60000 }, async (t) => {
   const seen = await render(t);
   assert.equal(seen.checkedInThread, false);
   assert.deepEqual(seen.warning, []);
@@ -47,33 +47,33 @@ test("a merge with nothing counted shows its own header with Revert, and no Chec
   assert.deepEqual(seen.revert, {
     shown: "Revert",
     sent: ["Revert merge f00dfee (PR #7) on main and push it the way it went in"],
-    after: ["Revert asked"],
+    after: ["Reverting…"],
   });
 });
 
-// A turn that edited files and merged says so once, in its Edited files card's header, with
-// Revert and View changes there (no Undo) and no "Merged" on its rows.
-test("the Edited files card's header carries the merge, Revert and View changes", { timeout: 60000 }, async (t) => {
+// A turn that edited files and merged says so once, in its Changes card's header, with Revert and
+// View changes there (no Discard) and no "Merged" on its rows.
+test("the Changes card's header carries the merge, Revert and View changes", { timeout: 60000 }, async (t) => {
   const seen = await render(t, "&edited=1");
-  assert.deepEqual(seen.card, { title: "Edited 2 files", merged: "· Merged into main (PR #7)", buttons: ["Revert", "View changes"], rowWords: [] });
+  assert.deepEqual(seen.card, { title: "Edited 2 files", merged: "Merged into main (PR #7)", buttons: ["Revert", "View changes"], rowWords: [] });
   assert.deepEqual(seen.headers, []);
 });
 
 // Merged by the next request, the turn that edited the files still says they merged, with Revert;
-// the merging turn shows the merge's own header.
+// the merging turn shows the merge's own card.
 test("a merge in a later turn shows on the edited turn's card and in its own turn", { timeout: 60000 }, async (t) => {
   const seen = await render(t, "&later=1");
-  assert.equal(seen.card?.merged, "· Merged into main (PR #7)");
+  assert.equal(seen.card?.merged, "Merged into main (PR #7)");
   assert.deepEqual(seen.card?.buttons, ["Revert", "View changes"]);
   assert.deepEqual(seen.headers, ["Merged into main (PR #7)"]);
   assert.deepEqual(seen.warning, []);
 });
 
-// Something really wrong with the merged code is one plain line under the merge, which opens
-// the Progress tab, which lists each.
-test("an open finding and a failed CI run read as one line that opens the Progress tab", { timeout: 60000 }, async (t) => {
+// Something really wrong with the merged code is the Changes card's footer row, which opens the
+// Progress tab, which lists each.
+test("an open finding and a failed CI run read as the card's footer row, which opens the Progress tab", { timeout: 60000 }, async (t) => {
   const seen = await render(t, "&warn=1");
-  assert.deepEqual(seen.warning, ["One review finding is still open and CI failed."]);
+  assert.deepEqual(seen.warning, ["One review finding is still open and CI failed"]);
   assert.equal(seen.tab, "panel:reviews");
   // There, under Merging, only what is really wrong: no stale checks, no proofs line.
   assert.deepEqual(seen.reviews, ["! Codex review of 0000aaa..9999bbb: one finding still open", "! CI failed on a1b2c3d"]);

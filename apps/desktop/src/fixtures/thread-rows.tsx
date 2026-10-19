@@ -38,7 +38,7 @@ import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { CompactionRow } from "@/app/conversation/RequestBlock";
-import { TurnDiff } from "@/app/conversation/TurnDiff";
+import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
@@ -48,6 +48,7 @@ import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AttachmentRef, Conversation, OrchestratorStep, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
+import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -312,16 +313,16 @@ function Page() {
         </Case>
         <ViewContext.Provider value={view}>
           <Case id="turn-diff-many">
-            <TurnDiff requestIds={["many"]} />
+            <ChangesCard requestIds={["many"]} />
           </Case>
           <Case id="turn-diff-one">
-            <TurnDiff requestIds={["one"]} />
+            <ChangesCard requestIds={["one"]} />
           </Case>
           <Case id="turn-diff-direct">
-            <TurnDiff requestIds={["direct"]} />
+            <ChangesCard requestIds={["direct"]} />
           </Case>
           <Case id="turn-diff-steered">
-            <TurnDiff requestIds={["work", "steer"]} />
+            <ChangesCard requestIds={["work", "steer"]} />
           </Case>
         </ViewContext.Provider>
         <Case id="diff-patch">
@@ -466,18 +467,16 @@ async function measure(): Promise<object> {
   one<HTMLButtonElement>("[data-slot=turn-diff-more]", at("turn-diff-many"))?.click();
   await wait(100);
   const all5 = card("turn-diff-many");
+  // A row opens that file's diff in a tab: its part of the turn's change.
   one<HTMLButtonElement>("[data-slot=turn-diff-file] button", at("turn-diff-many"))?.click();
-  for (const end = performance.now() + 8000; performance.now() < end && !one("[data-slot=turn-diff-file-body] [data-slot=diff-name]", at("turn-diff-many")); ) await frame();
+  await wait(100);
+  const opened = sessionTabs(CHAT).tabs.find((tab) => tab.id === sessionTabs(CHAT).active);
   out.turnDiff = {
     many, all: { files: all5.files.length, more: all5.more }, one: card("turn-diff-one"),
-    opened: { name: text(one("[data-slot=turn-diff-file-body] [data-slot=diff-name]", at("turn-diff-many"))), counts: text(one("[data-slot=turn-diff-file-body] [data-slot=diff-counts]", at("turn-diff-many"))) },
+    opened: opened?.kind === "review" ? opened.target : null,
     direct: card("turn-diff-direct"), steered: card("turn-diff-steered"),
     asks: [...reviewAsks],
   };
-  // One file's title opens the turn's own diff of it in place.
-  one<HTMLButtonElement>("[aria-label='View changed files']", at("turn-diff-one"))?.click();
-  for (const end = performance.now() + 8000; performance.now() < end && !one("[data-slot=turn-diff-file-body] [data-slot=diff-name]", at("turn-diff-one")); ) await frame();
-  out.turnDiffOneOpened = text(one("[data-slot=turn-diff-file-body] [data-slot=diff-name]", at("turn-diff-one")));
   // The diff engine draws in its own shadow root.
   const inside = (id: string, selector: string) =>
     all("diffs-container", at(id)).flatMap((host) => (host.shadowRoot ? [...host.shadowRoot.querySelectorAll<HTMLElement>(selector)] : []));

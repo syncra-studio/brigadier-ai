@@ -21,7 +21,7 @@ import { createRoot } from "react-dom/client";
 import { ConversationView } from "@/app/ConversationView";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { ACTIVE_BUTTON, ACTIVE_MATCH, FINDING, MATCHES } from "@/app/conversation/ThreadFind";
-import { TurnDiff } from "@/app/conversation/TurnDiff";
+import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -642,7 +642,7 @@ async function drive(): Promise<void> {
       };
       useBoard.setState(({ board }) => ({ board: board && { ...board, requests: { ...board.requests, [changed.id]: changed } } }));
       const root = createRoot(host);
-      root.render(<ViewContext.Provider value={{ selection: { type: "conversation", id: "long" }, conversation, embedded: false }}><TurnDiff requestIds={[changed.id]} /></ViewContext.Provider>);
+      root.render(<ViewContext.Provider value={{ selection: { type: "conversation", id: "long" }, conversation, embedded: false }}><ChangesCard requestIds={[changed.id]} /></ViewContext.Provider>);
       await settle(300);
       await find("otter.ts");
       const row = host.querySelector('[data-slot="turn-diff-file"] > button')!;

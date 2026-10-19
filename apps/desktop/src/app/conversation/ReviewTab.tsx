@@ -139,7 +139,8 @@ export function ReviewTab({
   /** In front: it shows changes made meanwhile when it comes to the front again. */
   active?: boolean;
 }) {
-  const single = target.type === "file" ? target : null;
+  // One file's diff: the file's own, or its part of a commit's or a turn's (a Changes card's row).
+  const path = target.type === "file" ? target.path : target.type === "commit" || target.type === "lastTurn" ? (target.path ?? null) : null;
   const staged = target.staged;
   const commit = target.type === "commit" ? target.commit : null;
   // The diff is read again only when what it compares changes (it goes by the scope's text).
@@ -155,19 +156,19 @@ export function ReviewTab({
   // One file's diff: only its part of the scope's.
   const review = useMemo(
     () =>
-      fullReview && single
+      fullReview && path !== null
         ? (() => {
-            const files = fullReview.files.filter((file) => file.path === single.path);
+            const files = fullReview.files.filter((file) => file.path === path);
             return {
               ...fullReview,
               files,
-              patch: filePatch(fullReview.patch, single.path),
+              patch: filePatch(fullReview.patch, path),
               insertions: files.reduce((sum, file) => sum + (file.insertions ?? 0), 0),
               deletions: files.reduce((sum, file) => sum + (file.deletions ?? 0), 0),
             };
           })()
         : fullReview,
-    [fullReview, single],
+    [fullReview, path],
   );
   const patches = useMemo(() => {
     if (!fullReview) return new Map<string, ReviewPatch>();
@@ -207,7 +208,7 @@ export function ReviewTab({
         >
           <Text />
         </ToggleButton>
-        {!single && (
+        {path === null && (
           <TooltipIconButton
             tooltip={allCollapsed ? "Expand all diffs" : "Collapse all diffs"}
             size="icon-sm"
@@ -234,7 +235,7 @@ export function ReviewTab({
               <p className="text-destructive p-4 text-sm">{error}</p>
             ) : review && review.files.length === 0 ? (
               <p className="text-muted-foreground p-4 text-sm">
-                {single ? `No ${staged ? "staged " : ""}changes in ${single.path}` : "No changes"}
+                {path !== null ? `No ${staged ? "staged " : ""}changes in ${path}` : "No changes"}
               </p>
             ) : (
               review?.files.map((file) => (

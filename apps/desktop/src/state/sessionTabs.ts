@@ -21,12 +21,18 @@ export const MOCKUP_TAB = "mockup";
 export type ReviewTarget =
   | { type: "changes"; staged: boolean }
   | { type: "file"; path: string; staged: boolean }
-  /** One commit's own change: a merge's, from its turn's View changes; a fast-forward's `commits` all. */
-  | { type: "commit"; commit: string; commits?: number; staged: false }
+  /**
+   * One commit's own change: a merge's, from its turn's View changes; a fast-forward's `commits`
+   * all. With `path`, only that file's part (a Changes card's file row).
+   */
+  | { type: "commit"; commit: string; commits?: number; path?: string; staged: false }
   /** The session's branch since it left its base: the context card's Changes row. */
   | { type: "branch"; staged: false }
-  /** What the latest request that changed anything changed, every landing of it (Q90). */
-  | { type: "lastTurn"; requestId: string | null; staged: false }
+  /**
+   * What the latest request that changed anything changed, every landing of it (Q90). With
+   * `path`, only that file's part (a Changes card's file row).
+   */
+  | { type: "lastTurn"; requestId: string | null; path?: string; staged: false }
   /** Everything not committed: staged, unstaged and new files together (Q90). */
   | { type: "uncommitted"; staged: false };
 

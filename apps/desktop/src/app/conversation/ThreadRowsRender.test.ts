@@ -14,7 +14,6 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
     Shell
   > & {
     error?: string;
-    turnDiffOneOpened: string | null;
     commandClicked: boolean;
     stopped: { row: string | null; state: string | null; shimmer: boolean };
     stoppedShell: string | null;
@@ -127,27 +126,25 @@ test("the thread's rows read like the reference thread: Shell boxes, stopped ste
   assert.deepEqual(seen.editRow, { closed: "Edited math.js", open: "Edited math.js" });
   // A Codex rename is a rename row, not "Edited new.rs +0 −0".
   assert.deepEqual(seen.renameRows, ["Renamed old.rs to new.rs +0 −0", "Moved a.rs +0 −0"]);
-  // The turn's diff card: "Edited 5 files +5 −5" and Undo; the first three files, a
-  // folder dim before each name; then all five, and a row opens to its own diff.
+  // The turn's Changes card: "Edited 5 files +5 −5", Discard and the fold; the first three
+  // files, a folder dim before each name; then all five, and a row opens that file's diff in a tab.
   const { turnDiff } = seen;
-  assert.deepEqual([turnDiff.many.title, turnDiff.many.counts, turnDiff.many.buttons], ["Edited 5 files", "+5 −5", ["View changed files", "Undo", "View changes"]]);
+  assert.deepEqual([turnDiff.many.title, turnDiff.many.counts, turnDiff.many.buttons], ["Edited 5 files", "+5 −5", ["Discard", "Fold the files"]]);
   assert.deepEqual(turnDiff.many.files, [["", "README.md"], ["src/", "math.js"], ["src/", "strings.js"]]);
   assert.equal(turnDiff.many.more, "Show 2 more files");
-  assert.deepEqual(turnDiff.all, { files: 5, more: "Collapse files" });
-  assert.deepEqual(turnDiff.opened, { name: "README.md", counts: "+1 −1" });
+  assert.deepEqual(turnDiff.all, { files: 5, more: "Show less" });
+  assert.deepEqual(turnDiff.opened, { type: "lastTurn", requestId: "many", path: "README.md", staged: false });
   // A worker that landed with no stats of its own is counted from the Review diff, asked once.
   assert.deepEqual([turnDiff.direct.title, turnDiff.direct.counts, turnDiff.direct.files], ["Edited 2 files", "+4 −2", [["src/", "export.ts"], ["test/", "export.test.ts"]]]);
-  assert.deepEqual(turnDiff.asks.toSorted(), ["direct", "many"].map((requestId) => JSON.stringify({ type: "lastTurn", requestId })));
+  assert.deepEqual(turnDiff.asks, [JSON.stringify({ type: "lastTurn", requestId: "direct" })]);
   // A turn a message was steered into counts what both its requests landed.
   assert.deepEqual([turnDiff.steered.title, turnDiff.steered.counts], ["Edited 2 files", "+2 −2"]);
-  // Undo only where it can take the turn back whole: not across two requests, nor for a landing
-  // with no candidate.
-  assert.deepEqual(turnDiff.steered.buttons, ["View changed files", "View changes"]);
-  assert.deepEqual(turnDiff.direct.buttons, ["View changed files", "View changes"]);
-  // One file: its name is the title, and there is no list.
-  assert.deepEqual([turnDiff.one.title, turnDiff.one.files, turnDiff.one.more], ["Edited run.mjs", [], null]);
-  // Its title opens the turn's own diff of it in place, as a row would.
-  assert.equal(seen.turnDiffOneOpened, "run.mjs");
+  // Discard only where it can take the turn back whole: not across two requests, nor for a
+  // landing with no candidate.
+  assert.deepEqual(turnDiff.steered.buttons, ["Fold the files"]);
+  assert.deepEqual(turnDiff.direct.buttons, ["Fold the files"]);
+  // One file: its name is the title, and its row lists it.
+  assert.deepEqual([turnDiff.one.title, turnDiff.one.files.length, turnDiff.one.more], ["Edited run.mjs", 1, null]);
   assert.equal(seen["diff-missing"].empty, "Diff too large to preview");
   // Inline code naming a checkout file is a chip: from the list, or asked by its exact path
   // because the list was cut short; other code stays code, and a missing file is no chip.

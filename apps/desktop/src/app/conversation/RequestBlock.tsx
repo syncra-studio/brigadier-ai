@@ -26,7 +26,7 @@ import { WorkFold } from "@/app/conversation/WorkFold";
 import { ForkMenu } from "@/app/conversation/ForkMenu";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { ImagesRow, MadeImages } from "@/app/conversation/activity/ImageRows";
-import { MergeHeader, MergeWarning, TurnProofs, useTurnMerge } from "@/app/conversation/activity/MergeMessage";
+import { TurnProofs, useTurnMerge } from "@/app/conversation/activity/MergeMessage";
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { ActivityGroup } from "@/app/conversation/activity/ActivityGroup";
@@ -68,7 +68,7 @@ import { TeamSentence } from "@/app/conversation/activity/TeamSentence";
 import type { StatusHead } from "@/app/conversation/liveStatus";
 import { HeldNote } from "@/app/conversation/HeldNote";
 import { AnsweredStatus, StatusLine, type ThreadStatusProps, useThreadStatusHead } from "@/app/conversation/ThreadStatus";
-import { TurnDiff, useTurnChanged } from "@/app/conversation/TurnDiff";
+import { ChangesCard, useTurnChanged } from "@/app/conversation/ChangesCard";
 import { TurnMemories } from "@/app/conversation/TurnMemories";
 import { describeTurnError, interruptedByQuit } from "@/app/conversation/turnError";
 import { useAction } from "@/app/conversation/useAction";
@@ -356,9 +356,8 @@ const UpdateText: FC<TextMessagePartProps> = (props) => (
 );
 
 /**
- * The end of a finished turn under its answer: its proofs as thumbnails, its Edited files card
- * with the merge that took them (or the merge's own header), then one plain line when something
- * about the merged code is really wrong.
+ * The end of a finished turn under its answer: its proofs as thumbnails, then its Changes card
+ * with the merge that took them (or the merge's alone), and what is really wrong with it.
  */
 function TurnEnd({ meta }: { meta: BlockMeta }) {
   const merge = useTurnMerge(meta.orchestratorSteps, meta.requestIds);
@@ -376,8 +375,9 @@ function TurnEnd({ meta }: { meta: BlockMeta }) {
     <div data-slot="turn-end" className="mt-activity flex flex-col gap-3 empty:hidden">
       {preview && <WebPreviewCard url={preview} conversationId={meta.session ? (conversation?.id ?? null) : null} />}
       <TurnProofs steps={meta.orchestratorSteps} />
-      {card ? <TurnDiff requestIds={meta.requestIds} merge={merge} /> : merge?.own && <MergeHeader merge={merge.merge} />}
-      {merge?.own && <MergeWarning merge={merge.merge} />}
+      {/* Changes is always last, right above the answer's time and actions. */}
+      {/* A run's merge shows alone: its files are the run's card's. */}
+      {(card || merge?.own) && <ChangesCard requestIds={card ? meta.requestIds : []} merge={merge} />}
     </div>
   );
 }
