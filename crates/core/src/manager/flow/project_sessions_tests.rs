@@ -1294,3 +1294,67 @@ async fn an_offered_session_starts_only_on_the_users_click() {
     );
     flow.stop().await;
 }
+
+/// A tab whose request settled while its full checks still run reads working from the
+/// checking phase, with no quota wait, then ready once they pass (#346: the Working read right
+/// after `settled_in` was these checks, not a stray wait).
+#[tokio::test]
+async fn a_settled_tab_reads_working_while_its_full_checks_run_without_a_quota_wait() {
+    // The full checks wait while `hold-checks` is in the repository's git folder.
+    const HELD_CHECKS: &str = r#"#!/bin/sh
+common=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+while [ -f "$common/hold-checks" ]; do sleep 0.05; done
+"#;
+    let flow = Flow::start(
+        "sessions-checking",
+        Options {
+            files: vec![("tools/full-checks.sh", HELD_CHECKS)],
+            ..Options::default()
+        },
+        writing(None),
+    )
+    .await;
+    let a = flow.conversation.clone();
+    let state = |id: &ConversationId| {
+        let tab = flow.core.conversation(id).unwrap();
+        let manager = flow.manager.clone();
+        async move { manager.tab_state(&tab).await }
+    };
+    let hold = flow.repo.join(".git/hold-checks");
+    std::fs::write(&hold, "").unwrap();
+
+    flow.say_to(&a, "Write alpha.").await;
+    flow.settled_in(&a).await;
+    super::eventually_async("the full checks to run", || async {
+        let board = flow.core.board(&a).await.unwrap();
+        board.integrated_checks.values().any(|check| {
+            matches!(
+                check.state,
+                crate::work::IntegratedCheckState::Running { .. }
+            )
+        })
+    })
+    .await;
+    let tab = flow.core.conversation(&a).unwrap();
+    assert!(tab.quota_wait.is_none(), "{:?}", tab.quota_wait);
+    let board = flow.core.board(&a).await.unwrap();
+    assert_eq!(board.run, crate::work::RunState::Idle);
+    let activity = board.activity(&a).unwrap();
+    assert!(activity.tasks.is_empty(), "{:?}", activity.tasks);
+    assert!(
+        activity
+            .phases
+            .iter()
+            .all(|(_, phase)| *phase == crate::work::SessionPhase::Checking),
+        "{:?}",
+        activity.phases
+    );
+    assert_eq!(state(&a).await, Some(crate::work::TabState::Working));
+
+    std::fs::remove_file(&hold).unwrap();
+    super::eventually_async("the tab to read ready", || async {
+        state(&a).await == Some(crate::work::TabState::Ready)
+    })
+    .await;
+    flow.stop().await;
+}
