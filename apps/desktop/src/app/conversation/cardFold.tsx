@@ -20,6 +20,7 @@ export const FoldHeader: FC<HTMLAttributes<HTMLDivElement> & { foldable: boolean
   onClick,
   ...props
 }) => (
+  // oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- the chevron is the keyboard's fold control
   <div
     data-slot="card-fold-header"
     {...props}
