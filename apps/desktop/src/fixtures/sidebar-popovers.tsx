@@ -1,11 +1,12 @@
 /**
- * The sidebar's foot over a faked daemon: the usage list, a provider's limits opened in it, and
- * the help menu. ?drive=1 checks the foot row (Help last, flush right, no feedback icon), the
- * list (most used first, the tightest limit, amber past 75%), opening one provider at a time,
+ * The sidebar's foot over a faked daemon: the usage list and the help menu. ?drive=1 checks the
+ * foot row (Help last, flush right, no feedback icon), the list (most used first, the account in
+ * use's tightest limit, amber past 75%, a reached limit said), a provider's row opening its page,
  * Providers ›, a provider that needs signing in, and the help menu's two rows, writing what it
  * saw to #popovers-result (SidebarPopoversRender.test.ts reads it), then opens a plain popover and
  * menu built from the shared parts and reads how each is drawn beside the usage list and help menu.
- * ?show=usage, ?show=details or ?show=help leaves that one open, for screenshots.
+ * ?show=usage, ?show=limit (the account in use at its limit) or ?show=help leaves that one open,
+ * for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -26,7 +27,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { colourOf, surface } from "@/fixtures/look";
-import type { AccountsView, ProviderKind, ProviderOverview, QuotaWindow, Request } from "@/ipc/generated";
+import type { AccountsView, AccountView, ProviderKind, ProviderOverview, QuotaWindow, Request } from "@/ipc/generated";
 import { useAgentPageAsk } from "@/state/agentPage";
 import { useFeedbackUi } from "@/state/feedback";
 import { useApp } from "@/state/store";
@@ -39,15 +40,50 @@ if (params.has("drive")) {
   document.head.append(still);
 }
 
+const HOUR = 3_600_000;
+const start = Date.now();
+
+/** A Claude account: who it is, and whether the engine starts new work on it / it was picked with Use. */
+function account(id: string | undefined, email: string, inUse: boolean, picked: boolean): AccountView {
+  return {
+    account: { provider: "claude", ...(id ? { account: id } : {}) },
+    name: "",
+    default: picked,
+    inUse,
+    status: {
+      provider: "claude",
+      path: "/usr/local/bin/claude",
+      version: "1.0.0",
+      loggedIn: true,
+      authMethod: null,
+      plan: "max",
+      email,
+      guidance: null,
+      compacts: true,
+    },
+    quota: null,
+    quotaAtMs: start,
+    checkedAtMs: start,
+    checking: false,
+    error: null,
+    checkedGeneration: 0,
+  };
+}
+// Picked with Use is the computer's login; new work starts on the second, whose week ends first.
+const accounts: AccountsView = {
+  accounts: [
+    account(undefined, "golden@example.com", false, true),
+    account("acct-b", "escape@example.com", true, false),
+  ],
+  warnings: [],
+};
+
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
-  if (req.method === "getAccounts") return { method: req.method, accounts: { accounts: [], warnings: [] } satisfies AccountsView };
+  if (req.method === "getAccounts") return { method: req.method, accounts };
   return { method: req.method };
 });
-
-const HOUR = 3_600_000;
-const start = Date.now();
 const limit = (id: string, label: string, usedPercent: number, minutes: number | null, resetsInMs: number): QuotaWindow => ({
   id,
   label,
@@ -84,6 +120,19 @@ const claude = overview("claude", true, [
   limit("seven_day", "Weekly", 61, 10_080, 32 * HOUR),
   limit("seven_day_fable", "Weekly (Fable)", 0, 10_080, 32 * HOUR),
 ]);
+const limited: ProviderOverview = {
+  ...claude,
+  quota: {
+    provider: "claude",
+    windows: [
+      limit("five_hour", "5-hour", 12, 300, 4 * HOUR),
+      limit("seven_day", "Weekly", 100, 10_080, 3 * HOUR + 38 * 60_000),
+    ],
+    limit: { window: "seven_day", resetsAtMs: start + 3 * HOUR + 38 * 60_000, kind: "usageWindow" },
+    observedAtMs: start,
+    source: "read",
+  },
+};
 const codex = (loggedIn: boolean) =>
   overview("codex", loggedIn, [
     limit("primary", "5-hour", 82, 300, 3 * HOUR),
@@ -122,7 +171,6 @@ const usageRows = () =>
     words: [...row.children].map(text).filter(Boolean),
     amber: Boolean(q('[data-slot="usage-value"][data-level="warning"]', row)),
   }));
-const limits = () => all('[data-slot="usage-limit"]').map((row) => [...row.children].map(text).filter(Boolean));
 /** A row's size, corners and type, to set beside a shared menu row's. */
 const rowLook = (row: Element | null | undefined) => {
   if (!row) return null;
@@ -154,11 +202,8 @@ function Fixture() {
         press(helpButton());
         return;
       }
+      if (show === "limit") publish([limited, codex(true)]);
       usageButton()?.click();
-      if (show === "details") {
-        await wait(200);
-        rowNamed("Claude Code")?.click();
-      }
     })();
   }, []);
   useEffect(() => {
@@ -191,18 +236,39 @@ function Fixture() {
         amber: getComputedStyle(q('[data-slot="usage-value"][data-level="warning"]') ?? document.body).color,
         warning: colourOf("text-warning", "color"),
       };
+      seen.tips = all('[data-slot="usage-row"]').map((entry) => entry.title);
+      seen.expandable = all('[data-slot="usage-row"][aria-expanded], [data-slot="usage-limit"]').length;
       rowNamed("Claude Code")?.click();
-      await wait(100);
-      seen.claudeOpen = { rows: usageRows().map((entry) => entry.words), limits: limits() };
-      rowNamed("Codex")?.click();
-      await wait(100);
-      seen.codexOpen = {
-        expanded: all('[data-slot="usage-row"][aria-expanded="true"]').map((entry) => text(entry.children[1])),
-        limits: limits(),
+      await wait(200);
+      seen.claudePage = {
+        ask: useAgentPageAsk.getState().ask,
+        selection: useApp.getState().selection,
+        closed: !q('[data-slot="usage-popover"]'),
       };
+      useAgentPageAsk.setState({ ask: null });
+      usageButton()?.click();
+      await wait(200);
+      rowNamed("Codex")?.click();
+      await wait(200);
+      seen.codexPage = { ask: useAgentPageAsk.getState().ask, closed: !q('[data-slot="usage-popover"]') };
+      useAgentPageAsk.setState({ ask: null });
+      usageButton()?.click();
+      await wait(200);
       all<HTMLButtonElement>('[data-slot="usage-popover"] button').find((button) => text(button) === "Providers")?.click();
       await wait(200);
       seen.providers = { selection: useApp.getState().selection, closed: !q('[data-slot="usage-popover"]') };
+
+      // The account in use at its limit: the row says so, in red, and so does the icon.
+      publish([limited, codex(true)]);
+      usageButton()?.click();
+      await wait(200);
+      seen.limitRows = usageRows().map((entry) => entry.words);
+      seen.limitDot = {
+        tip: usageButton()?.getAttribute("aria-label"),
+        red: Boolean(q('[data-slot="usage-value"][data-level="danger"]')),
+      };
+      usageButton()?.click();
+      await wait(200);
 
       publish([claude, codex(false)]);
       usageButton()?.click();

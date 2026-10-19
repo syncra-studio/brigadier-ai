@@ -1,4 +1,4 @@
-import { BarChart, ChevronRight, ChevronUp, Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
+import { BarChart, ChevronRight, Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
@@ -12,11 +12,12 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSidebar } from "@/components/ui/sidebar";
 import { Switch } from "@/components/ui/switch";
-import type { ProviderKind, ProviderOverview, QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
+import type { AccountView, ProviderKind, ProviderOverview, QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
+import { maskEmailsIn } from "@/lib/email";
 import { formatCountdown } from "@/lib/format";
 import { levelTone, ordered, USAGE_DANGER_FROM, type UsageLevel, usageLevel, used, windowTitle } from "@/lib/quota";
 import { cn } from "@/lib/utils";
-import { loadAccounts } from "@/state/accounts";
+import { accountLabel, accountsOf, loadAccounts, oneRowPerAccount } from "@/state/accounts";
 import { loadProviders, openSettings, refreshProviders } from "@/state/actions";
 import { openAgentPage } from "@/state/agentPage";
 import {
@@ -119,10 +120,10 @@ function shareTone(percent: number, limitReached = false): UsageLevel {
   return percent > USAGE_AMBER_PAST ? "warning" : "normal";
 }
 
-/** A provider in the list: one that reports usage, or one that needs signing in. */
+/** A provider in the list: one that reports usage (its account in use's), or one that needs signing in. */
 type UsageEntry =
   | { provider: ProviderKind; needs: "signIn" }
-  | { provider: ProviderKind; needs: null; windows: QuotaWindow[]; top: QuotaWindow; limitReached: boolean };
+  | { provider: ProviderKind; needs: null; top: QuotaWindow; limitReached: boolean };
 
 /** The providers on and set up: those needing the user first, then the most used first. */
 function usageEntries(
@@ -134,11 +135,11 @@ function usageEntries(
     const state = agentState(overview);
     if (state === "signIn") return [{ provider: overview.provider, needs: "signIn" }];
     if (state !== "ready" || !withQuota(overview)) return [];
-    const windows = ordered(overview.quota);
-    const top = tightest(windows);
+    // The overview's quota is the account in use's: the one new work starts on.
+    const top = tightest(ordered(overview.quota));
     if (!top) return [];
     const limitReached = (overview.usage?.limit ?? overview.quota.limit) !== null;
-    return [{ provider: overview.provider, needs: null, windows, top, limitReached }];
+    return [{ provider: overview.provider, needs: null, top, limitReached }];
   });
   const rank = (entry: UsageEntry) => (entry.needs ? Number.POSITIVE_INFINITY : used(entry.top));
   return entries.toSorted((a, b) => rank(b) - rank(a));
@@ -159,20 +160,28 @@ function barStatus(entries: readonly UsageEntry[]): {
   return { label: `Usage · ${100 - most}% left`, alert };
 }
 
+/** Who `provider`'s account in use is, masked, for its row's tip; `null` with only one account. */
+function inUseLabel(views: readonly AccountView[] | undefined, provider: ProviderKind): string | null {
+  const rows = oneRowPerAccount(accountsOf(views, provider));
+  const inUse = rows.find(({ view }) => view.inUse)?.view;
+  return rows.length > 1 && inUse ? maskEmailsIn(accountLabel(inUse)) : null;
+}
+
 /**
  * Usage at the sidebar's foot, drawn to the user's design: its icon (tinted, with a dot, from 80%
- * used), and on click one row per provider, most used first, each with only its tightest limit;
- * a provider that needs signing in says so with Sign in. Clicking a provider opens every limit
- * it has under it, one provider at a time. Providers › opens Settings › Providers.
+ * used), and on click one row per provider, most used first, each with only its tightest limit
+ * of the account in use (the one new work starts on); a provider that needs signing in says so
+ * with Sign in. Clicking a provider opens its page in Settings › Providers; Providers › opens
+ * Settings › Providers.
  */
 export function UsageMenu() {
   useUsageRefresh();
   const providers = useApp((s) => s.providers.view?.providers);
   const settings = useApp((s) => s.settings);
+  const accounts = useApp((s) => s.accounts?.accounts);
   const onPage = useApp((s) => s.selection.type === "settings" && s.selection.page === "providers");
   const now = useNow();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [opened, setOpened] = useState<ProviderKind | null>(null);
   // In the row, the list lines up with the row's start rather than with its icon.
   const trigger = useRef<HTMLButtonElement>(null);
   const [rowStart, setRowStart] = useState(0);
@@ -188,7 +197,6 @@ export function UsageMenu() {
       open={menuOpen}
       onOpenChange={(next) => {
         setMenuOpen(next);
-        if (!next) setOpened(null);
         if (next) setRowStart(offsetInRow(trigger.current));
       }}
     >
@@ -226,8 +234,8 @@ export function UsageMenu() {
                 key={entry.provider}
                 entry={entry}
                 now={now}
-                open={opened === entry.provider}
-                onToggle={() => setOpened((current) => (current === entry.provider ? null : entry.provider))}
+                account={inUseLabel(accounts, entry.provider)}
+                onOpen={() => go(() => openAgentPage(entry.provider))}
                 onSignIn={() => go(() => openAgentPage(entry.provider, true))}
               />
             ))
@@ -267,21 +275,22 @@ function Share({ percent, limitReached = false }: { percent: number; limitReache
 }
 
 /**
- * One provider: its mark and name, then its tightest limit ("Weekly · 1d 8h", a bar and the
- * share), or, open, how many limits it has over a row for each; or, needing a sign-in, that and
- * Sign in.
+ * One provider: its mark and name, then its account in use's tightest limit ("Weekly · 1d 8h",
+ * a bar and the share), saying so when its limit is reached; clicking it opens the provider's
+ * page. Needing a sign-in, that and Sign in.
  */
 function ProviderUsage({
   entry,
   now,
-  open,
-  onToggle,
+  account,
+  onOpen,
   onSignIn,
 }: {
   entry: UsageEntry;
   now: number;
-  open: boolean;
-  onToggle: () => void;
+  /** Who its account in use is, masked, when it has several. */
+  account: string | null;
+  onOpen: () => void;
   onSignIn: () => void;
 }) {
   const name = PROVIDER_LABELS[entry.provider];
@@ -307,52 +316,23 @@ function ProviderUsage({
       </div>
     );
   }
-  const { windows, top, limitReached } = entry;
-  const resets = (window: QuotaWindow) =>
-    window.resetsAtMs === null ? null : formatCountdown(window.resetsAtMs, now);
-  const topResets = resets(top);
+  const { top, limitReached } = entry;
+  const resets = top.resetsAtMs === null ? null : formatCountdown(top.resetsAtMs, now);
   return (
-    <>
-      <button
-        type="button"
-        data-slot="usage-row"
-        aria-expanded={open}
-        onClick={onToggle}
-        className={cn(row, "hover:bg-foreground/8 text-start")}
-      >
-        {mark}
-        <span className="truncate">{name}</span>
-        {open ? (
-          <>
-            <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
-              {windows.length} {windows.length === 1 ? "limit" : "limits"}
-            </span>
-            <ChevronUp className="text-muted-foreground size-icon-sm shrink-0" />
-          </>
-        ) : (
-          <>
-            <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
-              {[windowTitle(top), topResets].filter(Boolean).join(" · ")}
-            </span>
-            <Share percent={used(top)} limitReached={limitReached} />
-          </>
-        )}
-      </button>
-      {open &&
-        windows.map((window) => (
-          <div
-            key={window.id}
-            data-slot="usage-limit"
-            className="h-control-sm flex items-center gap-2 ps-8 pe-2 text-xs"
-          >
-            <span className="text-foreground/65 truncate">{windowTitle(window)}</span>
-            <span className="text-muted-foreground min-w-0 flex-1 truncate">
-              {resets(window)}
-            </span>
-            <Share percent={used(window)} limitReached={limitReached && used(window) >= 100} />
-          </div>
-        ))}
-    </>
+    <button
+      type="button"
+      data-slot="usage-row"
+      title={account ? `In use: ${account}` : undefined}
+      onClick={onOpen}
+      className={cn(row, "hover:bg-foreground/8 text-start")}
+    >
+      {mark}
+      <span className="truncate">{name}</span>
+      <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
+        {[limitReached ? "At limit" : windowTitle(top), resets].filter(Boolean).join(" · ")}
+      </span>
+      <Share percent={used(top)} limitReached={limitReached} />
+    </button>
   );
 }
 
