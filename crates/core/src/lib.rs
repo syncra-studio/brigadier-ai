@@ -5,6 +5,7 @@
 //! every change as a [`DomainEvent`].
 
 pub mod accounts;
+pub mod app_call;
 mod board;
 pub mod browser;
 pub mod computer;
@@ -25,6 +26,7 @@ pub mod storage;
 pub mod tools;
 pub mod work;
 
+pub use app_call::*;
 pub use browser::*;
 pub use computer::*;
 pub use knowledge::*;

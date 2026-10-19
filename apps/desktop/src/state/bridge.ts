@@ -16,7 +16,7 @@ import { applySettledTabEvents, loadSettledTabs, refreshSettledTabsSoon } from "
 import { openFolderPicker, takeFolders } from "@/state/addProject";
 import { applyBoardEvents, sideBoardIds, useBoard } from "@/state/board";
 import { applyBrainEvents, reloadSessionTasks } from "@/state/brain";
-import { runBrowserCall } from "@/state/agentBrowser";
+import { runAppCall } from "@/state/appCalls";
 import { onComputerUse } from "@/state/computerUse";
 import { applyEvents, useApp } from "@/state/store";
 import { startBrowserOptions } from "@/state/links";
@@ -137,8 +137,8 @@ function onBridgeEvent(message: BridgeEvent) {
     case "computerUse":
       onComputerUse(message.status);
       break;
-    case "browserCall":
-      void runBrowserCall(message.call);
+    case "appCall":
+      void runAppCall(message.call);
       break;
     case "pageChanged":
       emitPageChanged({ id: message.id, revision: message.revision });

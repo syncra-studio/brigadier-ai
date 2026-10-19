@@ -17,6 +17,7 @@
 
 mod accounts;
 mod add_project;
+mod app_call;
 mod background_runs;
 mod brain_first;
 mod brain_jobs;
@@ -279,6 +280,7 @@ pub struct SessionManager {
     /// The helper as Settings, the menu bar and the watchdog tend it ([`computer_host`]).
     computer_host: computer_host::ComputerHost,
     /// Agents' browser calls on their way to the app ([`browser_tool`]).
+    app: Arc<app_call::AppHub>,
     browser: browser_tool::BrowserHub,
     /// Where "Open in terminal" runs a worker's session (the daemon's terminals).
     terminal_host: std::sync::OnceLock<Arc<dyn takeover::TerminalHost>>,
@@ -381,6 +383,7 @@ impl SessionManager {
                 .guard
                 .fake(brigadier_sandbox::MachineLoad::default());
         }
+        let app = Arc::new(app_call::AppHub::default());
         let manager = Arc::new_cyclic(|me| Self {
             me: me.clone(),
             core,
@@ -436,7 +439,8 @@ impl SessionManager {
             closing: closing::Closing::default(),
             computer_use: computer_use::ComputerUse::default(),
             computer_host: computer_host::ComputerHost::default(),
-            browser: browser_tool::BrowserHub::default(),
+            browser: browser_tool::BrowserHub::new(app.clone()),
+            app,
             terminal_host: std::sync::OnceLock::new(),
             pages: std::sync::OnceLock::new(),
             tab_chats: side_chat::TabChats::default(),

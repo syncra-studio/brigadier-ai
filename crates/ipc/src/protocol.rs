@@ -14,20 +14,20 @@ use brigadier_core::storage::{
     UnlandedBranch,
 };
 use brigadier_core::{
-    AccountEntry, AccountsView, AttachmentRef, BrainJobKind, BrainOverview, BrowserCall,
-    BrowserResult, CardId, Catalog, CheckoutFile, CommitOutcome, ComputerPermission,
-    ComputerUseStatus, ConflictFile, ConnectView, ConventionsExport, Conversation,
-    ConversationActivity, ConversationId, ConversationKind, ConversationStatus, ConversationView,
-    DiffStat, FolderCheck, FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message,
-    MessageMatches, MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId,
-    PendingChanges, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan,
-    ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession,
-    RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome,
-    ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup,
-    SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState,
-    StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget,
-    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
-    WorkspaceTarget, WorkspaceTree,
+    AccountEntry, AccountsView, AppAnswer, AppCall, AttachmentRef, BrainJobKind, BrainOverview,
+    CardId, Catalog, CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus,
+    ConflictFile, ConnectView, ConventionsExport, Conversation, ConversationActivity,
+    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat, FolderCheck,
+    FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message, MessageMatches,
+    MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, PendingChanges,
+    ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView,
+    PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
+    ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope,
+    RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest,
+    SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy,
+    TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
+    UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
+    WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -930,10 +930,10 @@ pub enum Request {
         notification_id: String,
         error: String,
     },
-    /// The app ran an agent's browser call (`browserCall`): what came of it.
-    BrowserAnswer {
+    /// The app ran an agent's app call (`appCall`): what came of it.
+    AppAnswer {
         id: String,
-        result: BrowserResult,
+        result: AppAnswer,
     },
     /// The user took an agent's Browser tab over (`paused`): its calls wait. Continue, or the
     /// tab closing, hands it back.
@@ -1727,7 +1727,7 @@ pub enum Response {
     PendingOvernightNotifications {
         notifications: Vec<PendingRunNotification>,
     },
-    BrowserAnswer,
+    AppAnswer,
     BrowserPaused,
     AckOvernightNotification,
     FailOvernightNotification,
@@ -2106,10 +2106,10 @@ pub enum ServerFrame {
     /// An agent needs computer use and its setup isn't finished: the app opens the setup
     /// window. Live only.
     ComputerUseSetupNeeded,
-    /// An agent's call of a Browser tab in its session, for the app to run and answer with
-    /// `browserAnswer`. Sent to every subscribed connection. Live only.
-    BrowserCall {
-        call: BrowserCall,
+    /// An agent's call of the app's window (Q90; a Browser tab's call is one), for the app to
+    /// run and answer with `appAnswer`. Sent to every subscribed connection. Live only.
+    AppCall {
+        call: AppCall,
     },
     /// How a clean under way goes (Settings › Storage). Sent to every subscribed connection.
     /// Live only.
@@ -2382,18 +2382,20 @@ mod browser_tests {
 
     #[test]
     fn a_browser_call_and_its_answer_keep_their_wire_shape() {
-        let frame = ServerFrame::BrowserCall {
-            call: BrowserCall {
-                id: "browser-call-1".into(),
+        let frame = ServerFrame::AppCall {
+            call: AppCall {
+                id: "app-call-1".into(),
                 conversation_id: ConversationId("c".into()),
                 task_id: None,
                 label: "Check the form".into(),
-                op: brigadier_core::BrowserOp::Click {
-                    tab: "browser:agent-1".into(),
-                    target: "e3".into(),
-                    guard: brigadier_core::BrowserGuard {
-                        declared: Some(brigadier_core::BrowserSensitive::Send),
-                        approved: None,
+                op: brigadier_core::AppOp::Browser {
+                    op: brigadier_core::BrowserOp::Click {
+                        tab: "browser:agent-1".into(),
+                        target: "e3".into(),
+                        guard: brigadier_core::BrowserGuard {
+                            declared: Some(brigadier_core::BrowserSensitive::Send),
+                            approved: None,
+                        },
                     },
                 },
             },
@@ -2401,13 +2403,13 @@ mod browser_tests {
         let wire = serde_json::to_value(&frame).unwrap();
         assert_eq!(
             wire,
-            serde_json::json!({"type": "browserCall", "call": {
-                "id": "browser-call-1", "conversationId": "c", "taskId": null, "label": "Check the form",
-                "op": {"op": "click", "tab": "browser:agent-1", "target": "e3",
-                       "guard": {"declared": "send", "approved": null}}}})
+            serde_json::json!({"type": "appCall", "call": {
+                "id": "app-call-1", "conversationId": "c", "taskId": null, "label": "Check the form",
+                "op": {"app": "browser", "op": {"op": "click", "tab": "browser:agent-1", "target": "e3",
+                       "guard": {"declared": "send", "approved": null}}}}})
         );
-        let answer = serde_json::json!({"method": "browserAnswer", "id": "browser-call-1",
-            "result": {"result": "paused", "tab": "browser:agent-1"}});
+        let answer = serde_json::json!({"method": "appAnswer", "id": "app-call-1",
+            "result": {"app": "browser", "result": {"result": "paused", "tab": "browser:agent-1"}}});
         let request: Request = serde_json::from_value(answer.clone()).unwrap();
         assert_eq!(serde_json::to_value(request).unwrap(), answer);
         let paused = serde_json::json!({"method": "browserPaused", "conversationId": "c",

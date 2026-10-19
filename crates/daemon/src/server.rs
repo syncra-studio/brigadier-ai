@@ -15,7 +15,7 @@ use brigadier_core::pages::{PageChange, PageError, Pages};
 use brigadier_core::runtime::{Runtime, StartRaw};
 use brigadier_core::storage::{CleanProgress, FreeUpProjectsReport};
 use brigadier_core::{
-    BrowserCall, Conversation, ConversationId, Core, Lifecycle, MAX_ATTACHMENT_BYTES, ProjectId,
+    AppCall, Conversation, ConversationId, Core, Lifecycle, MAX_ATTACHMENT_BYTES, ProjectId,
     SearchUpdate, Setup, WorkspaceTarget, streams,
 };
 use brigadier_ipc::metrics::{DaemonMetrics, Diagnostics, budgets};
@@ -217,7 +217,7 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
         page_feed: None,
         storage_feed: None,
         computer_feed: None,
-        browser_feed: None,
+        app_feed: None,
         checkout_saves: None,
         workspace_watch: None,
         search: None,
@@ -231,9 +231,9 @@ async fn serve(daemon: Arc<Daemon>, connection: Connection, client: ClientInfo) 
     if session.metrics.is_some() {
         daemon.metrics.set_streaming(false);
     }
-    // Browser calls waiting on this window fail now, unless another window runs them.
-    if session.browser_feed.take().is_some() {
-        daemon.sessions.browser_window_gone();
+    // App calls waiting on this window fail now, unless another window runs them.
+    if session.app_feed.take().is_some() {
+        daemon.sessions.app_window_gone();
     }
     daemon.metrics.connection_closed(id);
     tracing::info!(connection = id, "client disconnected");
@@ -266,8 +266,9 @@ struct Session {
     storage_feed: Option<broadcast::Receiver<CleanProgress>>,
     /// Computer use's news, once subscribed to the live feed.
     computer_feed: Option<broadcast::Receiver<ComputerNews>>,
-    /// Agents' browser calls, once subscribed to the live feed: the app runs them.
-    browser_feed: Option<broadcast::Receiver<BrowserCall>>,
+    /// Agents' app calls (a Browser tab's among them), once subscribed to the live feed: the
+    /// app runs them.
+    app_feed: Option<broadcast::Receiver<AppCall>>,
     /// The checkouts a tab chat saved a file in, once subscribed to the live feed.
     checkout_saves: Option<broadcast::Receiver<WorkspaceTarget>>,
     /// The checkout this connection's right sidebar shows, watched while it shows.
@@ -399,9 +400,9 @@ impl Session {
                         None => {}
                     }
                 }
-                call = next_browser_call(&mut self.browser_feed) => {
+                call = next_app_call(&mut self.app_feed) => {
                     if let Some(call) = call {
-                        self.writer.write(&ServerFrame::BrowserCall { call }).await?;
+                        self.writer.write(&ServerFrame::AppCall { call }).await?;
                     }
                 }
                 target = next_checkout_save(&mut self.checkout_saves) => {
@@ -453,8 +454,8 @@ impl Session {
                 if self.checkout_saves.is_none() {
                     self.checkout_saves = Some(self.daemon.sessions.subscribe_checkout_saves());
                 }
-                if self.browser_feed.is_none() {
-                    self.browser_feed = Some(self.daemon.sessions.subscribe_browser());
+                if self.app_feed.is_none() {
+                    self.app_feed = Some(self.daemon.sessions.subscribe_app());
                 }
                 if self.computer_feed.is_none() {
                     self.computer_feed = Some(self.daemon.sessions.subscribe_computer_use());
@@ -1179,9 +1180,7 @@ async fn next_dictation_update(
     }
 }
 
-async fn next_browser_call(
-    feed: &mut Option<broadcast::Receiver<BrowserCall>>,
-) -> Option<BrowserCall> {
+async fn next_app_call(feed: &mut Option<broadcast::Receiver<AppCall>>) -> Option<AppCall> {
     match feed {
         Some(rx) => match rx.recv().await {
             Ok(call) => Some(call),
@@ -2226,9 +2225,9 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             .await?;
             Response::FailOvernightNotification
         }
-        Request::BrowserAnswer { id, result } => {
-            sessions.browser_answer(&id, result);
-            Response::BrowserAnswer
+        Request::AppAnswer { id, result } => {
+            sessions.app_answer(&id, result);
+            Response::AppAnswer
         }
         Request::BrowserPaused {
             conversation_id,

@@ -1,24 +1,25 @@
-//! The browser tool's way to the app (Q74): an agent's call goes to the app's window over the
-//! live feed, the app runs it on the tab's page and answers it with its id. A call nobody
-//! answers in time, or made with no window open, fails in plain words; a call dropped (the
-//! agent stopped, its request ended) is forgotten, and a late answer to it goes nowhere.
+//! The browser tool's calls (Q74): an agent's call goes to the app's window as an app call
+//! (`super::app_call`), the app runs it on the tab's page and answers it. A tab the user took
+//! over pauses the calls on it, and what asks the user first waits for their yes.
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::sync::{Notify, broadcast, oneshot};
+use tokio::sync::Notify;
 
 use base64::Engine as _;
 
 use brigadier_providers::ApprovalDecision;
 
 use super::SessionManager;
+use super::app_call::AppHub;
 use super::cards::CardAnswer;
 use super::conversation::Envelope;
+use crate::app_call::{AppAnswer, AppOp};
 use crate::browser::{
-    BrowserApproved, BrowserCall, BrowserGo, BrowserGuard, BrowserOp, BrowserPageRead,
-    BrowserResult, BrowserSensitive,
+    BrowserApproved, BrowserGo, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult,
+    BrowserSensitive,
 };
 use crate::tools::{BrowserAsks, BrowserStep, BrowserToolCall, ToolReply};
 use crate::work::{Approval, ApprovalSubject, CardState, InjectionKind};
@@ -31,11 +32,10 @@ pub(crate) const CALL_TIMEOUT: Duration = Duration::from_secs(45);
 /// hears it is still paused.
 pub(crate) const PAUSE_WAIT: Duration = Duration::from_secs(50);
 
-/// Calls waiting for the app's answer, and the feed the app's windows hear them on.
+/// The browser's side of the app calls: the tabs the user took over and the yeses given.
 pub(crate) struct BrowserHub {
-    calls: broadcast::Sender<BrowserCall>,
-    pending: Mutex<HashMap<String, oneshot::Sender<BrowserResult>>>,
-    next: AtomicU64,
+    /// The way to the app's window, shared with the other app calls.
+    pub(crate) app: Arc<AppHub>,
     /// The tabs the user took over, by session: calls on them wait for Continue.
     paused: Mutex<HashSet<(ConversationId, String)>>,
     /// Told whenever a tab is paused or goes on.
@@ -59,10 +59,14 @@ pub(crate) struct GrantKey {
 
 impl Default for BrowserHub {
     fn default() -> Self {
+        Self::new(Arc::default())
+    }
+}
+
+impl BrowserHub {
+    pub(crate) fn new(app: Arc<AppHub>) -> Self {
         Self {
-            calls: broadcast::channel(64).0,
-            pending: Mutex::default(),
-            next: AtomicU64::new(1),
+            app,
             paused: Mutex::default(),
             pause_changed: Notify::new(),
             grants: Mutex::default(),
@@ -73,28 +77,6 @@ impl Default for BrowserHub {
                 key
             },
         }
-    }
-}
-
-/// Forgets a call when its wait ends, however it ends.
-struct Waiting<'a> {
-    hub: &'a BrowserHub,
-    id: String,
-}
-
-impl Drop for Waiting<'_> {
-    fn drop(&mut self) {
-        self.hub.pending().remove(&self.id);
-    }
-}
-
-impl BrowserHub {
-    fn pending(
-        &self,
-    ) -> std::sync::MutexGuard<'_, HashMap<String, oneshot::Sender<BrowserResult>>> {
-        self.pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn paused(&self) -> std::sync::MutexGuard<'_, HashSet<(ConversationId, String)>> {
@@ -219,8 +201,9 @@ impl BrowserHub {
         });
     }
 
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<BrowserCall> {
-        self.calls.subscribe()
+    #[cfg(test)]
+    pub(crate) fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::AppCall> {
+        self.app.subscribe()
     }
 
     /// Sends `op` to the app and waits up to `timeout` for its answer.
@@ -232,47 +215,34 @@ impl BrowserHub {
         op: BrowserOp,
         timeout: Duration,
     ) -> BrowserResult {
-        let id = format!("browser-call-{}", self.next.fetch_add(1, Ordering::Relaxed));
-        let (answer, answered) = oneshot::channel();
-        self.pending().insert(id.clone(), answer);
-        let _waiting = Waiting {
-            hub: self,
-            id: id.clone(),
-        };
-        let call = BrowserCall {
-            id,
-            conversation_id: conversation_id.clone(),
-            task_id: task_id.cloned(),
-            label: label.to_owned(),
-            op,
-        };
-        if self.calls.send(call).is_err() {
-            return failed("Brigadier's window isn't open, so its browser can't be used now.");
-        }
-        match tokio::time::timeout(timeout, answered).await {
-            Ok(Ok(result)) => result,
-            // The window closed with the call under way.
-            Ok(Err(_)) => failed("Brigadier's window closed before the browser answered."),
-            Err(_) => failed("The browser didn't answer in time."),
+        let answer = self
+            .app
+            .call(
+                conversation_id,
+                task_id,
+                label,
+                AppOp::Browser { op },
+                timeout,
+            )
+            .await;
+        match answer {
+            AppAnswer::Browser { result } => result,
+            AppAnswer::Failed { message } => BrowserResult::Failed { message },
+            #[allow(unreachable_patterns)]
+            _ => failed("The app answered a browser call with something else."),
         }
     }
 
     /// The app's answer to call `id`; false when nothing waits for it any more.
+    #[cfg(test)]
     pub(crate) fn answer(&self, id: &str, result: BrowserResult) -> bool {
-        match self.pending().remove(id) {
-            Some(waiting) => waiting.send(result).is_ok(),
-            None => false,
-        }
+        self.app.answer(id, AppAnswer::Browser { result })
     }
 
-    /// The window that ran calls went away: what waits on it fails at once.
-    pub(crate) fn window_gone(&self) {
-        if self.calls.receiver_count() == 0 {
-            self.pending().clear();
-            // Its tabs' pauses went with it.
-            self.paused().clear();
-            self.pause_changed.notify_waiters();
-        }
+    /// The window that ran calls went away: its tabs' pauses went with it.
+    pub(crate) fn clear_paused(&self) {
+        self.paused().clear();
+        self.pause_changed.notify_waiters();
     }
 }
 
@@ -735,7 +705,7 @@ impl SessionManager {
                 let path = dir.join(format!(
                     "shot-{}-{}.png",
                     crate::now_ms(),
-                    self.browser.next.fetch_add(1, Ordering::Relaxed)
+                    self.app.next.fetch_add(1, Ordering::Relaxed)
                 ));
                 let saved =
                     std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, &bytes));
@@ -760,24 +730,9 @@ impl SessionManager {
         }
     }
 
-    /// The agents' browser calls, for an app window to run.
-    pub fn subscribe_browser(&self) -> broadcast::Receiver<BrowserCall> {
-        self.browser.subscribe()
-    }
-
     /// The user took an agent's Browser tab over (`paused`), or handed it back or closed it.
     pub fn browser_paused(&self, conversation_id: &ConversationId, tab: &str, paused: bool) {
         self.browser.set_paused(conversation_id, tab, paused);
-    }
-
-    /// The app's answer to a browser call; false when nothing waits for it any more.
-    pub fn browser_answer(&self, id: &str, result: BrowserResult) -> bool {
-        self.browser.answer(id, result)
-    }
-
-    /// An app window that ran browser calls went away.
-    pub fn browser_window_gone(&self) {
-        self.browser.window_gone();
     }
 }
 
@@ -822,7 +777,7 @@ mod tests {
         let mut window = hub.subscribe();
         let answering = async {
             let call = window.recv().await.unwrap();
-            assert_eq!(call.op, read("t1"));
+            assert_eq!(call.op, AppOp::Browser { op: read("t1") });
             assert_eq!(call.label, "Fix the form");
             assert!(hub.answer(&call.id, page("t1")));
         };
@@ -831,7 +786,7 @@ mod tests {
             answering
         );
         assert_eq!(result, page("t1"));
-        assert!(hub.pending().is_empty());
+        assert!(hub.app.pending().is_empty());
     }
 
     #[tokio::test]
@@ -843,7 +798,7 @@ mod tests {
             matches!(&result, BrowserResult::Failed { message } if message.contains("window isn't open")),
             "{result:?}"
         );
-        assert!(hub.pending().is_empty());
+        assert!(hub.app.pending().is_empty());
     }
 
     #[tokio::test]
@@ -860,7 +815,7 @@ mod tests {
         );
         let call = window.recv().await.unwrap();
         assert!(!hub.answer(&call.id, page("t1")));
-        assert!(hub.pending().is_empty());
+        assert!(hub.app.pending().is_empty());
     }
 
     #[tokio::test]
@@ -898,8 +853,10 @@ mod tests {
         let (hub, log) = (hub.clone(), heard.clone());
         tokio::spawn(async move {
             while let Ok(call) = window.recv().await {
-                log.lock().unwrap().push(call.op.clone());
-                hub.answer(&call.id, page(call.op.tab().unwrap_or_default()));
+                let AppOp::Browser { op } = call.op;
+                let tab = op.tab().unwrap_or_default().to_owned();
+                log.lock().unwrap().push(op);
+                hub.answer(&call.id, page(&tab));
             }
         });
         heard
@@ -990,7 +947,7 @@ mod tests {
         let closing = async {
             tokio::task::yield_now().await;
             drop(window);
-            hub.window_gone();
+            assert!(hub.app.window_gone());
         };
         let (result, ()) = tokio::join!(call, closing);
         assert!(

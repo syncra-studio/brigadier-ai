@@ -67,9 +67,9 @@ pub enum BridgeEvent {
     ComputerUse {
         status: brigadier_core::ComputerUseStatus,
     },
-    /// An agent's call of a Browser tab: run it and answer with `browserAnswer`.
-    BrowserCall {
-        call: brigadier_core::BrowserCall,
+    /// An agent's call of the app's window: run it and answer with `appAnswer`.
+    AppCall {
+        call: brigadier_core::AppCall,
     },
     /// The window was hidden or shown; pause sampling while hidden.
     WindowVisibility {

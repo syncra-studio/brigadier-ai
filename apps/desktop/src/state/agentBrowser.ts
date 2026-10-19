@@ -3,9 +3,8 @@ import {
   browserAgentCapture,
   browserAgentLoad,
   browserGo,
-  request,
 } from "@/ipc/client";
-import type { BrowserBounds, BrowserCall, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult, BrowserSensitive } from "@/ipc/generated";
+import type { AppCall, BrowserBounds, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult, BrowserSensitive } from "@/ipc/generated";
 import { isPaused } from "@/state/agentPause";
 import { openPage, useBrowsers } from "@/state/browsers";
 import { type BrowserTabState, closeTab, openAgentTab, sessionTabs } from "@/state/sessionTabs";
@@ -16,6 +15,9 @@ import { useApp } from "@/state/store";
  * runs on a Browser tab of its session and is answered. `open` makes a normal Browser tab,
  * behind the one in front, with the user's sign-ins; the rest work only on such a tab.
  */
+
+/** A Browser tab's call, as its app call carries it. */
+export type BrowserCall = Omit<AppCall, "op"> & { op: BrowserOp };
 
 /** What the app does on a tab's page; the shell's own commands in the app, a fake in tests. */
 export type PageHands = {
@@ -41,14 +43,6 @@ const LOAD_WAIT_MS = 20_000;
 const SETTLE_MS = 400;
 /** The most of a page's text one read gives. */
 const READ_MOST = 20_000;
-
-/** Runs `call` and answers the daemon with what came of it. */
-export async function runBrowserCall(call: BrowserCall, hands: PageHands = shell): Promise<void> {
-  const result = await runCall(call, hands);
-  await request({ method: "browserAnswer", id: call.id, result }).catch((error: unknown) =>
-    console.error("answering a browser call failed", error),
-  );
-}
 
 const failed = (message: string): BrowserResult => ({ result: "failed", message });
 

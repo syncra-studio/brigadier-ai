@@ -134,7 +134,7 @@ note: string | null, } | { "method": "answerCard" } | { "method": "answerQuestio
 /**
  * Absent before the run has a branch, and for a finished run with nothing verified.
  */
-diff: DiffStat | null, } | { "method": "pendingOvernightNotifications", notifications: Array<PendingRunNotification>, } | { "method": "browserAnswer" } | { "method": "browserPaused" } | { "method": "ackOvernightNotification" } | { "method": "failOvernightNotification" } | { "method": "stopTask" } | { "method": "stopWorkers", 
+diff: DiffStat | null, } | { "method": "pendingOvernightNotifications", notifications: Array<PendingRunNotification>, } | { "method": "appAnswer" } | { "method": "browserPaused" } | { "method": "ackOvernightNotification" } | { "method": "failOvernightNotification" } | { "method": "stopTask" } | { "method": "stopWorkers", 
 /**
  * The tasks stopped, oldest first.
  */

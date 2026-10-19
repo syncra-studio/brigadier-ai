@@ -6,9 +6,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use super::{Flow, Options, Reply, Script, Turn};
-use crate::browser::{
-    BrowserCall, BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult, BrowserSensitive,
-};
+use crate::app_call::{AppAnswer, AppCall, AppOp};
+use crate::browser::{BrowserGuard, BrowserOp, BrowserPageRead, BrowserResult, BrowserSensitive};
 use crate::tools::{BrowserNavigate, BrowserOpen, BrowserTabRef, BrowserToolCall, ToolReply};
 
 fn script<F, Fut>(f: F) -> Script
@@ -17,6 +16,32 @@ where
     Fut: std::future::Future<Output = Reply> + Send + 'static,
 {
     Arc::new(move |turn| Box::pin(f(turn)))
+}
+
+/// A browser call as the window hears it, inside its app call.
+#[derive(Debug, Clone)]
+struct BrowserCall {
+    id: String,
+    conversation_id: crate::ConversationId,
+    task_id: Option<crate::TaskId>,
+    label: String,
+    op: BrowserOp,
+}
+
+fn browser_call(call: AppCall) -> Option<BrowserCall> {
+    match call.op {
+        AppOp::Browser { op } => Some(BrowserCall {
+            id: call.id,
+            conversation_id: call.conversation_id,
+            task_id: call.task_id,
+            label: call.label,
+            op,
+        }),
+    }
+}
+
+fn answer(manager: &crate::manager::SessionManager, id: &str, result: BrowserResult) {
+    manager.app_answer(id, AppAnswer::Browser { result });
 }
 
 fn quiet() -> Script {
@@ -70,11 +95,14 @@ fn page(tab: &str, text: &str) -> BrowserResult {
 /// The app's window: hears every call, keeps it and answers as a page would.
 fn window(flow: &Flow) -> Arc<Mutex<Vec<BrowserCall>>> {
     let heard: Arc<Mutex<Vec<BrowserCall>>> = Arc::default();
-    let mut calls = flow.manager.subscribe_browser();
+    let mut calls = flow.manager.subscribe_app();
     let manager = flow.manager.clone();
     let log = heard.clone();
     tokio::spawn(async move {
         while let Ok(call) = calls.recv().await {
+            let Some(call) = browser_call(call) else {
+                continue;
+            };
             let result = match &call.op {
                 BrowserOp::Open { .. } => page("browser:agent-1", "[e1] button \"Order\""),
                 BrowserOp::Screenshot { tab } => BrowserResult::Shot {
@@ -101,7 +129,7 @@ fn window(flow: &Flow) -> Arc<Mutex<Vec<BrowserCall>>> {
                 other => page(other.tab().unwrap_or_default(), "Thanks"),
             };
             log.lock().unwrap().push(call.clone());
-            manager.browser_answer(&call.id, result);
+            answer(&manager, &call.id, result);
         }
     });
     heard
@@ -345,10 +373,13 @@ fn shop_typing(flow: &Flow, typed: BrowserSensitive) -> Arc<Shop> {
         heard: Mutex::default(),
         read_fails: std::sync::atomic::AtomicBool::new(false),
     });
-    let mut calls = flow.manager.subscribe_browser();
+    let mut calls = flow.manager.subscribe_app();
     let (manager, page_of) = (flow.manager.clone(), shop.clone());
     tokio::spawn(async move {
         while let Ok(call) = calls.recv().await {
+            let Some(call) = browser_call(call) else {
+                continue;
+            };
             let generation = page_of.generation.load(std::sync::atomic::Ordering::SeqCst);
             page_of.heard.lock().unwrap().push(call.op.clone());
             let url = "https://shop.example/checkout".to_owned();
@@ -383,7 +414,7 @@ fn shop_typing(flow: &Flow, typed: BrowserSensitive) -> Arc<Shop> {
                 }
                 other => page(other.tab().unwrap_or_default(), "Checkout"),
             };
-            manager.browser_answer(&call.id, result);
+            answer(&manager, &call.id, result);
         }
     });
     shop

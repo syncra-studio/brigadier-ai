@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { Channel } from "@tauri-apps/api/core";
-import type { BrowserCall, BrowserEvent, BrowserOp, BrowserResult, Request } from "@/ipc/generated";
+import type { AppCall, BrowserEvent, BrowserOp, BrowserResult, Request } from "@/ipc/generated";
 
 const data = new Map<string, string>();
 Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
@@ -13,7 +13,8 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
   key: (at: number) => [...data.keys()][at] ?? null,
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage, crypto: globalThis.crypto, innerWidth: 1200, innerHeight: 800 } });
-const { base64, runBrowserCall } = await import("./agentBrowser");
+const { base64 } = await import("./agentBrowser");
+const { runAppCall } = await import("./appCalls");
 const { handBack, isPaused, userUsed } = await import("./agentPause");
 const { useBrowsers } = await import("./browsers");
 const { CHAT_TAB, selectTab, sessionTabs } = await import("./sessionTabs");
@@ -61,8 +62,9 @@ function fakeShell(answer: (op: Record<string, unknown>) => unknown) {
       case "browser_agent_capture":
         return new Uint8Array([137, 80, 78, 71]).buffer;
       case "ipc_request": {
-        const sent = args.request as Extract<Request, { method: "browserAnswer" }>;
-        if (sent.method === "browserAnswer") answers.push({ id: sent.id, result: sent.result });
+        const sent = args.request as Extract<Request, { method: "appAnswer" }>;
+        if (sent.method === "appAnswer")
+          answers.push({ id: sent.id, result: sent.result.app === "browser" ? sent.result.result : { result: "failed", message: sent.result.message } });
         const told = args.request as Request;
         if (told.method === "browserPaused") paused.push({ tab: told.tab, paused: told.paused });
         return { method: sent.method };
@@ -78,13 +80,13 @@ const reads = (op: Record<string, unknown>) =>
   op.kind === "read" ? { url: "http://127.0.0.1:4000/", title: "Shop", text: '[e1] button "Buy"' } : { done: true };
 
 let calls = 0;
-function call(op: BrowserOp): BrowserCall {
-  return { id: `browser-call-${++calls}`, conversationId: SESSION, taskId: null, label: "Check the shop", op };
+function call(op: BrowserOp): AppCall {
+  return { id: `app-call-${++calls}`, conversationId: SESSION, taskId: null, label: "Check the shop", op: { app: "browser", op } };
 }
 
 async function answered(shell: { answers: { id: string; result: BrowserResult }[] }, op: BrowserOp): Promise<BrowserResult> {
   const sent = call(op);
-  await runBrowserCall(sent);
+  await runAppCall(sent);
   const answer = shell.answers.find((each) => each.id === sent.id);
   assert.ok(answer, `${sent.id} was answered`);
   return answer.result;
