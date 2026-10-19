@@ -17,6 +17,7 @@ use brigadier_core::Error;
 use brigadier_core::manager::{HostedTerminal, TerminalHost, TerminalSnapshot};
 use brigadier_ipc::protocol::{TerminalInfo, TerminalOutput};
 use brigadier_providers::TerminalCommand;
+use brigadier_providers::login_mark::LoginMark;
 use brigadier_sandbox::Platform;
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::{broadcast, oneshot, watch};
@@ -42,6 +43,8 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 pub struct Terminals {
     live: Arc<Mutex<HashMap<String, Arc<Terminal>>>>,
+    /// Closed tabs whose processes still have time to end; shutdown owns them too.
+    lingering: Arc<Mutex<HashMap<String, Arc<Terminal>>>>,
     feed: broadcast::Sender<TerminalOutput>,
     next: AtomicU64,
     /// Ends a worker terminal's process tree.
@@ -64,6 +67,14 @@ struct Terminal {
     /// Becomes true once its output ended and its process was reaped.
     ended: watch::Sender<bool>,
     pid: Option<u32>,
+    account_sign_in: Mutex<Option<AccountSignIn>>,
+}
+
+#[derive(Clone)]
+struct AccountSignIn {
+    mark: Option<LoginMark>,
+    before: Option<String>,
+    started_at_ms: i64,
 }
 
 impl Terminal {
@@ -134,6 +145,7 @@ impl Terminals {
         let (feed, _) = broadcast::channel(FEED);
         Self {
             live: Arc::new(Mutex::new(HashMap::new())),
+            lingering: Arc::new(Mutex::new(HashMap::new())),
             feed,
             next: AtomicU64::new(1),
             platform: None,
@@ -289,14 +301,16 @@ impl Terminals {
             on_exit: Mutex::new(on_exit),
             ended: watch::Sender::new(false),
             pid,
+            account_sign_in: Mutex::new(None),
         });
         lock(&self.live).insert(id.clone(), terminal.clone());
         let live = self.live.clone();
+        let lingering = self.lingering.clone();
         let feed = self.feed.clone();
         let pump = terminal.clone();
         let started = std::thread::Builder::new()
             .name(format!("{id} output"))
-            .spawn(move || pump_output(&pump, reader, &feed, &live));
+            .spawn(move || pump_output(&pump, reader, &feed, &live, &lingering));
         if let Err(err) = started {
             lock(&self.live).remove(&id);
             terminal.kill();
@@ -448,11 +462,65 @@ impl Terminals {
         lock(&self.live).get(id)?.session.clone()
     }
 
+    /// Remembers where this terminal's login stood before its own sign-in started.
+    pub fn watch_account_sign_in(
+        &self,
+        id: &str,
+        mark: Option<LoginMark>,
+        before: Option<String>,
+        started_at_ms: i64,
+    ) {
+        if let Ok(terminal) = self.get(id) {
+            *lock(&terminal.account_sign_in) = Some(AccountSignIn {
+                mark,
+                before,
+                started_at_ms,
+            });
+        }
+    }
+
+    /// A cached signed-in account is not evidence this sign-in completed: its login must
+    /// have changed, and a check since this terminal started must have read as signed in.
+    pub async fn close_account_sign_in(
+        &self,
+        id: &str,
+        checked_at_ms: Option<i64>,
+        signed_in: bool,
+        grace: Duration,
+    ) {
+        let sign_in = self
+            .get(id)
+            .ok()
+            .and_then(|terminal| lock(&terminal.account_sign_in).clone());
+        let completed = match sign_in {
+            Some(AccountSignIn {
+                mark: Some(mark),
+                before: Some(before),
+                started_at_ms,
+            }) if signed_in && checked_at_ms.is_some_and(|at| at > started_at_ms) => {
+                mark.read().await.is_some_and(|now| now != before)
+            }
+            _ => false,
+        };
+        if completed {
+            self.close_after(id, grace);
+        } else {
+            self.close(id);
+        }
+    }
+
     /// Lets a terminal go as [`Self::close`] does, but gives its process `grace` to end by
     /// itself first: a sign-in that is done may still be saving what it saves.
-    pub fn close_after(&self, id: &str, grace: Duration) {
-        let Some(terminal) = lock(&self.live).remove(id) else {
-            return;
+    fn close_after(&self, id: &str, grace: Duration) {
+        let terminal = {
+            // The move shares close_all's lock order, so shutdown cannot miss a process
+            // between the visible and lingering sets.
+            let mut live = lock(&self.live);
+            let Some(terminal) = live.remove(id) else {
+                return;
+            };
+            lock(&self.lingering).insert(id.to_owned(), terminal.clone());
+            terminal
         };
         let platform = self.platform.clone();
         let mut ended = terminal.ended.subscribe();
@@ -468,7 +536,10 @@ impl Terminals {
 
     /// Ends a terminal's shell; closing one that already ended is fine.
     pub fn close(&self, id: &str) {
-        let terminal = lock(&self.live).remove(id);
+        let terminal = {
+            let mut live = lock(&self.live);
+            live.remove(id).or_else(|| lock(&self.lingering).remove(id))
+        };
         if let Some(terminal) = terminal {
             terminal.end(self.platform.as_ref());
         }
@@ -509,7 +580,14 @@ impl Terminals {
 
     /// Ends every shell (the daemon is quitting).
     pub fn close_all(&self) {
-        let terminals: Vec<Arc<Terminal>> = lock(&self.live).drain().map(|(_, t)| t).collect();
+        let terminals: Vec<Arc<Terminal>> = {
+            let mut live = lock(&self.live);
+            let mut lingering = lock(&self.lingering);
+            live.drain()
+                .chain(lingering.drain())
+                .map(|(_, t)| t)
+                .collect()
+        };
         for terminal in terminals {
             terminal.end(self.platform.as_ref());
         }
@@ -523,6 +601,7 @@ fn pump_output(
     mut reader: Box<dyn Read + Send>,
     feed: &broadcast::Sender<TerminalOutput>,
     live: &Mutex<HashMap<String, Arc<Terminal>>>,
+    lingering: &Mutex<HashMap<String, Arc<Terminal>>>,
 ) {
     let mut buffer = vec![0; READ_CHUNK];
     let mut decoder = Utf8Stream::default();
@@ -560,6 +639,7 @@ fn pump_output(
         {
             live.remove(&terminal.id);
         }
+        lock(lingering).remove(&terminal.id);
     }
     tracing::info!(terminal = %terminal.id, ?code, "terminal ended");
     let _ = feed.send(TerminalOutput::Exited {
@@ -737,6 +817,11 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::Terminals;
+    #[cfg(unix)]
+    use super::{
+        Arc, Duration, HostedTerminal, LoginMark, Terminal, TerminalCommand, TerminalHost, Write,
+        lock,
+    };
 
     /// A folder in the temp directory, removed when dropped however the test ends.
     #[cfg(unix)]
@@ -969,6 +1054,129 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    /// A fake account CLI waits for its browser callback (a line on stdin), then writes its
+    /// final file and exits. Its stored login starts signed in, as on "Sign in again".
+    #[cfg(unix)]
+    async fn account_sign_in_terminal() -> (Temp, Terminals, HostedTerminal, Arc<Terminal>) {
+        let home = Temp(std::env::temp_dir().join(format!(
+            "20261019-2257-onboarding-redesign-w08-account-{}",
+            uuid::Uuid::new_v4()
+        )));
+        std::fs::create_dir_all(&*home).unwrap();
+        let stored = home.join("auth.json");
+        std::fs::write(&stored, "old login").unwrap();
+        let mark = LoginMark::file(&stored);
+        let before = mark.read().await;
+        let terminals = Terminals::new();
+        let hosted = terminals
+            .start_command(
+                "account:test",
+                "account:test",
+                TerminalCommand {
+                    program: "/bin/sh".into(),
+                    args: vec![
+                        "-c".into(),
+                        "read callback; printf finished > finished".into(),
+                    ],
+                    cwd: home.to_path_buf(),
+                    env: Vec::new(),
+                },
+                80,
+                24,
+            )
+            .unwrap();
+        terminals.watch_account_sign_in(&hosted.id, Some(mark), before, 100);
+        let terminal = terminals.get(&hosted.id).unwrap();
+        (home, terminals, hosted, terminal)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelling_sign_in_again_stops_the_cli_without_a_new_stored_login() {
+        // Even a new signed-in status cannot turn the account's unchanged old login into
+        // completion of this attempt. A changed login also needs a fresh signed-in check.
+        for (changed, checked_at, signed_in) in [
+            (false, Some(99), true),
+            (false, Some(101), true),
+            (true, Some(99), true),
+            (true, None, true),
+            (true, Some(101), false),
+        ] {
+            let (home, terminals, hosted, terminal) = account_sign_in_terminal().await;
+            if changed {
+                std::fs::write(home.join("auth.json"), "new stored login").unwrap();
+            }
+            terminals
+                .close_account_sign_in(&hosted.id, checked_at, signed_in, Duration::from_secs(20))
+                .await;
+            tokio::time::timeout(Duration::from_secs(2), hosted.exited)
+                .await
+                .expect("cancelled CLI stopped immediately, without its grace period")
+                .unwrap();
+            assert!(lock(&terminal.child).try_wait().unwrap().is_some());
+            assert!(lock(&terminals.lingering).is_empty());
+            assert!(
+                !home.join("finished").exists(),
+                "cancelled callback completed"
+            );
+            terminals.close_all();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn closing_after_a_new_stored_login_lets_the_cli_finish_by_itself() {
+        let (home, terminals, hosted, terminal) = account_sign_in_terminal().await;
+        std::fs::write(home.join("auth.json"), "new stored login").unwrap();
+        terminals
+            .close_account_sign_in(&hosted.id, Some(101), true, Duration::from_secs(20))
+            .await;
+        assert!(lock(&terminal.child).try_wait().unwrap().is_none());
+        assert_eq!(terminals.count(), 0);
+        assert!(terminals.running("account:test", "account:test").is_none());
+        assert!(terminals.list("account:test").is_empty());
+        assert!(terminals.output("account:test", &hosted.id).is_none());
+        assert!(
+            terminals
+                .attach(&hosted.id, &mut terminals.subscribe(), 80, 24)
+                .is_err()
+        );
+        assert!(lock(&terminals.lingering).contains_key(&hosted.id));
+        // The hidden CLI can finish its own last writes and exit successfully.
+        lock(&terminal.writer).write_all(b"callback\n").unwrap();
+        tokio::time::timeout(Duration::from_secs(2), hosted.exited)
+            .await
+            .expect("completed CLI ended by itself")
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.join("finished")).unwrap(),
+            "finished"
+        );
+        assert!(lock(&terminal.child).try_wait().unwrap().unwrap().success());
+        assert!(lock(&terminals.lingering).is_empty());
+        terminals.close_all();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn daemon_shutdown_stops_a_lingering_account_sign_in() {
+        let (home, terminals, hosted, terminal) = account_sign_in_terminal().await;
+        std::fs::write(home.join("auth.json"), "new stored login").unwrap();
+        terminals
+            .close_account_sign_in(&hosted.id, Some(101), true, Duration::from_secs(20))
+            .await;
+        assert!(lock(&terminals.lingering).contains_key(&hosted.id));
+        assert!(lock(&terminal.child).try_wait().unwrap().is_none());
+        terminals.close_all();
+        tokio::time::timeout(Duration::from_secs(2), hosted.exited)
+            .await
+            .expect("shutdown stopped the CLI without waiting for its grace period")
+            .unwrap();
+        assert!(lock(&terminal.child).try_wait().unwrap().is_some());
+        assert!(lock(&terminals.lingering).is_empty());
+        assert!(!home.join("finished").exists());
     }
 
     /// The user closing a worker's tab ends its whole tree too, a child that ignores the

@@ -973,6 +973,7 @@ impl Session {
                     cwd: home.clone(),
                     env: account_env.vars(),
                 };
+                let started_at_ms = brigadier_core::now_ms();
                 let hosted = match self
                     .daemon
                     .terminals
@@ -981,6 +982,12 @@ impl Session {
                     Ok(hosted) => hosted,
                     Err(err) => return Ok(Err(IpcError::from(err))),
                 };
+                self.daemon.terminals.watch_account_sign_in(
+                    &hosted.id,
+                    mark.clone(),
+                    before.clone(),
+                    started_at_ms,
+                );
                 let (exited, account) = (hosted.exited, id.to_owned());
                 self.daemon
                     .supervisor
@@ -1785,29 +1792,28 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             Response::ClearTerminal
         }
         Request::CloseTerminal { terminal_id } => {
-            // An extra account's sign-in closed once the account reads as signed in (its row
-            // goes the moment the login is stored) ends by itself, stopped only if it doesn't.
-            let signed_in = daemon
+            let account = daemon
                 .terminals
                 .session_of(&terminal_id)
                 .and_then(|key| key.strip_prefix("account:").map(str::to_owned))
                 .and_then(|id| {
-                    let entry = daemon
-                        .core
-                        .settings()
+                    daemon
+                        .runtime
+                        .accounts_view()
                         .accounts
                         .into_iter()
-                        .find(|entry| entry.id == id)?;
-                    Some(brigadier_core::accounts::AccountRef::new(
-                        entry.provider,
-                        Some(id),
-                    ))
-                })
-                .is_some_and(|account| daemon.runtime.signed_in(&account));
-            if signed_in {
+                        .find(|view| view.account.account.as_deref() == Some(id.as_str()))
+                });
+            if let Some(account) = account {
                 daemon
                     .terminals
-                    .close_after(&terminal_id, crate::connect::LINGER);
+                    .close_account_sign_in(
+                        &terminal_id,
+                        account.checked_at_ms,
+                        account.status.is_some_and(|status| status.logged_in),
+                        crate::connect::LINGER,
+                    )
+                    .await;
             } else {
                 daemon.terminals.close(&terminal_id);
             }
