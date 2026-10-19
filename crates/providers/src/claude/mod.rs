@@ -1308,6 +1308,10 @@ impl Provider for Claude {
                 shared.clone(),
                 parser_rx,
                 !spec.auto_compact,
+                spec.mcp_servers
+                    .iter()
+                    .map(|server| server.name.clone())
+                    .collect(),
                 in_folder,
             ));
             let session = Arc::new(ClaudeSession {
@@ -1815,7 +1819,8 @@ impl ProviderSession for ClaudeSession {
 }
 
 /// Reads Claude's output until it exits: forwards events, pairs control responses, keeps
-/// permission requests until they are answered. Once it exited, `in_folder` goes: the staging
+/// permission requests until they are answered. `own_mcp` names Brigadier's own MCP servers,
+/// which the servers it reports leave out. Once it exited, `in_folder` goes: the staging
 /// folders it may have left empty are tidied ([`files::CliInFolder`]).
 async fn read_loop(
     process: Arc<CliProcess>,
@@ -1823,10 +1828,12 @@ async fn read_loop(
     shared: Arc<Shared>,
     mut commands: mpsc::UnboundedReceiver<ParserCommand>,
     refuses_compaction: bool,
+    own_mcp: HashSet<String>,
     in_folder: files::CliInFolder,
 ) {
     let mut parser = Parser::live();
     parser.refuses_compaction = refuses_compaction;
+    parser.own_mcp = own_mcp;
     while let Some(line) = stdout.recv().await {
         while let Ok(command) = commands.try_recv() {
             match command {

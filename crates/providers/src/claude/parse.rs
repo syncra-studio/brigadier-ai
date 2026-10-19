@@ -125,6 +125,11 @@ pub struct Parser {
     /// The background jobs Claude last said still run: each `task_notification` of one ends
     /// it alone, in the order Claude starts their turns (#221).
     background: Vec<String>,
+    /// Brigadier's own MCP servers, left out of the servers reported
+    /// ([`ProviderEvent::McpServers`]).
+    pub(crate) own_mcp: HashSet<String>,
+    /// The MCP servers last reported: each `system/init` repeats them.
+    mcp_reported: Option<Vec<McpServerState>>,
 }
 
 impl Parser {
@@ -713,12 +718,73 @@ impl Parser {
         })
     }
 
+    /// The MCP servers `system/init` lists, each with its state and its tools (`mcp__<server>__<tool>`
+    /// in its tool list; Claude may leave a deferred server's tools out), Brigadier's own and
+    /// disabled ones left out. Reported once per change: as Claude said it at its start.
+    fn mcp_servers(&mut self, value: &Value, out: &mut Vec<Output>) {
+        let Some(listed) = value.get("mcp_servers").and_then(Value::as_array) else {
+            return;
+        };
+        let tools: Vec<&str> = value
+            .get("tools")
+            .and_then(Value::as_array)
+            .map(|tools| tools.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let servers: Vec<McpServerState> = listed
+            .iter()
+            .filter_map(|server| {
+                let name = str_of(server, "name")?;
+                let status = match str_of(server, "status")? {
+                    "connected" => McpStatus::Connected,
+                    "pending" => McpStatus::Connecting,
+                    "needs-auth" => McpStatus::NeedsAuth,
+                    "failed" => McpStatus::Failed,
+                    _ => return None,
+                };
+                if self.own_mcp.contains(name) {
+                    return None;
+                }
+                // Claude's tool names carry the server's name with anything but letters,
+                // digits, `_` and `-` made `_`.
+                let prefix = format!(
+                    "mcp__{}__",
+                    name.chars()
+                        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                            c
+                        } else {
+                            '_'
+                        })
+                        .collect::<String>()
+                );
+                Some(McpServerState {
+                    name: name.to_owned(),
+                    status,
+                    tools: tools
+                        .iter()
+                        .filter_map(|tool| tool.strip_prefix(&prefix))
+                        .map(str::to_owned)
+                        .collect(),
+                    transport: None,
+                })
+            })
+            .collect();
+        if self.mcp_reported.as_ref() == Some(&servers) {
+            return;
+        }
+        self.mcp_reported = Some(servers.clone());
+        out.push(Output::Event(ProviderEvent::McpServers {
+            servers,
+            at_start: true,
+        }));
+    }
+
     fn system(&mut self, value: &Value, out: &mut Vec<Output>) {
         match str_of(value, "subtype") {
             Some("init") => {
                 if let Some(cwd) = str_of(value, "cwd") {
                     self.cwd = Some(cwd.to_owned());
                 }
+                self.mcp_servers(value, out);
                 if !self.started {
                     self.started = true;
                     out.push(Output::Event(ProviderEvent::SessionStarted {
@@ -1670,6 +1736,60 @@ mod tests {
         similar.allow(&network);
         assert!(similar.covers(&network, Some(&workspace)));
         std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    /// `system/init` names the session's MCP servers with their state and tools: reported once
+    /// per change, Brigadier's own and disabled ones left out.
+    #[test]
+    fn init_reports_the_session_s_own_mcp_servers_once() {
+        let mut parser = Parser::live();
+        parser.own_mcp = HashSet::from(["brigadier".to_owned()]);
+        let init = json!({
+            "type": "system", "subtype": "init", "session_id": "s", "cwd": "/p",
+            "mcp_servers": [
+                {"name": "brigadier", "status": "connected"},
+                {"name": "github", "status": "connected"},
+                {"name": "my.docs", "status": "pending"},
+                {"name": "linear", "status": "needs-auth"},
+                {"name": "pg", "status": "failed"},
+                {"name": "off", "status": "disabled"}
+            ],
+            "tools": ["Bash", "mcp__brigadier__ask", "mcp__github__list_issues", "mcp__github__get_diff", "mcp__my_docs__search"]
+        })
+        .to_string();
+        let reported = |parser: &mut Parser| {
+            parser
+                .feed(&init)
+                .into_iter()
+                .filter_map(|out| match out {
+                    Output::Event(ProviderEvent::McpServers { servers, at_start }) => {
+                        Some((servers, at_start))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = reported(&mut parser);
+        let server = |name: &str, status, tools: &[&str]| McpServerState {
+            name: name.to_owned(),
+            status,
+            tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
+            transport: None,
+        };
+        assert_eq!(
+            first,
+            [(
+                vec![
+                    server("github", McpStatus::Connected, &["list_issues", "get_diff"]),
+                    server("my.docs", McpStatus::Connecting, &["search"]),
+                    server("linear", McpStatus::NeedsAuth, &[]),
+                    server("pg", McpStatus::Failed, &[]),
+                ],
+                true
+            )]
+        );
+        // The next turn's init repeats them: nothing new to say.
+        assert!(reported(&mut parser).is_empty());
     }
 
     /// The CLI's guess at the user's next message, trimmed; an empty one is no guess.

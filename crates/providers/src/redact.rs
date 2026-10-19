@@ -544,6 +544,8 @@ pub fn redact_event(redactor: &Redactor, event: &mut ProviderEvent) {
         | ProviderEvent::RateLimits { .. }
         | ProviderEvent::Progress { .. }
         | ProviderEvent::BackgroundJobs { .. }
+        | ProviderEvent::McpServers { .. }
+        | ProviderEvent::McpServerChanged { .. }
         | ProviderEvent::TurnCompleted { .. } => {}
         ProviderEvent::MessageDelta { text, .. }
         | ProviderEvent::Message { text, .. }

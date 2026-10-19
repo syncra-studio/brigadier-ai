@@ -740,6 +740,30 @@ impl KeptOutput {
     }
 }
 
+/// How an agent's MCP server is doing, as its CLI reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpStatus {
+    Connected,
+    /// Not connected yet.
+    Connecting,
+    /// It wants the user to sign in to it first.
+    NeedsAuth,
+    Failed,
+}
+
+/// One MCP server an agent has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerState {
+    pub name: String,
+    pub status: McpStatus,
+    /// Its tools' own names, when the CLI lists them.
+    pub tools: Vec<String>,
+    /// "http" for a server reached over HTTP; absent when the CLI doesn't say.
+    pub transport: Option<String>,
+}
+
 /// Everything a provider session reports, in one vocabulary for every CLI.
 ///
 /// Streaming text arrives as `*Delta` events keyed by `itemId`; the matching final event
@@ -837,6 +861,17 @@ pub enum ProviderEvent {
     /// jobs running still has work coming. Never stored.
     BackgroundJobs {
         running: Vec<String>,
+    },
+    /// The MCP servers the CLI's agent has, as the CLI reports them, Brigadier's own left out:
+    /// the whole set. `atStart`: what the CLI said when it started, not kept current since
+    /// (Claude); otherwise the CLI's current state (Codex). Never stored.
+    McpServers {
+        servers: Vec<McpServerState>,
+        at_start: bool,
+    },
+    /// One of those servers changed state since ([`ProviderEvent::McpServers`]). Never stored.
+    McpServerChanged {
+        server: McpServerState,
     },
     FileChanges {
         item_id: String,
