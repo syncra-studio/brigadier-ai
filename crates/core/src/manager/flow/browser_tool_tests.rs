@@ -330,6 +330,8 @@ async fn with_the_browser_off_or_no_window_open_a_call_says_so() {
 struct Shop {
     generation: std::sync::atomic::AtomicU64,
     heard: Mutex<Vec<BrowserOp>>,
+    /// An approved action goes through, but reading the page after it fails.
+    read_fails: std::sync::atomic::AtomicBool,
 }
 
 fn shop(flow: &Flow) -> Arc<Shop> {
@@ -341,6 +343,7 @@ fn shop_typing(flow: &Flow, typed: BrowserSensitive) -> Arc<Shop> {
     let shop = Arc::new(Shop {
         generation: std::sync::atomic::AtomicU64::new(1),
         heard: Mutex::default(),
+        read_fails: std::sync::atomic::AtomicBool::new(false),
     });
     let mut calls = flow.manager.subscribe_browser();
     let (manager, page_of) = (flow.manager.clone(), shop.clone());
@@ -362,7 +365,11 @@ fn shop_typing(flow: &Flow, typed: BrowserSensitive) -> Arc<Shop> {
                         BrowserOp::Type { .. } => typed,
                         _ => guard.declared.unwrap_or(BrowserSensitive::Pay),
                     };
-                    if approved {
+                    if approved && page_of.read_fails.load(std::sync::atomic::Ordering::SeqCst) {
+                        BrowserResult::Failed {
+                            message: "The page didn't settle.".into(),
+                        }
+                    } else if approved {
                         page(tab, "Thanks for your order")
                     } else {
                         BrowserResult::NeedsApproval {
@@ -871,6 +878,45 @@ async fn one_yes_lets_one_of_two_identical_calls_through() {
         2,
         "the other call asked again"
     );
+    flow.stop().await;
+}
+
+/// #359: the click went through on the user's yes but the page read after it failed; the yes
+/// is spent all the same, so trying the call again asks again.
+#[tokio::test]
+async fn a_yes_is_spent_even_when_the_page_read_after_it_fails() {
+    let flow = Flow::start("browser-tool-spent", Options::default(), quiet()).await;
+    let shop = shop(&flow);
+    shop.read_fails
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (manager, conversation) = (flow.manager.clone(), flow.conversation.clone());
+    let paying = tokio::spawn(async move {
+        manager
+            .browser_tool(conversation, None, pay("browser:agent-1"))
+            .await
+    });
+    let card = card_number(&flow, 1).await;
+    flow.manager
+        .answer_card(flow.conversation.clone(), card.id.clone(), allow())
+        .await
+        .unwrap();
+    let failed = paying.await.unwrap();
+    assert!(failed.is_error, "{}", failed.text);
+    assert_eq!(approved_of(&shop).into_iter().flatten().count(), 1);
+
+    flow.manager
+        .set_question_timeout(std::time::Duration::from_millis(200));
+    let again = flow
+        .manager
+        .browser_tool(flow.conversation.clone(), None, pay("browser:agent-1"))
+        .await;
+    assert!(again.text.starts_with("No answer yet"), "{}", again.text);
+    assert_eq!(
+        approved_of(&shop).into_iter().flatten().count(),
+        1,
+        "the retry carried no yes"
+    );
+    assert_eq!(browser_cards(&flow).await.len(), 2);
     flow.stop().await;
 }
 
