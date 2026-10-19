@@ -118,3 +118,41 @@ pub fn default_data_dir() -> Result<PathBuf> {
     let dir = dirs::data_local_dir().map(|dir| dir.join("Brigadier"));
     dir.ok_or(Error::NoDataDir)
 }
+
+/// Chooses an app's data directory; `override_dir` is the value of `BRIGADIER_DATA_DIR`.
+pub(crate) fn choose_data_dir(identifier: &str, override_dir: Option<PathBuf>) -> Result<PathBuf> {
+    match override_dir {
+        Some(dir) if !dir.as_os_str().is_empty() => Ok(dir),
+        _ if identifier == crate::APP_ID => default_data_dir(),
+        _ => {
+            #[cfg(windows)]
+            let base = dirs::data_local_dir();
+            #[cfg(not(windows))]
+            let base = dirs::data_dir();
+            base.map(|dir| dir.join(identifier)).ok_or(Error::NoDataDir)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_directory_follows_bundle_identity_unless_overridden() {
+        let installed = default_data_dir().unwrap();
+        let custom_id = "ai.brigadier.issues2-w35";
+        assert_eq!(choose_data_dir(crate::APP_ID, None).unwrap(), installed);
+        assert_eq!(
+            choose_data_dir(custom_id, None).unwrap(),
+            installed.parent().unwrap().join(custom_id)
+        );
+        let override_dir = PathBuf::from("/tmp/20261018-1945-issues-run-2-w35-data");
+        for identifier in [crate::APP_ID, custom_id] {
+            assert_eq!(
+                choose_data_dir(identifier, Some(override_dir.clone())).unwrap(),
+                override_dir
+            );
+        }
+    }
+}

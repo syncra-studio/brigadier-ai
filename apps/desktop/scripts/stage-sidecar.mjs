@@ -51,7 +51,7 @@ const profile = release ? "release" : "debug";
 /** Builds the daemon for `triple` and returns the path of the produced binary. */
 function build(triple) {
   // The app's package is selected too (only brigadierd is built), so the shared crates get the
-  // features they get in the app's build. A `tauri build -- -p brigadier-desktop -p
+  // features they get in the app's build. A `tauri build --bundles app -- -p brigadier-desktop -p
   // brigadier-daemon` then reuses them instead of compiling the workspace a second time.
   const cargoArgs = ["build", "--locked", "-p", "brigadier-daemon", "-p", "brigadier-desktop", "--bin", name];
   if (release) cargoArgs.push("--release");

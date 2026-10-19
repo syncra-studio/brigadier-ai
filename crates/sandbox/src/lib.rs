@@ -242,12 +242,21 @@ pub const BACKGROUND_LAUNCH_ENV: &str = "BRIGADIER_BACKGROUND_LAUNCH";
 
 /// Builds the platform implementation for the current OS.
 pub fn native(options: PlatformOptions) -> Result<Arc<dyn Platform>> {
+    native_for_identifier(APP_ID, options)
+}
+
+/// Builds the platform for an app identity, keeping custom bundles out of the installed
+/// app's data directory. Daemons receive the app's resolved directory in `options`.
+pub fn native_for_identifier(
+    identifier: &str,
+    options: PlatformOptions,
+) -> Result<Arc<dyn Platform>> {
     let data_dir = match options.data_dir {
         Some(dir) => dir,
-        None => match std::env::var_os(DATA_DIR_ENV) {
-            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-            _ => paths::default_data_dir()?,
-        },
+        None => paths::choose_data_dir(
+            identifier,
+            std::env::var_os(DATA_DIR_ENV).map(PathBuf::from),
+        )?,
     };
     let paths = AppPaths::resolve(data_dir)?;
 

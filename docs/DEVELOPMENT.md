@@ -52,9 +52,10 @@ keeps its data in `/tmp/brigadier-dev` unless `BRIGADIER_DATA_DIR` names another
 The app launches `brigadierd` detached; closing the window keeps both running in the menu bar.
 Quit from the menu-bar item (or Cmd+Q) to stop the daemon too.
 
-Data lives in `~/Library/Application Support/Brigadier` (`%LOCALAPPDATA%\Brigadier`,
-`~/.local/share/brigadier`). Set `BRIGADIER_DATA_DIR` to use a throwaway directory; each data
-directory gets its own daemon.
+Release identity `ai.brigadier.app` keeps its data in `~/Library/Application Support/Brigadier`
+(`%LOCALAPPDATA%\Brigadier`, `~/.local/share/brigadier`). Other release builds default to a
+folder named after their bundle identifier in the same parent directory. Set
+`BRIGADIER_DATA_DIR` to use a throwaway directory; each data directory gets its own daemon.
 
 ## Checks
 
@@ -99,8 +100,8 @@ helpers and imports the same way, or Linux and Windows clippy flags them as unus
 The smoke check launches the app and judges it against the performance budgets (PLAN.md §4):
 
 ```sh
-pnpm tauri build
-BRIGADIER_DATA_DIR=$(mktemp -d) target/release/bundle/macos/Brigadier.app/Contents/MacOS/brigadier --smoke
+pnpm tauri:debug-app
+BRIGADIER_DATA_DIR=$(mktemp -d) "target/debug/bundle/macos/Brigadier Dev.app/Contents/MacOS/brigadier" --smoke
 ```
 
 For a test build, use `pnpm tauri:debug-app` and `target/debug/bundle/macos/Brigadier Dev.app`.
@@ -250,8 +251,10 @@ None of these exist in a release build.
 ## Build and sign (macOS)
 
 ```sh
-pnpm tauri build --target universal-apple-darwin
+pnpm tauri build --bundles app --target universal-apple-darwin
 ```
+
+Local test builds use `--bundles app` only; after a failed DMG step, run `hdiutil info`, detach its volume with `hdiutil detach <device>`, then delete its `rw.*.dmg` file.
 
 The bundle is `ai.brigadier.app`, universal, macOS 14+, hardened runtime. Signing and
 notarization are configured only through environment variables and are skipped when unset:

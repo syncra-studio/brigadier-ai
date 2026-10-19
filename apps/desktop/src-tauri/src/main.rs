@@ -591,6 +591,7 @@ fn main() {
     overnight_notifications::configure(&args);
     let intent = overnight_notifications::host_id(&args);
     let smoke = args.iter().any(|arg| arg == "--smoke");
+    let mut context = tauri::generate_context!();
     let data_dir = args
         .windows(2)
         .find(|pair| pair[0] == "--brigadier-data-dir")
@@ -609,7 +610,10 @@ fn main() {
         (cfg!(debug_assertions) && std::env::var_os(brigadier_sandbox::DATA_DIR_ENV).is_none())
             .then(debug_data_dir)
     });
-    let platform = match brigadier_sandbox::native(PlatformOptions { data_dir }) {
+    let platform = match brigadier_sandbox::native_for_identifier(
+        &context.config().identifier,
+        PlatformOptions { data_dir },
+    ) {
         Ok(platform) => platform,
         Err(err) => {
             eprintln!("brigadier: {err}");
@@ -627,7 +631,6 @@ fn main() {
         .unwrap_or(1.0);
     // Before the daemon is launched, which creates the database.
     let first_launch = !platform.paths().db_path.exists();
-    let mut context = tauri::generate_context!();
     let info = AppInfo {
         version: updates::version(context.config()),
         platform: platform.name().into(),
