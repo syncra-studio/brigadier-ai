@@ -37,11 +37,12 @@ export const CHEVRON =
 
 /**
  * How a row's or group's detail opens and closes: its height and opacity over 300 ms, fast out, at once
- * with reduced motion. On the collapsible's content; the detail's own layout goes inside it. It clips
- * without scrolling, so a sticky header inside sticks to the list that scrolls it.
+ * with reduced motion (`!`: the open and closed animations outrank a plain `motion-reduce:`). On the
+ * collapsible's content; the detail's own layout goes inside it. It clips without scrolling, so a
+ * sticky header inside sticks to the list that scrolls it.
  */
 export const OPENS =
-  "overflow-clip data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up motion-reduce:animate-none";
+  "overflow-clip data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up motion-reduce:animate-none!";
 
 /** A row's icon by its kind of work: a terminal for commands and checks, a file for reads, a magnifier for searches. */
 export const WORK_ICONS: Record<WorkKind, FC<{ className?: string }>> = {

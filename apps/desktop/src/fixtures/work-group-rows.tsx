@@ -13,6 +13,9 @@
  *   clear of the group's own row above it.
  * - A live group of one running command, opened to its Shell box: the box stays open when the
  *   command ends and the group's row says "Thinking", and when the live line moves on.
+ *
+ * `drive=motion` instead opens and closes the first group and a row in it, reading each body's
+ * state and the animation it runs as it starts ("none" with reduced motion).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -217,7 +220,37 @@ async function measure(): Promise<object> {
   return out;
 }
 
-void measure()
+/** A fold's body: its state and the animation it runs. */
+const read = (body: Element | null | undefined) => (body ? { state: body.getAttribute("data-state"), animation: getComputedStyle(body).animationName } : null);
+
+/** The group and its first row opened, then closed: each body's state and animation as it starts. */
+async function motion(): Promise<object> {
+  await wait(300);
+  const group = one("[data-slot=work-group]", at("open-in-group"))!;
+  const groupBody = () => one(":scope > [data-slot=collapsible-content]", group);
+  const row = () => one("[data-slot=work-group-list] > [data-kind]", group);
+  const toggleGroup = () => one<HTMLElement>(":scope > button", group)!.click();
+  const toggleRow = () => one<HTMLElement>("[role=button]", row()!)!.click();
+  const out: Record<string, unknown> = {};
+  toggleGroup();
+  await wait(16);
+  out.groupOpens = read(groupBody());
+  await wait(500);
+  toggleRow();
+  await wait(16);
+  out.rowOpens = read(one(":scope > [data-slot=collapsible-content]", row()!));
+  await wait(500);
+  toggleRow();
+  await wait(16);
+  out.rowCloses = read(one(":scope > [data-slot=collapsible-content]", row()!));
+  await wait(500);
+  toggleGroup();
+  await wait(16);
+  out.groupCloses = read(groupBody());
+  return out;
+}
+
+void (query.get("drive") === "motion" ? motion() : measure())
   .catch((error: unknown) => ({ error: String(error) }))
   .then(async (result) => {
     if (query.get("stop") === "1") await new Promise(() => {});

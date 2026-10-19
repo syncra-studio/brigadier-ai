@@ -30,3 +30,13 @@ test("an opened lone row stays open as its group's live line comes and goes", { 
   const { loneLive } = await seen<{ loneLive: Record<string, boolean> }>(t);
   assert.deepEqual(loneLive, { opened: true, ended: true, movedOn: true });
 });
+
+// A group's and a row's body open and close with the shared animation, at once with reduced motion.
+for (const reducedMotion of [false, true]) {
+  test(`a work group and its row open and close${reducedMotion ? " at once with reduced motion" : ", animated"}`, { timeout: 120000 }, async (t) => {
+    const folds = JSON.parse(await renderFixtureLive(t, "work-group-rows.html?drive=motion", "work-group-rows-result", 90000, { reducedMotion })) as Record<string, unknown>;
+    const opens = { state: "open", animation: reducedMotion ? "none" : "collapsible-down" };
+    const closes = { state: "closed", animation: reducedMotion ? "none" : "collapsible-up" };
+    assert.deepEqual(folds, { groupOpens: opens, rowOpens: opens, rowCloses: closes, groupCloses: closes });
+  });
+}

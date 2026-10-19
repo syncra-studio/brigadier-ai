@@ -38,11 +38,11 @@ export const FoldHeader: FC<HTMLAttributes<HTMLDivElement> & { foldable: boolean
 
 /**
  * A folding card's body: its height and opacity open and close as the thread's rows do, at once
- * with reduced motion (`!`: the open and closed animations outrank a plain `motion-reduce:`).
+ * with reduced motion.
  */
 export const FoldBody: FC<{ open: boolean; children: ReactNode }> = ({ open, children }) => (
   <Collapsible open={open}>
-    <CollapsibleContent data-slot="card-fold-body" className={cn(OPENS, "motion-reduce:animate-none!")}>
+    <CollapsibleContent data-slot="card-fold-body" className={OPENS}>
       {children}
     </CollapsibleContent>
   </Collapsible>
