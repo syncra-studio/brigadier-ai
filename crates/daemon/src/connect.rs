@@ -894,6 +894,8 @@ mod tests {
     const FAKE_CLAUDE: &str = r#"#!/bin/sh
 home="$HOME"
 now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
+# The moment of the agent's own confirmation, whole before the login can be seen.
+confirm() { now > "$home/confirmed-at.part"; mv "$home/confirmed-at.part" "$home/confirmed-at"; }
 case "$1 $2" in
   "--version "*) echo "2.1.302 (Claude Code)" ;;
   "auth status")
@@ -918,10 +920,10 @@ case "$1 $2" in
       finish) sleep 1; touch "$home/signed-in" ;;
       stay) touch "$home/signed-in"; sleep 60 ;;
       quit) exit 1 ;;
-      linger) sleep 1; touch "$home/signed-in"; now > "$home/confirmed-at"; echo "Login successful."; sleep 6 ;;
+      linger) sleep 1; confirm; touch "$home/signed-in"; echo "Login successful."; sleep 6 ;;
       late) touch "$home/late"; exit 0 ;;
       never) exit 0 ;;
-      quick) sleep 1; touch "$home/signed-in"; now > "$home/confirmed-at"; echo "Successfully logged in" >&2 ;;
+      quick) sleep 1; confirm; touch "$home/signed-in"; echo "Successfully logged in" >&2 ;;
       stored) sleep 1; now > "$home/stored-at"; touch "$home/signed-in"; sleep 3; echo "Login successful."; sleep 1 ;;
       *) sleep 60 ;;
     esac ;;
