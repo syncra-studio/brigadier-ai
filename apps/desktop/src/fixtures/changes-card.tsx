@@ -9,7 +9,7 @@
  * - `confirm`: Revert asks in the footer: what happens to main, Cancel and "Revert 6 files".
  * - `reverting`: the revert sent: "Reverting…" in place of the footer's buttons.
  * - `reverted`: the session reads Reverted: one line, folded, "Undone on main".
- * - `branch`: not merged yet, on its branch: Discard and Merge into main.
+ * - `branch`: not merged yet, on its branch two commits ahead: Discard and Merge into main.
  * - `merge-only`: a turn that merged with nothing of its own counted: the merge's card.
  *
  * `?case=<id>` shows one case alone (for a screenshot); `?drive=1` writes what each case shows,
@@ -91,7 +91,7 @@ useBoard.setState({
     orchestratorSteps: [step(1, MERGES.finding), step(2, MERGES.clean), step(3, MERGES.reverted)],
   },
 });
-useSettledTabs.setState({ byTab: { [CHAT]: { state: "merged" }, [REVERTED]: { state: "reverted" } } });
+useSettledTabs.setState({ byTab: { [CHAT]: { state: "merged", ahead: 2 }, [REVERTED]: { state: "reverted" } } });
 useApp.setState({ selection: { type: "conversation", id: CHAT } });
 
 const sent: string[] = [];

@@ -58,7 +58,7 @@ test("the Changes card: merged with a finding, folded, all files, Revert's quest
   );
   assert.equal(seen.revertedOpen, 3);
   // Not merged yet: on its branch, Discard and Merge into main.
-  assert.deepEqual([cases.branch.state, cases.branch.status, cases.branch.buttons], ["branch", "On three-small-improvements", ["Discard", "Merge into main", "Fold the files"]]);
+  assert.deepEqual([cases.branch.state, cases.branch.status, cases.branch.buttons], ["branch", "On three-small-improvements · 2 commits ahead", ["Discard", "Merge into main", "Fold the files"]]);
   // A merge with nothing of its own counted: the merge's card.
   assert.deepEqual([cases["merge-only"].title, cases["merge-only"].status, cases["merge-only"].buttons], ["Merged into main", "2 commits from brigadier/due-dates", ["Revert", "View changes"]]);
   // A row opens that file's part of the merge in a tab; View changes all of it; Open finding the Progress tab.

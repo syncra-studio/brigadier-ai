@@ -274,6 +274,8 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   const revertText = merged ? revertRequest(merged) : null;
   const revert = useAskRequest(conversationId ?? "", revertText);
   const environment = conversation?.setup?.type === "session" ? conversation.setup.environment : null;
+  // The session branch's commits its base lacks, as git counted them last.
+  const ahead = useSettledTabs((s) => (conversationId ? s.byTab[conversationId]?.ahead : undefined));
   const mergeText = environment?.type === "newWorktree" ? `Merge ${environment.branch} into ${environment.base}` : null;
   const mergeAsk = useAskRequest(conversationId ?? "", mergeText);
 
@@ -316,8 +318,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
               ? mergeWords(merged)
               : `${merged.commits === 1 ? "1 commit" : `${merged.commits} commits`} from ${merged.branch}`
             : environment
-              // TODO(w105): " · N commits ahead" once the session's count reaches the view.
-              ? `On ${environment.branch}`
+              ? [`On ${environment.branch}`, ahead ? `${ahead} ${ahead === 1 ? "commit" : "commits"} ahead` : null].filter(Boolean).join(" · ")
               : null,
         ]
           .filter(Boolean)
