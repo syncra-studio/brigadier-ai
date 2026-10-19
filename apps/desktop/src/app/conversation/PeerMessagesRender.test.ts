@@ -142,6 +142,15 @@ test("A jump opens the other session at the exact message, both ways, and the si
   assert.deepEqual(seen.afterReopen, none);
 });
 
+// #336: on a slow machine the replies' renderer can load just after a jump lands.
+test("A jump stays centred on its message when the replies' renderer loads after it lands", { timeout: 150000 }, async (t) => {
+  const seen = JSON.parse(await renderFixtureLive(t, "peer-messages.html?history=long&drive=jump&renderer=late", "peer-result", 120000, { latencyMs: 300 })) as {
+    error?: string; toReceiver: Landing; toSender: Landing;
+  };
+  assert.equal(seen.error, undefined);
+  assertLanded(seen.toReceiver, "peer-docs");
+  assertLanded(seen.toSender, "peer-api");
+});
 
 test("a second send mid-wait has its own Sending row until its wait arrives or the turn ends", { timeout: 120000 }, async (t) => {
   const rows = async (state: string) => JSON.parse(await renderFixtureLive(t,

@@ -629,6 +629,11 @@ async function landed(messageId: string, conversationId: string, left: Element |
   await until(() => useReveal.getState().reveal === null && one(`[data-peer-message~="${messageId}"][data-revealed=true]`) !== null, 15000);
   const ms = Math.round(performance.now() - shownAt);
   await wait(800);
+  // Replies still waiting on their renderer: the landing is read once they've shown.
+  if (one("[data-slot=reply-loading]", viewport() ?? document)) {
+    await until(() => !one("[data-slot=reply-loading]", viewport() ?? document), 15000);
+    await wait(400);
+  }
   return ms;
 }
 
@@ -733,10 +738,10 @@ async function driveGallery(): Promise<object> {
 }
 
 async function driveJump(): Promise<object> {
-  // The replies' renderer loads with the first reply. A slow dev server (a loaded machine) could
-  // have it arrive just after a landing, its replies' loading lines giving way and moving the
-  // message off the centre: the app's own bundle has it at once.
-  await import("@/components/assistant-ui/markdown-text");
+  // The replies' renderer loads with the first reply, at once from the app's own bundle. With
+  // `renderer=late` (and a slow server) it arrives after the landing, its replies' loading lines
+  // giving way around the message.
+  if (query.get("renderer") !== "late") await import("@/components/assistant-ui/markdown-text");
   await shown(API);
   await wait(300);
   const before = dots();

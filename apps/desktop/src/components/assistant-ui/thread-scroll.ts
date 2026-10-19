@@ -104,6 +104,16 @@ export function jumpInThread(target: Element | null | undefined): void {
   if (viewport) scrollers.get(viewport)?.release();
 }
 
+/**
+ * How many times the user acted on a thread's view, in any thread: their input in it, a focus
+ * moved in, a jump, the scroll button, a message sent or an edit. Code keeping a place for the
+ * user (a landed jump) stops when it changes.
+ */
+let actions = 0;
+export function threadActions(): number {
+  return actions;
+}
+
 /** Messages just sent, by conversation: their row's id, placed when it shows. */
 const sentTurns = new Map<string, string>();
 
@@ -112,6 +122,7 @@ const sentTurns = new Map<string, string>();
  * it shows, also in a thread not yet mounted (the first message, sent from the new-chat view).
  */
 export function expectSentTurn(key: string, id: string): void {
+  actions += 1;
   sentTurns.set(key, id);
 }
 
@@ -274,6 +285,7 @@ export class ThreadScroller {
 
   /** The user sent an edit of one of their messages: its new message's turn is placed. */
   editSent = (): void => {
+    actions += 1;
     this.editSentAtMs = performance.now();
   };
 
@@ -408,6 +420,7 @@ export class ThreadScroller {
    * what was underway stops, and the scrolls that come with it are theirs.
    */
   input = (event?: { type: string }): void => {
+    actions += 1;
     this.inputAtMs = performance.now();
     if (event?.type === "pointerdown") this.pressed = true;
     else if (event?.type === "pointerup" || event?.type === "pointercancel") this.pressed = false;
@@ -419,6 +432,7 @@ export class ThreadScroller {
    * the browser's scroll that brings it into view is the user's.
    */
   focused = (): void => {
+    actions += 1;
     this.inputAtMs = performance.now();
   };
 
@@ -428,6 +442,7 @@ export class ThreadScroller {
    * the bottom again follows again (see `scrolled`).
    */
   release = (): void => {
+    actions += 1;
     this.inputAtMs = performance.now();
     this.jumped = true;
     this.interrupt();
@@ -461,6 +476,7 @@ export class ThreadScroller {
   scrollToBottom = (): void => {
     const layout = this.layout;
     if (!layout) return;
+    actions += 1;
     this.interrupt();
     this.follow = true;
     this.watch = false;

@@ -309,6 +309,8 @@ function keyEvent(key: string): { key: string; code: string; windowsVirtualKeyCo
 type LiveOptions = {
   /** It asks for reduced motion. */
   reducedMotion?: boolean;
+  /** Each of the page's requests (its modules among them) is answered this much later. */
+  latencyMs?: number;
   /** The request whose URL holds `url` (a module loaded on first use) is answered `ms` late. */
   slow?: { url: string; ms: number };
 };
@@ -323,7 +325,7 @@ export async function renderFixtureLive(
   page: string,
   resultId: string,
   timeoutMs = 60000,
-  { reducedMotion = false, slow }: LiveOptions = {},
+  { reducedMotion = false, latencyMs = 0, slow }: LiveOptions = {},
 ): Promise<string> {
   const binary = chromium();
   const { url, scratch, log, stopFirst } = await serveFixtures(t);
@@ -450,7 +452,11 @@ export async function renderFixtureLive(
   // window's focus, so a field's focus() would fire no focus event.
   await call("Emulation.setFocusEmulationEnabled", { enabled: true });
   if (reducedMotion) await call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
-  // A busy machine's server, slow to answer one module.
+  // A busy machine's server, slow to answer: every request, or one module.
+  if (latencyMs > 0) {
+    await call("Network.enable", {});
+    await call("Network.emulateNetworkConditions", { offline: false, latency: latencyMs, downloadThroughput: -1, uploadThroughput: -1 });
+  }
   if (slow) {
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data)) as { method?: string; params?: { requestId: string } };

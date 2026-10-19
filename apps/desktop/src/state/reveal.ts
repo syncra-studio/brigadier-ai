@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { jumpInThread } from "@/components/assistant-ui/thread-scroll";
+import { jumpInThread, threadActions } from "@/components/assistant-ui/thread-scroll";
 
 /**
  * A message between sessions the thread is asked to show (SESSION-MESSAGING-PLAN.md §6.3): its
@@ -46,7 +46,7 @@ function settling(element: Element): boolean {
   });
 }
 
-/** How long a landing waits for its row to show and its folds to settle. */
+/** How long a landing waits for its row to show and its folds to settle, and keeps it centred after. */
 const LAND_WITHIN_MS = 4000;
 /** Frames the row must keep its place before the thread scrolls to it. */
 const STILL_FRAMES = 3;
@@ -57,10 +57,12 @@ const FADE_MS = 400;
 /**
  * Lands the jump `nonce` on `messageId` once its row is in the thread and the folds around it
  * have finished opening: the thread's viewport scrolls it to the centre (the thread's scroll
- * controller takes that as the reader's own scroll: it stops following), then it flashes once.
- * Returns a call that cancels it.
+ * controller takes that as the reader's own scroll: it stops following), then it flashes once
+ * and is kept centred while what's around it settles (`keepCentred`). Returns a call that
+ * cancels the landing.
  */
 export function landReveal(messageId: string, done: number): () => void {
+  cancelAnimationFrame(keeping);
   const until = performance.now() + LAND_WITHIN_MS;
   let frame = 0;
   let still = 0;
@@ -95,17 +97,56 @@ function land(element: HTMLElement): void {
   for (let holder = element.parentElement; holder && holder !== viewport; holder = holder.parentElement) {
     if (holder.scrollHeight > holder.clientHeight && /auto|scroll/.test(getComputedStyle(holder).overflowY)) centre(holder, element);
   }
-  if (viewport) centre(viewport, element);
+  if (viewport) {
+    centre(viewport, element);
+    keepCentred(viewport, element);
+  }
   flash(element);
+}
+
+/** The frame request of the landed jump keeping its message centred (`keepCentred`). */
+let keeping = 0;
+
+/**
+ * Content around a landed message can still change its height: a reply waiting on its renderer
+ * (loaded with the first reply, late on a slow machine) gives way to the reply. While the jump is
+ * the user's last action in the thread, each time the thread settles again the message is
+ * centred again, for as long as a landing waits.
+ */
+function keepCentred(viewport: HTMLElement, element: HTMLElement): void {
+  const until = performance.now() + LAND_WITHIN_MS;
+  let since = threadActions();
+  let still = 0;
+  let last: number | null = null;
+  const step = () => {
+    if (!element.isConnected || threadActions() !== since || performance.now() > until) return;
+    const top = element.getBoundingClientRect().top;
+    const loading = viewport.querySelector("[data-slot=reply-loading]") !== null;
+    still = !loading && !settling(element) && top === last ? still + 1 : 0;
+    last = top;
+    if (still >= STILL_FRAMES && Math.abs(centred(viewport, element) - viewport.scrollTop) >= 1) {
+      jumpInThread(viewport);
+      since = threadActions();
+      centre(viewport, element);
+      still = 0;
+    }
+    keeping = requestAnimationFrame(step);
+  };
+  keeping = requestAnimationFrame(step);
+}
+
+/** The scrollTop of `scroller` that puts `element` at its centre, as far as it can. */
+function centred(scroller: HTMLElement, element: HTMLElement): number {
+  const box = scroller.getBoundingClientRect();
+  const rect = element.getBoundingClientRect();
+  const off = rect.top + rect.height / 2 - (box.top + box.height / 2);
+  return Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + off));
 }
 
 /** Scrolls `scroller` so `element` sits at its centre, as far as it can. */
 function centre(scroller: HTMLElement, element: HTMLElement): void {
-  const box = scroller.getBoundingClientRect();
-  const rect = element.getBoundingClientRect();
-  const off = rect.top + rect.height / 2 - (box.top + box.height / 2);
   // oxlint-disable-next-line brigadier/thread-scroll-helper -- `land` said it jumps before it centres.
-  scroller.scrollTop = Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + off));
+  scroller.scrollTop = centred(scroller, element);
 }
 
 /** The flash's tint: the link colour, faint (what a picked sidebar row shows). */
