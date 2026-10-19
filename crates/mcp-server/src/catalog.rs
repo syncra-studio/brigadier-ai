@@ -81,10 +81,12 @@ answer.";
 
 const ROUTE_FOLLOW_UP: &str = "Sort a [follow-up …] the user sent while you work on their \
 request. route \"join\": it belongs to this work; it reaches you at once as the user's message, \
-and your final answer covers it too. \"wait\": a request of its own; it waits in the user's queue \
-and reaches you once this work is done. \"new_session\": a request of its own that could run \
-apart; it waits offering the user \"Open as a new session\" or \"Run here\" until they pick \
-(you never start sessions). \"session\" with `session` (another session's id): it belongs to \
+and your final answer covers it too. \"new_session\": separate work, with a different goal that \
+leaves the files this request is changing alone (another file, feature or fix), however small; \
+it waits offering the user \"Open as a new session\" or \"Run here\" until they pick (you \
+never start sessions). \"wait\": a request of its own that has to come after this work (it \
+builds on its result or changes the same files); it waits in the user's queue and reaches you \
+once this work is done. \"session\" with `session` (another session's id): it belongs to \
 that session of this project; it goes there as the user's message and this session shows the \
 user a notice with Undo; the result says if that session already merged. Optional: one left unsorted joins this work shortly.";
 
@@ -1452,6 +1454,36 @@ mod tests {
         let bytes =
             serde_json::to_string(&Value::Object(schema)).unwrap().len() + DELEGATE_TASK.len();
         assert!(bytes < 6_000, "delegate_task is {bytes} bytes");
+    }
+
+    /// #444: route_follow_up offers separate work (a different goal, files the running request
+    /// leaves alone) as a session of its own, however small; "wait" is only for a request that
+    /// has to come after this work. Its schema's routes say the same.
+    #[test]
+    fn route_follow_up_offers_separate_work_as_a_session_of_its_own() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        let tool = tools_for(&thread)
+            .iter()
+            .find(|tool| tool.name == "route_follow_up")
+            .unwrap();
+        let description = tool.description.as_deref().unwrap();
+        for words in [
+            "\"new_session\": separate work, with a different goal that leaves the files this request is changing alone",
+            "however small",
+            "\"wait\": a request of its own that has to come after this work (it builds on its result or changes the same files)",
+        ] {
+            assert!(description.contains(words), "{words}: {description}");
+        }
+        assert!(!description.contains("could run apart"), "{description}");
+        let schema = serde_json::to_string(&*tool.input_schema).unwrap();
+        assert!(
+            schema.contains("Separate work, with a different goal that leaves the files this request is changing"),
+            "{schema}"
+        );
+        assert!(schema.contains("has to come after this work"), "{schema}");
     }
 
     /// A thread's everyday tools load up front and the rest wait behind Claude Code's tool

@@ -426,6 +426,17 @@ macro_rules! offer_session_rule {
 /// The thread offers out-of-scope work as a session of its own (Q73's third way to start one).
 pub(crate) const OFFER_SESSION_RULE: &str = offer_session_rule!();
 
+macro_rules! separate_follow_up {
+    () => {
+        "A follow-up that is separate work, with a different goal that leaves the files this request is changing alone (another file, feature or fix), is a session of its own: route it \"new_session\", however small, rather than \"wait\"."
+    };
+}
+
+/// How the thread judges a follow-up that is separate work: offered as a session of its own,
+/// not held to run after this request (#444: two clearly unrelated follow-ups were held as
+/// "wait" and done in the same session).
+pub(crate) const SEPARATE_FOLLOW_UP: &str = separate_follow_up!();
+
 macro_rules! revised_answer {
     () => {
         "A worker's report or addendum that changes an answer you already wrote: write the whole answer again, revised and complete on its own, never a list of corrections or an update line."
@@ -1251,6 +1262,15 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, a message the user sends while you work waits in their queue again and reaches you at once as a [follow-up …] block, which says how to judge it with route_follow_up: \"join\" sends it into this work now, \"wait\" keeps it queued until this work is done, \"new_session\" keeps it queued offering the user \"Open as a new session\", and \"session\" sends it to another session of the project. One you leave unjudged joins this work by itself shortly. This replaces the note that said such a message reaches you as the user's message.",
         worker: "",
     },
+    Revision {
+        number: SEPARATE_FOLLOW_UP_REVISION,
+        thread: concat!(
+            "From now on: ",
+            separate_follow_up!(),
+            " \"wait\" is only for a request of its own that has to come after this work: it builds on its result or changes the same files."
+        ),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1822,6 +1842,9 @@ pub(crate) const START_REVISION: u32 = 120;
 /// A message the user sends while the thread works waits in the queue, Deciding, while the
 /// thread judges it with route_follow_up, as before MESSAGES_JOIN_REVISION (user, 10-20).
 pub(crate) const QUEUE_DECIDES_REVISION: u32 = 121;
+/// A follow-up that is separate work (a different goal, files the running request leaves alone)
+/// is offered as a session of its own with route "new_session", not held as "wait" (#444).
+pub(crate) const SEPARATE_FOLLOW_UP_REVISION: u32 = 122;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -3288,12 +3311,13 @@ pub(crate) fn follow_up(
          sends it there."
     };
     block.push_str(&format!(
-        "\n[/follow-up] If it is a request of its own, call route_follow_up (follow_up \"{id}\") \
-         with route \"wait\": it reaches you once this work is done, or \"new_session\": it \
-         waits offering the user \"Open as a new session\".{to_tab} Otherwise it joins this work (at \
-         once with route \"join\", else shortly by itself) and reaches you as the user's \
-         message; you may also answer or act on it now. If you have nothing to say now, reply \
-         with exactly {QUIET}."
+        "\n[/follow-up] {SEPARATE_FOLLOW_UP} Judge it with route_follow_up (follow_up \"{id}\"): \
+         route \"new_session\" keeps it queued offering the user \"Open as a new session\"; \
+         route \"wait\" keeps it queued until this work is done, only for a request of its own \
+         that has to come after this work (it builds on its result or changes the same \
+         files).{to_tab} Otherwise it joins this work (at once with route \"join\", else shortly \
+         by itself) and reaches you as the user's message; you may also answer or act on it now. \
+         If you have nothing to say now, reply with exactly {QUIET}."
     ));
     block
 }
@@ -5618,6 +5642,53 @@ mod environment_tests {
             !block.contains("tab") && !block.contains("workspace"),
             "{block}"
         );
+    }
+
+    /// #444: a follow-up block says separate work (a different goal, files the running request
+    /// leaves alone) goes to "new_session", however small, and keeps "wait" for a request that
+    /// has to come after this work; open threads hear it once, workers nothing.
+    #[test]
+    fn a_follow_up_that_is_separate_work_is_offered_as_a_session_of_its_own() {
+        let block = follow_up(
+            "q-1",
+            "Run five short commands",
+            "Separately: add a CONTRIBUTING.md.",
+            &[],
+            &[],
+        );
+        assert!(block.contains(SEPARATE_FOLLOW_UP), "{block}");
+        assert!(
+            SEPARATE_FOLLOW_UP
+                .contains("different goal that leaves the files this request is changing alone")
+                && SEPARATE_FOLLOW_UP
+                    .contains("route it \"new_session\", however small, rather than \"wait\"")
+        );
+        assert!(
+            block.contains("route \"wait\" keeps it queued until this work is done, only for a request of its own that has to come after this work"),
+            "{block}"
+        );
+        // The rule comes before the routes, so the routes read in its light.
+        let rule = block.find(SEPARATE_FOLLOW_UP).unwrap();
+        assert!(rule < block.find("route \"wait\"").unwrap());
+        assert!(
+            !block.contains("tab") && !block.contains("workspace"),
+            "{block}"
+        );
+
+        let added = REVISIONS
+            .iter()
+            .find(|revision| revision.number == SEPARATE_FOLLOW_UP_REVISION)
+            .unwrap();
+        assert!(added.worker.is_empty());
+        let note = revision_note(SEPARATE_FOLLOW_UP_REVISION - 1, false).unwrap();
+        assert!(note.contains(SEPARATE_FOLLOW_UP), "{note}");
+        assert!(
+            note.contains(
+                "\"wait\" is only for a request of its own that has to come after this work"
+            ),
+            "{note}"
+        );
+        assert!(revision_note(SEPARATE_FOLLOW_UP_REVISION - 1, true).is_none());
     }
 
     /// The queue decides again (user, 10-20): open threads hear once that a message sent

@@ -287,10 +287,12 @@ pub struct RouteFollowUp {
 pub enum FollowUpRoute {
     /// It belongs to this work: it joins it now.
     Join,
-    /// A request of its own: it waits in the queue until this work is done.
+    /// A request of its own that has to come after this work (it builds on its result or
+    /// changes the same files): it waits in the queue until this work is done.
     Wait,
-    /// A request of its own that could run apart: it waits, and offers the user "Open as a
-    /// new session". `new_tab` is its older name (rule R).
+    /// Separate work, with a different goal that leaves the files this request is changing
+    /// alone: it waits, and offers the user "Open as a new session". `new_tab` is its older
+    /// name (rule R).
     #[serde(alias = "new_tab")]
     NewSession,
     /// It belongs to another session of this project (`session`): it goes there. `tab` is
