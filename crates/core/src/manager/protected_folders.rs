@@ -184,11 +184,10 @@ fn within(path: &Path, root: &Path) -> bool {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn links_into_guarded_folders_are_rejected_before_canonicalizing() {
         let home = std::env::temp_dir().join(format!(
@@ -252,7 +251,6 @@ mod tests {
         assert!(canonicalized.is_empty(), "resolved {canonicalized:?}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn git_links_are_rejected_before_target_metadata() {
         let home = std::env::temp_dir().join(format!(
@@ -280,7 +278,6 @@ mod tests {
         assert!(reads.is_empty(), "must not stat through .git: {reads:?}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_guarded_folders_and_all_inside_them_are_covered_but_the_ones_the_user_chose() {
         let home = Path::new("/Users/someone");
