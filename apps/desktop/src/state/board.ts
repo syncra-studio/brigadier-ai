@@ -6,6 +6,7 @@ import { previewActive } from "@/app/conversation/previewStatus";
 import { showConversationNotice, shownNotice } from "@/state/notices";
 
 import type {
+  AgentMcpServers,
   Approval,
   ApprovalSubject,
   BackgroundRun,
@@ -89,6 +90,8 @@ export type Board = {
   integratedChecks: Record<string, IntegratedCheck>;
   /** The thread's run / run_check commands still going after a minute, owned by the session, by id. */
   backgroundRuns: Record<string, BackgroundRun>;
+  /** The MCP servers of each agent whose CLI runs, by `mcpAgentKey` (its own model's, or a worker's task id). */
+  mcpServers: Record<string, AgentMcpServers>;
   /** Overnight runs, a segment each, by id. */
   overnight: Record<string, OvernightRun>;
   /** What each user message set in motion, by request id (the message's id). */
@@ -275,6 +278,7 @@ export function emptyBoard(conversationId: string): Board {
     previews: {},
     integratedChecks: {},
     backgroundRuns: {},
+    mcpServers: {},
     overnight: {},
     requests: {},
     workerSteps: [],
@@ -304,6 +308,11 @@ export function emptyBoard(conversationId: string): Board {
   };
 }
 
+/** An agent's key in `Board.mcpServers`: its worker's task id, or `lead` for the conversation's own model. */
+export function mcpAgentKey(taskId: string | null): string {
+  return taskId === null ? "lead" : `task:${taskId}`;
+}
+
 function byId<T extends { id: string }>(items: readonly T[]): Record<string, T> {
   return Object.fromEntries(items.map((item) => [item.id, item]));
 }
@@ -319,6 +328,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "planUpdated",
   "reviewUpdated",
   "integratedCheckUpdated",
+  "mcpServersUpdated",
   "previewUpdated",
   "previewsCleared",
   "overnightUpdated",
@@ -385,6 +395,8 @@ export function boardFromView(
     integratedChecks: byId(view.integratedChecks ?? []),
     // Nor one from before the thread's long commands went to the background.
     backgroundRuns: byId(view.backgroundRuns ?? []),
+    // Nor one from before agents told their MCP servers.
+    mcpServers: Object.fromEntries((view.mcpServers ?? []).map((agent) => [mcpAgentKey(agent.taskId), agent])),
     overnight: byId(view.overnight),
     requests: byId(view.requests),
     workerSteps: view.workerSteps,
@@ -569,6 +581,13 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, integratedChecks: { ...board.integratedChecks, [event.check.id]: event.check } };
     case "backgroundRunUpdated":
       return { ...board, backgroundRuns: { ...board.backgroundRuns, [event.run.id]: event.run } };
+    case "mcpServersUpdated": {
+      const key = mcpAgentKey(event.taskId);
+      const { [key]: _gone, ...others } = board.mcpServers;
+      if (event.servers.length === 0) return key in board.mcpServers ? { ...board, mcpServers: others } : board;
+      const agent: AgentMcpServers = { taskId: event.taskId, provider: event.provider, servers: event.servers, atStart: event.atStart };
+      return { ...board, mcpServers: { ...others, [key]: agent } };
+    }
     case "previewUpdated":
       return { ...board, previews: { ...board.previews, [event.preview.id]: event.preview } };
     case "previewsCleared":

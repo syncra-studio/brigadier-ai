@@ -9,6 +9,7 @@ const SERVERS: McpServer[] = [
   { id: "postgres", name: "postgres", transport: "stdio", status: "failed", tools: [] },
   { id: "figma", name: "figma", transport: "stdio", status: "connecting", tools: [] },
   { id: "docs", name: "docs", transport: "stdio", status: "connected", tools: ["search"] },
+  { id: "notion", name: "notion", status: "connected", atStart: true, tools: [] },
 ];
 
 const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));

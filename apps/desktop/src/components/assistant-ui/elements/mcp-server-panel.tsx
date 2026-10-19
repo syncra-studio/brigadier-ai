@@ -26,7 +26,7 @@ export interface McpServer {
   tools: readonly string[];
 }
 
-/** A server's state in words: at the row's end in place of its tools until it connects. */
+/** A server's state in words: at the row's end in place of its tools until it connects, or while it names none. */
 const STATUS_WORDS: Record<McpServerStatus, string> = {
   connected: "Connected",
   connecting: "Connecting",
@@ -63,7 +63,10 @@ function ServerRow({ server }: { server: McpServer }) {
             server.status === "failed" ? "text-destructive" : "text-muted-foreground/70",
           )}
         >
-          {server.status === "connected" ? `${tools} ${tools === 1 ? "tool" : "tools"}` : STATUS_WORDS[server.status]}
+          {/* An agent may name no tools until it uses them (Claude defers MCP tools). */}
+          {server.status === "connected" && tools > 0
+            ? `${tools} ${tools === 1 ? "tool" : "tools"}`
+            : STATUS_WORDS[server.status]}
         </span>
       </button>
       <div id={id} hidden={!open} className="flex min-w-0 flex-col gap-1 ps-6 pb-2">
