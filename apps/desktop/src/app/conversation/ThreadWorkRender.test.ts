@@ -78,6 +78,8 @@ test("the thread's own work reads like the reference thread: running commands st
   assert.deepEqual(seen.viewedTiles, ["Inspected image", "Inspected image"]);
   assert.deepEqual(seen.gathered, ["Created image"]);
   assertMaking(seen.making, "pulse");
+  // Shown closed with its image made; one more starting opens it to its place.
+  assert.deepEqual(seen.later, ["closed", "open", "Creating 2 images"]);
 
   // Background terminals, by how they stand; a finished one opens to its output.
   assert.deepEqual(seen.background, [

@@ -1,5 +1,5 @@
 import { ChevronRightAlt } from "@openai/apps-sdk-ui/components/Icon";
-import { type ComponentProps, createContext, type ReactNode, useContext, useRef } from "react";
+import { type ComponentProps, createContext, type ReactNode, useContext, useRef, useState } from "react";
 
 import { CHEVRON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -25,25 +25,32 @@ function showInGroup(row: HTMLElement) {
 }
 
 /** One row of a thread's activity that opens to its detail when it has one. */
-export function ThreadActivity({ detail, detailClassName, defaultOpen = false, className, children, onOpenChange, ...props }: ComponentProps<"div"> & {
+export function ThreadActivity({ detail, detailClassName, autoOpen = false, className, children, onOpenChange, ...props }: ComponentProps<"div"> & {
   detail?: ReactNode;
   detailClassName?: string;
-  /** Opened from the start, as if the user had opened it. */
-  defaultOpen?: boolean;
+  /** Opens it as if the user had: from the start, and each time it turns true. */
+  autoOpen?: boolean;
   /** The row opened or closed. */
   onOpenChange?: (open: boolean) => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const told = useContext(RowOpens);
+  const [open, setOpen] = useState(autoOpen);
+  const [auto, setAuto] = useState(autoOpen);
+  if (auto !== autoOpen) {
+    setAuto(autoOpen);
+    if (autoOpen) setOpen(true);
+  }
   const row = className ?? ROW;
   if (!detail) return <div className={row} {...props}>{children}</div>;
   // Opened inside a group, it shows itself in the group's list: at once, and again once its detail has its height.
-  const opened = (open: boolean) => {
-    onOpenChange?.(open);
-    told?.(open);
-    if (open) requestAnimationFrame(() => root.current && showInGroup(root.current));
+  const opened = (now: boolean) => {
+    setOpen(now);
+    onOpenChange?.(now);
+    told?.(now);
+    if (now) requestAnimationFrame(() => root.current && showInGroup(root.current));
   };
-  return <Collapsible ref={root} {...props} defaultOpen={defaultOpen} onOpenChange={opened}>
+  return <Collapsible ref={root} {...props} open={open} onOpenChange={opened}>
     <CollapsibleTrigger asChild>
       <div role="button" tabIndex={0}
         onKeyDown={(event) => {

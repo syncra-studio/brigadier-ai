@@ -16,6 +16,7 @@
  * - Images being made ("Creating 3 images"): the row open at once, a dot grid in the place of
  *   each image still being made, beside the one made already; one finishes into its tile in the
  *   same place, one fails and leaves nothing. `making=1` measures only these.
+ * - A row shown closed with an image made already: one more starting to be made opens it.
  * - Background terminals: running, finished (opening to its output), stopped.
  * - A Codex find in a page: "Searched the web for 'LTS' in https://nodejs.org/en".
  * - The turn's changed files from the request's own record: one file named in the title; four
@@ -207,6 +208,17 @@ function MakingRow() {
   ];
   return <ImagesRow steps={steps} />;
 }
+/** Made already, then another started when `begin` says. */
+let begin: () => void = () => {};
+function LaterRow() {
+  const [begun, setBegun] = useState(false);
+  useEffect(() => {
+    begin = () => setBegun(true);
+  }, []);
+  const steps = [tool(26, { itemId: "made-5", name: "imagegen", detail: "a teal square", item: "image" })];
+  if (begun) steps.push(tool(27, { itemId: "made-6", name: "imagegen", detail: "a blue square", item: "image", status: "inProgress" }));
+  return <ImagesRow steps={steps} />;
+}
 const bg = (itemId: string, position: number) => tool(position, { itemId, name: "mcp__brigadier__run", detail: "npm run dev -- --port 5173", item: "command" });
 
 /** The live group, its steps moving on as `grow` says: the running commands hear more output. */
@@ -269,6 +281,9 @@ function Page() {
             </Case>
             <Case id="making">
               <MakingRow />
+            </Case>
+            <Case id="later">
+              <LaterRow />
             </Case>
             <Case id="made-gathered">
               <MadeImages steps={[...views, ...made]} />
@@ -374,6 +389,12 @@ async function measure(): Promise<object> {
   out.gathered = all("[data-slot=image-tile] img", at("made-gathered")).map((image) => image.getAttribute("alt"));
 
   out.making = await measureMaking();
+  const later = () => one("[data-slot=images-row]", at("later"));
+  await until(() => later());
+  const shut = later()!.getAttribute("data-state");
+  begin();
+  await until(() => all("[data-slot=image-generation]", at("later")).length === 1);
+  out.later = [shut, later()!.getAttribute("data-state"), text(one("[role=button]", later()!))];
 
   // Background terminals: their words; a finished one opens to its output.
   out.background = all("[data-slot=background-run-row]", at("background")).map((row) => ({

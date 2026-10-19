@@ -69,8 +69,8 @@ export function ImageTiles({ conversationId, steps }: { conversationId: string |
 }
 
 /**
- * A run of image steps as one row of their own, opening to their tiles. An image being made
- * opens the row, so its place shows at once and the finished tile lands there.
+ * A run of image steps as one row of their own, opening to their tiles. An image starting to be
+ * made opens the row, so its place shows at once and the finished tile lands there.
  */
 export function ImagesRow({ steps }: { steps: readonly LeadStep[] }) {
   const conversationId = useViewConversation()?.id ?? null;
@@ -81,7 +81,7 @@ export function ImagesRow({ steps }: { steps: readonly LeadStep[] }) {
     <ThreadActivity
       data-slot="images-row"
       data-made={steps.some(madeImage) || undefined}
-      defaultOpen={making}
+      autoOpen={making}
       detail={shown.length > 0 ? <ImageTiles conversationId={conversationId} steps={shown} /> : undefined}
       detailClassName={cn(ROW_DETAIL, "ps-0")}
     >
