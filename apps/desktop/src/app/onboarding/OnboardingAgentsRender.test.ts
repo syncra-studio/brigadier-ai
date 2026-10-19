@@ -8,8 +8,9 @@ const parse = (dump: string) =>
 
 // The real step in Chromium over a faked daemon: connected agents come first, each card offers
 // the one thing it needs next. Install opens the agent's install guide; once it is installed
-// (seen when the window comes back) the card offers Sign in, waits for the browser's sign-in,
-// says a failure on its line, and turns Connected with its plan once the sign-in is noticed.
+// (seen when the window comes back) the card offers Sign in and waits for the browser's sign-in;
+// hovered, Waiting… reads Cancel in the same room and stops it. The card says a failure on its
+// line, and turns Connected with its plan once the sign-in is noticed.
 // The cards keep their places; the line under the title follows what's connected.
 test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }, async (t) => {
   const seen = parse(await renderFixtureLive(t, "onboarding-agents.html?drive=1", "onboarding-agents-result", 30000));
@@ -25,6 +26,14 @@ test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }
   });
   assert.deepEqual(seen.found, { name: "Claude Code", line: "Found on this computer · Not signed in", action: "Sign in" });
   assert.deepEqual(seen.waiting, { name: "Claude Code", line: "Complete sign-in in your browser", action: "Waiting…" });
+  assert.deepEqual(seen.hover, {
+    name: "Claude Code",
+    line: "Complete sign-in in your browser",
+    action: "Cancel",
+    label: "Cancel sign-in to Claude Code",
+    moved: false,
+  });
+  assert.deepEqual(seen.cancelled, { name: "Claude Code", line: "Found on this computer · Not signed in", action: "Sign in" });
   assert.deepEqual(seen.failed, { name: "Claude Code", line: "The sign-in didn't finish. Try again.", action: "Sign in" });
   assert.deepEqual(seen.connected, {
     cards: [
@@ -37,6 +46,8 @@ test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }
   });
   assert.deepEqual(seen.asked, [
     "openUrl https://code.claude.com/docs/en/setup",
+    "connectAgent claude",
+    "cancelConnect claude",
     "connectAgent claude",
     "connectAgent claude",
   ]);

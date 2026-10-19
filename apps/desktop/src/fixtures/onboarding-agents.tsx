@@ -3,8 +3,9 @@
  * found (missing, signedOut or connected; Claude Code missing and Codex connected unless said),
  * ?waiting=claude has Claude Code's sign-in under way and ?plan= names the plan Codex reports:
  * the step stays as it opens, for screenshots. ?drive=1 presses Claude Code's Install, has it
- * installed meanwhile (the window coming back), presses Sign in, fails it, signs in again and
- * has the sign-in noticed, writing what each card and the step said at every point to
+ * installed meanwhile (the window coming back), presses Sign in, cancels it from Waiting… (which
+ * reads Cancel when hovered), signs in again, fails it, signs in again and has the sign-in
+ * noticed, writing what each card and the step said at every point to
  * #onboarding-agents-result (OnboardingAgentsRender.test.ts reads it). The faked daemon moves on
  * only when the drive says, so every point is read as it stands.
  */
@@ -103,8 +104,13 @@ function card(index: number) {
   return {
     name: text(element?.querySelector("p")),
     line: text(element?.querySelector('[data-slot="agent-line"]')),
-    action: text(action),
+    // Waiting… holds Cancel too; the label showing is the one it says.
+    action: action?.matches('[data-slot="agent-wait"]') ? shown(action) : text(action),
   };
+}
+/** The label of Waiting… / Cancel that shows. */
+function shown(waitButton: Element) {
+  return text([...waitButton.children].find((label) => getComputedStyle(label).visibility === "visible"));
 }
 const claudeCard = () => card(cards().findIndex((element) => text(element.querySelector("p")) === "Claude Code"));
 
@@ -158,6 +164,21 @@ function Fixture() {
         await fixtureClick(button("Sign in")!);
         await until(() => claudeCard().action === "Waiting…", "waiting");
         seen.waiting = claudeCard();
+
+        // Hovered, Waiting… reads Cancel in the same room, and stops the sign-in.
+        const waitButton = document.querySelector('[data-slot="agent-wait"]')!;
+        const before = waitButton.getBoundingClientRect();
+        await fixtureInput({ type: "pointer", x: before.x + before.width / 2, y: before.y + before.height / 2 });
+        await until(() => claudeCard().action === "Cancel", "Cancel on hover");
+        const after = waitButton.getBoundingClientRect();
+        seen.hover = { ...claudeCard(), label: waitButton.getAttribute("aria-label"), moved: before.width !== after.width || before.x !== after.x };
+        await fixtureClick(waitButton);
+        await until(() => claudeCard().action === "Sign in", "cancelled");
+        seen.cancelled = claudeCard();
+        await fixtureInput({ type: "pointer", x: 0, y: 0 });
+
+        await fixtureClick(button("Sign in")!);
+        await until(() => claudeCard().action === "Waiting…", "waiting after the cancel");
 
         claudeAt({ type: "failed", step: "signIn", error: "The sign-in didn't finish. Try again." });
         await until(() => claudeCard().action === "Sign in", "the failure");

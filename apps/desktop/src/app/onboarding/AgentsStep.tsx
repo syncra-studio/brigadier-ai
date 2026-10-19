@@ -2,7 +2,7 @@ import { ArrowUpRight, Check } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { RAISED_BUTTON, StepFooter, StepHeader } from "@/app/onboarding/parts";
+import { PILL_BUTTON, RAISED_BUTTON, StepFooter, StepHeader } from "@/app/onboarding/parts";
 import { type AgentState, agentState, checkAgents } from "@/app/onboarding/SetupTerminal";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { openUrl } from "@/ipc/client";
 import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { connectAgent, connecting, useConnect, useConnectProgress } from "@/state/connect";
+import { cancelConnect, connectAgent, connecting, useConnect, useConnectProgress } from "@/state/connect";
 import { useApp } from "@/state/store";
 
 // TODO(onboarding): more agents (Gemini CLI, OpenCode, Grok in the design) need detection and
@@ -183,10 +183,26 @@ function AgentCard({
           Connected
         </Badge>
       ) : waiting ? (
-        <span role="status" className="text-muted-foreground text-label flex h-7.5 shrink-0 items-center gap-1.75 px-1 font-medium">
-          <Spinner className="size-3.25 animate-spin" />
-          Waiting…
-        </span>
+        // Waiting… is the way out too: hovered or focused it reads Cancel, in the same room (the
+        // wider of the two holds it), and stops the sign-in.
+        <button
+          type="button"
+          data-slot="agent-wait"
+          aria-label={`Cancel sign-in to ${label}`}
+          onClick={() => void cancelConnect(provider)}
+          className={cn(
+            PILL_BUTTON,
+            "group/wait text-muted-foreground hover:text-foreground focus-visible:text-foreground grid shrink-0 items-center px-1 font-medium transition-colors",
+          )}
+        >
+          <span className="col-start-1 row-start-1 flex items-center gap-1.75 group-hover/wait:invisible group-focus-visible/wait:invisible">
+            <Spinner className="size-3.25 animate-spin" />
+            Waiting…
+          </span>
+          <span className="invisible col-start-1 row-start-1 text-center group-hover/wait:visible group-focus-visible/wait:visible">
+            Cancel
+          </span>
+        </button>
       ) : state === "signIn" ? (
         <Button size="sm" variant="outline" className={RAISED_BUTTON} onClick={() => void connectAgent(provider)}>
           Sign in
