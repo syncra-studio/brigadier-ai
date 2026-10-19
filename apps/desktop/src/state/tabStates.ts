@@ -120,8 +120,9 @@ function clock(ms: number): string {
 }
 
 /**
- * Its state with the reason its row names: Working · watching CI / · N workers / · waiting for
- * reset HH:MM, Needs you · approval / · question / · failed, Ready · PR open, proof attached.
+ * Its state with the reason its row's tip names: Working · watching CI / · waiting for reset
+ * HH:MM, Needs you · approval / · question / · failed, Ready · PR open, proof attached. How many
+ * workers it runs is never a reason: workers show in the session itself, not its row or tab.
  * `quotaWait`: its messages wait for a limit, which resets at the time given (null: unknown).
  */
 export function sessionStatus(
@@ -136,7 +137,6 @@ export function sessionStatus(
     reason = activity.awaiting === "approval" ? "approval" : activity.awaiting === "input" ? "question" : "failed";
   } else if (state === "working") {
     if (activity.phase === "watchingCi") reason = "watching CI";
-    else if (activity.workers > 0) reason = activity.workers === 1 ? "1 worker" : `${activity.workers} workers`;
     else if (activity.phase === "reviewing") reason = "reviewing";
     else if (activity.phase === "checking") reason = "checking";
     else if (quotaWait && !activity.running) {

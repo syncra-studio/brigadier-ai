@@ -22,8 +22,8 @@ test("the app reads each case of the states table as the engine does (crates/cor
 test("a session's state comes with the reason its row names", () => {
   const reset = new Date(2026, 9, 18, 14, 5).getTime();
   assert.deepEqual(sessionStatus({ ...quiet, running: true, phase: "watchingCi", workers: 2 }, null, undefined), { state: "working", reason: "watching CI" });
-  assert.deepEqual(sessionStatus({ ...quiet, running: true, workers: 2 }, null, undefined), { state: "working", reason: "2 workers" });
-  assert.deepEqual(sessionStatus({ ...quiet, running: true, workers: 1 }, null, undefined), { state: "working", reason: "1 worker" });
+  // How many workers it runs is never its reason: workers show in the session, not its row or tab.
+  assert.deepEqual(sessionStatus({ ...quiet, running: true, workers: 2 }, null, undefined), { state: "working", reason: null });
   assert.deepEqual(sessionStatus({ ...quiet, running: true }, null, undefined), { state: "working", reason: null });
   assert.deepEqual(sessionStatus(quiet, { resetsAtMs: reset }, { state: "ready" }), { state: "working", reason: "waiting for reset 14:05" });
   assert.deepEqual(sessionStatus(quiet, { resetsAtMs: null }, undefined), { state: "working", reason: "waiting for a usage limit" });

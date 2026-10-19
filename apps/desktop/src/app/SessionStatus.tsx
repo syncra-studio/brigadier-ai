@@ -9,12 +9,11 @@ export function statusWords({ state, reason }: SessionStatus): string {
 }
 
 /**
- * A session's state with its reason, on one line ("Working · watching CI", "Needs you ·
- * approval", "Ready · PR open"): a green pill while it needs the user, a spinner while it works
- * or merges, plain words once settled. `fallback` shows when it has no state. On a sidebar row
- * (`row`) it hides while the row's actions show; on the chat tab it is smaller and quieter. It
- * takes at most two fifths of the row or tab, and the reason is cut before the state: the title
- * is what tells sessions apart.
+ * A session's state in its one word or two ("Working", "Needs you", "Merged"): a green pill while
+ * it needs the user, a spinner while it works or merges, plain words once settled; its reason
+ * ("watching CI", "approval") shows only on hover. `fallback` shows when it has no state. On a
+ * sidebar row (`row`) it hides while the row's actions show; on the chat tab it is smaller and
+ * quieter. It takes at most two fifths of the row or tab: the title is what tells sessions apart.
  */
 export function SessionStatusLabel({
   conversationId,
@@ -50,8 +49,6 @@ export function SessionStatusLabel({
     >
       {busy && <Spinner aria-hidden className="size-icon-sm shrink-0 animate-spin motion-reduce:animate-none" />}
       <span className="shrink-0">{TAB_STATE_WORDS[state].one}</span>
-      {/* Only the reason gives way: a weighted shrink isn't kept to in WebKit. */}
-      {status.reason && <span className="min-w-0 overflow-hidden text-ellipsis"> · {status.reason}</span>}
     </span>
   );
 }

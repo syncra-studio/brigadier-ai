@@ -2,7 +2,6 @@ import {
   Archive,
   ArrowLeft,
   Chats,
-  ChevronRight,
   ComposeEditSquare,
   DotsHorizontal,
   Download,
@@ -80,9 +79,6 @@ import { useCanStep } from "@/state/history";
 import { lastFinished, unread, useLastOpened } from "@/state/lastOpened";
 import { askDelete, clearPicked, pickClick, pickedIn, prunePicked, usePicked } from "@/state/picking";
 import { useTabStates } from "@/state/tabStates";
-import { type SessionWorker, useSessionWorkers } from "@/state/activity";
-import { openWorker } from "@/state/openWorker";
-import { TASK_STATE_LABELS } from "@/app/conversation/WorkerChip";
 import { useApp } from "@/state/store";
 
 // ----- titlebar --------------------------------------------------------------------------
@@ -935,7 +931,6 @@ const ConversationRow = memo(function ConversationRow({
   const [targets, setTargets] = useState<string[]>([]);
 
   return (
-    <>
     <li className="group/row relative">
       <ContextMenu
         modal={false}
@@ -1040,49 +1035,5 @@ const ConversationRow = memo(function ConversationRow({
         </Tooltip>
       </RowActionsSlot>
     </li>
-    {(nested || conversation.kind === "chat") && <SessionWorkers conversationId={conversation.id} nested={nested} />}
-    </>
   );
 });
-
-/**
- * A session's or chat's open workers under its row, read-only: one row each with its title and
- * state, which opens the conversation with that worker in its Workers panel. Folds away from its
- * count. Indented from the row's own start.
- */
-function SessionWorkers({ conversationId, nested }: { conversationId: string; nested: boolean }) {
-  const workers = useSessionWorkers(conversationId);
-  const [open, setOpen] = useState(true);
-  if (workers.length === 0) return null;
-  return (
-    <li data-slot="session-workers" className="flex flex-col">
-      <button
-        type="button"
-        aria-expanded={open}
-        className={cn("text-muted-foreground hover:text-foreground/85 h-row-sm flex items-center gap-1 pe-2 text-start text-2xs", nested ? "ps-8" : "ps-2")}
-        onClick={() => setOpen(!open)}
-      >
-        <ChevronRight className={cn("size-icon-sm transition-transform motion-reduce:transition-none", open && "rotate-90")} />
-        {workers.length === 1 ? "1 worker" : `${workers.length} workers`}
-      </button>
-      {open && workers.map((worker) => <SessionWorkerRow key={worker.id} conversationId={conversationId} worker={worker} nested={nested} />)}
-    </li>
-  );
-}
-
-function SessionWorkerRow({ conversationId, worker, nested }: { conversationId: string; worker: SessionWorker; nested: boolean }) {
-  const title = worker.title || "Worker";
-  return (
-    <button
-      type="button"
-      data-slot="session-worker"
-      data-task={worker.id}
-      title={`Open ${title}`}
-      className={cn(navRow, "h-row-sm text-foreground/70 pe-1.5 text-xs", nested ? "ps-12" : "ps-6")}
-      onClick={() => openWorker(conversationId, worker.id)}
-    >
-      <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">{title}</span>
-      <span className="text-muted-foreground shrink-0 text-2xs">{TASK_STATE_LABELS[worker.state]}</span>
-    </button>
-  );
-}

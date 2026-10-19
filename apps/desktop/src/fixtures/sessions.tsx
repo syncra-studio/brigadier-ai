@@ -19,7 +19,6 @@ import type { Conversation, ConversationActivity, EventEnvelope, Project, Reques
 import { fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
 import { Toaster } from "@/components/ui/toast";
-import { useOpenWorker } from "@/state/openWorker";
 import { useToasts } from "@/state/toasts";
 import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
 
@@ -91,13 +90,14 @@ applySettledTabEvents([
 ]);
 
 const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~ * li, li li')]
-  .filter((row, index, all) => all.indexOf(row) === index && row.dataset.slot !== "session-workers")
+  .filter((row, index, all) => all.indexOf(row) === index)
   .map((row) => {
     const button = row.querySelector<HTMLButtonElement>("button")!;
     const status = row.querySelector<HTMLElement>('[data-slot="row-status"]');
     return {
       title: button.querySelector("span")?.textContent?.trim(),
       status: status ? `${status.dataset.status}:${status.textContent?.trim() ?? ""}` : null,
+      tip: status?.title ?? null,
       active: button.dataset.active === "true",
     };
   });
@@ -109,9 +109,8 @@ const needYou = () => {
   const count = document.querySelector<HTMLElement>('[data-slot="need-you-count"]');
   return count ? { text: count.textContent?.trim(), title: count.title } : null;
 };
-/** The worker rows under a session's row, and their fold. */
-const workerRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="session-worker"]')].map((row) => row.textContent?.trim());
-const workersFold = () => document.querySelector<HTMLButtonElement>('[data-slot="session-workers"] > button[aria-expanded]');
+/** Anything worker-shaped in the sidebar: a session's workers show in the session, never under its row. */
+const workerRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot^="session-worker"], [data-task]')].map((row) => row.textContent?.trim());
 /**
  * How each row with a state shares its width: the title's share of the row's inside in percent, and
  * whether the state's own words ("Needs you") show whole, the reason being cut first.
@@ -196,16 +195,7 @@ function Fixture() {
       return () => { disposed = true; };
     }
     const timer = setTimeout(async () => {
-      const seen: Record<string, unknown> = { rows: rows(), widths: rowWidths(), count: needYou(), workers: workerRows(), fold: workersFold()?.textContent?.trim() };
-      // A worker's row opens its session with that worker asked for in its Workers panel.
-      document.querySelector<HTMLButtonElement>('[data-slot="session-worker"][data-task="t-2"]')!.click();
-      seen.workerOpened = { selection: useApp.getState().selection, worker: useOpenWorker.getState().request };
-      useApp.setState({ selection: { type: "none" } });
-      workersFold()!.click();
-      await until(() => workerRows().length === 0);
-      seen.workersFolded = workerRows();
-      workersFold()!.click();
-      await until(() => workerRows().length > 0);
+      const seen: Record<string, unknown> = { rows: rows(), widths: rowWidths(), count: needYou(), workers: workerRows() };
       rowButton("Header")!.click();
       setTimeout(() => {
         seen.opened = useApp.getState().selection;

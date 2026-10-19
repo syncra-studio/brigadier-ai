@@ -6,9 +6,9 @@ import { renderFixturePage } from "@/fixtures/headless";
 // The real sidebar in Chromium over a faked daemon: a project lists its sessions, one row each
 // with its own title and state, those that need the user first with their count on the project,
 // and a click opens that session.
-test("sidebar: a project's sessions are rows of their own, the sessions of an old workspace too, each with its state and why", { timeout: 60000 }, async (t) => {
+test("sidebar: a project's sessions are rows of their own, the sessions of an old workspace too, each with its state", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html", "sessions-result", 20000)) as {
-    rows: { title: string; status: string | null; active: boolean }[];
+    rows: { title: string; status: string | null; tip: string | null; active: boolean }[];
     widths: { title: string; titleShare: number; stateWhole: boolean }[];
     count: { text: string; title: string } | null;
     opened: unknown;
@@ -16,28 +16,25 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     rowsAfter: string[];
     countAfter: { text: string; title: string } | null;
     workers: string[];
-    fold: string;
-    workerOpened: unknown;
-    workersFolded: string[];
   };
+  // A row shows its state's keyword only; why it is in that state shows on hover.
   assert.deepEqual(
-    seen.rows.map(({ title, status }) => [title, status]),
+    seen.rows.map(({ title, status, tip }) => [title, status, tip]),
     [
       // Those that need the user float to the top, newest first like the rest.
-      ["Deploy the site", "needsYou:Needs you · approval"],
-      ["Broken build", "needsYou:Needs you · failed"],
-      ["Footer", "working:Working · watching CI"],
-      ["Header", "working:Working · 2 workers"],
-      ["Fix the login", "ready:Ready · PR open, proof attached"],
-      ["Tidy the docs", "merged:Merged"],
-      ["Waiting on a limit", "working:Working · waiting for reset 14:05"],
-      ["Lone worker", "working:Working"],
-      ["Old fix", "reverted:Reverted"],
-      ["Ship the release", "merging:Merging"],
+      ["Deploy the site", "needsYou:Needs you", "Needs you · approval"],
+      ["Broken build", "needsYou:Needs you", "Needs you · failed"],
+      ["Footer", "working:Working", "Working · watching CI"],
+      ["Header", "working:Working", "Working"],
+      ["Fix the login", "ready:Ready", "Ready · PR open, proof attached"],
+      ["Tidy the docs", "merged:Merged", "Merged"],
+      ["Waiting on a limit", "working:Working", "Working · waiting for reset 14:05"],
+      ["Lone worker", "working:Working", "Working"],
+      ["Old fix", "reverted:Reverted", "Reverted"],
+      ["Ship the release", "merging:Merging", "Merging"],
     ],
   );
-  // The title tells sessions apart: the state takes at most two fifths of the row, and its
-  // reason is cut before the state's own words.
+  // The title tells sessions apart: the state takes at most two fifths of the row.
   assert.equal(seen.widths.length, 10);
   for (const row of seen.widths) {
     assert.ok(row.titleShare >= 55, `${row.title}: the title keeps most of the row (${row.titleShare}%)`);
@@ -52,11 +49,9 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     "a session that starts needing the user moves up",
   );
   assert.deepEqual(seen.countAfter, { text: "3 need you", title: "3 need you" });
-  // A session's workers are read-only rows under it, with their state, folded from their count.
-  assert.deepEqual(seen.workers, ["Header layoutRunning", "Header testsQueued"]);
-  assert.equal(seen.fold, "2 workers");
-  assert.deepEqual(seen.workerOpened, { selection: { type: "conversation", id: "w1-a" }, worker: { conversationId: "w1-a", taskId: "t-2" } }, "a worker's row opens its session with that worker asked for");
-  assert.deepEqual(seen.workersFolded, [], "the fold hides them");
+  // A session's workers show in the session itself (context card, Workers panel, thread), never
+  // under its row, though "Header" runs two.
+  assert.deepEqual(seen.workers, [], "no worker rows in the sidebar");
 });
 
 test("closing a working session's tab stops nothing and says so in a note; it stays in the sidebar and its row opens it again", { timeout: 60000 }, async (t) => {

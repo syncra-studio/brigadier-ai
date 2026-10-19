@@ -4,7 +4,6 @@ import { leadTranscript, workerPatch } from "@/fixtures/flow";
 import type { Message, ProviderEvent, RawEntry, Report, Task } from "@/ipc/generated";
 import { useActivity } from "@/state/activity";
 import { useBoard } from "@/state/board";
-import { openWorker, useOpenWorker } from "@/state/openWorker";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
@@ -90,27 +89,13 @@ useApp.setState((s) => ({ threads: { ...s.threads, [id]: { ...s.threads[id]!, it
     message(30, "assistant", "The files have been summarized and the README draft is ready. Both workers verified the project without changing any source files.")] : []),
 ] } }, conversations: { ...s.conversations, [id]: { ...s.conversations[id]!, title: "Summarize probe project",
   ...(chat ? { kind: "chat" as const, projectId: null, setup: null } : {}) } } }));
-// The sidebar's worker rows read the conversation's activity, as the app's catalog sends it.
+// The conversation's activity, as the app's catalog sends it: the sidebar row's state reads it.
 useActivity.setState((s) => ({ byConversation: { ...s.byConversation, [id]: { ...s.byConversation[id]!,
   tasks: Object.fromEntries(Object.values(tasks).map((task) => [task.id, task.state])),
   titles: Object.fromEntries(Object.values(tasks).map((task) => [task.id, task.title])) } } }));
 
-// A worker's row in the sidebar asks for it: the open session's Workers panel shows it.
-const workerThread = () => document.querySelector('[data-slot="worker-thread"]');
-if (query.has("open-worker")) {
-  const result = document.body.appendChild(document.createElement("pre"));
-  result.id = "workers-result";
-  void (async () => {
-    openWorker(id, "t2");
-    for (let i = 0; i < 100 && !workerThread(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
-    const view = workerThread()?.closest('[role="region"], section');
-    result.textContent = JSON.stringify({ label: view?.getAttribute("aria-label") ?? null, taken: useOpenWorker.getState().request });
-  })();
-}
-
 // A Chat's workers, everywhere a session shows them: the context card's Workers row opens the
-// Workers panel, a thread row opens its worker there, and the left sidebar lists them under the
-// Chat's row, where one opens too.
+// Workers panel and a thread row opens its worker there. The left sidebar lists none of them.
 const until = async (check: () => boolean) => {
   for (let i = 0; i < 100 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
   return check();
@@ -134,11 +119,8 @@ if (chat && !query.has("manual")) {
     document.querySelector<HTMLButtonElement>('[data-slot="pane-workspace"] button[title="Open File summary"]')?.click();
     await until(() => shownWorker() === "Worker: File summary");
     const fromThread = shownWorker();
-    const rows = [...document.querySelectorAll<HTMLElement>('[data-slot="session-workers"] [data-slot="session-worker"]')];
-    const sidebar = rows.map((row) => row.textContent);
-    rows.find((row) => row.dataset.task === "t2")?.click();
-    await until(() => shownWorker() === "Worker: Readme draft");
-    result.textContent = JSON.stringify({ summary, fromSummary, fromThread, sidebar, fromSidebar: shownWorker(),
+    const sidebar = [...document.querySelectorAll<HTMLElement>('[data-slot^="session-worker"], [data-slot="sidebar-panel"] [data-task]')].map((row) => row.textContent);
+    result.textContent = JSON.stringify({ summary, fromSummary, fromThread, sidebar,
       // Files and Source stay a session's: a Chat has no folder.
       noFiles: !document.querySelector('[data-slot="workspace-pane"]') });
   })().catch((error: unknown) => { result.textContent = JSON.stringify({ error: error instanceof Error ? error.stack : String(error) }); });
