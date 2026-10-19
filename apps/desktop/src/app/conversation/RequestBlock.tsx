@@ -364,9 +364,11 @@ function TurnEnd({ meta }: { meta: BlockMeta }) {
   const merge = useTurnMerge(meta.orchestratorSteps, meta.requestIds);
   // A run's work is merged from its card, never undone behind the run's back.
   const card = meta.session && !isRunRequest(meta.requestId);
-  // The page the turn left running: the one local address its final answer names.
+  // The page the turn left running: the one local address its final answer names, never a late
+  // note under it.
   const preview = useAuiState((s) => {
-    const part = s.message.parts.findLast((candidate) => candidate.type === "text");
+    const texts = s.message.parts.filter((candidate) => candidate.type === "text");
+    const part = texts[meta.texts.findLastIndex((text) => !text.update)];
     return part?.type === "text" ? webPreviewUrl(part.text) : null;
   });
   const conversation = useViewConversation();

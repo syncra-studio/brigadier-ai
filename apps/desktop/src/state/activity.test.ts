@@ -90,6 +90,9 @@ test("a stopped request is named through reconnect and clears when another turn 
   assert.equal(useActivity.getState().byConversation.stopped?.stopped, false);
   applyActivityEvents([on("stopped", { type: "requestUpdated", request: { conversationId: "stopped", state: { type: "stopped" } } })]);
   assert.equal(useActivity.getState().byConversation.stopped?.stopped, true);
+  // An earlier request's update (its review kept) leaves the stop be; the next turn clears it.
   applyActivityEvents([on("stopped", { type: "requestUpdated", request: { conversationId: "stopped", state: { type: "done" } } })]);
+  assert.equal(useActivity.getState().byConversation.stopped?.stopped, true);
+  applyActivityEvents([on("stopped", { type: "requestUpdated", request: { conversationId: "stopped", state: { type: "working" } } })]);
   assert.equal(useActivity.getState().byConversation.stopped?.stopped, false);
 });

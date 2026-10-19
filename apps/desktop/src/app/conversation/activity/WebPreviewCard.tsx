@@ -3,6 +3,7 @@ import { ChevronDown, Globe } from "@openai/apps-sdk-ui/components/Icon";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { openUrl } from "@/ipc/client";
+import { openLink } from "@/state/links";
 import { openBrowserTab } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
@@ -13,8 +14,8 @@ function failed(cause: unknown): void {
 
 /**
  * The page a turn left running, under its answer: a globe tile, "Web preview" and its address. A
- * click opens it in a Browser tab of the session (the default browser where there is none, or
- * the built-in browser is off); "Open in" picks one.
+ * click opens it where Settings › Browser sends local pages (a Browser tab of the session by
+ * default; the default browser in a Chat, or with the built-in browser off); "Open in" picks one.
  */
 export function WebPreviewCard({ url, conversationId }: { url: string; conversationId: string | null }) {
   const browser = useApp((s) => s.settings.browserEnabled && s.info?.platform !== "linux");
@@ -23,10 +24,12 @@ export function WebPreviewCard({ url, conversationId }: { url: string; conversat
     if (conversationId) openBrowserTab(conversationId, url, true);
   };
   const inDefault = () => void openUrl(url).catch(failed);
+  // Where Settings › Browser sends local pages; "Open in" picks either.
+  const open = () => void openLink(url, conversationId ? { agent: true, conversationId } : { agent: true }).catch(failed);
   const address = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
   return (
     <div data-slot="web-preview" className="border-foreground/10 rounded-shell hover:bg-foreground/3 relative flex items-center gap-3 border p-3 transition-colors">
-      <button type="button" aria-label={`Open ${address}`} onClick={inApp ? inBrowser : inDefault} className="rounded-shell absolute inset-0" />
+      <button type="button" aria-label={`Open ${address}`} onClick={open} className="rounded-shell absolute inset-0" />
       <span aria-hidden className="bg-background text-link flex size-12 shrink-0 items-center justify-center rounded-lg [&>svg]:size-6">
         <Globe />
       </span>

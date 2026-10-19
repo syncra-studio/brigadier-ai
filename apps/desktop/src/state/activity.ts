@@ -155,7 +155,8 @@ function apply(current: Activity, { event }: EventEnvelope): Activity {
     case "requestUpdated": {
       const { type } = event.request.state;
       const failed = type === "failed" ? true : type === "working" ? false : current.failed;
-      const stopped = type === "stopped";
+      // An update to an earlier request (its review kept, say) leaves the latest one's stop be.
+      const stopped = type === "stopped" ? true : type === "working" || type === "failed" ? false : (current.stopped ?? false);
       return failed === current.failed && stopped === current.stopped ? current : { ...current, failed, stopped };
     }
     case "taskUpdated": {

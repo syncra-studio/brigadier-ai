@@ -15,7 +15,8 @@ export function webPreviewUrl(answer: string): string | null {
   for (const url of addresses(answer)) {
     try {
       const parsed = new URL(url);
-      if (localUrl(url) && parsed.port) found.add(parsed.origin + (parsed.pathname === "/" ? "/" : parsed.pathname));
+      // The whole address: a route in its query or fragment (`/#/todos`) is the page.
+      if (localUrl(url) && parsed.port) found.add(parsed.href);
     } catch {
       // Not an address after all.
     }

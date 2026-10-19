@@ -7,6 +7,8 @@
  * bold run mid-sentence; `details=0` drops its Details. `old=1` is an answer written before Q87:
  * numbered markers and a trailing `### Sources` list, which now read as plain Markdown.
  * `preview=1` has the answer name the one local page the turn left running; `preview=2` names two.
+ * `late=1` adds a late note under the answer; `local=system` sends local pages to the default
+ * browser (Settings › Browser).
  *
  * `drive=1` reads what shows, opens the report, and writes what it saw to
  * `<pre id="research-answer-result">` (ResearchAnswerRender.test.ts reads it). Without it the
@@ -30,6 +32,7 @@ const bold = query.get("bold") === "1";
 const detailed = query.get("details") !== "0";
 const old = query.get("old") === "1";
 const previews = Number(query.get("preview") ?? 0);
+const late = query.get("late") === "1";
 const ID = "research-answer";
 const PAGE = "5".repeat(32);
 const begun = Date.now() - 600_000;
@@ -87,6 +90,12 @@ const messages: Message[] = [
     id: "a1", conversationId: ID, seq: 2, role: "assistant", text: ANSWER, blob: null, createdAtMs: begun + 60_000,
     attachments: [], mentions: [], model: null, requestId: "r1", parentId: "r1",
   },
+  ...(late
+    ? [{
+        id: "a2", conversationId: ID, seq: 3, role: "assistant", text: "Update: CI passed on c9cb8b3.", blob: null, createdAtMs: begun + 90_000,
+        attachments: [], mentions: [], model: null, requestId: "r1", parentId: "a1",
+      } as Message]
+    : []),
 ];
 
 const request = {
@@ -103,6 +112,7 @@ const page: Page = {
 } as unknown as Page;
 
 const read: string[] = [];
+const system: string[] = [];
 
 function view(): View {
   return {
@@ -117,6 +127,7 @@ function view(): View {
 }
 
 mockIPC((command, payload) => {
+  if (command === "open_url") system.push((payload as { url: string }).url);
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   switch (req.method) {
@@ -132,10 +143,11 @@ mockIPC((command, payload) => {
   }
 });
 
-useApp.setState({
+useApp.setState((s) => ({
+  settings: { ...s.settings, localLinksIn: query.get("local") === "system" ? "system" : s.settings.localLinksIn },
   conversations: { [ID]: conversation },
   connection: { status: "connected", daemon: null, reason: null },
-});
+}));
 openConversation(ID);
 
 function Page() {
@@ -188,6 +200,7 @@ async function drive(): Promise<object> {
   return {
     ...shown,
     browsed,
+    system,
     opened: {
       tab: tab?.kind === "page" ? { pageId: tab.pageId, active: sessionTabs(ID).active === tab.id } : null,
       dialog: text(document.querySelector("[data-slot=report-dialog]")),

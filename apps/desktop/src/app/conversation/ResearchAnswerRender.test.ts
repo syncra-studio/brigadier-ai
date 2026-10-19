@@ -13,6 +13,7 @@ type Seen = {
   items: (string | null)[];
   preview: string | null;
   browsed: string | null;
+  system: string[];
   opened: { tab: { pageId: string | null; active: boolean } | null; dialog: string | null; read: string[] };
 };
 
@@ -65,6 +66,17 @@ test("an answer naming one local page gets a web preview that opens in the brows
   assert.equal(two.preview, null);
   const none = await see(t, "kind=session");
   assert.equal(none.preview, null);
+});
+
+// A late note under the answer leaves its preview; a click goes where Settings › Browser sends
+// local pages.
+test("a web preview stays under a late note and opens where local pages go", { timeout: 90000 }, async (t) => {
+  const late = await see(t, "kind=session&preview=1&late=1");
+  assert.equal(late.preview, "Web previewlocalhost:5173Open in");
+  assert.equal(late.browsed, "http://localhost:5173/");
+  const system = await see(t, "kind=session&preview=1&local=system");
+  assert.equal(system.browsed, null);
+  assert.deepEqual(system.system, ["http://localhost:5173/"]);
 });
 
 // An answer written before Q87 reads as plain Markdown: its list of sources shows as written,
