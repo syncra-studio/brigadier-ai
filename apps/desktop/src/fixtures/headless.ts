@@ -237,8 +237,11 @@ async function openBrowser(
   // Chrome crashes (SIGTRAP) in single-process mode, so it keeps the default.
   // Scrollbars hidden: Linux Chrome's take room where macOS's float, and the page lays out alike.
   const oneProcess = process.platform === "darwin" ? ["--single-process"] : [];
+  // A mouse, as the app's window has: Chrome on a machine with none (a CI runner) reports
+  // `hover: none`, and every hover: style, which sits inside `@media (hover: hover)`, would stay off.
+  const mouse = `--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4`;
   const browser = spawn(chromium(), [
-    "--headless", "--no-sandbox", ...oneProcess, "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
+    "--headless", "--no-sandbox", ...oneProcess, "--disable-gpu", "--hide-scrollbars", mouse, "--no-first-run", "--no-default-browser-check",
     ...flags, "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank",
   ], { stdio: ["ignore", "ignore", "pipe"], detached: true });
   let browserLog = "";
