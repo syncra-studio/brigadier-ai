@@ -1052,6 +1052,21 @@ impl Repo {
     /// `commits`: how many commits a squash or rebase merge put on the base (a merge commit
     /// brings its second parent's).
     pub fn merge_reverted(&self, merge_commit: &Oid, commits: u32, base: &str) -> Result<bool> {
+        Ok(self
+            .merge_undo(merge_commit, commits, base)?
+            .is_some_and(|undo| undo.redone.is_none()))
+    }
+
+    /// What became of a merge's work on local branch `base` (or its upstream) since it merged,
+    /// read as [`Self::merge_reverted`] reads it: the newest revert of the work, with the
+    /// commit that put it back after that (a revert of the revert), if one did. None: never
+    /// reverted. Times are the commits' own commit times.
+    pub fn merge_undo(
+        &self,
+        merge_commit: &Oid,
+        commits: u32,
+        base: &str,
+    ) -> Result<Option<crate::MergeUndo>> {
         valid_oid(merge_commit)?;
         let mut tips = vec![self.branch_commit(base)?];
         tips.extend(self.upstream_tip(base)?);
@@ -1094,15 +1109,17 @@ impl Repo {
             "log".to_owned(),
             "--reverse".to_owned(),
             "--topo-order".to_owned(),
-            "--format=%H%x00%B%x1e".to_owned(),
+            "--format=%H%x00%ct%x00%B%x1e".to_owned(),
             format!("^{}", merge_commit.0),
         ];
         args.extend(tips.iter().map(|tip| tip.0.clone()));
         args.push("--".to_owned());
         let log = self.cmd(&args, true)?;
-        let mut latest = None;
+        let mut undo: Option<crate::MergeUndo> = None;
         for entry in String::from_utf8_lossy(&log).split('\x1e') {
-            let Some((sha, body)) = entry.trim_start_matches('\n').split_once('\0') else {
+            let mut fields = entry.trim_start_matches('\n').splitn(3, '\0');
+            let (Some(sha), Some(time), Some(body)) = (fields.next(), fields.next(), fields.next())
+            else {
                 continue;
             };
             let undone = body.lines().find_map(|line| {
@@ -1112,10 +1129,21 @@ impl Repo {
             });
             if let Some(undone) = undone {
                 puts_in.insert(sha.to_owned(), !undone);
-                latest = Some(!undone);
+                let at = (
+                    Oid(sha.to_owned()),
+                    time.trim().parse::<i64>().unwrap_or_default() * 1000,
+                );
+                if undone {
+                    undo = Some(crate::MergeUndo {
+                        reverted: at,
+                        redone: None,
+                    });
+                } else if let Some(undo) = &mut undo {
+                    undo.redone = Some(at);
+                }
             }
         }
-        Ok(latest == Some(false))
+        Ok(undo)
     }
 
     pub(crate) fn tree_changes(
@@ -2470,6 +2498,7 @@ pub(crate) mod tests {
         let merge = repo.resolve("HEAD").unwrap();
         let reverted = || repo.merge_reverted(&merge, 2, "main").unwrap();
         assert!(!reverted(), "just merged");
+        assert_eq!(repo.merge_undo(&merge, 2, "main").unwrap(), None);
         fs::write(root.join("d.txt"), "d\n").unwrap();
         repo.commit_changes("Unrelated", true).unwrap();
         assert!(!reverted());
@@ -2479,8 +2508,19 @@ pub(crate) mod tests {
         run(&["revert", "--no-edit", &revert.0]);
         assert!(!reverted(), "the revert reverted: merged again");
         let restore = repo.resolve("HEAD").unwrap();
+        let undo = repo.merge_undo(&merge, 2, "main").unwrap().unwrap();
+        assert_eq!(undo.reverted.0, revert, "the revert");
+        assert_eq!(undo.redone.as_ref().map(|redone| &redone.0), Some(&restore));
+        assert!(undo.reverted.1 > 0, "its time");
         run(&["revert", "--no-edit", &restore.0]);
         assert!(reverted(), "reverted once more");
+        let again = repo.resolve("HEAD").unwrap();
+        let undo = repo.merge_undo(&merge, 2, "main").unwrap().unwrap();
+        assert_eq!(
+            (undo.reverted.0, undo.redone),
+            (again, None),
+            "the newest revert"
+        );
 
         // A squash merge: one commit on the base.
         run(&["checkout", "-q", "-b", "more"]);

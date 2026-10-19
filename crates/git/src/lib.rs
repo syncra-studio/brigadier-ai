@@ -257,6 +257,17 @@ pub enum MergeOutcome {
     },
 }
 
+/// What became of a merge's work on its base since it merged ([`Repo::merge_undo`]): the latest
+/// revert of it, and the commit that put it back after that revert, if one did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeUndo {
+    /// The commit that reverted the work last, and its commit time in ms.
+    pub reverted: (Oid, i64),
+    /// The commit that reverted that revert (a redo), and its commit time in ms; none while
+    /// the work stays reverted.
+    pub redone: Option<(Oid, i64)>,
+}
+
 /// A merge worker's result checked against the sides it merged ([`Repo::audit_merge`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MergeAudit {

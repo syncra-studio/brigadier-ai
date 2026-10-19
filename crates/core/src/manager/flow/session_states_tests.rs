@@ -193,17 +193,41 @@ async fn a_pull_request_is_seen_at_a_turns_end_and_a_connect_and_a_reverted_merg
     assert_eq!(flow.manager.tab_state(&tab).await, Some(TabState::Merged));
     assert_eq!(git(&flow.repo, &["rev-parse", "main"]), squash);
 
+    let undo = || async { flow.manager.merge_undo(&id, &squash).await.unwrap() };
+    assert_eq!(undo().await, None, "never reverted");
     git(&flow.repo, &["revert", "--no-edit", &squash]);
     assert_eq!(flow.manager.tab_state(&tab).await, Some(TabState::Reverted));
     assert_eq!(
         mine(flow.manager.settled_tabs().await).state,
         TabState::Reverted
     );
+    let revert = git(&flow.repo, &["rev-parse", "HEAD"]);
+    let reverted = undo().await.unwrap();
+    assert_eq!(
+        (reverted.reverted_by.as_str(), reverted.redone_by.as_deref()),
+        (revert.as_str(), None)
+    );
+    let committed: i64 = git(&flow.repo, &["log", "-1", "--format=%ct", "HEAD"])
+        .parse()
+        .unwrap();
+    assert_eq!(reverted.reverted_at_ms, committed * 1000, "when, on main");
     git(&flow.repo, &["revert", "--no-edit", "HEAD"]);
     assert_eq!(
         flow.manager.tab_state(&tab).await,
         Some(TabState::Merged),
         "the revert reverted"
+    );
+    let redo = git(&flow.repo, &["rev-parse", "HEAD"]);
+    let redone = undo().await.unwrap();
+    assert_eq!(
+        (redone.reverted_by, redone.redone_by),
+        (revert, Some(redo)),
+        "redone"
+    );
+    assert_eq!(
+        flow.manager.merge_undo(&id, "0123456").await.unwrap(),
+        None,
+        "not a merge of this session's"
     );
     flow.stop().await;
 }

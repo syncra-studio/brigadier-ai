@@ -18,16 +18,16 @@ use brigadier_core::{
     CardId, Catalog, CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus,
     ConflictFile, ConnectView, ConventionsExport, Conversation, ConversationActivity,
     ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat, FolderCheck,
-    FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, Message, MessageMatches,
-    MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId, PendingChanges,
-    ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView,
-    PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId,
-    ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope,
-    RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest,
-    SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy,
-    TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
-    UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
-    WorkspaceTree,
+    FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, MergeUndo, Message,
+    MessageMatches, MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId,
+    PendingChanges, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan,
+    ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession,
+    RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome,
+    ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup,
+    SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState,
+    StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget,
+    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
+    WorkspaceTarget, WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -196,6 +196,12 @@ pub enum Request {
     GetActivity,
     /// The open tabs that are ready or merged (their tab and workspace row states).
     GetSettledTabs,
+    /// What became of a session's merge on its base since it merged: when it was reverted,
+    /// and redone after that (the Changes card's "Undone on main · ‹time›").
+    GetMergeUndo {
+        conversation_id: ConversationId,
+        merge_commit: String,
+    },
     /// Creates a project. With `repo` (a repository's top-level folder, from the native
     /// picker or typed), an empty `name` names it after the folder.
     CreateProject {
@@ -1403,6 +1409,10 @@ pub enum Response {
     },
     GetSettledTabs {
         tabs: Vec<SettledTab>,
+    },
+    GetMergeUndo {
+        /// None: never reverted.
+        undo: Option<MergeUndo>,
     },
     CreateProject {
         project: Box<Project>,

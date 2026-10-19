@@ -285,6 +285,53 @@ impl SessionManager {
         .unwrap_or(false)
     }
 
+    /// What became of merge `merge_commit` of session `id` on its base since: when it was
+    /// reverted, and redone after that (`getMergeUndo`). None: not reverted, or not a merge of
+    /// this session's.
+    pub async fn merge_undo(
+        &self,
+        id: &ConversationId,
+        merge_commit: &str,
+    ) -> Result<Option<crate::work::MergeUndo>> {
+        let tab = self.core.conversation(id)?;
+        let board = self.core.board(id).await?;
+        let Some((base, commits)) =
+            board
+                .orchestrator_steps
+                .iter()
+                .find_map(|step| match &step.kind {
+                    crate::work::OrchestratorStepKind::Merged {
+                        merge_commit: Some(commit),
+                        base,
+                        commits,
+                        ..
+                    } if commit == merge_commit => Some((base.clone(), *commits)),
+                    _ => None,
+                })
+        else {
+            return Ok(None);
+        };
+        let Some(Setup::Session { repo, .. }) = tab.setup.clone() else {
+            return Ok(None);
+        };
+        let git = self.git.clone();
+        let merge_commit = merge_commit.to_owned();
+        let undo = super::blocking(move || {
+            let repo = git
+                .open(std::path::Path::new(&repo))
+                .map_err(super::git_error)?;
+            repo.merge_undo(&brigadier_git::Oid(merge_commit), commits, &base)
+                .map_err(super::git_error)
+        })
+        .await?;
+        Ok(undo.map(|undo| crate::work::MergeUndo {
+            reverted_by: undo.reverted.0.0,
+            reverted_at_ms: undo.reverted.1,
+            redone_by: undo.redone.as_ref().map(|redone| redone.0.0.clone()),
+            redone_at_ms: undo.redone.map(|redone| redone.1),
+        }))
+    }
+
     /// A worktree tab's branch tip, and how many of its commits its base lacks.
     async fn tab_ahead(&self, tab: &Conversation) -> Option<(String, u32)> {
         let Some(Setup::Session {

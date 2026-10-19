@@ -2060,6 +2060,27 @@ pub enum TabState {
     Reverted,
 }
 
+/// What became of a merge's work on its base since it merged, as git shows it now: when it was
+/// reverted, and when it was put back after that (Redo), if it was. Asked of git each time,
+/// so a revert or redo made anywhere (the thread, a terminal, GitHub) counts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeUndo {
+    /// The commit on the base that reverted the merge's work last ("Undone on main · 9:41").
+    pub reverted_by: String,
+    /// That commit's commit time.
+    pub reverted_at_ms: i64,
+    /// The commit that reverted that revert (Redo), putting the work back; none while the
+    /// work stays reverted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub redone_by: Option<String>,
+    /// That commit's commit time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub redone_at_ms: Option<i64>,
+}
+
 /// A tab that is ready or merged, whatever runs in it now: the part of its state the app can't
 /// fold from events alone (it needs git), read once at connect.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

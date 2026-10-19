@@ -1359,6 +1359,12 @@ async fn open_session(sessions: &SessionManager, request: Request) -> Result<Res
         Request::GetSettledTabs => Response::GetSettledTabs {
             tabs: sessions.settled_tabs().await,
         },
+        Request::GetMergeUndo {
+            conversation_id,
+            merge_commit,
+        } => Response::GetMergeUndo {
+            undo: sessions.merge_undo(&conversation_id, &merge_commit).await?,
+        },
         _ => unreachable!("only tab requests come here"),
     })
 }
@@ -1404,6 +1410,7 @@ fn answered_beside(request: &Request) -> bool {
             | Request::PreviewUninstall { .. }
             | Request::Uninstall { .. }
             | Request::GetSettledTabs
+            | Request::GetMergeUndo { .. }
     )
 }
 
@@ -1447,7 +1454,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
         request @ (Request::StartSession { .. }
         | Request::StartOfferedSession { .. }
         | Request::SettleMoved { .. }
-        | Request::GetSettledTabs) => heap(|| open_session(sessions, request)).await?,
+        | Request::GetSettledTabs
+        | Request::GetMergeUndo { .. }) => heap(|| open_session(sessions, request)).await?,
         Request::ForkConversation {
             conversation_id,
             message_id,
