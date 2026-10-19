@@ -117,7 +117,7 @@ export function MergeHeader({ merge }: { merge: Merged }) {
 
 /**
  * The one plain line under a merge when something about the merged code is really wrong (an
- * open finding, a failed check): a click opens the Progress tab, where every check is.
+ * open finding, a failed check): a click opens the Progress tab, which lists each.
  */
 export function MergeWarning({ merge }: { merge: Merged }) {
   const conversationId = useViewConversation()?.id ?? null;

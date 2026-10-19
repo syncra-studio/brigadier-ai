@@ -1,12 +1,12 @@
 import type { ComponentProps, ReactNode } from "react";
 
+import { mergeProblems } from "@/app/conversation/activity/mergeChecks";
 import { type BoardJob, useSessionJobs } from "@/app/conversation/boardJob";
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import { type Job, type JobStep, phaseWords } from "@/app/conversation/job";
 import type { FindingLabel, FindingRow } from "@/app/conversation/reviewStatus";
 import { Timeline, type TimelineEvent } from "@/components/assistant-ui/elements/timeline";
 import { Badge } from "@/components/ui/badge";
-import type { MergeRecord } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { VENDOR_LABELS } from "@/lib/routing";
 
@@ -63,9 +63,10 @@ function JobTimeline({ job, title, details }: { job: Job; title?: ReactNode; det
   );
 }
 
-/** Under a job's steps, what the board holds of them: the review's findings, the merge's record. */
+/** Under a job's steps, what the board holds of them: the review's findings, what is wrong with the merged code. */
 function jobDetails(job: BoardJob): Record<string, ReactNode> {
   const { findings, merge } = job.facts;
+  const problems = merge?.record ? mergeProblems(merge.record, VENDOR_LABELS) : [];
   return {
     ...(findings.length > 0 && {
       review: (
@@ -76,12 +77,12 @@ function jobDetails(job: BoardJob): Record<string, ReactNode> {
         </ul>
       ),
     }),
-    ...(merge?.record && {
+    ...(problems.length > 0 && {
       merge: (
         <ul data-slot="job-merge-checked" className="flex flex-col gap-0.5 pt-1 text-xs">
-          {checkedLines(merge.record, merge.pr).map((line) => (
-            <li key={line.text} data-warn={line.warn || undefined} className={line.warn ? "text-warning" : "text-muted-foreground"}>
-              {line.text}
+          {problems.map((line) => (
+            <li key={line} data-warn className="text-warning">
+              {line}
             </li>
           ))}
         </ul>
@@ -93,7 +94,7 @@ function jobDetails(job: BoardJob): Record<string, ReactNode> {
 /**
  * The session's job tab, opened from the Job card or a merge's warning line: the job at work,
  * step by step, then each earlier merge's, newest first, with every review's findings at full
- * width and what was checked of each merged commit.
+ * width and what is wrong with each merged commit, if anything.
  */
 export function SessionJobTab({ conversationId }: { conversationId: string }) {
   const jobs = useSessionJobs(conversationId);
@@ -125,53 +126,6 @@ const STATUS_BADGE: Record<FindingLabel, ComponentProps<typeof Badge>> = {
   Unverified: { variant: "outline", className: "border-warning/50 text-warning" },
   Dismissed: { variant: "outline", className: "border-divider text-foreground/65" },
 };
-
-const short = (sha: string) => sha.slice(0, 7);
-
-/**
- * What was checked of a merged commit, as recorded when it merged: each check, review, CI result
- * and verifier verdict, one plain line each: a check on an older
- * commit, a failure or something missing is marked `warn`.
- */
-function checkedLines(record: MergeRecord, pr: boolean): { text: string; warn: boolean }[] {
-  const head = short(record.head);
-  const on = (sha: string, onHead: boolean) => (onHead ? `on ${head}` : `on ${short(sha)}, not the merged commit`);
-  const lines: { text: string; warn: boolean }[] = [];
-  for (const check of record.checks) {
-    const passed = check.status === "exit 0";
-    lines.push({ text: `${check.command}: ${passed ? "passed" : check.status} ${check.onHead ? `on ${head}` : "on an earlier version"}`, warn: !passed || !check.onHead });
-  }
-  if (record.checks.length === 0) lines.push({ text: "No tests or type checks ran", warn: true });
-  for (const review of record.reviews) {
-    const findings = review.fixed + review.dismissed + review.open;
-    const outcome =
-      review.state.type === "clean"
-        ? "clean"
-        : review.state.type === "running"
-          ? "still running"
-          : review.state.type === "failed"
-            ? "couldn't run"
-            : `${findings} finding${findings === 1 ? "" : "s"}, ${review.fixed} fixed, ${review.dismissed} dismissed, ${review.open} open`;
-    lines.push({
-      text: `${VENDOR_LABELS[review.reviewer]} review of ${short(review.from)}..${short(review.to)}: ${outcome}${review.onHead ? "" : ", not up to the merged commit"}`,
-      warn: !review.onHead || review.open > 0 || review.state.type === "running" || review.state.type === "failed",
-    });
-  }
-  if (record.reviews.length === 0) lines.push({ text: "No review", warn: true });
-  if (record.ci) {
-    const result = record.ci.result ?? "still running";
-    lines.push({ text: `CI ${result} ${on(record.ci.sha, record.ci.onHead)}`, warn: result !== "passed" || !record.ci.onHead });
-  } else if (pr) {
-    lines.push({ text: "No CI result", warn: true });
-  }
-  if (record.verifier) {
-    const result = record.verifier.result;
-    const said = result === null ? "no report yet" : { passed: "passed", failed: "failed", notRun: "couldn't run every check", noChecks: "no checks to run" }[result];
-    lines.push({ text: `Fresh verifier: ${said} ${on(record.verifier.commit, record.verifier.onHead)}`, warn: result !== "passed" || !record.verifier.onHead });
-  }
-  lines.push({ text: record.proofs === 0 ? "No screenshot or recording" : `${record.proofs} screenshot${record.proofs === 1 ? "" : "s"} or recording${record.proofs === 1 ? "" : "s"}`, warn: false });
-  return lines;
-}
 
 /** One finding at full width: what the thread recorded and how severe, its whole title, where, and the thread's words on it. */
 function Finding({ finding }: { finding: FindingRow }) {

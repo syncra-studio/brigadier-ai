@@ -9,8 +9,8 @@ use super::{SessionManager, blocking, git_error};
 use crate::board::Board;
 use crate::model::ConversationId;
 use crate::work::{
-    FindingStatus, MergeCheck, MergeCi, MergeRecord, MergeReview, MergeVerifier,
-    OrchestratorStepKind, ReviewKind, WorkerRole,
+    MergeCheck, MergeCi, MergeRecord, MergeReview, MergeVerifier, OrchestratorStepKind, ReviewKind,
+    WorkerRole,
 };
 
 impl SessionManager {
@@ -87,26 +87,20 @@ pub(super) fn record_of(
     let reviews = reviews
         .into_iter()
         .map(|review| {
-            let count = |settled: fn(&FindingStatus) -> bool| {
-                review
-                    .items
-                    .iter()
-                    .filter(|item| settled(&item.status))
-                    .count() as u32
-            };
-            MergeReview {
+            let mut merged = MergeReview {
+                review: review.id.clone(),
                 reviewer: review.reviewer,
                 model: review.reviewer_model.clone(),
                 from: review.base.clone(),
                 to: review.tip.clone(),
                 state: review.state.clone(),
-                fixed: count(|status| matches!(status, FindingStatus::Fixed { .. })),
-                dismissed: count(|status| matches!(status, FindingStatus::Dismissed { .. })),
-                open: count(|status| {
-                    matches!(status, FindingStatus::Open { .. } | FindingStatus::New)
-                }),
+                fixed: 0,
+                dismissed: 0,
+                open: 0,
                 on_head: review.tip == head,
-            }
+            };
+            merged.recount(review);
+            merged
         })
         .collect();
     let ci = board
@@ -160,7 +154,8 @@ pub(super) fn record_of(
 mod tests {
     use super::*;
     use crate::board::ThreadCheck;
-    use crate::work::{Finding, OrchestratorStep, ReviewRun, ReviewState};
+    use crate::model::DomainEvent;
+    use crate::work::{Finding, FindingStatus, OrchestratorStep, ReviewRun, ReviewState};
 
     fn step(kind: OrchestratorStepKind, position: i64) -> OrchestratorStep {
         OrchestratorStep {
@@ -193,6 +188,47 @@ mod tests {
             },
             position,
         )
+    }
+
+    fn review(id: &str, tip: &str, at: i64, items: Vec<FindingStatus>) -> ReviewRun {
+        ReviewRun {
+            id: id.into(),
+            conversation_id: ConversationId("s".into()),
+            request_id: None,
+            task_id: None,
+            kind: ReviewKind::Code,
+            base: "c0".into(),
+            tip: tip.into(),
+            author: brigadier_providers::ProviderKind::Claude,
+            reviewer: brigadier_providers::ProviderKind::Codex,
+            reviewer_model: Some("gpt".into()),
+            notify: crate::work::ReviewFor::Orchestrator,
+            state: if items.is_empty() {
+                ReviewState::Clean
+            } else {
+                ReviewState::Findings {
+                    count: items.len() as u32,
+                }
+            },
+            started_at_ms: at,
+            ended_at_ms: Some(at),
+            findings: None,
+            number: 1,
+            items: items
+                .into_iter()
+                .enumerate()
+                .map(|(n, status)| Finding {
+                    id: format!("R1.{n}"),
+                    severity: None,
+                    title: "A finding".into(),
+                    location: None,
+                    status,
+                    high: false,
+                })
+                .collect(),
+            landing: None,
+            answer_waits: false,
+        }
     }
 
     /// Each check names the commit it ran on: a review or CI of an older commit reads stale,
@@ -234,44 +270,6 @@ mod tests {
             ),
             ci("c1", 5),
         ];
-        let review = |id: &str, tip: &str, at: i64, items: Vec<FindingStatus>| ReviewRun {
-            id: id.into(),
-            conversation_id: ConversationId("s".into()),
-            request_id: None,
-            task_id: None,
-            kind: ReviewKind::Code,
-            base: "c0".into(),
-            tip: tip.into(),
-            author: brigadier_providers::ProviderKind::Claude,
-            reviewer: brigadier_providers::ProviderKind::Codex,
-            reviewer_model: Some("gpt".into()),
-            notify: crate::work::ReviewFor::Orchestrator,
-            state: if items.is_empty() {
-                ReviewState::Clean
-            } else {
-                ReviewState::Findings {
-                    count: items.len() as u32,
-                }
-            },
-            started_at_ms: at,
-            ended_at_ms: Some(at),
-            findings: None,
-            number: 1,
-            items: items
-                .into_iter()
-                .enumerate()
-                .map(|(n, status)| Finding {
-                    id: format!("R1.{n}"),
-                    severity: None,
-                    title: "A finding".into(),
-                    location: None,
-                    status,
-                    high: false,
-                })
-                .collect(),
-            landing: None,
-            answer_waits: false,
-        };
         board.reviews.insert(
             "r1".into(),
             review(
@@ -325,5 +323,72 @@ mod tests {
         let record = record_of(&board, "work", "c1", Some("t1"));
         assert!(record.reviews[0].on_head && record.ci.unwrap().on_head);
         assert!(record.checks[0].on_head);
+    }
+
+    /// The thread settles a finding after the merge (its text reached it late): the stored
+    /// record counts it settled, so the merge no longer reads a finding open.
+    #[test]
+    fn a_finding_settled_after_the_merge_counts_settled_in_its_record() {
+        let mut board = Board::default();
+        let mut late = review("r4", "c1", 1, vec![FindingStatus::New]);
+        board.apply(
+            &DomainEvent::ReviewUpdated {
+                review: late.clone(),
+            },
+            1,
+        );
+        let record = record_of(&board, "work", "c2", Some("t2"));
+        assert_eq!(record.reviews[0].open, 1);
+        let merged = |record| OrchestratorStepKind::Merged {
+            branch: "work".into(),
+            base: "main".into(),
+            commits: 1,
+            asked_in: None,
+            upstream: None,
+            head: Some("c2".into()),
+            merge_commit: Some("m2".into()),
+            pr: None,
+            auto: false,
+            requests: Vec::new(),
+            record: Some(Box::new(record)),
+        };
+        board.apply(
+            &DomainEvent::OrchestratorStepped {
+                step: step(merged(record), 2),
+            },
+            2,
+        );
+        late.items[0].status = FindingStatus::Fixed {
+            task: None,
+            why: None,
+            checked: Some("re-checked on the merged code".into()),
+        };
+        board.apply(&DomainEvent::ReviewUpdated { review: late }, 3);
+        let OrchestratorStepKind::Merged {
+            record: Some(record),
+            ..
+        } = &board.orchestrator_steps[0].kind
+        else {
+            panic!("the merge is stored");
+        };
+        let review = &record.reviews[0];
+        assert_eq!((review.fixed, review.dismissed, review.open), (1, 0, 0));
+
+        // A record stored before it named its review finds it by reviewer and range.
+        let mut old = (**record).clone();
+        old.reviews[0].review.clear();
+        old.reviews[0].fixed = 0;
+        old.reviews[0].open = 1;
+        board.orchestrator_steps[0].kind = merged(old);
+        let again = board.reviews["r4"].clone();
+        board.apply(&DomainEvent::ReviewUpdated { review: again }, 4);
+        let OrchestratorStepKind::Merged {
+            record: Some(record),
+            ..
+        } = &board.orchestrator_steps[0].kind
+        else {
+            panic!("the merge is stored");
+        };
+        assert_eq!(record.reviews[0].open, 0);
     }
 }

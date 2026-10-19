@@ -70,16 +70,11 @@ test("a merge in a later turn shows on the edited turn's card and in its own tur
 });
 
 // Something really wrong with the merged code is one plain line under the merge, which opens
-// the Progress tab where every check is.
+// the Progress tab, which lists each.
 test("an open finding and a failed CI run read as one line that opens the Progress tab", { timeout: 60000 }, async (t) => {
   const seen = await render(t, "&warn=1");
   assert.deepEqual(seen.warning, ["One review finding is still open and CI failed."]);
   assert.equal(seen.tab, "panel:reviews");
-  // There, what was checked of the merged commit, every line, the review short of it marked.
-  assert.deepEqual(seen.reviews, [
-    "pnpm test: passed on a1b2c3d",
-    "! Codex review of 0000aaa..9999bbb: 2 findings, 1 fixed, 0 dismissed, 1 open, not up to the merged commit",
-    "! CI failed on a1b2c3d",
-    "2 screenshots or recordings",
-  ]);
+  // There, under Merging, only what is really wrong: no stale checks, no proofs line.
+  assert.deepEqual(seen.reviews, ["! Codex review of 0000aaa..9999bbb: one finding still open", "! CI failed on a1b2c3d"]);
 });

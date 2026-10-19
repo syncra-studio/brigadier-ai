@@ -47,7 +47,7 @@ const item = (id: string, status: FindingStatus, title = `Finding ${id}`): Findi
 const words = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 const count = (html: string, slot: string) => html.split(`data-slot="${slot}"`).length - 1;
 
-test("the job tab shows the job at work, then each merge's, with every finding at full width and what was checked of the merge", async () => {
+test("the job tab shows the job at work, then each merge's, with every finding at full width and nothing under a merge with nothing wrong", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { SessionJobTab } = await server.ssrLoadModule("/src/app/conversation/JobTab.tsx");
@@ -86,9 +86,9 @@ test("the job tab shows the job at work, then each merge's, with every finding a
     assert.match(html, /<code[^>]*>--version<\/code> ignores extra arguments/);
     assert.match(text, /the CLI ignores extra arguments everywhere/);
     assert.match(text, /cli\.ts:6/);
-    // What was checked of the merged commit.
-    assert.equal(count(html, "job-merge-checked"), 1);
-    assert.match(text, /pnpm test: passed on 1234567/);
+    // Nothing is wrong with the merged commit: nothing lists under the merge.
+    assert.equal(count(html, "job-merge-checked"), 0);
+    assert.doesNotMatch(text, /pnpm test/);
 
     const empty = createStore(() => ({ board: emptyBoard("c"), orchestrator: null }));
     const none = ReactDOMServer.renderToStaticMarkup(

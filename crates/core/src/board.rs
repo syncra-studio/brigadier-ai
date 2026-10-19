@@ -565,6 +565,21 @@ impl Board {
                 self.plans.insert(plan.id.clone(), plan);
             }
             DomainEvent::ReviewUpdated { review } => {
+                // A merge's record counts the thread's later word on the review's findings too:
+                // one it settles after the merge no longer reads open there.
+                for step in &mut self.orchestrator_steps {
+                    if let crate::work::OrchestratorStepKind::Merged {
+                        record: Some(record),
+                        ..
+                    } = &mut step.kind
+                    {
+                        for merged in &mut record.reviews {
+                            if merged.counts(review) {
+                                merged.recount(review);
+                            }
+                        }
+                    }
+                }
                 self.reviews.insert(review.id.clone(), review.clone());
             }
             DomainEvent::IntegratedCheckUpdated { check } => {

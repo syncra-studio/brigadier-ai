@@ -1611,6 +1611,11 @@ pub struct MergeCheck {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MergeReview {
+    /// The review it counts ([`ReviewRun::id`]), so its counts follow the thread's later word
+    /// on its findings. Empty in records stored before it was kept.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(skip)]
+    pub review: String,
     pub reviewer: ProviderKind,
     pub model: Option<String>,
     pub from: String,
@@ -1622,6 +1627,33 @@ pub struct MergeReview {
     pub open: u32,
     /// It reviewed up to the merged head.
     pub on_head: bool,
+}
+
+impl MergeReview {
+    /// Whether it counts `review`: by id, or by reviewer and range in an older record.
+    pub(crate) fn counts(&self, review: &ReviewRun) -> bool {
+        if self.review.is_empty() {
+            self.reviewer == review.reviewer && self.from == review.base && self.to == review.tip
+        } else {
+            self.review == review.id
+        }
+    }
+
+    /// Its state and counts as `review` holds them now.
+    pub(crate) fn recount(&mut self, review: &ReviewRun) {
+        let count = |settled: fn(&FindingStatus) -> bool| {
+            review
+                .items
+                .iter()
+                .filter(|item| settled(&item.status))
+                .count() as u32
+        };
+        self.state = review.state.clone();
+        self.fixed = count(|status| matches!(status, FindingStatus::Fixed { .. }));
+        self.dismissed = count(|status| matches!(status, FindingStatus::Dismissed { .. }));
+        self.open =
+            count(|status| matches!(status, FindingStatus::Open { .. } | FindingStatus::New));
+    }
 }
 
 /// A CI watch's result on its commit.
