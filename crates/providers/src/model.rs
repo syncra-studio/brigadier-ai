@@ -1135,18 +1135,24 @@ pub enum ToolSet {
     Lean,
     /// None at all: only the MCP servers given (the orchestrator).
     None,
-    /// Web search and fetch only (Chats).
+    /// Web search and fetch only (a research one-shot).
     Web,
+    /// A Chat's: as [`Self::Web`], and Codex keeps its image generation (Q24).
+    Chat,
     /// A one-shot reviewer's: reading files and running the read-only git commands that show
     /// a change, and nothing else (Claude; Codex runs its reviews through `codex exec review`).
     Review,
+    /// A tab chat's, which reads its session's files: as [`Self::Review`], and Codex keeps its
+    /// image generation, as a Chat does.
+    TabChat,
     /// A session's thread (THREAD-PLAN.md Q1): reading, searching, running commands, editing
     /// and the web, with no sub-agents and nothing that runs in the background. Codex: its
     /// usual tools less sub-agents.
     Thread,
     /// A Brain job's (BUILD-PLAN C5): reading and searching files only, with the lean start's
     /// settings and a system prompt with no per-session sections, so the jobs of a batch share
-    /// one cached start. Codex: as `Default` (it reads through its shell).
+    /// one cached start. Codex: as `Default` (it reads through its shell), less image
+    /// generation.
     Reader,
 }
 

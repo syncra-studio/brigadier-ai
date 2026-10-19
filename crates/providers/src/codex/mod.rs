@@ -86,8 +86,8 @@ const ADDITIONAL_PERMISSIONS_FEATURE: &str = "exec_permission_approvals";
 /// What a profiled session at Approve for me is told about leaving its sandbox.
 const ADDITIONAL_PERMISSIONS_HINT: &str = "Leaving the sandbox: here `require_escalated` still runs the command sandboxed. To write outside your writable folders or use the network, run the command with `sandbox_permissions: \"with_additional_permissions\"` and `additional_permissions` naming exactly the paths (file_system read/write) or network it needs; a reviewer approves it.";
 
-/// Built-ins switched off for sessions that must not act on their own (a Chat, a handoff
-/// note, a one-shot job): viewing local images, generating images, Codex's own sub-agents,
+/// Built-ins switched off for sessions that must not act on their own (a handoff note, a
+/// one-shot job, a control connection): viewing local images, generating images, Codex's own sub-agents,
 /// goals, the sleep tool, and every shell tool. Without a shell tool there is no command to approve at all,
 /// so neither an exec-policy rule of the user's nor a sandbox gap can let one run.
 const RESTRICTED_FEATURES: &[&str] = &[
@@ -100,6 +100,21 @@ const RESTRICTED_FEATURES: &[&str] = &[
     "shell_tool",
     "unified_exec",
 ];
+
+/// The same for a Chat ([`ToolSet::Chat`], [`ToolSet::TabChat`]), which keeps Codex's own image
+/// generation: its images show in the Chat as a thread's do.
+const CHAT_FEATURES: &[&str] = &[
+    "view_image",
+    "multi_agent",
+    "multi_agent_v2",
+    "goals",
+    "sleep_tool",
+    "shell_tool",
+    "unified_exec",
+];
+
+/// Built-ins switched off for a Brain job ([`ToolSet::Reader`]), which only reads.
+const READER_FEATURES: &[&str] = &["image_generation"];
 
 /// Built-ins switched off for a thread ([`ToolSet::Thread`]), which keeps Codex's usual tools
 /// (its shell, patches, images, web search) but hands work only to Brigadier's workers: no
@@ -316,10 +331,13 @@ impl Codex {
 fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
     let mut args: Vec<String> = vec!["app-server".into()];
     let tools = session.map(|session| session.tools).unwrap_or_default();
-    let role_features: &[&str] = match tools {
-        ToolSet::Default | ToolSet::Lean | ToolSet::Reader => &[],
-        ToolSet::Thread => THREAD_FEATURES,
-        ToolSet::None | ToolSet::Web | ToolSet::Review => RESTRICTED_FEATURES,
+    // The built-ins switched off, and whether the restricted overrides come with them.
+    let (role_features, restricted): (&[&str], bool) = match tools {
+        ToolSet::Default | ToolSet::Lean => (&[], false),
+        ToolSet::Reader => (READER_FEATURES, false),
+        ToolSet::Thread => (THREAD_FEATURES, true),
+        ToolSet::None | ToolSet::Web | ToolSet::Review => (RESTRICTED_FEATURES, true),
+        ToolSet::Chat | ToolSet::TabChat => (CHAT_FEATURES, true),
     };
     let user_setup = tools.user_setup();
     let sealed: &[&str] = if user_setup { &[] } else { USER_SETUP_FEATURES };
@@ -327,7 +345,7 @@ fn app_server_args(session: Option<&SessionSpec>) -> Vec<String> {
         args.push("--disable".into());
         args.push((*feature).into());
     }
-    if !role_features.is_empty() {
+    if restricted {
         for value in RESTRICTED_OVERRIDES {
             if user_setup && *value == NO_SKILLS_CATALOG {
                 continue;
@@ -1139,6 +1157,15 @@ async fn remove_project_trust(rpc: &Rpc, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// The session's `web_search` setting; `None`: Codex's own default.
+fn web_search(tools: ToolSet) -> Option<&'static str> {
+    match tools {
+        ToolSet::Default | ToolSet::Lean | ToolSet::Reader => None,
+        ToolSet::None | ToolSet::Review | ToolSet::TabChat => Some("disabled"),
+        ToolSet::Web | ToolSet::Chat | ToolSet::Thread => Some("live"),
+    }
+}
+
 /// Per-thread config: Brigadier's MCP servers on, the user's off but in a session with their
 /// setup ([`ToolSet::user_setup`]), and the workspace sandbox with network access, or the
 /// session's permission profile.
@@ -1166,14 +1193,8 @@ async fn thread_config(
             json!(NO_AUTO_COMPACT_TOKENS),
         );
     }
-    match spec.tools {
-        ToolSet::Default | ToolSet::Lean | ToolSet::Reader => {}
-        ToolSet::None | ToolSet::Review => {
-            config.insert("web_search".into(), json!("disabled"));
-        }
-        ToolSet::Web | ToolSet::Thread => {
-            config.insert("web_search".into(), json!("live"));
-        }
+    if let Some(mode) = web_search(spec.tools) {
+        config.insert("web_search".into(), json!(mode));
     }
     if let Some(profile) = profile {
         // Profiles and the legacy sandbox settings don't compose: set only the profile.
@@ -2428,7 +2449,9 @@ mod tests {
             ToolSet::Default,
             ToolSet::None,
             ToolSet::Web,
+            ToolSet::Chat,
             ToolSet::Review,
+            ToolSet::TabChat,
             ToolSet::Reader,
         ]
         .map(|tools| app_server_args(Some(&spec(tools, None))))
@@ -2442,6 +2465,52 @@ mod tests {
         }
         let review = app_server_args(Some(&spec(ToolSet::Review, None)));
         assert!(review.iter().any(|arg| arg == NO_SKILLS_CATALOG));
+    }
+
+    /// A Chat and a tab chat generate images (Q24) and are otherwise locked down as before:
+    /// no shell, viewing of local files, sub-agents, goals or sleep tool, the web as it was.
+    /// Every one-shot role (a handoff note, a git job or escalation, research, a review) still
+    /// goes without image generation.
+    #[test]
+    fn only_a_chat_of_the_locked_down_sessions_generates_images() {
+        let disabled = |args: &[String]| -> Vec<String> {
+            args.windows(2)
+                .filter(|pair| pair[0] == "--disable")
+                .map(|pair| pair[1].clone())
+                .collect()
+        };
+        for (tools, locked_like, web) in [
+            (ToolSet::Chat, ToolSet::Web, Some("live")),
+            (ToolSet::TabChat, ToolSet::Review, Some("disabled")),
+        ] {
+            let args = app_server_args(Some(&spec(tools, None)));
+            let off = disabled(&args);
+            assert!(!off.iter().any(|f| f == "image_generation"), "{args:?}");
+            let mut before = disabled(&app_server_args(Some(&spec(locked_like, None))));
+            before.retain(|f| f != "image_generation");
+            assert_eq!(off, before, "{tools:?}");
+            assert!(without_sub_agents(&args), "{args:?}");
+            assert!(args.iter().any(|arg| arg == NO_SKILLS_CATALOG));
+            assert_eq!(web_search(tools), web_search(locked_like));
+            assert_eq!(web_search(tools), web);
+        }
+        for tools in [ToolSet::None, ToolSet::Web, ToolSet::Review] {
+            let off = disabled(&app_server_args(Some(&spec(tools, None))));
+            for feature in RESTRICTED_FEATURES {
+                assert!(off.iter().any(|f| f == feature), "{tools:?}: {off:?}");
+            }
+        }
+        // A Brain job reads through its shell and keeps its other tools.
+        let brain = app_server_args(Some(&spec(ToolSet::Reader, None)));
+        let off = disabled(&brain);
+        assert!(off.iter().any(|f| f == "image_generation"), "{brain:?}");
+        assert!(!off.iter().any(|f| f == "shell_tool"), "{brain:?}");
+        assert!(!without_sub_agents(&brain), "{brain:?}");
+        // A worker and a thread make images.
+        for tools in [ToolSet::Lean, ToolSet::Default, ToolSet::Thread] {
+            let off = disabled(&app_server_args(Some(&spec(tools, None))));
+            assert!(!off.iter().any(|f| f == "image_generation"), "{tools:?}");
+        }
     }
 
     #[test]

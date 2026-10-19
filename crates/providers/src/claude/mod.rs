@@ -342,7 +342,8 @@ impl Claude {
                 args.push("--tools".into());
                 args.push(String::new());
             }
-            ToolSet::Web => {
+            // Claude generates no images: a Chat's tools are research's.
+            ToolSet::Web | ToolSet::Chat => {
                 args.push("--tools".into());
                 args.push("WebSearch,WebFetch".into());
             }
@@ -350,7 +351,7 @@ impl Claude {
                 args.push("--tools".into());
                 args.push(THREAD_TOOLS.into());
             }
-            ToolSet::Review => {
+            ToolSet::Review | ToolSet::TabChat => {
                 args.push("--tools".into());
                 args.push(REVIEW_TOOLS.into());
                 args.push("--allowedTools".into());
@@ -750,7 +751,7 @@ fn settings(spec: &SessionSpec, cwd: &Path, sub_agents: &SubAgents, home_login: 
         // Like the user's own terminal: `bypassPermissions` asks for nothing.
         Access::Full => json!({ "enabled": false }),
     };
-    if matches!(spec.tools, ToolSet::Web | ToolSet::Thread) {
+    if matches!(spec.tools, ToolSet::Web | ToolSet::Chat | ToolSet::Thread) {
         allow.extend(["WebSearch".to_owned(), "WebFetch".to_owned()]);
     }
     let mut permissions = json!({});
@@ -3316,6 +3317,27 @@ for line in sys.stdin:
         let denied = denied_tools(&worker, &SubAgents::Any).unwrap();
         for tool in ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"] {
             assert!(denied.split(',').any(|name| name == tool), "{denied}");
+        }
+    }
+
+    /// Claude generates no images: a Chat runs exactly as research does, a tab chat as a
+    /// reviewer, flags and settings alike.
+    #[test]
+    fn a_chat_runs_with_researchs_tools_and_a_tab_chat_with_a_reviewers() {
+        let cwd = Temp::new();
+        let cwd = cwd.path();
+        for (chat, like) in [
+            (ToolSet::Chat, ToolSet::Web),
+            (ToolSet::TabChat, ToolSet::Review),
+        ] {
+            let of = |tools| {
+                let session = SessionSpec {
+                    tools,
+                    ..spec(cwd, &[])
+                };
+                Claude::session_flags(&session, cwd, false, None)
+            };
+            assert_eq!(of(chat), of(like), "{chat:?}");
         }
     }
 

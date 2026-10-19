@@ -3378,9 +3378,9 @@ impl SessionManager {
             mcp_servers: mcp,
             tools: match conv.kind {
                 ConversationKind::Session => ToolSet::Thread,
-                // A tab chat reads its session's files.
-                ConversationKind::Chat if tab_checkout.is_some() => ToolSet::Review,
-                ConversationKind::Chat => ToolSet::Web,
+                // A tab chat reads its session's files. A Chat makes images (Q24).
+                ConversationKind::Chat if tab_checkout.is_some() => ToolSet::TabChat,
+                ConversationKind::Chat => ToolSet::Chat,
             },
             skill_plugins: Vec::new(),
             // The workspace is the thread's to work in, never its own to clean up: it is not

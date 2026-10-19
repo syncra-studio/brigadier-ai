@@ -113,6 +113,9 @@ pub fn codex_args(subject: Subject<'_>, model: Option<&str>, output: &Path) -> V
         args.push("--ephemeral".into());
     }
     args.extend([
+        // A review only reads.
+        "--disable".into(),
+        "image_generation".into(),
         "-c".into(),
         format!("model_reasoning_effort=\"{EFFORT}\""),
         "-c".into(),
@@ -1074,6 +1077,8 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_token
             [
                 "exec",
                 "review",
+                "--disable",
+                "image_generation",
                 "-c",
                 "model_reasoning_effort=\"high\"",
                 "-c",
@@ -1101,6 +1106,13 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":100,"cached_input_token
         assert!(plan.iter().any(|arg| arg == "--ephemeral"));
         assert!(!code.iter().any(|arg| arg == "--ephemeral"));
         assert_eq!(plan.last().map(String::as_str), Some("-"));
+        // Neither makes images.
+        for args in [&code, &plan] {
+            assert!(
+                args.windows(2)
+                    .any(|pair| pair[0] == "--disable" && pair[1] == "image_generation")
+            );
+        }
     }
 
     #[test]
