@@ -686,6 +686,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "reviewUpdated":
     case "integratedCheckUpdated":
     case "backgroundRunUpdated":
+    case "mcpServersUpdated":
     case "threadCommitsSeen":
     case "unreviewedChanged":
     case "outputStored":

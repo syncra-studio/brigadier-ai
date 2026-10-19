@@ -2126,6 +2126,8 @@ mod litter_tests;
 #[cfg(test)]
 mod local_commit_tests;
 #[cfg(test)]
+mod mcp_servers_tests;
+#[cfg(test)]
 mod memory_claims_tests;
 #[cfg(test)]
 mod mention_tests;

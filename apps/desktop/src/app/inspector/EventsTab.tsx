@@ -132,6 +132,8 @@ function summary(event: DomainEvent): string {
       return `${event.check.id} ${event.check.state.type} at ${event.check.tip.slice(0, 10)}`;
     case "backgroundRunUpdated":
       return `${event.run.id} ${event.run.state.type}: ${event.run.command}`;
+    case "mcpServersUpdated":
+      return `${event.taskId ?? "lead"} · ${event.provider}: ${event.servers.map((server) => `${server.name} ${server.status}`).join(", ") || "none"}`;
     case "threadCommitsSeen":
       return `${event.branch} seen at ${event.tip.slice(0, 10)}`;
     case "unreviewedChanged":

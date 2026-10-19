@@ -207,6 +207,9 @@ pub(crate) struct Board {
     pub(crate) integrated_checks: HashMap<String, crate::work::IntegratedCheck>,
     /// The thread's commands that went to the background, by id.
     pub(crate) background_runs: HashMap<String, crate::work::BackgroundRun>,
+    /// The MCP servers of each of its agents whose CLI runs (by task id; `None`: its own
+    /// model's), with the daemon process that heard them ([`crate::boot_id`]).
+    pub(crate) mcp_servers: HashMap<Option<String>, (String, crate::model::AgentMcpServers)>,
     /// Per branch: the tip up to which the thread's commits were looked at.
     pub(crate) thread_tips: HashMap<String, String>,
     /// Per branch: where the thread's commits were first looked for, which its self-edit
@@ -570,6 +573,31 @@ impl Board {
             }
             DomainEvent::BackgroundRunUpdated { run } => {
                 self.background_runs.insert(run.id.clone(), run.clone());
+            }
+            DomainEvent::McpServersUpdated {
+                task_id,
+                provider,
+                servers,
+                at_start,
+                boot,
+                ..
+            } => {
+                if servers.is_empty() {
+                    self.mcp_servers.remove(task_id);
+                } else {
+                    self.mcp_servers.insert(
+                        task_id.clone(),
+                        (
+                            boot.clone(),
+                            crate::model::AgentMcpServers {
+                                task_id: task_id.clone(),
+                                provider: *provider,
+                                servers: servers.clone(),
+                                at_start: *at_start,
+                            },
+                        ),
+                    );
+                }
             }
             DomainEvent::ThreadCommitsSeen {
                 branch,
@@ -1081,6 +1109,32 @@ impl Board {
         let mut runs: Vec<_> = self.background_runs.values().cloned().collect();
         runs.sort_by_key(|run| crate::manager::background_run_number(&run.id));
         runs
+    }
+
+    /// The MCP servers of `task_id`'s agent (`None`: the conversation's own model), as this
+    /// daemon process heard them.
+    pub(crate) fn mcp_servers_of(
+        &self,
+        task_id: Option<&str>,
+    ) -> Option<&crate::model::AgentMcpServers> {
+        self.mcp_servers
+            .get(&task_id.map(str::to_owned))
+            .filter(|(boot, _)| boot == crate::boot_id())
+            .map(|(_, servers)| servers)
+    }
+
+    /// The MCP servers of its agents as this daemon process heard them: its own model's
+    /// first, then each worker's by task id. What an earlier process heard is gone with its
+    /// CLIs.
+    pub(crate) fn current_mcp_servers(&self) -> Vec<crate::model::AgentMcpServers> {
+        let mut agents: Vec<_> = self
+            .mcp_servers
+            .values()
+            .filter(|(boot, _)| boot == crate::boot_id())
+            .map(|(_, servers)| servers.clone())
+            .collect();
+        agents.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+        agents
     }
 
     /// Its previews, oldest first.

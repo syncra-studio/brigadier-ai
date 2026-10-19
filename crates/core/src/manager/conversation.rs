@@ -51,7 +51,9 @@ use crate::model::{
 };
 use crate::routing::{TokenMeter, WriteCause};
 use crate::runtime::{is_delta, merge_delta};
-use crate::sessions::{inline_image_tokens, inline_paste, place_inline_pastes, push_block};
+use crate::sessions::{
+    McpUpdate, inline_image_tokens, inline_paste, place_inline_pastes, push_block,
+};
 use crate::tools::{Role, RunTools};
 use crate::work::{
     AttachmentRef, Compaction, CompactionState, ContextInjection, HeldBy, InjectionKind,
@@ -4181,6 +4183,13 @@ impl SessionManager {
                     Some(ProviderEvent::BackgroundJobs { running }) => {
                         self.background_jobs(&conv, &cli, running).await;
                     }
+                    // Kept on the board while the CLI runs, never in its log.
+                    Some(ProviderEvent::McpServers { servers, at_start }) => {
+                        self.agent_mcp_servers(&conv.id, None, cli.provider, McpUpdate::All { servers, at_start }).await;
+                    }
+                    Some(ProviderEvent::McpServerChanged { server }) => {
+                        self.agent_mcp_servers(&conv.id, None, cli.provider, McpUpdate::One(server)).await;
+                    }
                     // Only a session's thread keeps what it read (a Chat only searches the web).
                     Some(event @ ProviderEvent::Looked { .. }) => {
                         if conv.kind == ConversationKind::Session {
@@ -4204,6 +4213,10 @@ impl SessionManager {
                     Some(mut event) => {
                         deadline = None;
                         self.store_deltas(&conv, quiet.pass(std::mem::take(&mut deltas))).await;
+                        // A CLI that starts (again) tells its MCP servers anew.
+                        if matches!(event, ProviderEvent::SessionStarted { .. }) {
+                            self.agent_mcp_servers(&conv.id, None, cli.provider, McpUpdate::Ended).await;
+                        }
                         // Stored whole before it is recorded cut (BUILD-PLAN D2.1).
                         self.keep_output(&mut event).await;
                         // A worker it starts gets what the thread read so far in its context
@@ -4249,8 +4262,13 @@ impl SessionManager {
         self.record_held_looked(&conv).await;
         self.grants.revoke_owner(&cli.owner);
         conv.items().cli_ended();
-        let (was_busy, closing, failed, jobs) = {
+        let (was_busy, closing, failed, jobs, current) = {
             let mut state = conv.state.lock().await;
+            // No CLI that took over since: its MCP servers ended with it.
+            let current = state
+                .cli
+                .as_ref()
+                .is_none_or(|current| Arc::ptr_eq(current, &cli));
             if state
                 .cli
                 .as_ref()
@@ -4318,8 +4336,13 @@ impl SessionManager {
                 state.closing || state.watchdog.recovering(),
                 failed,
                 jobs,
+                current,
             )
         };
+        if current {
+            self.agent_mcp_servers(&conv.id, None, cli.provider, McpUpdate::Ended)
+                .await;
+        }
         self.end_compaction(&conv, ENDED_UNEXPECTEDLY.into()).await;
         cli.ended.cancel();
         for (words, count, request) in jobs {
@@ -4353,6 +4376,25 @@ impl SessionManager {
             self.set_run(&conv.id, RunState::Idle, None).await;
         }
         self.settle_requests(&conv.id).await;
+    }
+
+    /// Records what an agent's CLI told of its MCP servers (`task`: a worker's; `None`: the
+    /// conversation's own model).
+    pub(super) async fn agent_mcp_servers(
+        &self,
+        id: &ConversationId,
+        task: Option<&TaskId>,
+        provider: ProviderKind,
+        update: McpUpdate,
+    ) {
+        let task = task.map(|task| task.0.as_str());
+        if let Err(err) = self
+            .core
+            .record_mcp_servers(id, task, provider, update)
+            .await
+        {
+            tracing::warn!(conversation = %id, task = ?task, error = %err, "could not record an agent's MCP servers");
+        }
     }
 
     /// A Codex shell command of the thread's started or ended. One that ended after its turn

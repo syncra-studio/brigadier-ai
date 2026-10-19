@@ -106,3 +106,11 @@ pub fn now_ms() -> i64 {
         .map(|elapsed| elapsed.as_millis() as i64)
         .unwrap_or_default()
 }
+
+/// This daemon process's own id, new each start: what it recorded about live CLIs (their MCP
+/// servers) says nothing once it restarted.
+pub fn boot_id() -> &'static str {
+    static BOOT: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| uuid::Uuid::new_v4().to_string());
+    &BOOT
+}

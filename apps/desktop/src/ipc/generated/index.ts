@@ -7,6 +7,7 @@ export type { AccountUsage } from "./AccountUsage";
 export type { AccountView } from "./AccountView";
 export type { AccountsView } from "./AccountsView";
 export type { AgentConnect } from "./AgentConnect";
+export type { AgentMcpServers } from "./AgentMcpServers";
 export type { AgentPath } from "./AgentPath";
 export type { Alternative } from "./Alternative";
 export type { AnswerInput } from "./AnswerInput";

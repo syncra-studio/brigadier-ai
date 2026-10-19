@@ -64,6 +64,20 @@ const BOARD_PAGE: u32 = 1_000;
 /// Newest orchestrator log entries searched for the model's context size.
 const CONTEXT_SCAN: u32 = 200;
 
+/// What an agent's CLI told of its MCP servers ([`Core::record_mcp_servers`]).
+#[derive(Debug, Clone)]
+pub(crate) enum McpUpdate {
+    /// The whole set ([`ProviderEvent::McpServers`]).
+    All {
+        servers: Vec<brigadier_providers::McpServerState>,
+        at_start: bool,
+    },
+    /// One server changed ([`ProviderEvent::McpServerChanged`]).
+    One(brigadier_providers::McpServerState),
+    /// Its CLI ended or started again: what it told is over.
+    Ended,
+}
+
 /// A synthetic event burst started by [`Core::probe_burst`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1505,6 +1519,7 @@ impl Core {
             previews: board.sorted_previews(),
             integrated_checks: board.sorted_integrated_checks(),
             background_runs: board.sorted_background_runs(),
+            mcp_servers: board.current_mcp_servers(),
             peer_messages: board.sorted_peer_messages(),
         })
     }
@@ -1599,6 +1614,78 @@ impl Core {
             }
         }
         Ok(stored)
+    }
+
+    /// Records what an agent's CLI told of its MCP servers (`task_id`: the worker's; `None`:
+    /// the conversation's own model), as [`DomainEvent::McpServersUpdated`], unless it changes
+    /// nothing (checked under the board's lock). A server's own change is merged into the last
+    /// snapshot, keeping its tools when the change names none.
+    pub(crate) async fn record_mcp_servers(
+        &self,
+        id: &ConversationId,
+        task_id: Option<&str>,
+        provider: ProviderKind,
+        update: McpUpdate,
+    ) -> Result<()> {
+        let mut boards = self.boards.lock().await;
+        if !boards.contains_key(id) {
+            let board = self.load_board(id).await?;
+            boards.insert(id.clone(), board);
+        }
+        let current = boards
+            .get(id)
+            .and_then(|board| board.mcp_servers_of(task_id))
+            .cloned();
+        let (servers, at_start) = match update {
+            McpUpdate::All { servers, at_start } => (servers, at_start),
+            McpUpdate::One(server) => {
+                let (mut servers, at_start) =
+                    current.as_ref().map_or((Vec::new(), false), |known| {
+                        (known.servers.clone(), known.at_start)
+                    });
+                match servers.iter_mut().find(|known| known.name == server.name) {
+                    Some(known) => {
+                        known.status = server.status;
+                        if !server.tools.is_empty() {
+                            known.tools = server.tools;
+                        }
+                        if server.transport.is_some() {
+                            known.transport = server.transport;
+                        }
+                    }
+                    None => {
+                        servers.push(server);
+                        servers.sort_by(|a, b| a.name.cmp(&b.name));
+                    }
+                }
+                (servers, at_start)
+            }
+            McpUpdate::Ended => (Vec::new(), false),
+        };
+        let unchanged = match &current {
+            None => servers.is_empty(),
+            Some(known) => {
+                known.servers == servers && known.at_start == at_start && known.provider == provider
+            }
+        };
+        if unchanged {
+            return Ok(());
+        }
+        let event = DomainEvent::McpServersUpdated {
+            conversation_id: id.clone(),
+            task_id: task_id.map(str::to_owned),
+            provider,
+            servers,
+            at_start,
+            boot: crate::boot_id().to_owned(),
+        };
+        let stored = self
+            .record(vec![(streams::conversation(id), event.clone())])
+            .await?;
+        if let Some(board) = boards.get_mut(id) {
+            board.apply(&event, stored[0]);
+        }
+        Ok(())
     }
 
     /// Records that request `request_id` of `id` settled with its branch ahead of base at

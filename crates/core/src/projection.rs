@@ -158,6 +158,7 @@ impl Projection {
             | DomainEvent::ReviewUpdated { .. }
             | DomainEvent::IntegratedCheckUpdated { .. }
             | DomainEvent::BackgroundRunUpdated { .. }
+            | DomainEvent::McpServersUpdated { .. }
             | DomainEvent::ThreadCommitsSeen { .. }
             | DomainEvent::UnreviewedChanged { .. }
             | DomainEvent::OutputStored { .. }

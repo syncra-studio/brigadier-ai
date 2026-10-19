@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use brigadier_providers::{
-    Access, Artifact, ModelCatalog, ProviderEvent, ProviderKind, ProviderStatus, QuotaSnapshot,
-    TextPhase,
+    Access, Artifact, McpServerState, ModelCatalog, ProviderEvent, ProviderKind, ProviderStatus,
+    QuotaSnapshot, TextPhase,
 };
 use brigadier_router::{
     Area, Explanation, Learned, MergedModel, OverrideRule, ProviderQuota, QuotaSample, RankedPlace,
@@ -1381,9 +1381,26 @@ pub struct ConversationView {
     /// The thread's commands that went to the background, oldest first.
     #[serde(default)]
     pub background_runs: Vec<crate::work::BackgroundRun>,
+    /// The MCP servers of its agents whose CLI runs now, its own model's first, then each
+    /// worker's by task id.
+    #[serde(default)]
+    pub mcp_servers: Vec<AgentMcpServers>,
     /// Its messages to and from other sessions, in the order they were recorded.
     #[serde(default)]
     pub peer_messages: Vec<PeerMessage>,
+}
+
+/// The MCP servers one agent of a conversation has, as its CLI last told
+/// ([`DomainEvent::McpServersUpdated`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentMcpServers {
+    /// The worker's task; absent for the conversation's own model.
+    pub task_id: Option<String>,
+    pub provider: ProviderKind,
+    pub servers: Vec<McpServerState>,
+    /// What its CLI said when it started, not kept current since (Claude).
+    pub at_start: bool,
 }
 
 /// A branch, for the composer's branch picker.
@@ -2397,6 +2414,18 @@ pub enum DomainEvent {
     BackgroundRunUpdated {
         run: crate::work::BackgroundRun,
     },
+    /// The MCP servers one of the conversation's agents has, as its CLI tells them, Brigadier's
+    /// own left out (full snapshot; none: its CLI ended or restarts). `taskId`: the worker's;
+    /// absent for the conversation's own model. `boot`: the daemon process that heard it
+    /// ([`crate::boot_id`]); one from an earlier process is shown no more.
+    McpServersUpdated {
+        conversation_id: ConversationId,
+        task_id: Option<String>,
+        provider: ProviderKind,
+        servers: Vec<McpServerState>,
+        at_start: bool,
+        boot: String,
+    },
     /// The thread's commits on `branch` were looked at up to `tip`: what follows it is new
     /// (THREAD-PLAN.md Q4, Q12).
     ThreadCommitsSeen {
@@ -2674,6 +2703,7 @@ impl DomainEvent {
             Self::ReviewUpdated { .. } => "review.updated",
             Self::IntegratedCheckUpdated { .. } => "integrated_check.updated",
             Self::BackgroundRunUpdated { .. } => "background_run.updated",
+            Self::McpServersUpdated { .. } => "mcp_servers.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::UnreviewedChanged { .. } => "thread.unreviewed",
             Self::OutputStored { .. } => "output.stored",

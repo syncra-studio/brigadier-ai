@@ -60,6 +60,7 @@ use crate::model::{
 };
 use crate::routing::{TokenMeter, WriteCause};
 use crate::runtime::{is_delta, merge_delta};
+use crate::sessions::McpUpdate;
 use crate::tools::Role;
 use crate::work::{
     ArtifactKind, ArtifactRef, AttachmentRef, Attempt, AttemptEnd, GateLink, GateOwner,
@@ -3006,6 +3007,13 @@ impl SessionManager {
                     Some(event @ (ProviderEvent::Progress { .. } | ProviderEvent::BackgroundJobs { .. })) => {
                         live.note_event(&cli, &event).await;
                     }
+                    // Kept on the conversation's board while the CLI runs, never in its log.
+                    Some(ProviderEvent::McpServers { servers, at_start }) => {
+                        self.agent_mcp_servers(&live.conversation_id, Some(&live.id), cli.provider, McpUpdate::All { servers, at_start }).await;
+                    }
+                    Some(ProviderEvent::McpServerChanged { server }) => {
+                        self.agent_mcp_servers(&live.conversation_id, Some(&live.id), cli.provider, McpUpdate::One(server)).await;
+                    }
                     // Only the thread's reads are kept (`super::reads`); the call that made it
                     // is stored as itself.
                     Some(ProviderEvent::Looked { .. }) => {}
@@ -3018,6 +3026,10 @@ impl SessionManager {
                         live.note_event(&cli, &event).await;
                         deadline = None;
                         self.record_worker_events(&live.id, std::mem::take(&mut deltas)).await;
+                        // A CLI that starts (again) tells its MCP servers anew.
+                        if matches!(event, ProviderEvent::SessionStarted { .. }) {
+                            self.agent_mcp_servers(&live.conversation_id, Some(&live.id), cli.provider, McpUpdate::Ended).await;
+                        }
                         // Stored whole before it is recorded cut (BUILD-PLAN D2.1).
                         self.keep_output(&mut event).await;
                         let mut exited = false;
@@ -3061,9 +3073,17 @@ impl SessionManager {
             (state.stopping, state.generation, state.cli.is_some())
         };
         cli.ended.cancel();
-        // A fresh session that already took the task over keeps its run's worker slot.
+        // A fresh session that already took the task over keeps its run's worker slot, and
+        // tells its own MCP servers.
         if !replaced {
             self.release_run_task(&live.id);
+            self.agent_mcp_servers(
+                &live.conversation_id,
+                Some(&live.id),
+                cli.provider,
+                McpUpdate::Ended,
+            )
+            .await;
         }
         if !stopping
             && let Ok(task) = self.task_by_id(&live.conversation_id, &live.id).await
