@@ -1,14 +1,16 @@
 /**
  * File links in an answer (BUILD-PLAN A1, Q84): a worker's file, linked as `outputs/…` or by
  * its removed scratch path, opens Brigadier's stored copy inside Brigadier, in the reader with
- * its Save: Markdown as the answer shows it, other text as written; an image opens in its own
- * app, and so does "Open in › Default app". No Save sits next to a link. A dead link with
+ * its Save: Markdown as the answer shows it, other text as written; a picture shows under its
+ * link as an 80px tile, and the link opens it in the image viewer; "Open in › Default app" opens
+ * the file in its own app. No Save sits next to a link. A dead link with
  * nothing stored says "This file is no longer here". A chip in a message passes when the
  * message was written, so an `outputs/` link opens the task of its time. In a table's narrow
  * column, a chip's icon stays on its name's line. Driven with real clicks; IPC is mocked, no
  * daemon. `?stop=reader` holds the page with the reader open on rounding.md, for a screenshot.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { LinkConversationContext, LinkTimeContext } from "@/components/assistant-ui/file-links";
@@ -47,23 +49,52 @@ const stored: Record<string, ArtifactRef> = {
   "rounding.md": artifact("blob-1", "rounding.md", "text/markdown"),
   "rates.csv": artifact("blob-2", "rates.csv", "text/csv"),
   "chart.png": artifact("blob-3", "chart.png", "image/png"),
+  "first.png": artifact("blob-4", "first.png", "image/png"),
+  "second.png": artifact("blob-5", "second.png", "image/png"),
+  "early.png": artifact("blob-6", "early.png", "image/png"),
+  "swapped.png": artifact("blob-7", "swapped.png", "image/png"),
 };
 const contents: Record<string, string> = {
   "blob-1": "# Rounding\n\nTotals now round **half-even**, as the invoice test expects.",
   "blob-2": "currency,rate\nEUR,0.92\nMDL,17.8",
 };
+// A 2×2 orange PNG: chart.png's stored bytes.
+const CHART = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4v5QBiBggFAAx+gaR3bxTGwAAAABJRU5ErkJggg==";
+
+// Reads of a picture held until the page lets them end, so a slow read is a fact, not a race.
+function gate() {
+  const held = { open: () => undefined as void };
+  const shut = new Promise<void>((resolve) => {
+    held.open = resolve;
+  });
+  return { shut, open: () => held.open() };
+}
+const gates: Record<string, ReturnType<typeof gate>> = { "blob-4": gate(), "blob-6": gate() };
+// The list's and the early click's pictures: their lookups aren't part of the calls checked.
+const quiet = /(?:first|second|early|swapped)\.png$/;
+// The worker stores swapped.png again: its link resolves to the new copy from then on.
+let swapped = false;
+// The pictures' reads, in order.
+const reads: string[] = [];
 
 const calls: unknown[] = [];
-mockIPC((command, payload) => {
+mockIPC(async (command, payload) => {
   if (command !== "ipc_request") {
     calls.push({ command, ...(payload as object) });
     return command === "save_artifact" ? true : null;
   }
   const req = (payload as { request: Request }).request;
   if (req.method === "resolveFileLink") {
-    calls.push({ method: req.method, conversationId: req.conversationId, link: req.link, path: req.path, atMs: req.atMs });
-    const copy = req.link.startsWith(scratch) || /^(?:\.\/)?outputs\//.test(req.link) ? stored[req.path.split("/").at(-1)!] : undefined;
+    if (!quiet.test(req.link)) calls.push({ method: req.method, conversationId: req.conversationId, link: req.link, path: req.path, atMs: req.atMs });
+    const name = req.path.split("/").at(-1)!;
+    const copy = swapped && name === "swapped.png" ? artifact("blob-8", "swapped.png", "image/png") : req.link.startsWith(scratch) || /^(?:\.\/)?outputs\//.test(req.link) ? stored[name] : undefined;
     return { method: req.method, exists: false, stored: copy ? { taskId: "task-1", artifact: copy } : null };
+  }
+  if (req.method === "readAttachment") {
+    reads.push(req.id);
+    await gates[req.id]?.shut;
+    if (req.id === "blob-3") calls.push({ method: req.method, id: req.id });
+    return { method: req.method, data: CHART };
   }
   if (req.method === "readArtifact") {
     calls.push({ method: req.method, id: req.id });
@@ -73,10 +104,37 @@ mockIPC((command, payload) => {
   return { method: req.method };
 });
 
+// An answer still streaming: words come after the list item's pictures once they show.
+let streamOn: (() => void) | null = null;
+function Streamed() {
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    streamOn = () => setMore(true);
+  }, []);
+  return (
+    <ul className="aui-md-ul">
+      <li data-fixture="list">
+        See <FileChip href="outputs/task-1/first.png">first.png</FileChip> and <FileChip href="outputs/task-1/second.png">second.png</FileChip>
+        {more && " for details."}
+      </li>
+    </ul>
+  );
+}
+
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
     <LinkConversationContext.Provider value="chat-1">
       <main className="bg-background text-foreground flex min-h-screen w-96 flex-col gap-24 p-8">
+        {/* Beside the rest, in view, and out of their layout. */}
+        <aside className="fixed top-8 left-112 flex w-72 flex-col gap-8">
+          <Streamed />
+          <p data-fixture="early">
+            Here it is: <FileChip href="outputs/task-1/early.png">early.png</FileChip>.
+          </p>
+          <p data-fixture="swapped">
+            Redrawn: <FileChip href="outputs/task-1/swapped.png">swapped.png</FileChip>.
+          </p>
+        </aside>
         {Object.entries(links).map(([id, href]) => (
           // Apart, so one chip's tooltip never covers the next.
           // The stored one sits in a message written at 1700 ms: its click says so.
@@ -116,6 +174,14 @@ const row = (id: string) => document.querySelector(`[data-fixture="${id}"]`)!;
 const chip = (id: string) => row(id)?.querySelector("[data-slot=file-chip]") as HTMLElement;
 const notice = (id: string) => row(id).querySelector("[data-slot=file-chip-gone]")?.textContent ?? null;
 const reader = () => document.querySelector<HTMLElement>("[data-slot=file-reader]");
+const viewer = () => document.querySelector("[data-slot=image-preview]");
+const opened = () => calls.filter((call) => (call as { command?: string }).command === "open_artifact").length;
+
+/** Closes the image viewer, and waits for its morph back into the tile to end. */
+async function closeViewer() {
+  await fixtureClick(document.querySelector<HTMLElement>("[aria-label='Close image preview']")!);
+  await until("the viewer to close", () => !viewer() && document.body.style.pointerEvents !== "none" && !document.documentElement.matches(":active-view-transition"));
+}
 const command = (call: unknown) => (call as { command?: string; method?: string }).command ?? (call as { method?: string }).method;
 
 /** What the reader shows: its title, whether its body is Markdown or plain text, its words and its Save. */
@@ -146,6 +212,41 @@ async function closeReader() {
 const seen: Record<string, unknown> = {};
 try {
   await until("the chips", () => Object.keys(links).every((id) => chip(id)));
+  // A picture clicked before its read ends opens in the image viewer once it ends, never elsewhere.
+  await fixtureClick(document.querySelector<HTMLElement>("[data-fixture=early] [data-slot=file-chip]")!);
+  await sleep(100);
+  seen.earlyBefore = { viewer: !!viewer(), opened: opened() };
+  gates["blob-6"]!.open();
+  await until("the early picture's viewer", () => !!viewer());
+  seen.earlyViewer = viewer()!.querySelector("img")?.getAttribute("alt") ?? null;
+  seen.earlyOpened = opened();
+  await closeViewer();
+  // In a list item the second picture's read ends first, yet the tiles keep their links' order;
+  // words streamed in after them stay in the sentence, the tiles after it.
+  const list = document.querySelector<HTMLElement>("[data-fixture=list]")!;
+  const listTiles = () => [...list.querySelectorAll("[data-slot=file-chip-picture] img")].map((img) => img.getAttribute("alt"));
+  await until("the second tile", () => listTiles().length === 1);
+  gates["blob-4"]!.open();
+  await until("both tiles", () => listTiles().length === 2);
+  seen.listOrder = listTiles();
+  streamOn!();
+  await until("the streamed words", () => !!list.textContent?.includes("for details."));
+  await sleep(50);
+  const shelf = list.querySelector("[data-slot=file-chip-pictures]");
+  seen.listShelfLast = list.lastChild === shelf;
+  seen.listSentence = [...list.childNodes].filter((node) => node !== shelf).map((node) => node.textContent).join("");
+  // An output stored again since its tile showed: the link reads the new copy and the viewer and
+  // the tile show it.
+  const swappedRow = document.querySelector<HTMLElement>("[data-fixture=swapped]")!;
+  const swappedTile = () => swappedRow.nextElementSibling?.querySelector<HTMLImageElement>("[data-slot=file-chip-picture] img") ?? null;
+  await until("the swapped tile", () => !!swappedTile());
+  const firstUrl = swappedTile()!.src;
+  swapped = true;
+  await fixtureClick(swappedRow.querySelector<HTMLElement>("[data-slot=file-chip]")!);
+  await until("the swapped picture's viewer", () => !!viewer());
+  const shownUrl = viewer()!.querySelector("img")?.src;
+  seen.swapped = { reads: reads.filter((id) => id === "blob-7" || id === "blob-8"), newUrl: shownUrl !== firstUrl, tileShowsIt: swappedTile()?.src === shownUrl, opened: opened() };
+  await closeViewer();
   // The icon and the name's first line share a line: their middles within a few pixels.
   const cell = row("cell").querySelector("[data-slot=file-chip]")!;
   const icon = cell.querySelector("svg")!.getBoundingClientRect();
@@ -166,11 +267,23 @@ try {
     }
     ((seen.presses ??= []) as number[]).push(await closeReader());
   }
-  // An image isn't text: it opens in its own app, with no reader.
+  // A picture shows under its link as a tile, its stored bytes read once; the link opens the
+  // image viewer, never the reader or another app.
+  // Its tiles sit right after the link's paragraph, which reads on unbroken.
+  const picture = () => row("image").nextElementSibling?.querySelector<HTMLElement>("[data-slot=file-chip-picture] button") ?? null;
+  await until("the picture's tile", () => !!picture()?.querySelector("img")?.complete && picture()!.querySelector("img")!.naturalWidth > 0);
+  const tileBox = picture()!.getBoundingClientRect();
+  const linkBox = chip("image").getBoundingClientRect();
+  seen.pictureTile = { width: tileBox.width, height: tileBox.height, below: tileBox.top >= linkBox.bottom, label: picture()!.getAttribute("aria-label") };
+  seen.otherTiles = Object.keys(links).filter((id) => id !== "image" && row(id).nextElementSibling?.matches("[data-slot=file-chip-pictures]"));
+  seen.sentence = row("image").textContent;
   const before = calls.length;
   await fixtureClick(chip("image"));
-  await until("the image to open", () => calls.slice(before).some((call) => command(call) === "open_artifact"));
+  await until("the image viewer", () => !!viewer());
+  seen.viewerImage = viewer()!.querySelector("img")?.getAttribute("alt") ?? null;
   seen.imageReader = !!reader();
+  seen.imageOpenedElsewhere = calls.slice(before).some((call) => command(call) === "open_artifact");
+  await closeViewer();
   await fixtureClick(chip("lost"));
   await until("the notice on lost", () => notice("lost") !== null);
   seen.after = Object.fromEntries(Object.keys(links).map((id) => [id, notice(id)]));

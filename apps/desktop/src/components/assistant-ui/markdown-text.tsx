@@ -9,10 +9,13 @@ import {
   memo,
   type ReactNode,
   useContext,
+  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { TextMessagePartProvider, type TextMessagePartProps } from "@assistant-ui/react";
 import { Check, Copy, Document, DownloadSimple, ExpandLg, Globe, Mail } from "@openai/apps-sdk-ui/components/Icon";
 
@@ -274,13 +277,81 @@ function readable(artifact: ArtifactRef): boolean {
   return !/^(image|audio|video)\//.test(artifact.mime) && artifact.mime !== "application/pdf";
 }
 
+/** A link whose file may be a picture: only these are looked up before a click. */
+const PICTURE = /\.(png|jpe?g|gif|webp)$/i;
+
+/** A stored picture's bytes as an object URL. */
+async function pictureUrl(artifact: ArtifactRef): Promise<string> {
+  const { data } = await request({ method: "readAttachment", id: artifact.id });
+  const binary = atob(data);
+  return URL.createObjectURL(new Blob([Uint8Array.from(binary, (char) => char.charCodeAt(0))], { type: artifact.mime }));
+}
+
+/** The link each picture tile on a shelf belongs to, so tiles keep their links' order. */
+const tileLinks = new WeakMap<Element, HTMLElement>();
+/** Each block's one shelf, wherever streamed content has put it for the moment. */
+const blockShelves = new WeakMap<Element, HTMLElement>();
+/** What keeps a shelf inside a list item or table cell after that block's own content. */
+const shelfWatches = new WeakMap<Element, MutationObserver>();
+
+/**
+ * Where a link's picture shows: a row of tiles right after the paragraph the link is in (inside a
+ * list item or a table cell, at its end, staying there as the answer streams on), shared by the
+ * block's pictures in their links' order, so the sentence reads on unbroken. Gone with its last
+ * picture.
+ */
+function pictureShelf(link: HTMLElement): { place: HTMLElement; leave: () => void } {
+  const block = link.closest("p, li, td, th, h1, h2, h3, h4, h5, h6") ?? link;
+  const inside = block !== link && block.tagName !== "P" && !/^H\d$/.test(block.tagName);
+  let shelf = blockShelves.get(block);
+  if (!shelf?.isConnected) {
+    const made = document.createElement("div");
+    made.dataset.slot = "file-chip-pictures";
+    made.className = "flex flex-wrap gap-2 pt-1 pb-2";
+    if (inside) {
+      block.append(made);
+      // Text streamed into the block after the link lands after the shelf: the shelf moves back to
+      // the end.
+      const watch = new MutationObserver(() => {
+        if (block.lastChild !== made) block.append(made);
+      });
+      watch.observe(block, { childList: true });
+      shelfWatches.set(made, watch);
+    } else {
+      block.after(made);
+    }
+    shelf = made;
+    blockShelves.set(block, made);
+  }
+  const place = document.createElement("span");
+  tileLinks.set(place, link);
+  const later = [...shelf.children].find((tile) => {
+    const other = tileLinks.get(tile);
+    return !!other && !!(link.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  shelf.insertBefore(place, later ?? null);
+  const owner = shelf;
+  return {
+    place,
+    leave: () => {
+      place.remove();
+      if (owner.childElementCount) return;
+      shelfWatches.get(owner)?.disconnect();
+      owner.remove();
+      if (blockShelves.get(block) === owner) blockShelves.delete(block);
+    },
+  };
+}
+
 /**
  * The file-link chip: the file's type icon and its name in link blue, "(line 36)"
  * after it, the absolute path on hover. A click opens the file in the Files tab, or shows it
  * in Finder when it isn't the session's. A worker's file (`outputs/…`, or its scratch path once
  * the folder is gone) opens the copy Brigadier stored with its report (BUILD-PLAN A1) inside
- * Brigadier, in the reader with its Save (Q84); a file that isn't text opens in its own app. A
- * file that is gone with nothing stored says "This file is no longer here"; never an error toast.
+ * Brigadier, in the reader with its Save (Q84); a worker's picture shows under its link as an
+ * 80px tile, as the thread's own images do, and the link or the tile opens it in the image
+ * viewer; another file that isn't text opens in its own app. A file that is gone with nothing
+ * stored says "This file is no longer here"; never an error toast.
  */
 export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, children }) => {
   const root = useCheckoutRoot();
@@ -305,8 +376,84 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
   // folder is gone opens the copy too.
   const storedCopy = (found: Awaited<ReturnType<typeof resolve>>) =>
     found?.stored && (/^(?:\.\/)?outputs\//.test(href) || !found.exists) ? found.stored.artifact : null;
+  // A worker's picture, read once the link shows: its tile, and the viewer the link opens.
+  const [picture, setPicture] = useState<{ url: string; name: string } | null>(null);
+  const tile = useRef<HTMLButtonElement>(null);
+  const link = useRef<HTMLAnchorElement>(null);
+  const [place, setPlace] = useState<HTMLElement | null>(null);
+  // The read under way (true once its tile can show), a click that came before it ended, the
+  // stored copy and object URL shown, and which read is the latest (an older one is dropped).
+  const loading = useRef<Promise<boolean> | null>(null);
+  const openOnShow = useRef(false);
+  const shownId = useRef<string | null>(null);
+  const shownUrl = useRef<string | null>(null);
+  const generation = useRef(0);
+  const take = async (copy: ArtifactRef, read: number) => {
+    const url = await pictureUrl(copy);
+    if (read !== generation.current) {
+      URL.revokeObjectURL(url);
+      return false;
+    }
+    if (shownUrl.current) URL.revokeObjectURL(shownUrl.current);
+    shownUrl.current = url;
+    shownId.current = copy.id;
+    setPicture({ url, name: copy.fileName ?? copy.title });
+    return true;
+  };
+  useLayoutEffect(() => {
+    if (!picture || !link.current) return undefined;
+    const shelf = pictureShelf(link.current);
+    setPlace(shelf.place);
+    return () => {
+      shelf.leave();
+      setPlace(null);
+    };
+  }, [picture]);
+  useEffect(() => {
+    if (!place || !openOnShow.current) return;
+    openOnShow.current = false;
+    tile.current?.click();
+  }, [place]);
+  const pictureLink = PICTURE.test(path) ? `${conversationId ?? ""}|${atMs ?? ""}|${href}` : null;
+  useEffect(() => {
+    if (!pictureLink) return undefined;
+    const read = ++generation.current;
+    loading.current = (async () => {
+      const copy = storedCopy(await resolve());
+      return !!copy?.mime.startsWith("image/") && read === generation.current && (await take(copy, read));
+    })().catch(() => false);
+    return () => {
+      generation.current += 1;
+      loading.current = null;
+      openOnShow.current = false;
+      if (shownUrl.current) URL.revokeObjectURL(shownUrl.current);
+      shownUrl.current = null;
+      shownId.current = null;
+      setPicture(null);
+    };
+    // Read again only for another link, conversation or message time.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [pictureLink]);
   const show = async (artifact: ArtifactRef) => {
     const name = artifact.fileName ?? artifact.title;
+    // A picture opens in the image viewer, once its tile is there; clicked before its read ended,
+    // when that read ends; the copy stored since (an output replaced) is read first.
+    if (artifact.mime.startsWith("image/") && loading.current) {
+      // No tile yet: the viewer opens as it shows, whenever React draws it.
+      const waiting = !tile.current;
+      openOnShow.current = waiting;
+      let ready = await loading.current;
+      if (ready && shownId.current !== artifact.id) {
+        openOnShow.current = true;
+        loading.current = take(artifact, generation.current).catch(() => false);
+        ready = await loading.current;
+        if (ready) return;
+      } else if (ready) {
+        if (!waiting) tile.current?.click();
+        return;
+      }
+      openOnShow.current = false;
+    }
     if (readable(artifact)) {
       const { text } = await request({ method: "readArtifact", id: artifact.id, offset: 0, limit: READ_BYTES });
       if (!text.binary) {
@@ -349,6 +496,7 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
         <TooltipTrigger asChild>
           <ContextMenuTrigger asChild>
           <a
+            ref={link}
             href={href}
             data-slot="file-chip"
             onClick={(event) => {
@@ -367,6 +515,21 @@ export const FileChip: FC<{ href: string; children: ReactNode }> = ({ href, chil
       </Tooltip>
       <FileChipMenu path={path} line={line} openDefault={openDefault} />
       </ContextMenu>
+      {picture && place && createPortal(
+        <span data-slot="file-chip-picture" className="block">
+          <ImagePreview url={picture.url} name={picture.name}>
+            <button
+              ref={tile}
+              type="button"
+              aria-label={`Open ${picture.name}`}
+              className="border-border focus-visible:ring-ring block size-20 overflow-hidden rounded-lg border focus-visible:ring-2 focus-visible:outline-none"
+            >
+              <img src={picture.url} alt={picture.name} className="size-full object-cover" />
+            </button>
+          </ImagePreview>
+        </span>,
+        place,
+      )}
       {gone && (
         <span data-slot="file-chip-gone" className="text-muted-foreground">
           {" "}
