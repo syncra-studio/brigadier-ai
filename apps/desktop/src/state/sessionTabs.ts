@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 
 import { notePaneClose } from "@/state/closedPanes";
 import { discardDocument, documentIsSaved } from "@/state/documentDrafts";
+import type { ReviewScope } from "@/ipc/generated";
 import type { PlanDocRef } from "@/state/planDoc";
 
 /**
@@ -23,7 +24,22 @@ export type ReviewTarget =
   /** One commit's own change: a merge's, from its turn's View changes; a fast-forward's `commits` all. */
   | { type: "commit"; commit: string; commits?: number; staged: false }
   /** The session's branch since it left its base: the context card's Changes row. */
-  | { type: "branch"; staged: false };
+  | { type: "branch"; staged: false }
+  /** What the latest request that changed anything changed, every landing of it (Q90). */
+  | { type: "lastTurn"; requestId: string | null; staged: false }
+  /** Everything not committed: staged, unstaged and new files together (Q90). */
+  | { type: "uncommitted"; staged: false };
+
+/** The changes `target` compares. */
+export function reviewScope(target: ReviewTarget): ReviewScope {
+  switch (target.type) {
+    case "commit": return { type: "commit", commit: target.commit, ...(target.commits ? { commits: target.commits } : {}) };
+    case "branch": return { type: "branch" };
+    case "lastTurn": return { type: "lastTurn", requestId: target.requestId };
+    case "uncommitted": return { type: "uncommitted" };
+    default: return { type: target.staged ? "staged" : "unstaged" };
+  }
+}
 
 /**
  * A page, file or browser tab's own chat, beside it in a split: `share` is the chat's part of
@@ -124,8 +140,12 @@ export type PanelView =
   | { type: "output"; source: "preview" | "run"; id: string };
 export type PanelTabState = { kind: "panel"; id: string; opener: string | null; view: PanelView; title: string };
 
-/** Any tab may say an agent opened it (Q90): it is the agent's to close; every other tab is the user's. */
-export type AgentMark = { agentOpened?: boolean };
+/**
+ * Any tab may say an agent opened it (Q90): it is the agent's to close; every other tab is the
+ * user's. `unseen`: an agent opened it behind the tab the user was on; its dot shows until it
+ * comes to the front.
+ */
+export type AgentMark = { agentOpened?: boolean; unseen?: boolean };
 export type SessionTab = (FileTab | ReviewTabState | PanelTabState | BrowserTabState | TerminalTabState | SideChatTabState | PageTabState | MockupTabState | PlanTabState | NewTabState | ConflictTabState) & AgentMark;
 
 /** Whether an agent opened `tab`: by an app call, or with the browser tool. */
@@ -181,13 +201,44 @@ function update(conversationId: string, change: (current: SessionTabs) => Sessio
     const current = sessions[conversationId] ?? EMPTY;
     const changed = change(current);
     // Changes that rebuild the tabs keep the mockup moment unless they set it.
-    const next = current.mockup && !("mockup" in changed) ? { ...changed, mockup: current.mockup } : changed;
+    const kept = current.mockup && !("mockup" in changed) ? { ...changed, mockup: current.mockup } : changed;
+    // A tab in front has been seen.
+    const next = kept.tabs.some((tab) => tab.id === kept.active && tab.unseen)
+      ? { ...kept, tabs: kept.tabs.map((tab) => tab.id === kept.active ? seen(tab) : tab) }
+      : kept;
     if (!next.tabs.length && next.active === CHAT_TAB && !next.mockup) {
       const { [conversationId]: _gone, ...rest } = sessions;
       return { sessions: rest };
     }
     return { sessions: { ...sessions, [conversationId]: next } };
   });
+}
+
+function seen(tab: SessionTab): SessionTab {
+  const { unseen: _seen, ...rest } = tab;
+  return rest as SessionTab;
+}
+
+/**
+ * An agent opens a tab with `open` (one of the openers here, which bring it to the front), as
+ * the user's click would (Q90's `open_in_app`). In front only when `front`; else the tab the user
+ * was on stays in front and the opened one gets its dot. A tab it made is the agent's; one that
+ * was there stays whose it was. Returns the tab's id.
+ */
+export function openForAgent(conversationId: string, front: boolean, open: () => string): string {
+  const before = sessionTabs(conversationId);
+  const had = new Set(before.tabs.map((tab) => tab.id));
+  const id = open();
+  update(conversationId, (current) => ({
+    ...current,
+    active: front ? id : before.active,
+    tabs: current.tabs.map((tab) => tab.id !== id ? tab : {
+      ...tab,
+      ...(had.has(id) ? {} : { agentOpened: true }),
+      ...(!front && id !== before.active ? { unseen: true } : {}),
+    }),
+  }));
+  return id;
 }
 
 /** A new tab goes right after the one in front. */
@@ -682,6 +733,8 @@ export function selectTabNumber(conversationId: string, number: number): void {
   if (id) selectTab(conversationId, id);
 }
 
+const REVIEW_TARGETS = new Set<string>(["changes", "file", "commit", "branch", "lastTurn", "uncommitted"] satisfies ReviewTarget["type"][]);
+
 /** Turns an old document's file name into a page title. */
 export function draftTitle(name: string): string {
   return name === "Untitled" ? "" : name.replace(/\.[^.]+$/, "") || name;
@@ -698,7 +751,7 @@ export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSave
     const tabs = (session.tabs as (SessionTab | LegacyDocumentTab)[]).flatMap((tab): SessionTab[] => {
       if (tab.kind === "terminal") return [{ ...tab, title: "" }];
       // The old Review tab of every change and its scope picker is gone.
-      if (tab.kind === "review" && tab.target.type !== "changes" && tab.target.type !== "file" && tab.target.type !== "commit" && tab.target.type !== "branch") return [];
+      if (tab.kind === "review" && !REVIEW_TARGETS.has(tab.target.type)) return [];
       // A popup its opener wrote (about:blank) is gone with its page: its tab starts empty.
       if (tab.kind === "browser" && !/^https?:/i.test(tab.url)) return [{ ...tab, url: "" }];
       if (tab.kind !== "document") return [tab];

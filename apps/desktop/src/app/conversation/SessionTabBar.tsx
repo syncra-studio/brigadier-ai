@@ -441,6 +441,7 @@ export function SessionTabBar({
                         {name}
                         {tab.kind === "mockup" && <MockupTabStatus conversationId={id} />}
                       </span>
+                      {tab.unseen && <span data-slot="tab-unseen" role="img" aria-label="New" className="bg-link size-2 shrink-0 rounded-full" />}
                     </button>
                     <button
                       type="button"

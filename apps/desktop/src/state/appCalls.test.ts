@@ -14,7 +14,8 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage, crypto: globalThis.crypto, innerWidth: 1200, innerHeight: 800 } });
 const { runAppCall } = await import("./appCalls");
-const { newSessionTab, openAgentTab, sessionTabs } = await import("./sessionTabs");
+const { newSessionTab, openAgentTab, openFileTab, openReviewTab, reviewScope, selectTab, sessionTabs } = await import("./sessionTabs");
+const { useWorkerPanelAsk } = await import("./workerPanel");
 const { answerOf } = await import("./appCalls");
 const { useApp } = await import("./store");
 
@@ -55,6 +56,14 @@ const call = (conversationId: string, op: AppOp): AppCall => ({ id: `app-call-${
 const EVERY_CALL: AppOp[] = [
   { app: "browser", op: { op: "open", url: "http://127.0.0.1:4000/" } },
   { app: "state" },
+  { app: "open", target: { kind: "file", path: "src/main.rs", line: 3 }, show: true },
+  { app: "open", target: { kind: "diff", scope: "lastTurn" }, show: true },
+  { app: "open", target: { kind: "progress" }, show: true },
+  { app: "open", target: { kind: "output", source: "preview", id: "preview-1", title: "Dev app" }, show: true },
+  { app: "open", target: { kind: "url", url: "http://127.0.0.1:5173/" }, show: true },
+  { app: "open", target: { kind: "worker", task: "task-1" }, show: true },
+  { app: "open", target: { kind: "plan", id: "card-1", outline: false, title: "The plan" }, show: true },
+  { app: "open", target: { kind: "page", id: "page-1", title: "Notes" }, show: true },
 ];
 
 test("no app call brings the window forward or moves the user off the session and tab they are on", async () => {
@@ -96,4 +105,93 @@ test("the state call tells the session's tabs, whose each is, and whether it is 
   const hidden = await answerOf(call(session, { app: "state" }));
   assert.equal((hidden as Extract<typeof hidden, { app: "state" }>).view.onScreen, false, "the window is hidden");
   useApp.setState({ windowVisible: true });
+});
+
+type Opened = Extract<AppAnswer, { app: "opened" }>;
+const opened = async (conversationId: string, target: Extract<AppOp, { app: "open" }>["target"], show: boolean) =>
+  (await answerOf(call(conversationId, { app: "open", target, show }))) as Opened | Extract<AppAnswer, { app: "failed" }>;
+
+test("open_in_app opens in front only when asked to show and the user is on the session; else behind with its dot", async () => {
+  fakeShell();
+  const session = "open-in-app-session";
+  useApp.setState({ selection: { type: "conversation", id: session }, windowVisible: true });
+  const theirs = newSessionTab(session, "terminal", "/repo");
+
+  const behind = await opened(session, { kind: "file", path: "src/a.rs", line: 4 }, false);
+  assert.deepEqual(behind, { app: "opened", tab: "file:src/a.rs", front: false, kept: false });
+  assert.equal(sessionTabs(session).active, theirs, "not asked to show it: the user's tab stays in front");
+  const a = sessionTabs(session).tabs.find((tab) => tab.id === "file:src/a.rs")!;
+  assert.equal(a.agentOpened, true);
+  assert.equal(a.unseen, true, "it has its dot");
+
+  const shown = await opened(session, { kind: "progress" }, true);
+  assert.deepEqual(shown, { app: "opened", tab: "panel:reviews", front: true, kept: false });
+  assert.equal(sessionTabs(session).active, "panel:reviews");
+  assert.equal(sessionTabs(session).tabs.find((tab) => tab.id === "panel:reviews")!.unseen, undefined, "seen in front");
+
+  selectTab(session, "file:src/a.rs");
+  assert.equal(sessionTabs(session).tabs.find((tab) => tab.id === "file:src/a.rs")!.unseen, undefined, "brought to the front, its dot goes");
+
+  useApp.setState({ selection: { type: "conversation", id: USER } });
+  selectTab(session, theirs);
+  const away = await opened(session, { kind: "output", source: "run", id: "run-2", title: "Core tests" }, true);
+  assert.deepEqual(away, { app: "opened", tab: "panel:output:run:run-2", front: false, kept: false }, "the user is on another session: behind");
+  assert.equal(sessionTabs(session).active, theirs);
+  assert.deepEqual(useApp.getState().selection, { type: "conversation", id: USER }, "and the user stays where they are");
+  useApp.setState({ selection: { type: "conversation", id: session } });
+});
+
+test("open_in_app leaves the user's own tab, and the one in front, as they were", async () => {
+  fakeShell();
+  const session = "open-in-app-user-tabs";
+  useApp.setState({ selection: { type: "conversation", id: session }, windowVisible: true });
+  openFileTab(session, "src/b.rs", { line: 1 });
+  openReviewTab(session, { type: "changes", staged: true });
+  const kept = await opened(session, { kind: "file", path: "src/b.rs", line: 40 }, false);
+  assert.deepEqual(kept, { app: "opened", tab: "file:src/b.rs", front: false, kept: true });
+  const file = sessionTabs(session).tabs.find((tab) => tab.id === "file:src/b.rs")!;
+  assert.equal(file.kind === "file" && file.line, 1, "the user's file stays at their line");
+  assert.equal(file.agentOpened, undefined, "and stays theirs");
+  const review = await opened(session, { kind: "diff", scope: "lastTurn" }, false);
+  assert.equal(review.app === "opened" && review.kept, true, "the Review tab in front isn't changed under the user");
+  const reviewTab = sessionTabs(session).tabs.find((tab) => tab.kind === "review");
+  assert.deepEqual(reviewTab?.kind === "review" && reviewTab.target, { type: "changes", staged: true });
+
+  const asked = await opened(session, { kind: "file", path: "src/b.rs", line: 40 }, true);
+  assert.deepEqual(asked, { app: "opened", tab: "file:src/b.rs", front: true, kept: false }, "asked to show it: it comes to the front at the line");
+  const shownFile = sessionTabs(session).tabs.find((tab) => tab.id === "file:src/b.rs")!;
+  assert.equal(shownFile.kind === "file" && shownFile.line, 40);
+  assert.equal(shownFile.agentOpened, undefined, "still the user's");
+});
+
+test("open_in_app's diffs read the last turn, the branch or everything uncommitted", async () => {
+  fakeShell();
+  const session = "open-in-app-diffs";
+  useApp.setState({ selection: { type: "conversation", id: session }, windowVisible: true });
+  const scopes = [];
+  for (const scope of ["lastTurn", "branch", "uncommitted"] as const) {
+    await opened(session, { kind: "diff", scope }, true);
+    const tab = sessionTabs(session).tabs.find((each) => each.kind === "review")!;
+    assert.equal(tab.kind, "review");
+    if (tab.kind === "review") scopes.push(reviewScope(tab.target));
+  }
+  assert.deepEqual(scopes, [{ type: "lastTurn", requestId: null }, { type: "branch" }, { type: "uncommitted" }]);
+});
+
+test("open_in_app reuses the Browser tab already on the page, and a worker's panel opens only in front", async () => {
+  fakeShell();
+  const session = "open-in-app-browser";
+  useApp.setState((state) => ({ settings: { ...state.settings, browserEnabled: true }, selection: { type: "conversation", id: session }, windowVisible: true }));
+  const first = await opened(session, { kind: "url", url: "http://127.0.0.1:5173/" }, true);
+  const again = await opened(session, { kind: "url", url: "http://127.0.0.1:5173" }, true);
+  assert.equal(first.app === "opened" && again.app === "opened" && first.tab === again.tab, true, "one tab for one page");
+  assert.equal(sessionTabs(session).tabs.filter((tab) => tab.kind === "browser").length, 1);
+
+  const panel = await opened(session, { kind: "worker", task: "task-7" }, true);
+  assert.deepEqual(panel, { app: "opened", tab: null, front: true, kept: false });
+  assert.deepEqual(useWorkerPanelAsk.getState().ask, { conversationId: session, task: "task-7" });
+  useWorkerPanelAsk.setState({ ask: null });
+  const notAsked = await opened(session, { kind: "worker", task: "task-7" }, false);
+  assert.equal(notAsked.app, "failed");
+  assert.equal(useWorkerPanelAsk.getState().ask, null, "not asked to show it: no panel");
 });

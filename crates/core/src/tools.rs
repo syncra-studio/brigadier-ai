@@ -1912,12 +1912,62 @@ pub struct ReadTerminal {
     pub terminal: String,
 }
 
+/// `open_in_app`: something to show the user in the session's tabs.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpenInApp {
+    pub target: OpenInAppTarget,
+    /// The user asked to see it: it comes to the front when they are on this session. Left
+    /// out, it opens behind the tab they are on, marked new.
+    #[serde(default)]
+    pub show: bool,
+}
+
+/// What `open_in_app` opens.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OpenInAppTarget {
+    /// A file of the session's checkout (its path there, or absolute inside it), at a line.
+    File {
+        path: String,
+        #[serde(default)]
+        line: Option<u32>,
+    },
+    /// Your changes, in the Review tab.
+    Diff { scope: OpenDiffScope },
+    /// The Progress tab: the job step by step, with its reviews and checks.
+    Progress,
+    /// What a preview or a background run prints ("preview-1", "run-2").
+    Output { id: String },
+    /// A page on the web, or a preview's address, in a Browser tab.
+    Url { url: String },
+    /// A worker's panel in the Workers sidebar (only ever in front).
+    Worker { task: String },
+    /// A plan you proposed, or an outline waiting for the user's start, by its card id.
+    Plan { id: String },
+    /// A page, by its id.
+    Page { id: String },
+}
+
+/// Which of your changes `open_in_app` shows.
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenDiffScope {
+    /// What the latest request that changed anything changed, every landing of it.
+    LastTurn,
+    /// The session's branch since it left its base.
+    Branch,
+    /// Everything not committed: staged, unstaged and new files.
+    Uncommitted,
+}
+
 /// An app tool call (Q90), from the thread or a Chat.
 #[derive(Debug, Clone)]
 pub enum AppToolCall {
     /// `app_state`: what the session has open in the app now.
     State,
     ReadTerminal(ReadTerminal),
+    Open(OpenInApp),
 }
 
 impl AppToolCall {
@@ -1926,6 +1976,7 @@ impl AppToolCall {
         match self {
             Self::State => "app_state",
             Self::ReadTerminal(_) => "read_terminal",
+            Self::Open(_) => "open_in_app",
         }
     }
 }

@@ -2410,6 +2410,42 @@ pub(crate) mod tests {
         (dir, Git::new(PathBuf::from("git"), env))
     }
 
+    /// "Last turn" over several landings shows each of them and nothing that landed between
+    /// them; "uncommitted" shows staged and unstaged edits together (Q90's `open_in_app`).
+    #[test]
+    fn a_requests_landings_and_a_checkouts_uncommitted_edits_read_whole() {
+        let (dir, git) = test_git("review-scopes");
+        let root = dir.join("repo");
+        assert!(git.init(&root).expect("git init").is_none());
+        let repo = git.open(&root).expect("the repository");
+        repo.cmd(&["checkout", "-q", "-b", "main"], false).unwrap();
+        fs::write(root.join("a.txt"), "a\n").unwrap();
+        repo.commit_changes("Start", true).unwrap();
+        fs::write(root.join("b.txt"), "first landing\n").unwrap();
+        repo.commit_changes("First landing", true).unwrap();
+        let first = repo.resolve("HEAD").unwrap();
+        fs::write(root.join("other.txt"), "someone else\n").unwrap();
+        repo.commit_changes("Another request", true).unwrap();
+        fs::write(root.join("c.txt"), "second landing\n").unwrap();
+        repo.commit_changes("Second landing", true).unwrap();
+        let second = repo.resolve("HEAD").unwrap();
+        let (from, to) = repo.changes_of(&[second, first]).unwrap();
+        let patch = repo.review_patch(&from, &to, 3, false).unwrap();
+        assert!(patch.contains("+first landing"), "{patch}");
+        assert!(patch.contains("+second landing"), "{patch}");
+        assert!(!patch.contains("someone else"), "{patch}");
+
+        fs::write(root.join("a.txt"), "a\nstaged\n").unwrap();
+        repo.cmd(&["add", "a.txt"], false).unwrap();
+        fs::write(root.join("b.txt"), "first landing\nunstaged\n").unwrap();
+        let trees = repo.checkout_trees().unwrap();
+        let patch = repo
+            .review_patch(&trees.head_tree, &trees.files, 3, false)
+            .unwrap();
+        assert!(patch.contains("+staged"), "{patch}");
+        assert!(patch.contains("+unstaged"), "{patch}");
+    }
+
     /// A merge reads reverted after a revert of it, merged again after the revert is
     /// reverted, and reverted once more after that; a squash merge's revert counts as one of a
     /// merge commit does, and unrelated commits since change nothing.

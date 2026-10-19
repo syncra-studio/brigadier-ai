@@ -1,6 +1,7 @@
 import { request } from "@/ipc/client";
 import type { AppAnswer, AppCall } from "@/ipc/generated";
 import { type PageHands, runCall } from "@/state/agentBrowser";
+import { openInApp } from "@/state/openInApp";
 import { windowView } from "@/state/windowView";
 
 /**
@@ -24,5 +25,7 @@ export async function answerOf(call: AppCall, hands?: PageHands): Promise<AppAns
       return { app: "browser", result: await runCall({ ...call, op: call.op.op }, hands) };
     case "state":
       return { app: "state", view: windowView(call.conversationId) };
+    case "open":
+      return openInApp(call.conversationId, call.op.target, call.op.show);
   }
 }

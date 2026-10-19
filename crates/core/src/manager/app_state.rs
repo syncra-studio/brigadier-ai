@@ -40,6 +40,7 @@ impl SessionManager {
         let replied = match call {
             AppToolCall::State => Ok(self.app_state_text(&id).await),
             AppToolCall::ReadTerminal(args) => self.read_terminal_text(&id, &args.terminal).await,
+            AppToolCall::Open(args) => self.open_in_app(&id, args).await,
         };
         match replied {
             Ok(text) => ToolReply::ok(text),

@@ -33,6 +33,7 @@ mod clean_up;
 mod closing;
 mod cold;
 mod computer_host;
+mod open_in_app;
 pub use computer_host::ComputerNews;
 mod computer_use;
 mod constraints;

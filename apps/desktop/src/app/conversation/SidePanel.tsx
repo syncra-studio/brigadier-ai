@@ -9,6 +9,7 @@ import { tokenPx } from "@/lib/tokens";
 import { takePaneClose } from "@/state/closedPanes";
 import { HOME_PLACE, placeOf, terminalWorksHere, toggleTerminal, undoTabClose, useTerminalPlaces } from "@/state/terminalPlaces";
 import { useApp } from "@/state/store";
+import { clearWorkerPanelAsk, useWorkerPanelAsk } from "@/state/workerPanel";
 import { columnsFit } from "@/state/workspacePane";
 
 export function shortcutLabel(keys: string, mac: boolean): string {
@@ -65,6 +66,14 @@ export function useSidePanel(conversationId: string | null, enabled: boolean, em
       setWorker(next); openTab("workers");
     },
   }), [open, active, worker, setOpen, openTab]);
+  // An agent asked to show a worker's panel here (Q90's `open_in_app`).
+  const ask = useWorkerPanelAsk((s) => s.ask);
+  const { setPanel } = agents;
+  useEffect(() => {
+    if (embedded || !ask || ask.conversationId !== conversationId) return;
+    clearWorkerPanelAsk();
+    setPanel(ask.task);
+  }, [ask, conversationId, embedded, setPanel]);
   return { panel: rightSidebar, agents, workspace };
 }
 

@@ -43,7 +43,7 @@ import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 import { type ReviewOptions, setReviewOption, useReview } from "@/state/review";
-import { CHAT_TAB, openFileTab, type ReviewTarget, selectTab } from "@/state/sessionTabs";
+import { CHAT_TAB, openFileTab, type ReviewTarget, reviewScope, selectTab } from "@/state/sessionTabs";
 import { toast } from "@/state/toasts";
 
 /**
@@ -142,12 +142,8 @@ export function ReviewTab({
   const single = target.type === "file" ? target : null;
   const staged = target.staged;
   const commit = target.type === "commit" ? target.commit : null;
-  const commits = target.type === "commit" ? target.commits : undefined;
-  const branch = target.type === "branch";
-  const scope = useMemo<ReviewScope>(
-    () => (commit ? { type: "commit", commit, ...(commits ? { commits } : {}) } : branch ? { type: "branch" } : { type: staged ? "staged" : "unstaged" }),
-    [commit, commits, branch, staged],
-  );
+  // The diff is read again only when what it compares changes (it goes by the scope's text).
+  const scope = reviewScope(target);
   const options = useReview((s) => s.options);
   const [tick, setTick] = useState(0);
   const [wasActive, setWasActive] = useState(active);
@@ -195,7 +191,7 @@ export function ReviewTab({
     <div data-slot="review-tab" className="flex min-h-0 flex-1 flex-col">
       <div className="border-border flex h-control-lg shrink-0 items-center gap-1 border-b px-2">
         <span className="text-muted-foreground px-1.5 text-sm">
-          {commit ? `Merge ${commit.slice(0, 7)}` : staged ? "Staged Changes" : "Changes"}
+          {commit ? `Merge ${commit.slice(0, 7)}` : target.type === "lastTurn" ? "Last turn" : target.type === "uncommitted" ? "Uncommitted changes" : staged ? "Staged Changes" : "Changes"}
         </span>
         {review && review.files.length > 0 && (
           <Counts insertions={review.insertions} deletions={review.deletions} className="text-sm" />

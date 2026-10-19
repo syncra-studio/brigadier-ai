@@ -34,6 +34,74 @@ pub enum AppOp {
     Browser { op: BrowserOp },
     /// What the window shows of the session now (`app_state`'s part from the app).
     State,
+    /// Opens `target` in the session's tabs (`open_in_app`): in front when `show` (the user
+    /// asked to see it) and the user is on the session; else behind, marked new.
+    Open { target: OpenTarget, show: bool },
+}
+
+/// What `open_in_app` opens, checked and named by the daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum OpenTarget {
+    /// A file of the session's checkout, by its path there, at `line`.
+    File {
+        path: String,
+        line: Option<u32>,
+    },
+    /// The agent's changes, in the Review tab.
+    Diff {
+        scope: DiffScope,
+    },
+    /// The Progress tab: the job step by step, with its reviews and checks.
+    Progress,
+    /// What a preview or a background run prints, in an Output tab.
+    Output {
+        source: OutputOf,
+        id: String,
+        title: String,
+    },
+    /// A page on the web, or a preview's address, in a Browser tab.
+    Url {
+        url: String,
+    },
+    /// A worker's panel in the Workers sidebar: never behind, so only in front.
+    Worker {
+        task: TaskId,
+    },
+    /// A plan (or a lead's outline) read full screen.
+    Plan {
+        id: String,
+        outline: bool,
+        title: String,
+    },
+    Page {
+        id: String,
+        title: String,
+    },
+}
+
+/// Which of the agent's changes a diff shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum DiffScope {
+    /// What the latest request that changed anything changed, every landing of it.
+    LastTurn,
+    /// The session's branch since it left its base.
+    Branch,
+    /// Everything not committed: staged, unstaged and new files.
+    Uncommitted,
+}
+
+/// What an Output tab shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum OutputOf {
+    Preview,
+    Run,
 }
 
 impl AppOp {
@@ -41,7 +109,7 @@ impl AppOp {
     pub(crate) fn what(&self) -> &'static str {
         match self {
             Self::Browser { .. } => "its browser",
-            Self::State => "its tabs",
+            Self::State | Self::Open { .. } => "its tabs",
         }
     }
 }
@@ -55,6 +123,13 @@ pub enum AppAnswer {
     },
     State {
         view: WindowView,
+    },
+    /// `tab` shows the target (none for a panel), in front or behind. `kept`: a tab already
+    /// showed it (the user's own, or the one in front) and was left as it was.
+    Opened {
+        tab: Option<String>,
+        front: bool,
+        kept: bool,
     },
     /// Nothing was done: why, in plain words.
     Failed {

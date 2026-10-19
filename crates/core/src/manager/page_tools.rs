@@ -57,7 +57,11 @@ impl SessionManager {
     }
 
     /// The pages folder, if `page_id` is the page the user's latest message came from.
-    async fn page_access(&self, id: &ConversationId, page_id: &str) -> Result<Arc<Pages>> {
+    pub(super) async fn page_access(
+        &self,
+        id: &ConversationId,
+        page_id: &str,
+    ) -> Result<Arc<Pages>> {
         match self.core.conversation(id)?.tab_chat {
             // A tab's chat has its tab's page, always, and no other.
             Some(TabChat {
