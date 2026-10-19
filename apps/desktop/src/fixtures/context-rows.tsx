@@ -1,6 +1,6 @@
 /**
  * The production context card of a worktree session with something in every section, in the
- * reference order: the project with its ⋯, its Changes and Reviewed rows, the plan, the
+ * reference order: the project, its Changes and Reviewed rows, the plan, the
  * workers (two at work, one done), what runs in the background and the sources. For screenshots
  * and render checks; synthetic IPC, no daemon. `?workers=5` puts five at work (one row).
  */

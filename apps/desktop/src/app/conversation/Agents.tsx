@@ -5,7 +5,6 @@ import { useShallow } from "zustand/react/shallow";
 import { workerDone, workerWorking, workerState, workerPreview } from "@/app/conversation/workerPresentation";
 import { StopWorker } from "@/app/conversation/activity/StopWorker";
 import { TaskDetails } from "@/app/conversation/TaskDetails";
-import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import {
   AgentsPanelContext,
@@ -61,48 +60,42 @@ function RowTime({ task }: { task: Task }) {
   </span>;
 }
 
+/**
+ * One worker on one line: its glyph, its name (a soft "working" while it works), and how long it
+ * has worked or how long ago it finished; Stop in the time's place on hover. A click opens it.
+ */
 const AgentRow = memo(function AgentRow({ taskId }: { taskId: string }) {
   const task = useBoard((s) => s.board?.tasks[taskId]);
   const name = useWorkerName(taskId);
   const { setPanel } = useContext(AgentsPanelContext);
-  // A working row previews its current step, as the Workers strip does.
-  const { ref, first } = useTaskActivityLine(taskId);
   if (!task) return null;
-  const status = workerWorking(task) && first ? first : workerPreview(task);
+  const working = workerWorking(task);
+  const stoppable = !workerDone(task);
   return (
-    <li>
-      <div ref={ref} className="flex min-w-0 items-start">
+    <li className="group/row relative flex min-w-0">
       <button
         type="button"
         data-task={`task-${task.number}`}
         aria-label={`${name} ${workerState(task)}`}
+        title={workerPreview(task) ?? undefined}
         onClick={() => setPanel(task.id)}
-        className="hover:bg-foreground/5 rounded-lg flex min-h-10 min-w-0 flex-1 items-start gap-3 px-2 py-2 text-start transition-colors"
+        className="hover:bg-foreground/5 rounded-lg flex h-row min-w-0 flex-1 items-center gap-3 px-2 text-start transition-colors"
       >
-        <WorkerGlyph taskId={task.id} className="size-6" />
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="flex min-h-6 items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-label">{name}</span>
-            <RowTime task={task} />
-          </span>
-          {status && (
-            <span
-              className={cn(
-                "truncate text-label leading-5",
-                workerWorking(task) && "shimmer",
-                "text-foreground/65",
-              )}
-            >
-              {status}
-            </span>
-          )}
+        <WorkerGlyph taskId={task.id} className="size-5" />
+        <span className="min-w-0 flex-1 truncate text-label">
+          {name}
+          {working && <span className="text-muted-foreground shimmer"> working</span>}
+        </span>
+        <span className={cn(stoppable && "group-hover/row:invisible group-focus-within/row:invisible")}>
+          <RowTime task={task} />
         </span>
       </button>
       {/* Its Stop on the row, without opening the worker first. */}
-      <span className="flex shrink-0 items-center gap-1 pt-2">
-        <StopWorker taskId={task.id} name={name ?? task.title} />
-      </span>
-      </div>
+      {stoppable && (
+        <span className="absolute inset-y-0 end-1 hidden items-center group-focus-within/row:flex group-hover/row:flex">
+          <StopWorker taskId={task.id} name={name ?? task.title} />
+        </span>
+      )}
     </li>
   );
 });
@@ -141,7 +134,7 @@ function AgentSection({
       {ids.length === 0 ? (
         <p className="text-muted-foreground px-2 text-sm">{empty}</p>
       ) : (
-        <ul className="flex flex-col gap-1">
+        <ul className="flex flex-col gap-0.5">
           {shown.map((id) => (
             <AgentRow key={id} taskId={id} />
           ))}
@@ -200,15 +193,15 @@ function WorkerList({ conversationId }: { conversationId: string }) {
     >
       <div className="max-w-thread mx-auto flex w-full flex-col">
         <AgentSection
-          title="Working"
+          title="Active"
           counted
           ids={lists.active}
           page={ACTIVE_PAGE}
           trailing={waiting > 0 ? `${waiting} waiting` : undefined}
-          empty={`No ${WORKERS_LABEL.toLowerCase()} working`}
+          empty={`No active ${WORKERS_LABEL.toLowerCase()}`}
         />
         <AgentSection
-          title="Finished"
+          title="Done"
           ids={lists.finished}
           page={DONE_PAGE}
           counted
@@ -239,26 +232,23 @@ function WorkerDetail({ task, headerActions }: { task: Task; headerActions?: Rea
           <ArrowLeft />
         </TooltipIconButton>
         <WorkerGlyph taskId={task.id} className="size-6" />
-        {/* The title on its own line, the model under it: neither takes the other's width. */}
-        <div className="flex min-w-8 flex-1 flex-col items-start">
-          <h2
-            className="max-w-full truncate text-label font-medium"
-            title={name ?? task.title}
-          >
-            {name ?? task.title}
-          </h2>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button type="button" aria-label={`Worker details: ${model}`} aria-pressed={details}
-                data-state={details ? "open" : "closed"}
-                className="text-muted-foreground hover:text-foreground data-[state=open]:text-foreground flex max-w-full rounded-sm text-xs transition-colors"
-                onClick={() => setDetails((open) => !open)}>
-                <span className="truncate">{model}</span>
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>Worker details · {model}</TooltipContent>
-          </Tooltip>
-        </div>
+        <h2 className="min-w-8 truncate text-label font-medium" title={name ?? task.title}>
+          {name ?? task.title}
+        </h2>
+        <span className="flex-1" />
+        {/* Its model at the end, as a worker's conversation reads; a click shows its details.
+            Where the header is short it gives way first: the title keeps its room. */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" aria-label={`Worker details: ${model}`} aria-pressed={details}
+              data-state={details ? "open" : "closed"}
+              className="text-muted-foreground hover:text-foreground data-[state=open]:text-foreground flex min-w-0 shrink-1000 rounded-sm px-1 text-label transition-colors"
+              onClick={() => setDetails((open) => !open)}>
+              <span className="truncate">{model}</span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Worker details · {model}</TooltipContent>
+        </Tooltip>
         <StopWorker taskId={task.id} name={name ?? task.title} />
         {headerActions}
       </header>

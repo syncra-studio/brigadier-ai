@@ -1,10 +1,7 @@
 import { useAui } from "@assistant-ui/react";
 import {
   Compare,
-  Dock,
-  DotsHorizontal,
   ExclamationMarkCircle,
-  Folder,
   HandRaised,
   Link,
   Plus,
@@ -14,7 +11,6 @@ import {
   PullRequestOpen,
   ShieldCheck,
   Tasks,
-  Terminal,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type ReactNode,
@@ -46,7 +42,7 @@ import { type ReviewedLine, reviewedLine, useChecksLine, useReviewRow } from "@/
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, openSummaryByItself, useSummary } from "@/app/conversation/summaryState";
 import { RightSidebarContext } from "@/app/conversation/RightSidebar";
-import { CHAT_TAB, newSessionTab, openPanelTab, openReviewTab, useSessionTabsOf } from "@/state/sessionTabs";
+import { CHAT_TAB, openPanelTab, openReviewTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
@@ -65,16 +61,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { openFolder, request } from "@/ipc/client";
+import { request } from "@/ipc/client";
 import { openLink as openWebLink } from "@/state/links";
 import type {
   Conversation,
@@ -615,7 +602,7 @@ function SummaryCard({
 
 /**
  * A session's summary, pinned at the top end of its thread's pane, in the reference order: the
- * project (with its ⋯), what the branch changed and how it was reviewed, what waits on the user,
+ * project, what the branch changed and how it was reviewed, what waits on the user,
  * the plan, the workers, what runs in the background and the sources; then a run's own card. It
  * eases in from the pane's end when pinned and out when unpinned. Where the pane has too little
  * room beside the thread's column it hides, and the same cards float over the thread instead,
@@ -655,7 +642,8 @@ export function PinnedSummary({
 
   return (
     <>
-      <div className="pointer-events-none absolute inset-y-0 end-0 z-10 flex max-w-full flex-col">
+      {/* Over the thread's top fade (z-10), which comes after it. */}
+      <div className="pointer-events-none absolute inset-y-0 end-0 z-20 flex max-w-full flex-col">
         <aside
           ref={stack}
           aria-label="Context"
@@ -703,7 +691,9 @@ function FloatingSummary({ conversation }: { conversation: Conversation | null }
   }, [panel, mainTab]);
   return (
     <>
-      <PopoverAnchor className="pointer-events-none absolute end-0 top-0 size-0" />
+      {/* The pane's whole width, so the card follows the pane's end as the pane narrows (a side
+          panel opening) instead of staying where it first opened. */}
+      <PopoverAnchor className="pointer-events-none absolute inset-x-0 top-0 h-0" />
       <PopoverContent
         ref={ref}
         side="bottom"
@@ -751,51 +741,6 @@ export function SummaryFloat({ children }: { children: ReactNode }) {
     >
       {children}
     </Popover>
-  );
-}
-
-function fail(cause: unknown): void {
-  toast(cause instanceof Error ? cause.message : String(cause), { tone: "error" });
-}
-
-/**
- * The project section's ⋯: the session's checkout in a terminal tab, in Finder, or in another
- * app (Terminal on macOS).
- */
-function ProjectActions({ conversationId, checkout }: { conversationId: string; checkout: string }) {
-  const mac = useApp((s) => s.info?.platform === "macos");
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <TooltipIconButton tooltip="Project actions" size="icon-xs">
-          <DotsHorizontal />
-        </TooltipIconButton>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={() => newSessionTab(conversationId, "terminal", checkout)}>
-          <Terminal />
-          Open terminal
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => void openFolder(checkout).catch(fail)}>
-          <Folder />
-          {mac ? "Show in Finder" : "Show in file manager"}
-        </DropdownMenuItem>
-        {mac && (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              <Dock />
-              Open in
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent>
-              <DropdownMenuItem onSelect={() => void openFolder(checkout, "Terminal").catch(fail)}>
-                <Dock />
-                Terminal
-              </DropdownMenuItem>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -943,7 +888,6 @@ function SessionSummaryContent({
           <SummarySection
             foldKey="project"
             title={<span title={checkout}>{project ?? setup.repo}</span>}
-            action={<ProjectActions conversationId={conversation.id} checkout={checkout} />}
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
             <ChangesRow conversationId={conversation.id} branch={run?.workspace?.branch ?? setup.environment.branch} diff={diff} />

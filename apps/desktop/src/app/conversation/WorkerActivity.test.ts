@@ -154,10 +154,11 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
   assert.match(rendering.summary, /Check queued working/);
   assert.match(rendering.summary, /1 done · 1 stopped/);
   assert.doesNotMatch(rendering.summary, /\$ /);
-  assert.match(rendering.list, /Working · 3/);
-  assert.match(rendering.list, /Finished · 2/);
-  assert.match(rendering.list, /Waiting for its plan to be reviewed/);
-  assert.match(rendering.list, /Waiting for a free slot/);
+  // The Workers panel lists them as the reference does: Active, then Done, one line each; what a
+  // waiting worker waits for is in its row's tooltip.
+  assert.match(rendering.list, /Active · 3/);
+  assert.match(rendering.list, /Done · 2/);
+  assert.doesNotMatch(rendering.list, /Waiting for its plan to be reviewed|Waiting for a free slot/);
   assert.match(rendering.list, /3m 12s/);
   assert.match(rendering.list, /2m ago/);
   assert.ok(rendering.avatars.every((width) => width === 16));
