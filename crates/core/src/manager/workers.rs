@@ -5915,10 +5915,9 @@ fn job_name(title: &str, kind: TaskKind, subject: Option<&str>, used: &[String])
     if !used.iter().any(|name| name.eq_ignore_ascii_case(&base)) {
         return base;
     }
-    let short = words.iter().take(3).copied().collect::<Vec<_>>().join(" ");
     let mut ordinal = 2;
     loop {
-        let name = format!("{short} {ordinal}");
+        let name = format!("{base} {ordinal}");
         if !used.iter().any(|used| used.eq_ignore_ascii_case(&name)) {
             return name;
         }
@@ -6719,6 +6718,18 @@ mod tests {
 #[cfg(test)]
 mod job_name_tests {
     use super::*;
+
+    #[test]
+    fn duplicate_names_keep_the_whole_base_before_the_ordinal() {
+        let title = "Beginner trading in Moldova";
+        let mut used = vec![title.to_owned()];
+        for ordinal in 2..=3 {
+            let name = job_name(title, TaskKind::Scout, None, &used);
+            assert_eq!(name, format!("{title} {ordinal}"));
+            used.push(name);
+        }
+    }
+
     #[test]
     fn names_are_short_plain_and_unique() {
         assert_eq!(
