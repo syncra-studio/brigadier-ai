@@ -55,8 +55,10 @@ async function drive() {
   const seen: Record<string, unknown> = {};
   await until(() => cards().length > 0);
   await wait(300);
-  // Each card's title, in the thread's order: the running request's waits.
+  // Each card's title, in the thread's order: the running request's shows too, in place.
   seen.cards = cards().map((each) => text(each.querySelector("[class*=rounded-settings] p")));
+  // Where each sits: in its request's work while it runs, kept in view once it is done.
+  seen.places = cards().map((each) => (each.closest('[data-slot="request-work"]') ? "work" : "kept"));
   seen.heading = text(cards()[0]?.querySelector("p"));
   seen.buttons = [...(cards()[0]?.querySelectorAll("button") ?? [])].map((each) => text(each));
   const shown = useApp.getState().selection;

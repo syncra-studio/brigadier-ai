@@ -1,7 +1,6 @@
 import { Branch, Check } from "@openai/apps-sdk-ui/components/Icon";
-import { useContext, useState } from "react";
+import { useState } from "react";
 
-import { TurnEnded } from "@/app/conversation/FeedbackOffer";
 import { useAction } from "@/app/conversation/useAction";
 import { field } from "@/components/assistant-ui/elements/surfaces";
 import { cn } from "@/lib/utils";
@@ -79,9 +78,11 @@ export function SessionOfferCard({
   );
 }
 
-/** The offer `id` as the thread made it, shown once its turn ended and started through the daemon. */
+/**
+ * The offer `id` as the thread made it, shown in place the moment it is made (its turn may
+ * still work) and started through the daemon.
+ */
 export function SessionOffer({ id, title, task }: { id: string; title: string; task: string }) {
-  const ended = useContext(TurnEnded);
   const conversationId = useBoard((s) => s.board?.conversationId ?? null);
   const taken = useBoard((s) => {
     const step = s.board?.orchestratorSteps.find((each) => each.kind.type === "sessionOfferTaken" && each.kind.id === id);
@@ -89,7 +90,7 @@ export function SessionOffer({ id, title, task }: { id: string; title: string; t
   });
   const [started, setStarted] = useState<string | null>(null);
   const action = useAction();
-  if (!ended || !conversationId) return null;
+  if (!conversationId) return null;
   const session = taken ?? started;
   return (
     <SessionOfferCard
