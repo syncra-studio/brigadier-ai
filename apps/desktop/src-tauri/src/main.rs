@@ -442,6 +442,28 @@ fn set_running_chats(app: tauri::AppHandle, chats: Vec<RunningChat>) {
     }
 }
 
+/// Opens a rendered PDF (a PDF preview's file) in the system's PDF viewer. Only an existing
+/// `.pdf`: the path comes from the thread and must not launch anything else.
+#[tauri::command]
+fn open_pdf(app: tauri::AppHandle, path: String) -> Result<(), IpcError> {
+    let file = std::path::Path::new(&path);
+    let pdf = file
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"));
+    if !pdf || !file.is_absolute() || !file.is_file() {
+        return Err(IpcError {
+            code: brigadier_ipc::protocol::ErrorCode::Invalid,
+            message: format!("only a PDF file opens here: {path}"),
+        });
+    }
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|err| IpcError {
+            code: brigadier_ipc::protocol::ErrorCode::Internal,
+            message: format!("could not open it: {err}"),
+        })
+}
+
 /// Shows a file (a file link in an answer) selected in the system file manager.
 #[tauri::command]
 fn reveal_path(app: tauri::AppHandle, path: String) -> Result<(), IpcError> {
@@ -860,6 +882,7 @@ fn main() {
             open_artifact,
             open_folder,
             open_url,
+            open_pdf,
             system_name,
             reveal_path,
             set_running_chats,

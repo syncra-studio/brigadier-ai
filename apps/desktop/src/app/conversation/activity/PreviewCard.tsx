@@ -1,5 +1,6 @@
-import { ArrowUpRight, ChevronDown, ChevronUp, Globe, ImageSquare, Play, Terminal } from "@openai/apps-sdk-ui/components/Icon";
-import { type FC, type ReactNode, useState } from "react";
+import { ArrowRotateCw, ArrowUpRight, ChevronDown, ChevronUp, Document, Globe, ImageSquare, Mobile, Play, Terminal } from "@openai/apps-sdk-ui/components/Icon";
+import { type FC, type ReactNode, useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
@@ -9,11 +10,11 @@ import { Pill, RoundBadge, RowText, StorageCard } from "@/app/settings/storage/p
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { buttonVariants } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import type { OrchestratorStepKind, Preview, ProofKind } from "@/ipc/generated";
-import { openUrl } from "@/ipc/client";
+import type { OrchestratorStepKind, Preview, PreviewKind, ProofKind } from "@/ipc/generated";
+import { openPdf, openUrl } from "@/ipc/client";
 import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { resumePreview } from "@/state/actions";
+import { previewLogTail, restartPreview, resumePreview } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { openLink } from "@/state/links";
 import { openBrowserTab } from "@/state/sessionTabs";
@@ -192,41 +193,112 @@ const Proofs: FC<{ proofs: readonly { proof: Proof; atMs: number | undefined }[]
   );
 };
 
+/** A preview that isn't a web page, by its kind: its title, its badge and the word for it being up. */
+const KINDS: Record<Exclude<PreviewKind, "web" | "app">, { title: string; Icon: FC<{ className?: string }>; up: string }> = {
+  simulator: { title: "iOS Simulator", Icon: Mobile, up: "Running" },
+  pdf: { title: "Rendered PDF", Icon: Document, up: "Ready" },
+  test: { title: "Test run", Icon: Terminal, up: "Running" },
+};
+
+/** Whether a preview is one of those: a simulator run, a rendered PDF or a test run. */
+export function isOtherPreview(preview: Preview): boolean {
+  return preview.kind in KINDS;
+}
+
+/** How a simulator, PDF or test run stands, in a word: a test run that ended well Passed (green). */
+function kindStanding(record: Preview): { words: string; live: boolean } {
+  const kind = KINDS[record.kind as keyof typeof KINDS];
+  if (record.state.type === "running") return { words: kind.up, live: true };
+  if (record.kind === "test" && record.state.type === "exited") {
+    // TODO: how many tests passed ("15 passed") once a test run records its count.
+    return record.state.code === 0 ? { words: "Passed", live: true } : { words: "Failed", live: false };
+  }
+  return standing(record);
+}
+
+/** A test run's own output, its last lines, read from its log while the card shows it. */
+function useRunOutput(conversationId: string | null, record: Preview | null): string | null {
+  const [found, setFound] = useState<{ key: string; tail: string } | null>(null);
+  const key = record && conversationId ? `${conversationId} ${record.id} ${record.state.type} ${record.endedAtMs ?? ""}` : null;
+  useEffect(() => {
+    if (!key || !record || !conversationId) return;
+    let current = true;
+    previewLogTail(conversationId, record.id)
+      .then(({ tail }) => current && setFound({ key, tail }))
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [key, conversationId, record]);
+  return found && found.key === key ? found.tail : null;
+}
+
+/** A rendered PDF's file: its target, from the preview's folder when not absolute. */
+const pdfPath = (record: Preview) =>
+  !record.target ? null : record.target.startsWith("/") ? record.target : `${record.workdir.replace(/\/$/, "")}/${record.target}`;
+
 /**
- * What a finished turn left to look at: the one local page its answer names (`url`) and the
- * proofs it took (`steps`). Neither, and there is no card. `session`: the turn is a session's,
- * whose Browser tabs can show the page.
+ * What a finished turn left to look at: the one local page its answer names (`url`) or one of its
+ * other previews (`preview`: a simulator run, a rendered PDF, a test run), and the proofs it took
+ * of it (`steps`). Neither page nor preview, and the card is the proofs' alone; no proofs either,
+ * and there is no card. `session`: the turn is a session's, whose Browser tabs can show the page.
  */
-export function PreviewCard({ url, steps, session }: { url: string | null; steps: readonly BlockOrchestratorStep[]; session: boolean }) {
+export function PreviewCard({ url, preview = null, steps, session }: { url: string | null; preview?: Preview | null; steps: readonly BlockOrchestratorStep[]; session: boolean }) {
   const viewed = useViewConversation()?.id ?? null;
   const conversationId = session ? viewed : null;
   const proofs = steps.flatMap((step) => (step.kind.type === "proof" ? [{ proof: step.kind as Proof, atMs: (step.kind as Proof).takenAtMs ?? step.atMs }] : []));
-  const record = useBoard((s) =>
-    url ? Object.values(s.board?.previews ?? {}).filter((each) => samePage(each, url)).toSorted((a, b) => a.startedAtMs - b.startedAtMs).at(-1) ?? null : null,
+  const page = useBoard((s) =>
+    url && !preview ? Object.values(s.board?.previews ?? {}).filter((each) => samePage(each, url)).toSorted((a, b) => a.startedAtMs - b.startedAtMs).at(-1) ?? null : null,
   );
+  const record = preview ?? page;
+  const kind = preview ? KINDS[preview.kind as keyof typeof KINDS] : null;
+  const ownLog = preview?.kind === "test" && !proofs.some(({ proof }) => printed(proof));
+  const output = useRunOutput(viewed, ownLog ? preview : null);
   const [open, setOpen] = useState(true);
-  if (!url && proofs.length === 0) return null;
+  if (!url && !preview && proofs.length === 0) return null;
 
   const counted = proofCount(proofs.map(({ proof }) => proof));
-  const state = record ? standing(record) : null;
+  const state = record ? (preview ? kindStanding(preview) : standing(record)) : null;
+  const ended = record !== null && ["stopped", "exited"].includes(record.state.type);
   const stopped = state !== null && !state.live && record?.state.type !== "starting";
-  const address = url?.replace(/^https?:\/\//, "").replace(/\/$/, "") ?? null;
-  const title = url ? "Web preview" : proofsTitle(proofs.map(({ proof }) => proof));
+  const address = preview ? (preview.target ?? null) : (url?.replace(/^https?:\/\//, "").replace(/\/$/, "") ?? null);
+  const title = kind ? kind.title : url ? "Web preview" : proofsTitle(proofs.map(({ proof }) => proof));
   const where = takenWhere(proofs.map(({ proof }) => proof));
   const logsOnly = proofs.length > 0 && proofs.every(({ proof }) => printed(proof));
+  const lastLines = output?.trimEnd().split("\n").slice(-LAST_LINES).join("\n") ?? "";
+  const body = proofs.length > 0 || (ownLog && lastLines !== "");
 
   let action: ReactNode = null;
-  if (url && record?.state.type === "paused" && viewed) {
+  if (record && record.state.type === "paused" && viewed) {
     action = (
       <Pill data-slot="preview-start" onClick={() => void resumePreview(viewed, record.id).catch(failed)}>
         <Play aria-hidden className="size-icon-sm" />
         Start again
       </Pill>
     );
-  } else if (url && !stopped) {
+  } else if (record && ended && viewed && (url || preview)) {
+    // Its own command again, from its record.
+    const again = record.kind === "test";
+    action = (
+      <Pill data-slot="preview-start" onClick={() => void restartPreview(viewed, record.id).catch(failed)}>
+        {again ? <ArrowRotateCw aria-hidden className="size-icon-sm" /> : <Play aria-hidden className="size-icon-sm" />}
+        {again ? "Run again" : "Start again"}
+      </Pill>
+    );
+  } else if (preview?.kind === "pdf" && preview.state.type === "running") {
+    const file = pdfPath(preview);
+    if (file) {
+      action = (
+        <Pill data-slot="preview-open" title={file} onClick={() => void openPdf(file).catch(failed)}>
+          <ArrowUpRight aria-hidden className="size-icon-sm" />
+          Open
+        </Pill>
+      );
+    }
+  } else if (url && !preview && !stopped) {
     action = <OpenPill url={url} conversationId={conversationId} />;
   }
-  // TODO(w105): Start again for a stopped preview, restarting its own command from its record.
+  // TODO: Open for a running iOS simulator, once the app can bring its window forward.
 
   const line: ReactNode[] = [];
   if (state) {
@@ -239,24 +311,32 @@ export function PreviewCard({ url, steps, session }: { url: string | null; steps
   }
   if (address) {
     line.push(
-      <span key="address" data-slot="preview-target" title={url ?? undefined} className="text-muted-foreground min-w-0 truncate font-mono">
+      <span key="address" data-slot="preview-target" title={preview ? address : (url ?? undefined)} className="text-muted-foreground min-w-0 truncate font-mono">
         {address}
       </span>,
     );
   }
-  // Folded (or a card of proofs alone), the header counts them.
-  if (counted && (!open || !url)) {
+  // Folded, a card of proofs alone or another kind of preview, the header counts them.
+  if (counted && (!open || !url || preview)) {
     line.push(
       <span key="count" data-slot="preview-count" className="text-muted-foreground shrink-0">
         {counted}
       </span>,
     );
   }
+  const Badge = kind?.Icon ?? (url ? Globe : logsOnly ? Terminal : ImageSquare);
 
   return (
-    <StorageCard data-slot="preview-card" data-state={state ? (stopped ? "stopped" : "running") : undefined} data-open={(open && proofs.length > 0) || undefined}>
-      <FoldHeader foldable={proofs.length > 0} onToggle={() => setOpen(!open)} className="flex items-center gap-4 py-4">
-        <RoundBadge>{url ? <Globe className={cn(stopped && "text-foreground/65")} /> : logsOnly ? <Terminal /> : <ImageSquare />}</RoundBadge>
+    <StorageCard
+      data-slot="preview-card"
+      data-kind={preview?.kind ?? (url ? "web" : undefined)}
+      data-state={state ? (stopped ? "stopped" : "running") : undefined}
+      data-open={(open && body) || undefined}
+    >
+      <FoldHeader foldable={body} onToggle={() => setOpen(!open)} className="flex items-center gap-4 py-4">
+        <RoundBadge>
+          <Badge className={cn(stopped && "text-foreground/65")} />
+        </RoundBadge>
         <RowText
           title={<span data-slot="preview-title">{title}</span>}
           line={
@@ -267,7 +347,7 @@ export function PreviewCard({ url, steps, session }: { url: string | null; steps
         />
         <div className="flex shrink-0 items-center gap-1">
           {action}
-          {proofs.length > 0 && (
+          {body && (
             <button
               type="button"
               data-slot="preview-fold"
@@ -281,19 +361,53 @@ export function PreviewCard({ url, steps, session }: { url: string | null; steps
           )}
         </div>
       </FoldHeader>
-      {proofs.length > 0 && (
+      {body && (
         <FoldBody open={open}>
           <div data-slot="preview-proofs" className="border-divider flex flex-col gap-3 border-t pt-3.5 pb-4.5 ps-13">
-            {url && (
+            {url && !preview && (
               <div className="flex items-center gap-2 text-xs">
                 {where && <span data-slot="preview-proofs-where" className="text-foreground/65 font-medium">{where}</span>}
                 <span data-slot="preview-proofs-count" className="text-muted-foreground">{counted}</span>
               </div>
             )}
-            <Proofs proofs={proofs} conversationId={viewed} />
+            {ownLog && lastLines && preview && (
+              <div data-slot="preview-run-output" className="flex flex-col gap-2">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-foreground/65 font-medium">Test output</span>
+                  <span className="text-muted-foreground">last {LAST_LINES} lines</span>
+                </div>
+                <ShellBox command={preview.command} output={lastLines} status="inProgress" exit={null} />
+              </div>
+            )}
+            {proofs.length > 0 && <Proofs proofs={proofs} conversationId={viewed} />}
           </div>
         </FoldBody>
       )}
     </StorageCard>
   );
+}
+
+/**
+ * The turn's other previews (a simulator run, a rendered PDF, a test run): those its proofs were
+ * taken of, and those started while its requests ran. One that was its stays its while the card
+ * shows, though Start again gives it a new start time.
+ */
+export function useTurnPreviews(requestIds: readonly string[], steps: readonly BlockOrchestratorStep[]): Preview[] {
+  const named = steps.flatMap((step) => (step.kind.type === "proof" && step.kind.preview ? [step.kind.preview] : []));
+  // TODO: a preview's own request, once its record keeps the request that started it.
+  const found = useBoard(
+    useShallow((s) => {
+      const requests = requestIds.flatMap((id) => (s.board?.requests[id] ? [s.board.requests[id]] : []));
+      const from = Math.min(...requests.map((each) => each.startedAtMs));
+      const to = requests.some((each) => each.endedAtMs === null) ? Infinity : Math.max(...requests.map((each) => each.endedAtMs ?? 0));
+      return Object.values(s.board?.previews ?? {})
+        .filter(isOtherPreview)
+        .filter((each) => named.includes(each.id) || (each.startedAtMs >= from && each.startedAtMs <= to))
+        .map((each) => each.id);
+    }),
+  );
+  const [kept, setKept] = useState<readonly string[]>([]);
+  const ids = [...new Set([...kept, ...found])];
+  if (ids.length !== kept.length) setKept(ids);
+  return useBoard(useShallow((s) => ids.flatMap((id) => (s.board?.previews[id] ? [s.board.previews[id]] : []))));
 }

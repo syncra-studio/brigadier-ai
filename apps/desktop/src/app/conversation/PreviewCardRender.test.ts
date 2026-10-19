@@ -20,7 +20,8 @@ type Look = {
 };
 type Seen = {
   error?: string;
-  cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only" | "test-output", Look>;
+  cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only" | "test-output" | "simulator" | "pdf" | "test-run" | "test-failed", Look>;
+  turn: [string | null, string | null][];
   opened: string | null;
   browserTabs: number;
   menu: string[];
@@ -46,10 +47,35 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   // Folded: the header counts the screenshots.
   assert.deepEqual([cases.collapsed.count, cases.collapsed.captions.length, cases.collapsed.buttons.at(-1)], ["2 screenshots", 0, "Show the proofs"]);
   assert.equal(seen.unfolded, 2);
-  // Paused: Start again, the screenshots kept; Stopped: no Open to a dead page, the screenshots kept.
+  // Paused: Start again, the screenshots kept; Stopped: no Open to a dead page but Start again, the screenshots kept.
   assert.deepEqual([cases.paused.standing, cases.paused.buttons, cases.paused.captions], ["Paused", ["Start again", "Fold the proofs"], CAPTIONS]);
-  assert.deepEqual([cases.stopped.state, cases.stopped.standing, cases.stopped.buttons, cases.stopped.captions], ["stopped", "Stopped", ["Fold the proofs"], CAPTIONS]);
+  assert.deepEqual([cases.stopped.state, cases.stopped.standing, cases.stopped.buttons, cases.stopped.captions], ["stopped", "Stopped", ["Start again", "Fold the proofs"], CAPTIONS]);
   assert.ok(seen.calls.includes("resumePreview"));
+  // Start again and Run again run an ended preview's own command; a ready PDF's Open opens its file.
+  assert.ok(seen.calls.includes("restartPreview preview-3"));
+  assert.ok(seen.calls.includes("restartPreview preview-test"));
+  assert.ok(seen.calls.includes("open_pdf /w/app/out/invoice.pdf"));
+  // The other kinds: each its badge's title, its state, its target and what was taken of it.
+  const sim = cases.simulator;
+  assert.deepEqual([sim.title, sim.standing, sim.target, sim.count, sim.buttons], ["iOS Simulator", "Running", "iPhone 17", "1 recording", ["Fold the proofs"]]);
+  assert.deepEqual(sim.captions, ["1. Adding a todo on the phone 10:11 PM"]);
+  const pdf = cases.pdf;
+  assert.deepEqual([pdf.title, pdf.standing, pdf.target, pdf.buttons], ["Rendered PDF", "Ready", "out/invoice.pdf", ["Open"]]);
+  const run = cases["test-run"];
+  assert.deepEqual([run.title, run.standing, run.target, run.buttons], ["Test run", "Passed", "npm test", ["Run again", "Fold the proofs"]]);
+  assert.deepEqual(run.shell, [
+    "$ npm test",
+    "✓ rejects a title longer than 200 characters\n✓ accepts years 0000 to 0099\n✓ marks a past due date as overdue\n✓ a todo due today is not overdue\n15 passing (412ms)",
+  ]);
+  assert.deepEqual([cases["test-failed"].standing, cases["test-failed"].state], ["Failed", "stopped"]);
+  // A turn's other previews: the simulator its recording names, the test runs started while its
+  // request ran and the PDF, not the run started after it.
+  assert.deepEqual(seen.turn, [
+    ["iOS Simulator", "iPhone 17"],
+    ["Rendered PDF", "out/invoice.pdf"],
+    ["Test run", "npm test"],
+    ["Test run", "npm test"],
+  ]);
   // No screenshots: the one line, no chevron.
   assert.deepEqual([cases["no-proofs"].buttons, cases["no-proofs"].heading], [["Open", "Open in"], null]);
   // No preview record: the address alone.

@@ -6,13 +6,19 @@
  *   the browser ("Checked in the browser", each at its own time); Open, its ▾ and the fold chevron.
  * - `collapsed`: the same, folded: the header counts the screenshots.
  * - `paused`: the page paused: Start again, the screenshots kept.
- * - `stopped`: the page stopped: no Open, the screenshots kept.
+ * - `stopped`: the page stopped: Start again (its own command run again), the screenshots kept.
  * - `no-proofs`: running, no screenshots: the header line alone, no chevron.
  * - `no-record`: a page with no preview record: the address alone, no state.
  * - `proofs-only`: proofs with no page left running, from before proofs kept their kind and
  *   place: "Screenshots and recordings".
  * - `test-output`: a test run's output as a proof: "Test output", its last five lines under its
  *   command.
+ * - `simulator`: an iOS simulator run on "iPhone 17" with a recording of it: no Open.
+ * - `pdf`: a rendered PDF, ready: Open opens the file in the system's viewer.
+ * - `test-run`: a test run that passed, its own output's last five lines; Run again.
+ * - `test-failed`: one that failed, folded to its header.
+ * - `turn`: a turn's other previews, found as its end finds them: the simulator its recording
+ *   names and the test run started while its request ran, not one started after.
  *
  * `?case=<id>` shows one case alone (for a screenshot); `?drive=1` writes what each case shows,
  * then clicks through it, to `<pre id="preview-card-result">` (PreviewCardRender.test.ts).
@@ -21,7 +27,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";
 
-import { PreviewCard } from "@/app/conversation/activity/PreviewCard";
+import { PreviewCard, useTurnPreviews } from "@/app/conversation/activity/PreviewCard";
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { driveFold } from "@/fixtures/cardFold";
@@ -47,6 +53,10 @@ const TEST_LOG = ["> todo@1.0.0 test", "> node --test", "", "✓ rejects a title
 
 const calls: string[] = [];
 mockIPC((command, payload) => {
+  if (command === "open_pdf") {
+    calls.push(`open_pdf ${(payload as { path: string }).path}`);
+    return null;
+  }
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
   if (req.method === "readThreadImage") {
@@ -54,7 +64,8 @@ mockIPC((command, payload) => {
     const video = req.itemId.includes("video");
     return { method: req.method, data: video ? btoa("not a real recording") : page(req.itemId), mime: video ? "video/webm" : "image/svg+xml" };
   }
-  calls.push(req.method);
+  calls.push(req.method === "restartPreview" ? `restartPreview ${req.previewId}` : req.method);
+  if (req.method === "previewLog") return { method: req.method, tail: TEST_LOG, url: null };
   return { method: req.method };
 });
 
@@ -62,13 +73,29 @@ const preview = (id: string, port: number, state: PreviewState): Preview => ({
   id, conversationId: CHAT, name: "npm run dev", command: "npm run dev", workdir: "/w", workspace: "/w", pid: 1, state,
   startedAtMs: 0, endedAtMs: null, log: null, url: `http://localhost:${port}/`, kind: "web", building: false,
 });
+const other = (id: string, kind: Preview["kind"], target: string, state: PreviewState, startedAtMs: number, command = "xcrun simctl boot"): Preview => ({
+  id, conversationId: CHAT, name: kind, command, workdir: "/w/app", workspace: "/w", pid: 1, state,
+  startedAtMs, endedAtMs: null, log: null, kind, target, building: false,
+});
+const OTHERS = [
+  other("preview-sim", "simulator", "iPhone 17", { type: "running" }, 500),
+  other("preview-pdf", "pdf", "out/invoice.pdf", { type: "running" }, 2000, "node render.js"),
+  other("preview-test", "test", "npm test", { type: "exited", code: 0, status: "exit 0" }, 3000, "npm test"),
+  other("preview-failed", "test", "npm test", { type: "exited", code: 1, status: "exit 1" }, 3500, "npm test"),
+  // Started after the turn's request ended: another turn's.
+  other("preview-later", "test", "npm run e2e", { type: "exited", code: 0, status: "exit 0" }, 9000, "npm run e2e"),
+];
+
 useBoard.setState({
   board: {
     ...emptyBoard(CHAT),
     loaded: true,
     previews: Object.fromEntries(
-      [preview("preview-1", 3000, { type: "running" }), preview("preview-2", 3002, { type: "paused" }), preview("preview-3", 3003, { type: "stopped", reason: "stopped" })].map((each) => [each.id, each]),
+      [preview("preview-1", 3000, { type: "running" }), preview("preview-2", 3002, { type: "paused" }), preview("preview-3", 3003, { type: "stopped", reason: "stopped" }), ...OTHERS].map((each) => [each.id, each]),
     ),
+    requests: {
+      "turn-1": { id: "turn-1", conversationId: CHAT, preview: "", state: { type: "done" }, startedAtMs: 1000, endedAtMs: 5000, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false },
+    } as unknown as ReturnType<typeof emptyBoard>["requests"],
   },
 });
 useApp.setState({ selection: { type: "conversation", id: CHAT } });
@@ -90,6 +117,23 @@ const TESTS = [
   { position: 0, atMs: at22 + 240_000, kind: { type: "proof", id: "test-log", name: "test.log", mime: "text/plain", kind: "test", takenOn: "npm test", caption: "The todo tests", takenAtMs: at22 + 240_000 } },
 ] as BlockOrchestratorStep[];
 
+// A recording of the simulator, attached after the turn's request: it names its preview.
+const SIM_PROOFS = [
+  { position: 0, atMs: at22, kind: { type: "proof", id: "sim-video", name: "sim.mov", mime: "video/quicktime", kind: "recording", takenOn: "iPhone 17", preview: "preview-sim", caption: "Adding a todo on the phone", takenAtMs: at22 } },
+] as BlockOrchestratorStep[];
+
+/** A turn's end as RequestBlock lays it out: one card for each of its other previews. */
+function Turn() {
+  const others = useTurnPreviews(["turn-1"], SIM_PROOFS);
+  return (
+    <div className="flex flex-col gap-3">
+      {others.map((each) => (
+        <PreviewCard key={each.id} url={null} preview={each} steps={SIM_PROOFS.filter((step) => step.kind.type === "proof" && step.kind.preview === each.id)} session />
+      ))}
+    </div>
+  );
+}
+
 const session = { id: CHAT, kind: "session", title: "Due dates", setup: { type: "session" } } as unknown as Conversation;
 
 const CASES: { id: string; node: ReactNode }[] = [
@@ -101,6 +145,11 @@ const CASES: { id: string; node: ReactNode }[] = [
   { id: "no-record", node: <PreviewCard url="http://localhost:5173/" steps={[]} session /> },
   { id: "proofs-only", node: <PreviewCard url={null} steps={MIXED} session /> },
   { id: "test-output", node: <PreviewCard url={null} steps={TESTS} session /> },
+  { id: "simulator", node: <PreviewCard url={null} preview={OTHERS[0]!} steps={SIM_PROOFS} session /> },
+  { id: "pdf", node: <PreviewCard url={null} preview={OTHERS[1]!} steps={[]} session /> },
+  { id: "test-run", node: <PreviewCard url={null} preview={OTHERS[2]!} steps={[]} session /> },
+  { id: "test-failed", node: <PreviewCard url={null} preview={OTHERS[3]!} steps={[]} session /> },
+  { id: "turn", node: <Turn /> },
 ];
 
 const only = query.get("case");
@@ -134,7 +183,7 @@ function look(id: string) {
     standing: words(card?.querySelector("[data-slot=preview-state]")),
     target: words(card?.querySelector("[data-slot=preview-target]")),
     count: words(card?.querySelector("[data-slot=preview-count]")),
-    buttons: [...(card?.querySelectorAll("button") ?? [])].filter((each) => !each.closest("[data-slot=proof]")).map((each) => each.getAttribute("aria-label") ?? words(each)),
+    buttons: [...(card?.querySelectorAll("button") ?? [])].filter((each) => !each.closest("[data-slot=proof],[data-slot=preview-run-output]")).map((each) => each.getAttribute("aria-label") ?? words(each)),
     heading: words(card?.querySelector("[data-slot=preview-proofs-count]")),
     where: words(card?.querySelector("[data-slot=preview-proofs-where]")),
     shell: card?.querySelector("[data-slot=shell-card]") ? [words(card.querySelector("[data-slot=shell-command]")), card.querySelector("[data-slot=shell-output] pre")?.textContent ?? null] : null,
@@ -147,7 +196,7 @@ function look(id: string) {
 
 /** The states that need a click to reach: folded. */
 async function reach() {
-  await until(() => document.querySelectorAll("[data-slot=proof] img").length >= (only ? 0 : 6) && (!!only || !!document.querySelector("[data-slot=shell-output]")));
+  await until(() => document.querySelectorAll("[data-slot=proof] img").length >= (only ? 0 : 6) && (!!only || document.querySelectorAll("[data-slot=shell-output]").length >= 4));
   at("collapsed")?.querySelector<HTMLButtonElement>("[data-slot=preview-fold]")?.click();
   // The folded card's body closes as it animates.
   await until(() => !at("collapsed") || look("collapsed").captions.length === 0);
@@ -180,6 +229,13 @@ async function drive() {
   at("collapsed")?.querySelector<HTMLButtonElement>("[data-slot=preview-fold]")?.click();
   await wait(50);
   out.unfolded = look("collapsed").captions.length;
+  // Ended: its own command again. A ready PDF opens in the system's viewer.
+  at("stopped")?.querySelector<HTMLButtonElement>("[data-slot=preview-start]")?.click();
+  at("test-run")?.querySelector<HTMLButtonElement>("[data-slot=preview-start]")?.click();
+  at("pdf")?.querySelector<HTMLButtonElement>("[data-slot=preview-open]")?.click();
+  await until(() => calls.filter((each) => each.startsWith("restartPreview") || each.startsWith("open_pdf")).length >= 3, 2000);
+  // The turn's other previews, as its end finds them.
+  out.turn = [...(at("turn")?.querySelectorAll("[data-slot=preview-card]") ?? [])].map((card) => [words(card.querySelector("[data-slot=preview-title]")), words(card.querySelector("[data-slot=preview-target]"))]);
   out.calls = calls;
   return out;
 }

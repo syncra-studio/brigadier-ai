@@ -943,6 +943,11 @@ export async function resumePreview(conversationId: string, previewId: string): 
   await request({ method: "resumePreview", conversationId, previewId });
 }
 
+/** Runs an ended preview's own command again from its record (Start again, Run again). */
+export async function restartPreview(conversationId: string, previewId: string): Promise<void> {
+  await request({ method: "restartPreview", conversationId, previewId });
+}
+
 export async function previewLogTail(conversationId: string, previewId: string): Promise<{ tail: string; url: string | null }> {
   const { tail, url } = await request({ method: "previewLog", conversationId, previewId, lines: 80 });
   return { tail, url };

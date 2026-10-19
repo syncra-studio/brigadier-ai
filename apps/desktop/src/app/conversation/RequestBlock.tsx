@@ -74,7 +74,7 @@ import { describeTurnError, interruptedByQuit } from "@/app/conversation/turnErr
 import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { webPreviewUrl } from "@/app/conversation/activity/webPreview";
-import { PreviewCard } from "@/app/conversation/activity/PreviewCard";
+import { PreviewCard, useTurnPreviews } from "@/app/conversation/activity/PreviewCard";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import {
   BranchPicker,
@@ -356,8 +356,9 @@ const UpdateText: FC<TextMessagePartProps> = (props) => (
 );
 
 /**
- * The end of a finished turn under its answer: its Preview card (the page it left running and the
- * proofs it took), then its Changes card with the merge that took them (or the merge's alone).
+ * The end of a finished turn under its answer: its Preview cards (the page it left running and
+ * its other previews, a simulator run, a rendered PDF, a test run, each with the proofs taken of
+ * it), then its Changes card with the merge that took them (or the merge's alone).
  */
 function TurnEnd({ meta }: { meta: BlockMeta }) {
   const merge = useTurnMerge(meta.orchestratorSteps, meta.requestIds);
@@ -370,9 +371,17 @@ function TurnEnd({ meta }: { meta: BlockMeta }) {
     const part = texts[meta.texts.findLastIndex((text) => !text.update)];
     return part?.type === "text" ? webPreviewUrl(part.text) : null;
   });
+  const others = useTurnPreviews(meta.requestIds, meta.orchestratorSteps);
+  const ofPreview = (id: string | null) =>
+    meta.orchestratorSteps.filter((step) =>
+      step.kind.type !== "proof" ? id === null : id === null ? !others.some((other) => other.id === (step.kind as { preview?: string }).preview) : step.kind.preview === id,
+    );
   return (
     <div data-slot="turn-end" className="mt-activity flex flex-col gap-3 empty:hidden">
-      <PreviewCard url={preview} steps={meta.orchestratorSteps} session={meta.session} />
+      <PreviewCard url={preview} steps={ofPreview(null)} session={meta.session} />
+      {others.map((other) => (
+        <PreviewCard key={other.id} url={null} preview={other} steps={ofPreview(other.id)} session={meta.session} />
+      ))}
       {/* Changes is always last, right above the answer's time and actions. */}
       {/* A run's merge shows alone: its files are the run's card's. */}
       {(card || merge?.own) && <ChangesCard requestIds={card ? meta.requestIds : []} merge={merge} />}

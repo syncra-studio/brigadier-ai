@@ -225,6 +225,15 @@ export function setRunningChats(chats: RunningChat[]): Promise<void> {
   return invoke("set_running_chats", { chats });
 }
 
+/** Opens a PDF file (a rendered PDF preview's) in the system's PDF viewer. */
+export async function openPdf(path: string): Promise<void> {
+  try {
+    await invoke("open_pdf", { path });
+  } catch (error) {
+    throw isIpcError(error) ? new RequestError(error) : error;
+  }
+}
+
 /** Shows a file selected in the system file manager. */
 export async function revealPath(path: string): Promise<void> {
   try {
