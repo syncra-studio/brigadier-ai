@@ -48,6 +48,9 @@ const V2_ROOTS: &[&str] = &[
     "ThreadTokenUsageUpdatedNotification",
     "AccountRateLimitsUpdatedNotification",
     "ErrorNotification",
+    "ListMcpServerStatusParams",
+    "ListMcpServerStatusResponse",
+    "McpServerStatusUpdatedNotification",
 ];
 
 /// Request params the adapter builds field by field; they get `Default`.
