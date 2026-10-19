@@ -337,6 +337,9 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
   let clock: unknown = null;
   let failure = "";
   try {
+    // The page acts as the focused one, as `--dump-dom`'s did: Chrome (not its headless shell)
+    // gives a tab opened over the DevTools protocol no focus, so focus() and keys would miss.
+    await browser.call("Emulation.setFocusEmulationEnabled", { enabled: true });
     await browser.call("Emulation.setVirtualTimePolicy", { policy: "pause" });
     await browser.call("Page.navigate", { url: `${url}fixtures/${page}` });
     await browser.call("Emulation.setVirtualTimePolicy", { policy: "pauseIfNetworkFetchesPending", budget: budgetMs });
