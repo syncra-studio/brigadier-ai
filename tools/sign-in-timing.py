@@ -11,13 +11,16 @@ touched: the scratch folder, and the Keychain item Claude Code makes for it, are
 end (--keep leaves them).
 """
 
+import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import unicodedata
 
 AGENTS = {
     "claude": {
@@ -37,16 +40,42 @@ AGENTS = {
 }
 
 
-def keychain_items():
-    """The Claude Code credential items in the login keychain, by service name."""
-    out = subprocess.run(
-        ["security", "dump-keychain"], capture_output=True, text=True
-    ).stdout
-    return {
-        line.split("=", 1)[1].strip().strip('"')
-        for line in out.splitlines()
-        if '"svce"' in line and "Claude Code-credentials" in line
-    }
+def cleanup_keychain(agent, home, env):
+    """Delete only Claude's credential for this scratch config, never discovered items."""
+    # Codex defaults to auth.json in CODEX_HOME; removing its scratch folder suffices.
+    if sys.platform != "darwin" or agent != "claude":
+        return
+
+    # Verified in Claude Code 2.1.303: D1 hashes the NFC config path (not realpath),
+    # and Vx uses USER or os.userInfo().username, with this account-name fallback.
+    digest = hashlib.sha256(unicodedata.normalize("NFC", home).encode()).hexdigest()[:8]
+    suffix = "-custom-oauth" if env.get("CLAUDE_CODE_CUSTOM_OAUTH_URL") else ""
+    service = f"Claude Code{suffix}-credentials-{digest}"
+    if (not home or not os.path.isabs(home) or env.get("CLAUDE_CONFIG_DIR") != home
+            or env.get("CLAUDE_SECURESTORAGE_CONFIG_DIR", home) != home):
+        print(f"Skipped Keychain cleanup: storage is not the scratch config. "
+              f"Check scratch item {service!r} manually.")
+        return
+
+    import pwd
+
+    try:
+        account = env.get("USER") or pwd.getpwuid(os.geteuid()).pw_name
+    except (KeyError, OSError):
+        account = "claude-code-user"
+    if not re.fullmatch(r"[a-zA-Z0-9._-]+", account):
+        account = "claude-code-user"
+    try:
+        result = subprocess.run(
+            ["security", "delete-generic-password", "-s", service, "-a", account],
+            capture_output=True,
+        )
+        if result.returncode in (0, 44):  # Deleted, or no item (e.g. cancelled login).
+            return
+    except OSError:
+        pass
+    print(f"Could not clean up Keychain item {service!r}, account {account!r}; "
+          "remove it manually if present.")
 
 
 def main():
@@ -67,7 +96,6 @@ def main():
     os.chmod(browser, 0o700)
     env = dict(os.environ, BROWSER=browser, NO_COLOR="1")
     env[agent["home_var"]] = home
-    items_before = keychain_items() if sys.platform == "darwin" else set()
 
     events = []
     started = time.monotonic()
@@ -126,9 +154,7 @@ def main():
         note("stopped")
     finally:
         if not keep:
-            if sys.platform == "darwin":
-                for item in keychain_items() - items_before:
-                    subprocess.run(["security", "delete-generic-password", "-s", item], capture_output=True)
+            cleanup_keychain(args[0], home, env)
             shutil.rmtree(home, ignore_errors=True)
         else:
             print(f"kept {home}")
