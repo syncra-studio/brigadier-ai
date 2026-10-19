@@ -266,6 +266,10 @@ impl SessionManager {
             self.recover_previews(&conversation.id).await;
             // And its CI watches (SESSION-FIXES-PLAN.md Q1): the user can ask to watch again.
             self.stop_ci_watches(&conversation.id).await;
+            // Not its pull request's: the one its ready work waits on is watched again.
+            if conversation.lifecycle != Lifecycle::Archived {
+                self.rewatch_pr(&conversation.id).await;
+            }
             // A held merge whose writers ended while Brigadier was down is stopped, waits or
             // is due now (SESSION-FIXES-PLAN.md Q3).
             self.check_held_merge(&conversation.id).await;

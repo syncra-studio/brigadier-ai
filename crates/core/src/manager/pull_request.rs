@@ -167,8 +167,33 @@ impl SessionManager {
         }
         let (manager, id) = (self.arc(), id.clone());
         self.spawn(async move {
-            manager.session_pr(&id).await;
+            // Left open or merged on GitHub: watched (again), so the merge is recorded (#351).
+            if let Some(SessionPr { found, base, .. }) = manager.session_pr(&id).await
+                && matches!(
+                    found.pr.state,
+                    PullRequestState::Open | PullRequestState::Merged
+                )
+                && found.base.as_deref() == Some(&base)
+            {
+                manager.watch_pr(&id);
+            }
         });
+    }
+
+    /// After a restart: the pull request a ready session's work waits on, last seen open
+    /// (queued, auto-merging) or merged, is watched again, so GitHub's merge, made meanwhile or
+    /// later, is recorded with no new turn (#351).
+    pub(super) async fn rewatch_pr(&self, id: &ConversationId) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        if !board.unmerged_ready().is_empty()
+            && board.pull_request.as_ref().is_some_and(|pr| {
+                matches!(pr.state, PullRequestState::Open | PullRequestState::Merged)
+            })
+        {
+            self.watch_pr(id);
+        }
     }
 }
 

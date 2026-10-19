@@ -235,3 +235,84 @@ async fn a_queued_pull_request_merging_while_a_command_runs_is_recorded_after_it
     assert_eq!(git(&workspace, &["rev-parse", "HEAD~1"]), head);
     flow.stop().await;
 }
+
+/// Brigadier restarts while the pull request waits for its checks with auto-merge on: its
+/// watch starts again, and GitHub's merge, after the restart or while Brigadier was off, is
+/// recorded with no new message from the user (#351).
+#[cfg(unix)]
+#[tokio::test]
+async fn an_auto_merging_pull_request_is_recorded_when_github_merges_it_after_a_restart() {
+    queued_across_a_restart("merge-queue-restart", false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_pull_request_merged_while_brigadier_was_off_is_recorded_after_the_restart() {
+    queued_across_a_restart("merge-queue-merged-off", true).await;
+}
+
+async fn queued_across_a_restart(name: &str, merged_while_off: bool) {
+    let scratch: Arc<OnceLock<PathBuf>> = Arc::default();
+    let dir = scratch.clone();
+    let mut flow = Flow::start(
+        name,
+        Options {
+            auto_merge: true,
+            ..Options::default()
+        },
+        script(move |turn| {
+            let dir = dir.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("Done.");
+                }
+                if turn.input.contains("Ship the notes.") {
+                    ship(&turn.add_dirs[0], dir.get().unwrap(), true).await;
+                    return Reply::text("PR #7 will merge once its checks pass.");
+                }
+                Reply::text("Noted.")
+            }
+        }),
+    )
+    .await;
+    let root = with_origin(&flow);
+    scratch.set(root.clone()).unwrap();
+
+    flow.say("Ship the notes.").await;
+    let board = flow.settled().await;
+    let ready = board.latest_request().unwrap().id.clone();
+    // The watch has seen it open (so its row has), before Brigadier quits.
+    flow.until("the pull request seen", |board| {
+        board.pull_request.is_some()
+    })
+    .await;
+    let workspace = PathBuf::from(flow.manager.checkout_dir(&flow.conversation).unwrap());
+    let head = git(&workspace, &["rev-parse", "HEAD"]);
+    let branch = git(&workspace, &["branch", "--show-current"]);
+    let merge = || {
+        let squash = squash_merge(&root.join("origin.git"), &root, &branch);
+        list(&root, "MERGED", &head, false, Some(&squash));
+        squash
+    };
+    // Merged while Brigadier is off: the old one no longer hears from GitHub.
+    let squash = merged_while_off.then(|| {
+        let before = root.join("gh-before");
+        let gh = stub_gh(&before);
+        std::fs::copy(root.join("gh/pr-list"), before.join("pr-list")).unwrap();
+        *flow.manager.gh_override.lock().unwrap() = Some(gh);
+        merge()
+    });
+    flow.restart().await;
+    *flow.manager.gh_override.lock().unwrap() = Some(stub_gh(&root.join("gh")));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let squash = squash.unwrap_or_else(merge);
+
+    let board = flow
+        .until("the merge recorded", |board| !merges(board).is_empty())
+        .await;
+    assert_eq!(merges(&board), [(Some(7), vec![ready])]);
+    flow.settled().await;
+    assert_eq!(git(&flow.repo, &["rev-parse", "main"]), squash);
+    assert_eq!(git(&workspace, &["rev-parse", "HEAD"]), squash);
+    flow.stop().await;
+}
