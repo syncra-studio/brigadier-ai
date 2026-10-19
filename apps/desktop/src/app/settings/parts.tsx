@@ -25,6 +25,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ScrollFade } from "@/components/ui/scroll-fade";
 import { Switch } from "@/components/ui/switch";
 import type { Settings } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -64,7 +65,7 @@ export function SettingsPage({
   children: ReactNode;
 }) {
   return (
-    <div data-slot="settings-page" className="flex h-full flex-col">
+    <div data-slot="settings-page" className="relative flex h-full flex-col">
       <div
         className={cn(
           "min-h-0 flex-1",
@@ -107,6 +108,13 @@ export function SettingsPage({
           </div>
         </div>
       </div>
+      {/* What scrolls fades out at the view's edges, as the conversation does. */}
+      {scrollable && (
+        <>
+          <ScrollFade edge="top" />
+          <ScrollFade edge="bottom" />
+        </>
+      )}
     </div>
   );
 }

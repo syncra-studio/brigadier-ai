@@ -46,6 +46,7 @@ import { ThreadScroller } from "@/components/assistant-ui/thread-scroll";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
 import { Button } from "@/components/ui/button";
+import { ScrollFade } from "@/components/ui/scroll-fade";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
@@ -316,7 +317,7 @@ const ThreadRoot: FC<{
       aria-hidden
       className="thread-bottom-pad pointer-events-none sticky bottom-0 z-10 mt-auto w-full shrink-0"
     >
-      <div className="thread-bottom-fade absolute inset-x-0 bottom-0" />
+      <ScrollFade edge="bottom" />
     </div>
   );
 
@@ -373,9 +374,8 @@ const ThreadRoot: FC<{
               {isEmpty ? <div className="flex grow basis-0 flex-col justify-end">{pad}</div> : pad}
             </div>
           </div>
-          {/* Under the top bar the thread fades out: over the view, never in what scrolls, so a
-              rubber-band overscroll moves the content under it and never the fade (#232). */}
-          <div aria-hidden className="thread-top-fade pointer-events-none absolute inset-x-0 top-0 z-10" />
+          {/* Under the top bar the thread fades out (see `scroll-fade.tsx`). */}
+          <ScrollFade edge="top" />
           {/* The user's messages, beside the column (see `message-rail.tsx`). */}
           <MessageRail viewport={viewport} scroller={scroller} />
           {Find && <Find viewport={viewport} scroller={scroller} />}
