@@ -11,7 +11,7 @@ import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { buttonVariants } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { OrchestratorStepKind, Preview, PreviewKind, ProofKind } from "@/ipc/generated";
-import { openPdf, openUrl } from "@/ipc/client";
+import { openPdf, openSimulator, openUrl } from "@/ipc/client";
 import { formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { previewLogTail, restartPreview, resumePreview } from "@/state/actions";
@@ -295,10 +295,18 @@ export function PreviewCard({ url, preview = null, steps, session }: { url: stri
         </Pill>
       );
     }
+  } else if (preview?.kind === "simulator" && preview.state.type === "running") {
+    // Simulator to the front, on the preview's device (none named: any booted one).
+    const device = preview.target && preview.target !== KINDS.simulator.title ? preview.target : null;
+    action = (
+      <Pill data-slot="preview-open" title={device ?? KINDS.simulator.title} onClick={() => void openSimulator(device).catch(failed)}>
+        <ArrowUpRight aria-hidden className="size-icon-sm" />
+        Open
+      </Pill>
+    );
   } else if (url && !preview && !stopped) {
     action = <OpenPill url={url} conversationId={conversationId} />;
   }
-  // TODO: Open for a running iOS simulator, once the app can bring its window forward.
 
   const line: ReactNode[] = [];
   if (state) {

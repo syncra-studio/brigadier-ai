@@ -234,6 +234,15 @@ export async function openPdf(path: string): Promise<void> {
   }
 }
 
+/** Brings Simulator to the front, on the booted device of that name (an iOS simulator preview's) or any booted one. */
+export async function openSimulator(device: string | null): Promise<void> {
+  try {
+    await invoke("open_simulator", { device });
+  } catch (error) {
+    throw isIpcError(error) ? new RequestError(error) : error;
+  }
+}
+
 /** Shows a file selected in the system file manager. */
 export async function revealPath(path: string): Promise<void> {
   try {

@@ -51,13 +51,15 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   assert.deepEqual([cases.paused.standing, cases.paused.buttons, cases.paused.captions], ["Paused", ["Start again", "Fold the proofs"], CAPTIONS]);
   assert.deepEqual([cases.stopped.state, cases.stopped.standing, cases.stopped.buttons, cases.stopped.captions], ["stopped", "Stopped", ["Start again", "Fold the proofs"], CAPTIONS]);
   assert.ok(seen.calls.includes("resumePreview"));
-  // Start again and Run again run an ended preview's own command; a ready PDF's Open opens its file.
+  // Start again and Run again run an ended preview's own command; a ready PDF's Open opens its file,
+  // a running simulator's brings Simulator forward on its device.
   assert.ok(seen.calls.includes("restartPreview preview-3"));
   assert.ok(seen.calls.includes("restartPreview preview-test"));
   assert.ok(seen.calls.includes("open_pdf /w/app/out/invoice.pdf"));
+  assert.ok(seen.calls.includes("open_simulator iPhone 17"));
   // The other kinds: each its badge's title, its state, its target and what was taken of it.
   const sim = cases.simulator;
-  assert.deepEqual([sim.title, sim.standing, sim.target, sim.count, sim.buttons], ["iOS Simulator", "Running", "iPhone 17", "1 recording", ["Fold the proofs"]]);
+  assert.deepEqual([sim.title, sim.standing, sim.target, sim.count, sim.buttons], ["iOS Simulator", "Running", "iPhone 17", "1 recording", ["Open", "Fold the proofs"]]);
   assert.deepEqual(sim.captions, ["1. Adding a todo on the phone 10:11 PM"]);
   const pdf = cases.pdf;
   assert.deepEqual([pdf.title, pdf.standing, pdf.target, pdf.buttons], ["Rendered PDF", "Ready", "out/invoice.pdf", ["Open"]]);

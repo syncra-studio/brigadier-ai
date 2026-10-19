@@ -27,6 +27,7 @@ mod launcher;
 mod login_item;
 mod overnight_notifications;
 mod shell;
+mod simulator;
 mod smoke;
 mod updates;
 
@@ -883,6 +884,7 @@ fn main() {
             open_folder,
             open_url,
             open_pdf,
+            simulator::open_simulator,
             system_name,
             reveal_path,
             set_running_chats,

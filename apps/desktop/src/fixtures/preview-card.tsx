@@ -13,7 +13,7 @@
  *   place: "Screenshots and recordings".
  * - `test-output`: a test run's output as a proof: "Test output", its last five lines under its
  *   command.
- * - `simulator`: an iOS simulator run on "iPhone 17" with a recording of it: no Open.
+ * - `simulator`: an iOS simulator run on "iPhone 17" with a recording of it: Open brings Simulator forward.
  * - `pdf`: a rendered PDF, ready: Open opens the file in the system's viewer.
  * - `test-run`: a test run that passed, its own output's last five lines; Run again.
  * - `test-failed`: one that failed, folded to its header.
@@ -55,6 +55,10 @@ const calls: string[] = [];
 mockIPC((command, payload) => {
   if (command === "open_pdf") {
     calls.push(`open_pdf ${(payload as { path: string }).path}`);
+    return null;
+  }
+  if (command === "open_simulator") {
+    calls.push(`open_simulator ${(payload as { device: string | null }).device}`);
     return null;
   }
   if (command !== "ipc_request") return null;
@@ -233,7 +237,9 @@ async function drive() {
   at("stopped")?.querySelector<HTMLButtonElement>("[data-slot=preview-start]")?.click();
   at("test-run")?.querySelector<HTMLButtonElement>("[data-slot=preview-start]")?.click();
   at("pdf")?.querySelector<HTMLButtonElement>("[data-slot=preview-open]")?.click();
-  await until(() => calls.filter((each) => each.startsWith("restartPreview") || each.startsWith("open_pdf")).length >= 3, 2000);
+  // A running simulator's Open brings Simulator forward on its device.
+  at("simulator")?.querySelector<HTMLButtonElement>("[data-slot=preview-open]")?.click();
+  await until(() => calls.filter((each) => each.startsWith("restartPreview") || each.startsWith("open_")).length >= 4, 2000);
   // The turn's other previews, as its end finds them.
   out.turn = [...(at("turn")?.querySelectorAll("[data-slot=preview-card]") ?? [])].map((card) => [words(card.querySelector("[data-slot=preview-title]")), words(card.querySelector("[data-slot=preview-target]"))]);
   out.calls = calls;
