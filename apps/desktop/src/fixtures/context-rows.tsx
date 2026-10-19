@@ -1,6 +1,6 @@
 /**
  * The production context card of a worktree session with something in every section, in the
- * reference order: the project with its ⋯, the branch, its review and checks, the plan, the
+ * reference order: the project with its ⋯, its Changes and Reviewed rows, the plan, the
  * workers (two at work, one done), what runs in the background and the sources. For screenshots
  * and render checks; synthetic IPC, no daemon. `?workers=5` puts five at work (one row).
  */
@@ -16,6 +16,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import type { BackgroundRun, Conversation, IntegratedCheck, OrchestratorStep, Plan, Preview, Request, ReviewRun, Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
+import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const id = "context-rows-fixture";
@@ -96,6 +97,17 @@ async function drive(panel: () => AgentsPanelState): Promise<string> {
   planStep?.click();
   await frame();
   seen.stepOpens = panel();
+  const project = card()!.querySelector('[data-slot="summary-section"]')!;
+  seen.project = [...project.querySelectorAll('[data-slot="summary-row"]')].map((row) => row.textContent?.replace(/\s+/g, " ").trim());
+  seen.changesTip = project.querySelector('[data-row="changes"]')?.getAttribute("title");
+  seen.findingsInCard = card()!.querySelectorAll('[data-slot*="finding"]').length;
+  project.querySelector<HTMLButtonElement>('[data-row="reviewed"]')?.click();
+  await frame();
+  seen.reviewedOpens = sessionTabs(id).active;
+  project.querySelector<HTMLButtonElement>('[data-row="changes"]')?.click();
+  await frame();
+  const front = sessionTabs(id).tabs.find((tab) => tab.id === sessionTabs(id).active);
+  seen.changesOpens = front?.kind === "review" ? front.target.type : front?.kind;
   seen.grew = card()!.getBoundingClientRect().height !== height;
   return JSON.stringify(seen);
 }

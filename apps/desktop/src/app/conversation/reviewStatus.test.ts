@@ -261,9 +261,10 @@ test("the checks line follows the newest run of the session's full checks", () =
   assert.deepEqual(checksLine([failed, cut]), { text: "Checks couldn't run", title: "a restart", failed: true });
 });
 
+const reviewRowOf = (...outcomes: string[]) => ({ text: "Review", sections: outcomes.map((outcome) => ({ label: null, outcome, findings: [] })) });
+
 test("the reviews and checks read as one row: failed checks first, then what asks for a look, else where they stand", () => {
-  const section = (outcome: string, label: string | null = null) => ({ label, outcome, findings: [] });
-  const row = (...outcomes: string[]) => ({ text: "Review", sections: outcomes.map((said) => section(said)) });
+  const row = reviewRowOf;
   const passed = { text: "Checks passed", title: "npm test at abc", failed: false };
   const failed = { text: "Checks failed: npm test", title: "exit 1 at abc", failed: true };
   const running = { text: "Checks running…", title: "npm test", failed: false, sinceMs: 1 };

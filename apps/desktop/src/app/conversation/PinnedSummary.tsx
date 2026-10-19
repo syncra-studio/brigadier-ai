@@ -1,8 +1,9 @@
 import { useAui } from "@assistant-ui/react";
 import {
-  Branch,
+  Compare,
   Dock,
   DotsHorizontal,
+  ExclamationMarkCircle,
   Folder,
   HandRaised,
   Link,
@@ -11,6 +12,7 @@ import {
   PullRequestDraft,
   PullRequestMerged,
   PullRequestOpen,
+  ShieldCheck,
   Tasks,
   Terminal,
 } from "@openai/apps-sdk-ui/components/Icon";
@@ -40,11 +42,11 @@ import {
 } from "@/app/conversation/overnightAdapter";
 import { contextPlanId, contextPlanIds, latestPlanRequest } from "@/app/conversation/planProgress";
 import { ActivitiesSummary } from "@/app/conversation/Activities";
-import { ChecksRow, ReviewRows } from "@/app/conversation/ReviewSummaryRow";
+import { type ReviewedLine, reviewedLine, useChecksLine, useReviewRow } from "@/app/conversation/reviewStatus";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, openSummaryByItself, useSummary } from "@/app/conversation/summaryState";
 import { RightSidebarContext } from "@/app/conversation/RightSidebar";
-import { CHAT_TAB, newSessionTab, useSessionTabsOf } from "@/state/sessionTabs";
+import { CHAT_TAB, newSessionTab, openPanelTab, openReviewTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
@@ -54,6 +56,7 @@ import {
   SummarySection,
 } from "@/components/assistant-ui/elements/summary-section";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Spinner } from "@/components/glyphs/spinner";
 import { TitlebarButton } from "@/components/titlebar-button";
 import { Button } from "@/components/ui/button";
 import {
@@ -796,12 +799,17 @@ function ProjectActions({ conversationId, checkout }: { conversationId: string; 
   );
 }
 
-/** The branch the session's work is on, with its +N −N once known. */
-function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) {
+/**
+ * "Changes": what the session's branch changed against its base, +N −N once known; the branch in
+ * its tooltip. A click opens the branch's diff in a tab.
+ */
+function ChangesRow({ conversationId, branch, diff }: { conversationId: string; branch: string; diff: DiffStat | null }) {
   return (
-    <SummaryRow
+    <SummaryRowButton
+      data-row="changes"
       title={branch}
-      icon={<Branch />}
+      icon={<Compare />}
+      onClick={() => openReviewTab(conversationId, { type: "branch", staged: false })}
       meta={
         diff &&
         (diff.insertions > 0 || diff.deletions > 0) && (
@@ -812,8 +820,37 @@ function BranchRow({ branch, diff }: { branch: string; diff: DiffStat | null }) 
         )
       }
     >
-      {branch}
-    </SummaryRow>
+      Changes
+    </SummaryRowButton>
+  );
+}
+
+/** The Reviewed row's icon, by how its reviews and checks stand. */
+const REVIEWED_ICON: Record<ReviewedLine["tone"], ReactNode> = {
+  ok: <ShieldCheck />,
+  running: <Spinner />,
+  warn: <ExclamationMarkCircle className="text-warning" />,
+  failed: <ExclamationMarkCircle className="text-destructive" />,
+};
+
+/**
+ * "Reviewed": the session's code reviews and full checks in one line ("Reviewed · 5 fixed", red
+ * "Checks failed"); a click opens them in full in the Reviews tab. Nothing opens in the card.
+ */
+function ReviewedRow({ conversationId }: { conversationId: string }) {
+  const line = reviewedLine(useReviewRow(conversationId), useChecksLine(conversationId));
+  if (!line) return null;
+  return (
+    <SummaryRowButton
+      data-row="reviewed"
+      data-tone={line.tone}
+      title={line.title || undefined}
+      icon={REVIEWED_ICON[line.tone]}
+      className={cn(line.tone === "failed" && "text-destructive")}
+      onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Reviews")}
+    >
+      {line.text}
+    </SummaryRowButton>
   );
 }
 
@@ -909,9 +946,8 @@ function SessionSummaryContent({
             action={<ProjectActions conversationId={conversation.id} checkout={checkout} />}
           >
             {/* Plain rows: the thread merges on the user's words, and the Source panel commits. */}
-            <BranchRow branch={run?.workspace?.branch ?? setup.environment.branch} diff={diff} />
-            <ReviewRows conversationId={conversation.id} />
-            <ChecksRow conversationId={conversation.id} />
+            <ChangesRow conversationId={conversation.id} branch={run?.workspace?.branch ?? setup.environment.branch} diff={diff} />
+            <ReviewedRow conversationId={conversation.id} />
             {pullRequest && <PullRequestRow conversationId={conversation.id} pullRequest={pullRequest} />}
           </SummarySection>
           <WaitingOnYou conversationId={conversation.id} />

@@ -1,13 +1,24 @@
-import { type ReactNode, useMemo } from "react";
+import { type ComponentProps, type ReactNode, useMemo } from "react";
 
 import type { Merged } from "@/app/conversation/activity/revert";
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
-import { type FindingRow, useChecksLine, useReviewRow } from "@/app/conversation/reviewStatus";
-import { STATUS_BADGE } from "@/app/conversation/ReviewSummaryRow";
+import { type FindingLabel, type FindingRow, useChecksLine, useReviewRow } from "@/app/conversation/reviewStatus";
 import { Badge } from "@/components/ui/badge";
 import type { MergeRecord } from "@/ipc/generated";
 import { VENDOR_LABELS } from "@/lib/routing";
 import { useBoard } from "@/state/board";
+
+/**
+ * Each chip coloured as the app's badges are: open warns, fixed is done, a fix nobody checked
+ * warns softly, dismissed is quiet.
+ */
+const STATUS_BADGE: Record<FindingLabel, ComponentProps<typeof Badge>> = {
+  Open: { variant: "warning" },
+  New: { variant: "secondary" },
+  Fixed: { variant: "success" },
+  Unverified: { variant: "outline", className: "border-warning/50 text-warning" },
+  Dismissed: { variant: "outline", className: "border-divider text-foreground/65" },
+};
 
 /**
  * The session's reviews and checks in full, in a tab of their own (opened from the context card's
@@ -124,8 +135,8 @@ function Part({ title, children }: { title: string; children: ReactNode }) {
 /** One finding at full width: what the thread recorded and how severe, its whole title, where, and the thread's words on it. */
 function Finding({ finding }: { finding: FindingRow }) {
   return (
-    <li data-slot="reviews-finding" className="border-divider flex min-w-0 items-start gap-2 border-b py-2 text-sm last:border-b-0">
-      <Badge {...STATUS_BADGE[finding.status]}>{finding.status}</Badge>
+    <li data-slot="reviews-finding" title={finding.id} className="border-divider flex min-w-0 items-start gap-2 border-b py-2 text-sm last:border-b-0">
+      <Badge data-slot="finding-status" {...STATUS_BADGE[finding.status]}>{finding.status}</Badge>
       {finding.severity && (
         <Badge variant="outline" className="border-divider text-foreground/65">
           {finding.severity}

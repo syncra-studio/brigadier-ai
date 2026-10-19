@@ -21,7 +21,9 @@ export type ReviewTarget =
   | { type: "changes"; staged: boolean }
   | { type: "file"; path: string; staged: boolean }
   /** One commit's own change: a merge's, from its turn's View changes. */
-  | { type: "commit"; commit: string; staged: false };
+  | { type: "commit"; commit: string; staged: false }
+  /** The session's branch since it left its base: the context card's Changes row. */
+  | { type: "branch"; staged: false };
 
 /**
  * A page, file or browser tab's own chat, beside it in a split: `share` is the chat's part of
@@ -680,7 +682,7 @@ export function restoreSessionTabs(sessions: Record<string, SessionTabs>, isSave
     const tabs = (session.tabs as (SessionTab | LegacyDocumentTab)[]).flatMap((tab): SessionTab[] => {
       if (tab.kind === "terminal") return [{ ...tab, title: "" }];
       // The old Review tab of every change and its scope picker is gone.
-      if (tab.kind === "review" && tab.target.type !== "changes" && tab.target.type !== "file" && tab.target.type !== "commit") return [];
+      if (tab.kind === "review" && tab.target.type !== "changes" && tab.target.type !== "file" && tab.target.type !== "commit" && tab.target.type !== "branch") return [];
       // A popup its opener wrote (about:blank) is gone with its page: its tab starts empty.
       if (tab.kind === "browser" && !/^https?:/i.test(tab.url)) return [{ ...tab, url: "" }];
       if (tab.kind !== "document") return [tab];

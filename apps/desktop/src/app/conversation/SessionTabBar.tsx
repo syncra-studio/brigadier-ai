@@ -68,6 +68,7 @@ function baseName(path: string): string {
 export function tabTitle(tab: SessionTab, tabs: readonly SessionTab[]): string {
   if (tab.kind === "review") {
     if (tab.target.type === "changes") return tab.target.staged ? "Staged Changes" : "Changes";
+    if (tab.target.type === "branch") return "Changes";
     if (tab.target.type === "commit") return `Merge ${tab.target.commit.slice(0, 7)}`;
     return `${baseName(tab.target.path)} (diff)`;
   }
