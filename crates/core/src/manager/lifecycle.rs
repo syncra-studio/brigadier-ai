@@ -104,6 +104,8 @@ impl SessionManager {
         // session recovers: a reply sent while they recover (a cut-off request's) is delivered
         // once, by its sending, and not again as if the last run had left it.
         let owed = self.owed_peer_messages().await;
+        // Each big await below is polled from the heap ([`crate::heap`]): recovery runs on a
+        // runtime thread's stack, and their futures in this frame came to over 700 KB.
         for conversation in self.core.catalog().conversations {
             // One still being deleted (a delete that failed at launch) gets nothing new.
             if conversation.deleting {
@@ -131,7 +133,7 @@ impl SessionManager {
                 self.mark_cut_off_turn(&conversation.id).await;
             }
             self.recover_unheard_envelopes(&conversation.id).await;
-            if rebirth && !self.recover_stopped_rebirth(&conversation.id).await {
+            if rebirth && !crate::heap(|| self.recover_stopped_rebirth(&conversation.id)).await {
                 self.mark_cut_off_turn(&conversation.id).await;
             }
             // Merge cards are retired: open ones close, and no card answer merges.
@@ -162,18 +164,18 @@ impl SessionManager {
                     // A merge worker sent back during its landing, or its report Brigadier was
                     // to land on its own: the restart ended that, so the orchestrator decides.
                     _ if interrupted_fix(&task) => {
-                        self.recover_fix(&task).await;
+                        crate::heap(|| self.recover_fix(&task)).await;
                         continue;
                     }
                     // Its worktree and session stay: the terminal is gone, and the session
                     // goes back to its worker (or the end under way finishes).
                     TaskState::TakenOver => {
-                        self.recover_takeover(&task).await;
+                        crate::heap(|| self.recover_takeover(&task)).await;
                         continue;
                     }
                     // A write task that reported changing nothing has nothing to land.
                     TaskState::Reported if self.changed_nothing(&task).await => {
-                        self.dispose_task(&task, TaskState::Done).await;
+                        crate::heap(|| self.dispose_task(&task, TaskState::Done)).await;
                         continue;
                     }
                     // Its worktree is intact; the worker resumes when sent back to work.
@@ -201,7 +203,7 @@ impl SessionManager {
                     }
                     // A read task that reported is done.
                     TaskState::Reported => {
-                        self.dispose_task(&task, TaskState::Done).await;
+                        crate::heap(|| self.dispose_task(&task, TaskState::Done)).await;
                         continue;
                     }
                     // The landing was interrupted (older stores: its checks, or its card):
@@ -242,7 +244,7 @@ impl SessionManager {
                         if conversation.lifecycle == Lifecycle::Active
                             && task.native_session.is_some() =>
                     {
-                        self.resume_after_restart(&task).await;
+                        crate::heap(|| self.resume_after_restart(&task)).await;
                         continue;
                     }
                     _ => {}
@@ -252,18 +254,18 @@ impl SessionManager {
                         t.error = Some("Brigadier quit while this task was running.".into());
                     })
                     .await;
-                self.dispose_task(&task, TaskState::Stopped).await;
+                crate::heap(|| self.dispose_task(&task, TaskState::Stopped)).await;
             }
-            self.expire_stale_cards(&conversation.id).await;
+            crate::heap(|| self.expire_stale_cards(&conversation.id)).await;
             // A one-shot review the restart cut off is over; the orchestrator hears it.
-            self.recover_reviews(&conversation.id).await;
+            crate::heap(|| self.recover_reviews(&conversation.id)).await;
             if let Some(live) = &live
                 && live.recovering(false).await
             {
                 self.kick(live);
             }
             // So are its previews (the sweep above ended any a crash left running).
-            self.recover_previews(&conversation.id).await;
+            crate::heap(|| self.recover_previews(&conversation.id)).await;
             // And its CI watches (SESSION-FIXES-PLAN.md Q1): the user can ask to watch again.
             self.stop_ci_watches(&conversation.id).await;
             // Not its pull request's: the one its ready work waits on is watched again.
@@ -274,7 +276,7 @@ impl SessionManager {
             // is due now (SESSION-FIXES-PLAN.md Q3).
             self.check_held_merge(&conversation.id).await;
             // What other sessions sent it and it hadn't taken goes again (once).
-            self.recover_peer_messages(&conversation, &owed).await;
+            crate::heap(|| self.recover_peer_messages(&conversation, &owed)).await;
             // What waits for the user matches the tasks and reports as they are now.
             self.reconcile_waiting(&conversation.id).await;
             // Nothing runs any more: what was working is over or waits for the user. What ends
