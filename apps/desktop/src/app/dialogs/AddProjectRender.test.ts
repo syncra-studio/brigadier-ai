@@ -42,7 +42,7 @@ test("Add project lists the repositories on this computer and adds, clones or st
 
 type Frame = { ms: number; top: number; height: number; title: string | null };
 
-/** The dialog's moves over a second of frames: where its top edge went, and its heights in turn. */
+/** The dialog's moves over its recorded frames: where its top edge went, and its heights in turn. */
 function moves(frames: Frame[]) {
   const heights = frames.map((frame) => frame.height).filter((height, at, all) => at === 0 || height !== all[at - 1]);
   return { tops: [...new Set(frames.map((frame) => frame.top))], heights, frames: frames.length };

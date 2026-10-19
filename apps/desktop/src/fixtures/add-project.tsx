@@ -4,7 +4,7 @@
  * URL with a URL pasted, ?view=new New repository. ?drive=1 searches, picks, adds, clones and
  * starts a repository, and writes what it saw to #add-project-result (AddProjectRender.test.ts
  * reads it). ?frames=1 (under renderFixtureLive) answers the scan late, as a real one is, and
- * records the dialog's top edge and height on every frame for a second after it opens, after
+ * records the dialog's top edge and height on every frame (a second, 30 frames at least) after it opens, after
  * Clone from URL and after the back arrow, into #add-project-frames. ?look=1 (under
  * renderFixtureLive too, for a row under the pointer) sets each view's parts beside the app's
  * shared ones and writes their looks to #add-project-look. Without any the page stays as it
@@ -150,7 +150,13 @@ async function drive(): Promise<string> {
 /** Where the dialog is on one frame: its top edge (as drawn) and its height (as laid out). */
 type Frame = { ms: number; top: number; height: number; title: string | null };
 
-/** The dialog on every frame for a second from `act`. */
+/** How many drawn frames of the dialog a recording holds at least; a slow machine draws fewer a second. */
+const FRAMES = 30;
+
+/**
+ * The dialog on every frame from `act`, for a second and at least FRAMES frames with the dialog
+ * drawn (10 s at most), so a slow machine's recording holds as many frames as a fast one's.
+ */
 function record(act: () => unknown): Promise<Frame[]> {
   return new Promise((resolve) => {
     const seen: Frame[] = [];
@@ -165,7 +171,8 @@ function record(act: () => unknown): Promise<Frame[]> {
           title: found.querySelector("h2")?.textContent ?? null,
         });
       }
-      if (performance.now() - start < 1000) requestAnimationFrame(tick);
+      const elapsed = performance.now() - start;
+      if (elapsed < 1000 || (seen.length < FRAMES && elapsed < 10000)) requestAnimationFrame(tick);
       else resolve(seen);
     };
     requestAnimationFrame(tick);
