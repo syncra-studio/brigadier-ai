@@ -1,4 +1,4 @@
-import { Comment, Keyboard, QuestionMarkCircle, Settings } from "@openai/apps-sdk-ui/components/Icon";
+import { Comment, Keyboard, Settings } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useRef } from "react";
 
 import { AppUpdatePill } from "@/app/AppUpdatePill";
@@ -7,6 +7,7 @@ import { useShortcuts } from "@/app/shortcuts";
 import { preloadSettings } from "@/app/settings/lazy";
 import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
 import { UpdatesRow } from "@/app/UpdatesRow";
+import { HelpIcon } from "@/components/glyphs/help-icon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -94,7 +95,7 @@ function Moving({
   );
 }
 
-/** Help at the sidebar's foot: a question mark that opens Send feedback… and Keyboard shortcuts. */
+/** Help at the sidebar's foot: a life ring that opens Send feedback… and Keyboard shortcuts. */
 function HelpMenu() {
   const { open } = useSidebar();
   // Send feedback opens once the menu has closed, so its note keeps the keyboard rather than the
@@ -103,7 +104,7 @@ function HelpMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <FootButton tip="Help" icon={<QuestionMarkCircle />} />
+        <FootButton tip="Help" icon={<HelpIcon />} />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         {...(open ? ({ side: "top", align: "end" } as const) : footMenuPlacement(false))}
