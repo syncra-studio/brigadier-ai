@@ -13,6 +13,8 @@ const chat = query.has("chat");
 const stress = query.has("panel-test");
 // The worker view's header at the panel's own width in a 1280-wide window.
 const headerTest = query.has("header-test");
+// Wider letters, as Linux Chrome's fallback fonts set the same words wider than macOS's.
+if (query.has("wider-font")) document.head.appendChild(document.createElement("style")).textContent = "body * { letter-spacing: 0.3px !important; }";
 // A done worker's diff, opened from its `task-1.diff` chip.
 const diffTest = query.has("diff-test");
 const previousWidth = localStorage.getItem("brigadier.rightSidebarWidth");

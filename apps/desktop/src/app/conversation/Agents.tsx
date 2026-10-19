@@ -235,14 +235,14 @@ function WorkerDetail({ task, headerActions }: { task: Task; headerActions?: Rea
         <h2 className="min-w-8 truncate text-label font-medium" title={name ?? task.title}>
           {name ?? task.title}
         </h2>
-        <span className="flex-1" />
         {/* Its model at the end, as a worker's conversation reads; a click shows its details.
-            Where the header is short it gives way first: the title keeps its room. */}
+            Where the header is short it gives way first: the title keeps its room. No spacer and
+            no padding of its own, which would hold width the title needs once the model is gone. */}
         <Tooltip>
           <TooltipTrigger asChild>
             <button type="button" aria-label={`Worker details: ${model}`} aria-pressed={details}
               data-state={details ? "open" : "closed"}
-              className="text-muted-foreground hover:text-foreground data-[state=open]:text-foreground flex min-w-0 shrink-1000 rounded-sm px-1 text-label transition-colors"
+              className="text-muted-foreground hover:text-foreground data-[state=open]:text-foreground ms-auto flex min-w-0 shrink-1000 rounded-sm text-label transition-colors"
               onClick={() => setDetails((open) => !open)}>
               <span className="truncate">{model}</span>
             </button>
