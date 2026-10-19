@@ -12,7 +12,8 @@ test("Background lists the previews still there; a web preview's Show output ope
   assert.match(seen.section, /^Background/);
   // Only what is still there, newest first: the two that ended are not in the card.
   assert.deepEqual(seen.order, ["preview-5", "preview-4", "preview-3"]);
-  assert.match(seen.chip, /^Brigadier dev app1m/);
+  // Its state in a word: the app is starting.
+  assert.match(seen.chip, /^Brigadier dev app starting1m/);
   assert.equal(seen.pausedIcon, true);
   assert.equal(seen.opened, "panel:output:preview:preview-4");
   assert.match(seen.tabText, /Web app.*Showing/);
