@@ -18,7 +18,7 @@ type Look = {
 };
 type Seen = {
   error?: string;
-  cases: Record<"merged-finding" | "collapsed" | "all" | "confirm" | "reverting" | "reverted" | "branch" | "merge-only", Look>;
+  cases: Record<"merged-finding" | "collapsed" | "all" | "confirm" | "reverting" | "reverted" | "thread-reverted" | "branch" | "merge-only", Look>;
   row: unknown;
   viewChanges: unknown;
   finding: string | null;
@@ -58,6 +58,9 @@ test("the Changes card: merged with a finding, folded, all files, Revert's quest
     ["reverted", "Reverted 6 files", "Undone on main · 4:02 PM", [], ["Redo", "Show the files"]],
   );
   assert.equal(seen.revertedOpen, 3);
+  // Reverted through the thread (a later merge, the session reads Merged): git's revert says so.
+  const thread = cases["thread-reverted"];
+  assert.deepEqual([thread.state, thread.title, thread.status, thread.buttons], ["reverted", "Reverted 6 files", "Undone on main · 4:02 PM", ["Redo", "Show the files"]]);
   // Not merged yet: on its branch, Discard and Merge into main.
   assert.deepEqual([cases.branch.state, cases.branch.status, cases.branch.buttons], ["branch", "On three-small-improvements · 2 commits ahead", ["Discard", "Merge into main", "Fold the files"]]);
   // A merge with nothing of its own counted: the merge's card.

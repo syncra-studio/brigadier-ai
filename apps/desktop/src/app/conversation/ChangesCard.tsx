@@ -171,17 +171,17 @@ export function useTurnChanged(requestIds: readonly string[]): boolean {
 }
 
 /**
- * Whether the merge was taken back on its base: this is the session's latest merge (a later merge
- * brings work back), and the session reads Reverted or git shows the merge's revert, not redone
- * since. With what git shows of that revert: its time, and the commit Redo reverts.
+ * Whether the merge was taken back on its base: git shows its revert, not redone since, however
+ * it was made (through the thread, whose revert lands as a merge of its own, or by hand). Until
+ * git has answered, the session reading Reverted with this as its latest merge. With what git
+ * shows of that revert: its time, and the commit Redo reverts.
  */
 function useReverted(merge: Merged | null): { reverted: boolean; undo: MergeUndo | null } {
   const conversationId = useViewConversation()?.id ?? "";
   const settled = useSettledTabs((s) => s.byTab[conversationId]?.state === "reverted");
   const latest = useBoard((s) => s.board?.orchestratorSteps.findLast((step) => step.kind.type === "merged")?.kind as Merged | undefined);
   const undo = useMergeUndo(conversationId, merge?.mergeCommit);
-  const standing = undo !== null && undo.redoneBy === undefined;
-  const reverted = !!merge && latest?.mergeCommit === merge.mergeCommit && (standing || (settled && undo?.redoneBy === undefined));
+  const reverted = !!merge && (undo !== null ? undo.redoneBy === undefined : settled && latest?.mergeCommit === merge.mergeCommit);
   return { reverted, undo: reverted ? undo : null };
 }
 

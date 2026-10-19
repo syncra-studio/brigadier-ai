@@ -10,6 +10,8 @@
  * - `reverting`: the revert sent: "Reverting…" in place of the footer's buttons.
  * - `reverted`: the session reads Reverted and git shows the revert: one line, folded,
  *   "Undone on main · 4:02 PM", Redo.
+ * - `thread-reverted`: a merge the thread reverted (its revert landed as a later merge, the
+ *   session reads Merged): git's revert alone reads it Reverted.
  * - `branch`: not merged yet, on its branch two commits ahead: Discard and Merge into main.
  * - `merge-only`: a turn that merged with nothing of its own counted: the merge's card.
  *
@@ -76,6 +78,8 @@ const MERGES = {
   clean: merged("c1c1c1c1"),
   // The session's latest merge: the one its Reverted state names.
   reverted: merged("e1e1e1e1"),
+  // Reverted through the thread: not the session's latest merge.
+  threadReverted: merged("a2a2a2a2"),
 };
 
 const review = {
@@ -92,7 +96,7 @@ useBoard.setState({
   board: {
     ...emptyBoard(CHAT),
     loaded: true,
-    requests: Object.fromEntries(["finding", "collapsed", "all", "confirm", "reverting", "reverted", "branch"].map((id) => [id, request(id)])),
+    requests: Object.fromEntries(["finding", "collapsed", "all", "confirm", "reverting", "reverted", "thread-reverted", "branch"].map((id) => [id, request(id)])),
     reviews: { [review.id]: review },
     orchestratorSteps: [step(1, MERGES.finding), step(2, MERGES.clean), step(3, MERGES.reverted)],
   },
@@ -111,7 +115,8 @@ mockIPC((command, payload) => {
   }
   // The reverted merge's revert, as git shows it; the other merges stand.
   if (req.method === "getMergeUndo") {
-    return { method: req.method, undo: req.mergeCommit === MERGES.reverted.mergeCommit ? { revertedBy: "d0d0d0d0d0", revertedAtMs: REVERTED_AT } : null };
+    const reverted = [MERGES.reverted.mergeCommit, MERGES.threadReverted.mergeCommit].includes(req.mergeCommit);
+    return { method: req.method, undo: reverted ? { revertedBy: "d0d0d0d0d0", revertedAtMs: REVERTED_AT } : null };
   }
   return { method: req.method };
 });
@@ -131,6 +136,7 @@ const CASES: { id: string; conversation: string; node: ReactNode }[] = [
   { id: "confirm", conversation: CHAT, node: <ChangesCard requestIds={["confirm"]} merge={own(MERGES.clean)} /> },
   { id: "reverting", conversation: CHAT, node: <ChangesCard requestIds={["reverting"]} merge={own(MERGES.clean)} /> },
   { id: "reverted", conversation: REVERTED, node: <ChangesCard requestIds={["reverted"]} merge={own(MERGES.reverted)} /> },
+  { id: "thread-reverted", conversation: CHAT, node: <ChangesCard requestIds={["thread-reverted"]} merge={own(MERGES.threadReverted)} /> },
   { id: "branch", conversation: CHAT, node: <ChangesCard requestIds={["branch"]} /> },
   { id: "merge-only", conversation: CHAT, node: <ChangesCard requestIds={[]} merge={own(MERGES.clean)} /> },
 ];
