@@ -89,7 +89,35 @@ pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
     let mut wanted: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mcp = project.join(".mcp.json");
     if mcp.is_file() {
-        wanted.push((cwd.join(".mcp.json"), mcp));
+        // Claude starts the project's servers in `cwd`: what they name in the project is made
+        // absolute, in a copy of the file kept in the folder's `.claude`, where a session's
+        // file tools can't edit it, and readable by the user alone (it may hold secrets).
+        let target = match std::fs::read_to_string(&mcp)
+            .ok()
+            .and_then(|text| mcp_in_project(&text, project))
+        {
+            Some(text) => {
+                let copy = cwd.join(MCP_COPY);
+                if std::fs::read_to_string(&copy).ok().as_deref() != Some(&text) {
+                    std::fs::create_dir_all(&dot_claude)?;
+                    let temp = cwd.join(format!("{MCP_COPY}.{}.tmp", std::process::id()));
+                    // Made anew, never through what the session's commands left at its name.
+                    let _ = std::fs::remove_file(&temp);
+                    std::io::Write::write_all(
+                        &mut std::os::unix::fs::OpenOptionsExt::mode(
+                            std::fs::OpenOptions::new().write(true).create_new(true),
+                            0o600,
+                        )
+                        .open(&temp)?,
+                        text.as_bytes(),
+                    )?;
+                    std::fs::rename(&temp, &copy)?;
+                }
+                copy
+            }
+            None => mcp,
+        };
+        wanted.push((cwd.join(".mcp.json"), target));
     }
     if let Ok(entries) = std::fs::read_dir(project.join(".claude")) {
         for entry in entries.flatten() {
@@ -107,6 +135,148 @@ pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
         wanted.push((local, main.join(".claude/settings.local.json")));
     }
     sync_links(cwd, &wanted)
+}
+
+/// [`link_project`]'s copy of a project's `.mcp.json` whose local servers have paths in the
+/// project, in the session's folder, where its `.mcp.json` links to it.
+#[cfg(unix)]
+const MCP_COPY: &str = ".claude/.mcp.project.json";
+
+/// `text`, a project's `.mcp.json`, with what its local servers name in the project made
+/// absolute in `project`: `${CLAUDE_PROJECT_DIR}`, a command that is a file there
+/// (`./scripts/server`), and the paths a script runner or such a command is given (`node
+/// scripts/mcp.js`); none when there is nothing to change (or it isn't JSON). Other commands'
+/// arguments (`docker run … mcp/server`, `npx -y @acme/mcp`) stay as they are written.
+#[cfg(unix)]
+fn mcp_in_project(text: &str, project: &Path) -> Option<String> {
+    let mut config: serde_json::Value = serde_json::from_str(text).ok()?;
+    let mut changed = false;
+    let servers = config.get_mut("mcpServers")?.as_object_mut()?;
+    for server in servers
+        .values_mut()
+        .filter_map(|server| server.as_object_mut())
+    {
+        if server
+            .get("type")
+            .is_some_and(|kind| kind.as_str() != Some("stdio"))
+        {
+            continue;
+        }
+        let Some(command) = server.get("command").and_then(|c| c.as_str()) else {
+            continue;
+        };
+        let own = with_project_dir(command, project)
+            .or_else(|| path_in_project(command, project).filter(|_| command.contains('/')));
+        let paths = (own.is_some() || runs_scripts(command))
+            && !server
+                .get("args")
+                .and_then(|args| args.as_array())
+                .is_some_and(|args| {
+                    args.iter()
+                        .any(|arg| arg.as_str().is_some_and(picks_folder))
+                });
+        if let Some(own) = own {
+            server.insert("command".into(), own.into());
+            changed = true;
+        }
+        let Some(args) = server.get_mut("args").and_then(|args| args.as_array_mut()) else {
+            continue;
+        };
+        for arg in args {
+            let Some(text) = arg.as_str() else {
+                continue;
+            };
+            let resolved = with_project_dir(text, project)
+                .or_else(|| paths.then(|| path_in_project(text, project)).flatten());
+            if let Some(resolved) = resolved {
+                *arg = resolved.into();
+                changed = true;
+            }
+        }
+    }
+    changed.then(|| serde_json::to_string_pretty(&config).ok())?
+}
+
+/// An argument that chooses the folder the runner reads its paths from (`uv --directory`):
+/// those paths are left to it ([`mcp_in_project`]).
+#[cfg(unix)]
+fn picks_folder(arg: &str) -> bool {
+    const FLAGS: &[&str] = &[
+        "--directory",
+        "--cwd",
+        "--prefix",
+        "--project",
+        "--cd",
+        "-C",
+    ];
+    let flag = arg.split('=').next().unwrap_or(arg);
+    FLAGS.contains(&flag)
+}
+
+/// A command that runs the script it is given ([`mcp_in_project`]).
+#[cfg(unix)]
+fn runs_scripts(command: &str) -> bool {
+    const RUNNERS: &[&str] = &[
+        "node", "nodejs", "deno", "bun", "tsx", "ts-node", "uv", "ruby", "perl", "php", "sh",
+        "bash", "zsh",
+    ];
+    let name = Path::new(command)
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default();
+    RUNNERS.contains(&name.as_ref()) || name.starts_with("python")
+}
+
+/// `value` with `${CLAUDE_PROJECT_DIR}` or `${CLAUDE_PROJECT_DIR:-default}` in it made
+/// `project`: Claude sets that variable to the folder it runs in, here the session's.
+#[cfg(unix)]
+fn with_project_dir(value: &str, project: &Path) -> Option<String> {
+    const VAR: &str = "${CLAUDE_PROJECT_DIR";
+    if !value.contains(VAR) {
+        return None;
+    }
+    let (mut out, mut rest) = (String::new(), value);
+    while let Some(at) = rest.find(VAR) {
+        let after = &rest[at + VAR.len()..];
+        let end = match after.chars().next() {
+            Some('}') => 0,
+            Some(':') => after.find('}')?,
+            _ => {
+                out.push_str(&rest[..at + VAR.len()]);
+                rest = after;
+                continue;
+            }
+        };
+        out.push_str(&rest[..at]);
+        out.push_str(&project.display().to_string());
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+/// `value` made absolute in `project` when it is a path there ([`mcp_in_project`]): a file
+/// (`scripts/mcp.js`, `server.py`), or anything named from the folder (`.`, `./data`); never a
+/// flag or a bare word (`run`), nor a folder named like a package (`mcp/server`).
+#[cfg(unix)]
+fn path_in_project(value: &str, project: &Path) -> Option<String> {
+    if value.is_empty() || value.starts_with('-') || Path::new(value).is_absolute() {
+        return None;
+    }
+    let explicit =
+        value == "." || value == ".." || value.starts_with("./") || value.starts_with("../");
+    let relative = value.trim_start_matches("./");
+    let full = match relative {
+        "" | "." => project.to_path_buf(),
+        _ => project.join(relative),
+    };
+    // A bare word (a subcommand such as `run`) is never taken for a file.
+    let found = if explicit {
+        full.exists()
+    } else {
+        (value.contains('/') || value.contains('.')) && full.is_file()
+    };
+    found.then(|| full.display().to_string())
 }
 
 /// Takes [`link_project`]'s links out of `cwd` for a session that may not load a project's
@@ -163,6 +333,14 @@ fn sync_links(cwd: &Path, wanted: &[(PathBuf, PathBuf)]) -> io::Result<()> {
         let _ = std::fs::remove_file(&temp);
         std::os::unix::fs::symlink(target, &temp)?;
         std::fs::rename(&temp, link)?;
+    }
+    // A copy of an `.mcp.json` that no link reads any more.
+    let copy = cwd.join(MCP_COPY);
+    if !wanted.iter().any(|(_, target)| *target == copy) {
+        match std::fs::remove_file(&copy) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+            _ => {}
+        }
     }
     Ok(())
 }
@@ -915,6 +1093,115 @@ mod link_tests {
         for link in [".mcp.json", ".claude/settings.json", ".claude/skills"] {
             assert!(cwd.join(link).is_symlink(), "{link}");
         }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Claude starts the project's MCP servers in the session's folder: what a server names in
+    /// the project is made absolute there, so `node scripts/mcp.js` finds the project's script;
+    /// every other value stays as written (#352).
+    #[test]
+    fn a_projects_mcp_servers_keep_their_paths_in_the_project() {
+        let root = std::env::temp_dir().join(format!("brigadier-link-{}", uuid::Uuid::new_v4()));
+        let (project, cwd) = (root.join("project"), root.join("orch"));
+        std::fs::create_dir_all(project.join("scripts")).unwrap();
+        std::fs::create_dir_all(project.join("mcp/server")).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        for file in ["scripts/mcp.js", "scripts/server", "server.py", "run"] {
+            std::fs::write(project.join(file), "").unwrap();
+        }
+        std::fs::write(
+            project.join(".mcp.json"),
+            r#"{"mcpServers":{
+                "notes":{"command":"node","args":["scripts/mcp.js","--port","3000"]},
+                "local":{"command":"./scripts/server","args":["--data","${CLAUDE_PROJECT_DIR:-.}/data"]},
+                "uv":{"command":"uv","args":["run","server.py"]},
+                "elsewhere":{"command":"uv","args":["--directory","/external/mcp","run","server.py"]},
+                "npm":{"command":"npm","args":["run","mcp"]},
+                "box":{"command":"docker","args":["run","-v","${CLAUDE_PROJECT_DIR}:/app","-w","/app","node:22","node","scripts/mcp.js"]},
+                "npx":{"command":"npx","args":["-y","@acme/mcp"]},
+                "docker":{"command":"docker","args":["run","--rm","-i","mcp/server"]},
+                "web":{"type":"http","url":"https://example.com/mcp"}
+            }}"#,
+        )
+        .unwrap();
+
+        // A link the session's commands left at the copy's temporary name isn't written through.
+        let outside = root.join("outside");
+        std::fs::write(&outside, "keep").unwrap();
+        let temp = cwd.join(format!("{MCP_COPY}.{}.tmp", std::process::id()));
+        std::fs::create_dir_all(cwd.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&outside, &temp).unwrap();
+        link_project(&cwd, &project).unwrap();
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep");
+        assert!(!cwd.join(MCP_COPY).is_symlink());
+        let mode = std::os::unix::fs::PermissionsExt::mode(
+            &std::fs::metadata(cwd.join(MCP_COPY)).unwrap().permissions(),
+        );
+        assert_eq!(mode & 0o777, 0o600, "the user's alone");
+        assert_eq!(
+            std::fs::read_link(cwd.join(".mcp.json")).unwrap(),
+            cwd.join(MCP_COPY)
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(cwd.join(".mcp.json")).unwrap()).unwrap();
+        let servers = &config["mcpServers"];
+        let p = |rest: &str| project.join(rest).display().to_string();
+        assert_eq!(servers["notes"]["command"], "node");
+        assert_eq!(
+            servers["notes"]["args"],
+            serde_json::json!([p("scripts/mcp.js"), "--port", "3000"])
+        );
+        assert_eq!(servers["local"]["command"], p("scripts/server"));
+        assert_eq!(
+            servers["local"]["args"],
+            serde_json::json!(["--data", format!("{}/data", project.display())])
+        );
+        assert_eq!(
+            servers["uv"]["args"],
+            serde_json::json!(["run", p("server.py")])
+        );
+        // A runner told where to read its paths from reads them there.
+        assert_eq!(
+            servers["elsewhere"]["args"],
+            serde_json::json!(["--directory", "/external/mcp", "run", "server.py"])
+        );
+        // Another command's arguments stay: an npm script's name, a container's own paths.
+        assert_eq!(servers["npm"]["args"], serde_json::json!(["run", "mcp"]));
+        assert_eq!(
+            servers["box"]["args"],
+            serde_json::json!([
+                "run",
+                "-v",
+                format!("{}:/app", project.display()),
+                "-w",
+                "/app",
+                "node:22",
+                "node",
+                "scripts/mcp.js"
+            ])
+        );
+        assert_eq!(
+            servers["npx"],
+            serde_json::json!({ "command": "npx", "args": ["-y", "@acme/mcp"] })
+        );
+        assert_eq!(
+            servers["docker"]["args"],
+            serde_json::json!(["run", "--rm", "-i", "mcp/server"])
+        );
+        assert_eq!(servers["web"]["url"], "https://example.com/mcp");
+
+        // Nothing in the project left: the link reads the project's own file, and the copy goes.
+        std::fs::write(
+            project.join(".mcp.json"),
+            r#"{"mcpServers":{"npx":{"command":"npx","args":["-y","@acme/mcp"]}}}"#,
+        )
+        .unwrap();
+        link_project(&cwd, &project).unwrap();
+        assert_eq!(
+            std::fs::read_link(cwd.join(".mcp.json")).unwrap(),
+            project.join(".mcp.json")
+        );
+        assert!(!cwd.join(MCP_COPY).exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
