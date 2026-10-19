@@ -105,17 +105,13 @@ pub(super) fn skipped_roots(data_dir: &Path) -> BTreeSet<PathBuf> {
 }
 
 /// A past session's folder, canonical, when the scan may look at it: not Brigadier's own, and
-/// not in a folder macOS asks the user about, which is told from the path before the folder is
-/// touched (resolving it reads the disk) and again once it is.
+/// not in a folder macOS asks the user about. Link targets are checked before following them.
 pub(super) fn usable_folder(
     cwd: &Path,
     skipped: &BTreeSet<PathBuf>,
     protected: &ProtectedFolders,
 ) -> Option<PathBuf> {
-    if protected.covers(cwd) {
-        return None;
-    }
-    let cwd = cwd.canonicalize().ok()?;
+    let cwd = protected.canonicalize(cwd)?;
     usable_root(&cwd, skipped, protected).then_some(cwd)
 }
 

@@ -189,10 +189,7 @@ fn look_for_repos(
         if read >= MAX_FOLDERS || Instant::now() >= deadline {
             break;
         }
-        if protected.covers(&dir) {
-            continue;
-        }
-        let Ok(dir) = dir.canonicalize() else {
+        let Some(dir) = protected.canonicalize(&dir) else {
             continue;
         };
         // `~/code` and `~/Code` are one folder on a case-insensitive disk.
@@ -384,6 +381,71 @@ mod tests {
         let mut listed: Vec<_> = repos.iter().map(|repo| PathBuf::from(&repo.path)).collect();
         listed.sort();
         assert_eq!(listed, vec![picked, home.join("code/app")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn past_sessions_linked_into_guarded_folders_are_skipped_but_chosen_links_work() {
+        let temp = Temp::new();
+        let home = temp.0.join("home");
+        let real = Git::new("git".into(), std::env::vars_os().collect());
+        let guarded = home.join("Documents/code");
+        real.init(&guarded).unwrap();
+        std::fs::create_dir_all(guarded.join("src")).unwrap();
+        std::os::unix::fs::symlink("Documents/code", home.join("code")).unwrap();
+        std::os::unix::fs::symlink("code", home.join("via-code")).unwrap();
+        let log = temp.0.join("git-runs");
+        let logging = temp.0.join("git");
+        std::fs::write(
+            &logging,
+            format!("#!/bin/sh\npwd >> '{}'\nexec git \"$@\"\n", log.display()),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&logging).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&logging, permissions).unwrap();
+        let git = Git::new(logging, std::env::vars_os().collect());
+        let past = vec![
+            (home.join("code/src"), 1_000),
+            (home.join("via-code/src"), i64::MAX),
+        ];
+        let protected = ProtectedFolders::macos(Some(&home), []);
+        assert!(
+            suggest_repos(
+                &git,
+                past.clone(),
+                Some(&home),
+                &[],
+                &BTreeSet::new(),
+                &protected,
+            )
+            .is_empty()
+        );
+        assert!(!log.exists(), "git must not enter the guarded link target");
+
+        for chosen in [guarded.clone(), home.join("code")] {
+            let projects = vec![(ProjectId("picked".into()), chosen.display().to_string())];
+            let protected = ProtectedFolders::macos(Some(&home), [chosen]);
+            let repos = suggest_repos(
+                &git,
+                past.clone(),
+                Some(&home),
+                &projects,
+                &BTreeSet::new(),
+                &protected,
+            );
+            assert_eq!(repos.len(), 1);
+            assert_eq!(repos[0].path, guarded.display().to_string());
+            assert_eq!(repos[0].project_id, Some(ProjectId("picked".into())));
+            assert_eq!(repos[0].last_used_ms, i64::MAX);
+            let runs: BTreeSet<_> = std::fs::read_to_string(&log)
+                .unwrap()
+                .lines()
+                .map(PathBuf::from)
+                .collect();
+            assert_eq!(runs, BTreeSet::from([guarded.clone(), guarded.join("src")]));
+            std::fs::remove_file(&log).unwrap();
+        }
     }
 
     #[test]

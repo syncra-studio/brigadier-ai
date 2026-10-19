@@ -8,6 +8,7 @@
 //! other apps' data (Mail, Messages, Safari…) kept in `~/Library`, where macOS 14 and later
 //! also ask before an app reads another app's container.
 
+use std::collections::VecDeque;
 use std::path::{Component, Path, PathBuf};
 
 /// Below the home folder: Desktop, Documents, Downloads; `~/Library` holds iCloud Drive
@@ -39,10 +40,99 @@ impl ProtectedFolders {
             let home = lexical(home);
             roots.extend(IN_HOME.iter().map(|name| home.join(name)));
         }
-        Self {
+        let mut protected = Self {
             roots,
-            chosen: chosen.into_iter().map(|path| lexical(&path)).collect(),
+            // Resolving these is allowed: the user explicitly chose them. Keep both names
+            // so a project chosen through a link also permits its resolved folder.
+            chosen: chosen
+                .into_iter()
+                .flat_map(|path| {
+                    let resolved = path.canonicalize().ok();
+                    std::iter::once(lexical(&path)).chain(resolved)
+                })
+                .collect(),
+        };
+        // The home folder's ancestors can be links (/var on macOS, for example). Resolve
+        // only the unguarded home itself, then guard the same children under both names.
+        if let Some(home) = home.and_then(|home| protected.canonicalize(home)) {
+            protected
+                .roots
+                .extend(IN_HOME.iter().map(|name| home.join(name)));
         }
+        protected
+    }
+
+    /// Check each link hop before resolving a scan folder. Never stat through a link into a
+    /// guarded folder: even canonicalizing it can trigger the macOS permission prompt.
+    pub(super) fn canonicalize(&self, path: &Path) -> Option<PathBuf> {
+        self.canonicalize_with(path, |path| path.canonicalize())
+    }
+
+    fn canonicalize_with(
+        &self,
+        path: &Path,
+        canonicalize: impl FnOnce(&Path) -> std::io::Result<PathBuf>,
+    ) -> Option<PathBuf> {
+        if self.covers(path) {
+            return None;
+        }
+        if self.roots.is_empty() {
+            return canonicalize(path).ok();
+        }
+        let mut pending: VecDeque<_> = path
+            .components()
+            .map(|part| part.as_os_str().to_owned())
+            .collect();
+        let mut resolved = PathBuf::new();
+        let mut links = 0;
+        while let Some(part) = pending.pop_front() {
+            match Path::new(&part).components().next()? {
+                Component::Prefix(_) | Component::RootDir => resolved.push(part),
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    resolved.pop();
+                }
+                Component::Normal(_) => {
+                    let next = resolved.join(part);
+                    let full = lexical(
+                        &pending
+                            .iter()
+                            .fold(next.clone(), |path, part| path.join(part)),
+                    );
+                    // A chosen folder may require traversing a guarded parent. Only that
+                    // route is allowed, never a sibling or a link escaping the choice.
+                    let chosen_parent = self
+                        .chosen
+                        .iter()
+                        .any(|chosen| within(&full, chosen) && within(chosen, &next));
+                    if self.covers(&full) || (self.covers(&next) && !chosen_parent) {
+                        return None;
+                    }
+                    // lstat/readlink inspect the link itself, without accessing its target.
+                    let metadata = std::fs::symlink_metadata(&next).ok()?;
+                    if metadata.file_type().is_symlink() {
+                        links += 1;
+                        if links > 40 {
+                            return None;
+                        }
+                        let target = std::fs::read_link(&next).ok()?;
+                        if target.is_absolute() {
+                            resolved.clear();
+                        }
+                        for part in target.components().rev() {
+                            pending.push_front(part.as_os_str().to_owned());
+                        }
+                    } else {
+                        if !pending.is_empty() && !metadata.is_dir() {
+                            return None;
+                        }
+                        resolved = next;
+                    }
+                }
+            }
+        }
+        let path = canonicalize(&resolved).ok()?;
+        (!self.covers(&path)).then_some(path)
     }
 
     /// Whether `path` is in a guarded folder the user didn't choose, told from the path alone:
@@ -92,6 +182,70 @@ fn within(path: &Path, root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn links_into_guarded_folders_are_rejected_before_canonicalizing() {
+        let home = std::env::temp_dir().join(format!(
+            "20261018-1945-issues-run-2-w39-protected-{}",
+            uuid::Uuid::now_v7()
+        ));
+        std::fs::create_dir_all(home.join("Documents/code")).unwrap();
+        let home = home.canonicalize().unwrap();
+        std::os::unix::fs::symlink("Documents/code", home.join("code")).unwrap();
+        std::os::unix::fs::symlink("code", home.join("chain")).unwrap();
+        std::fs::create_dir_all(home.join("plain")).unwrap();
+        std::os::unix::fs::symlink("../Documents/code", home.join("plain/relative")).unwrap();
+        std::os::unix::fs::symlink(&home, home.join("home-alias")).unwrap();
+        let protected = ProtectedFolders::macos(Some(&home), []);
+        let mut canonicalized = Vec::new();
+        for path in ["code", "chain", "plain/relative", "home-alias/code"] {
+            assert!(
+                protected
+                    .canonicalize_with(&home.join(path), |path| {
+                        canonicalized.push(path.to_owned());
+                        path.canonicalize()
+                    })
+                    .is_none()
+            );
+        }
+        let alias = home.join("home-alias");
+        let alias_protected = ProtectedFolders::macos(Some(&alias), []);
+        assert!(
+            alias_protected
+                .canonicalize_with(&alias.join("code"), |path| {
+                    canonicalized.push(path.to_owned());
+                    path.canonicalize()
+                })
+                .is_none()
+        );
+        std::os::unix::fs::symlink("cycle", home.join("cycle")).unwrap();
+        assert!(
+            protected
+                .canonicalize_with(&home.join("cycle"), |path| {
+                    canonicalized.push(path.to_owned());
+                    path.canonicalize()
+                })
+                .is_none()
+        );
+        std::os::unix::fs::symlink("../other", home.join("Documents/code/escape")).unwrap();
+        let picked = ProtectedFolders::macos(Some(&home), [home.join("Documents/code")]);
+        assert!(
+            picked
+                .canonicalize_with(&home.join("code/escape"), |path| {
+                    canonicalized.push(path.to_owned());
+                    path.canonicalize()
+                })
+                .is_none()
+        );
+        // Parent components must be applied after links, as the filesystem does.
+        assert_eq!(
+            picked.canonicalize(&home.join("code/../code")),
+            Some(home.join("Documents/code")),
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+        assert!(canonicalized.is_empty(), "resolved {canonicalized:?}");
+    }
 
     #[cfg(unix)]
     #[test]
