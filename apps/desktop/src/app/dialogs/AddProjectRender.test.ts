@@ -71,3 +71,17 @@ for (const reducedMotion of [false, true]) {
     assert.equal(moves(seen.opened).heights.length, 1, JSON.stringify(moves(seen.opened)));
   });
 }
+
+// Drawn with the app's shared parts (#385), in each view: the app's dialog with its title, line,
+// close and back buttons, its fields, buttons, divider and badge, the picked row the app's chosen
+// row and a row under the pointer the app's row wash.
+test("Add project is drawn with the app's dialog, fields, buttons and rows", { timeout: 90000 }, async (t) => {
+  const pairs = JSON.parse(await renderFixtureLive(t, "add-project.html?look=1", "add-project-look", 60000)) as Record<
+    string,
+    [unknown, unknown]
+  >;
+  for (const [part, [mine, shared]] of Object.entries(pairs)) {
+    assert.notEqual(shared, null, `${part}: the shared part is drawn`);
+    assert.deepEqual(mine, shared, `${part} looks like the app's own`);
+  }
+});

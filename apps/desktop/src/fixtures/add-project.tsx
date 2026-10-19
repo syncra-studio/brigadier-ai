@@ -5,22 +5,25 @@
  * starts a repository, and writes what it saw to #add-project-result (AddProjectRender.test.ts
  * reads it). ?frames=1 (under renderFixtureLive) answers the scan late, as a real one is, and
  * records the dialog's top edge and height on every frame for a second after it opens, after
- * Clone from URL and after the back arrow, into #add-project-frames. Without either the page
- * stays as it opens, for screenshots.
+ * Clone from URL and after the back arrow, into #add-project-frames. ?look=1 (under
+ * renderFixtureLive too, for a row under the pointer) sets each view's parts beside the app's
+ * shared ones and writes their looks to #add-project-look. Without any the page stays as it
+ * opens, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AddProjectDialog } from "@/app/dialogs/AddProjectDialog";
-import { fixtureClick } from "@/fixtures/input";
+import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
+import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { Project, RepoSuggestion, Request } from "@/ipc/generated";
 import { revealApp } from "@/lib/splash";
 import { openAddProject } from "@/state/addProject";
 import { useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
-if (params.has("drive")) {
+if (params.has("drive") || params.has("look")) {
   const still = document.createElement("style");
   still.textContent =
     "*, *::before, *::after { animation: none !important; transition: none !important; backdrop-filter: none !important; }";
@@ -178,6 +181,64 @@ async function frames(): Promise<string> {
   return JSON.stringify({ opened, cloned, back });
 }
 
+/** Fields as they rest, as the shared field is measured: nothing focused. */
+const rest = () => (document.activeElement as HTMLElement | null)?.blur();
+
+/** The box a field's input (or shown value) sits in. */
+const field = (input: Element | null | undefined) => input?.closest("label, div");
+
+/** Each view's parts beside the shared ones they are drawn with, once `Canon` is mounted. */
+async function looks(): Promise<string> {
+  openAddProject();
+  for (let i = 0; i < 50 && !card()?.querySelector("[role=radio]"); i++) await settle();
+  rest();
+  const rows = [...card()!.querySelectorAll<HTMLElement>("[role=radio]")];
+  // The pointer over a row not picked (website), for its hover.
+  const over = rows[1]!.getBoundingClientRect();
+  await fixtureInput({ type: "pointer", x: over.x + over.width / 2, y: over.y + over.height / 2 });
+  await settle();
+  const pairs: LookPairs = {
+    card: [look(card(), "surface"), canon("dialog", "surface")],
+    title: [look(card()?.querySelector("h2"), "text"), canon("title", "text")],
+    line: [look(card()?.querySelector("p"), "text"), canon("line", "text")],
+    close: [look(card()?.querySelector("[aria-label=Close]"), "button"), canon("icon", "button")],
+    search: [look(field(card()?.querySelector("input")), "surface"), canon("input", "surface")],
+    chooseFolder: [look(button("Choose folder…"), "button"), canon("outline", "button")],
+    picked: [look(rows[0], "fill"), canon("chosen", "fill")],
+    pickedInk: [look(rows[0], "ink"), canon("chosen", "ink")],
+    hovered: [look(rows[1], "fill"), canon("wash", "fill")],
+    added: [look(rows[3]?.querySelector(":scope > span:nth-child(3)"), "button"), canon("badge", "button")],
+    radio: [look(rows[0]?.querySelector(":scope > span:last-child"), "fill"), canon("primary", "fill")],
+    footer: [look(button("Cancel")?.parentElement, "edgeTop"), canon("divider", "edgeTop")],
+    cloneFromUrl: [look(button("Clone from URL"), "button"), canon("ghost", "button")],
+    newRepository: [look(button("New repository"), "button"), canon("ghost", "button")],
+    cancel: [look(button("Cancel"), "button"), canon("ghost", "button")],
+    add: [look(button("Add brigadier"), "button"), canon("primary", "button")],
+  };
+  button("Clone from URL")?.click();
+  await settle();
+  rest();
+  await settle();
+  Object.assign(pairs, {
+    back: [look(card()?.querySelector("[aria-label=Back]"), "button"), canon("icon", "button")],
+    url: [look(field(card()?.querySelector("input")), "surface"), canon("input", "surface")],
+    saveTo: [look(field(card()?.querySelector("[data-slot=save-to]")), "surface"), canon("input", "surface")],
+    change: [look(button("Change…"), "button"), canon("outline", "button")],
+    clone: [look(button("Clone and add"), "button"), canon("primary", "button")],
+  } satisfies LookPairs);
+  card()?.querySelector<HTMLElement>("[aria-label=Back]")?.click();
+  await settle();
+  button("New repository")?.click();
+  await settle();
+  rest();
+  await settle();
+  Object.assign(pairs, {
+    name: [look(field(card()?.querySelector("input")), "surface"), canon("input", "surface")],
+    create: [look(button("Create and add"), "button"), canon("primary", "button")],
+  } satisfies LookPairs);
+  return JSON.stringify(pairs);
+}
+
 /** Opens the view asked for, with a URL pasted in Clone. */
 async function show() {
   openAddProject();
@@ -193,8 +254,10 @@ async function show() {
 function Page() {
   const [result, setResult] = useState<string | null>(null);
   const [recorded, setFrames] = useState<string | null>(null);
+  const [looked, setLooked] = useState<string | null>(null);
   useEffect(() => {
     if (params.has("drive")) void drive().then(setResult);
+    else if (params.has("look")) void looks().then(setLooked);
     else if (params.has("frames")) void frames().then(setFrames);
     else void show();
   }, []);
@@ -205,6 +268,8 @@ function Page() {
       <AddProjectDialog />
       {result && <pre id="add-project-result">{result}</pre>}
       {recorded && <pre id="add-project-frames">{recorded}</pre>}
+      {params.has("look") && <Canon />}
+      {looked && <pre id="add-project-look">{looked}</pre>}
     </div>
   );
 }

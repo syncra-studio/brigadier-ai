@@ -22,8 +22,9 @@ import {
 } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { DialogPill } from "@/app/dialogs/pills";
 import { Spinner } from "@/components/glyphs/spinner";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { useNow } from "@/hooks/use-now";
 import { pickFolder } from "@/ipc/client";
@@ -42,9 +43,9 @@ import {
 import { toast } from "@/state/toasts";
 
 /*
- * Add project, drawn to the user's design: pick a git repository found on this computer (or
- * choose a folder), or clone one from a URL, or start a new one. Its colours and type are the
- * redesigned Settings pages' (`settings-*`).
+ * Add project, laid out to the user's design and drawn with the app's dialog parts: pick a git
+ * repository found on this computer (or choose a folder), or clone one from a URL, or start a
+ * new one.
  */
 
 /** Where clones and new repositories go unless the user changes it (made when missing). */
@@ -59,7 +60,7 @@ export function AddProjectDialog() {
       <DialogContent
         data-testid="add-project-dialog"
         showCloseButton={false}
-        className="bg-settings-surface border-settings-border rounded-design-dialog max-w-add-project shadow-design-dialog text-settings-text top-add-project-top origin-top translate-y-0 gap-0 border p-0 ring-0 motion-reduce:animate-none"
+        className="max-w-add-project top-add-project-top origin-top translate-y-0 gap-0 p-0 motion-reduce:animate-none"
       >
         {/* Its top edge stays put (#384): a view or the list loading changes only its height,
             which moves the bottom edge. Remounted per opening so it starts over. */}
@@ -100,24 +101,18 @@ function Header({ title, line, onBack }: { title: string; line: string; onBack?:
   return (
     <div className={cn("flex gap-3.5 pt-6 pr-5 pb-5", onBack ? "pl-6" : "pl-7")}>
       {onBack && (
-        <button
-          type="button"
-          aria-label="Back"
-          onClick={onBack}
-          className="bg-settings-raised text-settings-text hover:bg-settings-border rounded-capsule focus-visible:ring-settings-accent flex size-7 shrink-0 items-center justify-center outline-none focus-visible:ring-2"
-        >
-          <ArrowLeft className="size-icon-sm" />
-        </button>
+        <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
+          <ArrowLeft />
+        </Button>
       )}
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <DialogTitle className="text-dialog-title text-settings-text font-medium">{title}</DialogTitle>
-        <DialogDescription className="text-settings-text-secondary text-settings-small">{line}</DialogDescription>
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription>{line}</DialogDescription>
       </div>
-      <DialogClose
-        aria-label="Close"
-        className="text-settings-text-secondary hover:bg-settings-raised hover:text-settings-text rounded-capsule focus-visible:ring-settings-accent flex size-7 shrink-0 items-center justify-center outline-none focus-visible:ring-2"
-      >
-        <X className="size-design-icon-close" />
+      <DialogClose asChild>
+        <Button variant="ghost" size="icon-sm" aria-label="Close">
+          <X />
+        </Button>
       </DialogClose>
     </div>
   );
@@ -126,7 +121,7 @@ function Header({ title, line, onBack }: { title: string; line: string; onBack?:
 /** The bar along the bottom: `start` on the left, Cancel and the main button on the right. */
 function Footer({ start, children }: { start?: ReactNode; children: ReactNode }) {
   return (
-    <div className="border-settings-divider flex items-center gap-2 border-t py-4 pr-6 pl-5">
+    <div className="border-divider flex items-center gap-2 border-t py-4 pr-6 pl-5">
       <div className="flex min-w-0 flex-1 items-center gap-1">{start}</div>
       {children}
     </div>
@@ -135,9 +130,9 @@ function Footer({ start, children }: { start?: ReactNode; children: ReactNode })
 
 function CancelButton({ label = "Cancel" }: { label?: string }) {
   return (
-    <DialogPill look="quiet" onClick={closeAddProject}>
+    <Button variant="ghost" size="sm" onClick={closeAddProject}>
       {label}
-    </DialogPill>
+    </Button>
   );
 }
 
@@ -145,17 +140,20 @@ function CancelButton({ label = "Cancel" }: { label?: string }) {
 function FieldLabel({ htmlFor, label, aside }: { htmlFor?: string; label: string; aside?: string | undefined }) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <label htmlFor={htmlFor} className="text-settings-text text-settings-small font-medium">
+      <label htmlFor={htmlFor} className="text-foreground text-xs font-medium">
         {label}
       </label>
-      {aside && <span className="text-settings-text-tertiary text-settings-meta">{aside}</span>}
+      {aside && <span className="text-muted-foreground text-xs">{aside}</span>}
     </div>
   );
 }
 
-/** A 42-high box for a field: its icon, then its content. */
+/** A 42-high box for a field, in the app's field look: its icon, then its content. */
 const BOX =
-  "bg-settings-inset rounded-design-row flex h-10.5 items-center gap-2.5 border [&>svg]:size-icon-sm [&>svg]:shrink-0 [&>svg]:text-settings-text-tertiary";
+  "bg-muted/60 focus-within:bg-background rounded-control flex h-10.5 items-center gap-2.5 border border-transparent transition-colors [&>svg]:size-icon-sm [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
+
+/** A field's own input inside its box. */
+const BOX_INPUT = "text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent font-mono text-xs outline-none";
 
 /**
  * Save to: the folder it goes in (`parent`, dimmer) and its own name a step brighter, with
@@ -186,20 +184,15 @@ function SaveTo({
   return (
     <div className="flex flex-col gap-2">
       <FieldLabel label="Save to" aside={aside} />
-      <div className={cn(BOX, "border-settings-divider pr-1.5 pl-3")}>
+      <div className={cn(BOX, "pr-1.5 pl-3")}>
         <Folder />
-        <p data-slot="save-to" className="text-settings-meta flex min-w-0 flex-1 font-mono">
-          <span className="text-settings-text-tertiary min-w-0 truncate">{parent}</span>
-          <span className="text-settings-text shrink-0">{name}</span>
+        <p data-slot="save-to" className="flex min-w-0 flex-1 font-mono text-xs">
+          <span className="text-muted-foreground min-w-0 truncate">{parent}</span>
+          <span className="text-foreground shrink-0">{name}</span>
         </p>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={change}
-          className="bg-settings-raised border-settings-ring text-settings-text hover:bg-settings-border rounded-capsule text-settings-small focus-visible:ring-settings-accent flex h-7 shrink-0 items-center border px-3 font-medium outline-none focus-visible:ring-2 disabled:opacity-50"
-        >
+        <Button variant="outline" size="sm" disabled={disabled} onClick={change}>
           Change…
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -358,8 +351,8 @@ function PickView({
     <div className="flex flex-col">
       <Header title="Add project" line="Pick a git repository for your sessions to work in." />
       <div className="flex items-center gap-2.5 px-7">
-        <label className="bg-settings-inset border-settings-divider rounded-capsule focus-within:border-settings-ring flex h-9 min-w-0 flex-1 items-center gap-2 border px-3.5">
-          <Search className="size-icon-sm text-settings-text-tertiary shrink-0" />
+        <label className="bg-muted/60 focus-within:bg-background rounded-control flex h-9 min-w-0 flex-1 items-center gap-2 border border-transparent px-3.5 transition-colors">
+          <Search className="size-icon-sm text-muted-foreground shrink-0" />
           <input
             value={query}
             autoFocus
@@ -369,18 +362,18 @@ function PickView({
             placeholder="Search repositories"
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onSearchKey}
-            className="text-settings-text text-settings-small placeholder:text-settings-text-tertiary min-w-0 flex-1 bg-transparent outline-none"
+            className="text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
           />
         </label>
-        <DialogPill look="secondary" className="h-9" onClick={choose}>
-          <FolderOpen className="size-icon-sm" />
+        <Button variant="outline" className="h-9" onClick={choose}>
+          <FolderOpen />
           Choose folder…
-        </DialogPill>
+        </Button>
       </div>
       <div className="flex flex-col gap-2 px-4 pt-5.5 pb-4">
         <div className="flex items-center justify-between px-3">
-          <span className="text-settings-text-tertiary text-settings-small">On this Mac</span>
-          <span className="text-settings-text-tertiary text-settings-meta">Most recent first</span>
+          <span className="text-muted-foreground text-xs">On this Mac</span>
+          <span className="text-muted-foreground text-xs">Most recent first</span>
         </div>
         {/* While the scan runs the list holds its five rows' room. */}
         <div
@@ -399,7 +392,7 @@ function PickView({
             />
           ))}
           {rows.length === 0 && (
-            <p className="text-settings-text-tertiary text-settings-small flex h-14.5 items-center px-3">
+            <p className="text-muted-foreground flex h-14.5 items-center px-3 text-sm">
               {repos === null
                 ? "Looking for repositories…"
                 : query.trim()
@@ -417,22 +410,22 @@ function PickView({
       <Footer
         start={
           <>
-            <DialogPill look="quiet" onClick={onClone}>
-              <Link className="size-design-icon-sm" />
+            <Button variant="ghost" size="sm" onClick={onClone}>
+              <Link />
               Clone from URL
-            </DialogPill>
-            <DialogPill look="quiet" onClick={() => onNew()}>
-              <Plus className="size-design-icon-sm" />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => onNew()}>
+              <Plus />
               New repository
-            </DialogPill>
+            </Button>
           </>
         }
       >
         <CancelButton />
-        <DialogPill look="primary" disabled={!current || busy} onClick={() => void add()}>
+        <Button size="sm" disabled={!current || busy} onClick={() => void add()}>
           {busy && <Spinner className="size-icon-xs animate-spin" />}
           {current ? `Add ${current.name}` : "Add project"}
-        </DialogPill>
+        </Button>
       </Footer>
     </div>
   );
@@ -463,33 +456,33 @@ function RepoRow({
       onClick={onPick}
       onDoubleClick={onAdd}
       className={cn(
-        "rounded-design-row focus-visible:ring-settings-accent flex h-14.5 w-full shrink-0 cursor-default items-center gap-3 border px-3 text-left outline-none focus-visible:ring-2",
-        chosen ? "bg-design-row-chosen border-settings-ring" : "hover:bg-design-row-chosen border-transparent",
+        "rounded-control focus-visible:ring-ring flex h-14.5 w-full shrink-0 cursor-default items-center gap-3 px-3 text-left outline-none focus-visible:ring-2",
+        chosen ? "bg-accent text-accent-foreground" : "hover:bg-foreground/5",
         added && "opacity-55",
       )}
     >
-      <span className="bg-settings-chosen rounded-design-mark flex size-8.5 shrink-0 items-center justify-center">
-        <Folder className={cn("size-icon-md", chosen ? "text-settings-text" : "text-settings-text-secondary")} />
+      <span className="bg-foreground/8 rounded-nav flex size-8.5 shrink-0 items-center justify-center">
+        <Folder className={cn("size-icon-md", chosen ? "text-foreground" : "text-foreground/65")} />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.75">
-        <span className="text-settings-text text-settings-body truncate font-medium">{row.name}</span>
-        <span className="text-settings-text-tertiary text-settings-meta truncate font-mono">{shortPath(row.path)}</span>
+        <span className="truncate text-sm font-medium">{row.name}</span>
+        <span className="text-muted-foreground truncate font-mono text-xs">{shortPath(row.path)}</span>
       </span>
       {added ? (
-        <span className="bg-settings-border rounded-design-badge flex shrink-0 items-center gap-1.25 px-2 py-0.75">
-          <Check className="size-design-icon-xs text-settings-text-secondary" />
-          <span className="text-design-badge-text text-settings-meta font-medium">Added</span>
-        </span>
+        <Badge variant="secondary">
+          <Check />
+          Added
+        </Badge>
       ) : (
         <>
-          <span className="text-settings-text-tertiary text-settings-meta shrink-0">
+          <span className="text-muted-foreground shrink-0 text-xs">
             {row.plain ? "Not a repository" : row.lastUsedMs ? formatLastUsed(row.lastUsedMs, now) : ""}
           </span>
           <span
             aria-hidden
             className={cn(
-              "rounded-capsule flex size-4.5 shrink-0 items-center justify-center",
-              chosen ? "bg-settings-accent text-design-on-accent" : "shadow-design-radio",
+              "flex size-4.5 shrink-0 items-center justify-center rounded-full",
+              chosen ? "bg-primary text-primary-foreground" : "ring-foreground/16 ring-1",
             )}
           >
             {chosen && <Check className="size-icon-xs" />}
@@ -568,7 +561,7 @@ function CloneView({ onBack }: { onBack: () => void }) {
       <div className="flex flex-col gap-5.5 px-7 pt-1 pb-7">
         <div className="flex flex-col gap-2">
           <FieldLabel htmlFor={`${id}-url`} label="Repository URL" />
-          <div className={cn(BOX, "border-settings-divider focus-within:border-settings-accent px-3")}>
+          <div className={cn(BOX, "px-3")}>
             <Link />
             <input
               id={`${id}-url`}
@@ -582,7 +575,7 @@ function CloneView({ onBack }: { onBack: () => void }) {
                 setUrl(event.target.value);
                 setError(null);
               }}
-              className="text-settings-text text-settings-meta placeholder:text-settings-text-tertiary caret-settings-link min-w-0 flex-1 bg-transparent font-mono outline-none"
+              className={BOX_INPUT}
             />
           </div>
         </div>
@@ -598,10 +591,10 @@ function CloneView({ onBack }: { onBack: () => void }) {
       </div>
       <Footer>
         <CancelButton label={busy ? "Close" : "Cancel"} />
-        <DialogPill look="primary" type="submit" disabled={busy}>
+        <Button size="sm" type="submit" disabled={busy}>
           {busy && <Spinner className="size-icon-xs animate-spin" />}
           {busy ? "Cloning…" : "Clone and add"}
-        </DialogPill>
+        </Button>
       </Footer>
     </form>
   );
@@ -654,7 +647,7 @@ function NewRepoView({
       <div className="flex flex-col gap-5.5 px-7 pt-1 pb-7">
         <div className="flex flex-col gap-2">
           <FieldLabel htmlFor={`${id}-name`} label="Name" />
-          <div className={cn(BOX, "border-settings-divider focus-within:border-settings-accent px-3")}>
+          <div className={cn(BOX, "px-3")}>
             <Plus />
             <input
               id={`${id}-name`}
@@ -669,7 +662,7 @@ function NewRepoView({
                 setName(event.target.value);
                 setError(null);
               }}
-              className="text-settings-text text-settings-meta placeholder:text-settings-text-tertiary caret-settings-link min-w-0 flex-1 bg-transparent font-mono outline-none"
+              className={BOX_INPUT}
             />
           </div>
         </div>
@@ -678,10 +671,10 @@ function NewRepoView({
       </div>
       <Footer>
         <CancelButton />
-        <DialogPill look="primary" type="submit" disabled={busy}>
+        <Button size="sm" type="submit" disabled={busy}>
           {busy && <Spinner className="size-icon-xs animate-spin" />}
           Create and add
-        </DialogPill>
+        </Button>
       </Footer>
     </form>
   );
