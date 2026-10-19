@@ -218,21 +218,57 @@ async fn a_background_run_keeps_the_name_the_thread_gave_it() {
 #[tokio::test]
 async fn a_check_waiting_for_the_same_check_goes_to_the_background_and_answers_from_its_result() {
     let (inputs, replies): (Log, Log) = Default::default();
+    let gate = super::Scratch::new("background-same-check-release");
+    let started = gate.join("started");
+    let marker = gate.join("release");
+    let command = format!(
+        "touch '{}'; while [ ! -f '{}' ]; do sleep 0.05; done; echo once",
+        started.display().to_string().replace('\'', "'\\''"),
+        marker.display().to_string().replace('\'', "'\\''")
+    );
     let flow = Flow::start(
         "background-same-check",
         Options::default(),
-        checking(
-            vec![
-                ("run_check", "sleep 6; echo once"),
-                ("run_check", "sleep 6; echo once"),
-            ],
-            inputs.clone(),
-            replies.clone(),
-        ),
+        script({
+            let (inputs, replies) = (inputs.clone(), replies.clone());
+            move |turn| {
+                let (inputs, replies, command, started) = (
+                    inputs.clone(),
+                    replies.clone(),
+                    command.clone(),
+                    started.clone(),
+                );
+                async move {
+                    inputs.lock().unwrap().push(turn.input.clone());
+                    if turn.input.contains("finished · ") {
+                        return Reply::text("The check passed.");
+                    }
+                    for _ in 0..2 {
+                        let reply = turn.call("run_check", json!({ "command": command })).await;
+                        assert!(!reply.is_error, "run_check: {}", reply.text);
+                        replies.lock().unwrap().push(reply.text);
+                        // Preparing a check can outlast its foreground call. Ensure the
+                        // first owns the check before the second starts preparing it.
+                        super::eventually("the first check's command to start", || {
+                            started.exists()
+                        })
+                        .await;
+                    }
+                    Reply::text(crate::manager::prompts::QUIET)
+                }
+            }
+        }),
     )
     .await;
     flow.background_commands();
     flow.say("Check twice.").await;
+    // Keep the first check running until both calls have gone to the background, even if
+    // the test process stalls while its child keeps running.
+    flow.until("both checks to go to the background", |_| {
+        replies.lock().unwrap().len() == 2
+    })
+    .await;
+    std::fs::write(&marker, "").unwrap();
     let board = flow.settled().await;
     let replies = replies.lock().unwrap().clone();
     assert!(replies[0].starts_with("[run-1 still runs"), "{replies:?}");
