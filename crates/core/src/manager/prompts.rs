@@ -38,53 +38,34 @@ macro_rules! thread_voice {
     };
 }
 
-/// How an answer someone acts on is laid out (Q79, Q86): the bottom line first, then free
-/// Markdown with optional parts the app draws, numbered sources folded at the end by the app.
-macro_rules! research_format {
+/// How a final answer is shaped (Q87): outcome first, short, standing alone beside the folded
+/// work, with sources inline and no layout of the model's own; the app draws cards only for
+/// real things (files, images, the edited files, a running local page).
+macro_rules! answer_style {
     () => {
         concat!(
             "
 
-An answer someone will act on (advice, a decision, a how-to, research):
-- Start with the bottom line: one or two sentences that say what to do, or give the answer itself. Nothing before it. If you are unsure overall, say so once there, in plain words.
-- The rest is free Markdown, shaped as the answer needs. The app draws a few shapes as parts of its own. They are optional tools, never a template: use one only when the answer really has that shape; otherwise write freely in Markdown.",
-            answer_parts!(),
-            "
-- Never fold a warning, or anything the reader must know to stay safe. Write numbers as \"7 out of 10\", not percentages, with the same base each time. Use everyday words and sentences under 25 words, and explain each term once, in passing. A factual question gets the answer in its first sentence and at most a few lines after it.
-- Your text around the parts follows the voice.",
+How a final answer looks:
+- Brigadier folds the notes you write while you work under \"Worked for\" once your final answer comes, so the final answer stands alone: never point back to an earlier note.
+- Lead with the outcome: the result, the answer or what to do, in the first sentence; if you are unsure overall, say so there, once. Then one or two short paragraphs, and an optional line on how it was checked. Don't default to bullets: one or two changes read best as plain prose.
+- Sum up routine checks in one line (\"All 10 tests pass.\"), never a list of each check. Say what you couldn't run or check (the tests, the app).
+- Never more than 50 to 70 lines: give what matters most, not all you did. A heading only when it really helps, of 1 to 3 words. Lists stay flat, never nested, and their items are sentences.",
             research_breakdown!(),
             "
-- Mark only the facts that carry weight (a price, a law, a risk number) with their source's number, [1] or [2, 3]: about six at most before the `---`. End with one `### Sources` heading, in English whatever language you write in, over a numbered list: `1. [Title](https://…)`. Nothing after it except `### Details` when that applies. Never list sources anywhere else: the app folds the list and links the numbers."
+- Cite a web source as a link on the words of the claim it supports, right where it stands ([the 2026 price list](https://…)): never numbered marks like [1], and never a list of sources at the end.
+- A comparison may be one plain Markdown table of at most 3 columns, with your pick said in the sentence before it.
+- Never leave out a warning, or anything the reader must know to stay safe. Write numbers as \"7 out of 10\", not percentages, and explain each term once, in passing.
+- Brigadier draws real things as cards of its own (a file or image you link, the files you edited, a local page you started): never draw layout yourself, such as `---` sections, cards, badges or a `### Details` section."
         )
     };
 }
 
-/// The optional parts an answer may use (Q86): the prompt's half of the app's parts registry
-/// (`answerLayout.ts`), one line per part. Adding a part is a line here and an entry there.
-macro_rules! answer_parts {
-    () => {
-        "
-  - Steps done in order: right after the bottom line, one numbered list of 3 to 7 steps. Each step starts with a short phrase that begins with a verb and ends with a full stop, then one sentence of detail, with the cost or time when you know it.
-  - A real choice between 2 to 4 options: one table, options as rows, at most 5 short columns, the last saying who each option is best for. End the first cell of your pick with ` ★`, and pick one: don't leave the choice open.
-  - A real trap (losing money, a scam, a legal or health risk): one avoid-list, a line `> [!CAUTION]`, then a short title line in the reader's language, then at most 4 bullets, each a sign the reader can recognise.
-  - What only some readers need (why, background, taxes, who can help, what you couldn't check): after a line `---`, one `### heading` per topic that says what is inside; the app folds each. Keep each short.
-  - A risk number that drives the advice: a fenced block `chance` holding `N of 100` and one caption line."
-    };
-}
-
-/// The questions a Chat's reader likely asks next (Q86): the app shows them as buttons.
-macro_rules! ask_next {
-    () => {
-        "
-- You may end with up to 3 short questions the reader is likely to ask next, as a list under one `### Ask next` heading, in English whatever language you write in, just before `### Sources`. Never one a fold already answers."
-    };
-}
-
-/// How the breakdown is written: the voice's no-bold-labels rule, said where research answers
-/// broke it (Q79, the 10-18 live checks: a bold name with a colon, then one without).
+/// No line starts in bold: the voice's no-bold-labels rule, said where research answers broke
+/// it (Q79, the 10-18 live checks: a bold name with a colon, then one without).
 macro_rules! research_breakdown {
     () => {
-        " Write it in sentences, or a plain list whose items are sentences. No line or list item starts with bold text, with or without a colon, even where what you read (a source, a worker's notes, a report) does: names stay plain (not \"- **Option:** costs …\" or \"- **Option** costs …\" but \"- Option costs …\"). Bold only for one critical warning, if at all."
+        " No line or list item starts with bold text, with or without a colon, even where what you read (a source, a worker's notes, a report) does: names stay plain (not \"- **Option:** costs …\" or \"- **Option** costs …\" but \"- Option costs …\"). Bold only for one critical warning, if at all."
     };
 }
 
@@ -93,13 +74,6 @@ macro_rules! research_report {
     () => {
         "
 - Findings longer than that (many options compared, prices, a full write-up) go in a report: save it with save_report and link it in one line ([Full report](brigadier-page:…)). Never paste the report into the chat."
-    };
-}
-
-/// When an answer has Details (Q79): only when its request changed code.
-macro_rules! details_rule {
-    () => {
-        "When this request changed code, a last heading `### Details`, shown folded, holds three labelled lines: `Checks:` each check you ran in this request with its result (or \"none run\"), `Review:` its state (none for a tiny edit, off, still running, or what it found and what you fixed) and `Not checked:` what nobody checked (or \"nothing\"). An answer that changed no code (a question, research, an explained error) has no Details."
     };
 }
 
@@ -121,7 +95,7 @@ macro_rules! fusion_lead {
 /// disagreement only where it changes what to do.
 macro_rules! fused_answer {
     () => {
-        "In a fused answer, never write `Confidence:` or `Disagreement:` lines. Show a disagreement only when it changes what the reader should do: if it changes your pick, as a condition in the bottom line; otherwise as one first-person line in the section it concerns (\"I'm not fully sure of …: one source says …, but …, so I used …\"). If you are unsure overall, say so once in the bottom line."
+        "In a fused answer, never write `Confidence:` or `Disagreement:` lines. Show a disagreement only when it changes what the reader should do: if it changes your pick, as a condition in the first sentence; otherwise as one first-person sentence where it belongs (\"I'm not fully sure of …: one source says …, but …, so I used …\"). If you are unsure overall, say so once in the first sentence."
     };
 }
 
@@ -328,14 +302,14 @@ How to work:
 - {OFFER_SESSION_RULE}
 - When the user seems annoyed with Brigadier itself (not their project), call offer_feedback once.
 - Tools return at once; never wait or poll: reports, questions, reviews and outcomes come later as messages from Brigadier ([report task-3 …] … [/report]).
-- Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too, nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer: {INLINE_FILES} Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
+- Never give the user a scratch path or a throwaway file (a one-off script, a log), nor point them at a file you haven't just seen exist. Hand a worker's file over with its task card's Save or a link in your answer: {INLINE_FILES} Save picks where it goes, so never offer to copy it. A document they ask you to write: ask where it goes first unless they said, then link its full path. Never copy a file to the Desktop, Downloads, elsewhere or the clipboard unasked. Your commands' scratch goes in $TMPDIR, never elsewhere in /tmp. {NO_PROMISED_FILES}
 - Never delete branches, worktrees or temp folders by hand: Brigadier cleans up (clean_up only if the user asks), and "Operation not permitted" on another session's branch or folder is Brigadier protecting it.{GRILLING}
 
 How to talk to the user:
 - A user message and everything it sets in motion is one request, shown as one answer. Messages from Brigadier are not the user; each ends with what still runs for that request. The user sees each line you write as you write it, a short one before or between tool calls too: speak when it helps them, and reply exactly {quiet} when there's nothing to say.
 - {LEAD}
 - While work runs, write one line only for: a failure of what you started (what failed, its key error line, what you do about it); work the user didn't ask for, before it starts; and [status due]: what runs and what's left.
-- When the request is done (work, a question or an error explained alike), write one final answer: at most about five short lines of what changed and what to know, and, when a review ran, what it found and what you fixed. Then, if any, one line "To check: …" only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). {details} Say code compiles, works or runs only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text.
+- When the request is done (work, a question or an error explained alike), write one final answer, shaped as below: what changed and what to know and, when a review ran, what it found and what you fixed, in a sentence. Then, if any, one line "To check: …" only for what nobody here can check or fix, and one "You'll need to: …" for what only the user can do (a key, an account). A site or app the user can try stays running (start_preview), with its local URL in your final answer (http://localhost:5173). Say code compiles, works or runs only after a check in this request showed it. A decision goes on a card (ask_user, propose_plan), never in text.
 - Fix a known defect in a deliverable yourself, with no card (write a fixed copy; store a worker's with store_output and link it as outputs/<name>, else link its full path), or send it back, before you answer.
 - {LATE_EVENT} {REVISED_ANSWER} Never repeat a closing, and say a merge is ready at most once.
 - A message from Brigadier marked [for the user's earlier request: …] belongs to that request: answer about it briefly.{voice}
@@ -343,7 +317,6 @@ How to talk to the user:
         today = today(),
         quiet = QUIET,
         voice = VOICE,
-        details = details_rule!(),
         fan_out = research_fan_out!(),
         clarify = clarify_rule!(),
         fusion = fusion_rule!(),
@@ -389,9 +362,16 @@ fn callable(text: &str, provider: ProviderKind) -> String {
     out
 }
 
-/// What the thread does with an event that arrives after its answer (bug 4): an update line
-/// only when the user must know, never a rewritten ending.
-pub(crate) const LATE_EVENT: &str = "A late event after your answer (a review, a landing, a CI result) changes it only if it changes what the user must know: then write one short update line (\"Update: the review's two fixes landed; nothing open.\"), starting with the English word \"Update:\" whatever language you write in, never a new ending. Otherwise reply [quiet].";
+macro_rules! late_event {
+    () => {
+        "A late event after your answer (a review, a landing, a CI result) changes it only if it changes what the user must know: then write one plain sentence that starts with the English word \"Update:\" whatever language you write in (\"Update: the review's two fixes landed; nothing open.\"). Brigadier hides the word and shows the sentence as a short paragraph under your answer. Never a new ending. Otherwise reply [quiet]."
+    };
+}
+
+/// What the thread does with an event that arrives after its answer (bug 4, Q87): one plain
+/// sentence only when the user must know, never a rewritten ending. "Update:" stays as the
+/// marker the app finds a late note by (and hides).
+pub(crate) const LATE_EVENT: &str = late_event!();
 
 macro_rules! offer_session_rule {
     () => {
@@ -565,14 +545,14 @@ fn permission_text(permission: PermissionLevel, trusted: bool) -> String {
     }
 }
 
-/// The thread's voice, with how it lays out a research answer.
+/// The thread's voice, with how a final answer looks.
 const VOICE: &str = concat!(
     voice_core!(),
     thread_voice!(),
-    research_format!(),
+    answer_style!(),
     research_report!()
 );
-/// A worker's: the voice without the research answer's layout, which is the thread's to write.
+/// A worker's: the voice without the final answer's shape, which is the thread's to write.
 const WORKER_WRITING: &str = concat!(voice_core!(), thread_voice!());
 
 /// The reply voice, fixed at the measured best default (PLAN.md §7, BUILD-PLAN §1.4), as the note
@@ -1122,13 +1102,12 @@ pub(crate) const REVISIONS: &[Revision] = &[
     Revision {
         number: ANSWER_FORMAT_REVISION,
         thread: concat!(
-            "From now on, this replaces what your instructions say about how to write, about Details and about answering research yourself:",
+            "From now on, this replaces what your instructions say about how to write and about answering research yourself:",
             voice_core!(),
             thread_voice!(),
-            // The answer's layout comes in ANSWER_PARTS_REVISION's note: said once, not twice.
+            // The answer's shape and the end of Details come in ANSWER_STYLE_REVISION's note:
+            // said once, not twice.
             research_report!(),
-            "\n- ",
-            details_rule!(),
             "\n- ",
             research_fan_out!()
         ),
@@ -1192,11 +1171,19 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: concat!("From now on: ", inline_files!()),
         worker: "",
     },
+    // Its parts are gone again: the answer's shape comes in ANSWER_STYLE_REVISION's note.
     Revision {
         number: ANSWER_PARTS_REVISION,
+        thread: "",
+        worker: "",
+    },
+    Revision {
+        number: ANSWER_STYLE_REVISION,
         thread: concat!(
-            "From now on, this replaces what your instructions say about laying out an answer and about how a fused answer shows its judging:",
-            research_format!(),
+            "From now on, this replaces what your instructions say about laying out an answer, about its `### Details`, about late update lines and about how a fused answer shows its judging:",
+            answer_style!(),
+            "\n- A site or app the user can try stays running (start_preview), with its local URL in your final answer (http://localhost:5173).\n- ",
+            late_event!(),
             "\n- ",
             fused_answer!()
         ),
@@ -1240,8 +1227,9 @@ const CHAT_GRILLING: &str = grilling_rule!();
 /// rounds, facts looked up first (Q78); 9 the live run's fixes to both ([`CHAT_FIXES_NOTE`]); 10
 /// it names each file once, inline, with no Save under the answer (Q84); 11 its answer leads
 /// with the bottom line and may use optional parts and Ask next, and a fused answer has no
-/// Confidence or Disagreement lines (Q86); 12 a Chat that can make images makes them itself (Q24).
-const CHAT_CONTRACT: u32 = 12;
+/// Confidence or Disagreement lines (Q86); 12 a Chat that can make images makes them itself (Q24);
+/// 13 its answer is short and stands alone, sources inline, with no parts or Ask next (Q87).
+const CHAT_CONTRACT: u32 = 13;
 /// The first Chat contract with the voice; a Chat told an older one hears [`chat_voice_note`].
 const CHAT_VOICE_CONTRACT: u32 = 2;
 /// The first Chat contract with a thread's abilities; a Chat told an older one hears
@@ -1262,13 +1250,14 @@ const CHAT_FIXES_CONTRACT: u32 = 9;
 /// The first Chat contract with files named once, inline (Q84); a Chat told a thread's
 /// abilities before hears [`CHAT_FILES_NOTE`] (one told less hears it within [`CHAT_THREAD_NOTE`]).
 const CHAT_FILES_CONTRACT: u32 = 10;
-/// The first Chat contract with the answer's optional parts (Q86); a Chat or tab chat told the
-/// voice before hears [`chat_parts_note`] (one told less hears them within the voice's note).
-const CHAT_PARTS_CONTRACT: u32 = 11;
 /// The first Chat contract where a Chat makes an image itself when it can (Q24); a Chat told a
 /// thread's abilities before hears [`CHAT_IMAGES_NOTE`] (one told less hears it within
 /// [`CHAT_THREAD_NOTE`]).
 const CHAT_IMAGES_CONTRACT: u32 = 12;
+/// The first Chat contract with the final answer's shape as it is now (Q87); a Chat or tab chat
+/// told the voice before hears [`chat_style_note`] (one told less hears it within the voice's
+/// note).
+const CHAT_STYLE_CONTRACT: u32 = 13;
 /// The first contract whose instructions say that notes replace them.
 const NOTES_CONTRACT: u32 = 1;
 
@@ -1287,23 +1276,17 @@ const CHAT_AUTHORITY: &str = "Brigadier tells you in a note at the start of a me
 /// What a Chat can do as a thread (Q76).
 const CHAT_THREAD: &str = chat_thread!();
 
-/// How a Chat writes, and lays out an answer with its report (Q79, Q86).
-const CHAT_VOICE: &str = concat!(
-    voice_core!(),
-    research_format!(),
-    ask_next!(),
-    research_report!()
-);
+/// How a Chat writes, and shapes an answer with its report (Q79, Q87).
+const CHAT_VOICE: &str = concat!(voice_core!(), answer_style!(), research_report!());
 /// The same for a tab chat, which has no `save_report`.
-const TAB_CHAT_VOICE: &str = concat!(voice_core!(), research_format!(), ask_next!());
+const TAB_CHAT_VOICE: &str = concat!(voice_core!(), answer_style!());
 
-/// Tells a Chat or tab chat told the voice before how it lays out an answer now (Q86), and, when
+/// Tells a Chat or tab chat told the voice before how a final answer looks now (Q87), and, when
 /// it heard fusion's first words (`fused`), how a fused answer shows its judging.
-fn chat_parts_note(fused: bool) -> String {
+fn chat_style_note(fused: bool) -> String {
     let mut text = concat!(
-        "[instructions] From now on, this replaces what your instructions say about laying out an answer:",
-        research_format!(),
-        ask_next!()
+        "[instructions] From now on, this replaces what your instructions say about laying out an answer, its parts and Ask next:",
+        answer_style!()
     )
     .to_owned();
     if fused {
@@ -1349,7 +1332,7 @@ const CHAT_MEMORY_LABEL: &str = "personal facts";
 const CHAT_GRILLING_LABEL: &str = "interview on cards";
 const CHAT_FIXES_LABEL: &str = "fused answers and interview fixes";
 const CHAT_FILES_LABEL: &str = "files inline";
-const CHAT_PARTS_LABEL: &str = "answer parts";
+const CHAT_STYLE_LABEL: &str = "answer style";
 const CHAT_IMAGES_LABEL: &str = "images";
 const TODAY_LABEL: &str = "today";
 const PERMISSION_LABEL: &str = "permission level";
@@ -1741,6 +1724,10 @@ pub(crate) const INLINE_FILES_REVISION: u32 = 116;
 /// An answer leads with its bottom line and may use optional parts the app draws (steps, a
 /// pick, an avoid-list, folds, odds); a fused answer has no Confidence or Disagreement lines (Q86).
 pub(crate) const ANSWER_PARTS_REVISION: u32 = 117;
+/// A final answer is short and stands alone beside the folded work: outcome first, one or two
+/// paragraphs, checks in one line, sources inline, no Details and no parts; a late note is one
+/// plain sentence; a site the user can try comes with its local URL (Q87).
+pub(crate) const ANSWER_STYLE_REVISION: u32 = 118;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -1990,23 +1977,6 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             },
         });
     }
-    // Told the voice before the answer's parts (contract 2 to 10): last but the images note, so
-    // its contract is the one the log keeps (a Chat told less than a thread's abilities heard
-    // about images within the thread note). Fusion's words only to a Chat that heard their
-    // first ones; one told less hears them within the thread or fusion note.
-    if now.chat && (CHAT_VOICE_CONTRACT..CHAT_PARTS_CONTRACT).contains(&told.contract.unwrap_or(0))
-    {
-        notes.push(Note {
-            text: chat_parts_note(
-                now.reports && told.contract.unwrap_or(0) >= CHAT_FUSION_CONTRACT,
-            ),
-            label: CHAT_PARTS_LABEL,
-            told: Told {
-                contract: Some(CHAT_CONTRACT),
-                ..Told::default()
-            },
-        });
-    }
     // Told a thread's abilities with images made only by workers (contract 5 to 11); one told
     // less hears it within the thread note.
     if now.chat
@@ -2018,6 +1988,22 @@ pub(crate) fn notes(told: &Told, now: &Current) -> Vec<Note> {
             label: CHAT_IMAGES_LABEL,
             told: Told {
                 contract: Some(CHAT_IMAGES_CONTRACT),
+                ..Told::default()
+            },
+        });
+    }
+    // Told the voice before the answer's shape as it is now (contract 2 to 12): last, so its
+    // contract is the one the log keeps. Fusion's words only to a Chat that heard their first
+    // ones; one told less hears them within the thread or fusion note.
+    if now.chat && (CHAT_VOICE_CONTRACT..CHAT_STYLE_CONTRACT).contains(&told.contract.unwrap_or(0))
+    {
+        notes.push(Note {
+            text: chat_style_note(
+                now.reports && told.contract.unwrap_or(0) >= CHAT_FUSION_CONTRACT,
+            ),
+            label: CHAT_STYLE_LABEL,
+            told: Told {
+                contract: Some(CHAT_CONTRACT),
                 ..Told::default()
             },
         });
@@ -3154,8 +3140,10 @@ mod tests {
     fn a_note_after_a_report_that_changes_nothing_is_answered_quietly() {
         // Bug 4: a late event gets one update line at most, never a rewritten ending.
         assert!(LATE_EVENT.ends_with(&format!("Otherwise reply {QUIET}.")));
-        assert!(LATE_EVENT.contains("one short update line"));
-        assert!(LATE_EVENT.contains("never a new ending"));
+        assert!(LATE_EVENT.contains("one plain sentence"));
+        assert!(LATE_EVENT.contains("Never a new ending."));
+        // Q87: the app hides the marker and shows the sentence as plain prose.
+        assert!(LATE_EVENT.contains("Brigadier hides the word"));
         // A CI result after the answer is one too, and its envelope says so (no second ending).
         assert!(LATE_EVENT.contains("a CI result"));
         // Q81: a worker's addendum is no late event, and an update line keys on its English
@@ -3163,7 +3151,7 @@ mod tests {
         assert!(!LATE_EVENT.contains("addendum"));
         assert!(
             LATE_EVENT.contains(
-                "starting with the English word \"Update:\" whatever language you write in"
+                "starts with the English word \"Update:\" whatever language you write in"
             )
         );
         assert!(crate::manager::ci::AFTER_THE_ANSWER.contains("one `Update:` line"));
@@ -4106,7 +4094,7 @@ mod environment_tests {
             cfg!(target_os = "macos")
         );
         assert!(claude.contains("Your workspace: (none yet)"));
-        // The short ending, with its folded Details, updated rather than repeated; nothing
+        // The short ending, updated rather than repeated, with no Details since Q87; nothing
         // is listed for the user outside a run (THREAD-PARITY-PLAN §5 Q6, Q9).
         for text in [&codex, &claude] {
             assert!(text.contains("at most about five short lines"));
@@ -4116,9 +4104,10 @@ mod environment_tests {
             // task's output (#27), any other linked by its full path.
             assert!(text.contains("Fix a known defect in a deliverable yourself, with no card"));
             assert!(text.contains("else link its full path"));
-            assert!(text.contains("`### Details`, shown folded"));
-            // Every final answer has them, a question's or an explained error's too (E3).
+            assert!(!text.contains("`### Details`, shown folded"));
             assert!(text.contains("(work, a question or an error explained alike)"));
+            // Q87: a site the user can try comes with its local URL, which the app makes a card.
+            assert!(text.contains("with its local URL in your final answer"));
             assert!(text.contains(LATE_EVENT));
             // A merge said while workers write is held, then due (SESSION-FIXES-PLAN.md Q3):
             // finish_session and delegate_task say so (BUILD-PLAN C1).
@@ -4373,7 +4362,7 @@ mod environment_tests {
         assert!(notes(&chat.told(), &chat).is_empty());
     }
 
-    /// #108, #52: no throwaway file goes to the user, Details included, and a document the
+    /// #108, #52: no throwaway file goes to the user, and a document the
     /// thread writes itself is asked about and linked; an open thread hears it once.
     #[test]
     fn a_thread_hands_over_no_throwaway_file_and_asks_where_a_document_goes() {
@@ -4386,7 +4375,9 @@ mod environment_tests {
             ProviderKind::Claude,
             true,
         );
-        assert!(prompt.contains("Never give the user a scratch path or a throwaway file (a one-off script, a log), in Details too"));
+        assert!(prompt.contains(
+            "Never give the user a scratch path or a throwaway file (a one-off script, a log), nor"
+        ));
         assert!(prompt.contains("A document they ask you to write: ask where it goes first unless they said, then link its full path"));
         let note = revision_note(HANDOVER_REVISION - 1, false).unwrap();
         assert!(note.contains("never link a throwaway file for the user"));
@@ -5358,21 +5349,39 @@ mod environment_tests {
         "Security, irreversible actions and steps whose order matters get full, careful sentences.",
     ];
 
-    /// The research answer's layout (Q79), in every thread, Chat and tab chat.
-    const RESEARCH_RULES: &[&str] = &[
-        "Start with the bottom line: one or two sentences that say what to do, or give the answer itself.",
-        "They are optional tools, never a template: use one only when the answer really has that shape; otherwise write freely in Markdown.",
+    /// The final answer's shape (Q87), in every thread, Chat and tab chat; the third is Q79's
+    /// rule against bold at the start of a line, kept.
+    const ANSWER_RULES: &[&str] = &[
+        "Brigadier folds the notes you write while you work under \"Worked for\" once your final answer comes, so the final answer stands alone",
+        "Lead with the outcome: the result, the answer or what to do, in the first sentence",
         "No line or list item starts with bold text, with or without a colon, even where what you read (a source, a worker's notes, a report) does: names stay plain (not \"- **Option:** costs …\" or \"- **Option** costs …\" but \"- Option costs …\"). Bold only for one critical warning, if at all.",
-        "Mark only the facts that carry weight (a price, a law, a risk number) with their source's number, [1] or [2, 3]",
-        "End with one `### Sources` heading, in English whatever language you write in",
-        "Never list sources anywhere else",
+        "Then one or two short paragraphs, and an optional line on how it was checked. Don't default to bullets",
+        "Sum up routine checks in one line (\"All 10 tests pass.\"), never a list of each check. Say what you couldn't run or check",
+        "Never more than 50 to 70 lines",
+        "Lists stay flat, never nested",
+        "Cite a web source as a link on the words of the claim it supports, right where it stands",
+        "never numbered marks like [1], and never a list of sources at the end.",
+        "one plain Markdown table of at most 3 columns",
+        "never draw layout yourself, such as `---` sections, cards, badges or a `### Details` section.",
     ];
 
-    /// Q79: the 10-04 voice is back whole in every thread, Chat and tab chat, with the research
-    /// answer's layout; the report goes to save_report where there is one, and a worker gets the
-    /// voice without the layout.
+    /// What Q87 took out of every answer: the fixed research layout, its parts and Ask next.
+    const GONE_LAYOUT: &[&str] = &[
+        "Start with the bottom line",
+        "They are optional tools, never a template",
+        "`### Sources`",
+        "with their source's number, [1] or [2, 3]",
+        "`### Ask next`",
+        "> [!CAUTION]",
+        "a fenced block `chance`",
+        "When this request changed code, a last heading `### Details`",
+    ];
+
+    /// Q79: the 10-04 voice is back whole in every thread, Chat and tab chat, with the final
+    /// answer's shape (Q87: no fixed layout); the report goes to save_report where there is one,
+    /// and a worker gets the voice without the shape.
     #[test]
-    fn every_thread_and_chat_writes_in_the_restored_voice_and_lays_out_research_answers() {
+    fn every_thread_and_chat_writes_in_the_restored_voice_and_shapes_its_final_answer() {
         let threads = [
             thread(
                 &session("fullAccess"),
@@ -5402,8 +5411,11 @@ mod environment_tests {
         let browser = tab_chat(&crate::model::TabTarget::Browser, "/repo");
         let chat = chat(&[]);
         for text in threads.iter().chain([&chat, &page, &browser]) {
-            for words in RESTORED_VOICE.iter().chain(RESEARCH_RULES) {
+            for words in RESTORED_VOICE.iter().chain(ANSWER_RULES) {
                 assert!(text.contains(words), "{words}");
+            }
+            for words in GONE_LAYOUT {
+                assert!(!text.contains(words), "{words}");
             }
             assert!(!text.contains("besides `### Details`"));
         }
@@ -5418,12 +5430,8 @@ mod environment_tests {
         for text in [&page, &browser] {
             assert!(!text.contains("save_report"));
         }
-        // The thread: Details only when code changed, and research fanned out when it warrants.
+        // The thread: no Details (Q87), and research fanned out when it warrants.
         for text in &threads {
-            assert!(text.contains(
-                "When this request changed code, a last heading `### Details`, shown folded"
-            ));
-            assert!(text.contains("An answer that changed no code (a question, research, an explained error) has no Details."));
             assert!(!text.contains("which always holds three labelled lines"));
             assert!(text.contains("split it across 2 to 4 research workers"));
             assert!(
@@ -5434,11 +5442,13 @@ mod environment_tests {
             assert!(text.contains("A quick fact you look up yourself."));
         }
         assert!(WORKER_WRITING.contains(RESTORED_VOICE[2]));
-        assert!(!WORKER_WRITING.contains("save_report") && !WORKER_WRITING.contains("### Sources"));
+        assert!(
+            !WORKER_WRITING.contains("save_report") && !WORKER_WRITING.contains(ANSWER_RULES[0])
+        );
     }
 
-    /// Q79: an open thread hears the restored voice, the research layout, the Details rule and
-    /// the fan-out once, as one revision; a worker hears nothing.
+    /// Q79: an open thread hears the restored voice and the fan-out once, as one revision, and
+    /// the final answer's shape in Q87's; a worker hears nothing.
     #[test]
     fn open_threads_hear_the_restored_voice_and_the_answer_format_once() {
         let added = REVISIONS
@@ -5447,19 +5457,21 @@ mod environment_tests {
             .unwrap();
         assert!(added.worker.is_empty());
         let note = revision_note(ANSWER_FORMAT_REVISION - 1, false).unwrap();
-        for words in RESTORED_VOICE.iter().chain(RESEARCH_RULES) {
+        for words in RESTORED_VOICE.iter().chain(ANSWER_RULES) {
             assert!(note.contains(words), "{words}");
         }
+        for words in GONE_LAYOUT {
+            assert!(!note.contains(words), "{words}");
+        }
         assert!(note.contains("save it with save_report"));
-        assert!(note.contains("An answer that changed no code (a question, research, an explained error) has no Details."));
         assert!(note.contains("split it across 2 to 4 research workers"));
         assert!(revision_note(ANSWER_FORMAT_REVISION - 1, true).is_none());
     }
 
     /// Q79, the 10-18 live checks (#319): a research answer broke the voice's no-bold-labels rule
     /// in its breakdown, a thread's after its workers' formatting, so a thread told the answer
-    /// format hears the tightened rule once, whether or not it heard revision 107's: since Q86,
-    /// within the answer's layout.
+    /// format hears the tightened rule once, whether or not it heard revision 107's: since Q87,
+    /// within the final answer's shape.
     #[test]
     fn open_threads_hear_once_that_no_breakdown_line_starts_with_bold() {
         for told in [
@@ -5468,9 +5480,9 @@ mod environment_tests {
             BOLD_LEAD_REVISION,
         ] {
             let note = revision_note(told, false).unwrap();
-            assert_eq!(note.matches(RESEARCH_RULES[2]).count(), 1, "{note}");
+            assert_eq!(note.matches(ANSWER_RULES[2]).count(), 1, "{note}");
             assert!(!note.contains("an item never opens with a bold name and a colon"));
-            assert_eq!(note.matches("### Sources").count(), 1, "{note}");
+            assert_eq!(note.matches(ANSWER_RULES[0]).count(), 1, "{note}");
         }
     }
 
@@ -5496,23 +5508,23 @@ mod environment_tests {
                 false => labels,
             };
             assert_eq!(labels(&sent), thread(vec![CHAT_VOICE_LABEL]));
-            for words in RESTORED_VOICE.iter().chain(RESEARCH_RULES) {
+            for words in RESTORED_VOICE.iter().chain(ANSWER_RULES) {
                 assert!(sent[0].text.contains(words), "{words}");
             }
             assert_eq!(sent[0].text.contains("save_report"), reports);
             took(&mut told, &sent);
             assert!(notes(&told, &now).is_empty());
             // Told the voice before the breakdown rule, or before it was tightened (#319): the
-            // answer's layout as it is now comes, once, holding that rule (Q86).
+            // answer's shape as it is now comes, once, holding that rule (Q87).
             for contract in [CHAT_VOICE_CONTRACT, 3] {
                 told.contract = Some(contract);
                 let sent = notes(&told, &now);
                 let mut expected = thread(Vec::new());
-                expected.push(CHAT_PARTS_LABEL);
+                expected.push(CHAT_STYLE_LABEL);
                 assert_eq!(labels(&sent), expected);
                 let layout = sent.last().unwrap();
-                assert_eq!(layout.text.matches(RESEARCH_RULES[2]).count(), 1);
-                assert!(layout.text.contains("### Sources"));
+                assert_eq!(layout.text.matches(ANSWER_RULES[2]).count(), 1);
+                assert!(layout.text.contains(ANSWER_RULES[0]));
                 // Told no fusion yet: its words come whole in the thread note.
                 assert!(!layout.text.contains("`Confidence:`"));
                 took(&mut told, &sent);
@@ -5538,7 +5550,7 @@ mod environment_tests {
                 CHAT_THREAD_LABEL,
                 CHAT_MEMORY_LABEL,
                 CHAT_GRILLING_LABEL,
-                CHAT_PARTS_LABEL
+                CHAT_STYLE_LABEL
             ]
         );
         for words in CHAT_THREAD_RULES {
@@ -5551,7 +5563,7 @@ mod environment_tests {
         let mut told = tab.told();
         told.contract = Some(CHAT_THREAD_CONTRACT - 1);
         // A tab chat hears only the answer's layout as it is now (Q86).
-        assert_eq!(labels(&notes(&told, &tab)), vec![CHAT_PARTS_LABEL]);
+        assert_eq!(labels(&notes(&told, &tab)), vec![CHAT_STYLE_LABEL]);
         assert!(!chat(&[]).contains("plain chat"));
     }
 
@@ -5589,8 +5601,8 @@ mod environment_tests {
                 CHAT_MEMORY_LABEL,
                 CHAT_GRILLING_LABEL,
                 CHAT_FILES_LABEL,
-                CHAT_PARTS_LABEL,
-                CHAT_IMAGES_LABEL
+                CHAT_IMAGES_LABEL,
+                CHAT_STYLE_LABEL
             ]
         );
         for words in FUSION_RULES {
@@ -5608,7 +5620,7 @@ mod environment_tests {
                 CHAT_THREAD_LABEL,
                 CHAT_MEMORY_LABEL,
                 CHAT_GRILLING_LABEL,
-                CHAT_PARTS_LABEL
+                CHAT_STYLE_LABEL
             ]
         );
         assert_eq!(sent[0].text.matches(FUSION_RULES[0]).count(), 1);
@@ -5618,7 +5630,7 @@ mod environment_tests {
         let mut told = tab.told();
         told.contract = Some(CHAT_FUSION_CONTRACT - 1);
         // A tab chat hears only the answer's layout as it is now (Q86).
-        assert_eq!(labels(&notes(&told, &tab)), vec![CHAT_PARTS_LABEL]);
+        assert_eq!(labels(&notes(&told, &tab)), vec![CHAT_STYLE_LABEL]);
     }
 
     /// Q78: a Chat told contract 6 hears once that it keeps stable personal facts and nothing
@@ -5636,8 +5648,8 @@ mod environment_tests {
                 CHAT_GRILLING_LABEL,
                 CHAT_FIXES_LABEL,
                 CHAT_FILES_LABEL,
-                CHAT_PARTS_LABEL,
-                CHAT_IMAGES_LABEL
+                CHAT_IMAGES_LABEL,
+                CHAT_STYLE_LABEL
             ]
         );
         for words in [
@@ -5656,7 +5668,7 @@ mod environment_tests {
         let mut told = tab.told();
         told.contract = Some(CHAT_MEMORY_CONTRACT - 1);
         // A tab chat hears only the answer's layout as it is now (Q86).
-        assert_eq!(labels(&notes(&told, &tab)), vec![CHAT_PARTS_LABEL]);
+        assert_eq!(labels(&notes(&told, &tab)), vec![CHAT_STYLE_LABEL]);
     }
 
     /// Q78: a Chat told contract 7 hears once how it interviews on cards; open threads hear it
@@ -5673,8 +5685,8 @@ mod environment_tests {
                 CHAT_GRILLING_LABEL,
                 CHAT_FIXES_LABEL,
                 CHAT_FILES_LABEL,
-                CHAT_PARTS_LABEL,
-                CHAT_IMAGES_LABEL
+                CHAT_IMAGES_LABEL,
+                CHAT_STYLE_LABEL
             ]
         );
         took(&mut told, &sent);
@@ -5720,8 +5732,8 @@ mod environment_tests {
                 [
                     CHAT_FIXES_LABEL,
                     CHAT_FILES_LABEL,
-                    CHAT_PARTS_LABEL,
-                    CHAT_IMAGES_LABEL
+                    CHAT_IMAGES_LABEL,
+                    CHAT_STYLE_LABEL
                 ]
             );
             took(&mut told, &sent);
@@ -5740,37 +5752,30 @@ mod environment_tests {
         assert!(chat(&[]).contains(fixes[0]), "{}", fixes[0]);
     }
 
-    /// The words of the answer's optional parts (Q86) the tests look for.
-    const PARTS_RULES: &[&str] = &[
-        "Start with the bottom line: one or two sentences",
-        "They are optional tools, never a template",
-        "one numbered list of 3 to 7 steps",
-        "End the first cell of your pick with ` ★`",
-        "a line `> [!CAUTION]`",
-        "after a line `---`, one `### heading` per topic",
-        "a fenced block `chance` holding `N of 100`",
-        "Never fold a warning",
-        "about six at most before the `---`",
-    ];
-
     /// What instructions and notes say no more after Q86: the old layout and the fused
-    /// answer's report on its judging.
+    /// answer's report on its judging; after Q87: the answer's parts, its bottom line and Ask next.
     const RETIRED_RULES: &[&str] = &[
         "Your recommendation first, in 3 to 5 lines",
         "`Confidence: high, medium or low, and why`",
         "`Disagreement: none`",
         "the Confidence and Disagreement lines are each a paragraph",
+        "one numbered list of 3 to 7 steps",
+        "End the first cell of your pick with ` ★`",
+        "after a line `---`, one `### heading` per topic",
+        "about six at most before the `---`",
+        "in the bottom line",
     ];
 
-    /// Q86: an answer leads with its bottom line and may use optional parts the app draws, and
-    /// a fused answer has no Confidence or Disagreement lines. A thread told any revision before
-    /// hears it once, the old words nowhere; a Chat or tab chat told the voice before hears it
-    /// once, Ask next with it, fusion's words only in a Chat; new instructions hold it all.
+    /// Q87: a final answer is short and stands alone, sources inline, with no Details, parts or
+    /// Ask next; a late note is one plain sentence; a site comes with its local URL. A thread
+    /// told any revision before hears it once, the old words nowhere; a Chat or tab chat told
+    /// the voice before hears it once, last, fusion's words only in a Chat; new instructions
+    /// hold it all.
     #[test]
-    fn threads_and_chats_hear_once_that_answers_have_optional_parts() {
+    fn threads_and_chats_hear_once_how_a_final_answer_looks() {
         let added = REVISIONS
             .iter()
-            .find(|revision| revision.number == ANSWER_PARTS_REVISION)
+            .find(|revision| revision.number == ANSWER_STYLE_REVISION)
             .unwrap();
         assert!(added.worker.is_empty());
         for told in [
@@ -5779,41 +5784,39 @@ mod environment_tests {
             FUSION_REVISION - 1,
             FUSED_INTERVIEW_FIXES_REVISION - 1,
             ANSWER_PARTS_REVISION - 1,
+            ANSWER_STYLE_REVISION - 1,
         ] {
             let note = revision_note(told, false).unwrap();
-            for words in PARTS_RULES
-                .iter()
-                .chain([&RESEARCH_RULES[2], &FUSED_ANSWER])
-            {
+            for words in ANSWER_RULES.iter().chain([&FUSED_ANSWER, &LATE_EVENT]) {
                 assert_eq!(note.matches(words).count(), 1, "{told}: {words}");
             }
-            for words in RETIRED_RULES {
+            assert!(note.contains("with its local URL in your final answer"));
+            for words in RETIRED_RULES.iter().chain(GONE_LAYOUT) {
                 assert!(!note.contains(words), "{told}: {words}");
             }
-            assert!(!note.contains("### Ask next"), "{told}");
         }
-        assert!(revision_note(ANSWER_PARTS_REVISION, false).is_none());
+        assert!(revision_note(ANSWER_STYLE_REVISION, false).is_none());
         for (now, reports) in [
             (Current::chat(Vec::new()), true),
             (Current::tab_chat(), false),
         ] {
-            for contract in 0..CHAT_PARTS_CONTRACT {
+            for contract in 0..CHAT_STYLE_CONTRACT {
                 let mut told = now.told();
                 told.contract = Some(contract);
                 let sent = notes(&told, &now);
                 let all: String = sent.iter().map(|note| note.text.as_str()).collect();
-                for words in PARTS_RULES
-                    .iter()
-                    .chain([&RESEARCH_RULES[2], &"### Ask next"])
-                {
+                for words in ANSWER_RULES {
                     assert_eq!(all.matches(words).count(), 1, "{contract}: {words}");
+                }
+                if contract >= CHAT_VOICE_CONTRACT {
+                    assert_eq!(labels(&sent).last(), Some(&CHAT_STYLE_LABEL), "{contract}");
                 }
                 assert_eq!(
                     all.matches(FUSED_ANSWER).count(),
                     usize::from(reports),
                     "{contract}"
                 );
-                for words in RETIRED_RULES {
+                for words in RETIRED_RULES.iter().chain(GONE_LAYOUT) {
                     assert!(!all.contains(words), "{contract}: {words}");
                 }
                 took(&mut told, &sent);
@@ -5831,16 +5834,14 @@ mod environment_tests {
             true,
         );
         for prompt in [chat(&[]), session.clone()] {
-            for words in PARTS_RULES.iter().chain([&FUSED_ANSWER]) {
+            for words in ANSWER_RULES.iter().chain([&FUSED_ANSWER]) {
                 assert_eq!(prompt.matches(words).count(), 1, "{words}");
             }
-            for words in RETIRED_RULES {
+            for words in RETIRED_RULES.iter().chain(GONE_LAYOUT) {
                 assert!(!prompt.contains(words), "{words}");
             }
         }
-        // Ask next is a Chat's: a session's answers have no chips.
-        assert!(chat(&[]).contains("### Ask next"));
-        assert!(!session.contains("### Ask next"));
+        assert!(session.contains(LATE_EVENT));
     }
 
     /// Q84: a file shows once, inline, as a link that opens it in Brigadier. Open threads and
@@ -5863,7 +5864,7 @@ mod environment_tests {
             let sent = notes(&told, &now);
             assert_eq!(
                 labels(&sent)[labels(&sent).len() - 3..],
-                [CHAT_FILES_LABEL, CHAT_PARTS_LABEL, CHAT_IMAGES_LABEL]
+                [CHAT_FILES_LABEL, CHAT_IMAGES_LABEL, CHAT_STYLE_LABEL]
             );
             took(&mut told, &sent);
             assert_eq!(told.contract, Some(CHAT_CONTRACT));
@@ -5902,7 +5903,7 @@ mod environment_tests {
     }
 
     /// Q24: a Chat that can make images makes them itself. Chats that were threads hear so once,
-    /// last; a Chat from before hears it within the thread note; a tab chat hears nothing of it.
+    /// last but the answer's shape (Q87); a Chat from before hears it within the thread note; a tab chat hears nothing of it.
     #[test]
     fn chats_hear_once_that_they_make_images_themselves_when_they_can() {
         let words = "when you have an image generation tool of your own, make it yourself";
@@ -5912,7 +5913,11 @@ mod environment_tests {
             let mut told = now.told();
             told.contract = Some(contract);
             let sent = notes(&told, &now);
-            assert_eq!(labels(&sent).last(), Some(&CHAT_IMAGES_LABEL), "{contract}");
+            assert_eq!(
+                labels(&sent)[labels(&sent).len() - 2..],
+                [CHAT_IMAGES_LABEL, CHAT_STYLE_LABEL],
+                "{contract}"
+            );
             let all: String = sent.iter().map(|note| note.text.as_str()).collect();
             assert_eq!(all.matches(words).count(), 1, "{contract}");
             took(&mut told, &sent);
@@ -5942,9 +5947,16 @@ mod environment_tests {
             took(&mut told, &sent);
             assert_eq!(told.contract, Some(CHAT_CONTRACT), "{contract}");
         }
-        let mut told = tab.told();
-        told.contract = Some(CHAT_IMAGES_CONTRACT - 1);
-        assert!(notes(&told, &tab).is_empty());
+        // Told up to images, a tab chat hears only the answer's shape (Q87).
+        for contract in [CHAT_IMAGES_CONTRACT - 1, CHAT_IMAGES_CONTRACT] {
+            let mut told = tab.told();
+            told.contract = Some(contract);
+            assert_eq!(labels(&notes(&told, &tab)), vec![CHAT_STYLE_LABEL]);
+        }
+        // A Chat told images hears only the answer's shape too.
+        let mut told = now.told();
+        told.contract = Some(CHAT_IMAGES_CONTRACT);
+        assert_eq!(labels(&notes(&told, &now)), vec![CHAT_STYLE_LABEL]);
         assert_eq!(chat(&[]).matches(words).count(), 1);
         assert!(!chat(&[]).contains(retired));
     }

@@ -509,10 +509,14 @@ async fn a_session_from_before_details_on_every_answer_is_told_once() {
     told_once(ANSWER_DETAILS_REVISION, "an explanation of an error too").await;
 }
 
-/// Rule R for the restored voice and the research answer's format (Q79).
+/// Rule R for the restored voice (Q79) and the final answer's shape (Q87).
 #[tokio::test]
 async fn a_session_from_before_the_answer_format_is_told_once() {
-    told_once(ANSWER_FORMAT_REVISION, "End with one `### Sources` heading").await;
+    told_once(
+        ANSWER_FORMAT_REVISION,
+        "under \"Worked for\" once your final answer comes",
+    )
+    .await;
 }
 
 /// Rule R for the research breakdown with no line starting in bold (Q79, #319).
