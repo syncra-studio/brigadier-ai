@@ -31,7 +31,7 @@ import {
   ProvidersButton,
   useShownPermission,
 } from "@/app/conversation/SetupPickers";
-import { SuggestionContext, useSuggestion } from "@/app/conversation/suggestion";
+import { SuggestionContext, useSuggestion, useSuggestionAccepted } from "@/app/conversation/suggestion";
 import type { ComposerInputProps } from "@/app/conversation/ComposerEditor";
 import { type MentionMemory, Mentions } from "@/app/conversation/Mentions";
 import { SlashCommands } from "@/app/conversation/SlashCommands";
@@ -110,7 +110,7 @@ const ComposerEditor = lazy(() =>
  */
 export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder }) => {
   const target = useContext(ComposerTargetContext);
-  // The CLI's guess at the next message, in the empty field (Tab takes it).
+  // The guess at the next message, in the empty field (Tab, → or Enter takes it).
   const suggestion = useSuggestion(target?.conversation?.id ?? null);
   const attached = useAuiState((s) => s.composer.attachments.length > 0);
   const [modelOpen, setModelOpen] = useState(false);
@@ -337,22 +337,28 @@ function ComposerDraft({
 function ComposerInput({ guess, ...props }: ComposerInputProps & { guess: string | null }) {
   const { placeholder, autoFocus } = props;
   const empty = useAuiState((s) => s.composer.isEmpty);
+  const accepted = useSuggestionAccepted();
   return (
     <div className="relative min-w-0">
       <ComposerField placeholder={placeholder} autoFocus={autoFocus} />
-      {/* The CLI's guess at the next message, where the placeholder would be. */}
+      {/* The guess at the next message, where the placeholder would be; its key hint only until one is taken. */}
       {guess && empty && (
         <p
           data-slot="composer-suggestion"
           className="text-muted-foreground/60 pointer-events-none absolute inset-x-0 top-0 px-2 py-2.5 text-base"
         >
-          {guess}{" "}
-          <span
-            data-slot="composer-suggestion-key"
-            className="bg-foreground/5 text-muted-foreground/60 ms-0.5 inline-block rounded-sm px-1.5 py-0.5 align-middle text-sm leading-4"
-          >
-            Press Tab to accept
-          </span>
+          {guess}
+          {!accepted && (
+            <>
+              {" "}
+              <span
+                data-slot="composer-suggestion-key"
+                className="bg-foreground/5 text-muted-foreground/60 ms-0.5 inline-block rounded-sm px-1.5 py-0.5 align-middle text-sm leading-4"
+              >
+                Press Tab to accept
+              </span>
+            </>
+          )}
         </p>
       )}
     </div>

@@ -2,7 +2,9 @@
  * A standalone Vite entry, excluded from the app entry and production build: the CLI's guess at
  * the user's next message (`UserRequest.suggestion`, G18) in the app's own conversation view.
  * A Chat whose one request is over carries a guess; IPC is mocked and records each
- * `setComposerShown`. It drives the real keys (`fixtureInput`), then checks the field keeps typed
+ * `setComposerShown` and every other request (Enter takes the guess, never sends). It drives the
+ * real keys (`fixtureInput`): Tab, → and Enter each take it, and its "Press Tab to accept" goes
+ * once one was taken. Then it checks the field keeps typed
  * text as typed (no text checking, no double-space period), and writes what it saw as JSON
  * into `<pre id="composer-suggestion-result">`.
  */
@@ -40,9 +42,14 @@ const request = {
 } as unknown as UserRequest;
 
 const shown: boolean[] = [];
+/** Every request but `setComposerShown`, in order. */
+const asked: string[] = [];
+// Never taken one: the key hint shows.
+localStorage.removeItem("brigadier.suggestionAccepted");
 mockIPC((command, payload) => {
   if (command !== "ipc_request") return null;
   const req = (payload as { request: Request }).request;
+  if (req.method !== "setComposerShown") asked.push(req.method);
   switch (req.method) {
     case "getConversation":
       return {
@@ -102,6 +109,22 @@ async function drive() {
     await until("the field empty", () => typed() === "");
     await until("the guess back", () => ghost() !== null);
     seen.backWhenEmpty = true;
+    // Taken once, the hint is gone for good.
+    seen.chipAfterTaken = ghost()?.querySelector("[data-slot=composer-suggestion-key]") !== null;
+    seen.ghostAfterTaken = ghost()?.textContent;
+    // → and Enter take it too; Enter sends nothing.
+    const takes: Record<string, boolean> = {};
+    for (const name of ["ArrowRight", "Enter"]) {
+      const before = asked.length;
+      await key(name);
+      await until(`the guess in the field by ${name}`, () => typed() === GUESS);
+      await sleep(200);
+      takes[name] = asked.slice(before).length === 0;
+      for (let index = 0; index < GUESS.length + 2; index++) await key("Backspace");
+      await until("the field empty", () => typed() === "");
+      await until("the guess back", () => ghost() !== null);
+    }
+    seen.takesUnsent = takes;
     // Typing hides it.
     await key("x");
     await until("the letter", () => typed() === "x");

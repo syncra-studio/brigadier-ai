@@ -431,6 +431,9 @@ struct ConvState {
     reminded: HashSet<TaskId>,
     /// The running turn's last reply.
     last_reply: Option<String>,
+    /// The guess at the next message its last reply ended with ([`prompts::NEXT_OPEN`]), kept
+    /// once the turn is over as a CLI's own guess is.
+    next_guess: Option<String>,
     /// Requests whose last turn ended asking the user something in its reply: until the user
     /// writes again, no reminder pushes the orchestrator past its question.
     asked_user: HashSet<String>,
@@ -3240,6 +3243,8 @@ impl SessionManager {
                 current.git_writing = writing;
                 current.browser = browser;
                 current.auto_merge = auto_merge;
+                // As the prompt it was written with says.
+                current.next_message = prompts::marks_next(conv.kind, choice.provider);
                 // A Codex thread runs long commands through `run`; a Claude thread's own Bash
                 // output is trimmed by its hook (THREAD-PLAN.md Q4).
                 let commands = super::run::run_tools(choice.provider, permission);
@@ -3421,11 +3426,10 @@ impl SessionManager {
             deny_tools: None,
             // The user types into this one: its CLI guesses their next message, held while
             // its composer is off screen (`pause_suggestions`). Never a worker's. A Claude
-            // Session goes without: Claude Code 2.1.301 acknowledges the pause and guesses
-            // anyway, each guess reading the whole context again, so neither the off-screen
-            // pause nor the work-pending hold would hold it. Codex is asked by Brigadier.
-            suggestions: conv.kind == ConversationKind::Chat
-                || choice.provider == ProviderKind::Codex,
+            // Session's final answers carry the guess instead (`marks_next`): Claude Code
+            // 2.1.301 acknowledges the pause and guesses anyway, each guess reading the whole
+            // context again. Codex is asked by Brigadier.
+            suggestions: !prompts::marks_next(conv.kind, choice.provider),
             protection: launch
                 .as_ref()
                 .map(|launch| launch.protection.clone())
@@ -4462,20 +4466,7 @@ impl SessionManager {
         // The CLI's guess at the user's next message is for the composer only: never logged,
         // so no transcript, digest or rebirth ever reads it as said.
         if let ProviderEvent::PromptSuggestion { text } = event {
-            // A guess that comes once another turn is under way, or for a request no longer
-            // the latest (a message came meanwhile), follows nothing on screen: dropped.
-            let request = {
-                let state = conv.state.lock().await;
-                (!state.busy && !state.awaiting_start)
-                    .then(|| state.guess_for.clone())
-                    .flatten()
-            };
-            let Some(request) = request else {
-                return;
-            };
-            if let Err(err) = self.core.set_suggestion(&conv.id, &request, text).await {
-                tracing::debug!(conversation = %conv.id, error = %err, "could not keep a next-message guess");
-            }
+            self.keep_guess(conv, text).await;
             return;
         }
         let event = self.retain_thread_image(&conv.id, event).await;
@@ -4522,9 +4513,13 @@ impl SessionManager {
                 role: ProviderRole::Assistant,
                 text,
             } => {
+                // Its guess at the next message is the composer's, never part of the reply.
+                let (text, guess) = without_next(text);
                 let (request, answer_at_ms) = {
                     let mut state = conv.state.lock().await;
-                    state.last_reply = Some(text.clone());
+                    state.last_reply = Some(text.to_owned());
+                    state.next_guess =
+                        guess.filter(|_| prompts::marks_next(conv.kind, cli.provider));
                     let request = state
                         .replying_for
                         .remove(item_id)
@@ -5003,6 +4998,30 @@ impl SessionManager {
         }
         if let Some(status) = completed {
             crate::heap(|| self.turn_completed(conv, cli, status)).await;
+            // The guess its final answer ended with, once the turn is over, as a CLI's comes.
+            let guess = conv.state.lock().await.next_guess.take();
+            if let Some(text) = guess.filter(|_| status == TurnStatus::Completed) {
+                self.keep_guess(conv, text).await;
+            }
+        }
+    }
+
+    /// Keeps a guess at the user's next message on the request the last turn served, for the
+    /// composer only: never logged, so no transcript, digest or rebirth ever reads it as said.
+    async fn keep_guess(&self, conv: &Arc<ConvLive>, text: String) {
+        // A guess that comes once another turn is under way, or for a request no longer the
+        // latest (a message came meanwhile), follows nothing on screen: dropped.
+        let request = {
+            let state = conv.state.lock().await;
+            (!state.busy && !state.awaiting_start)
+                .then(|| state.guess_for.clone())
+                .flatten()
+        };
+        let Some(request) = request else {
+            return;
+        };
+        if let Err(err) = self.core.set_suggestion(&conv.id, &request, text).await {
+            tracing::debug!(conversation = %conv.id, error = %err, "could not keep a next-message guess");
         }
     }
 
@@ -6263,6 +6282,7 @@ impl SessionManager {
                 current.due = due;
                 if let Some(cli) = conv.live_cli().await {
                     current.provider = cli.provider;
+                    current.next_message = prompts::marks_next(conv.kind, cli.provider);
                 }
                 current
             }
@@ -6680,12 +6700,14 @@ struct Quiet {
     /// Text streamed so far per reply still held back, and what its CLI said it is; released
     /// replies are absent.
     held: HashMap<String, (String, Option<TextPhase>)>,
-    released: HashSet<String>,
+    /// Released replies, each with the end it still holds back: a last line that may be its
+    /// guess at the next message ([`prompts::NEXT_OPEN`]), which never shows.
+    released: HashMap<String, String>,
 }
 
 impl Quiet {
     /// The deltas the user may see: a reply's text is released, whole, once it can no longer
-    /// be [`prompts::QUIET`].
+    /// be [`prompts::QUIET`], all but a last line that may still be its next-message line.
     fn pass(&mut self, deltas: Vec<ProviderEvent>) -> Vec<ProviderEvent> {
         deltas
             .into_iter()
@@ -6695,8 +6717,10 @@ impl Quiet {
                     text,
                     phase,
                 } => {
-                    if self.released.contains(&item_id) {
-                        return Some(ProviderEvent::MessageDelta {
+                    if let Some(pending) = self.released.get_mut(&item_id) {
+                        pending.push_str(&text);
+                        let text = shown_before_next(pending);
+                        return (!text.is_empty()).then_some(ProviderEvent::MessageDelta {
                             item_id,
                             text,
                             phase,
@@ -6711,9 +6735,10 @@ impl Quiet {
                     if prompts::QUIET.starts_with(trimmed) || trimmed.starts_with(prompts::QUIET) {
                         return None;
                     }
-                    let (text, phase) = self.held.remove(&item_id).unwrap_or_default();
-                    self.released.insert(item_id.clone());
-                    Some(ProviderEvent::MessageDelta {
+                    let (mut pending, phase) = self.held.remove(&item_id).unwrap_or_default();
+                    let text = shown_before_next(&mut pending);
+                    self.released.insert(item_id.clone(), pending);
+                    (!text.is_empty()).then_some(ProviderEvent::MessageDelta {
                         item_id,
                         text,
                         phase,
@@ -6731,6 +6756,49 @@ impl Quiet {
             self.released.remove(item_id);
         }
     }
+}
+
+/// Takes from streamed `pending` what may show now, leaving a last line that may still become
+/// its next-message line ([`prompts::NEXT_OPEN`]): the whole reply strips it (`without_next`).
+fn shown_before_next(pending: &mut String) -> String {
+    let start = pending.rfind('\n').map_or(0, |at| at + 1);
+    let line = pending[start..].trim_start().to_ascii_lowercase();
+    let may_be = !line.is_empty()
+        && (prompts::NEXT_OPEN.starts_with(line.as_str()) || line.starts_with(prompts::NEXT_OPEN));
+    let rest = if may_be {
+        pending.split_off(start)
+    } else {
+        String::new()
+    };
+    std::mem::replace(pending, rest)
+}
+
+/// The longest guess at the next message kept: one message, not a paragraph.
+const NEXT_MAX_CHARS: usize = 300;
+
+/// A reply without its last line when that is its guess at the user's next message
+/// (`[next: …]`, [`prompts::NEXT_OPEN`]), and the guess: none when empty or too long.
+fn without_next(text: &str) -> (&str, Option<String>) {
+    let body = text.trim_end();
+    let start = body.rfind('\n').map_or(0, |at| at + 1);
+    let line = body[start..].trim();
+    let opens = line
+        .get(..prompts::NEXT_OPEN.len())
+        .is_some_and(|open| open.eq_ignore_ascii_case(prompts::NEXT_OPEN));
+    if !opens {
+        return (text, None);
+    }
+    let guess = line[prompts::NEXT_OPEN.len()..]
+        .strip_suffix(']')
+        .map(|guess| {
+            guess
+                .trim()
+                .trim_matches(['"', '\u{201c}', '\u{201d}'])
+                .trim()
+        })
+        .filter(|guess| !guess.is_empty() && guess.chars().count() <= NEXT_MAX_CHARS)
+        .map(str::to_owned);
+    (body[..start].trim_end(), guess)
 }
 
 /// What the thread is told when its reply asked the user something in text, with no card open.
@@ -7158,6 +7226,87 @@ mod tests {
         ] {
             assert!(quiet.pass(vec![delta(text)]).is_empty(), "{text}");
         }
+    }
+
+    #[test]
+    fn a_reply_s_next_message_line_is_cut_off_and_kept_as_the_guess() {
+        assert_eq!(
+            without_next(
+                "Done: titles edit inline.\n\n[next: could u make it so I can delete one too?]\n"
+            ),
+            (
+                "Done: titles edit inline.",
+                Some("could u make it so I can delete one too?".to_owned())
+            )
+        );
+        // Its case, quotes and spaces don't matter.
+        assert_eq!(
+            without_next("Done.\n  [Next: \"Run it again.\"]  ")
+                .1
+                .as_deref(),
+            Some("Run it again.")
+        );
+        // An empty or unclosed line is no guess, and still hidden.
+        assert_eq!(without_next("Done.\n[next: ]"), ("Done.", None));
+        assert_eq!(without_next("Done.\n[next: Run it"), ("Done.", None));
+        assert_eq!(
+            without_next(&format!(
+                "Done.\n[next: {}]",
+                "a".repeat(NEXT_MAX_CHARS + 1)
+            )),
+            ("Done.", None)
+        );
+        // Only a last line: one inside the answer, or none, changes nothing.
+        for text in [
+            "Done.",
+            "Done.\n[next: Run it.]\nMore.",
+            "See [1].\n[note] kept",
+            "Done.\n- [next](https://example.com) step",
+        ] {
+            assert_eq!(without_next(text), (text, None), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_streamed_next_message_line_never_shows() {
+        let delta = |text: &str| ProviderEvent::MessageDelta {
+            item_id: "m1".into(),
+            text: text.into(),
+            phase: None,
+        };
+        let shown = |events: Vec<ProviderEvent>| -> String {
+            events
+                .into_iter()
+                .map(|event| match event {
+                    ProviderEvent::MessageDelta { text, .. } => text,
+                    _ => String::new(),
+                })
+                .collect()
+        };
+        let mut quiet = Quiet::default();
+        let mut seen = String::new();
+        for text in [
+            "Done: ti",
+            "tles edit.\n",
+            "\n[ne",
+            "xt: Run ",
+            "it again.]",
+        ] {
+            seen.push_str(&shown(quiet.pass(vec![delta(text)])));
+        }
+        assert_eq!(seen, "Done: titles edit.\n\n");
+        // A line that turns out to be something else shows once it can't be one.
+        let mut quiet = Quiet::default();
+        let mut seen = String::new();
+        for text in [
+            "See below.\n[",
+            "1] The source.",
+            "\n[next",
+            " step]\nMore.",
+        ] {
+            seen.push_str(&shown(quiet.pass(vec![delta(text)])));
+        }
+        assert_eq!(seen, "See below.\n[1] The source.\n[next step]\nMore.");
     }
 
     fn image_ref(id: &str, inline: bool, mime: &str) -> AttachmentRef {

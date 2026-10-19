@@ -15,6 +15,7 @@ import {
   $getSelection,
   $isRangeSelection,
   $isTextNode,
+  COMMAND_PRIORITY_HIGH,
   COMMAND_PRIORITY_NORMAL,
   COPY_COMMAND,
   CUT_COMMAND,
@@ -22,6 +23,7 @@ import {
   HISTORY_MERGE_TAG,
   type LexicalNode,
   KEY_ARROW_DOWN_COMMAND,
+  KEY_ARROW_RIGHT_COMMAND,
   KEY_ARROW_UP_COMMAND,
   KEY_BACKSPACE_COMMAND,
   KEY_DOWN_COMMAND,
@@ -42,7 +44,7 @@ import { clearBackgroundSend, markBackgroundSend } from "@/state/backgroundSend"
 import { isTaskTab } from "@/state/tabStates";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { useImagesBlocked } from "@/app/conversation/imageInput";
-import { SuggestionContext } from "@/app/conversation/suggestion";
+import { SuggestionContext, markSuggestionAccepted } from "@/app/conversation/suggestion";
 import { IMAGES_BLOCKED } from "@/app/conversation/imageModels";
 import {
   imageMarkerAt,
@@ -231,7 +233,11 @@ function $caretAtStart(): boolean {
   return true;
 }
 
-/** Tab in the empty field takes the guess at the next message it shows, unsent. */
+/**
+ * Tab, → or Enter in the empty field takes the guess at the next message it shows, unsent, as
+ * a draft to edit; with a modifier each does what it does elsewhere. Above the field's own
+ * Enter, which would send: an empty field has no open menu to take it first.
+ */
 function SuggestionKeys() {
   const [editor] = useLexicalComposerContext();
   const aui = useAui();
@@ -240,21 +246,22 @@ function SuggestionKeys() {
   useEffect(() => {
     shown.current = suggestion;
   }, [suggestion]);
-  useEffect(
-    () =>
-      editor.registerCommand(
-        KEY_TAB_COMMAND,
-        (event) => {
-          const guess = shown.current;
-          if (!guess || event.shiftKey || !aui.composer().getState().isEmpty) return false;
-          event.preventDefault();
-          aui.composer().setText(guess);
-          return true;
-        },
-        COMMAND_PRIORITY_NORMAL,
-      ),
-    [editor, aui],
-  );
+  useEffect(() => {
+    const take = (event: KeyboardEvent | null) => {
+      const guess = shown.current;
+      if (!guess || !event || event.isComposing || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false;
+      if (!aui.composer().getState().isEmpty) return false;
+      event.preventDefault();
+      aui.composer().setText(guess);
+      markSuggestionAccepted();
+      return true;
+    };
+    return mergeRegister(
+      editor.registerCommand(KEY_TAB_COMMAND, take, COMMAND_PRIORITY_HIGH),
+      editor.registerCommand(KEY_ARROW_RIGHT_COMMAND, take, COMMAND_PRIORITY_HIGH),
+      editor.registerCommand(KEY_ENTER_COMMAND, take, COMMAND_PRIORITY_HIGH),
+    );
+  }, [editor, aui]);
   return null;
 }
 

@@ -1,15 +1,16 @@
-import { createContext, useEffect } from "react";
+import { createContext, useEffect, useSyncExternalStore } from "react";
 
 import { latestRequest } from "@/app/conversation/rework";
 import { request } from "@/ipc/client";
 import { useBoard } from "@/state/board";
 
 /**
- * The CLI's own guess at the user's next message (`UserRequest.suggestion`): shown in the
- * empty composer, with "Press Tab to accept", once the request it follows is over. Tab puts it
- * in the field, unsent; typing hides it until the field is empty again; sending ends it (the
- * next request has its own); an attachment hides it. Its CLI guesses only while the composer
- * is on screen.
+ * The guess at the user's next message (`UserRequest.suggestion`): its CLI's own, or, on a
+ * Claude session thread, the one its final answer ended with (a hidden `[next: …]` line). Shown
+ * in the empty composer in the placeholder's colour once the request it follows is over, with
+ * "Press Tab to accept" until the user first takes one. Tab, → or Enter puts it in the field,
+ * unsent; typing hides it until the field is empty again; sending ends it (the next request has
+ * its own); an attachment hides it. A CLI guesses only while the composer is on screen.
  */
 
 /** The guess the composer shows now (none in plan mode or with an attachment), for Tab. */
@@ -27,6 +28,36 @@ export function useSuggestion(conversationId: string | null): Suggestion | null 
   // While the request works, the next message isn't due yet.
   if (latest.state.type === "working" || latest.state.type === "waiting") return null;
   return { requestId: latest.id, text };
+}
+
+const ACCEPTED_KEY = "brigadier.suggestionAccepted";
+const acceptedListeners = new Set<() => void>();
+
+function readAccepted(): boolean {
+  try {
+    return localStorage.getItem(ACCEPTED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the user has taken a guess before: "Press Tab to accept" shows only until then. */
+export function useSuggestionAccepted(): boolean {
+  return useSyncExternalStore((listener) => {
+    acceptedListeners.add(listener);
+    return () => acceptedListeners.delete(listener);
+  }, readAccepted);
+}
+
+/** The user took a guess: its key hint goes for good. */
+export function markSuggestionAccepted(): void {
+  if (readAccepted()) return;
+  try {
+    localStorage.setItem(ACCEPTED_KEY, "1");
+  } catch {
+    // Without storage the hint stays.
+  }
+  for (const listener of acceptedListeners) listener();
 }
 
 /**

@@ -3622,6 +3622,10 @@ pub struct Told {
     /// has had: `workers`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_use: Option<Vec<String>>,
+    /// Whether its final answers end with the user's likely next message on a `[next: …]` line
+    /// (`prompts::marks_next`); `None` counts as no.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_message: Option<bool>,
 }
 
 /// One entry of the orchestrator log shown in the Inspector.

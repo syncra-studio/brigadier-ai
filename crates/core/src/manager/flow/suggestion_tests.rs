@@ -1,6 +1,7 @@
 //! The thread's CLI guesses the user's next message (G18): kept on the request it follows,
 //! never logged as said, and asked for only while the conversation's composer shows. A Claude
-//! Session goes without: Claude Code 2.1.301 acknowledges the pause and guesses anyway.
+//! Session's CLI never guesses (Claude Code 2.1.301 acknowledges the pause and guesses anyway):
+//! its final answer ends with the guess on a `[next: …]` line instead, which never shows.
 
 use std::sync::Arc;
 
@@ -8,7 +9,9 @@ use brigadier_providers::{ProviderEvent, ProviderKind};
 use brigadier_store::StreamPage;
 
 use super::{FakeBehavior, Flow, Options, Reply, Script, Turn};
-use crate::model::{ConversationId, ConversationKind, ModelChoice, SetupRequest, streams};
+use crate::model::{
+    ConversationId, ConversationKind, MessageRole, ModelChoice, SetupRequest, streams,
+};
 
 fn script<F, Fut>(f: F) -> Script
 where
@@ -263,5 +266,95 @@ async fn a_guess_that_comes_during_a_newer_turn_is_dropped() {
         "{:?}",
         board.requests
     );
+    flow.stop().await;
+}
+
+/// The answers' texts in `id`, as stored.
+async fn answers(flow: &Flow, id: &ConversationId) -> Vec<String> {
+    flow.core
+        .conversation_view(id.clone(), 50)
+        .await
+        .unwrap()
+        .messages
+        .messages
+        .into_iter()
+        .filter(|message| message.role == MessageRole::Assistant)
+        .map(|message| message.text)
+        .collect()
+}
+
+/// A Claude Session thread's final answer carries the guess on its last line, at no request
+/// of its own: the line never shows in the answer, and the guess is kept on the request as a
+/// CLI's would be. An answer without the line keeps none, as before.
+#[tokio::test]
+async fn a_claude_session_thread_s_answer_carries_its_guess_on_a_hidden_last_line() {
+    let flow = Flow::start(
+        "20261017-2108-workspaces-rework-w89-next-line",
+        Options::default(),
+        script(|turn| async move {
+            if turn.input.contains("Second") {
+                return Reply::text("Answered again.");
+            }
+            Reply::text(format!("Answered.\n\n[next: {GUESS}]"))
+        }),
+    )
+    .await;
+    flow.say("First").await;
+    let first = flow
+        .until("the request over with its guess", |board| {
+            board.latest_request().is_some_and(|request| {
+                request.suggestion.as_deref() == Some(GUESS)
+                    && request.state == crate::work::RequestState::Done
+            })
+        })
+        .await
+        .latest_request()
+        .unwrap()
+        .id
+        .clone();
+    assert_eq!(answers(&flow, &flow.conversation).await, ["Answered."]);
+    // Its CLI was never asked to guess.
+    let suggesting = flow.behavior.suggesting.lock().unwrap().clone();
+    assert!(!suggesting.contains(&true), "{suggesting:?}");
+
+    flow.say("Second").await;
+    let board = flow
+        .until("the second request over", |board| {
+            board.latest_request().is_some_and(|request| {
+                request.id != first && request.state == crate::work::RequestState::Done
+            })
+        })
+        .await;
+    assert_eq!(board.latest_request().unwrap().suggestion, None);
+    assert_eq!(
+        answers(&flow, &flow.conversation).await,
+        ["Answered.", "Answered again."]
+    );
+    flow.stop().await;
+}
+
+/// A Codex thread keeps its CLI's guess: a `[next: …]` line it writes anyway is hidden, and
+/// its words are no guess.
+#[tokio::test]
+async fn a_codex_thread_s_next_line_is_hidden_and_no_guess() {
+    let flow = Flow::start(
+        "20261017-2108-workspaces-rework-w89-next-codex",
+        Options {
+            thread: ProviderKind::Codex,
+            ..Default::default()
+        },
+        script(|_| async move { Reply::text("Answered.\n[next: Something else]") }),
+    )
+    .await;
+    flow.say("Hello").await;
+    let board = flow
+        .until("the request over", |board| {
+            board
+                .latest_request()
+                .is_some_and(|request| request.state == crate::work::RequestState::Done)
+        })
+        .await;
+    assert_eq!(board.latest_request().unwrap().suggestion, None);
+    assert_eq!(answers(&flow, &flow.conversation).await, ["Answered."]);
     flow.stop().await;
 }
