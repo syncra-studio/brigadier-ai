@@ -23,8 +23,8 @@ test("send feedback opens a filled-in GitHub issue", { timeout: 60000 }, async (
   // The details go with it, as the user sees them; a CLI without a known version is left out.
   assert.deepEqual(seen.included, ["Brigadier 0.1.0", "macOS 27.0 Tahoe (aarch64)", "Claude Code 2.1.4"]);
   assert.equal(seen.sendDisabled, true);
-  // The design's card: 600 wide, corners of 14.
-  assert.deepEqual(seen.card, { width: 600, radius: 14 });
+  // The design's card: 600 wide.
+  assert.equal(seen.width, 600);
   assert.equal(seen.ideaPlaceholder, "What are you trying to do, and what gets in the way?");
   assert.equal(seen.sendEnabled, true);
   const urls = seen.opened_urls as string[];
@@ -42,4 +42,17 @@ test("send feedback opens a filled-in GitHub issue", { timeout: 60000 }, async (
   // It closes: the rest happens on GitHub.
   assert.equal(seen.stillOpen, false);
   assert.deepEqual(seen.draft, { kind: "An idea", text: "Let me pin a chat" });
+});
+
+// Drawn with the app's shared parts (#385): the app's dialog with its title, line and close
+// button, its choice pills, field, badges, divider and buttons.
+test("send feedback is drawn with the app's dialog, pills, field, badges and buttons", { timeout: 60000 }, async (t) => {
+  const pairs = JSON.parse(await renderFixturePage(t, "feedback.html?look=1", "feedback-look", 10000)) as Record<
+    string,
+    [unknown, unknown]
+  >;
+  for (const [part, [mine, shared]] of Object.entries(pairs)) {
+    assert.notEqual(shared, null, `${part}: the shared part is drawn`);
+    assert.deepEqual(mine, shared, `${part} looks like the app's own`);
+  }
 });

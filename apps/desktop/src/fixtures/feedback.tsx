@@ -2,7 +2,8 @@
  * Send feedback over a faked app: the sidebar's foot and the dialog. ?drive=1 opens it from the
  * foot's Help menu, writes a bug, looks at the idea form, sends it (which closes it), opens a draft and writes
  * what it saw (and the link opened) to #feedback-result (FeedbackRender.test.ts reads it).
- * Without it, the dialog stays open, filled in, for screenshots.
+ * ?look=1 sets the open dialog's parts beside the app's shared ones and writes their looks to
+ * #feedback-look. Without either, the dialog stays open, filled in, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -12,13 +13,14 @@ import { FeedbackDialog } from "@/app/feedback/FeedbackDialog";
 import { SidebarFoot } from "@/app/SidebarFoot";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
 import type { ProviderOverview } from "@/ipc/generated";
 import { openFeedback, useFeedbackUi } from "@/state/feedback";
 import { useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
 // Driven, nothing animates (see the archived chats fixture).
-if (params.has("drive")) {
+if (params.has("drive") || params.has("look")) {
   const still = document.createElement("style");
   still.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; }";
   document.head.append(still);
@@ -80,6 +82,31 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function Fixture() {
   const [result, setResult] = useState("");
+  const [looked, setLooked] = useState("");
+  useEffect(() => {
+    if (!params.has("look")) return;
+    void (async () => {
+      for (let tries = 0; tries < 100 && !dialog()?.querySelector("li"); tries++) await wait(50);
+      const open = dialog();
+      // The note as it rests, as the shared field is measured.
+      open?.querySelector("textarea")?.blur();
+      await wait(100);
+      const pairs: LookPairs = {
+        card: [look(open, "surface"), canon("dialog", "surface")],
+        title: [look(open?.querySelector("h2"), "text"), canon("title", "text")],
+        line: [look(open?.querySelector("p"), "text"), canon("line", "text")],
+        close: [look(button("Close", open ?? document), "button"), canon("icon", "button")],
+        kinds: [look(open?.querySelector('[role="radio"]')?.parentElement, "fill"), canon("segmented", "fill", "> *")],
+        kind: [look(open?.querySelector('[role="radio"][data-state="on"]'), "button"), canon("segmented", "button", '[data-state="on"]')],
+        note: [look(open?.querySelector("textarea"), "surface"), canon("input", "surface")],
+        chip: [look(open?.querySelector('[aria-label="Also included"] li'), "button"), canon("badge", "button")],
+        footer: [look(open?.lastElementChild, "edgeTop"), canon("divider", "edgeTop")],
+        cancel: [look(button("Cancel", open ?? document), "button"), canon("ghost", "button")],
+        send: [look(button("Continue on GitHub", open ?? document), "button"), canon("primary", "button")],
+      };
+      setLooked(JSON.stringify(pairs));
+    })();
+  }, []);
   useEffect(() => {
     if (!params.has("drive")) return;
     let stopped = false;
@@ -102,8 +129,7 @@ function Fixture() {
       seen.focused = document.activeElement === area;
       seen.included = [...(open?.querySelectorAll('[aria-label="Also included"] li') ?? [])].map(text);
       seen.sendDisabled = button("Continue on GitHub", open ?? document)?.disabled;
-      const style = open ? getComputedStyle(open) : null;
-      seen.card = { width: Math.round(open?.getBoundingClientRect().width ?? 0), radius: Number.parseFloat(style?.borderTopLeftRadius ?? "0") };
+      seen.width = Math.round(open?.getBoundingClientRect().width ?? 0);
       button("An idea", open ?? document)?.click();
       await wait(100);
       seen.ideaPlaceholder = dialog()?.querySelector("textarea")?.placeholder;
@@ -142,6 +168,8 @@ function Fixture() {
         <FeedbackDialog />
       </SidebarProvider>
       {result && <pre id="feedback-result">{result}</pre>}
+      {params.has("look") && <Canon />}
+      {looked && <pre id="feedback-look">{looked}</pre>}
     </TooltipProvider>
   );
 }

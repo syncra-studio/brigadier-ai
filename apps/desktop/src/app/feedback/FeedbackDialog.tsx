@@ -2,10 +2,11 @@ import { ArrowUpRight, Bug, Eye, Lightbulb, X } from "@openai/apps-sdk-ui/compon
 import { type ReactNode, useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { GhostButton, LightButton } from "@/app/routing/parts";
+import { Segmented } from "@/app/settings/parts";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { detailsItems, type FeedbackKind } from "@/lib/feedbackUrl";
-import { cn } from "@/lib/utils";
 import { closeFeedback, feedbackDetails, type FeedbackDraft, sendFeedback, useFeedbackUi } from "@/state/feedback";
 
 const KINDS = [
@@ -20,7 +21,7 @@ const ASK: Record<FeedbackKind, string> = {
 
 /**
  * Send feedback (Help › Send Feedback…, the sidebar's help menu, the search palette, or a draft
- * from elsewhere), drawn to the user's design: a bug or an idea, written here and opened as a
+ * from elsewhere), laid out to the user's design with the app's dialog parts: a bug or an idea, written here and opened as a
  * new issue on GitHub, filled in, with the versions it carries shown as chips. Continue opens it
  * in the browser and closes the dialog; the user reads it there before posting.
  */
@@ -62,52 +63,38 @@ function Feedback({ draft }: { draft: FeedbackDraft | null }) {
     <DialogContent
       data-slot="feedback"
       showCloseButton={false}
-      className="bg-settings-surface border-settings-border shadow-design-dialog max-w-feedback block gap-0 rounded-design-dialog border p-0 ring-0"
+      className="max-w-feedback block gap-0 p-0"
     >
       <div className="flex gap-3.5 pt-6 pe-5 pb-4.5 ps-6">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <DialogTitle className="text-dialog-title text-settings-text font-medium">Send feedback</DialogTitle>
-          <DialogDescription className="text-settings-small text-settings-text-secondary">
+          <DialogTitle>Send feedback</DialogTitle>
+          <DialogDescription>
             Opens a GitHub issue with your note filled in.
           </DialogDescription>
         </div>
-        <DialogClose
-          aria-label="Close"
-          className="text-settings-text-secondary hover:text-settings-text hover:bg-settings-raised flex size-7 shrink-0 items-center justify-center rounded-full transition-colors"
-        >
-          <X className="size-3.75" />
+        <DialogClose asChild>
+          <Button variant="ghost" size="icon-sm" aria-label="Close">
+            <X />
+          </Button>
         </DialogClose>
       </div>
 
       <div className="flex flex-col gap-3.5 px-6 pb-5.5">
-        <div
-          role="radiogroup"
-          aria-label="Kind"
-          className="bg-settings-inset border-settings-divider flex gap-0.75 rounded-full border p-0.75"
-        >
-          {KINDS.map((choice) => {
-            const active = choice.value === kind;
-            return (
-              <button
-                key={choice.value}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                data-state={active ? "on" : "off"}
-                onClick={() => setKind(choice.value)}
-                className={cn(
-                  "text-settings-small flex h-7.5 flex-1 items-center justify-center gap-1.75 rounded-full border font-medium transition-colors [&_svg]:size-3.5",
-                  active
-                    ? "bg-settings-raised border-settings-ring text-settings-text"
-                    : "text-settings-text-secondary hover:text-settings-text border-transparent",
-                )}
-              >
+        <Segmented
+          fill
+          label="Kind"
+          value={kind}
+          options={KINDS.map((choice) => ({
+            value: choice.value,
+            label: (
+              <span className="[&_svg]:size-icon-sm inline-flex items-center gap-1.5 align-middle">
                 {choice.icon}
                 {choice.label}
-              </button>
-            );
-          })}
-        </div>
+              </span>
+            ),
+          }))}
+          onChange={setKind}
+        />
 
         <textarea
           value={text}
@@ -116,20 +103,17 @@ function Feedback({ draft }: { draft: FeedbackDraft | null }) {
           autoFocus
           placeholder={ASK[kind]}
           aria-label={ASK[kind]}
-          className="bg-settings-inset border-settings-border focus-visible:border-settings-accent text-settings-body text-settings-text placeholder:text-settings-text-tertiary rounded-design-row h-37 resize-none border px-3.5 py-3 leading-normal outline-none"
+          className="placeholder:text-muted-foreground bg-muted/60 focus-visible:bg-background rounded-control h-37 resize-none border border-transparent px-3.5 py-3 text-sm leading-normal transition-colors outline-none"
         />
 
         {included.length > 0 && (
           <div className="flex flex-col gap-2 pt-1">
-            <span className="text-settings-meta text-settings-text-tertiary">Also included</span>
+            <span className="text-muted-foreground text-xs">Also included</span>
             <ul aria-label="Also included" className="flex flex-wrap gap-1.5">
               {included.map((item) => (
-                <li
-                  key={item}
-                  className="bg-feedback-chip text-settings-badge text-settings-text-secondary rounded-design-badge px-2 py-1 font-mono"
-                >
-                  {item}
-                </li>
+                <Badge asChild key={item} variant="secondary" className="font-mono font-normal">
+                  <li>{item}</li>
+                </Badge>
               ))}
             </ul>
           </div>
@@ -138,18 +122,20 @@ function Feedback({ draft }: { draft: FeedbackDraft | null }) {
         <ErrorLine error={error} />
       </div>
 
-      <div className="border-settings-divider flex items-center gap-2 border-t px-6 py-4">
-        <span className="text-settings-meta text-settings-text-tertiary flex min-w-0 flex-1 items-center gap-1.75">
+      <div className="border-divider flex items-center gap-2 border-t px-6 py-4">
+        <span className="text-muted-foreground flex min-w-0 flex-1 items-center gap-1.75 text-xs">
           <Eye className="size-3.25 shrink-0" />
           You’ll review it before it’s posted
         </span>
         <DialogClose asChild>
-          <GhostButton>Cancel</GhostButton>
+          <Button variant="ghost" size="sm">
+            Cancel
+          </Button>
         </DialogClose>
-        <LightButton disabled={!text.trim()} onClick={send} className="gap-1.5 ps-3.5 pe-3">
+        <Button size="sm" disabled={!text.trim()} onClick={send}>
           Continue on GitHub
-          <ArrowUpRight className="size-3.25" />
-        </LightButton>
+          <ArrowUpRight />
+        </Button>
       </div>
     </DialogContent>
   );
