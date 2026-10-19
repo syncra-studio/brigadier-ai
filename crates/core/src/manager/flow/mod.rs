@@ -460,7 +460,7 @@ pub(crate) fn click() -> crate::work::AnswerOrigin {
 
 /// Runs git in `dir` and returns its output; panics when it fails.
 pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
+    let output = crate::test_git_command()
         .args(args)
         .current_dir(dir)
         .env("GIT_AUTHOR_NAME", "Flow Test")

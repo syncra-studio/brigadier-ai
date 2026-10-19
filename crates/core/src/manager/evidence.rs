@@ -552,7 +552,7 @@ mod tests {
         let _temp = Temp(dir.clone());
         std::fs::create_dir_all(&dir).unwrap();
         let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
+            let out = crate::test_git_command()
                 .arg("-C")
                 .arg(&dir)
                 .args([

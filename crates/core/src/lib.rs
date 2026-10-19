@@ -81,6 +81,24 @@ pub(crate) fn test_patience() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
+/// A test's git command must use its scratch repository, even inside a hook or bisect run.
+#[cfg(test)]
+pub(crate) fn test_git_command() -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    for key in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_PREFIX",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        command.env_remove(key);
+    }
+    command
+}
+
 /// Milliseconds since the Unix epoch.
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()

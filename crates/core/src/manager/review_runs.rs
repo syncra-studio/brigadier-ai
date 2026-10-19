@@ -3238,7 +3238,7 @@ mod tests {
             std::env::temp_dir().join(format!("brigadier-covered-upto-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let git_in = |args: &[&str]| {
-            let out = std::process::Command::new("git")
+            let out = crate::test_git_command()
                 .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
                 .args(args)
                 .current_dir(&dir)

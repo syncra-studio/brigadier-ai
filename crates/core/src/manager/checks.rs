@@ -2885,7 +2885,7 @@ mod tests {
     use super::*;
 
     fn git_in(dir: &Path, args: &[&str]) {
-        let status = std::process::Command::new("git")
+        let status = crate::test_git_command()
             .args([
                 "-c",
                 "user.name=Checks",
@@ -3724,7 +3724,7 @@ mod tests {
         repo_at(tree);
         let body = |tree: &Path| {
             String::from_utf8(
-                std::process::Command::new("git")
+                crate::test_git_command()
                     .args(["log", "-1", "--format=%B"])
                     .current_dir(tree)
                     .output()

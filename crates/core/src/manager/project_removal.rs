@@ -692,7 +692,7 @@ pub(super) fn branch_records<'r>(
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsString, path::PathBuf, process::Command};
+    use std::{ffi::OsString, path::PathBuf};
 
     use super::{BranchRecord, unlanded};
 
@@ -723,7 +723,7 @@ mod tests {
             env.push((key.into(), value.into()));
         }
         let run = |args: &[&str]| {
-            let out = Command::new("git")
+            let out = crate::test_git_command()
                 .args(args)
                 .current_dir(&root)
                 .env_clear()

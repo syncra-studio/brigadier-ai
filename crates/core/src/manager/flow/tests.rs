@@ -16,6 +16,69 @@ where
     Arc::new(move |turn| Box::pin(f(turn)))
 }
 
+/// Hooks and bisect export another checkout's git paths. A flow must still create and
+/// commit only its own repository. Use a child so no other test's environment is changed.
+#[tokio::test]
+async fn a_flow_leaves_the_callers_git_repository_untouched() {
+    const CHILD: &str = "BRIGADIER_FLOW_GIT_ENV_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let flow = Flow::start(
+            "20261018-1945-issues-run-2-w38-git-env-child",
+            Options::default(),
+            script(|_| async { Reply::text("Done.") }),
+        )
+        .await;
+        assert_eq!(
+            super::git(&flow.repo, &["rev-list", "--count", "HEAD"]),
+            "1"
+        );
+        assert_eq!(
+            super::git(&flow.repo, &["log", "-1", "--format=%s"]),
+            "Start"
+        );
+        flow.stop().await;
+        return;
+    }
+    let scratch = super::Scratch::new("20261018-1945-issues-run-2-w38-git-env");
+    super::git(&scratch, &["init", "-q", "-b", "main"]);
+    std::fs::write(scratch.join("caller.txt"), "keep this\n").unwrap();
+    super::git(&scratch, &["add", "caller.txt"]);
+    super::git(&scratch, &["commit", "-q", "-m", "Caller"]);
+    let head = super::git(&scratch, &["rev-parse", "HEAD"]);
+    let index = std::fs::read(scratch.join(".git/index")).unwrap();
+    for all_paths in [false, true] {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                &format!(
+                    "{}::a_flow_leaves_the_callers_git_repository_untouched",
+                    module_path!().split_once("::").unwrap().1
+                ),
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("GIT_DIR", scratch.join(".git"));
+        if all_paths {
+            command
+                .env("GIT_COMMON_DIR", scratch.join(".git"))
+                .env("GIT_WORK_TREE", &*scratch)
+                .env("GIT_INDEX_FILE", scratch.join(".git/index"))
+                .env("GIT_OBJECT_DIRECTORY", scratch.join(".git/objects"))
+                .env(
+                    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                    scratch.join(".git/objects"),
+                )
+                .env("GIT_PREFIX", "caller/");
+        }
+        let output = command.output().unwrap();
+        assert_eq!(super::git(&scratch, &["rev-parse", "HEAD"]), head);
+        assert_eq!(std::fs::read(scratch.join(".git/index")).unwrap(), index);
+        assert!(output.status.success(), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
+}
+
 /// The worker's side of a scripted run where the worker ends its first turn to wait for its
 /// own background job. `ends` says whether the job ends (and its end starts a turn that
 /// reports) or hangs (the wait runs out and the worker is nudged, then reports).
@@ -1204,7 +1267,7 @@ async fn a_review_still_running_at_the_merge_reports_its_findings_after_it() {
         })
         .await;
     assert!(
-        std::process::Command::new("git")
+        crate::test_git_command()
             .args(["cat-file", "-e", "main:hello.txt"])
             .current_dir(&flow.repo)
             .status()

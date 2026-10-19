@@ -51,7 +51,7 @@ async fn the_tree_lists_ignored_entries_and_every_kind_of_change() {
     git(repo, &["checkout", "-q", "-"]);
     std::fs::write(repo.join("both.txt"), "main\n").unwrap();
     git(repo, &["commit", "-qam", "Main"]);
-    let merged = std::process::Command::new("git")
+    let merged = crate::test_git_command()
         .args(["merge", "side"])
         .current_dir(repo)
         .output()

@@ -2175,7 +2175,7 @@ exit "$code"
         }
 
         fn git(dir: &Path, args: &[&str]) -> String {
-            let out = std::process::Command::new("git")
+            let out = crate::test_git_command()
                 .args([
                     "-c",
                     "user.name=t",

@@ -44,7 +44,7 @@ struct Sides {
 
 /// Runs git in `dir`, which may fail (a merge that stops at conflicts).
 fn try_git(dir: &Path, args: &[&str]) -> bool {
-    std::process::Command::new("git")
+    crate::test_git_command()
         .args(args)
         .current_dir(dir)
         .env("GIT_AUTHOR_NAME", "Flow Test")

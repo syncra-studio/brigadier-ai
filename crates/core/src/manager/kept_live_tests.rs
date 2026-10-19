@@ -88,7 +88,7 @@ async fn preserved(provider: Arc<dyn Provider>, model: &str, effort: Option<&str
     let root = std::env::temp_dir().join(format!("brigadier-kept-live-{}", uuid::Uuid::new_v4()));
     let cwd = root.join("work");
     std::fs::create_dir_all(&cwd).unwrap();
-    let ok = std::process::Command::new("git")
+    let ok = crate::test_git_command()
         .args(["init", "-q"])
         .current_dir(&cwd)
         .status()

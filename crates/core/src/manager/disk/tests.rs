@@ -867,7 +867,7 @@ async fn only_what_is_not_brigadiers_own_git_keeps_a_folder_busy() {
     let processes = flow.manager.runtime.platform().processes();
     assert!(!super::busy_in(processes, &folder.0));
     // `git hash-object --stdin` waits for its input: a read of ours, still going.
-    let mut git = Command::new("git")
+    let mut git = crate::test_git_command()
         .args(["hash-object", "--stdin"])
         .current_dir(&folder.0)
         .stdin(Stdio::piped())

@@ -1766,7 +1766,7 @@ test result: FAILED. 1 passed; 3 failed";
         ));
         std::fs::create_dir_all(dir.join("apps/web")).unwrap();
         let git = |args: &[&str]| {
-            let status = std::process::Command::new("git")
+            let status = crate::test_git_command()
                 .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
                 .args(args)
                 .current_dir(&dir)

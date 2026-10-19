@@ -738,7 +738,7 @@ mod tests {
         std::fs::create_dir_all(&repo).unwrap();
         std::fs::create_dir_all(&scratch).unwrap();
         let git = |cwd: &Path, args: &[&str]| {
-            let out = std::process::Command::new("git")
+            let out = crate::test_git_command()
                 .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
                 .args(args)
                 .current_dir(cwd)

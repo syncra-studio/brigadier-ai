@@ -6207,7 +6207,7 @@ mod tests {
 
     /// Runs git in `cwd`, failing the test when it fails.
     fn git_ok(cwd: &Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git")
+        let out = crate::test_git_command()
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
             .args(args)
             .current_dir(cwd)

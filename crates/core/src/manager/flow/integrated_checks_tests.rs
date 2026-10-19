@@ -1510,7 +1510,7 @@ async fn a_dirty_local_checkouts_review_reads_only_the_requests_change() {
     let reviews: Vec<_> = board.reviews.values().collect();
     assert_eq!(reviews.len(), 1, "{reviews:#?}");
     let review = reviews[0];
-    let ancestor = std::process::Command::new("git")
+    let ancestor = crate::test_git_command()
         .args(["merge-base", "--is-ancestor", &review.base, &review.tip])
         .current_dir(&flow.repo)
         .status()

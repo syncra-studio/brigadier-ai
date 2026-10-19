@@ -317,7 +317,7 @@ async fn a_merge_brings_main_up_to_date_and_says_it_isnt_pushed() {
     let board = flow.settled().await;
     assert!(on_main(&flow, "NOTES.md") && on_main(&flow, "UPSTREAM.md"));
     assert!(
-        std::process::Command::new("git")
+        crate::test_git_command()
             .args(["merge-base", "--is-ancestor", &pushed, "main"])
             .current_dir(&flow.repo)
             .status()

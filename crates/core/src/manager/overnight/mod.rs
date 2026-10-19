@@ -887,7 +887,7 @@ mod tests {
             )
             .collect();
         let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
+            let out = crate::test_git_command()
                 .args(args)
                 .current_dir(&root)
                 .env_clear()

@@ -496,12 +496,11 @@ fn act(repo: &Repo, action: SourceAction, merged: Option<&MergedPr>) -> brigadie
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
-    use std::process::Command;
 
     use brigadier_git::Git;
 
     fn run(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
+        let out = crate::test_git_command()
             .args(args)
             .current_dir(dir)
             .output()

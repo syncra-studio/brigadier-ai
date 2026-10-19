@@ -220,7 +220,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     fn git(cwd: &Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git")
+        let out = crate::test_git_command()
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
             .args(args)
             .current_dir(cwd)

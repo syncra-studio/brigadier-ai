@@ -250,7 +250,7 @@ async fn squash_merged(name: &str, single_branch: bool) {
     flow.say("Add more.").await;
     flow.settled().await;
     assert_eq!(said("started at: "), squash);
-    let ancestor = std::process::Command::new("git")
+    let ancestor = crate::test_git_command()
         .args(["merge-base", "--is-ancestor", &head, "HEAD"])
         .current_dir(flow.manager.checkout_dir(&flow.conversation).unwrap())
         .status()

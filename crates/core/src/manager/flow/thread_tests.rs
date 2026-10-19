@@ -1570,7 +1570,7 @@ async fn finish(turn: &Turn, words: &str, replies: &MergeReplies) -> bool {
 }
 
 pub(super) fn on_main(flow: &Flow, path: &str) -> bool {
-    std::process::Command::new("git")
+    crate::test_git_command()
         .args(["cat-file", "-e", &format!("main:{path}")])
         .current_dir(&flow.repo)
         .status()
