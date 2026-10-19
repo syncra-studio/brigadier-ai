@@ -2,17 +2,21 @@ import { Globe, Search } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useMemo } from "react";
 
 import { hostOf, useUsedSources } from "@/app/conversation/PinnedSummary";
+import { McpServerPanel } from "@/components/assistant-ui/elements/mcp-server-panel";
+import { useMcpServers } from "@/state/mcpServers";
 import { toast } from "@/state/toasts";
 import { useBoard } from "@/state/board";
 import { openLink } from "@/state/links";
 
 /**
  * Every source the session used, in a tab of its own (the context card's Sources › View all):
- * what it used (attachments, links, integrations), then each web search with its words and each
- * page it opened, which opens in the browser again.
+ * the MCP servers its agents have connected, under each agent's name, then what it used
+ * (attachments, links, integrations), then each web search with its words and each page it
+ * opened, which opens in the browser again.
  */
 export function SourcesTab({ conversationId }: { conversationId: string }) {
   const used = useUsedSources(conversationId).filter((source) => source.key !== "web");
+  const mcp = useMcpServers(conversationId);
   const json = useBoard((s) =>
     s.board?.conversationId === conversationId
       ? JSON.stringify(
@@ -27,11 +31,23 @@ export function SourcesTab({ conversationId }: { conversationId: string }) {
     const of = (kind: "search" | "page") => [...new Set(steps.flatMap(([each, value]) => (each === kind ? [value] : [])))];
     return { searches: of("search"), pages: of("page") };
   }, [json]);
-  const empty = used.length === 0 && searches.length === 0 && pages.length === 0;
+  const empty = mcp.length === 0 && used.length === 0 && searches.length === 0 && pages.length === 0;
   return (
     <div data-slot="sources-tab" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="max-w-thread mx-auto flex w-full flex-col gap-6 px-5 pt-6 pb-10">
         {empty && <p className="text-muted-foreground text-sm">No sources yet.</p>}
+        {mcp.length > 0 && (
+          <section data-slot="sources-part" className="flex flex-col gap-3">
+            <h3 className="text-muted-foreground text-label">MCP servers</h3>
+            {mcp.map((group) => (
+              <div key={group.key} data-slot="sources-mcp" className="flex flex-col gap-1">
+                {/* Whose servers: each agent's CLI connects its own. */}
+                <p className="text-muted-foreground text-xs">{group.agentLabel}</p>
+                <McpServerPanel servers={group.servers} />
+              </div>
+            ))}
+          </section>
+        )}
         {used.length > 0 && (
           <Part title="Used">
             {used.map((source) => (

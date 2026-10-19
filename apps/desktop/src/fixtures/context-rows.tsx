@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
+import { SessionJobTab } from "@/app/conversation/JobTab";
 import { SourcesTab } from "@/app/conversation/SourcesTab";
 import { AgentsPanelContext, type AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -59,6 +60,14 @@ const run: BackgroundRun = { id: "run-1", conversationId: id, requestId: "r1", t
 const step = (kind: OrchestratorStep["kind"], at: number): OrchestratorStep => ({ requestId: "r1", kind, atMs: now - at * MIN, position: 0 });
 useBoard.setState({ board: { ...emptyBoard(id), loaded: true, tasks, plans: { [plan.id]: plan }, reviews: { [review.id]: review }, integratedChecks: { [checks.id]: checks },
   previews: { [page.id]: page }, backgroundRuns: { [run.id]: run },
+  // The MCP servers each agent's CLI connected: the session's own model at its start, a worker's kept current.
+  mcpServers: {
+    lead: { taskId: null, provider: "claude", atStart: true, servers: [
+      { name: "linear", status: "connected", tools: ["search_issues", "get_issue"], transport: "http" },
+      { name: "figma", status: "needs-auth", tools: [], transport: null },
+    ] },
+    "task:task-3": { taskId: "task-3", provider: "codex", atStart: false, servers: [{ name: "postgres", status: "failed", tools: [], transport: null }] },
+  },
   diffs: { "task-2": { files: [], insertions: 120, deletions: 4 }, "task-3": { files: [], insertions: 48, deletions: 0 } },
   orchestratorSteps: [
     step({ type: "searchedWeb", query: "express static files" } as OrchestratorStep["kind"], 13),
@@ -81,8 +90,9 @@ mockIPC((command, payload) => {
   return { method: req.method };
 });
 
-// `tab=sources` opens the Sources tab, for a screenshot.
+// `tab=sources` opens the Sources tab, `tab=progress` the Job card's, for a screenshot.
 if (params.get("tab") === "sources") openPanelTab(id, { type: "sources" }, "Sources");
+if (params.get("tab") === "progress") openPanelTab(id, { type: "reviews" }, "Progress");
 
 const card = () => document.querySelector<HTMLElement>('[data-slot="summary-card"]');
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 50)));
@@ -122,6 +132,8 @@ async function drive(): Promise<string> {
   [...(sources?.querySelectorAll<HTMLButtonElement>('[data-slot="summary-row"]') ?? [])].find((row) => row.textContent?.trim() === "View all")?.click();
   await frame();
   seen.sourcesOpens = sessionTabs(id).active;
+  seen.mcp = [...document.querySelectorAll('[data-slot="sources-mcp"]')].map((group) =>
+    [group.querySelector("p")?.textContent, ...[...group.querySelectorAll('[data-slot="mcp-server-panel"] > li')].map((row) => row.querySelector("button")?.textContent)]);
   seen.sourcesTab = [...document.querySelectorAll('[data-slot="sources-part"]')].map((part) =>
     [...part.querySelectorAll("h3, [data-slot=sources-line]")].map((line) => line.textContent?.trim()));
   return JSON.stringify(seen);
@@ -131,7 +143,8 @@ async function drive(): Promise<string> {
 function FrontTab() {
   const tabs = useSessionTabsOf(id);
   const front = tabs.tabs.find((candidate) => candidate.id === tabs.active);
-  return front?.kind === "panel" && front.view.type === "sources" ? <SourcesTab conversationId={id} /> : null;
+  if (front?.kind !== "panel") return null;
+  return front.view.type === "sources" ? <SourcesTab conversationId={id} /> : front.view.type === "reviews" ? <SessionJobTab conversationId={id} /> : null;
 }
 
 function Fixture() {

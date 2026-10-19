@@ -22,7 +22,10 @@ test("the context card reads in the reference order, one row-height line per row
   // which opens the Sources tab with every search and page (Q87).
   assert.deepEqual(seen.sources, ["Linear", "Web search", "View all"]);
   assert.equal(seen.sourcesOpens, "panel:sources");
+  // MCP servers first, under each agent's name (w85-reply-1): the lead's as its CLI said at start.
+  assert.deepEqual(seen.mcp, [["Lead · Claude", "linear2 tools", "figmaNeeds sign-in"], ["API routes", "postgresFailed"]]);
   assert.deepEqual(seen.sourcesTab, [
+    ["MCP servers"],
     ["Used", "Linear"],
     ["Searched 1 time", "express static files"],
     ["Opened 2 pages", "expressjs.comhttps://expressjs.com/en/starter/static-files.html", "developer.mozilla.orghttps://developer.mozilla.org/en-US/docs/Web/HTML/Element/form"],
