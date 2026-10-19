@@ -3,7 +3,7 @@
  * with its own title and state, archived sessions left out, and a click that opens the session.
  * The sessions of what was once a workspace are plain sessions too. `close=1` adds the open
  * session's tab bar: closing a working session's tab stops nothing and a click on its row opens
- * it again. The sessions that need the user come first, and the project counts them; one that
+ * it again. The sessions that need the user come first; one that
  * starts needing the user moves up. Writes what it saw to #sessions-result (SessionsRender.test.ts reads it).
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
@@ -124,9 +124,9 @@ const rows = () => [...document.querySelectorAll<HTMLElement>('[aria-expanded] ~
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const until = async (check: () => boolean) => { for (let n = 0; n < 200 && !check(); n++) await wait(20); };
 const rowButton = (title: string) => [...document.querySelectorAll<HTMLButtonElement>("li li button")].find((button) => button.textContent?.includes(title));
-const needYou = () => {
-  const count = document.querySelector<HTMLElement>('[data-slot="need-you-count"]');
-  return count ? { text: count.textContent?.trim(), title: count.title } : null;
+const projectHeader = () => {
+  const button = document.querySelector<HTMLButtonElement>('li > div > button[aria-expanded]')!;
+  return { text: button.textContent?.trim(), icons: button.querySelectorAll("svg").length };
 };
 /** Anything worker-shaped in the sidebar: a session's workers show in the session, never under its row. */
 const workerRows = () => [...document.querySelectorAll<HTMLElement>('[data-slot^="session-worker"], [data-task]')].map((row) => row.textContent?.trim());
@@ -249,9 +249,22 @@ function Fixture() {
       void closeAndReopen().then((seen) => { if (!disposed) setResult(JSON.stringify(seen)); });
       return () => { disposed = true; };
     }
+    if (params.has("flyout")) {
+      const timer = setTimeout(async () => {
+        document.querySelector<HTMLButtonElement>('button[aria-label="Projects"]')!.click();
+        await until(() => Boolean(document.querySelector('button[title="New session in brigadier"]')));
+        const header = document.querySelector<HTMLButtonElement>('button[title="New session in brigadier"]')!;
+        const list = header.parentElement!;
+        setResult(JSON.stringify({
+          projectHeader: { text: header.textContent?.trim(), icons: header.querySelectorAll("svg").length },
+          sessions: [...list.querySelectorAll('[data-slot="row-title"]')].map((title) => title.textContent?.trim()),
+        }));
+      }, 300);
+      return () => clearTimeout(timer);
+    }
     if (params.has("manual")) return;
     const timer = setTimeout(async () => {
-      const seen: Record<string, unknown> = { rows: rows(), widths: rowWidths(), count: needYou(), workers: workerRows() };
+      const seen: Record<string, unknown> = { rows: rows(), widths: rowWidths(), projectHeader: projectHeader(), workers: workerRows() };
       rowButton("Header")!.click();
       setTimeout(() => {
         seen.opened = useApp.getState().selection;
@@ -260,7 +273,7 @@ function Fixture() {
         useActivity.setState((state) => ({ byConversation: { ...state.byConversation, ...Object.fromEntries([activity("w8-a", { approvals: ["a-2"] })]) } }));
         setTimeout(() => {
           seen.rowsAfter = rows().map((row) => row.title);
-          seen.countAfter = needYou();
+          seen.projectHeaderAfter = projectHeader();
           setResult(JSON.stringify(seen));
         }, 100);
       }, 100);
@@ -270,7 +283,7 @@ function Fixture() {
   return (
     <TooltipProvider>
       <div className="bg-chrome flex h-screen flex-col">
-        <SidebarProvider className="relative min-h-0 flex-1 flex-col" defaultOpen>
+        <SidebarProvider className="relative min-h-0 flex-1 flex-col" defaultOpen={!params.has("flyout")}>
           <div className="relative flex min-h-0 min-w-0 flex-1">
             <SidebarPanel strip={<AppStrip />}>
               <AppSidebar />

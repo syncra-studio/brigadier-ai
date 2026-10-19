@@ -413,6 +413,7 @@ async function driveLayout(): Promise<Record<string, unknown>> {
   const tab = one('[data-slot="session-tabs"] [data-tab-id="chat"] [role="tab"]')!;
   const mark = tab.querySelector<HTMLElement>('[data-slot="tab-status"]')!;
   seen.sessionStatus = { words: mark.textContent, tip: tab.title, spinner: !!mark.querySelector('[data-slot="status-spinner"]'), width: mark.getBoundingClientRect().width };
+  seen.projectHeader = one('[data-slot="sidebar-panel"] li > div > button[aria-expanded]')?.textContent?.trim();
   seen.expandedStart = tabsStart();
   seen.expanded = await panels();
   // The sidebar folded: New chat lives in the strip; the divider follows the sidebar toggle.

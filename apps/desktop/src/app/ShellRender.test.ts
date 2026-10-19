@@ -38,6 +38,7 @@ for (const [name, page] of [["", "shell.html?drive=layout"], [", a widened left 
     const seen = JSON.parse(await renderFixtureLive(t, page, "shell-result", 90000)) as Record<string, unknown>;
     if (process.env.SHELL_SEEN) console.log(JSON.stringify(seen, null, 2));
     assert.equal(seen.error, undefined);
+    assert.equal(seen.projectHeader, "release-notes", "the project header shows only its name beside the folder icon");
     const status = seen.sessionStatus as { words: string; tip: string; spinner: boolean; width: number };
     assert.equal(status.words, "");
     assert.equal(status.tip, "Tidy the release notes · Working");

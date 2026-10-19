@@ -4,17 +4,17 @@ import { test } from "node:test";
 import { renderFixturePage } from "@/fixtures/headless";
 
 // The real sidebar in Chromium over a faked daemon: a project lists its sessions, one row each
-// with its own title and state, those that need the user first with their count on the project,
+// with its own title and state, those that need the user first,
 // and a click opens that session.
 test("sidebar: a project's sessions are rows of their own, the sessions of an old workspace too, each with its state", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixturePage(t, "sessions.html", "sessions-result", 20000)) as {
     rows: { title: string; status: string | null; tip: string | null; active: boolean; mark: string | null; words: string | null; error: boolean; plain: boolean }[];
     widths: { title: string; titleShare: number; stateWhole: boolean }[];
-    count: { text: string; title: string } | null;
+    projectHeader: { text: string; icons: number };
     opened: unknown;
     activeAfter: string[];
     rowsAfter: string[];
-    countAfter: { text: string; title: string } | null;
+    projectHeaderAfter: { text: string; icons: number };
     workers: string[];
   };
   // A row shows its state's keyword only; why it is in that state shows on hover.
@@ -48,7 +48,7 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     assert.ok(row.titleShare >= 55, `${row.title}: the title keeps most of the row (${row.titleShare}%)`);
     assert.ok(row.stateWhole, `${row.title}: the state's words show whole`);
   }
-  assert.deepEqual(seen.count, { text: "2 need you", title: "2 need you" }, "the project counts the sessions that need the user");
+  assert.deepEqual(seen.projectHeader, { text: "brigadier", icons: 1 }, "the project header contains only its folder icon and name");
   assert.deepEqual(seen.opened, { type: "conversation", id: "w1-a" }, "the row opens its own session");
   assert.deepEqual(seen.activeAfter, ["Header"]);
   assert.deepEqual(
@@ -56,10 +56,19 @@ test("sidebar: a project's sessions are rows of their own, the sessions of an ol
     ["Deploy the site", "Broken build", "Old fix", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Ship the release", "Ready to review", "Paused task"],
     "a session that starts needing the user moves up",
   );
-  assert.deepEqual(seen.countAfter, { text: "3 need you", title: "3 need you" });
+  assert.deepEqual(seen.projectHeaderAfter, seen.projectHeader, "sessions needing the user add no badge to the header");
   // A session's workers show in the session itself (context card, Workers panel, thread), never
   // under its row, though "Header" runs two.
   assert.deepEqual(seen.workers, [], "no worker rows in the sidebar");
+});
+
+test("the Projects flyout shows a folder and name without a count, preserving its session rows", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "sessions.html?flyout=1", "sessions-result", 20000)) as {
+    projectHeader: { text: string; icons: number };
+    sessions: string[];
+  };
+  assert.deepEqual(seen.projectHeader, { text: "brigadier", icons: 1 });
+  assert.deepEqual(seen.sessions, ["Deploy the site", "Broken build", "Footer", "Header", "Fix the login", "Tidy the docs", "Waiting on a limit", "Lone worker", "Old fix", "Ship the release", "Ready to review", "Paused task"]);
 });
 
 test("closing a working session's tab stops nothing and says so in a note; it stays in the sidebar and its row opens it again", { timeout: 60000 }, async (t) => {

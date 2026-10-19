@@ -139,9 +139,6 @@ type Sections = {
   sessions: Record<string, Conversation[]>;
 };
 
-/** The sections with each project's count of sessions that need the user. */
-type InboxSections = Sections & { needYou: Readonly<Record<string, number>> };
-
 /** What the rows can ask the sidebar to do. */
 type RowActions = {
   onRename: (conversation: Conversation) => void;
@@ -188,9 +185,9 @@ function useSections(): Sections {
 
 /**
  * The light inbox (Q63): each project's sessions that need the user come first, in their order
- * otherwise, and each project counts them.
+ * otherwise.
  */
-function useInboxSections(): InboxSections {
+function useInboxSections(): Sections {
   const sections = useSections();
   const { projects, sessions } = sections;
   const ids = useMemo(
@@ -203,31 +200,13 @@ function useInboxSections(): InboxSections {
   return useMemo(() => {
     const needing = new Set(ids.filter((_, index) => needs[index] === "1"));
     const ordered: Record<string, Conversation[]> = {};
-    const needYou: Record<string, number> = {};
     for (const [projectId, list] of Object.entries(sessions)) {
       const first = list.filter((conversation) => needing.has(conversation.id));
       ordered[projectId] =
         first.length > 0 ? [...first, ...list.filter((conversation) => !needing.has(conversation.id))] : list;
-      if (first.length > 0) needYou[projectId] = first.length;
     }
-    return { ...sections, sessions: ordered, needYou };
+    return { ...sections, sessions: ordered };
   }, [sections, sessions, ids, needs]);
-}
-
-/** "2 need you": how many sessions of a project need the user, a small pill by its name. */
-function NeedYouCount({ count }: { count: number }) {
-  if (count === 0) return null;
-  const words = `${count} ${count === 1 ? "needs" : "need"} you`;
-  return (
-    <span
-      data-slot="need-you-count"
-      title={words}
-      className="bg-success/15 text-success rounded-capsule h-pill px-pill-x flex shrink-0 items-center text-2xs tabular-nums"
-    >
-      {count}
-      <span className="sr-only"> {count === 1 ? "needs" : "need"} you</span>
-    </span>
-  );
 }
 
 type SectionId = "pinned" | "projects" | "chats";
@@ -266,7 +245,7 @@ function useFoldedSections() {
  * are any), Projects with their sessions, and Chats. Each section folds away from its title.
  */
 export function AppSidebar() {
-  const { pinned, chats, projects, sessions, needYou } = useInboxSections();
+  const { pinned, chats, projects, sessions } = useInboxSections();
   const activeId = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : null));
   const draftProjectId = useApp((s) =>
     s.selection.type === "draft" && s.selection.kind === "session" ? s.selection.projectId : null,
@@ -406,7 +385,6 @@ export function AppSidebar() {
                 key={project.id}
                 project={project}
                 sessions={sessions[project.id] ?? NO_SESSIONS}
-                needYou={needYou[project.id] ?? 0}
                 activeId={activeId}
                 drafting={draftProjectId === project.id}
                 actions={actions}
@@ -644,7 +622,7 @@ function FlyoutConversation({
 
 /** The Projects flyout: each project, picked to start a session in it, with its sessions. */
 function ProjectsFlyout({ pick }: { pick: (choose: () => void) => void }) {
-  const { projects, sessions, needYou } = useInboxSections();
+  const { projects, sessions } = useInboxSections();
   const activeId = useApp((s) => (s.selection.type === "conversation" ? s.selection.id : null));
   const draftProjectId = useApp((s) =>
     s.selection.type === "draft" && s.selection.kind === "session" ? s.selection.projectId : null,
@@ -683,7 +661,6 @@ function ProjectsFlyout({ pick }: { pick: (choose: () => void) => void }) {
             <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
               {project.name}
             </span>
-            <NeedYouCount count={needYou[project.id] ?? 0} />
           </button>
           <NavList className="pt-px pb-1">
             {(sessions[project.id] ?? NO_SESSIONS).map((conversation) => (
@@ -761,7 +738,6 @@ const hideOnRowHover =
 const ProjectRow = memo(function ProjectRow({
   project,
   sessions,
-  needYou,
   activeId,
   drafting,
   actions,
@@ -770,8 +746,6 @@ const ProjectRow = memo(function ProjectRow({
 }: {
   project: Project;
   sessions: Conversation[];
-  /** How many of its sessions need the user. */
-  needYou: number;
   activeId: string | null;
   drafting: boolean;
   actions: RowActions;
@@ -799,7 +773,6 @@ const ProjectRow = memo(function ProjectRow({
           <span className="mask-fade-end min-w-0 flex-1 overflow-hidden whitespace-nowrap">
             {project.name}
           </span>
-          <NeedYouCount count={needYou} />
         </button>
         <RowActionsSlot>
           <DropdownMenu modal={false}>
