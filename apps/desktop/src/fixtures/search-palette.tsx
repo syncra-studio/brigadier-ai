@@ -2,7 +2,9 @@
  * The search palette over a faked app: a project with three sessions, and a chat. ?drive=1 reads
  * the groups and rows, moves down with ↓, opens a session with ↵, then types "feed" and opens
  * Send feedback… from it, writing what it saw to #palette-result (SearchPaletteRender.test.ts
- * reads it). Without it, the palette stays open on the first session, for screenshots.
+ * reads it). ?look=1 sets the palette's card, selected row, key hints and hairline beside the
+ * app's shared parts and writes their looks to #palette-look. Without either, the palette stays
+ * open on the first session, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -11,12 +13,13 @@ import { createRoot } from "react-dom/client";
 import { FeedbackDialog } from "@/app/feedback/FeedbackDialog";
 import { GlobalSearch, openSearch } from "@/app/SearchDialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
 import { useFeedbackUi } from "@/state/feedback";
 import { useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
 // Driven, nothing animates (see the archived chats fixture).
-if (params.has("drive")) {
+if (params.has("drive") || params.has("look")) {
   const still = document.createElement("style");
   still.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; }";
   document.head.append(still);
@@ -68,12 +71,29 @@ const groups = () =>
 
 function Fixture() {
   const [result, setResult] = useState("");
+  const [measuring, setMeasuring] = useState(false);
+  const [looks, setLooks] = useState("");
   useEffect(() => {
     openSearch();
     let stopped = false;
     void (async () => {
       for (let tries = 0; tries < 100 && !field(); tries++) await wait(50);
       await wait(100);
+      if (params.has("look")) {
+        setMeasuring(true);
+        await wait(200);
+        const palette = '[data-slot="search-palette"]';
+        const pairs: LookPairs = {
+          card: [look(q(palette), "surface"), canon("dialog", "surface")],
+          selected: [look(q(`${palette} [aria-selected="true"]`), "fill"), canon("chosen", "fill")],
+          selectedInk: [look(q(`${palette} [aria-selected="true"]`), "ink"), canon("chosen", "ink")],
+          key: [look(q(`${palette} kbd`), "button"), canon("kbd", "button")],
+          keyType: [look(q(`${palette} kbd`), "text"), canon("kbd", "text")],
+          hairline: [look(field()?.parentElement, "edgeBottom"), canon("divider", "edgeBottom")],
+        };
+        if (!stopped) setLooks(JSON.stringify(pairs));
+        return;
+      }
       if (!params.has("drive")) {
         key("ArrowDown");
         return;
@@ -112,6 +132,8 @@ function Fixture() {
       <GlobalSearch />
       <FeedbackDialog />
       {result && <pre id="palette-result">{result}</pre>}
+      {measuring && <Canon />}
+      {looks && <pre id="palette-look">{looks}</pre>}
     </TooltipProvider>
   );
 }

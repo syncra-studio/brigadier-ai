@@ -1,5 +1,5 @@
 import { Chat, Comment, Folder, Search, Terminal } from "@openai/apps-sdk-ui/components/Icon";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { create } from "zustand";
 
 import {
@@ -8,6 +8,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { openConversation, select, setProjectExpanded } from "@/state/actions";
 import { openFeedback } from "@/state/feedback";
@@ -78,17 +79,8 @@ function useResults(query: string): Result[] {
 
 const ICONS = { project: Folder, session: Terminal, chat: Chat, feedback: Comment } as const;
 
-/** A key, as the palette shows it ("esc", "↵", "↑"). */
-function Key({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="bg-settings-raised border-settings-track text-settings-badge text-settings-text-secondary rounded-palette-key flex h-5 shrink-0 items-center justify-center border px-1.5 font-sans font-medium">
-      {children}
-    </kbd>
-  );
-}
-
 /**
- * Search, drawn to the user's design: a palette at the top centre over projects, sessions and
+ * Search, laid out to the user's design and drawn with the app's dialog, rows and keys: a palette at the top centre over projects, sessions and
  * chats by title, grouped, the selected one with Open ↵; Send feedback… when typed for.
  */
 export function SearchDialog({
@@ -113,7 +105,7 @@ export function SearchDialog({
           event.preventDefault();
           next();
         }}
-        className="bg-settings-surface border-settings-border rounded-design-dialog shadow-design-dialog max-w-palette top-42 block translate-y-0 gap-0 border p-0 ring-0"
+        className="max-w-palette top-42 block translate-y-0 gap-0 p-0"
       >
         <DialogTitle className="sr-only">Search</DialogTitle>
         <DialogDescription className="sr-only">
@@ -168,8 +160,8 @@ function SearchBody({ onDone }: { onDone: (after?: () => void) => void }) {
 
   return (
     <div className="flex flex-col">
-      <div className="border-settings-divider flex h-13.5 items-center gap-3 border-b ps-4.5 pe-4">
-        <Search className="text-settings-text-secondary size-4 shrink-0" />
+      <div className="border-divider flex h-13.5 items-center gap-3 border-b ps-4.5 pe-4">
+        <Search className="text-muted-foreground size-4 shrink-0" />
         <input
           autoFocus
           value={query}
@@ -182,9 +174,9 @@ function SearchBody({ onDone }: { onDone: (after?: () => void) => void }) {
             setActive(0);
           }}
           onKeyDown={onKeyDown}
-          className="text-settings-heading text-settings-text placeholder:text-settings-text-tertiary caret-settings-link min-w-0 flex-1 bg-transparent outline-none"
+          className="text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
         />
-        <Key>esc</Key>
+        <Kbd>esc</Kbd>
       </div>
       <div
         id="search-results"
@@ -193,7 +185,7 @@ function SearchBody({ onDone }: { onDone: (after?: () => void) => void }) {
         className="flex max-h-(--container-sm) flex-col gap-1.5 overflow-y-auto px-2 pt-2 pb-2.5"
       >
         {results.length === 0 && (
-          <p className="text-settings-small text-settings-text-tertiary px-3 py-6 text-center">
+          <p className="text-muted-foreground px-3 py-6 text-center text-sm">
             {query.trim() ? `Nothing matches “${query.trim()}”.` : "Nothing here yet."}
           </p>
         )}
@@ -204,7 +196,7 @@ function SearchBody({ onDone }: { onDone: (after?: () => void) => void }) {
           if (group.length === 0) return null;
           return (
             <div key={label} role="group" aria-label={label} className="flex flex-col gap-px">
-              <span className="text-settings-meta text-settings-text-tertiary px-2.5 pt-2 pb-1.5 font-medium">
+              <span className="text-muted-foreground px-2.5 pt-2 pb-1.5 text-xs font-medium">
                 {label}
               </span>
               {group.map(({ result, index }) => {
@@ -221,32 +213,25 @@ function SearchBody({ onDone }: { onDone: (after?: () => void) => void }) {
                     onClick={() => choose(result)}
                     onKeyDown={(event) => event.key === "Enter" && choose(result)}
                     className={cn(
-                      "rounded-palette-row flex h-9.5 cursor-default items-center gap-3 px-2.5",
-                      selected && "bg-settings-raised",
+                      "h-row rounded-control flex cursor-default items-center gap-3 px-2.5 text-sm",
+                      selected && "bg-accent text-accent-foreground",
                     )}
                   >
                     <Icon
                       className={cn(
-                        "size-3.75 shrink-0",
-                        selected ? "text-settings-text" : "text-settings-text-secondary",
+                        "size-icon-md shrink-0",
+                        selected ? "text-accent-foreground" : "text-muted-foreground",
                       )}
                     />
-                    <span
-                      className={cn(
-                        "text-settings-body min-w-0 flex-1 truncate",
-                        selected ? "text-settings-text" : "text-menu-label",
-                      )}
-                    >
-                      {result.title}
-                    </span>
+                    <span className="min-w-0 flex-1 truncate">{result.title}</span>
                     {selected ? (
-                      <span className="text-settings-meta text-settings-text-secondary flex shrink-0 items-center gap-2">
+                      <span className="text-muted-foreground flex shrink-0 items-center gap-2 text-xs">
                         Open
-                        <Key>↵</Key>
+                        <Kbd>↵</Kbd>
                       </span>
                     ) : (
                       result.detail && (
-                        <span className="text-settings-meta text-settings-text-tertiary shrink-0">{result.detail}</span>
+                        <span className="text-muted-foreground shrink-0 text-xs">{result.detail}</span>
                       )
                     )}
                   </div>
@@ -256,14 +241,14 @@ function SearchBody({ onDone }: { onDone: (after?: () => void) => void }) {
           );
         })}
       </div>
-      <div className="border-settings-divider text-settings-meta text-settings-text-tertiary flex h-10 items-center gap-4.5 border-t px-4.5">
+      <div className="border-divider text-muted-foreground flex h-10 items-center gap-4.5 border-t px-4.5 text-xs">
         <span className="flex items-center gap-1.5">
-          <Key>↑</Key>
-          <Key>↓</Key>
+          <Kbd>↑</Kbd>
+          <Kbd>↓</Kbd>
           Navigate
         </span>
         <span className="flex items-center gap-1.5">
-          <Key>↵</Key>
+          <Kbd>↵</Kbd>
           Open
         </span>
       </div>

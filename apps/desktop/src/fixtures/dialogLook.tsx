@@ -1,0 +1,103 @@
+/**
+ * The app's shared dialog parts, drawn unseen, for a fixture to compare a dialog with: its
+ * card, title, buttons, field, key hint, badge, tooltip, choice pills and list-row colours, each
+ * marked `data-canon`. `look` reads what an element looks like as drawn, so a dialog drawn with
+ * the app's parts reads the same as the part it uses (#385).
+ */
+import { Segmented } from "@/app/settings/parts";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Kbd } from "@/components/ui/kbd";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+
+/** The shared parts, unseen. Mount it only to measure: its dialog is one more open layer. */
+export function Canon() {
+  return (
+    <TooltipProvider>
+      <Dialog open modal={false}>
+        <DialogContent
+          data-canon="dialog"
+          showCloseButton={false}
+          className="invisible"
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+        >
+          <DialogTitle data-canon="title">Canon</DialogTitle>
+          <DialogDescription data-canon="line">Canon</DialogDescription>
+        </DialogContent>
+      </Dialog>
+      <div className="invisible fixed start-0 top-0" aria-hidden>
+        <Button data-canon="primary">Canon</Button>
+        <Button data-canon="ghost" variant="ghost">
+          Canon
+        </Button>
+        <Button data-canon="outline" variant="outline">
+          Canon
+        </Button>
+        <Button data-canon="icon" variant="ghost" size="icon-sm">
+          C
+        </Button>
+        <Input data-canon="input" placeholder="Canon" />
+        <Kbd data-canon="kbd">↵</Kbd>
+        <Badge data-canon="badge" variant="secondary">
+          Canon
+        </Badge>
+        <div data-canon="chosen" className="bg-accent text-accent-foreground">
+          Canon
+        </div>
+        <div data-canon="wash" className="bg-foreground/5">
+          Canon
+        </div>
+        <div data-canon="divider" className="border-divider border-y" />
+        <div data-canon="segmented">
+          <Segmented
+            fill
+            label="Canon"
+            value="a"
+            options={[
+              { value: "a", label: "A" },
+              { value: "b", label: "B" },
+            ]}
+            onChange={() => {}}
+          />
+        </div>
+        <Tooltip open>
+          <TooltipTrigger>Canon</TooltipTrigger>
+          <TooltipContent data-canon="tooltip">Canon</TooltipContent>
+        </Tooltip>
+      </div>
+    </TooltipProvider>
+  );
+}
+
+/** What each kind of part is drawn with. */
+const PROPS = {
+  surface: ["backgroundColor", "borderTopLeftRadius", "boxShadow", "borderTopWidth", "borderTopColor"],
+  button: ["backgroundColor", "color", "borderTopLeftRadius", "borderTopWidth"],
+  text: ["color", "fontSize", "fontWeight", "fontFamily"],
+  fill: ["backgroundColor"],
+  ink: ["color"],
+  /** A hairline above. */
+  edgeTop: ["borderTopColor", "borderTopWidth"],
+  /** A hairline below. */
+  edgeBottom: ["borderBottomColor", "borderBottomWidth"],
+} as const satisfies Record<string, readonly (keyof CSSStyleDeclaration)[]>;
+
+type Kind = keyof typeof PROPS;
+
+/** `element`'s look as drawn: the properties a `kind` of part is drawn with. */
+export function look(element: Element | null | undefined, kind: Kind): Record<string, string> | null {
+  if (!element) return null;
+  const style = getComputedStyle(element);
+  return Object.fromEntries(PROPS[kind].map((name) => [name, String(style[name])]));
+}
+
+/** The look of the canonical part marked `name` (a selector inside it with `inside`). */
+export function canon(name: string, kind: Kind, inside = ""): Record<string, string> | null {
+  return look(document.querySelector(`[data-canon="${name}"] ${inside}`.trim()), kind);
+}
+
+/** Each part, its look and the canonical one's, side by side: `[mine, canon]`. */
+export type LookPairs = Record<string, [Record<string, string> | null, Record<string, string> | null]>;

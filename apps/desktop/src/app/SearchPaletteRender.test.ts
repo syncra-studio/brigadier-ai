@@ -34,3 +34,16 @@ test("search palette: grouped results, keys, and Send feedback", { timeout: 6000
   assert.deepEqual(seen.feedbackGroups, [["Help", ["Send feedback…", "Open↵", "(selected)"]]]);
   assert.deepEqual(seen.feedback, { open: true, focused: true });
 });
+
+// Drawn with the app's shared parts (#385): its card is the app's dialog, its selected row the
+// app's chosen row, its key hints the app's keys and its hairline the app's divider.
+test("search palette: drawn with the app's dialog, rows, keys and divider", { timeout: 60000 }, async (t) => {
+  const pairs = JSON.parse(await renderFixturePage(t, "search-palette.html?look=1", "palette-look", 10000)) as Record<
+    string,
+    [unknown, unknown]
+  >;
+  for (const [part, [mine, shared]] of Object.entries(pairs)) {
+    assert.notEqual(shared, null, `${part}: the shared part is drawn`);
+    assert.deepEqual(mine, shared, `${part} looks like the app's own`);
+  }
+});
