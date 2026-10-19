@@ -666,6 +666,13 @@ impl Provider for Codex {
                 predict_thread: Mutex::new(None),
                 predicting: AtomicBool::new(spec.suggestions),
                 predict_paused: AtomicBool::new(false),
+                own_mcp: spec
+                    .mcp_servers
+                    .iter()
+                    .map(|server| server.name.clone())
+                    .collect(),
+                mcp_listing: AtomicBool::new(true),
+                mcp_relist: Mutex::new(McpRelist::default()),
             });
             let trusted: HashSet<String> = spec
                 .mcp_servers
@@ -736,6 +743,7 @@ impl Provider for Codex {
                     cli_version: Some(thread.cli_version.clone()),
                 })
                 .await;
+            list_mcp_servers(&session.rpc, &session.shared);
             for message in notices {
                 session
                     .emit(ProviderEvent::Notice {
@@ -1830,14 +1838,28 @@ struct Shared {
     /// `thread/compact/start` is being sent; the reader tells its parser.
     compact_asked: AtomicBool,
     events: Events,
-    /// The thread whose turns get Codex's own guess at the user's next message
-    /// ([`SessionSpec::suggestions`]), once it is open.
+    /// The thread, once it is open: its turns get Codex's own guess at the user's next message
+    /// ([`SessionSpec::suggestions`]) and its MCP servers are listed.
     predict_thread: Mutex<Option<String>>,
     /// Asked after each finished turn; off for good once Codex refuses the request (an
     /// app-server or account without it).
     predicting: AtomicBool,
     /// Held while the conversation's composer is off screen.
     predict_paused: AtomicBool,
+    /// Brigadier's own MCP servers, left out of the servers reported.
+    own_mcp: HashSet<String>,
+    /// Codex lists the thread's MCP servers (`mcpServerStatus/list`); off for good once it
+    /// refuses (an older app-server).
+    mcp_listing: AtomicBool,
+    mcp_relist: Mutex<McpRelist>,
+}
+
+/// The MCP server listing in flight, and whether another was asked for meanwhile: a burst of
+/// startup steps makes one more listing, not one each.
+#[derive(Default)]
+struct McpRelist {
+    running: bool,
+    again: bool,
 }
 
 pub struct CodexSession {
@@ -2118,6 +2140,65 @@ fn predict(rpc: &Arc<Rpc>, shared: &Arc<Shared>, turn: String) {
     });
 }
 
+/// Lists the thread's MCP servers with their state and tools, as
+/// [`ProviderEvent::McpServers`]. It runs apart, once the thread is open; asked again while it
+/// runs, it lists once more after. A refusal ends the listing for this session (an app-server
+/// without it), quietly: the startup steps still tell each server's state.
+fn list_mcp_servers(rpc: &Arc<Rpc>, shared: &Arc<Shared>) {
+    if !shared.mcp_listing.load(Ordering::Acquire) {
+        return;
+    }
+    let Some(thread) = lock(&shared.predict_thread).clone() else {
+        return;
+    };
+    {
+        let mut relist = lock(&shared.mcp_relist);
+        if relist.running {
+            relist.again = true;
+            return;
+        }
+        relist.running = true;
+    }
+    let (rpc, shared) = (rpc.clone(), shared.clone());
+    tokio::spawn(async move {
+        loop {
+            lock(&shared.mcp_relist).again = false;
+            let params = p::ListMcpServerStatusParams {
+                thread_id: Some(thread.clone()),
+                detail: Some(p::McpServerStatusDetail::ToolsAndAuthOnly),
+                ..Default::default()
+            };
+            match rpc
+                .call::<_, p::ListMcpServerStatusResponse>("mcpServerStatus/list", &params)
+                .await
+            {
+                Ok(listed) => {
+                    let servers = parse::listed_mcp_servers(listed.data, &shared.own_mcp);
+                    shared
+                        .events
+                        .send(ProviderEvent::McpServers {
+                            servers,
+                            at_start: false,
+                        })
+                        .await;
+                }
+                Err(err @ Error::Timeout(_)) => {
+                    crate::logging::private_trace!(rpc.process.private_logs(), debug, "Codex did not list its MCP servers in time"; thread = %thread, error = %err);
+                }
+                Err(err) => {
+                    shared.mcp_listing.store(false, Ordering::Release);
+                    crate::logging::private_trace!(rpc.process.private_logs(), debug, "Codex does not list its MCP servers here"; thread = %thread, error = %err);
+                }
+            }
+            let mut relist = lock(&shared.mcp_relist);
+            if !relist.again || !shared.mcp_listing.load(Ordering::Acquire) {
+                relist.running = false;
+                return;
+            }
+        }
+    });
+}
+
 /// Serves a session's app-server output until it exits. `trusted` names the MCP servers whose
 /// tool calls run without asking.
 async fn read_loop(
@@ -2128,6 +2209,7 @@ async fn read_loop(
     prompting: HashSet<String>,
 ) {
     let mut parser = Parser::live().with_private_logs(rpc.process.private_logs());
+    parser.own_mcp = shared.own_mcp.clone();
     while let Some(line) = stdout.recv().await {
         if shared.compact_asked.swap(false, Ordering::AcqRel) {
             parser.compact_requested();
@@ -2143,9 +2225,19 @@ async fn read_loop(
                         } => Some(turn.clone()),
                         _ => None,
                     };
+                    // A server that came up or gave up: its tools and state, as Codex lists
+                    // them now.
+                    let settled = matches!(
+                        &event,
+                        ProviderEvent::McpServerChanged { server }
+                            if server.status != McpStatus::Connecting
+                    );
                     shared.events.send(event).await;
                     if let Some(turn) = finished {
                         predict(&rpc, &shared, turn);
+                    }
+                    if settled {
+                        list_mcp_servers(&rpc, &shared);
                     }
                 }
                 Output::Control(Control::Response { id, result }) => rpc.resolve(id, result),

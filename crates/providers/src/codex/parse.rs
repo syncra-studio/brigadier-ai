@@ -5,7 +5,7 @@
 //! with the generated [`protocol`] types; a message the bindings cannot read is reported as a
 //! notice rather than dropped silently.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -98,6 +98,9 @@ pub struct Parser {
     compacting: Option<(bool, Option<i64>, Option<i64>)>,
     /// What each reply started as: a line between steps or the turn's final answer.
     phases: HashMap<String, TextPhase>,
+    /// Brigadier's own MCP servers, left out of the servers reported
+    /// ([`ProviderEvent::McpServerChanged`]).
+    pub(crate) own_mcp: HashSet<String>,
 }
 
 impl Parser {
@@ -383,6 +386,19 @@ impl Parser {
                 };
                 out.push(notice(level, format!("Codex: {message}")));
             }
+            "mcpServer/startupStatus/updated" => {
+                let Some(updated) = decode::<p::McpServerStatusUpdatedNotification>(
+                    method,
+                    params,
+                    out,
+                    self.private_logs,
+                ) else {
+                    return;
+                };
+                if let Some(server) = startup_status(updated, &self.own_mcp) {
+                    out.push(Output::Event(ProviderEvent::McpServerChanged { server }));
+                }
+            }
             "model/rerouted" => out.push(notice(
                 NoticeLevel::Warning,
                 format!(
@@ -390,8 +406,7 @@ impl Parser {
                     clip(&params.to_string(), 300)
                 ),
             )),
-            // Status changes, MCP startup, diffs and plans the normalized model has no use
-            // for (yet).
+            // Status changes, diffs and plans the normalized model has no use for (yet).
             _ => {}
         }
     }
@@ -1257,6 +1272,71 @@ fn requested_permissions(asked: &p::AdditionalPermissionProfile) -> Vec<String> 
     lines
 }
 
+/// A server's startup step (`mcpServer/startupStatus/updated`) as its new state, its tools
+/// unknown (the listing tells them). Nothing for one of Brigadier's own servers.
+fn startup_status(
+    updated: p::McpServerStatusUpdatedNotification,
+    own_mcp: &HashSet<String>,
+) -> Option<McpServerState> {
+    if own_mcp.contains(&updated.name) {
+        return None;
+    }
+    let status = match updated.status {
+        p::McpServerStartupState::Starting => McpStatus::Connecting,
+        p::McpServerStartupState::Ready => McpStatus::Connected,
+        p::McpServerStartupState::Failed
+            if updated.failure_reason
+                == Some(p::McpServerStartupFailureReason::ReauthenticationRequired) =>
+        {
+            McpStatus::NeedsAuth
+        }
+        p::McpServerStartupState::Failed | p::McpServerStartupState::Cancelled => McpStatus::Failed,
+    };
+    Some(McpServerState {
+        name: updated.name,
+        status,
+        tools: Vec::new(),
+        transport: None,
+    })
+}
+
+/// The servers `mcpServerStatus/list` names, by name, Brigadier's own and disabled ones left
+/// out. A server Codex has not started for the thread (no runtime state) reads from its sign-in
+/// and its tools: one that wants a sign-in needs it, one with tools is up, else it is still
+/// coming.
+pub fn listed_mcp_servers(
+    listed: Vec<p::McpServerStatus>,
+    own_mcp: &HashSet<String>,
+) -> Vec<McpServerState> {
+    use p::McpServerConnectionStatus as Runtime;
+    let mut servers: Vec<McpServerState> = listed
+        .into_iter()
+        .filter(|server| !own_mcp.contains(&server.name))
+        .filter_map(|server| {
+            let status = match server.runtime_status {
+                Some(Runtime::Connected) => McpStatus::Connected,
+                Some(Runtime::Starting | Runtime::NotStarted) => McpStatus::Connecting,
+                Some(Runtime::AuthenticationRequired) => McpStatus::NeedsAuth,
+                Some(Runtime::Failed | Runtime::Cancelled) => McpStatus::Failed,
+                Some(Runtime::Disabled) => return None,
+                None if server.auth_status == p::McpAuthStatus::NotLoggedIn => McpStatus::NeedsAuth,
+                None if !server.tools.is_empty() => McpStatus::Connected,
+                None => McpStatus::Connecting,
+            };
+            let mut tools: Vec<String> = server.tools.into_keys().collect();
+            tools.sort();
+            Some(McpServerState {
+                name: server.name,
+                status,
+                tools,
+                transport: server.http_origin.map(|_| "http".to_owned()),
+            })
+        })
+        .collect();
+    servers.sort_by(|a, b| a.name.cmp(&b.name));
+    servers
+}
+
 fn decode<T: DeserializeOwned>(
     method: &str,
     params: Value,
@@ -2000,5 +2080,130 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    fn mcp(
+        name: &str,
+        status: McpStatus,
+        tools: &[&str],
+        transport: Option<&str>,
+    ) -> McpServerState {
+        McpServerState {
+            name: name.to_owned(),
+            status,
+            tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
+            transport: transport.map(str::to_owned),
+        }
+    }
+
+    /// Each startup step of a server is its new state; Brigadier's own servers are left out.
+    #[test]
+    fn mcp_startup_steps_are_the_servers_new_state() {
+        let mut parser = Parser::live();
+        parser.own_mcp = HashSet::from(["brigadier".to_owned()]);
+        let step = |params: Value| json!({ "method": "mcpServer/startupStatus/updated", "params": params });
+        let changed = |parser: &mut Parser, params: Value| {
+            events(parser, &step(params))
+                .into_iter()
+                .map(|event| match event {
+                    ProviderEvent::McpServerChanged { server } => server,
+                    other => panic!("unexpected {other:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            changed(
+                &mut parser,
+                json!({ "name": "github", "status": "starting", "threadId": "t" })
+            ),
+            [mcp("github", McpStatus::Connecting, &[], None)]
+        );
+        assert_eq!(
+            changed(&mut parser, json!({ "name": "github", "status": "ready" })),
+            [mcp("github", McpStatus::Connected, &[], None)]
+        );
+        assert_eq!(
+            changed(
+                &mut parser,
+                json!({ "name": "linear", "status": "failed", "failureReason": "reauthenticationRequired", "error": "401" })
+            ),
+            [mcp("linear", McpStatus::NeedsAuth, &[], None)]
+        );
+        assert_eq!(
+            changed(
+                &mut parser,
+                json!({ "name": "pg", "status": "failed", "error": "refused" })
+            ),
+            [mcp("pg", McpStatus::Failed, &[], None)]
+        );
+        assert_eq!(
+            changed(&mut parser, json!({ "name": "pg", "status": "cancelled" })),
+            [mcp("pg", McpStatus::Failed, &[], None)]
+        );
+        assert!(
+            changed(
+                &mut parser,
+                json!({ "name": "brigadier", "status": "ready" })
+            )
+            .is_empty()
+        );
+    }
+
+    /// `mcpServerStatus/list` reads as each server's state and sorted tools, by name; disabled
+    /// and Brigadier's own servers are left out.
+    #[test]
+    fn listed_mcp_servers_read_their_runtime_state_or_else_their_sign_in() {
+        let tool = |name: &str| json!({ "name": name, "inputSchema": { "type": "object" } });
+        let server = |name: &str, runtime: Option<&str>, auth: &str, tools: &[&str]| {
+            let mut server = json!({
+                "name": name,
+                "authStatus": auth,
+                "tools": tools.iter().map(|t| ((*t).to_owned(), tool(t))).collect::<serde_json::Map<_, _>>(),
+                "resources": [],
+                "resourceTemplates": [],
+            });
+            if let Some(runtime) = runtime {
+                server["runtimeStatus"] = json!(runtime);
+            }
+            server
+        };
+        let mut remote = server("remote", Some("connected"), "oAuth", &["search", "fetch"]);
+        remote["httpOrigin"] = json!("https://mcp.example.com");
+        let listed: p::ListMcpServerStatusResponse = serde_json::from_value(json!({
+            "data": [
+                remote,
+                server("brigadier", Some("connected"), "unsupported", &["ask"]),
+                server("off", Some("disabled"), "unsupported", &[]),
+                server("booting", Some("starting"), "unsupported", &[]),
+                server("later", Some("notStarted"), "unsupported", &[]),
+                server("locked", Some("authenticationRequired"), "notLoggedIn", &[]),
+                server("broken", Some("failed"), "unsupported", &[]),
+                server("stopped", Some("cancelled"), "unsupported", &[]),
+                server("guest", None, "notLoggedIn", &[]),
+                server("ready", None, "unsupported", &["run"]),
+                server("unknown", None, "unknown", &[]),
+            ],
+        }))
+        .unwrap();
+        let own = HashSet::from(["brigadier".to_owned()]);
+        assert_eq!(
+            listed_mcp_servers(listed.data, &own),
+            [
+                mcp("booting", McpStatus::Connecting, &[], None),
+                mcp("broken", McpStatus::Failed, &[], None),
+                mcp("guest", McpStatus::NeedsAuth, &[], None),
+                mcp("later", McpStatus::Connecting, &[], None),
+                mcp("locked", McpStatus::NeedsAuth, &[], None),
+                mcp("ready", McpStatus::Connected, &["run"], None),
+                mcp(
+                    "remote",
+                    McpStatus::Connected,
+                    &["fetch", "search"],
+                    Some("http")
+                ),
+                mcp("stopped", McpStatus::Failed, &[], None),
+                mcp("unknown", McpStatus::Connecting, &[], None),
+            ]
+        );
     }
 }
