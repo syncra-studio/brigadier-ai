@@ -7,7 +7,8 @@ use super::*;
 /// full-text only.
 struct TestBrain {
     brain: Brain,
-    dir: PathBuf,
+    /// Last, so it is removed once the Brain is closed.
+    _dir: Removed,
 }
 
 impl TestBrain {
@@ -15,13 +16,27 @@ impl TestBrain {
         let dir = std::env::temp_dir().join(format!("brain-test-{}", uuid::Uuid::now_v7()));
         let embedder = Embedder::new(dir.join("models"));
         let brain = Brain::open(&dir.join("brain.sqlite"), Scope::Project, embedder).unwrap();
-        Self { brain, dir }
+        Self {
+            brain,
+            _dir: Removed(dir),
+        }
     }
 }
 
-impl Drop for TestBrain {
+/// A folder removed when dropped. The Brain's thread closes its database just after the Brain
+/// is dropped, and Windows removes no file still open: there it takes a few tries.
+struct Removed(PathBuf);
+
+impl Drop for Removed {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        let tries = if cfg!(windows) { 100 } else { 1 };
+        for _ in 1..tries {
+            if std::fs::remove_dir_all(&self.0).is_ok() || !self.0.exists() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
