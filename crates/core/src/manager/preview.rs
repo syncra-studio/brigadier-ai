@@ -1008,7 +1008,8 @@ impl SessionManager {
         }
         for port in ready::listening_ports(group).await {
             if ready::port_answers(port).await {
-                return Some(url);
+                // One that printed none (buffered output) is opened on the port that answered (#406).
+                return Some(url.or_else(|| Some(port_url(port))));
             }
         }
         None
@@ -1206,7 +1207,7 @@ impl SessionManager {
                 ))
                 .await;
             }
-            preview.url = preview.url.or(url);
+            preview.url = known_url(preview.url, url);
             preview.tests = tests;
             preview.pages = pages;
             preview.state = state;
@@ -1417,7 +1418,8 @@ impl SessionManager {
         let known = self.core.board(&id).await?;
         let url = match (&live, known.previews.get(&preview_id)) {
             (Some(live), Some(preview))
-                if preview.url.is_none() && preview.kind == PreviewKind::Web =>
+                if preview.url.as_deref().is_none_or(guessed)
+                    && preview.kind == PreviewKind::Web =>
             {
                 let path = live.log.clone();
                 blocking(move || Ok(log_url(&path))).await?
@@ -1434,8 +1436,9 @@ impl SessionManager {
             board.previews.get(&preview_id).cloned().ok_or_else(|| {
                 Error::Invalid(format!("there is no {preview_id} in this session"))
             })?;
-        if preview.url.is_none() && url.is_some() {
-            preview.url = url;
+        let found = known_url(preview.url.clone(), url);
+        if preview.url != found {
+            preview.url = found;
             self.record_preview(preview.clone()).await?;
         }
         let bytes = if preview.state.is_live()
@@ -2178,6 +2181,27 @@ fn url_port(url: &str) -> Option<u16> {
     }
 }
 
+/// The address of a web preview that printed none, from the port that answered (#406).
+fn port_url(port: u16) -> String {
+    format!("http://localhost:{port}/")
+}
+
+/// Whether `url` is only that: the port's root, not an address the server printed.
+fn guessed(url: &str) -> bool {
+    url_port(url).is_some_and(|port| url == port_url(port))
+}
+
+/// A preview's address once its log is read again: the one it printed (`logged`) replaces one
+/// guessed from its port, as a server may print its address, route and all, after it answers.
+fn known_url(known: Option<String>, logged: Option<String>) -> Option<String> {
+    match (known, logged) {
+        (Some(known), Some(logged)) if guessed(&known) && url_port(&logged) == url_port(&known) => {
+            Some(logged)
+        }
+        (known, logged) => known.or(logged),
+    }
+}
+
 /// Whether nothing listens on local `port` now.
 async fn port_free(port: u16) -> bool {
     tokio::net::TcpListener::bind(("127.0.0.1", port))
@@ -2573,6 +2597,8 @@ fn read_log_end(path: &Path, max: u64) -> Vec<u8> {
     bytes
 }
 
+/// The first local http(s) address in a log: on localhost or 127.0.0.1, or on every address
+/// (`0.0.0.0`, `[::]`), read as localhost's (#406).
 fn preview_url(bytes: &[u8]) -> Option<String> {
     let plain = plain_text(bytes);
     for (at, _) in plain.match_indices("http") {
@@ -2587,10 +2613,19 @@ fn preview_url(bytes: &[u8]) -> Option<String> {
             continue;
         };
         let authority = address.split(['/', '?', '#']).next().unwrap_or_default();
-        let (host, port) = authority
-            .split_once(':')
-            .map_or((authority, None), |(host, port)| (host, Some(port)));
-        if !matches!(host, "localhost" | "127.0.0.1") {
+        let (host, port) = match authority.strip_prefix('[') {
+            Some(bracketed) => match bracketed.split_once(']') {
+                Some((host, rest)) if rest.is_empty() || rest.starts_with(':') => {
+                    (host, rest.strip_prefix(':'))
+                }
+                _ => continue,
+            },
+            None => authority
+                .split_once(':')
+                .map_or((authority, None), |(host, port)| (host, Some(port))),
+        };
+        let every = matches!(host, "0.0.0.0" | "::");
+        if !every && !matches!(host, "localhost" | "127.0.0.1") {
             continue;
         }
         if port.is_some_and(|port| {
@@ -2599,6 +2634,14 @@ fn preview_url(bytes: &[u8]) -> Option<String> {
                 || port.parse::<u16>().is_err()
         }) {
             continue;
+        }
+        if every {
+            let scheme = &candidate[..candidate.len() - address.len()];
+            let port = port.map(|port| format!(":{port}")).unwrap_or_default();
+            return Some(format!(
+                "{scheme}localhost{port}{}",
+                &address[authority.len()..]
+            ));
         }
         return Some(candidate.to_owned());
     }
@@ -3162,6 +3205,22 @@ while True:
     }
 
     #[test]
+    fn a_printed_address_replaces_one_guessed_from_its_port() {
+        let guess = Some(super::port_url(3000));
+        let printed = Some("http://localhost:3000/app/".to_owned());
+        assert_eq!(super::known_url(guess.clone(), printed.clone()), printed);
+        assert_eq!(super::known_url(guess.clone(), None), guess);
+        // Another port's, or over an address it printed itself, it is kept.
+        let other = Some("http://localhost:4000/app/".to_owned());
+        assert_eq!(super::known_url(guess.clone(), other), guess);
+        assert_eq!(
+            super::known_url(printed.clone(), Some("http://localhost:3000/x".into())),
+            printed
+        );
+        assert_eq!(super::known_url(None, printed.clone()), printed);
+    }
+
+    #[test]
     fn preview_urls_strip_color_and_only_accept_local_http_addresses() {
         assert_eq!(
             preview_url(b"Local: \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[0m"),
@@ -3171,7 +3230,22 @@ while True:
             preview_url(b"(http://127.0.0.1:8080/path?q=1)."),
             Some("http://127.0.0.1:8080/path?q=1".into())
         );
+        // A server listening on every address is opened on this machine's (#406).
+        assert_eq!(
+            preview_url(b"Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ..."),
+            Some("http://localhost:8000/".into())
+        );
+        assert_eq!(
+            preview_url(b"Serving HTTP on :: port 8000 (http://[::]:8000/) ..."),
+            Some("http://localhost:8000/".into())
+        );
+        assert_eq!(
+            preview_url(b"listening on http://0.0.0.0:3000/app?x=1"),
+            Some("http://localhost:3000/app?x=1".into())
+        );
         for bad in [
+            "http://[::]:nope/",
+            "http://0.0.0.0.evil/",
             "https://localhost.evil/",
             "http://127.0.0.1@evil/",
             "http://localhost:nope/",

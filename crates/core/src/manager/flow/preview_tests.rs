@@ -1371,7 +1371,8 @@ async fn a_web_preview_runs_once_its_url_answers() {
 
 /// A web preview that prints no URL is ready once a port a process of its group listens on
 /// answers, even when the launcher that started that process has exited (it is reparented,
-/// no longer the preview's descendant, but still in its process group).
+/// no longer the preview's descendant, but still in its process group). Its address is that
+/// port's, so its page opens, not its output (#406).
 #[tokio::test]
 async fn a_web_preview_runs_once_a_port_its_group_listens_on_answers() {
     let replies: Replies = Arc::default();
@@ -1393,7 +1394,19 @@ async fn a_web_preview_runs_once_a_port_its_group_listens_on_answers() {
         })
         .await;
     let preview = &board.previews["preview-1"];
-    assert_eq!(preview.url, None, "it printed none");
+    let url = preview
+        .url
+        .as_deref()
+        .expect("the address of the port that answered");
+    let port = url
+        .strip_prefix("http://localhost:")
+        .and_then(|rest| rest.strip_suffix('/'))
+        .and_then(|port| port.parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("a local address with a port: {url}"));
+    assert!(
+        crate::manager::preview_ready::port_answers(port).await,
+        "{url} is the server's"
+    );
     let server = child_pid(&pids);
     let processes = flow.manager.runtime.platform().processes();
     let leader = preview.pid.unwrap();
