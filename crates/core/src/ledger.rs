@@ -1102,6 +1102,9 @@ fn remove_adopted(
         match platform.processes().in_dir(bound.path()) {
             Ok(found) if found.is_empty() => {}
             Ok(_) => return Err(format!("{}: something runs in it now", path.display())),
+            // Windows can't name the processes working in a folder yet, but it refuses to
+            // remove a folder one works in, so an empty one may still go.
+            Err(brigadier_sandbox::Error::Unsupported { .. }) if cfg!(windows) && empty_only => {}
             Err(err) => return Err(format!("{}: {err}", path.display())),
         }
     }
