@@ -470,6 +470,8 @@
   --radius-2xl: 1rem;
   --radius-document: 0.375rem;
   --radius-control: 0.5rem;
+  /* Every checkbox box: the checkbox, a page's and the composer's checklist items. */
+  --radius-checkbox: 0.3125rem;
   --radius-surface: 0.625rem;
   --radius-dialog: 0.75rem;
   /* A question asked in a centred card: rounder and roomier than other dialogs. */

@@ -188,7 +188,7 @@
   width: calc(var(--spacing) * 4);
   height: calc(var(--spacing) * 4);
   border: 1px solid var(--page-quiet);
-  border-radius: .25rem;
+  border-radius: var(--radius-checkbox);
   cursor: pointer;
 }
 .page-li-checked::before { border-color: var(--foreground); background: var(--foreground); }

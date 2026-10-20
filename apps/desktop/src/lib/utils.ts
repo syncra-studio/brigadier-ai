@@ -93,6 +93,7 @@ const twMerge = extendTailwindMerge({
         "settings",
         "summary",
         "browser-menu",
+        "checkbox",
       ],
       shadow: ["hairline", "menu", "tooltip", "summary", "thumb", "page"],
       text: [
