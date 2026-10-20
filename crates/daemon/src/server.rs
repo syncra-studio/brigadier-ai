@@ -1392,6 +1392,9 @@ fn answered_beside(request: &Request) -> bool {
             | Request::GetSettledTabs
             | Request::GetMergeUndo { .. }
             | Request::RestartPreview { .. }
+            | Request::WriteUpFeedback { .. }
+            | Request::FileFeedback { .. }
+            | Request::FeedbackAccount
     )
 }
 
@@ -2895,6 +2898,21 @@ mod tests {
         let settings = Box::new(brigadier_core::model::Settings::default());
         assert!(!answered_beside(&Request::UpdateSettings { settings }));
         assert!(!answered_beside(&Request::GetCatalog));
+    }
+
+    /// Send feedback's writer turns and GitHub calls take a minute or more: the connection's
+    /// other requests and its events don't wait for them.
+    #[test]
+    fn send_feedback_holds_up_no_other_request() {
+        for request in [
+            Request::WriteUpFeedback {
+                text: "Stop leaves a worker running".into(),
+            },
+            Request::FileFeedback { items: Vec::new() },
+            Request::FeedbackAccount,
+        ] {
+            assert!(answered_beside(&request), "{request:?} is answered beside");
+        }
     }
 
     /// Every await of `handle_request` goes through [`heap`]: an unoptimized build keeps all
