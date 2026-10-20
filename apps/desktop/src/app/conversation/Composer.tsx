@@ -431,14 +431,18 @@ const closedNotices = new Set<string>();
  * and buttons; heights rounded to whole pixels, so the thread's footer stays on the pixel grid),
  * rounded like the composer. It steps aside while a question, proposal or approval
  * waits above the composer, so it never pushes that card or the thread's last lines out of
- * view. × closes it for this conversation; "Don't show again" turns it off in Settings, where it
+ * view, and while messages wait in the queue, so they stay right under the conversation (#448). × closes it for this conversation; "Don't show again" turns it off in Settings, where it
  * can be turned back on.
  */
 function FullAccessNotice({ conversation }: { conversation: Conversation }) {
   const show = useApp((s) => s.settings.showFullAccessNotice);
   const [, setClosed] = useState(0);
   const full = conversation.setup?.type === "session" && conversation.setup.permission === "fullAccess";
-  if (!show || !full || closedNotices.has(conversation.id)) return null;
+  const queued = useBoard((s) => {
+    const queue = s.board?.conversationId === conversation.id ? s.board.queue : null;
+    return !!queue && (queue.items.length > 0 || (queue.moved?.length ?? 0) > 0);
+  });
+  if (!show || !full || queued || closedNotices.has(conversation.id)) return null;
   const close = () => {
     closedNotices.add(conversation.id);
     setClosed((count) => count + 1);

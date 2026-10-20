@@ -3,13 +3,16 @@
  * real ConversationView (the phase-flow fixture). `?drive=1` scrolls the thread to its bottom,
  * writes what it saw into `#full-access-notice-result`, then closes the card with ×. With
  * `&waiting=1` the session still works with approvals waiting above the composer, and the
- * result says whether the card stepped aside for them.
+ * result says whether the card stepped aside for them. With `&queued=1` a message waits in the
+ * queue, and the result says whether the card stepped aside for it and came back once it left.
  */
+import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
 const drive = params.has("drive");
 const waiting = params.has("waiting");
+const queued = params.has("queued");
 history.replaceState(
   null,
   "",
@@ -46,6 +49,36 @@ async function runWaiting() {
   for (let tries = 0; tries < 80 && !document.querySelector('[data-slot="approval-slot"]'); tries += 1) await pause();
   await pause(300);
   report({ approvals: document.querySelector('[data-slot="approval-slot"]') !== null, notice: notice() !== null });
+}
+
+/** The session's queue holds these messages. */
+function setQueue(items: { id: string; text: string }[]): void {
+  useBoard.setState(({ board }) =>
+    board
+      ? {
+          board: {
+            ...board,
+            queue: {
+              paused: false,
+              items: items.map((item) => ({ ...item, attachments: [], mentions: [], queuedAtMs: Date.now(), editedAtMs: null, deciding: false })),
+            },
+          },
+        }
+      : {},
+  );
+}
+
+/** A message waits in the queue (#448): whether the card is there with it, and back once it left. */
+async function runQueued() {
+  for (let tries = 0; tries < 80 && !notice(); tries += 1) await pause();
+  const before = notice() !== null;
+  setQueue([{ id: "q1", text: "Also tell me which Node version package.json asks for." }]);
+  for (let tries = 0; tries < 30 && !document.querySelector('[data-slot="message-queue-item"]'); tries += 1) await pause();
+  const rail = document.querySelector('[data-slot="message-queue-item"]') !== null;
+  const withQueue = notice() !== null;
+  setQueue([]);
+  for (let tries = 0; tries < 30 && !notice(); tries += 1) await pause();
+  report({ before, rail, withQueue, after: notice() !== null });
 }
 
 async function run() {
@@ -87,4 +120,4 @@ async function run() {
   report(seen);
 }
 
-if (drive) void (waiting ? runWaiting() : run());
+if (drive) void (waiting ? runWaiting() : queued ? runQueued() : run());

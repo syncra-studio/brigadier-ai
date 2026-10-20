@@ -44,3 +44,10 @@ test("the Full access card steps aside while approvals wait above the composer",
   assert.equal(seen.approvals, true);
   assert.equal(seen.notice, false);
 });
+
+test("the Full access card steps aside while messages wait in the queue, and comes back once it empties (issue 448)", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(
+    await renderFixturePage(t, "full-access-notice.html?drive=1&queued=1", "full-access-notice-result", 10000),
+  ) as { before: boolean; rail: boolean; withQueue: boolean; after: boolean };
+  assert.deepEqual(seen, { before: true, rail: true, withQueue: false, after: true });
+});
