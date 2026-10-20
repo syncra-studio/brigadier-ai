@@ -63,7 +63,10 @@ SWIFT
 fi
 
 nice_prefix=()
-if [ "$(ps -o nice= -p $$ | tr -d ' ')" -lt 10 ]; then
+# Git Bash's ps has no -o; its nice prints the niceness instead.
+niceness="$(ps -o nice= -p $$ 2>/dev/null | tr -d ' ')"
+if [ -z "$niceness" ]; then niceness="$(nice)"; fi
+if [ "$niceness" -lt 10 ]; then
   nice_prefix=(nice -n 10)
 fi
 
