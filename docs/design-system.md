@@ -50,9 +50,8 @@ one level deep, so a part both `app.pen` and `settings.pen` use must live in `fo
 
 - Use the design-system components. Don't draw a part by hand when one exists; visual details
   (cards, radii, hover, popovers, dialogs) reuse what the app already has.
-- `Icon / <Name>` components are the app's real icons: the names match the UI kit's `Icon`
-  component and our own glyphs in `components/glyphs`. A few spots keep a library icon because
-  the app has none there; the Read me lists them.
+- Icons are the app's real icons, and the Icons board is their one home in Pen: see Icons below.
+  A few spots keep a library icon because the app has none there; the Read me lists them.
 - Screens show what ships, not ideas. 1440×900, dark, realistic sample content.
 - Dark only. Normal density only: there is no compact variant.
 - Buttons, chips and badges are fully rounded; icon buttons keep a 10px corner; the composer's
@@ -63,6 +62,28 @@ one level deep, so a part both `app.pen` and `settings.pen` use must live in `fo
   `src/components/ui`. `pnpm lint` checks it (the oxlint rule `no-raw-design-values` for ts/tsx,
   `scripts/check-styles.mjs` for CSS files, fixed inline styles and kit imports), and so does CI.
   A value that can't follow yet goes in `scripts/check-styles.allow` with its reason.
+
+## Icons
+
+Every icon the app draws lives in `apps/desktop/src/components/icons/`, one folder per set, and
+app code imports them from `@/components/icons` only. The style check fails `<svg>` markup
+anywhere else and the kit's icons imported anywhere but `icons/kit.ts`; a drawing made from live
+values (a chart, a progress ring) is listed in `check-styles.allow` as `<svg` with its reason.
+
+In `foundations.pen` the Icons board holds every icon component, one section per folder, and a
+code name is its component's name:
+
+| Icons board section | Folder | Pen names → code |
+|---|---|---|
+| UI kit | `icons/kit.ts` | `Icon / <Name>` → the kit's `<Name>` |
+| App glyphs | `icons/app-glyphs/` | `Icon / <Name>` → `<Name>` (codicons, diff, queue, help, feedback, shields, sidebar status, routing line icons, page drag handle, plan partial, spinner) |
+| File types | `icons/file-types/` | `FileIcon/<kind>` → `FileIcon` for that kind (`fileKind`) |
+| Worker shapes | `icons/worker-shapes/` | `IdGlyph/<shape>` → `IdGlyph`'s shape of that name |
+| Page blocks | `icons/page-blocks/` | `BlockIcon/<label>` → `BLOCK_ICONS[<kind>]` of the block with that label |
+| Marks | `icons/marks/` | `BrigadierGlyph`, `ProviderGlyph/<agent>` → the same names |
+
+An icon is drawn once, as a component on the Icons board; everything else (the Glyphs &
+indicators board, controls, the other files) places it as a ref.
 
 ## Keeping it in sync
 
