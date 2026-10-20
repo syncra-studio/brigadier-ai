@@ -7,11 +7,17 @@ export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The project dialogs' card: its edge drawn inside it, and the menus' shadow, as drawn. */
+export const PROJECT_DIALOG_CARD = "shadow-menu ring-inset";
+
+/** The project dialogs' title: larger and bolder than the app's other dialogs, as drawn. */
+export const PROJECT_DIALOG_TITLE = "font-sans text-lg leading-5.25 font-semibold";
+
 /** An error the daemon (or validation) reported, shown where it happened. */
-export function ErrorLine({ error }: { error: string | null }) {
+export function ErrorLine({ error, className }: { error: string | null; className?: string }) {
   if (!error) return null;
   return (
-    <p role="alert" className="text-destructive text-xs whitespace-pre-wrap">
+    <p role="alert" className={cn("text-destructive text-xs whitespace-pre-wrap", className)}>
       {error}
     </p>
   );
@@ -42,8 +48,8 @@ export function CheckboxRow({
         className="mt-0.5"
       />
       <label htmlFor={id} className="grid gap-0.5">
-        <span className="text-sm">{label}</span>
-        {note && <span className="text-muted-foreground text-xs">{note}</span>}
+        <span className="text-label leading-4">{label}</span>
+        {note && <span className="text-foreground/65 text-xs leading-3.75">{note}</span>}
       </label>
     </div>
   );
