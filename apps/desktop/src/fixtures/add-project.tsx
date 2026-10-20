@@ -205,10 +205,10 @@ async function looks(): Promise<string> {
   await fixtureInput({ type: "pointer", x: over.x + over.width / 2, y: over.y + over.height / 2 });
   await settle();
   const pairs: LookPairs = {
-    card: [look(card(), "surface"), canon("dialog", "surface")],
-    title: [look(card()?.querySelector("h2"), "text"), canon("title", "text")],
+    card: [look(card(), "surface"), canon("project-dialog", "surface")],
+    title: [look(card()?.querySelector("h2"), "text"), canon("project-title", "text")],
     line: [look(card()?.querySelector("p"), "text"), canon("line", "text")],
-    close: [look(card()?.querySelector("[aria-label=Close]"), "button"), canon("icon", "button")],
+    close: [look(card()?.querySelector("[aria-label=Close]"), "buttonShape"), canon("icon", "buttonShape")],
     search: [look(field(card()?.querySelector("input")), "surface"), canon("search", "surface", "label")],
     chooseFolder: [look(button("Choose folder…"), "button"), canon("outline", "button")],
     picked: [look(rows[0], "fill"), canon("chosen", "fill")],
@@ -227,7 +227,7 @@ async function looks(): Promise<string> {
   rest();
   await settle();
   Object.assign(pairs, {
-    back: [look(card()?.querySelector("[aria-label=Back]"), "button"), canon("icon", "button")],
+    back: [look(card()?.querySelector("[aria-label=Back]"), "buttonShape"), canon("icon", "buttonShape")],
     url: [look(field(card()?.querySelector("input")), "surface"), canon("input", "surface")],
     saveTo: [look(field(card()?.querySelector("[data-slot=save-to]")), "surface"), canon("input", "surface")],
     change: [look(button("Change…"), "button"), canon("outline", "button")],

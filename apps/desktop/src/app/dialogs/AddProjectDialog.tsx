@@ -11,7 +11,7 @@ import {
   type RefObject,
 } from "react";
 
-import { ErrorLine, errorText } from "@/app/dialogs/fields";
+import { ErrorLine, errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
 import { SettingsSearch } from "@/app/settings/parts";
 import { ArrowLeft, Check, Folder, FolderOpen, Link, Plus, Spinner, X } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
@@ -51,7 +51,10 @@ export function AddProjectDialog() {
       <DialogContent
         data-testid="add-project-dialog"
         showCloseButton={false}
-        className="max-w-add-project top-add-project-top origin-top translate-y-0 gap-0 p-0 motion-reduce:animate-none"
+        className={cn(
+          PROJECT_DIALOG_CARD,
+          "max-w-add-project top-add-project-top origin-top translate-y-0 gap-0 p-0 motion-reduce:animate-none",
+        )}
       >
         {/* Its top edge stays put (#384): a view or the list loading changes only its height,
             which moves the bottom edge. Remounted per opening so it starts over. */}
@@ -92,16 +95,16 @@ function Header({ title, line, onBack }: { title: string; line: string; onBack?:
   return (
     <div className={cn("flex gap-3.5 pt-6 pr-5 pb-5", onBack ? "pl-6" : "pl-7")}>
       {onBack && (
-        <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
+        <Button variant="ghost" size="icon-sm" className="text-toolbar-foreground" aria-label="Back" onClick={onBack}>
           <ArrowLeft />
         </Button>
       )}
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{line}</DialogDescription>
+        <DialogTitle className={PROJECT_DIALOG_TITLE}>{title}</DialogTitle>
+        <DialogDescription className="leading-4.25">{line}</DialogDescription>
       </div>
       <DialogClose asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="Close">
+        <Button variant="ghost" size="icon-sm" className="text-toolbar-foreground" aria-label="Close">
           <X />
         </Button>
       </DialogClose>
@@ -112,7 +115,8 @@ function Header({ title, line, onBack }: { title: string; line: string; onBack?:
 /** The bar along the bottom: `start` on the left, Cancel and the main button on the right. */
 function Footer({ start, children }: { start?: ReactNode; children: ReactNode }) {
   return (
-    <div className="border-divider flex items-center gap-2 border-t py-4 pr-6 pl-5">
+    // The top line sits inside the bar's 60px, as drawn: it takes a pixel of the top padding.
+    <div className="border-divider flex items-center gap-2 border-t pt-3.75 pr-6 pb-4 pl-5">
       <div className="flex min-w-0 flex-1 items-center gap-1">{start}</div>
       {children}
     </div>
@@ -131,17 +135,17 @@ function CancelButton({ label = "Cancel" }: { label?: string }) {
 function FieldLabel({ htmlFor, label, aside }: { htmlFor?: string; label: string; aside?: string | undefined }) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <label htmlFor={htmlFor} className="text-foreground text-xs font-medium">
+      <label htmlFor={htmlFor} className="text-foreground text-xs leading-3.75 font-medium">
         {label}
       </label>
-      {aside && <span className="text-muted-foreground text-xs">{aside}</span>}
+      {aside && <span className="text-muted-foreground text-xs leading-3.75">{aside}</span>}
     </div>
   );
 }
 
 /** A 42-high box for a field, in the app's field look (and the Input's when invalid): its icon, then its content. */
 const BOX =
-  "bg-muted/60 focus-within:bg-background rounded-control flex h-10.5 items-center gap-2.5 border border-transparent transition-colors [&>svg]:size-icon-sm [&>svg]:shrink-0 [&>svg]:text-muted-foreground has-aria-invalid:border-destructive/50 has-aria-invalid:ring-destructive/40 has-aria-invalid:ring-1";
+  "bg-muted/60 focus-within:bg-background focus-within:border-ring rounded-control flex h-10.5 items-center gap-2.5 border border-transparent transition-colors [&>svg]:size-icon-sm [&>svg]:shrink-0 [&>svg]:text-muted-foreground has-aria-invalid:border-destructive/60 has-[input:disabled]:opacity-50";
 
 /** A field's own input inside its box. */
 const BOX_INPUT = "text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent font-mono text-xs outline-none";
@@ -346,7 +350,7 @@ function PickView({
           label="Search repositories"
           value={query}
           autoFocus
-          className="h-9"
+          className="h-9 [&>svg]:size-icon-sm"
           onChange={setQuery}
           onKeyDown={onSearchKey}
         />
@@ -357,8 +361,8 @@ function PickView({
       </div>
       <div className="flex flex-col gap-2 px-4 pt-5.5 pb-4">
         <div className="flex items-center justify-between px-3">
-          <span className="text-muted-foreground text-xs">On this Mac</span>
-          <span className="text-muted-foreground text-xs">Most recent first</span>
+          <span className="text-muted-foreground text-xs leading-3.75">On this Mac</span>
+          <span className="text-muted-foreground text-xs leading-3.75">Most recent first</span>
         </div>
         {/* While the scan runs the list holds its five rows' room. */}
         <div
@@ -377,7 +381,7 @@ function PickView({
             />
           ))}
           {rows.length === 0 && (
-            <p className="text-muted-foreground flex h-14.5 items-center px-3 text-sm">
+            <p className="text-muted-foreground flex h-14.5 items-center px-3 text-sm leading-4.25">
               {repos === null
                 ? "Looking for repositories…"
                 : query.trim()
@@ -388,7 +392,7 @@ function PickView({
         </div>
         {error && (
           <div className="px-3">
-            <ErrorLine error={error} />
+            <ErrorLine error={error} className="leading-4.25" />
           </div>
         )}
       </div>
@@ -416,7 +420,7 @@ function PickView({
   );
 }
 
-/** A repository in the list: its mark, name, path and last use, and its radio or Added. */
+/** A repository in the list: its mark, name, path, last use (or Added) and its radio. */
 function RepoRow({
   row,
   now,
@@ -441,16 +445,16 @@ function RepoRow({
       onClick={onPick}
       onDoubleClick={onAdd}
       className={cn(
-        "rounded-control focus-visible:ring-ring flex h-14.5 w-full shrink-0 cursor-default items-center gap-3 border px-3 text-left outline-none focus-visible:ring-2",
+        "rounded-surface focus-visible:outline-ring flex h-14.5 w-full shrink-0 cursor-default items-center gap-3 border px-3 text-left outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2",
         chosen ? "bg-accent text-accent-foreground border-border" : "hover:bg-foreground/5 border-transparent",
         added && "opacity-55",
       )}
     >
-      <span className="bg-foreground/8 rounded-nav flex size-8.5 shrink-0 items-center justify-center">
+      <span className="bg-foreground/8 rounded-lg flex size-8.5 shrink-0 items-center justify-center">
         <Folder className={cn("size-icon-md", chosen ? "text-foreground" : "text-foreground/65")} />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.75">
-        <span className="truncate text-sm font-medium">{row.name}</span>
+        <span className="truncate text-sm leading-4.25 font-medium">{row.name}</span>
         <span className="text-muted-foreground truncate font-mono text-xs">{shortPath(row.path)}</span>
       </span>
       {added ? (
@@ -459,21 +463,19 @@ function RepoRow({
           Added
         </Badge>
       ) : (
-        <>
-          <span className="text-muted-foreground shrink-0 text-xs">
-            {row.plain ? "Not a repository" : row.lastUsedMs ? formatLastUsed(row.lastUsedMs, now) : ""}
-          </span>
-          <span
-            aria-hidden
-            className={cn(
-              "flex size-4.5 shrink-0 items-center justify-center rounded-full",
-              chosen ? "bg-toggle-on text-foreground" : "ring-foreground/16 ring-1",
-            )}
-          >
-            {chosen && <Check className="size-icon-xs" />}
-          </span>
-        </>
+        <span className="text-muted-foreground shrink-0 text-xs">
+          {row.plain ? "Not a repository" : row.lastUsedMs ? formatLastUsed(row.lastUsedMs, now) : ""}
+        </span>
       )}
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-4.5 shrink-0 items-center justify-center rounded-full",
+          chosen ? "bg-toggle-on text-foreground" : "border-foreground/16 border",
+        )}
+      >
+        {chosen && <Check className="size-icon-xs" />}
+      </span>
     </button>
   );
 }
@@ -578,7 +580,7 @@ function CloneView({ onBack }: { onBack: () => void }) {
           onParent={setParent}
           onError={setError}
         />
-        <ErrorLine error={error} />
+        <ErrorLine error={error} className="leading-4.25" />
       </div>
       <Footer>
         <CancelButton label={busy ? "Close" : "Cancel"} />
@@ -663,7 +665,7 @@ function NewRepoView({
           </div>
         </div>
         <SaveTo parent={parent} name={folder} disabled={busy} onParent={setParent} onError={setError} />
-        <ErrorLine error={error} />
+        <ErrorLine error={error} className="leading-4.25" />
       </div>
       <Footer>
         <CancelButton />

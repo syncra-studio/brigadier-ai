@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { ErrorLine } from "@/app/dialogs/fields";
+import { ErrorLine, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -38,7 +38,7 @@ export function TrustDialog() {
       <DialogContent
         data-testid="trust-dialog"
         showCloseButton={false}
-        className="max-w-trust gap-0 p-0"
+        className={cn(PROJECT_DIALOG_CARD, "max-w-trust gap-0 p-0")}
         onInteractOutside={(event) => event.preventDefault()}
         onEscapeKeyDown={(event) => event.preventDefault()}
         // The card itself takes focus, not an answer: Enter never trusts a folder by accident.
@@ -148,7 +148,7 @@ function FolderPath({ folder }: { folder: string }) {
         <div
           role="tooltip"
           data-slot="trust-path-tooltip"
-          className="bg-popover text-popover-foreground border-border rounded-tooltip shadow-tooltip pointer-events-none absolute top-full -right-2 -left-2 z-10 mt-1.75 flex flex-col gap-1.5 border px-3 py-2.5"
+          className="bg-popover text-popover-foreground border-border rounded-tooltip shadow-tooltip pointer-events-none absolute top-full -right-2 -left-2 z-10 mt-6.25 flex flex-col gap-1.5 border px-3 py-2.5"
         >
           {/* Lines break after a slash: each part with its slash is one piece, split only when wider than a line. */}
           <span className="font-mono text-xs leading-normal wrap-anywhere">
@@ -158,7 +158,7 @@ function FolderPath({ folder }: { folder: string }) {
               </span>
             ))}
           </span>
-          <span className="text-muted-foreground text-2xs">{copied ? "Copied" : "Click to copy"}</span>
+          <span className="text-muted-foreground text-2xs leading-3.25">{copied ? "Copied" : "Click to copy"}</span>
         </div>
       )}
     </div>
@@ -173,13 +173,13 @@ export function TrustForm({ project, folder }: { project: Project; folder: strin
     <div className="flex flex-col">
       <div className="flex flex-col gap-3 px-6 pt-6">
         <DialogHeader className="gap-1.5">
-          <DialogTitle>Trust this folder?</DialogTitle>
+          <DialogTitle className={PROJECT_DIALOG_TITLE}>Trust this folder?</DialogTitle>
           <FolderPath folder={folder} />
         </DialogHeader>
         <DialogDescription>
           Agents can edit and run files here without asking, and the folder's own settings can run code.
         </DialogDescription>
-        <ErrorLine error={action.error} />
+        <ErrorLine error={action.error} className="leading-4.25" />
       </div>
       <div className="flex items-center justify-end gap-2 px-6 pt-6 pb-5">
         <Button variant="outline" size="sm" disabled={action.busy} onClick={() => answer(false)}>

@@ -1,9 +1,10 @@
 /**
  * The app's shared dialog parts, drawn unseen, for a fixture to compare a dialog with: its
- * card, title, buttons, field, search field, key hint, badge, tooltip, choice pills and list-row colours, each
+ * card, title (and the project dialogs' own), buttons, field, search field, key hint, badge, tooltip, choice pills and list-row colours, each
  * marked `data-canon`. `look` reads what an element looks like as drawn, so a dialog drawn with
  * the app's parts reads the same as the part it uses (#385).
  */
+import { PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
 import { SettingsSearch } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,19 @@ export function Canon() {
         >
           <DialogTitle data-canon="title">Canon</DialogTitle>
           <DialogDescription data-canon="line">Canon</DialogDescription>
+        </DialogContent>
+      </Dialog>
+      <Dialog open modal={false}>
+        <DialogContent
+          data-canon="project-dialog"
+          showCloseButton={false}
+          className={`${PROJECT_DIALOG_CARD} invisible`}
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+        >
+          <DialogTitle data-canon="project-title" className={PROJECT_DIALOG_TITLE}>
+            Canon
+          </DialogTitle>
         </DialogContent>
       </Dialog>
       <div className="invisible fixed start-0 top-0" aria-hidden>
@@ -82,6 +96,8 @@ export function Canon() {
 const PROPS = {
   surface: ["backgroundColor", "borderTopLeftRadius", "boxShadow", "borderTopWidth", "borderTopColor"],
   button: ["backgroundColor", "color", "borderTopLeftRadius", "borderTopWidth"],
+  /** A button whose ink is its own (the project dialogs' close and back icons). */
+  buttonShape: ["backgroundColor", "borderTopLeftRadius", "borderTopWidth"],
   text: ["color", "fontSize", "fontWeight", "fontFamily"],
   fill: ["backgroundColor"],
   ink: ["color"],

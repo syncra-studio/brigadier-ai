@@ -123,8 +123,8 @@ async function looks(): Promise<string> {
   const labelled = (label: string) =>
     [...(card?.querySelectorAll("button") ?? [])].find((button) => button.textContent === label);
   const pairs: LookPairs = {
-    card: [look(card, "surface"), canon("dialog", "surface")],
-    title: [look(card?.querySelector("h2"), "text"), canon("title", "text")],
+    card: [look(card, "surface"), canon("project-dialog", "surface")],
+    title: [look(card?.querySelector("h2"), "text"), canon("project-title", "text")],
     line: [look(card?.querySelector("p"), "text"), canon("line", "text")],
     trust: [look(labelled("Trust folder"), "button"), canon("primary", "button")],
     dontTrust: [look(labelled("Don't trust"), "button"), canon("outline", "button")],
