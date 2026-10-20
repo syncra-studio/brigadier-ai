@@ -48,7 +48,7 @@ function Feedback({ draft }: { draft: FeedbackDraft | null }) {
 
   const send = () => {
     setError(null);
-    sendFeedback(kind, text).then(
+    sendFeedback(text, kind).then(
       () => {
         draft?.onSent?.();
         closeFeedback();

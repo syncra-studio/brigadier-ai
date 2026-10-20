@@ -2143,6 +2143,16 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| sessions.put_off_plan(conversation_id, card_id)).await?;
             Response::PutOffPlan
         }
+        Request::WriteUpFeedback { text } => Response::WriteUpFeedback {
+            write_up: heap(|| sessions.write_up_feedback(&text)).await?,
+        },
+        Request::FileFeedback { items } => {
+            let filed = heap(|| sessions.file_feedback(&items)).await;
+            Response::FileFeedback {
+                signed_in: filed.is_some(),
+                results: filed.unwrap_or_default(),
+            }
+        }
         Request::AnswerFeedbackOffer {
             conversation_id,
             offer_id,

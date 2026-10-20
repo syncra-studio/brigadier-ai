@@ -2111,6 +2111,8 @@ mod terminal_run_tests;
 #[cfg(all(test, debug_assertions))]
 mod fault_tests;
 #[cfg(test)]
+mod feedback_tests;
+#[cfg(test)]
 mod findings_tests;
 #[cfg(test)]
 mod fresh_base_tests;

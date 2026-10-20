@@ -33,7 +33,10 @@ mockIPC((command, payload) => {
     opened.push((payload as { url: string }).url);
     return null;
   }
-  if (command === "ipc_request") return { method: (payload as { request: { method: string } }).request.method };
+  const method = (payload as { request?: { method: string } }).request?.method;
+  // No writer runs here: Send opens the one form.
+  if (method === "writeUpFeedback") throw { code: "invalid", message: "no model can write the report now" };
+  if (command === "ipc_request") return { method };
   return null;
 });
 

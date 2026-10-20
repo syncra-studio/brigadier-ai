@@ -417,6 +417,35 @@ impl SessionManager {
             ""
         };
         let prompt = format!("Write the commit message for this diff:\n\n{shown}{cut}");
+        let (message, why) = self
+            .write_text(
+                settings.git_writer.as_ref(),
+                project,
+                &system,
+                &prompt,
+                "the message",
+            )
+            .await?;
+        let message = clean_message(&message);
+        if message.is_empty() {
+            tracing::warn!(checkout = %path.display(), "the message writer's reply was empty");
+            return Err(Error::Provider("the message writer replied nothing".into()));
+        }
+        Ok((message, why))
+    }
+
+    /// A short text (`what`, for errors: "the message") written in a throwaway session with no
+    /// tools, by `chosen` (else Automatic, routing's pick for git text): its reply as written.
+    /// A model at its usage limit hands it to routing's next pick (another account, then the
+    /// other provider). With it, why the `chosen` model didn't write it, when it didn't.
+    pub(super) async fn write_text(
+        &self,
+        chosen: Option<&ModelChoice>,
+        project: Option<&ProjectId>,
+        system: &str,
+        prompt: &str,
+        what: &str,
+    ) -> Result<(String, Option<String>)> {
         let mut exclude: Vec<Exclusion> = Vec::new();
         let mut limited: Vec<(AccountRef, String)> = Vec::new();
         let mut runs = 0;
@@ -426,15 +455,10 @@ impl SessionManager {
             if runs == WRITE_ATTEMPTS {
                 break;
             }
-            let (routed, mut account, why) = self
-                .writer_route(settings.git_writer.as_ref(), project, &exclude)
-                .await?;
+            let (routed, mut account, why) =
+                self.writer_route(chosen, project, &exclude, what).await?;
             // The user's model writes it as they set it, Fast included.
-            let fast = why.is_none()
-                && settings
-                    .git_writer
-                    .as_ref()
-                    .is_some_and(|chosen| chosen.fast == Some(true));
+            let fast = why.is_none() && chosen.is_some_and(|chosen| chosen.fast == Some(true));
             if limited.contains(&(account.clone(), routed.model.clone())) {
                 // Another account of the same model that still has room, else that model is
                 // out until its reset.
@@ -455,27 +479,20 @@ impl SessionManager {
             }
             runs += 1;
             match self
-                .run_writer(&routed, fast, &account, &system, &prompt)
+                .run_writer(&routed, fast, &account, system, prompt)
                 .await?
             {
-                Some(message) => {
-                    let message = clean_message(&message);
-                    if message.is_empty() {
-                        tracing::warn!(checkout = %path.display(), "the message writer's reply was empty");
-                        return Err(Error::Provider("the message writer replied nothing".into()));
-                    }
-                    // Why the user's model didn't write it, of the pass that did.
-                    return Ok((message, why));
-                }
+                // Why the user's model didn't write it, of the pass that did.
+                Some(text) => return Ok((text, why)),
                 None => {
-                    tracing::info!(checkout = %path.display(), model = %routed.model, "the message writer hit its usage limit");
+                    tracing::info!(model = %routed.model, "the writer hit its usage limit");
                     limited.push((account, routed.model));
                 }
             }
         }
-        Err(Error::Provider(
-            "every model that could write the message is at its usage limit".into(),
-        ))
+        Err(Error::Provider(format!(
+            "every model that could write {what} is at its usage limit"
+        )))
     }
 
     /// The model, effort and account the next message is written with, and why it isn't the
@@ -485,6 +502,7 @@ impl SessionManager {
         chosen: Option<&ModelChoice>,
         project: Option<&crate::model::ProjectId>,
         exclude: &[Exclusion],
+        what: &str,
     ) -> Result<(Routed, AccountRef, Option<String>)> {
         let ask = |pin: Option<Pin>| Ask {
             category: TaskCategory::GitText,
@@ -522,7 +540,7 @@ impl SessionManager {
             Decision::Run(routed) => routed,
             Decision::Wait(waiting) => {
                 return Err(Error::Invalid(format!(
-                    "no model can write the message now: {}",
+                    "no model can write {what} now: {}",
                     waiting.reason
                 )));
             }

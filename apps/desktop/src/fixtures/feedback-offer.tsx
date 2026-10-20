@@ -27,6 +27,10 @@ internals.invoke = (command, args, options) => {
     opened.push((args as { url: string }).url);
     return Promise.resolve(null);
   }
+  // No writer runs here: Send opens the one form.
+  if (command === "ipc_request" && (args as { request: { method: string } }).request.method === "writeUpFeedback") {
+    return Promise.reject({ code: "invalid", message: "no model can write the report now" });
+  }
   return invoke(command, args, options);
 };
 // Send feedback, which the app mounts beside every view.

@@ -2391,7 +2391,20 @@ async fn the_thread_offers_feedback_once_per_incident() {
         script(move |turn| {
             let log = log.clone();
             async move {
-                if turn.is_orchestrator() {
+                if turn.is_orchestrator() && turn.input.contains("Report this") {
+                    let reply = turn
+                        .call(
+                            "offer_feedback",
+                            json!({
+                                "kind": "bug",
+                                "title": "Stop leaves the tab spinning",
+                                "body": "After Stop the tab keeps its spinner.",
+                                "asked": true,
+                            }),
+                        )
+                        .await;
+                    log.lock().unwrap().push((reply.is_error, reply.text));
+                } else if turn.is_orchestrator() {
                     let call = || {
                         turn.call(
                             "offer_feedback",
@@ -2512,6 +2525,13 @@ async fn the_thread_offers_feedback_once_per_incident() {
         "{fourth:?}"
     );
     assert_eq!(offers(&board).len(), 2);
+
+    // Asked for ("report this"): offered even after a dismissal.
+    flow.say("Report this to Brigadier, please.").await;
+    let board = flow.settled().await;
+    let fifth = taken(&replies);
+    assert!(fifth.iter().all(|reply| !reply.0), "{fifth:?}");
+    assert_eq!(offers(&board).len(), 3);
     flow.stop().await;
 }
 

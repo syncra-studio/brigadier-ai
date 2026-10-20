@@ -1224,9 +1224,10 @@ impl SessionManager {
     }
 
     /// `offer_feedback`: a card in the thread with a report to Brigadier's developers, which
-    /// the user sends or dismisses (the thread judges they are annoyed; this only plumbs).
-    /// One offer per incident: none while the session's last offer is unanswered or after the
-    /// user dismissed one, none twice in a request, and none in an overnight run. An offer
+    /// the user sends or dismisses (the thread judges they are annoyed, or that they asked;
+    /// this only plumbs). One offer per incident: none while the session's last offer is
+    /// unanswered or after the user dismissed one unless they asked for this one, none twice in
+    /// a request, and none in an overnight run. An offer
     /// from an attempt the user asked to redo, or from a message they edited away, counts for nothing.
     pub(crate) async fn offer_feedback(
         &self,
@@ -1292,6 +1293,7 @@ impl SessionManager {
             }
         }
         match last {
+            _ if args.asked => {}
             Some((_, None)) => {
                 return Err(Error::Invalid(
                     "The user hasn't answered the feedback already offered in this session: don't offer another.".into(),

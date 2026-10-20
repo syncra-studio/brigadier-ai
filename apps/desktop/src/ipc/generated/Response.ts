@@ -23,6 +23,8 @@ import type { Diagnostics } from "./Diagnostics";
 import type { DictationStatus } from "./DictationStatus";
 import type { DiffStat } from "./DiffStat";
 import type { EventEnvelope } from "./EventEnvelope";
+import type { FeedbackFiled } from "./FeedbackFiled";
+import type { FeedbackWriteUp } from "./FeedbackWriteUp";
 import type { FolderCheck } from "./FolderCheck";
 import type { FolderListing } from "./FolderListing";
 import type { FolderTrustReport } from "./FolderTrustReport";
@@ -135,7 +137,15 @@ watching: boolean, } | { "method": "startSearch", id: number, } | { "method": "c
 /**
  * Why the user's chosen model didn't write it, when it didn't.
  */
-note: string | null, } | { "method": "answerCard" } | { "method": "answerQuestion" } | { "method": "decidePlan" } | { "method": "putOffPlan" } | { "method": "answerFeedbackOffer" } | { "method": "cancelMerge", text: string, } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
+note: string | null, } | { "method": "answerCard" } | { "method": "answerQuestion" } | { "method": "decidePlan" } | { "method": "putOffPlan" } | { "method": "writeUpFeedback", writeUp: FeedbackWriteUp, } | { "method": "fileFeedback", 
+/**
+ * Whether `gh` is signed in; when it isn't, `results` is empty.
+ */
+signedIn: boolean, 
+/**
+ * What became of each item, in order.
+ */
+results: Array<FeedbackFiled>, } | { "method": "answerFeedbackOffer" } | { "method": "cancelMerge", text: string, } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
 /**
  * Absent before the run has a branch, and for a finished run with nothing verified.
  */

@@ -1,14 +1,17 @@
 import { create } from "zustand";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { openUrl, systemName } from "@/ipc/client";
-import { type FeedbackDetails, type FeedbackKind, feedbackUrl } from "@/lib/feedbackUrl";
+import { systemName } from "@/ipc/client";
+import { type FeedbackResult, retry, send } from "@/lib/feedbackSend";
+import type { FeedbackDetails, FeedbackKind } from "@/lib/feedbackUrl";
 import { useApp } from "@/state/store";
 
 /**
- * Send feedback (the sidebar's foot, Help › Send Feedback…): what the user writes opens as a new
- * issue in Brigadier's repository, in their browser, filled in from the repository's own issue
- * forms. Nothing is sent from the app: they read it, finish the form and post it there.
+ * Send feedback (the sidebar's foot, Help › Send Feedback…, the thread's feedback card): the
+ * user only writes; Brigadier splits it into one report per bug or idea in the shape of its
+ * repository's issue forms, looks for an issue it repeats, and files each as the user with
+ * their `gh` (a repeat as a comment there). Without a `gh` sign-in each report's form opens in
+ * the browser, filled in. With no writer to run, the note opens in one form, as it used to.
  * `openFeedback` (with a draft, from elsewhere) and `sendFeedback` are what other places use.
  */
 
@@ -47,10 +50,18 @@ export async function feedbackDetails(): Promise<FeedbackDetails> {
   return { version: info?.version ?? null, system: await systemLookup, agents };
 }
 
-/** Opens `text` as a new issue in the user's browser, filled in with the details; resolves to its link. */
-export async function sendFeedback(kind: FeedbackKind, text: string): Promise<string> {
-  const url = feedbackUrl(kind, text, await feedbackDetails());
-  await openUrl(url);
-  return url;
+/** What became of one report (see lib/feedbackSend.ts). */
+export type { FeedbackResult };
+
+/**
+ * Sends the user's note: written up as reports and filed (the thread's card passes the `kind`
+ * it drafted, which only the no-writer fallback uses). Resolves to what became of each report.
+ */
+export async function sendFeedback(text: string, kind?: FeedbackKind): Promise<FeedbackResult[]> {
+  return send(await feedbackDetails(), text, kind);
 }
 
+/** Sends the reports that failed again; the others stay as they were. */
+export async function retryFeedback(results: readonly FeedbackResult[]): Promise<FeedbackResult[]> {
+  return retry(await feedbackDetails(), results);
+}

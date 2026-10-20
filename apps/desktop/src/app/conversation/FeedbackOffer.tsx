@@ -119,7 +119,7 @@ export function FeedbackOffer({ id, kind, title, body }: { id: string; kind: Fee
       state={sent === null ? "open" : sent ? "sent" : "dismissed"}
       busy={action.busy}
       error={action.error}
-      onSend={() => action.run(() => sendFeedback(kind, text).then(() => answerWith(true)))}
+      onSend={() => action.run(() => sendFeedback(text, kind).then(() => answerWith(true)))}
       onEdit={() => openFeedback({ kind, text, onSent: () => action.run(() => answerWith(true)) })}
       onDismiss={() => action.run(() => answerWith(false))}
     />

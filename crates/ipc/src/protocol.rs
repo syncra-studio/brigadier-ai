@@ -17,17 +17,18 @@ use brigadier_core::{
     AccountEntry, AccountsView, AppAnswer, AppCall, AttachmentRef, BrainJobKind, BrainOverview,
     CardId, Catalog, CheckoutFile, CommitOutcome, ComputerPermission, ComputerUseStatus,
     ConflictFile, ConnectView, ConventionsExport, Conversation, ConversationActivity,
-    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat, FolderCheck,
-    FolderListing, FolderTrustReport, ForkPlace, GitState, Mention, MergeUndo, Message,
-    MessageMatches, MessagePage, MessageQueue, OrchestratorPage, OvernightRun, OvernightRunId,
-    PendingChanges, ProbeBurst, Project, ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan,
-    ProvidersView, PullRequest, QueuedMessage, Rating, RawApprovals, RawPage, RawSession,
-    RawSessionId, ReplaceFile, ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome,
-    ReviewDiff, ReviewScope, RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup,
-    SetupRequest, SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState,
-    StoredCopy, TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget,
-    UpdatesView, UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder,
-    WorkspaceTarget, WorkspaceTree,
+    ConversationId, ConversationKind, ConversationStatus, ConversationView, DiffStat,
+    FeedbackFiled, FeedbackFiling, FeedbackWriteUp, FolderCheck, FolderListing, FolderTrustReport,
+    ForkPlace, GitState, Mention, MergeUndo, Message, MessageMatches, MessagePage, MessageQueue,
+    OrchestratorPage, OvernightRun, OvernightRunId, PendingChanges, ProbeBurst, Project,
+    ProjectCandidate, ProjectId, ProjectPatch, ProposedPlan, ProvidersView, PullRequest,
+    QueuedMessage, Rating, RawApprovals, RawPage, RawSession, RawSessionId, ReplaceFile,
+    ReplaceOutcome, RepoInfo, RepoSuggestion, RestoreOutcome, ReviewDiff, ReviewScope,
+    RoutePreview, SearchQuery, SearchUpdate, Settings, SettledTab, Setup, SetupRequest,
+    SourceAction, SourceBranch, SourceChange, SourceGitRun, SourceScope, SourceState, StoredCopy,
+    TaskId, ThreadItem, ThreadItemsPage, ThreadMetrics, UndoOutcome, UpdateTarget, UpdatesView,
+    UsageActivity, UsageView, WorkerDiff, WorkerPage, WorkspaceFolder, WorkspaceTarget,
+    WorkspaceTree,
 };
 use brigadier_providers::{Access, ApprovalDecision, ProviderKind};
 use brigadier_router::{Area, RegistryInfo};
@@ -878,6 +879,16 @@ pub enum Request {
         conversation_id: ConversationId,
         card_id: CardId,
     },
+    /// Send feedback: the user's note as reports in Brigadier's issue forms, checked against
+    /// its existing issues. Fails when no writer can run.
+    WriteUpFeedback {
+        text: String,
+    },
+    /// Send feedback: files the reports as the user with their `gh`; nothing is filed when it
+    /// isn't signed in.
+    FileFeedback {
+        items: Vec<FeedbackFiling>,
+    },
     /// The user's answer to the thread's feedback offer (`offer_feedback`): opened on GitHub
     /// (`sent`) or dismissed.
     AnswerFeedbackOffer {
@@ -1727,6 +1738,15 @@ pub enum Response {
     AnswerQuestion,
     DecidePlan,
     PutOffPlan,
+    WriteUpFeedback {
+        write_up: FeedbackWriteUp,
+    },
+    FileFeedback {
+        /// Whether `gh` is signed in; when it isn't, `results` is empty.
+        signed_in: bool,
+        /// What became of each item, in order.
+        results: Vec<FeedbackFiled>,
+    },
     AnswerFeedbackOffer,
     /// What became of the Cancel, for the user.
     CancelMerge {
