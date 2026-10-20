@@ -1016,6 +1016,11 @@ fn resolved(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_owned())
 }
 
+/// What the status says when Claude Code is missing or signed out: Connect does either in one
+/// click, so no command and no terminal.
+const NOT_INSTALLED: &str = "Claude Code isn't installed. Install it from Settings › Providers.";
+const SIGNED_OUT: &str = "Claude Code isn't signed in. Sign in from Settings › Providers.";
+
 impl Provider for Claude {
     fn kind(&self) -> ProviderKind {
         ProviderKind::Claude
@@ -1037,11 +1042,7 @@ impl Provider for Claude {
                 compacts: false,
             };
             let Ok(binary) = found else {
-                status.guidance = Some(
-                    "Install Claude Code (https://code.claude.com) so `claude` is on your login \
-                     shell's PATH, then refresh."
-                        .into(),
-                );
+                status.guidance = Some(NOT_INSTALLED.into());
                 return status;
             };
             let spec = self
@@ -1084,7 +1085,7 @@ impl Provider for Claude {
                     }
                     Err(_) => {
                         status.guidance = Some(format!(
-                            "`claude auth status --json` gave no status: {}",
+                            "Claude Code didn't say whether it is signed in: {}",
                             output.stderr.trim()
                         ));
                     }
@@ -1092,11 +1093,7 @@ impl Provider for Claude {
                 Err(err) => status.guidance = Some(format!("Could not ask Claude Code: {err}")),
             }
             if !status.logged_in && status.guidance.is_none() {
-                status.guidance = Some(
-                    "Log in to Claude: run `claude auth login` in a terminal (or start `claude` \
-                     and use /login), then refresh."
-                        .into(),
-                );
+                status.guidance = Some(SIGNED_OUT.into());
             }
             status
         })
@@ -3623,5 +3620,42 @@ for line in sys.stdin:
                 .get("disableAllHooks")
                 .is_none()
         );
+    }
+
+    /// Missing or signed out, the status points at Connect in plain words: no command to run,
+    /// no terminal (#323).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_missing_or_signed_out_claude_points_at_connect() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = Temp::new();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.path().join("data")),
+        })
+        .unwrap();
+        let claude = |env| Claude::new(platform.clone(), Arc::new(env));
+        let env = || {
+            CliEnv::from_vars([
+                ("HOME".into(), dir.path().as_os_str().to_owned()),
+                ("PATH".into(), bin.as_os_str().to_owned()),
+            ])
+        };
+        let missing = claude(env()).status().await;
+        assert_eq!(missing.guidance.as_deref(), Some(NOT_INSTALLED));
+        let binary = bin.join("claude");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\nif [ \"$1\" = auth ]; then echo '{\"loggedIn\":false}'; else echo '2.1.0 (Claude Code)'; fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let signed_out = claude(env()).status().await;
+        assert!(!signed_out.logged_in);
+        assert_eq!(signed_out.guidance.as_deref(), Some(SIGNED_OUT));
+        for text in [NOT_INSTALLED, SIGNED_OUT] {
+            assert!(!text.contains('`') && !text.contains("terminal"), "{text}");
+        }
     }
 }

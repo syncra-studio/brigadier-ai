@@ -490,6 +490,11 @@ async fn control_reader(rpc: Arc<Rpc>, mut stdout: mpsc::Receiver<String>) {
     rpc.fail_all();
 }
 
+/// What the status says when Codex is missing or signed out: Connect does either in one click,
+/// so no command and no terminal.
+const NOT_INSTALLED: &str = "Codex isn't installed. Install it from Settings › Providers.";
+const SIGNED_OUT: &str = "Codex isn't signed in. Sign in from Settings › Providers.";
+
 impl Provider for Codex {
     fn kind(&self) -> ProviderKind {
         ProviderKind::Codex
@@ -511,11 +516,7 @@ impl Provider for Codex {
                 compacts: false,
             };
             let Ok(binary) = found else {
-                status.guidance = Some(
-                    "Install Codex (https://developers.openai.com/codex) so `codex` is on your \
-                     login shell's PATH, then refresh."
-                        .into(),
-                );
+                status.guidance = Some(NOT_INSTALLED.into());
                 return status;
             };
             let spec = self.env.spec(&binary).arg("login").arg("status");
@@ -551,8 +552,7 @@ impl Provider for Codex {
                 Err(err) => status.guidance = Some(format!("Could not ask Codex: {err}")),
             }
             if !status.logged_in && status.guidance.is_none() {
-                status.guidance =
-                    Some("Log in to Codex: run `codex login` in a terminal, then refresh.".into());
+                status.guidance = Some(SIGNED_OUT.into());
             }
             status
         })
@@ -2774,5 +2774,43 @@ mod tests {
         assert_eq!(request.reason.as_deref(), Some("It needs the network."));
         assert!(request.escalation);
         assert_eq!(request.kind, ApprovalKind::Command);
+    }
+
+    /// Missing or signed out, the status points at Connect in plain words: no command to run,
+    /// no terminal (#323).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_missing_or_signed_out_codex_points_at_connect() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("brigadier-codex-{}", uuid::Uuid::new_v4()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
+            data_dir: Some(dir.join("data")),
+        })
+        .unwrap();
+        let codex = |env| Codex::new(platform.clone(), Arc::new(env));
+        let env = || {
+            CliEnv::from_vars([
+                ("HOME".into(), dir.as_os_str().to_owned()),
+                ("PATH".into(), bin.as_os_str().to_owned()),
+            ])
+        };
+        let missing = codex(env()).status().await;
+        assert_eq!(missing.guidance.as_deref(), Some(NOT_INSTALLED));
+        let binary = bin.join("codex");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\nif [ \"$1\" = login ]; then echo 'Not logged in' >&2; exit 1; else echo 'codex-cli 0.163.0'; fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let signed_out = codex(env()).status().await;
+        assert!(!signed_out.logged_in);
+        assert_eq!(signed_out.guidance.as_deref(), Some(SIGNED_OUT));
+        for text in [NOT_INSTALLED, SIGNED_OUT] {
+            assert!(!text.contains('`') && !text.contains("terminal"), "{text}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
