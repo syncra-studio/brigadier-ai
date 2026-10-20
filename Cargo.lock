@@ -584,6 +584,7 @@ dependencies = [
 name = "brigadier-git"
 version = "0.1.0"
 dependencies = [
+ "brigadier-sandbox",
  "nix 0.31.3",
  "thiserror 2.0.21",
 ]

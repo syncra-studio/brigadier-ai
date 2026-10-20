@@ -304,6 +304,7 @@ impl Git {
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let mut child = command.spawn()?;
+        let group = group_of(&child);
         // The pipes are read on threads of their own and waited for only to the deadline: a
         // helper git started can hold them open after git is gone.
         let read = |pipe: Option<Box<dyn std::io::Read + Send>>| {
@@ -325,13 +326,13 @@ impl Git {
             if std::time::Instant::now() >= deadline {
                 if !read_only {
                     // Asked first, so git removes the locks it holds; killed if it doesn't go.
-                    signal_group(&child, false);
+                    signal_group(&child, &group, false);
                     let grace = std::time::Instant::now() + std::time::Duration::from_secs(2);
                     while child.try_wait()?.is_none() && std::time::Instant::now() < grace {
                         std::thread::sleep(std::time::Duration::from_millis(50));
                     }
                 }
-                signal_group(&child, true);
+                signal_group(&child, &group, true);
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
@@ -342,7 +343,7 @@ impl Git {
             pause = (pause * 2).min(std::time::Duration::from_millis(50));
         };
         // What git started and left behind goes too.
-        signal_group(&child, true);
+        signal_group(&child, &group, true);
         let left = |got: std::sync::mpsc::Receiver<Vec<u8>>| {
             let wait = deadline
                 .saturating_duration_since(std::time::Instant::now())
@@ -569,10 +570,28 @@ impl Drop for TempIndex {
     }
 }
 
+/// What `child` started, to stop with it: on Windows, a job holding it (a process group
+/// elsewhere, which it leads: nothing to keep). None if the job couldn't be made.
+#[cfg(windows)]
+type Group = Option<brigadier_sandbox::job::ProcessJob>;
+#[cfg(not(windows))]
+struct Group;
+
+#[cfg(windows)]
+fn group_of(child: &std::process::Child) -> Group {
+    brigadier_sandbox::job::ProcessJob::around(child).ok()
+}
+
+#[cfg(not(windows))]
+fn group_of(_child: &std::process::Child) -> Group {
+    Group
+}
+
 /// Signals what is left of `child`'s process group (it leads one: `process_group(0)`): asks it
-/// to stop, or kills it. Elsewhere, nothing: `Child::kill` stops git alone.
+/// to stop, or kills it. On Windows only a kill, of its job. Elsewhere, nothing: `Child::kill`
+/// stops git alone.
 #[cfg(unix)]
-fn signal_group(child: &std::process::Child, kill: bool) {
+fn signal_group(child: &std::process::Child, _group: &Group, kill: bool) {
     use nix::sys::signal::Signal;
     if let Ok(pid) = i32::try_from(child.id()) {
         let _ = nix::sys::signal::killpg(
@@ -586,8 +605,15 @@ fn signal_group(child: &std::process::Child, kill: bool) {
     }
 }
 
-#[cfg(not(unix))]
-fn signal_group(_child: &std::process::Child, _kill: bool) {}
+#[cfg(windows)]
+fn signal_group(_child: &std::process::Child, group: &Group, kill: bool) {
+    if let (true, Some(job)) = (kill, group) {
+        job.terminate();
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn signal_group(_child: &std::process::Child, _group: &Group, _kill: bool) {}
 
 /// All a child's pipe gives until it closes.
 fn drain(pipe: Option<impl std::io::Read>) -> Vec<u8> {

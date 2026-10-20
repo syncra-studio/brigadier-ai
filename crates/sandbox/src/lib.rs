@@ -9,6 +9,8 @@
 
 pub mod clone;
 pub mod footprint;
+#[cfg(windows)]
+pub mod job;
 pub mod limits;
 mod machine;
 mod paths;
