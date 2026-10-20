@@ -109,6 +109,10 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    if let Some(exit) = connect::catch_browser_link() {
+        return exit;
+    }
     // `brigadierd mcp`: the stdio MCP bridge a CLI session starts.
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
         return bridge::run(std::env::args_os().skip(2));

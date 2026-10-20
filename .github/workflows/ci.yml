@@ -97,7 +97,7 @@ jobs:
     name: Clippy (${{ matrix.name }})
     # Each platform's clippy sees the code gated to it: dead code under another platform's cfg
     # shows up only here.
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -153,6 +153,13 @@ jobs:
           pnpm build
           pnpm --filter @brigadier/desktop stage-sidecar --debug
           cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Windows Connect and browser capture tests
+        if: runner.os == 'Windows'
+        # Connect's fakes use the real PowerShell runner and the daemon staged above as the
+        # BROWSER link catcher. No vendor install, account, network request or browser opens.
+        run: |
+          cargo test --locked -p brigadier-daemon --bin brigadierd connect::windows_tests -- --test-threads=1
+          cargo test --locked -p brigadier-desktop --bin brigadier browser_agent:: -- --test-threads=1
 
   rust-tests:
     name: Rust tests (Linux)

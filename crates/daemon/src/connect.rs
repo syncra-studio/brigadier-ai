@@ -84,7 +84,7 @@ const STOP_GRACE: Duration = Duration::from_secs(2);
 /// The installer's last lines kept for the log.
 const TAIL_LINES: usize = 30;
 /// How often the sign-in is checked for the link it wants opened.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const LINK_EVERY: Duration = Duration::from_millis(20);
 
 /// Every agent's Connect: how it goes, and how to stop the one running.
@@ -492,7 +492,7 @@ struct Ops {
     /// Once signed in, how long its sign-in may take to end by itself.
     linger: Duration,
     /// Opens the vendor's sign-in page in the browser.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     open_link: Arc<dyn Fn(&str) + Send + Sync>,
 }
 
@@ -514,7 +514,7 @@ impl Ops {
             mark: Arc::new(move |provider| LoginMark::of(provider, &env)),
             unwatched_poll: UNWATCHED_POLL,
             linger: LINGER,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             open_link: Arc::new(open_in_browser),
         }
     }
@@ -545,35 +545,107 @@ fn open_in_browser(link: &str) {
     }
 }
 
-/// A `BROWSER` for the sign-in that only passes the link back: the script, and the file the
-/// link lands in. Removed when dropped.
-#[cfg(unix)]
-struct LinkCatcher {
-    dir: PathBuf,
+/// Opens the sign-in page in the user's normal Windows browser. Passing it as an argument
+/// keeps the URL out of a command shell (OAuth links contain `&` and percent escapes).
+#[cfg(windows)]
+fn open_in_browser(link: &str) {
+    let mut command = std::process::Command::new("rundll32.exe");
+    command
+        .arg("url.dll,FileProtocolHandler")
+        .arg(link)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    match command.spawn() {
+        Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+        Err(error) => tracing::warn!(%error, "the sign-in page didn't open"),
+    }
 }
 
-#[cfg(unix)]
+/// The Windows sign-in's `BROWSER` is this binary with only a URL argument. It exits before
+/// any daemon setup. An executable avoids command-file expansion of `%` in OAuth URLs.
+#[cfg(windows)]
+pub(crate) fn catch_browser_link() -> Option<std::process::ExitCode> {
+    use std::io::Write;
+
+    let path = std::env::var_os("BRIGADIER_SIGN_IN_LINK_FILE")?;
+    let mut args = std::env::args().skip(1);
+    let result = (|| -> std::io::Result<()> {
+        let link = args
+            .next()
+            .filter(|link| {
+                (link.starts_with("https://") || link.starts_with("http://"))
+                    && !link.contains(['\r', '\n'])
+            })
+            .filter(|_| args.next().is_none())
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "expected a sign-in URL")
+            })?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        writeln!(file, "{link}")
+    })();
+    Some(if result.is_ok() {
+        std::process::ExitCode::SUCCESS
+    } else {
+        std::process::ExitCode::FAILURE
+    })
+}
+
+/// A `BROWSER` for the sign-in that only passes the link back: the script, and the file the
+/// link lands in. Removed when dropped.
+#[cfg(any(unix, windows))]
+struct LinkCatcher {
+    dir: PathBuf,
+    #[cfg(windows)]
+    browser: PathBuf,
+}
+
+#[cfg(any(unix, windows))]
 impl LinkCatcher {
     fn new() -> Option<Self> {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("brigadier-sign-in-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).ok()?;
-        let catcher = Self { dir };
-        let script = catcher.script();
-        std::fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\n",
-                catcher.dir.join("link").display()
-            ),
-        )
-        .ok()?;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).ok()?;
+        #[cfg(windows)]
+        let browser = std::env::current_exe().ok()?;
+        // CI stages the real daemon before unit tests. A test harness cannot handle a URL
+        // argument, so Windows tests use that executable beside the test's deps folder.
+        #[cfg(all(windows, test))]
+        let browser = browser.parent()?.parent()?.join("brigadierd.exe");
+        let catcher = Self {
+            dir,
+            #[cfg(windows)]
+            browser,
+        };
+        #[cfg(unix)]
+        {
+            let script = catcher.script();
+            std::fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\n",
+                    catcher.dir.join("link").display()
+                ),
+            )
+            .ok()?;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).ok()?;
+        }
         Some(catcher)
     }
 
     fn script(&self) -> PathBuf {
-        self.dir.join("browser")
+        #[cfg(unix)]
+        {
+            self.dir.join("browser")
+        }
+        #[cfg(windows)]
+        {
+            self.browser.clone()
+        }
     }
 
     /// The first link the sign-in asked to open, once it has.
@@ -586,7 +658,7 @@ impl LinkCatcher {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Drop for LinkCatcher {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
@@ -680,7 +752,7 @@ fn installer_spec(ops: &Ops, provider: ProviderKind) -> SpawnSpec {
             .arg("-ExecutionPolicy")
             .arg("Bypass")
             .arg("-Command")
-            .arg(line)
+            .arg(format!("$ErrorActionPreference = 'Stop'; {line}"))
     } else {
         ops.env
             .spec(&PathBuf::from("/bin/bash"))
@@ -810,11 +882,15 @@ async fn sign_in(
         None => None,
     };
     let watched = stamp.is_some();
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let catcher = LinkCatcher::new();
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     if let Some(catcher) = &catcher {
         spec = spec.env("BROWSER", catcher.script());
+        #[cfg(windows)]
+        {
+            spec = spec.env("BRIGADIER_SIGN_IN_LINK_FILE", catcher.dir.join("link"));
+        }
     }
     tracing::info!(%provider, "opening the agent's own sign-in");
     let spawned = match process::spawn(ops.platform.clone(), &spec, process::Options::default()) {
@@ -835,7 +911,7 @@ async fn sign_in(
     // A code was passed on: a sign-in that ends without signing in didn't take it.
     let mut pasted = false;
     // The link it wants opened, opened by Brigadier the moment it arrives.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let opener = tokio::spawn({
         let open_link = ops.open_link.clone();
         async move {
@@ -936,7 +1012,7 @@ async fn sign_in(
             break Some(Ended::connected(status));
         }
     };
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     opener.abort();
     if child.is_running() {
         if outcome.as_ref().is_some_and(|ended| ended.status.is_some()) {
@@ -1819,3 +1895,6 @@ echo "asked: $answer" > "$HOME/asked"
         );
     }
 }
+
+#[cfg(all(test, windows))]
+mod windows_tests;
