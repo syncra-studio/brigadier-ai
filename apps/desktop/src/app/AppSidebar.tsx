@@ -52,6 +52,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -584,11 +585,6 @@ function Flyout({
   );
 }
 
-/** A heading in a flyout's list ("Pinned", "Chats"). */
-function FlyoutHeading({ children }: { children: ReactNode }) {
-  return <h2 className="text-foreground/50 px-2 pt-1 pb-1 text-sm font-medium">{children}</h2>;
-}
-
 /** A chat or session in a flyout: its title and state; picking it opens it. */
 function FlyoutConversation({
   conversation,
@@ -687,7 +683,9 @@ function ChatsFlyout({ pick }: { pick: (choose: () => void) => void }) {
     <div className="flex flex-col gap-3">
       {pinned.length > 0 && (
         <section>
-          <FlyoutHeading>Pinned</FlyoutHeading>
+          <DropdownMenuLabel variant="heading" asChild>
+            <h2>Pinned</h2>
+          </DropdownMenuLabel>
           <NavList>
             {pinned.map((conversation) => (
               <FlyoutConversation
@@ -701,7 +699,9 @@ function ChatsFlyout({ pick }: { pick: (choose: () => void) => void }) {
         </section>
       )}
       <section>
-        <FlyoutHeading>Chats</FlyoutHeading>
+        <DropdownMenuLabel variant="heading" asChild>
+          <h2>Chats</h2>
+        </DropdownMenuLabel>
         <NavList>
           {chats.map((conversation) => (
             <FlyoutConversation

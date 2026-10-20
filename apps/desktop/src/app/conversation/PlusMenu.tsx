@@ -67,13 +67,6 @@ export function usePlanMode(target: ComposerTarget | null): {
   };
 }
 
-/** A section heading, in plain grey. */
-const Section: FC<{ children: string }> = ({ children }) => (
-  <DropdownMenuLabel className="font-sans text-sm font-normal tracking-normal normal-case">
-    {children}
-  </DropdownMenuLabel>
-);
-
 /** A row of the menu: icon, title, then grey detail. */
 const Row: FC<{ icon: ReactNode; title: string; detail?: string | undefined }> = ({
   icon,
@@ -188,7 +181,7 @@ export const PlusMenu: FC = () => {
               ?.focus();
           }}
         >
-          <Section>Add</Section>
+          <DropdownMenuLabel variant="heading">Add</DropdownMenuLabel>
           <ComposerPrimitive.AddAttachment asChild>
             <DropdownMenuItem>
               <Row icon={<Paperclip />} title="Files" />
@@ -220,7 +213,7 @@ export const PlusMenu: FC = () => {
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           )}
-          {target.targets.length > 0 && <Section>Workers</Section>}
+          {target.targets.length > 0 && <DropdownMenuLabel variant="heading">Workers</DropdownMenuLabel>}
           {target.targets.map((worker) => (
             <DropdownMenuItem
               key={worker.id}
@@ -229,7 +222,7 @@ export const PlusMenu: FC = () => {
               <Row icon={<WorkerGlyph taskId={worker.id} />} title={worker.title} />
             </DropdownMenuItem>
           ))}
-          {chats.length > 0 && <Section>Chats</Section>}
+          {chats.length > 0 && <DropdownMenuLabel variant="heading">Chats</DropdownMenuLabel>}
           {chats.map((chat) => (
             <DropdownMenuItem
               key={chat.id}

@@ -5,6 +5,7 @@ import { LabeledDivider } from "@/components/assistant-ui/elements/labeled-divid
 import { OfferBody, OfferCard } from "@/app/conversation/OfferCard";
 import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
 import { Branch, Globe, Info } from "@/components/icons";
+import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 
 /** A node's box and colours. */
 function box(node: Element | null) {
@@ -51,7 +52,14 @@ function measure() {
     const tile = node.querySelector(":scope > div > span");
     return { ...box(node), tile: tile && box(tile), tileWidth: tile?.getBoundingClientRect().width };
   });
+  const labels = [...document.querySelectorAll('[data-group="label"] > *')].map((node) => ({
+    ...box(node),
+    tag: node.tagName.toLowerCase(),
+    case: getComputedStyle(node).textTransform,
+    mono: getComputedStyle(node).fontFamily === probe("font-family: var(--font-mono)").fontFamily,
+  }));
   return {
+    label: { labels, muted: probe("color: var(--muted-foreground)").color, textSm: probe("font-size: var(--text-sm)").fontSize },
     offer: {
       offers,
       radius: probe("border-radius: var(--radius-question)").radius,
@@ -103,6 +111,13 @@ function Fixture() {
             Continued from chat
           </span>
         </LabeledDivider>
+      </section>
+      <section data-group="label" className="flex flex-col">
+        <DropdownMenuLabel>Model</DropdownMenuLabel>
+        <DropdownMenuLabel variant="heading">Effort</DropdownMenuLabel>
+        <DropdownMenuLabel variant="heading" asChild>
+          <h2>Pinned</h2>
+        </DropdownMenuLabel>
       </section>
       <section data-group="offer" className="flex flex-col">
         <OfferCard label="Start as session?" kind="sessionOffered" icon={<Branch />} title="Start this as its own session?" line="Its own branch and worktree, in this project">

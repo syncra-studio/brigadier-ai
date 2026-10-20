@@ -159,19 +159,26 @@ function DropdownMenuRadioItem({
   );
 }
 
+/**
+ * A heading over a group of a menu's items: small mono capitals, or with `variant="heading"`
+ * plain grey words ("Model", "Pinned"). It needs no menu around it (a popover's list uses it).
+ */
 function DropdownMenuLabel({
   className,
   inset,
+  variant = "caps",
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Label> & {
   inset?: boolean;
+  variant?: "caps" | "heading";
 }) {
   return (
     <DropdownMenuPrimitive.Label
       data-slot="dropdown-menu-label"
       data-inset={inset}
       className={cn(
-        "text-muted-foreground px-2 py-1.5 font-mono text-2xs font-medium tracking-wide uppercase data-[inset]:ps-8",
+        "text-muted-foreground px-2 py-1.5 data-[inset]:ps-8",
+        variant === "caps" ? "font-mono text-2xs font-medium tracking-wide uppercase" : "text-sm",
         className,
       )}
       {...props}

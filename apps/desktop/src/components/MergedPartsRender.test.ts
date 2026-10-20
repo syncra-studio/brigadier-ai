@@ -7,6 +7,15 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("merged parts draw one look per group", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "merged-parts.html", "merged-parts-result", 30000));
 
+  // Menu section label: mono capitals, or plain grey words in or out of a menu (a flyout's h2).
+  const [caps, ...headings] = seen.label.labels;
+  assert.deepEqual([caps.case, caps.mono], ["uppercase", true]);
+  for (const heading of headings) {
+    assert.deepEqual([heading.case, heading.mono, heading.fontSize, heading.color], ["none", false, seen.label.textSm, seen.label.muted]);
+    assert.equal(heading.paddingTop, caps.paddingTop);
+  }
+  assert.equal(headings[1].tag, "h2");
+
   // Offer card: every offer is the same card, its icon in a square of the icon-button size.
   assert.equal(seen.offer.offers.length, 2);
   for (const offer of seen.offer.offers) {

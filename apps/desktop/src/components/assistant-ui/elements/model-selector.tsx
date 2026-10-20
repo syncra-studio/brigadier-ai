@@ -1,4 +1,4 @@
-import { type FC, type ReactNode, useState } from "react";
+import { type FC, useState } from "react";
 
 import { composerPill } from "@/components/assistant-ui/elements/surfaces";
 import { Bolt, Check, ChevronDown, ProviderGlyph } from "@/components/icons";
@@ -82,13 +82,6 @@ export function effortFor(model: ModelInfo | null, effort: string | null): strin
 
 /** A two-line row (a model and what it's for): rounded, not a pill. */
 const TALL_ROW = "h-auto rounded-xl";
-
-/** A section heading, in plain grey. */
-const Section: FC<{ children: ReactNode }> = ({ children }) => (
-  <DropdownMenuLabel className="font-sans text-sm font-normal tracking-normal normal-case">
-    {children}
-  </DropdownMenuLabel>
-);
 
 /** A model row: its name (marked when it's the default), then what it's for in grey. */
 const ModelRow: FC<{ model: ModelInfo; isDefault: boolean }> = ({ model, isDefault }) => (
@@ -261,7 +254,7 @@ export function ModelSelector({
         )}
         {!auto && current && current.efforts.length > 0 && (
           <>
-            <Section>Effort</Section>
+            <DropdownMenuLabel variant="heading">Effort</DropdownMenuLabel>
             <DropdownMenuRadioGroup
               value={effort ?? ""}
               onValueChange={(next) => onChange({ ...value, model: current.id, effort: next })}
@@ -296,7 +289,7 @@ export function ModelSelector({
         {!auto && current && (current.efforts.length > 0 || current.fast) && (
           <DropdownMenuSeparator />
         )}
-        <Section>Model</Section>
+        <DropdownMenuLabel variant="heading">Model</DropdownMenuLabel>
         {single ? (
           models(single)
         ) : (
