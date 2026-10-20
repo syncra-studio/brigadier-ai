@@ -9,6 +9,7 @@ import { SettingSuggestedCard } from "@/app/conversation/SettingSuggestedCard";
 import { SessionOffer } from "@/app/conversation/SessionOffer";
 import { WorkerLine } from "@/app/conversation/WorkerChip";
 import { ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
+import { LabeledDivider } from "@/components/assistant-ui/elements/labeled-divider";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { Branch, CheckCircle, Clock, PauseCircle, PlayCircle } from "@/components/icons";
 import type { ProviderKind } from "@/ipc/generated";
@@ -82,12 +83,9 @@ const DecidedRow: FC<{ kind: DecidedStep }> = ({ kind }) => (
  * "time passed" line there.
  */
 const QuotaResumed: FC<{ provider: ProviderKind; atMs: number | undefined }> = ({ provider, atMs }) => (
-  <p
-    data-slot="quota-resumed"
-    className="text-muted-foreground before:bg-work-rule after:bg-work-rule flex items-center gap-3 self-stretch py-2 text-sm before:h-px before:flex-1 after:h-px after:flex-1"
-  >
+  <LabeledDivider data-slot="quota-resumed">
     {`${VENDOR_LABELS[provider]} usage limit reset${atMs === undefined ? "" : ` · ${formatTime(atMs)}`}`}
-  </p>
+  </LabeledDivider>
 );
 
 export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {

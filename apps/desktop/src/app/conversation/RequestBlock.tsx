@@ -65,6 +65,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { webPreviewUrl } from "@/app/conversation/activity/webPreview";
 import { TurnPreviews } from "@/app/conversation/activity/PreviewCard";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
+import { LabeledDivider } from "@/components/assistant-ui/elements/labeled-divider";
 import {
   BranchPicker,
   MarkdownBlock,
@@ -679,8 +680,7 @@ const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
   // A usage limit is no error of the turn: a divider says it, with Try again for later.
   if (limit) {
     return (
-      <div data-slot="usage-limit" role="status" className="text-muted-foreground flex items-center gap-3 py-1 text-sm">
-        <span aria-hidden className="bg-border h-px flex-1" />
+      <LabeledDivider data-slot="usage-limit" role="status">
         <Info aria-hidden className="size-icon-sm shrink-0" />
         <span className="min-w-0 text-center">{summary}</span>
         {again && (
@@ -688,8 +688,7 @@ const BlockError: FC<{ meta: BlockMeta; live: boolean }> = ({ meta, live }) => {
             Try again
           </button>
         )}
-        <span aria-hidden className="bg-border h-px flex-1" />
-      </div>
+      </LabeledDivider>
     );
   }
   return (
@@ -1247,8 +1246,7 @@ const ContinuedFrom: FC<{ forkId: string | null }> = ({ forkId }) => {
   const source = useApp((s) => (origin ? s.conversations[origin.conversationId] : undefined));
   if (!origin || !forkId || origin.messageId !== forkId) return null;
   return (
-    <div className="text-muted-foreground flex items-center gap-3 py-2 text-sm">
-      <span className="bg-border h-px flex-1" />
+    <LabeledDivider>
       {source ? (
         <button
           type="button"
@@ -1264,7 +1262,6 @@ const ContinuedFrom: FC<{ forkId: string | null }> = ({ forkId }) => {
           Continued from chat
         </span>
       )}
-      <span className="bg-border h-px flex-1" />
-    </div>
+    </LabeledDivider>
   );
 };
