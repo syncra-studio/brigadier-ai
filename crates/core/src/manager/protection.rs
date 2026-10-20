@@ -462,14 +462,16 @@ mod tests {
             &["main".into(), "brigadier/aa/session".into()],
             false,
         );
+        // Compared as paths: Windows joins them with `\`.
         let paths = |list: &[PathBuf]| {
             list.iter()
-                .map(|path| path.strip_prefix(common).unwrap().display().to_string())
+                .map(|path| path.strip_prefix(common).unwrap().to_path_buf())
                 .collect::<Vec<_>>()
         };
+        let expected = |list: &[&str]| list.iter().map(PathBuf::from).collect::<Vec<_>>();
         assert_eq!(
             paths(&protection.deny),
-            [
+            expected(&[
                 "refs/heads/brigadier",
                 "logs/refs/heads/brigadier",
                 "refs/heads/overnight",
@@ -480,16 +482,16 @@ mod tests {
                 "logs/refs/heads/brigadier/aa/session",
                 "worktrees",
                 "packed-refs",
-            ]
+            ])
         );
         assert_eq!(
             paths(&protection.allow),
-            [
+            expected(&[
                 "worktrees/task-1",
                 "refs/heads/brigadier/aa/task-1",
                 "refs/heads/brigadier/aa/task-1.lock",
                 "logs/refs/heads/brigadier/aa/task-1",
-            ]
+            ])
         );
         assert!(protection.deny_patterns.is_empty());
     }
