@@ -616,6 +616,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-fill: var(--destructive-fill);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-success: var(--success);
@@ -705,6 +706,8 @@
   --accent-foreground: oklch(0.985 0.002 var(--tint));
   --destructive: oklch(0.704 0.191 22.216);
   --destructive-foreground: oklch(0.985 0.002 var(--tint));
+  /* The destructive button's fill: the red at 60%. */
+  --destructive-fill: color-mix(in oklab, var(--destructive) 60%, transparent);
   /* Amber: budget warnings, pending cards, notices. */
   --warning: oklch(0.769 0.165 62);
   --warning-foreground: oklch(0.215 0.003 var(--tint));
