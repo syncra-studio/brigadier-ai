@@ -10,17 +10,30 @@ import { useApp } from "@/state/store";
  * shows until finished (it can't be skipped), and again when asked for from Settings.
  */
 
-export const useOnboarding = create<{ reopened: boolean }>(() => ({ reopened: false }));
+export const useOnboarding = create<{
+  reopened: boolean;
+  /** Its finish is being saved: the setup stays open (and on its step) until it is. */
+  finishing: boolean;
+}>(() => ({ reopened: false, finishing: false }));
 
 export function reopenOnboarding(): void {
   useOnboarding.setState({ reopened: true });
 }
 
-/** Closes the setup for good (Settings can bring it back). */
+/**
+ * Closes the setup for good (Settings can bring it back). A first run's closes once that is
+ * saved; when it can't be, the setup stays where it was, for the caller to say why.
+ */
 export async function finishOnboarding(): Promise<void> {
   useOnboarding.setState({ reopened: false });
   const settings = useApp.getState().settings;
-  if (!settings.onboarded) await setSetting("onboarded", true);
+  if (settings.onboarded) return;
+  useOnboarding.setState({ finishing: true });
+  try {
+    await setSetting("onboarded", true);
+  } finally {
+    useOnboarding.setState({ finishing: false });
+  }
 }
 
 /** The repositories the user's own Claude Code and Codex sessions worked in. */

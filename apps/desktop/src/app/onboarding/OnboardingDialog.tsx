@@ -39,9 +39,10 @@ export function OnboardingDialog() {
   const introSeen = useApp((s) => s.settings.introSeen);
   const smoke = useApp((s) => s.info?.smoke ?? false);
   const reopened = useOnboarding((s) => s.reopened);
+  const finishing = useOnboarding((s) => s.finishing);
   // Not under the startup screen: it would take focus there, unseen.
   const revealed = useRevealed();
-  const open = revealed && catalogLoaded && !smoke && (!onboarded || reopened);
+  const open = revealed && catalogLoaded && !smoke && (!onboarded || reopened || finishing);
 
   // The sound loads under the startup screen, so the intro can start with it.
   const intro = catalogLoaded && !smoke && !onboarded && !introSeen;
