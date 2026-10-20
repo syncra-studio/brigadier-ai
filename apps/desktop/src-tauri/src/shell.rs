@@ -590,7 +590,7 @@ pub fn pages_flushed(token: u64) {
 /// first: this blocks the event loop that would carry its answer.
 pub fn quit_on_exit(app: &AppHandle) {
     let app = app.clone();
-    on_exit(move || {
+    on_exit(&QUITTING, move || {
         let stopped = wait_on_runtime(
             tauri::async_runtime::handle().inner(),
             async move { stop_daemon(&app).await },
@@ -605,9 +605,10 @@ pub fn quit_on_exit(app: &AppHandle) {
 /// The app's last event, on every quit: stops the daemon unless an orderly quit already has,
 /// then installs a waiting update. After a quit Apple event AppKit ends the process as soon as
 /// this returns (`terminate:` exits after `applicationWillTerminate:`), so `run_return` never
-/// returns and the update can't wait for it (#349).
-fn on_exit(stop_daemon: impl FnOnce()) {
-    if !QUITTING.swap(true, Ordering::AcqRel) {
+/// returns and the update can't wait for it (#349). `quitting` is [`QUITTING`], a test's own
+/// flag in tests: the bridge's tests, running alongside, notify only while the app isn't quitting.
+fn on_exit(quitting: &AtomicBool, stop_daemon: impl FnOnce()) {
+    if !quitting.swap(true, Ordering::AcqRel) {
         stop_daemon();
     }
     crate::updates::finish(daemon_stopped());
@@ -676,7 +677,8 @@ mod tests {
     fn a_quit_that_never_returns_from_the_run_loop_installs_the_waiting_update() {
         let installs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         crate::updates::wait_counting("0.1.0-nightly.202610190100", installs.clone());
-        on_exit(|| DAEMON_STOPPED.store(true, Ordering::Release));
+        let quitting = std::sync::atomic::AtomicBool::new(false);
+        on_exit(&quitting, || DAEMON_STOPPED.store(true, Ordering::Release));
         assert_eq!(
             installs.load(Ordering::Acquire),
             1,
