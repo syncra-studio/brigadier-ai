@@ -2030,6 +2030,11 @@ impl SessionManager {
         } = self
             .worker_session(task, subject, origin, Some(&mut first), &owner)
             .await?;
+        // Stopped while its new worktree's setup script ran (#457): its CLI never starts.
+        if self.stopped_meanwhile(task).await {
+            self.grants.revoke_owner(&owner);
+            return Err(stopped_as_it_started(task));
+        }
         let provider = task.route.choice.provider;
         let reviewed = (provider == ProviderKind::Codex
             && spec.auto_review
@@ -2123,8 +2128,26 @@ impl SessionManager {
         let manager = self.arc();
         let pumped = (live.clone(), cli.clone());
         self.spawn(async move { manager.pump_worker(pumped.0, pumped.1, events).await });
-        self.set_task_state(&conversation_id, &task.id, TaskState::Running)
-            .await?;
+        // A Stop while its CLI started ends it before its brief, and it stays stopped (#457).
+        let was_final = task.state.is_final();
+        let mut stopped = false;
+        self.update_task(&conversation_id, &task.id, |t| {
+            if self.is_stopping(&t.id) || (t.state.is_final() && !was_final) {
+                stopped = true;
+                return;
+            }
+            // Only the takeover moves a task out of the user's terminal.
+            if t.state != TaskState::TakenOver {
+                t.state = TaskState::Running;
+                t.blocked_reason = None;
+            }
+        })
+        .await?;
+        if stopped {
+            live.close_cli().await;
+            self.grants.revoke_owner(&cli.owner);
+            return Err(stopped_as_it_started(task));
+        }
         if live.state.lock().await.taken_over {
             // Opened in the user's terminal as it started (the open closed it): what it was
             // to be told waits for the report request.
@@ -2157,6 +2180,16 @@ impl SessionManager {
                 .await;
         }
         Ok(())
+    }
+
+    /// Whether `task` is being stopped, or ended since it was read as `task`.
+    async fn stopped_meanwhile(&self, task: &Task) -> bool {
+        self.is_stopping(&task.id)
+            || (!task.state.is_final()
+                && self
+                    .task_by_id(&task.conversation_id, &task.id)
+                    .await
+                    .is_ok_and(|now| now.state.is_final()))
     }
 
     /// Why a worker can't be resumed; a run lists it under What got in the way.
@@ -5782,6 +5815,11 @@ fn continues_work(subject: &Task) -> bool {
 
 /// The reason a "Stopped" row gives for the user's Stop all.
 pub(crate) const USER_STOP_REASON: &str = "Stopped by the user";
+
+/// The start of a worker that was stopped as it started.
+fn stopped_as_it_started(task: &Task) -> Error {
+    Error::Invalid(format!("task-{} was stopped as it started", task.number))
+}
 
 /// Whether a plain stop still stops a worker in `state`: it hasn't ended.
 fn unfinished(state: TaskState) -> bool {

@@ -279,3 +279,82 @@ async fn the_users_stop_ends_a_setup_script_still_running() {
     assert!(!worktree.join(".setup-ran").exists());
     flow.stop().await;
 }
+
+/// A worker the user stops while its setup script runs ends there: its CLI never starts and
+/// its task stays stopped (#457).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_worker_stopped_during_its_setup_script_never_starts() {
+    let mut files = FILES.to_vec();
+    files.retain(|(path, _)| *path != ".brigadier/setup");
+    // Only the worker's worktree (on its task branch) waits in the script.
+    files.push((
+        ".brigadier/setup",
+        "#!/bin/sh\ncase \"$(git rev-parse --abbrev-ref HEAD)\" in *write-the-page*) touch .setup-started; sleep 60;; esac\ntouch .setup-ran\n",
+    ));
+    let worker_turns: Arc<Mutex<Vec<u32>>> = Arc::default();
+    let script: Script = {
+        let worker_turns = worker_turns.clone();
+        Arc::new(move |turn| {
+            let worker_turns = worker_turns.clone();
+            Box::pin(async move {
+                if let Some(number) = turn.task_number() {
+                    worker_turns.lock().unwrap().push(number);
+                    return Reply::text("Started anyway.");
+                }
+                if !turn.is_orchestrator() || !turn.input.contains("Build the page") {
+                    return Reply::text("[quiet]");
+                }
+                let reply = turn
+                    .call(
+                        "delegate_task",
+                        serde_json::json!({"effort": "medium", "title": "Write the page", "kind": "implement", "spec": "Write the page"}),
+                    )
+                    .await;
+                assert!(!reply.is_error, "{}", reply.text);
+                Reply::text("[quiet]")
+            })
+        })
+    };
+    let options = Options {
+        files,
+        ..Options::default()
+    };
+    let flow = Flow::start("worktree-copies-worker-stopped", options, script).await;
+    let mut settings = flow.core.settings();
+    settings.start_workers_on_own = true;
+    flow.core.update_settings(settings).await.unwrap();
+    flow.say("Build the page").await;
+    let board = flow
+        .until("the worker's setup script to start", |board| {
+            board.tasks.values().any(|task| {
+                task.workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.worktree.as_ref())
+                    .is_some_and(|worktree| {
+                        std::path::Path::new(worktree)
+                            .join(".setup-started")
+                            .is_file()
+                    })
+            })
+        })
+        .await;
+    let task = Flow::task(&board, 1).clone();
+    let worktree =
+        std::path::PathBuf::from(task.workspace.as_ref().unwrap().worktree.clone().unwrap());
+    flow.manager
+        .stop_task_by_user(task.id.clone())
+        .await
+        .unwrap();
+    // Time for a launch the stop didn't end to start its CLI and run a turn.
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert!(
+        worker_turns.lock().unwrap().is_empty(),
+        "{:?}",
+        worker_turns.lock().unwrap()
+    );
+    let board = flow.idle().await;
+    assert_eq!(Flow::task(&board, 1).state, crate::work::TaskState::Stopped);
+    assert!(!worktree.join(".setup-ran").exists());
+    flow.stop().await;
+}
