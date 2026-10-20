@@ -1,12 +1,13 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 
-import { ErrorLine, errorText } from "@/app/dialogs/fields";
+import { ErrorLine, errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
 import { Branch, Chats, Folder, Spinner, X } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { Project, ProjectRemoval, RemovalBranch, RemoveProjectReport } from "@/ipc/generated";
 import { formatBytes, shortPath } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { previewRemoveProject, removeProject } from "@/state/actions";
 
 /**
@@ -27,7 +28,7 @@ export function RemoveProjectDialog({
     <Dialog open={project !== null} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="max-w-project-dialog max-h-full gap-7 overflow-y-auto p-6"
+        className={cn(PROJECT_DIALOG_CARD, "max-w-project-dialog max-h-full gap-7 overflow-y-auto p-6")}
         // The card takes focus, not the close button or an answer.
         onOpenAutoFocus={(event) => {
           event.preventDefault();
@@ -66,8 +67,12 @@ function RemoveFlow({
   if (!preview) {
     return (
       <>
-        <Head title={`Remove “${project.name}”?`}>Looking at what “{project.name}” has…</Head>
-        {error ? <ErrorLine error={error} /> : <Spinner className="size-icon-sm animate-spin" />}
+        <div className="flex flex-col gap-5">
+          <Head title={`Remove “${project.name}”?`} beside>
+            Looking at what “{project.name}” has…
+          </Head>
+          {error ? <ErrorLine error={error} className="leading-4.25" /> : <Spinner className="size-icon-sm animate-spin" />}
+        </div>
         <Actions>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
@@ -79,17 +84,34 @@ function RemoveFlow({
   return <RemoveForm preview={preview} onRemoved={setReport} onOpenChange={onOpenChange} />;
 }
 
-/** The title with the close button, and the line under it. */
-function Head({ title, children }: { title: string; children: ReactNode }) {
+/**
+ * The title with the close button, and the line under it across the dialog; `beside` (while
+ * looking, and once removed) keeps the line under the title, beside the close button.
+ */
+function Head({ title, beside, children }: { title: string; beside?: boolean; children: ReactNode }) {
+  const close = (
+    <DialogClose asChild>
+      <Button type="button" variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label="Close">
+        <X />
+      </Button>
+    </DialogClose>
+  );
+  if (beside) {
+    return (
+      <div className="flex items-start gap-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <DialogTitle className={PROJECT_DIALOG_TITLE}>{title}</DialogTitle>
+          <DialogDescription>{children}</DialogDescription>
+        </div>
+        {close}
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-3">
-        <DialogTitle className="min-w-0 flex-1">{title}</DialogTitle>
-        <DialogClose asChild>
-          <Button type="button" variant="ghost" size="icon-sm" aria-label="Close">
-            <X />
-          </Button>
-        </DialogClose>
+        <DialogTitle className={cn(PROJECT_DIALOG_TITLE, "min-w-0 flex-1")}>{title}</DialogTitle>
+        {close}
       </div>
       <DialogDescription>{children}</DialogDescription>
     </div>
@@ -196,7 +218,7 @@ function RemoveForm({
           </ul>
         )}
         {preview.worktrees.length > 0 && (
-          <p className="text-muted-foreground text-xs">
+          <p className="text-muted-foreground text-xs leading-4.25">
             Uncommitted changes in a worktree are saved as a commit on its branch first.
           </p>
         )}
@@ -207,14 +229,14 @@ function RemoveForm({
               checked={trashBrain}
               onCheckedChange={(state) => setTrashBrain(state === true)}
             />
-            <label htmlFor={`${id}-brain`} className="text-foreground text-label min-w-0 flex-1">
+            <label htmlFor={`${id}-brain`} className="text-foreground text-label min-w-0 flex-1 leading-4">
               Also move its Brain and code index to the Trash
             </label>
-            <span className="text-muted-foreground text-label shrink-0">{formatBytes(preview.brainBytes)}</span>
+            <span className="text-muted-foreground text-label shrink-0 leading-4">{formatBytes(preview.brainBytes)}</span>
           </div>
         )}
-        {preview.blocked && <ErrorLine error={preview.blocked} />}
-        <ErrorLine error={error} />
+        {preview.blocked && <ErrorLine error={preview.blocked} className="leading-4.25" />}
+        <ErrorLine error={error} className="leading-4.25" />
       </div>
       <Actions>
         <Button type="button" variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
@@ -251,7 +273,7 @@ function Removed({
   return (
     <>
       <div className="flex flex-col gap-5">
-        <Head title={`“${name}” was removed`}>
+        <Head title={`“${name}” was removed`} beside>
           {report.brainTrashedBytes > 0
             ? `Its Brain (${formatBytes(report.brainTrashedBytes)}) is in the Trash.`
             : "Its repository was not touched."}
@@ -264,8 +286,8 @@ function Removed({
             <ul className="flex flex-col gap-2 text-sm">
               {kept.map((branch) => (
                 <li key={branchKey(branch)} className="flex flex-col gap-0.5">
-                  <span>{branch.name}</span>
-                  <code className="text-muted-foreground text-xs break-all select-text">{branch.command}</code>
+                  <span className="leading-4.25">{branch.name}</span>
+                  <code className="text-muted-foreground text-xs leading-4.25 break-all select-text">{branch.command}</code>
                 </li>
               ))}
             </ul>

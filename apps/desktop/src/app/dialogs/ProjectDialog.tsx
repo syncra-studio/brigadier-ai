@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { ErrorLine, errorText } from "@/app/dialogs/fields";
+import { ErrorLine, errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Plus, Trash, X } from "@/components/icons";
@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { pickFolder } from "@/ipc/client";
 import type { Project } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { updateProject } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { folderTrust, setFolderTrust } from "@/state/trust";
@@ -24,7 +25,7 @@ export type ProjectDialogProps = {
 export function ProjectDialog(props: ProjectDialogProps) {
   return (
     <Dialog open={props.open && props.project !== null} onOpenChange={props.onOpenChange}>
-      <DialogContent showCloseButton={false} className="max-w-project-dialog gap-7 p-6">
+      <DialogContent showCloseButton={false} className={cn(PROJECT_DIALOG_CARD, "max-w-project-dialog gap-7 p-6")}>
         {/* Remounted per opening so the fields start from the project. */}
         {props.open && props.project && (
           <SettingsForm project={props.project} onOpenChange={props.onOpenChange} />
@@ -39,10 +40,10 @@ function Field({ label, aside, htmlFor, children }: { label: string; aside?: str
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-4">
-        <label htmlFor={htmlFor} className="text-foreground text-label font-medium">
+        <label htmlFor={htmlFor} className="text-foreground text-label leading-4 font-medium">
           {label}
         </label>
-        {aside && <span className="text-muted-foreground text-xs">{aside}</span>}
+        {aside && <span className="text-muted-foreground text-xs leading-3.75">{aside}</span>}
       </div>
       {children}
     </div>
@@ -61,10 +62,10 @@ function TrustRow({ projectId, folder }: { projectId: string; folder: string }) 
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-4">
         <div className="flex min-w-0 flex-1 flex-col gap-0.75">
-          <label htmlFor={`${id}-trusted`} className="text-foreground text-label font-medium">
+          <label htmlFor={`${id}-trusted`} className="text-foreground text-label leading-4.25 font-medium">
             Trust this folder
           </label>
-          <p className="text-muted-foreground text-xs">Agents run commands here without asking first.</p>
+          <p className="text-muted-foreground text-xs leading-4.25">Agents run commands here without asking first.</p>
         </div>
         <Switch
           id={`${id}-trusted`}
@@ -73,7 +74,7 @@ function TrustRow({ projectId, folder }: { projectId: string; folder: string }) 
           onCheckedChange={(on) => save.run(() => setFolderTrust(projectId, folder, on))}
         />
       </div>
-      <ErrorLine error={save.error} />
+      <ErrorLine error={save.error} className="leading-4.25" />
     </div>
   );
 }
@@ -94,10 +95,10 @@ function RepositoryField({ id, value, onChange }: { id: string; value: string; o
   };
   return (
     <>
-      <div className="bg-muted/60 rounded-control h-control-md flex items-center gap-2 pr-1 pl-3">
+      <div className="bg-muted/60 rounded-control flex h-9 items-center gap-2 pr-1 pl-3">
         <span
           id={id}
-          className={value ? "text-foreground min-w-0 flex-1 truncate font-mono text-xs" : "text-muted-foreground min-w-0 flex-1 truncate"}
+          className={value ? "text-foreground min-w-0 flex-1 truncate font-mono text-xs" : "text-muted-foreground text-label min-w-0 flex-1 truncate leading-4"}
         >
           {value ? shortPath(value) : "No repository chosen"}
         </span>
@@ -105,7 +106,7 @@ function RepositoryField({ id, value, onChange }: { id: string; value: string; o
           {value ? "Change" : "Choose…"}
         </Button>
       </div>
-      <ErrorLine error={error} />
+      <ErrorLine error={error} className="leading-4.25" />
     </>
   );
 }
@@ -176,9 +177,9 @@ function SettingsForm({
     <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-7">
       <div className="flex flex-col gap-5.5">
         <div className="flex items-center gap-3">
-          <DialogTitle className="min-w-0 flex-1">Project settings</DialogTitle>
+          <DialogTitle className={cn(PROJECT_DIALOG_TITLE, "min-w-0 flex-1")}>Project settings</DialogTitle>
           <DialogClose asChild>
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="Close">
+            <Button type="button" variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label="Close">
               <X />
             </Button>
           </DialogClose>
@@ -189,6 +190,7 @@ function SettingsForm({
             value={name}
             autoFocus
             maxLength={200}
+            className="h-9 px-3"
             onChange={(event) => setName(event.target.value)}
           />
         </Field>
@@ -207,7 +209,7 @@ function SettingsForm({
                   placeholder=".env.local"
                   aria-label={`Secret file ${index + 1}`}
                   aria-invalid={badRow === index || undefined}
-                  className="font-mono text-xs"
+                  className="aria-invalid:border-destructive/60 h-9 px-3 font-mono text-xs aria-invalid:ring-0"
                   onChange={(event) => {
                     if (badRow === index) setBadRow(null);
                     setSecrets((current) =>
@@ -242,7 +244,7 @@ function SettingsForm({
             Add file
           </Button>
         </Field>
-        <ErrorLine error={error} />
+        <ErrorLine error={error} className="leading-4.25" />
       </div>
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
