@@ -18,14 +18,7 @@ import {
 import { DiffView } from "@/app/conversation/diffView";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ArrowDown, ArrowUp } from "@/components/icons";
 import { request } from "@/ipc/client";
 import type { ConflictFile, SourceState } from "@/ipc/generated";
@@ -426,23 +419,14 @@ const MergeEditor: FC<{
       >
         Complete Merge
       </Button>
-      <Dialog open={asking} onOpenChange={setAsking}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Complete the merge of {tab.path.slice(tab.path.lastIndexOf("/") + 1)}?</DialogTitle>
-            <DialogDescription>
-              {remaining === 1 ? "1 conflict isn't" : `${remaining} conflicts aren't`} handled yet. The result keeps the
-              common version there.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setAsking(false)}>
-              Cancel
-            </Button>
-            <Button onClick={complete}>Complete with Conflicts</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={asking}
+        onOpenChange={setAsking}
+        title={`Complete the merge of ${tab.path.slice(tab.path.lastIndexOf("/") + 1)}?`}
+        description={`${remaining === 1 ? "1 conflict isn't" : `${remaining} conflicts aren't`} handled yet. The result keeps the common version there.`}
+        confirm="Complete with Conflicts"
+        onConfirm={complete}
+      />
     </div>
   );
 };

@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ChevronDown, Copy, Document, Download, EditPencil, SquarePlus, Trash } from "@/components/icons";
 import { Input } from "@/components/ui/input";
@@ -110,24 +110,21 @@ export function PageTopBar({ conversationId, pageId, content, editor, mac, activ
       </div>
       {notice && <span role="status" className="page-notice">{notice}</span>}
       <ShowPages open={listing} onOpenChange={setListing} onPick={(page) => { setListing(false); openPageTab(conversationId, page.id, page.title); }} />
-      <Dialog open={deleting} onOpenChange={setDeleting}>
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Delete this page?</DialogTitle>
-            <DialogDescription>“{content.title || "Untitled page"}” is removed from this Mac. This can't be undone.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setDeleting(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={() => {
-              setDeleting(false);
-              pageDelete(pageId).then(() => {
-                pageEditing().forget(pageId);
-                dropPageTabs(pageId);
-              }, (error: unknown) => setNotice(`Could not delete: ${error instanceof Error ? error.message : String(error)}`));
-            }}>Delete</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={deleting}
+        onOpenChange={setDeleting}
+        title="Delete this page?"
+        description={`“${content.title || "Untitled page"}” is removed from this Mac. This can't be undone.`}
+        confirm="Delete"
+        destructive
+        onConfirm={() => {
+          setDeleting(false);
+          pageDelete(pageId).then(() => {
+            pageEditing().forget(pageId);
+            dropPageTabs(pageId);
+          }, (error: unknown) => setNotice(`Could not delete: ${error instanceof Error ? error.message : String(error)}`));
+        }}
+      />
     </div>
   );
 }

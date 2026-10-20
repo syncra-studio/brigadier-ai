@@ -1,14 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmForm } from "@/components/ui/confirm-dialog";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import type { Conversation, UnlandedBranch } from "@/ipc/generated";
 import { conversationNoun, deleteAll, previewDelete } from "@/state/actions";
 import { clearPicked, useDeleteAsk } from "@/state/picking";
@@ -30,7 +23,7 @@ export function DeleteDialog() {
   if (ids !== null && ids !== shown?.ids) setShown({ ids, ask: (shown?.ask ?? 0) + 1 });
   return (
     <Dialog open={ids !== null} onOpenChange={(open) => !open && closeDeleteAsk()}>
-      <DialogContent className="max-w-md">
+      <DialogContent>
         {shown && <DeleteForm key={shown.ask} ids={shown.ids} onClose={closeDeleteAsk} />}
       </DialogContent>
     </Dialog>
@@ -73,15 +66,19 @@ function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
   };
 
   return (
-    <div className="grid gap-4">
-      <DialogHeader>
-        <DialogTitle>{count === 1 ? `Delete ${noun}?` : `Delete ${count} ${noun}?`}</DialogTitle>
-        <DialogDescription>
-          {count === 1
-            ? `This permanently deletes “${conversations[0]?.title}”. This can't be undone.`
-            : `This permanently deletes these ${count} ${noun}. This can't be undone.`}
-        </DialogDescription>
-      </DialogHeader>
+    <ConfirmForm
+      title={count === 1 ? `Delete ${noun}?` : `Delete ${count} ${noun}?`}
+      description={
+        count === 1
+          ? `This permanently deletes “${conversations[0]?.title}”. This can't be undone.`
+          : `This permanently deletes these ${count} ${noun}. This can't be undone.`
+      }
+      confirm={count === 1 ? `Delete ${noun}` : `Delete ${count} ${noun}`}
+      destructive
+      onConfirm={confirm}
+      onCancel={onClose}
+      confirmRef={deleteButton}
+    >
       {branches === "failed"
         ? conversations.some((c) => c.kind === "session") && (
             <p className="text-muted-foreground text-sm">
@@ -91,20 +88,7 @@ function DeleteForm({ ids, onClose }: { ids: string[]; onClose: () => void }) {
           )
         : branches &&
           branches.length > 0 && <UnlandedLine branches={branches} single={count === 1} />}
-      <DialogFooter>
-        <Button type="button" variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button
-          ref={deleteButton}
-          type="button"
-          variant="destructive"
-          onClick={confirm}
-        >
-          {count === 1 ? `Delete ${noun}` : `Delete ${count} ${noun}`}
-        </Button>
-      </DialogFooter>
-    </div>
+    </ConfirmForm>
   );
 }
 

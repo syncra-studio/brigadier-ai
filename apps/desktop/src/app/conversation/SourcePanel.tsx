@@ -21,11 +21,11 @@ import {
 } from "@/components/icons";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -724,61 +724,41 @@ export function SourcePanel({ target }: { target: SourceTarget }) {
           setDiscarding(null);
         }}
       />
-      <Dialog open={droppingStash} onOpenChange={setDroppingStash}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Drop the latest stash?</DialogTitle>
-            <DialogDescription>Its changes are deleted for good.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setDroppingStash(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setDroppingStash(false);
-                dropStash();
-              }}
-            >
-              Drop
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={droppingStash}
+        onOpenChange={setDroppingStash}
+        title="Drop the latest stash?"
+        description="Its changes are deleted for good."
+        confirm="Drop"
+        destructive
+        onConfirm={() => {
+          setDroppingStash(false);
+          dropStash();
+        }}
+      />
       <GitOutputDialog runs={gitOutput} onClose={() => setGitOutput("closed")} />
-      <Dialog open={stagingConflicts !== null} onOpenChange={(next) => !next && setStagingConflicts(null)}>
-        <DialogContent>
-          {stagingConflicts && (
-            <>
-              <DialogHeader>
-                <DialogTitle>
-                  {stagingConflicts.paths.length === 1
-                    ? `Stage ${baseName(stagingConflicts.paths[0]!)} with its conflicts?`
-                    : `Stage ${stagingConflicts.marked} ${stagingConflicts.marked === 1 ? "file" : "files"} with conflicts?`}
-                </DialogTitle>
-                <DialogDescription>
-                  {stagingConflicts.paths.length === 1 ? "It still has" : "They still have"} conflict markers. Staging marks
-                  the conflicts resolved, and the markers would be committed as they are.
-                </DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <Button variant="ghost" onClick={() => setStagingConflicts(null)}>
-                  Cancel
-                </Button>
-                <Button
-                  onClick={() => {
-                    void stage(stagingConflicts.paths);
-                    setStagingConflicts(null);
-                  }}
-                >
-                  Stage
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={stagingConflicts !== null}
+        onOpenChange={(next) => !next && setStagingConflicts(null)}
+        title={
+          stagingConflicts === null
+            ? null
+            : stagingConflicts.paths.length === 1
+              ? `Stage ${baseName(stagingConflicts.paths[0]!)} with its conflicts?`
+              : `Stage ${stagingConflicts.marked} ${stagingConflicts.marked === 1 ? "file" : "files"} with conflicts?`
+        }
+        description={
+          <>
+            {stagingConflicts?.paths.length === 1 ? "It still has" : "They still have"} conflict markers. Staging marks the
+            conflicts resolved, and the markers would be committed as they are.
+          </>
+        }
+        confirm="Stage"
+        onConfirm={() => {
+          if (stagingConflicts) void stage(stagingConflicts.paths);
+          setStagingConflicts(null);
+        }}
+      />
     </div>
   );
 }
@@ -942,41 +922,31 @@ const DiscardDialog: FC<{
 }> = ({ discarding, unstagedPaths, onCancel, onConfirm }) => {
   const file = discarding?.files[0];
   const many = (discarding?.files.length ?? 0) > 1;
+  const untracked = !many && discarding?.scope === "unstaged" && file?.status === "untracked";
   return (
-    <Dialog open={discarding !== null} onOpenChange={(open) => !open && onCancel()}>
-      <DialogContent>
-        {discarding && file && (
-          <>
-            <DialogHeader>
-              <DialogTitle>
-                {many
-                  ? `Discard all changes in ${discarding.files.length} files?`
-                  : discarding.scope === "unstaged" && file.status === "untracked"
-                    ? `Delete ${baseName(file.path)}?`
-                    : `Discard ${discarding.scope === "staged" ? "staged " : ""}changes to ${baseName(file.path)}?`}
-              </DialogTitle>
-              <DialogDescription>
-                {many
-                  ? "Their changes that aren't staged are lost, and new files Git doesn't track are deleted. This can't be undone."
-                  : discardWords(
-                      discarding.scope,
-                      file,
-                      discarding.scope === "staged" && unstagedPaths.has(file.path),
-                    )}
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button variant="ghost" onClick={onCancel}>
-                Cancel
-              </Button>
-              <Button variant="destructive" onClick={onConfirm}>
-                {!many && discarding.scope === "unstaged" && file.status === "untracked" ? "Delete" : "Discard"}
-              </Button>
-            </DialogFooter>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
+    <ConfirmDialog
+      open={discarding !== null}
+      onOpenChange={(open) => !open && onCancel()}
+      title={
+        !discarding || !file
+          ? null
+          : many
+            ? `Discard all changes in ${discarding.files.length} files?`
+            : untracked
+              ? `Delete ${baseName(file.path)}?`
+              : `Discard ${discarding.scope === "staged" ? "staged " : ""}changes to ${baseName(file.path)}?`
+      }
+      description={
+        !discarding || !file
+          ? null
+          : many
+            ? "Their changes that aren't staged are lost, and new files Git doesn't track are deleted. This can't be undone."
+            : discardWords(discarding.scope, file, discarding.scope === "staged" && unstagedPaths.has(file.path))
+      }
+      confirm={untracked ? "Delete" : "Discard"}
+      destructive
+      onConfirm={onConfirm}
+    />
   );
 };
 

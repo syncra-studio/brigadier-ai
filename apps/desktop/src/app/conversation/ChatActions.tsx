@@ -16,19 +16,10 @@ import {
   Pencil,
   Pin,
   Plus,
-  Spinner,
   Trash,
   Unpin,
 } from "@/components/icons";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -301,44 +292,34 @@ const CloseWorkspaceDialog: FC<{
 }> = ({ conversationId, workspace, open, onOpenChange }) => {
   const [busy, setBusy] = useState(false);
   return (
-    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Remove worktree?</DialogTitle>
-          <DialogDescription>
-            This removes the folder <code className="break-all">{workspace.path}</code>. Uncommitted
-            changes are kept as a commit on <code>{workspace.branch}</code>, and the branch stays
-            unless all of its work is already on <code>{workspace.base}</code>. The session&apos;s
-            next change makes a fresh worktree in the same folder.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button type="button" variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            disabled={busy}
-            onClick={() => {
-              setBusy(true);
-              closeWorkspace(conversationId)
-                .then((text) => {
-                  toast(text);
-                  onOpenChange(false);
-                })
-                .catch((error: unknown) =>
-                  toast(`Couldn't remove the worktree: ${error instanceof Error ? error.message : String(error)}`, { tone: "error" }),
-                )
-                .finally(() => setBusy(false));
-            }}
-          >
-            {busy && <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" />}
-            Remove worktree
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Remove worktree?"
+      description={
+        <>
+          This removes the folder <code className="break-all">{workspace.path}</code>. Uncommitted
+          changes are kept as a commit on <code>{workspace.branch}</code>, and the branch stays
+          unless all of its work is already on <code>{workspace.base}</code>. The session&apos;s
+          next change makes a fresh worktree in the same folder.
+        </>
+      }
+      confirm="Remove worktree"
+      destructive
+      busy={busy}
+      onConfirm={() => {
+        setBusy(true);
+        closeWorkspace(conversationId)
+          .then((text) => {
+            toast(text);
+            onOpenChange(false);
+          })
+          .catch((error: unknown) =>
+            toast(`Couldn't remove the worktree: ${error instanceof Error ? error.message : String(error)}`, { tone: "error" }),
+          )
+          .finally(() => setBusy(false));
+      }}
+    />
   );
 };
 

@@ -16,8 +16,7 @@ import {
   WholeWordGlyph,
   X,
 } from "@/components/icons";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ReplaceOutcome, ReplaceSkip, SearchFile, SearchLine, SearchQuery } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { useApp } from "@/state/store";
@@ -205,27 +204,15 @@ export function SearchPanel({ target, onOpen, readOnly }: {
             onDismiss={dismissFile} onReplace={canReplace ? (path) => setConfirming({ file: path }) : null} />
         </>
       )}
-      <Dialog open={confirming !== null} onOpenChange={(open) => { if (!open) setConfirming(null); }}>
-        <DialogContent>
-          {results && (
-            <>
-              <DialogHeader>
-                <DialogTitle>
-                  Replace {plural(confirmedMatches, "match", "matches")} in {plural(confirmedFiles.length, "file")}?
-                </DialogTitle>
-                <DialogDescription>
-                  {form.replace ? <>Each becomes “{form.replace}”.</> : "Each is deleted."} If a file changed since
-                  the search, none is replaced.
-                </DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <Button variant="ghost" onClick={() => setConfirming(null)}>Cancel</Button>
-                <Button disabled={!canReplace || confirmedFiles.length === 0} onClick={() => replace(confirming?.file)}>Replace</Button>
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={confirming !== null}
+        onOpenChange={(open) => { if (!open) setConfirming(null); }}
+        title={results ? `Replace ${plural(confirmedMatches, "match", "matches")} in ${plural(confirmedFiles.length, "file")}?` : null}
+        description={<>{form.replace ? <>Each becomes “{form.replace}”.</> : "Each is deleted."} If a file changed since the search, none is replaced.</>}
+        confirm="Replace"
+        disabled={!canReplace || confirmedFiles.length === 0}
+        onConfirm={() => replace(confirming?.file)}
+      />
     </div>
   );
 }
