@@ -6,6 +6,7 @@ import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversati
 import { workerDone, workerPreview, workerState, workerWorking } from "@/app/conversation/workerPresentation";
 import { ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
+import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
 import { CheckCircle, Chat, Commit, StopCircle } from "@/components/icons";
 import type { OrchestratorStepKind, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -115,9 +116,7 @@ const Briefs: FC<{ tasks: readonly Task[] }> = ({ tasks }) => (
     {tasks.map((task) => (
       <div key={task.id} className="flex flex-col gap-1">
         {tasks.length > 1 && <WorkerName taskId={task.id} />}
-        <p className="bg-code-surface rounded-control text-foreground/80 max-h-60 overflow-y-auto px-3 py-2 whitespace-pre-wrap">
-          {task.spec}
-        </p>
+        <ToolBox prose>{task.spec}</ToolBox>
       </div>
     ))}
   </div>
@@ -180,10 +179,6 @@ export function isTeamStep(kind: { type: string }): kind is TeamStepKind {
   return ["messaged", "answered", "stopped", "landed", "reviewed"].includes(kind.type);
 }
 
-const Quiet: FC<{ children: ReactNode }> = ({ children }) => (
-  <p className="bg-code-surface rounded-control text-foreground/80 max-h-60 overflow-y-auto px-3 py-2 whitespace-pre-wrap">{children}</p>
-);
-
 /** "the change from", "the changes from": what a Landed or Reviewed row names before its workers. */
 const changesFrom = (taskIds: readonly string[]) => (taskIds.length > 1 ? "the changes from" : "the change from");
 
@@ -203,7 +198,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
     case "messaged":
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
       line = <>Messaged <WorkerName taskId={kind.taskId} /></>;
-      detail = kind.text ? <Quiet>{kind.text}</Quiet> : undefined;
+      detail = kind.text ? <ToolBox prose>{kind.text}</ToolBox> : undefined;
       break;
     case "answered":
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
@@ -236,7 +231,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       const byUser = kind.reason === USER_STOP_REASON;
       icon = <StopCircle aria-hidden className="size-4 shrink-0" />;
       line = <>{byUser ? "You stopped" : "Stopped"} <WorkerName taskId={kind.taskId} />{stoppedMs >= 1000 && ` after ${formatDuration(stoppedMs)}`}</>;
-      detail = kind.reason && !byUser ? <Quiet>{kind.reason}</Quiet> : undefined;
+      detail = kind.reason && !byUser ? <ToolBox prose>{kind.reason}</ToolBox> : undefined;
       break;
     }
     case "landed":

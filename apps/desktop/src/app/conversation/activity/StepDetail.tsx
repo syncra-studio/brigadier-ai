@@ -5,6 +5,7 @@ import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { cliRunOutput, OWN_RUNS, ownRunOutput } from "@/app/conversation/activity/ownRun";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, editHunks, fileDiffs, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
+import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -25,13 +26,10 @@ import { useCallItems } from "@/state/threadItems";
  * what any other tool gave back.
  */
 
-const BOX = "border-border bg-code-surface rounded-control mt-1 flex flex-col border text-sm";
-
 /** A command's box: a faint card, its command up to two lines, and the end of its output. */
 // Its parts keep their heights: WebKit squeezed a clamped two-line command under the output.
 const SHELL = "border-foreground/16 bg-foreground/8 rounded-shell mt-1 flex flex-col overflow-hidden border *:shrink-0";
 const SHELL_TEXT = "text-code font-mono whitespace-pre-wrap wrap-anywhere";
-const BODY = "text-code max-h-60 overflow-auto px-3 py-1 font-mono whitespace-pre-wrap";
 
 /** Output this long shows its head and tail, with the lines between folded. */
 const LONG_LINES = 40;
@@ -201,18 +199,6 @@ function CopyButton({ text, label, className }: { text: string; label: string; c
   );
 }
 
-/** A titled box of mono text: a tool's input and output, or a list of files. */
-export function ToolBox({ title, body }: { title: string; body: string }) {
-  return (
-    <div data-slot="tool-card" className={BOX}>
-      <span className="text-muted-foreground px-3 pt-2 text-xs">{title}</span>
-      <pre className={cn(BODY, "pb-2")}>
-        <Output text={body} />
-      </pre>
-    </div>
-  );
-}
-
 /** A tool's output as structured data: pretty-printed, or `null` when it is plain text. */
 export function structuredOutput(output: string): string | null {
   const text = output.trim();
@@ -257,8 +243,8 @@ export function ToolResult({ name, status, input, output }: { name: string; stat
           <DialogContent aria-describedby={undefined} className="max-w-thread flex max-h-full flex-col gap-3">
             <DialogTitle>{name}</DialogTitle>
             <div className="flex min-h-0 flex-col gap-3 overflow-auto">
-              {input && <ToolBox title="Input" body={input} />}
-              {text && <ToolBox title="Output" body={output ?? ""} />}
+              {input && <ToolBox title="Input" className="mt-1"><Output text={input} /></ToolBox>}
+              {text && <ToolBox title="Output" className="mt-1"><Output text={output ?? ""} /></ToolBox>}
             </div>
           </DialogContent>
         </Dialog>
@@ -338,10 +324,10 @@ export function actionDetail(item: ActionItem): ReactNode {
     case "files": {
       const diffs = item.changes.flatMap((change) => (change.diff ? [{ path: change.path, diff: change.diff }] : []));
       if (diffs.length > 0) return <Diffs files={diffs} />;
-      return <ToolBox title="Files" body={item.changes.map((change) => `${change.kind} ${change.path}`).join("\n")} />;
+      return <ToolBox title="Files" className="mt-1"><Output text={item.changes.map((change) => `${change.kind} ${change.path}`).join("\n")} /></ToolBox>;
     }
     case "image":
-      return item.path || item.prompt ? <ToolBox title="Image" body={item.path ?? item.prompt ?? ""} /> : null;
+      return item.path || item.prompt ? <ToolBox title="Image" className="mt-1"><Output text={item.path ?? item.prompt ?? ""} /></ToolBox> : null;
   }
 }
 
@@ -374,7 +360,7 @@ function LeadToolDetail({ conversationId, kind }: { conversationId: string; kind
   if (detail) return <>{detail}</>;
   // A search with no results kept: nothing more to show than its row.
   if (short === "WebSearch" || short === "web_search") return null;
-  if (EDITS.has(short) && kind.detail) return <ToolBox title="Files" body={kind.detail} />;
+  if (EDITS.has(short) && kind.detail) return <ToolBox title="Files" className="mt-1"><Output text={kind.detail} /></ToolBox>;
   return <span className="text-muted-foreground text-xs">Nothing more was kept of this step.</span>;
 }
 

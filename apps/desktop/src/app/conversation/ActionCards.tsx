@@ -24,7 +24,6 @@ import { WorkerChip } from "@/app/conversation/WorkerChip";
 import {
   ActionCard,
   ActionCardActions,
-  ActionCardCode,
   ActionCardQuestion,
   ActionCardTitle,
   ActionFileList,
@@ -35,6 +34,7 @@ import {
   staggered,
 } from "@/components/assistant-ui/elements/action-card";
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
+import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
 import { Button } from "@/components/ui/button";
 import {
   ChevronLeft,
@@ -346,17 +346,6 @@ function fileStats(stat: DiffStat) {
   }));
 }
 
-/** Prose the card asks about (an outline, the details of an action), scrolling when long. */
-function CardProse({ children }: { children: ReactNode }) {
-  return (
-    <div className="px-3">
-      <div className="bg-background/25 text-foreground/70 max-h-40 overflow-y-auto rounded-md p-2 text-sm whitespace-pre-wrap">
-        {children}
-      </div>
-    </div>
-  );
-}
-
 /** The host a network approval asks to reach, from its input (`{"host": "example.com"}`). */
 function hostAsked(input: string | null): string | null {
   try {
@@ -417,18 +406,18 @@ function describe(
         // The asker's own justification, when it has one; else the plain question.
         title: request.reason || fallback,
         body: request.command ? (
-          <ActionCardCode>
+          <ToolBox clamp className="mx-3">
             {shownCommand(request.command)}
             {cwd && <span className="text-foreground/35 block">in {cwd}</span>}
             {/* What the command asks for beyond its sandbox (`write /path`, `network`). */}
             {request.paths.length > 0 && (
               <span className="text-foreground/35 block">with {request.paths.join(", ")}</span>
             )}
-          </ActionCardCode>
+          </ToolBox>
         ) : request.paths.length > 0 ? (
           <ActionFileList files={request.paths.map((path) => ({ path }))} />
         ) : (
-          request.input && <ActionCardCode>{request.input}</ActionCardCode>
+          request.input && <ToolBox clamp className="mx-3">{request.input}</ToolBox>
         ),
       };
     }
@@ -437,7 +426,7 @@ function describe(
         icon: <Dock />,
         kind: "Terminal",
         title: "Allow this command? It reaches outside this computer.",
-        body: <ActionCardCode>{shownCommand(subject.argv.map(quote).join(" "))}</ActionCardCode>,
+        body: <ToolBox clamp className="mx-3">{shownCommand(subject.argv.map(quote).join(" "))}</ToolBox>,
       };
     case "landing":
       return {
@@ -458,14 +447,14 @@ function describe(
         icon: <Key />,
         kind: "Ask permission",
         title: subject.action,
-        body: subject.details && <CardProse>{subject.details}</CardProse>,
+        body: subject.details && <ToolBox prose className="mx-3">{subject.details}</ToolBox>,
       };
     case "outline":
       return {
         icon: <Sparkle />,
         kind: "Plan",
         title: `Start this plan? ${subject.title}`,
-        body: <CardProse>{subject.outline}</CardProse>,
+        body: <ToolBox prose className="mx-3">{subject.outline}</ToolBox>,
         allow: "Yes, start it",
       };
     case "peerMessage":
@@ -473,7 +462,7 @@ function describe(
         icon: <Sparkle />,
         kind: "Message",
         title: `Send a message to ${subject.title} in ${subject.project}?`,
-        body: <CardProse>{subject.text}</CardProse>,
+        body: <ToolBox prose className="mx-3">{subject.text}</ToolBox>,
         allow: "Send",
         deny: "Don't send",
       };
@@ -482,7 +471,7 @@ function describe(
         icon: <Globe />,
         kind: "Browser",
         title: subject.question,
-        body: <CardProse>{subject.details}</CardProse>,
+        body: <ToolBox prose className="mx-3">{subject.details}</ToolBox>,
         allow: "Go ahead",
         deny: "Don't",
       };

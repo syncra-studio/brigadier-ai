@@ -2,9 +2,6 @@ import {
   type ComponentProps,
   type CSSProperties,
   type ReactNode,
-  useEffect,
-  useRef,
-  useState,
 } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -151,53 +148,6 @@ export function ActionCardActions({
         )}
       >
         {children}
-      </div>
-    </div>
-  );
-}
-
-/** Exact text the card asks about (a command line, tool input), three lines until expanded. */
-export function ActionCardCode({ children }: { children: ReactNode }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [clamped, setClamped] = useState(false);
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    const observer = new ResizeObserver(() =>
-      setClamped(element.scrollHeight > element.clientHeight + 1),
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return (
-    <div className="px-3">
-      <div
-        className={cn(
-          "bg-background/25 text-foreground/50 flex max-h-80 w-full flex-col overflow-hidden rounded-md text-xs leading-4.5 supports-[corner-shape:superellipse(1.5)]:rounded-lg",
-          SQUIRCLE,
-        )}
-      >
-        <div className="min-h-0 overflow-y-auto p-2 font-mono font-medium">
-          <span
-            ref={ref}
-            data-selectable
-            className={cn("block break-words whitespace-pre-wrap", !expanded && "line-clamp-3")}
-          >
-            {children}
-          </span>
-        </div>
-        {(clamped || expanded) && (
-          <div className="flex shrink-0 justify-end p-1">
-            <button
-              type="button"
-              onClick={() => setExpanded(!expanded)}
-              className="text-foreground/50 hover:bg-foreground/8 text-code rounded-lg px-2 py-0.5 font-sans leading-4.5 transition-colors"
-            >
-              {expanded ? "Collapse" : "Expand"}
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

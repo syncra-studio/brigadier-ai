@@ -7,6 +7,17 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("merged parts draw one look per group", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "merged-parts.html", "merged-parts-result", 30000));
 
+  // Mono box: one quiet code-surface box with no border, mono unless prose; a clamped one
+  // offers Expand.
+  assert.equal(seen.box.boxes.length, 3);
+  for (const box of seen.box.boxes) {
+    assert.equal(box.background, seen.box.surface);
+    assert.equal(box.radius, seen.box.radius);
+    assert.equal(box.border, 0);
+  }
+  assert.deepEqual(seen.box.boxes.map((box: { font: string }) => box.font === seen.box.mono), [true, true, false]);
+  assert.deepEqual(seen.box.boxes.map((box: { expand: string[] }) => box.expand), [[], ["Expand"], []]);
+
   // Labelled divider: words between two 1px hairlines in the border colour, 8px above and below.
   assert.equal(seen.divider.dividers.length, 3);
   for (const divider of seen.divider.dividers) {
