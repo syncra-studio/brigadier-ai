@@ -202,7 +202,6 @@ export function ProviderAccounts({
     <SetupTerminal
       bare
       provider={provider}
-      install={false}
       openTerminal={openTerminal}
       check={null}
       onExited={onExited}

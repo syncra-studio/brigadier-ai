@@ -7,20 +7,19 @@ import { Button } from "@/components/ui/button";
 import type { ProviderKind, ProviderOverview, TerminalInfo } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { loadProviders, refreshProviders } from "@/state/actions";
-import { closeSetupTerminal, openSetupTerminal } from "@/state/onboarding";
+import { closeSetupTerminal } from "@/state/onboarding";
 import { useApp } from "@/state/store";
 
 /*
- * Installing an agent or signing in to it, in a terminal row: the first-run setup and the
- * Providers page both use it.
+ * Signing an extra account in, in a terminal row on the Providers page.
  */
 
-// The terminal (xterm) loads only when an agent needs installing or signing in.
+// The terminal (xterm) loads only when an account signs in.
 const TerminalView = lazy(() =>
   import("@/app/conversation/TerminalView").then((module) => ({ default: module.TerminalView })),
 );
 
-/** How often an agent is checked again while its install or sign-in terminal is open. */
+/** How often an agent is checked again while its sign-in terminal is open. */
 const RECHECK_MS = 3000;
 
 export type AgentState = "checking" | "install" | "signIn" | "ready";
@@ -47,12 +46,11 @@ export async function checkAgents(): Promise<void> {
 const SETTLE_MS = 10_000;
 
 /**
- * Runs the agent's installer or sign-in. Its output stays folded away unless asked for, or
- * the command fails; the row closes by itself once the agent is set up.
+ * Runs an account's sign-in. Its output stays folded away unless asked for, or the command
+ * fails; the row closes by itself once the account is set up.
  */
 export function SetupTerminal({
   provider,
-  install,
   onClose,
   openTerminal,
   check,
@@ -60,10 +58,9 @@ export function SetupTerminal({
   bare = false,
 }: {
   provider: ProviderKind;
-  install: boolean;
   onClose: () => void;
-  /** Opens the terminal; by default with the agent's own install or sign-in command. */
-  openTerminal?: (cols: number, rows: number) => Promise<TerminalInfo>;
+  /** Opens the terminal with the sign-in command. */
+  openTerminal: (cols: number, rows: number) => Promise<TerminalInfo>;
   /** Checks whether it is set up yet; by default the agent's check. `null`: never. */
   check?: (() => Promise<void>) | null;
   /** The command finished, with its exit code. */
@@ -81,13 +78,11 @@ export function SetupTerminal({
 
   const open = useCallback(
     async (cols: number, rows: number) => {
-      const terminal = openTerminal
-        ? await openTerminal(cols, rows)
-        : await openSetupTerminal(provider, install, cols, rows);
+      const terminal = await openTerminal(cols, rows);
       terminalId.current = terminal.id;
       return terminal;
     },
-    [provider, install, openTerminal],
+    [openTerminal],
   );
   const recheck = useMemo(
     () => (check === undefined ? () => refreshProviders(provider) : check),
@@ -107,7 +102,7 @@ export function SetupTerminal({
     [recheck],
   );
 
-  // Notices the sign-in (or install) soon after it finishes.
+  // Notices the sign-in soon after it finishes.
   useEffect(() => {
     if (!recheck) return;
     const timer = window.setInterval(() => {
@@ -134,11 +129,9 @@ export function SetupTerminal({
   const expanded = shown ?? (failed || stuck);
   const status =
     exit === null
-      ? install
-        ? `Installing ${label}…`
-        : `Finish signing in to ${label} in your browser…`
+      ? `Finish signing in to ${label} in your browser…`
       : failed
-        ? `${install ? `${label} could not be installed` : `Signing in to ${label} failed`}${exit.code === null ? "" : ` (exit code ${exit.code})`}.`
+        ? `Signing in to ${label} failed${exit.code === null ? "" : ` (exit code ${exit.code})`}.`
         : stuck
           ? `${label} still isn't ready. The output may say why.`
           : `Checking ${label}…`;

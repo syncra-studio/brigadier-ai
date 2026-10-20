@@ -101,7 +101,7 @@ files: Array<string>,
 /**
  * Set when the checkout has more files than were listed.
  */
-truncated: boolean, } | { "method": "readFile", file: CheckoutFile, } | { "method": "openTerminal", terminal: TerminalInfo, } | { "method": "openSetupTerminal", terminal: TerminalInfo, } | { "method": "openWorkerTerminal", terminal: TerminalInfo, 
+truncated: boolean, } | { "method": "readFile", file: CheckoutFile, } | { "method": "openTerminal", terminal: TerminalInfo, } | { "method": "openWorkerTerminal", terminal: TerminalInfo, 
 /**
  * The worker's CLI (Claude asks whether to trust a folder it never saw).
  */

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import { request } from "@/ipc/client";
-import type { ProjectCandidate, ProviderKind, TerminalInfo } from "@/ipc/generated";
+import type { ProjectCandidate } from "@/ipc/generated";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
@@ -27,17 +27,6 @@ export async function finishOnboarding(): Promise<void> {
 export async function findProjects(): Promise<ProjectCandidate[]> {
   const { candidates } = await request({ method: "findProjects" });
   return candidates;
-}
-
-/** A terminal with the CLI's install or sign-in command typed, for the user to run. */
-export async function openSetupTerminal(
-  provider: ProviderKind,
-  install: boolean,
-  cols: number,
-  rows: number,
-): Promise<TerminalInfo> {
-  const { terminal } = await request({ method: "openSetupTerminal", provider, install, cols, rows });
-  return terminal;
 }
 
 export function closeSetupTerminal(terminalId: string): void {

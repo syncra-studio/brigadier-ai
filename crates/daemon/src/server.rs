@@ -25,7 +25,6 @@ use brigadier_ipc::protocol::{
     Request, Response, SendOutcome, ServerFrame, TerminalInfo, TerminalOutput,
 };
 use brigadier_ipc::{Accepted, Connection, Listener, Reader, Token, Writer};
-use brigadier_providers::ProviderKind;
 use brigadier_providers::login_mark::LoginMark;
 use brigadier_store::{Store, StoredEvent};
 use tokio::sync::broadcast::error::RecvError;
@@ -490,12 +489,6 @@ impl Session {
                 fresh.unwrap_or(false),
                 (cols, rows),
             ),
-            Request::OpenSetupTerminal {
-                provider,
-                install,
-                cols,
-                rows,
-            } => self.open_setup_terminal(provider, install, cols, rows),
             Request::AddAccount {
                 provider,
                 cols,
@@ -875,49 +868,6 @@ impl Session {
             provider,
             checkout,
         }))
-    }
-
-    /// Opens (or re-attaches to) the terminal that sets up a CLI: its install or sign-in
-    /// command runs in the home folder, and the terminal ends with it.
-    fn open_setup_terminal(
-        &mut self,
-        provider: ProviderKind,
-        install: bool,
-        cols: u16,
-        rows: u16,
-    ) -> Result<Response, IpcError> {
-        let env = self.daemon.runtime.cli_env();
-        let cwd = env
-            .home()
-            .ok_or_else(|| IpcError::from(brigadier_core::Error::Invalid("no home folder".into())))?
-            .display()
-            .to_string();
-        let command = if install {
-            provider.install_command(cfg!(windows)).to_owned()
-        } else {
-            // The binary Brigadier found, so the sign-in is the one Brigadier will use.
-            let (binary, arguments) = provider
-                .login_command()
-                .split_once(' ')
-                .unwrap_or((provider.login_command(), ""));
-            let binary = env.resolve(provider).map_or_else(
-                || binary.to_owned(),
-                |path| shell_quote(&path.display().to_string()),
-            );
-            format!("{binary} {arguments}")
-        };
-        if self.terminal_feed.is_none() {
-            self.terminal_feed = Some(self.daemon.terminals.subscribe());
-        }
-        let terminal = self.daemon.terminals.open(
-            &format!("setup:{provider}"),
-            cwd,
-            cols,
-            rows,
-            Some(&command),
-        )?;
-        self.terminals.insert(terminal.id.clone());
-        Ok(Response::OpenSetupTerminal { terminal })
     }
 
     /// Opens (or shows again) the terminal that signs extra account `id` in: its CLI's own
@@ -1729,7 +1679,6 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             file: heap(|| sessions.read_file(&conversation_id, path)).await?,
         },
         Request::OpenTerminal { .. }
-        | Request::OpenSetupTerminal { .. }
         | Request::AddAccount { .. }
         | Request::SignInAccount { .. }
         | Request::OpenWorkerTerminal { .. } => {
@@ -2871,16 +2820,6 @@ async fn on_pages<T: Send + 'static>(
 /// A computer-use request that didn't work, in the helper's own words.
 fn computer_error(message: String) -> IpcError {
     IpcError::from(brigadier_core::Error::Invalid(message))
-}
-
-/// A path as one word for the shell a setup terminal runs in (PowerShell on Windows, where
-/// a quoted program needs the call operator).
-fn shell_quote(path: &str) -> String {
-    if cfg!(windows) {
-        format!("& '{}'", path.replace('\'', "''"))
-    } else {
-        format!("'{}'", path.replace('\'', "'\"'\"'"))
-    }
 }
 
 #[cfg(test)]

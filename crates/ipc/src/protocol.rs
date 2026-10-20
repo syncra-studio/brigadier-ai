@@ -405,15 +405,6 @@ pub enum Request {
         text: String,
         selection: String,
     },
-    /// A terminal in the home folder that sets up a CLI (the first run's Install and Sign
-    /// in), started if none runs for it: it runs the CLI's installer when `install`, else its
-    /// sign-in, and ends with it. Its output streams like [`Request::OpenTerminal`]'s.
-    OpenSetupTerminal {
-        provider: ProviderKind,
-        install: bool,
-        cols: u16,
-        rows: u16,
-    },
     /// "Open in terminal": continues a worker's own CLI session in a terminal (the task is
     /// taken over until it ends, then the worker reports), or reattaches to the one open. Its
     /// output then streams like [`Request::OpenTerminal`]'s.
@@ -1500,9 +1491,6 @@ pub enum Response {
         file: CheckoutFile,
     },
     OpenTerminal {
-        terminal: TerminalInfo,
-    },
-    OpenSetupTerminal {
         terminal: TerminalInfo,
     },
     OpenWorkerTerminal {
