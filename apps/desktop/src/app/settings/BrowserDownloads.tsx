@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { DotsHorizontal, Download, Folder, Trash } from "@/components/icons";
+import { EmptyState } from "@/components/ui/empty-state";
 import { SettingsCard } from "@/components/ui/settings-card";
 import { useNow } from "@/hooks/use-now";
 import { revealPath } from "@/ipc/client";
@@ -70,13 +71,12 @@ export function BrowserDownloads({ onBack }: { onBack: () => void }) {
         <ErrorLine error={error} />
         {downloads && days.length === 0 && (
           <SettingsCard>
-            <div className="flex flex-col items-center gap-1.5 py-8 text-center">
-              <Download aria-hidden className="text-foreground/65 size-icon-lg" />
-              <p className="text-sm font-medium">{query ? "No downloads match" : "No downloads yet"}</p>
-              {!query && (
-                <p className="text-foreground/65 text-label">Files you download in the built-in browser show here.</p>
-              )}
-            </div>
+            <EmptyState
+              variant="centered"
+              icon={Download}
+              title={query ? "No downloads match" : "No downloads yet"}
+              detail={!query && "Files you download in the built-in browser show here."}
+            />
           </SettingsCard>
         )}
         {days.map((day) => (

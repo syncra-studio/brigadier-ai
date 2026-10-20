@@ -4,6 +4,7 @@ import { type ImageState, type LoadedImage, loadImage, markedScreenshot, useStor
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ArrowUp, Check, ChevronDown, Comment, Grid, ImageSquare, SquareImage, Trash, X } from "@/components/icons";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { type Choice, Segmented } from "@/components/ui/segmented";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -117,7 +118,7 @@ export function MockupView({ conversationId, active }: { conversationId: string;
   }, [commenting, active, sendNotes]);
 
   if (!mockup) {
-    return <Centered>No mockup in this session yet.</Centered>;
+    return <Centered title="No mockup in this session yet." />;
   }
   const shownZoom = zoom === "fit" ? fitted : zoom;
   return (
@@ -131,8 +132,8 @@ export function MockupView({ conversationId, active }: { conversationId: string;
         </header>
         {items.length === 0 ? (
           mockup.status === "building"
-            ? <Centered><span className="shimmer">Building the mockup…</span><span className="text-muted-foreground text-xs">Its screenshots show here when its worker reports.</span></Centered>
-            : <Centered>The mockup stopped before it had screenshots.</Centered>
+            ? <Centered title={<span className="shimmer">Building the mockup…</span>} detail="Its screenshots show here when its worker reports." />
+            : <Centered title="The mockup stopped before it had screenshots." />
         ) : view === "canvas" ? (
           <Canvas conversationId={conversationId} items={items} zoom={zoom === "fit" ? 100 : zoom} commenting={editable}
             onZoom={setZoom} onFocus={(key) => { setPicked(key); setView("focused"); }} />
@@ -147,8 +148,8 @@ export function MockupView({ conversationId, active }: { conversationId: string;
   );
 }
 
-function Centered({ children }: { children: ReactNode }) {
-  return <div className="text-muted-foreground flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm">{children}</div>;
+function Centered({ title, detail }: { title: ReactNode; detail?: ReactNode }) {
+  return <EmptyState variant="centered" as="div" title={title} detail={detail} className="flex-1 p-6" />;
 }
 
 function Tip({ label, children }: { label: string; children: ReactNode }) {

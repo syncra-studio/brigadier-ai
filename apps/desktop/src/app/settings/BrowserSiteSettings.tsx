@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { SettingsPage, SettingsSection, SettingsSelect } from "@/app/settings/parts";
 import { Camera, Mic } from "@/components/icons";
+import { EmptyState } from "@/components/ui/empty-state";
 import { SettingsCard } from "@/components/ui/settings-card";
 import type { BrowserSite, SitePermission } from "@/ipc/generated";
 import { browserSites, setSite } from "@/state/browserData";
@@ -44,9 +45,10 @@ export function BrowserSiteSettings({ onBack }: { onBack: () => void }) {
         <ErrorLine error={error} />
         {sites && sites.length === 0 ? (
           <SettingsCard>
-            <p className="text-foreground/65 text-label py-4">
-              Sites that ask for your camera or microphone show here. Until you choose, each asks you first.
-            </p>
+            <EmptyState
+              variant="card"
+              title="Sites that ask for your camera or microphone show here. Until you choose, each asks you first."
+            />
           </SettingsCard>
         ) : (
           <SettingsCard>

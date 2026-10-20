@@ -109,15 +109,6 @@ export function NavList({ children, className }: { children: ReactNode; classNam
   return <ul className={cn("flex flex-col gap-px", className)}>{children}</ul>;
 }
 
-/** A muted line in a list with nothing to show ("No sessions yet"). */
-export function NavEmpty({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <li className={cn("text-foreground/35 h-nav-row flex items-center px-2 text-sm", className)}>
-      {children}
-    </li>
-  );
-}
-
 /**
  * How far a menu opened beside the collapsed strip sits from its icon: past the strip's edge
  * (the strip's inset), then the usual gap.

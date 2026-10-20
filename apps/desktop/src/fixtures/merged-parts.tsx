@@ -4,8 +4,9 @@ import { createRoot } from "react-dom/client";
 import { LabeledDivider } from "@/components/assistant-ui/elements/labeled-divider";
 import { OfferBody, OfferCard } from "@/app/conversation/OfferCard";
 import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
-import { Branch, Folder, Globe, Info } from "@/components/icons";
+import { Branch, Download, Folder, Globe, Info } from "@/components/icons";
 import { DropdownMenuLabel, itemBase, MenuRow } from "@/components/ui/dropdown-menu";
+import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 
 /** A node's box and colours. */
@@ -65,7 +66,21 @@ function measure() {
     hint: node.querySelector('[data-slot="menu-row-hint"]')?.textContent ?? null,
     lines: node.querySelectorAll(".truncate").length,
   }));
+  const empties = [...document.querySelectorAll('[data-group="empty"] [data-slot="empty-state"]')].map((node) => ({
+    ...box(node),
+    role: node.getAttribute("role"),
+    align: getComputedStyle(node).textAlign,
+    icon: node.querySelector("svg")?.getBoundingClientRect().width ?? null,
+  }));
   return {
+    empty: {
+      empties,
+      dim: getComputedStyle(document.querySelector('[data-group="empty"] > [data-dim]')!).color,
+      textSm: probe("font-size: var(--text-sm)").fontSize,
+      navRow: parseFloat(probe("width: var(--spacing-nav-row)").width),
+      iconMd: parseFloat(probe("width: var(--spacing-icon-md)").width),
+      iconLg: parseFloat(probe("width: var(--spacing-icon-lg)").width),
+    },
     row: { rows, iconMd: parseFloat(probe("width: var(--spacing-icon-md)").width) },
     label: { labels, muted: probe("color: var(--muted-foreground)").color, textSm: probe("font-size: var(--text-sm)").fontSize },
     offer: {
@@ -119,6 +134,14 @@ function Fixture() {
             Continued from chat
           </span>
         </LabeledDivider>
+      </section>
+      <section data-group="empty" className="flex w-80 flex-col">
+        <ul>
+          <EmptyState as="li" title="No sessions yet" />
+        </ul>
+        <EmptyState variant="card" icon={Info} title="Nothing yet." />
+        <span data-dim className="text-foreground/65" />
+        <EmptyState variant="centered" icon={Download} title="No downloads yet" detail="Files you download show here." />
       </section>
       <section data-group="row" className="flex w-80 flex-col">
         <div className={itemBase}>

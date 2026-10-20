@@ -9,7 +9,6 @@ import { openSearch } from "@/app/SearchDialog";
 import { SidebarToggle } from "@/app/SidebarToggle";
 import {
   navRow,
-  NavEmpty,
   NavFold,
   NavHeader,
   NavList,
@@ -56,6 +55,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Kbd } from "@/components/ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -437,7 +437,7 @@ export function AppSidebar() {
                 actions={actions}
               />
             ))}
-            {catalogLoaded && chats.length === 0 && <NavEmpty>Chats you start appear here.</NavEmpty>}
+            {catalogLoaded && chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
           </NavList>
         </NavSection>
       </div>
@@ -711,7 +711,7 @@ function ChatsFlyout({ pick }: { pick: (choose: () => void) => void }) {
               pick={pick}
             />
           ))}
-          {chats.length === 0 && <NavEmpty>Chats you start appear here.</NavEmpty>}
+          {chats.length === 0 && <EmptyState as="li" title="Chats you start appear here." />}
         </NavList>
       </section>
     </div>
@@ -844,7 +844,7 @@ const ProjectRow = memo(function ProjectRow({
               nested
             />
           ))}
-          {sessions.length === 0 && <NavEmpty className="ps-8">No sessions yet</NavEmpty>}
+          {sessions.length === 0 && <EmptyState as="li" className="ps-8" title="No sessions yet" />}
         </NavList>
       </NavFold>
     </li>

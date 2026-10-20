@@ -4,6 +4,7 @@ import { recordKeyPress } from "@/app/keyCapture";
 import { SettingsPage } from "@/app/settings/parts";
 import { SHORTCUTS, formatKeys, searchShortcuts, shortcutsFor, type Shortcut } from "@/app/shortcutCatalog";
 import { KeyboardShortcut, MagnifyingGlassSearch, X } from "@/components/icons";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Kbd } from "@/components/ui/kbd";
 import { SettingsCard } from "@/components/ui/settings-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -52,9 +53,7 @@ export function ShortcutsPage() {
             ))}
           </SettingsCard>
         ) : (
-          <p role="status" className="text-foreground/65 py-6 text-center text-sm">
-            No shortcuts match
-          </p>
+          <EmptyState variant="centered" title="No shortcuts match" />
         )}
       </div>
     </SettingsPage>

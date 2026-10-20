@@ -4,6 +4,7 @@ import { errorText } from "@/app/dialogs/fields";
 import { SettingsPage, SettingsRow } from "@/app/settings/parts";
 import { Brain } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { SettingsCard } from "@/components/ui/settings-card";
 import { useNow } from "@/hooks/use-now";
@@ -76,14 +77,13 @@ export function MemoryPage() {
       {memories !== null && (
         <SettingsCard>
           {memories.length === 0 ? (
-            <div
+            <EmptyState
+              variant="card"
+              as="div"
+              icon={Brain}
               data-setting={MEMORY_ROWS.memories.label}
-              className="text-foreground/65 flex items-center gap-3 px-4 py-3 text-label"
-            >
-              <Brain aria-hidden className="size-icon-md shrink-0" />
-              Nothing yet. Tell a chat about yourself (“I live in Lisbon”, “I’m an electrician”) and
-              it shows up here.
-            </div>
+              title="Nothing yet. Tell a chat about yourself (“I live in Lisbon”, “I’m an electrician”) and it shows up here."
+            />
           ) : (
             memories.map((memory, index) => (
               <MemoryRow

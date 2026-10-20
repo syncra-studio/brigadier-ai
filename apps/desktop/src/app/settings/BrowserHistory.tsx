@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/collapsible";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ChevronDown, DotsHorizontal, ExternalLink, Filter, Globe, Trash } from "@/components/icons";
+import { EmptyState } from "@/components/ui/empty-state";
 import { SettingsCard } from "@/components/ui/settings-card";
 import { useNow } from "@/hooks/use-now";
 import type { BrowserVisit, HistoryFilter } from "@/ipc/generated";
@@ -106,9 +107,7 @@ export function BrowserHistory({
       >
         <ErrorLine error={error} />
         {visits && days.length === 0 && (
-          <p className="text-foreground/65 text-label px-1 py-2">
-            {query ? "No pages match." : EMPTY[filter]}
-          </p>
+          <EmptyState title={query ? "No pages match." : EMPTY[filter]} />
         )}
         {days.map((day) => (
           <SettingsCard key={day.key}>

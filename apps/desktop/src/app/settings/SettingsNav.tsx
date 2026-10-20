@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
+import { EmptyState } from "@/components/ui/empty-state";
 
 /** Opens a result's page, then brings the setting it found into view. */
 function openResult({ page, row }: SettingsSearchResult) {
@@ -86,7 +87,7 @@ export function SettingsNav() {
       <div className="scroll-edge-fade flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pt-1 pb-2">
         {results ? (
           results.length === 0 ? (
-            <p className="text-muted-foreground px-2 py-1 text-sm">No settings match.</p>
+            <EmptyState title="No settings match." />
           ) : (
             <NavList>
               {results.map((result, index) => {

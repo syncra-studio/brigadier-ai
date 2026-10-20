@@ -33,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Branch, Chats, Check, DotsHorizontal, Filter, Folder, Trash, Unarchive } from "@/components/icons";
+import { EmptyState } from "@/components/ui/empty-state";
 import { SettingsCard } from "@/components/ui/settings-card";
 import type { Conversation } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
@@ -137,9 +138,7 @@ export function ArchivedPage() {
         )}
 
         {shown.length === 0 && (
-          <p role="status" className="text-foreground/65 py-12 text-center text-sm">
-            {archived.length === 0 ? "No archived chats" : "No archived chats match"}
-          </p>
+          <EmptyState variant="centered" title={archived.length === 0 ? "No archived chats" : "No archived chats match"} />
         )}
 
         <div className="flex flex-col gap-10 pt-5">

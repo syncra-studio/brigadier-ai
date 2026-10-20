@@ -7,6 +7,17 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("merged parts draw one look per group", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "merged-parts.html", "merged-parts-result", 30000));
 
+  // Empty state: one dim 14px line; a list's is a row tall and not a status; centred has a
+  // larger icon.
+  const [inList, inCard, centered] = seen.empty.empties;
+  for (const empty of seen.empty.empties) {
+    assert.deepEqual([empty.color, empty.fontSize], [seen.empty.dim, seen.empty.textSm]);
+  }
+  assert.deepEqual([inList.role, inCard.role, centered.role], [null, "status", "status"]);
+  assert.equal(inList.height, seen.empty.navRow);
+  assert.deepEqual([inCard.icon, centered.icon], [seen.empty.iconMd, seen.empty.iconLg]);
+  assert.equal(centered.align, "center");
+
   // Menu row: a 16px icon, a hint at the end, and a second line under the title when two-line.
   const [plain, hinted, twoLine] = seen.row.rows;
   assert.equal(plain.icon, seen.row.iconMd);
