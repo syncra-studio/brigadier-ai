@@ -54,15 +54,21 @@ one level deep, so a part both `app.pen` and `settings.pen` use must live in `fo
   A few spots keep a library icon because the app has none there; the Read me lists them.
 - Screens show what ships, not ideas. 1440×900, dark, realistic sample content.
 - Dark only. Normal density only: there is no compact variant.
-- Buttons, chips and badges are fully rounded; icon buttons keep a 10px corner; the composer's
-  send button is a circle. There is one checkbox: blue (`--toggle-on`) with a white tick.
+- Buttons with words, chips and badges are fully rounded (`rounded-capsule`). Icon buttons keep
+  a 10px corner (`rounded-toolbar-button`), except the spots Pen draws round (the composer's
+  controls, the browser's toolbar…), which stay round; the composer's send button is a circle.
+- There is one checkbox: blue (`--toggle-on`) with a white tick, corner `--radius-checkbox` (5px).
 - Plain words. No names or marks of other chat apps or of the UI kit's vendor.
 - In the code every colour, length, radius, font and shadow comes from
-  `apps/desktop/src/styles/tokens.css`, and the UI kit and Radix are used only inside the
-  wrappers in `src/components/controls`, `overlays` and `layout`. `pnpm lint` checks it (the
-  oxlint rule `no-raw-design-values` for ts/tsx, `scripts/check-styles.mjs` for CSS files, fixed
-  inline styles, kit and library imports and component imports), and so does CI. A value that
-  can't follow yet goes in `scripts/check-styles.allow` with its reason.
+  `apps/desktop/src/styles/tokens.css`. The UI kit and Radix are used only inside the wrappers in
+  `src/components/controls`, `overlays` and `layout`; icons live only in `src/components/icons`;
+  the libraries that draw (the chat library, lexical, xterm, sigma/graphology, @pierre/diffs)
+  are imported only inside `src/components`.
+- The style check enforces all of it: `pnpm lint` runs the oxlint rule `no-raw-design-values`
+  (raw colours, lengths and Tailwind arbitrary values in ts/tsx) and `scripts/check-styles.mjs`
+  (CSS files, fixed inline styles, kit, Radix and library imports, `<svg>` outside icons,
+  components taken from a folder's index), and fast CI fails on it. A value that can't follow
+  yet goes in `scripts/check-styles.allow` with its reason; an entry no longer needed fails too.
 
 ## Code layout
 
@@ -90,6 +96,87 @@ imported only inside `src/components`; the style check fails them anywhere else.
 `side-panel/`, `setup/` (onboarding, computer-use setup) in `app.pen`; `settings/` (its pages,
 Providers and Routing among them) and `inspector/` in `settings.pen`. App-wide wiring (`App.tsx`,
 shortcuts, smoke) stays at the top of `app/`.
+
+## Pen component → code
+
+Every component in `foundations.pen`, board by board, with the file (under `apps/desktop/src`)
+and the export that draws it. "Pen only" means the code has no such part; "code only" means a
+component folder holds a part that has no card yet. Parts still in `src/app` (not yet under
+`src/components`) are noted "in app"; the per-surface "Design system: … parts as reusable
+components" issues track moving them. The card captions in Pen may still show older paths; this
+table is the current one.
+
+| Board | Pen component | Code file | Export | Note |
+|---|---|---|---|---|
+| Icons | `Icon / <Name>`, `FileIcon/*`, `IdGlyph/*`, `BlockIcon/*`, `BrigadierGlyph`, `ProviderGlyph/*` | `components/icons/` | see Icons below | |
+| Icons | `Spinner/12`, `/14`, `/16`, `/20` | `components/icons/app-glyphs/spinner.tsx` | `Spinner` (sized by class) | |
+| Primitives · Controls | `Badge/Default`, `Secondary`, `Destructive`, `Warning`, `Success`, `Outline`, `Ghost`, `Link` | `components/controls/badge.tsx` | `Badge` (`variant`) | |
+| Primitives · Controls | `Badge/Full access` | — | — | Pen only: the app's Full access pill is the access picker's trigger (`text-full-access`) in `app/shell/SetupPickers.tsx` |
+| Primitives · Controls | `Button/Primary`, `Secondary`, `Outline`, `Ghost`, `Destructive`, `Link`, each `/xs` and `/sm` | `components/controls/button.tsx` | `Button` (`variant` default…link, `size` default/xs/sm) | |
+| Primitives · Controls | — | `components/controls/button.tsx` | `Button` variants `soft`, `soft-destructive`, `link-blue`, sizes `lg`, `inline` | code only (`soft` is drawn as SettingsButton, Shared app parts) |
+| Primitives · Controls | `Icon Button`, `Icon Button/xs`, `/sm`, `/lg` | `components/controls/tooltip-icon-button.tsx` | `TooltipIconButton` (`size`, `look` ghost/toolbar/strip, `pressed`, `dot`) | sizes come from `Button` `icon-*` |
+| Primitives · Controls | `Send Button` | `app/conversation/Composer.tsx` | `SendControls` (file-local) | in app |
+| Primitives · Controls | `Input` | `components/controls/input.tsx` | `Input` | |
+| Primitives · Controls | `Settings Select` | `app/settings/parts.tsx` | `SettingsSelect`, `SettingsSelectTrigger` | in app |
+| Primitives · Controls | `Switch/On`, `Switch/Off` | `components/controls/switch.tsx` | `Switch` | |
+| Primitives · Controls | `Checkbox/Off`, `Checkbox/On`, `Checkbox/Mixed` | `components/controls/checkbox.tsx` | `Checkbox`, `CheckboxMark` | |
+| Primitives · Controls | `Checkbox Row` | `app/shell/dialogs/fields.tsx` | `CheckboxRow` | in app |
+| Primitives · Controls | `Kbd`, `Kbd/Tooltip`, `Kbd/On button` | `components/controls/kbd.tsx` | `Kbd` (`variant` key/chip; the tooltip and button pills follow where it sits) | |
+| Primitives · Controls | `KbdGroup` | — | — | Pen only: keys sit side by side in their parent |
+| Primitives · Controls | `TabsList`, `TabsList/Line`, `TabsList/Vertical`, `Tab/Active`, `Tab/Inactive`, `Tab/Line Active`, `Tab/Line Inactive` | `components/controls/tabs.tsx` | `Tabs`, `TabsList` (`variant` default/line, orientation), `TabsTrigger`, `TabsContent` | |
+| Primitives · Controls | `Toggle/Off`, `Toggle/On` | `components/controls/toggle.tsx` | `Toggle` | |
+| Primitives · Controls | `ToggleGroup`, `ToggleGroupItem/On`, `ToggleGroupItem/Off` | `components/controls/toggle-group.tsx` | `ToggleGroup`, `ToggleGroupItem` | |
+| Primitives · Controls | `Segmented`, `Segmented/Fill`, `Segment/On`, `Segment/Off` | `components/controls/segmented.tsx` | `Segmented` (`fill`), `Segment`, `SegmentedRoot`, `Choice` | |
+| Primitives · Controls | — | `components/controls/slot.tsx` | `Slot` | code only (no look) |
+| Primitives · Controls | `Skeleton` | `components/layout/skeleton.tsx` | `Skeleton` | |
+| Primitives · Controls | `Separator/Horizontal`, `Separator/Vertical` | — | — | Pen only: the code draws rules with border classes (`separator.tsx` was removed) |
+| Primitives · Controls | `RoundBadge/Plain`, `RoundBadge/Done` | `app/settings/storage/parts.tsx` | `RoundBadge` (`tone`) | in app |
+| Primitives · Controls | `Dot` | `components/shared/state-dot.tsx` | `StateDot` (`color`) | |
+| Primitives · Controls | `ErrorLine` | `app/shell/dialogs/fields.tsx` | `ErrorLine` | in app |
+| Primitives · Controls | `Nav Row` | `app/shell/sidebar/nav.tsx` | `navRow` (class string) | in app |
+| Primitives · Menus, popovers & dialogs | `Menu`, `Menu Item`, `Menu Item/Check`, `Menu Item/Radio`, `Menu Item/Sub`, `Menu Label`, `Menu Separator` | `components/overlays/dropdown-menu.tsx` | `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuCheckboxItem`, `DropdownMenuRadioItem`, `DropdownMenuSubTrigger`, `DropdownMenuLabel` (`variant` caps/heading), `DropdownMenuSeparator` | |
+| Primitives · Menus, popovers & dialogs | — | `components/overlays/dropdown-menu.tsx` | `MenuRow` | code only (the two-line menu row) |
+| Primitives · Menus, popovers & dialogs | — | `components/overlays/context-menu.tsx` | `ContextMenu*` | code only (same look as the menu) |
+| Primitives · Menus, popovers & dialogs | `Tooltip` | `components/overlays/tooltip.tsx` | `Tooltip`, `TooltipTrigger`, `TooltipContent`, `TooltipProvider` | |
+| Primitives · Menus, popovers & dialogs | `Dialog`, `Dialog/With close`, `DialogOverlay` | `components/overlays/dialog.tsx` | `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogDescription`, `DialogFooter`, `DialogOverlay`, `DialogPlain*` | |
+| Primitives · Menus, popovers & dialogs | — | `components/overlays/confirm-dialog.tsx` | `ConfirmDialog`, `ConfirmForm` | code only |
+| Primitives · Menus, popovers & dialogs | `Toast`, `Toast/Success`, `Toast/Error`, `Toast/Neutral` | `components/overlays/toast.tsx` | `Toaster` (each toast is its file-local `ToastItem`) | |
+| Primitives · Menus, popovers & dialogs | `PopoverContent` | `components/overlays/popover.tsx` | `Popover`, `PopoverTrigger`, `PopoverAnchor`, `PopoverContent` | |
+| Primitives · Menus, popovers & dialogs | `ScrollBar/Vertical`, `ScrollBar/Horizontal` | `styles/globals.css` | — | Pen only as a component: scroll bars are the CSS-styled native ones (`scroll-area.tsx` was removed) |
+| Primitives · Menus, popovers & dialogs | `ScrollFade/Top`, `ScrollFade/Bottom` | `components/layout/scroll-fade.tsx` | `ScrollFade` | |
+| Primitives · Menus, popovers & dialogs | — | `components/layout/collapsible.tsx`, `sidebar.tsx`, `sidebar-layout.tsx` | `Collapsible*`, `SidebarPanel`, `SidebarProvider`, `SidebarReveal`, `SidebarResizeHandle` | code only (behaviour, no look of their own) |
+| Glyphs & indicators | `SidebarGlyph/Open`, `SidebarGlyph/Closed (floating)` | `app/shell/SidebarToggle.tsx` | `SidebarGlyph` | in app |
+| Glyphs & indicators | `StepIcon/read` … `StepIcon/stop` | `app/conversation/activity/ActivityGroup.tsx` | `StepIcon` (file-local) | in app |
+| Glyphs & indicators | `FileTypeIcon/Image`, `Document`, `Data`, `Code` | `components/conversation/elements/file-type-icon.tsx` | `FileTypeIcon` | |
+| Glyphs & indicators | `WorkerGlyph` | `app/conversation/WorkerChip.tsx` | `WorkerGlyph` | in app |
+| Glyphs & indicators | `SidebarActivityMark/Working`, `/Unread`, `SidebarError`, `SessionStatusLabel` | `app/shell/SessionStatus.tsx` | `SidebarActivityMark`, `SidebarError`, `SessionStatusLabel` | in app |
+| Glyphs & indicators | `StateIcon/Running`, `StateIcon/Paused` | `app/conversation/Activities.tsx` | `StateIcon` (file-local) | in app |
+| Glyphs & indicators | `Donut` | `app/conversation/ComposerCapsule.tsx` | `Donut` (file-local) | in app |
+| Glyphs & indicators | `StepGlyph/Done`, `Failed`, `Stopped`, `Pending` | `components/conversation/elements/step-glyph.tsx` | `StepGlyph` | |
+| Glyphs & indicators | `CiGlyph/Passed` | `app/conversation/ComposerStatusSlot.tsx` | `CiGlyph` (file-local) | in app |
+| Glyphs & indicators | `MockupTabIcon` | `app/conversation/MockupTabIcon.tsx` | `MockupTabIcon` | in app |
+| Glyphs & indicators | `FaviconGlyph/Globe`, `Favicon`, `Loading`, `Loading with favicon` | `app/conversation/BrowserTabIcon.tsx` | `FaviconGlyph`, `BrowserTabIcon` | in app |
+| Glyphs & indicators | `SiteIcon/Globe`, `SiteIcon/Favicon` | `app/side-panel/NewTabTools.tsx` | `SiteIcon` (file-local) | in app |
+| Glyphs & indicators | `Counts` | `app/conversation/Counts.tsx` | `Counts` (`dim`, `quiet`) | in app |
+| Glyphs & indicators | `SourceCountBadge` | `app/side-panel/WorkspacePane.tsx` | — (inline `data-slot="source-count"` span) | in app |
+| Glyphs & indicators | `Share` | `app/shell/BarStatus.tsx` | `Share` (file-local) | in app |
+| Shared app parts | `TitlebarNav` | `app/shell/AppSidebar.tsx` | `TitlebarNav` | in app |
+| Shared app parts | `RowAction`, `RowActionsSlot` | `app/shell/sidebar/nav.tsx`, `app/shell/AppSidebar.tsx` | `rowAction` (class string), `RowActionsSlot` (file-local) | in app |
+| Shared app parts | `ConversationRow` | `app/shell/AppSidebar.tsx` | `ConversationRow` (file-local, on `navRow`) | in app |
+| Shared app parts | `SidebarToggle/Open` | `app/shell/SidebarToggle.tsx` | `SidebarToggle` | in app |
+| Shared app parts | `TerminalButton` | `app/side-panel/SidePanel.tsx` | `TerminalButton` | in app |
+| Shared app parts | `NavHeader`, `NavSection` | `app/shell/sidebar/nav.tsx` | `NavHeader`, `NavSection` | in app |
+| Shared app parts | `CopyButton` | `components/shared/copy-button.tsx` | `CopyButton` | |
+| Shared app parts | `ModelSelector` | `components/shared/model-selector.tsx` | `ModelSelector` | |
+| Shared app parts | `ProgressLine` | `components/shared/progress-line.tsx` | `ProgressLine` | |
+| Shared app parts | `Section` | `app/conversation/cards/common.tsx` | `Section` | in app |
+| Shared app parts | `SettingsButton` | `components/controls/button.tsx` | `Button variant="soft" size="sm"` | |
+| Shared app parts | `SettingsSearch` | `components/shared/settings-search.tsx` | `SettingsSearch` | |
+| Shared app parts | `Settings Card`, `Settings Row` | `components/shared/settings-card.tsx`, `app/settings/parts.tsx` | `SettingsCard`, `RowText`, `settingsRows`; `SettingsRow` | Settings Row in app |
+| Shared app parts | `SettingsTitlebarStrip` | `app/App.tsx` | — (inline strip holding `TerminalButton`) | in app |
+| Shared app parts | `LabeledDivider` | `components/shared/labeled-divider.tsx` | `LabeledDivider` | |
+| Shared app parts | `MD/Paragraph`, `MD/Bullet item` | `components/conversation/markdown-text.tsx` | `MarkdownText` | |
+| Shared app parts | — | `components/shared/banner.tsx`, `empty-state.tsx`, `usage-bar.tsx`, `titlebar-button.tsx` | `Banner`, `EmptyState`, `UsageBar`, `TITLEBAR_BUTTON`, `TitlebarTips` | code only |
 
 ## Icons
 
