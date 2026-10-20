@@ -1,15 +1,8 @@
 import { useId, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
+import { Picker } from "@/app/inspector/providers/Picker";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ChevronDown } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { request } from "@/ipc/client";
@@ -24,40 +17,8 @@ const USUAL_WINDOWS: Record<ProviderKind, string[]> = {
   codex: ["primary", "secondary"],
 };
 
-/** A radio menu behind an outline button. */
-function Choice({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: Array<{ value: string; label: string }>;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button size="xs" variant="outline" aria-label={label} className="max-w-full justify-self-start">
-          <span className="truncate">
-            {options.find((option) => option.value === value)?.label ?? "Pick…"}
-          </span>
-          <ChevronDown />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-w-sm">
-        <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
-          {options.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value}>
-              <span className="truncate">{option.label}</span>
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
+/** The fault menus keep their own width in the form's grid. */
+const PICK = "max-w-full justify-self-start";
 
 /**
  * Development builds only: makes a provider refuse work as if a usage window ran out, for one
@@ -157,16 +118,25 @@ export function FaultControl() {
           </ToggleGroup>
           {kind === "task" ? (
             taskOptions.length > 0 ? (
-              <Choice label="Task" value={taskId} options={taskOptions} onChange={setTaskId} />
+              <Picker
+                label="Task"
+                value={taskId}
+                options={taskOptions}
+                onChange={setTaskId}
+                placeholder="Pick…"
+                className={PICK}
+              />
             ) : (
               <span className="text-muted-foreground">Open a session with workers.</span>
             )
           ) : (
-            <Choice
+            <Picker
               label="Conversation"
               value={conversationId}
               options={conversationOptions}
               onChange={setConversationId}
+              placeholder="Pick…"
+              className={PICK}
             />
           )}
         </div>
@@ -191,7 +161,14 @@ export function FaultControl() {
           ))}
         </ToggleGroup>
         <span className="text-muted-foreground">Window</span>
-        <Choice label="Window" value={windowId} options={windowOptions} onChange={setWindowId} />
+        <Picker
+          label="Window"
+          value={windowId}
+          options={windowOptions}
+          onChange={setWindowId}
+          placeholder="Pick…"
+          className={PICK}
+        />
         <label htmlFor={`${id}-reset`} className="text-muted-foreground">
           Resets in (min)
         </label>

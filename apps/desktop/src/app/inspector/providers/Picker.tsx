@@ -7,6 +7,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ChevronDown } from "@/components/icons";
+import { cn } from "@/lib/utils";
 
 export type PickerOption = { value: string; label: string; hint?: string };
 
@@ -17,12 +18,17 @@ export function Picker({
   options,
   onChange,
   disabled,
+  placeholder = "—",
+  className,
 }: {
   label: string;
   value: string;
   options: readonly PickerOption[];
   onChange: (value: string) => void;
   disabled?: boolean;
+  /** Shown while no option matches the value. */
+  placeholder?: string;
+  className?: string;
 }) {
   const current = options.find((option) => option.value === value);
   return (
@@ -33,13 +39,13 @@ export function Picker({
           size="xs"
           aria-label={label}
           disabled={disabled || options.length === 0}
-          className="min-w-0 justify-between"
+          className={cn("min-w-0 justify-between", className)}
         >
-          <span className="truncate">{current?.label ?? "—"}</span>
+          <span className="truncate">{current?.label ?? placeholder}</span>
           <ChevronDown />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
+      <DropdownMenuContent align="start" className="max-w-sm">
         <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
           {options.map((option) => (
             <DropdownMenuRadioItem key={option.value} value={option.value} className="text-xs">
