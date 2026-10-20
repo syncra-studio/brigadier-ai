@@ -20,12 +20,13 @@ through its MCP server, never as text.
 
 ## Boards
 
-- Every `app.pen` and `settings.pen` board is titled "Surface · Topic" and reads top to bottom:
-  ① Screens, ② Dialogs, ③ Components. Cards are titled "#NN Name" (the number from the
-  components inventory) and show the component's code path.
+- Every `app.pen` and `settings.pen` board is titled by its surface or page ("Surface · Topic"
+  when it has several boards) and holds its zones in this order: ① Screens, ② Dialogs,
+  ③ Components. Cards are titled "#NN Name" (the number from the components inventory) and show
+  the component's code path.
 - Boards sit in rows, not columns, left to right in app order, with a label above each group.
-  A board is at most 8,400 × 5,000 and always landscape; when a surface needs more, it gets
-  another board beside it.
+  A board is at most 8,400 × 5,000 and always landscape (the user's two boards in `app.pen` are
+  the only exception); when a surface needs more, it gets another board beside it.
 
 ## How the files link
 
