@@ -18,6 +18,10 @@ test("send feedback files what the user wrote and lists it with its links", { ti
   assert.equal(seen.placeholder, "What’s wrong, or what would you like? Several things at once is fine.");
   assert.equal(seen.focused, true);
   assert.equal(seen.account, "Posts as @stephen-golban on GitHub, with your app and macOS version.");
+  // It opens at its size, and its words don't change once shown (#470).
+  assert.ok((seen.firstHeight as number) > 0);
+  assert.equal(seen.firstHeight, seen.settledHeight);
+  assert.deepEqual(seen.accountLines, [seen.account]);
   // No Cancel: the X closes it.
   assert.deepEqual(seen.footer, ["Write it on GitHub yourself", "Send"]);
   assert.equal(seen.sendDisabled, true);

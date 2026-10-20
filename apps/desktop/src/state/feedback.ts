@@ -165,19 +165,29 @@ export function outcomeOf(results: FeedbackResult[]): FeedbackSending {
   return { phase: "failed", error: reason ? `Couldn’t send it: ${reason}.` : COULDNT_REACH, results };
 }
 
-let systemLookup: Promise<string | null> | null = null;
+let system: string | null = null;
+
+/**
+ * Looks up this computer's system and processor, once, at startup beside the app's info: Send
+ * feedback says it from its first frame instead of changing its words as it arrives (#470).
+ */
+export async function lookUpSystem(): Promise<void> {
+  system = await systemName().catch(() => null);
+}
 
 /** What goes with feedback now: this app's version, the system, and the agent CLIs found. */
-export async function feedbackDetails(): Promise<FeedbackDetails> {
-  systemLookup ??= systemName().catch(() => {
-    systemLookup = null;
-    return null;
-  });
+export function feedbackDetails(): FeedbackDetails {
   const { info, providers } = useApp.getState();
   const agents = (providers.view?.providers ?? []).flatMap(({ provider, status }) =>
     status?.version ? [`${PROVIDER_LABELS[provider]} ${status.version}`] : [],
   );
-  return { version: info?.version ?? null, system: await systemLookup, agents };
+  return { version: info?.version ?? null, system, agents };
+}
+
+/** The details to send, the system asked for again if startup couldn't tell. */
+async function sentDetails(): Promise<FeedbackDetails> {
+  if (system === null) await lookUpSystem();
+  return feedbackDetails();
 }
 
 /** What became of one report, and a send's step (see lib/feedbackSend.ts). */
@@ -193,7 +203,7 @@ export async function sendFeedback(
   kind?: FeedbackKind,
   onStep?: (step: FeedbackStep) => void,
 ): Promise<FeedbackResult[]> {
-  return send(await feedbackDetails(), text, kind, onStep);
+  return send(await sentDetails(), text, kind, onStep);
 }
 
 /** Files a write-up made first (the thread's card), or with none, the note in one form. */
@@ -202,10 +212,10 @@ export async function fileFeedback(
   kind: FeedbackKind,
   written: FeedbackWriteUp | null,
 ): Promise<FeedbackResult[]> {
-  return fileWriteUp(await feedbackDetails(), text, kind, written);
+  return fileWriteUp(await sentDetails(), text, kind, written);
 }
 
 /** Sends the reports that failed again; the others stay as they were. */
 export async function retryFeedback(results: readonly FeedbackResult[]): Promise<FeedbackResult[]> {
-  return retry(await feedbackDetails(), results);
+  return retry(await sentDetails(), results);
 }

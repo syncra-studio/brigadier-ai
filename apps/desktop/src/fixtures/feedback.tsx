@@ -19,7 +19,7 @@ import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
 import type { FeedbackFiling, FeedbackReport, ProviderOverview } from "@/ipc/generated";
-import { closeFeedback, COULDNT_REACH, type FeedbackResult, openFeedback, useFeedbackUi } from "@/state/feedback";
+import { closeFeedback, COULDNT_REACH, type FeedbackResult, lookUpSystem, openFeedback, useFeedbackUi } from "@/state/feedback";
 import { useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
@@ -64,7 +64,8 @@ const daemon = { writer: true, signedIn: true, failing: false, hold: null as Pro
 const state = params.get("state");
 if (state === "signedout" || state === "browser") daemon.signedIn = false;
 mockIPC(async (command, payload) => {
-  if (command === "system_name") return "macOS 27.0 Tahoe (aarch64)";
+  // A round trip's wait, as over the app's IPC.
+  if (command === "system_name") return new Promise((resolve) => setTimeout(() => resolve("macOS 27.0 Tahoe (aarch64)"), 50));
   if (command === "open_url") {
     opened.push((payload as { url: string }).url);
     return null;
@@ -97,6 +98,8 @@ mockIPC(async (command, payload) => {
   if (command === "ipc_request") return { method: request?.method };
   return null;
 });
+// As the app does at startup.
+await lookUpSystem();
 
 const provider = (kind: "claude" | "codex", version: string | null): ProviderOverview => ({
   provider: kind,
@@ -209,9 +212,20 @@ function Fixture() {
       await wait(200);
       button("Help")?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
       await wait(200);
+      // Every wording the line under the note shows as it first opens: only its last (#470).
+      const lines = new Set<string>();
+      const shown = new MutationObserver(() => {
+        if (dialog() && seen.firstHeight === undefined) seen.firstHeight = dialog()?.offsetHeight;
+        const line = text(dialog()?.querySelector("textarea")?.nextElementSibling);
+        if (line) lines.add(line);
+      });
+      shown.observe(document.body, { childList: true, subtree: true, characterData: true });
       [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => text(item) === "Send feedback…")?.click();
       await wait(300);
+      shown.disconnect();
+      seen.accountLines = [...lines];
       const open = dialog();
+      seen.settledHeight = open?.offsetHeight;
       const area = open?.querySelector("textarea");
       seen.opened = open !== null;
       seen.title = text(open?.querySelector("h2"));

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/controls";
 import { ArrowUpRight, Bug, Lightbulb } from "@/components/icons";
@@ -94,16 +94,7 @@ export function stepProgress(
 
 /** The system's name in a word ("macOS"), as "with your app and macOS version" says it. */
 export function useSystemWord(): string {
-  const [word, setWord] = useState("system");
-  useEffect(() => {
-    let live = true;
-    void feedbackDetails().then(({ system }) => {
-      const name = system?.split(" ")[0];
-      if (live && name) setWord(name);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
+  // Known since startup, so the words never change once shown (#470).
+  const [word] = useState(() => feedbackDetails().system?.split(" ")[0] || "system");
   return word;
 }

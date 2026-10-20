@@ -14,7 +14,7 @@ import { createRoot } from "react-dom/client";
 import { FeedbackDialog } from "@/app/shell/feedback/FeedbackDialog";
 import type { FeedbackFiling, FeedbackReport, OrchestratorStep } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
-import { closeFeedback, COULDNT_REACH, useFeedbackOffers, useFeedbackUi } from "@/state/feedback";
+import { closeFeedback, COULDNT_REACH, lookUpSystem, useFeedbackOffers, useFeedbackUi } from "@/state/feedback";
 import { useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
@@ -97,6 +97,8 @@ internals.invoke = async (command, args, options) => {
   }
   return invoke(command, args, options);
 };
+// As the app does at startup.
+await lookUpSystem();
 // Send feedback, which the app mounts beside every view.
 const dialogRoot = document.createElement("div");
 document.body.append(dialogRoot);
