@@ -818,8 +818,11 @@ mod tests {
         .unwrap();
         let checkout = repo.git.open(&linked).unwrap();
         assert!(checkout.rebase_onto("feature", "main").unwrap());
+        // As git names it (C:/… on Windows, where canonical paths are \\?\C:\…).
         assert_eq!(
-            repo.rebasing_checkout("feature").unwrap(),
+            repo.rebasing_checkout("feature")
+                .unwrap()
+                .map(|path| fs::canonicalize(path).unwrap()),
             Some(fs::canonicalize(&linked).unwrap())
         );
         assert_eq!(repo.rebasing_checkout("main").unwrap(), None);
