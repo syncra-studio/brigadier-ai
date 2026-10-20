@@ -2153,6 +2153,13 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 results: filed.unwrap_or_default(),
             }
         }
+        Request::FeedbackAccount => {
+            let account = heap(|| sessions.feedback_account()).await;
+            Response::FeedbackAccount {
+                signed_in: account.is_some(),
+                login: account.flatten(),
+            }
+        }
         Request::AnswerFeedbackOffer {
             conversation_id,
             offer_id,

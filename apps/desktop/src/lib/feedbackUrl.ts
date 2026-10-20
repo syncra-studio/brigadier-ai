@@ -163,3 +163,20 @@ export function reportUrl(report: FeedbackReport, details: FeedbackDetails): str
   }
   return url;
 }
+
+/** A report as the thread's card shows it opened: its fields in a line each, as they'll be posted. */
+export function reportLines(report: FeedbackReport): string[] {
+  const fields =
+    report.kind === "bug"
+      ? [
+          ["What happened", report.actual],
+          ["Expected", report.expected],
+          ["Steps", report.steps],
+        ]
+      : [
+          ["The problem", report.problem],
+          ["Today", report.today],
+          ["Wanted", report.wanted],
+        ];
+  return fields.flatMap(([label, value]) => (value?.trim() ? [`${label}: ${value.trim()}`] : []));
+}

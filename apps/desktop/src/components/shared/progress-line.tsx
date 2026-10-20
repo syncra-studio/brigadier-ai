@@ -32,6 +32,7 @@ export function ProgressLine({
   meta,
   description,
   outcome,
+  icon = true,
   className,
   ...props
 }: Omit<ComponentProps<"div">, "children" | "title"> & {
@@ -45,6 +46,8 @@ export function ProgressLine({
   /** What the stage at work is doing, in a line. */
   description?: ReactNode;
   outcome?: { status: ProgressOutcomeStatus; summary?: string | undefined } | undefined;
+  /** The spinner, or the outcome's mark, before the line; off where the line alone says it. */
+  icon?: boolean;
 }) {
   const running = outcome === undefined;
   const progress = outcome?.status === "success" ? 100 : pct(done, total);
@@ -56,7 +59,7 @@ export function ProgressLine({
       {...props}
     >
       <div className="flex min-w-0 items-center gap-2">
-        {outcome?.status === "partial" ? (
+        {!icon ? null : outcome?.status === "partial" ? (
           <ExclamationMarkCircle aria-hidden className="text-warning size-icon-sm shrink-0" />
         ) : outcome?.status === "failed" ? (
           <X aria-hidden className="text-destructive size-icon-sm shrink-0" />

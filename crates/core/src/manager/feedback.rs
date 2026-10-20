@@ -50,6 +50,20 @@ impl SessionManager {
         out.success().then_some(gh)
     }
 
+    /// Who Send feedback posts as: `None` when `gh` isn't signed in (the forms open in the
+    /// browser instead), else the GitHub login when `gh` can say it.
+    pub async fn feedback_account(&self) -> Option<Option<String>> {
+        let gh = self.signed_in_gh().await?;
+        let login = gh
+            .output(&["api", "user", "--jq", ".login"])
+            .await
+            .ok()
+            .filter(|out| out.success())
+            .map(|out| out.stdout.trim().to_owned())
+            .filter(|login| !login.is_empty());
+        Some(login)
+    }
+
     /// The note `text` as reports in the issue forms' shape, each checked against Brigadier's
     /// existing issues. Fails when no writer can run (the app then opens one form, as before).
     pub async fn write_up_feedback(&self, text: &str) -> Result<FeedbackWriteUp> {

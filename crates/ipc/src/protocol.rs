@@ -889,6 +889,8 @@ pub enum Request {
     FileFeedback {
         items: Vec<FeedbackFiling>,
     },
+    /// Send feedback: who it posts as on GitHub.
+    FeedbackAccount,
     /// The user's answer to the thread's feedback offer (`offer_feedback`): opened on GitHub
     /// (`sent`) or dismissed.
     AnswerFeedbackOffer {
@@ -1746,6 +1748,12 @@ pub enum Response {
         signed_in: bool,
         /// What became of each item, in order.
         results: Vec<FeedbackFiled>,
+    },
+    FeedbackAccount {
+        /// Whether `gh` is signed in; when it isn't, each report opens in the browser.
+        signed_in: bool,
+        /// The GitHub login, when `gh` could say it.
+        login: Option<String>,
     },
     AnswerFeedbackOffer,
     /// What became of the Cancel, for the user.

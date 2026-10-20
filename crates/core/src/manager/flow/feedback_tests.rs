@@ -23,6 +23,7 @@ echo "$*" >> "$D/calls"
 n=$(wc -l < "$D/calls" | tr -d ' ')
 case "$1 $2" in
   "auth status") exit "$(cat "$D/auth.exit" 2>/dev/null || echo 0)" ;;
+  "api user") cat "$D/login" ;;
   "issue list") cat "$D/issues.json" ;;
   "issue view") cat "$D/view-$3.json" ;;
   "issue create")
@@ -385,4 +386,27 @@ async fn a_refused_label_is_dropped_and_signed_out_nothing_is_filed() {
     assert_eq!(flow.manager.file_feedback(&items).await, None);
     assert_eq!(stubs.lines("calls").len(), 4, "only the sign-in check");
     flow.stop().await;
+}
+
+/// Who it posts as: the login `gh` names when signed in, nothing when it can't say it, and no
+/// account at all when signed out.
+#[tokio::test]
+async fn the_account_is_who_gh_is_signed_in_as() {
+    let seen = Seen::default();
+    let flow = Flow::start(
+        "feedback-account",
+        Options::default(),
+        writer(&seen, "", ""),
+    )
+    .await;
+    let stubs = Stubs::new(&flow);
+    stubs.file("login", "octocat\n");
+    assert_eq!(
+        flow.manager.feedback_account().await,
+        Some(Some("octocat".into()))
+    );
+    stubs.file("login", "");
+    assert_eq!(flow.manager.feedback_account().await, Some(None));
+    stubs.signed_out();
+    assert_eq!(flow.manager.feedback_account().await, None);
 }

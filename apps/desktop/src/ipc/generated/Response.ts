@@ -145,7 +145,15 @@ signedIn: boolean,
 /**
  * What became of each item, in order.
  */
-results: Array<FeedbackFiled>, } | { "method": "answerFeedbackOffer" } | { "method": "cancelMerge", text: string, } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
+results: Array<FeedbackFiled>, } | { "method": "feedbackAccount", 
+/**
+ * Whether `gh` is signed in; when it isn't, each report opens in the browser.
+ */
+signedIn: boolean, 
+/**
+ * The GitHub login, when `gh` could say it.
+ */
+login: string | null, } | { "method": "answerFeedbackOffer" } | { "method": "cancelMerge", text: string, } | { "method": "mergeSession", text: string, } | { "method": "closeWorkspace", text: string, } | { "method": "proposeOvernight", run: OvernightRun, } | { "method": "startOvernight", run: OvernightRun, } | { "method": "stopOvernight", run: OvernightRun, } | { "method": "steerOvernight", run: OvernightRun, } | { "method": "continueOvernight", run: OvernightRun, } | { "method": "mergeOvernight", run: OvernightRun, } | { "method": "getRunDiff", 
 /**
  * Absent before the run has a branch, and for a finished run with nothing verified.
  */
