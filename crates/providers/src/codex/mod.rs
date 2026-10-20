@@ -1339,30 +1339,41 @@ fn remove_unset_options(value: &mut Value) {
     }
 }
 
-/// The MCP servers of a project's own `.codex/config.toml` from a `config/read` with layers in
-/// the project, when Codex loads that file (the user trusts the project in Codex), each started
-/// in the project unless it names its own folder: a session working outside the project gets
-/// them as they run there.
+/// MCP servers from every enabled project layer, using Codex's effective settings.
+/// Layers are reported nearest first: the first layer defining a name supplies its default
+/// working folder, so inherited servers still run in their own project outside a thread's cwd.
 fn project_servers(read: &Value) -> Map<String, Value> {
-    let Some(layer) = project_layers(read).next() else {
-        return Map::new();
-    };
-    let root = layer
-        .pointer("/name/dotCodexFolder")
-        .and_then(Value::as_str)
-        .and_then(|folder| Path::new(folder).parent())
-        .map(|root| root.display().to_string());
-    let mut servers = layer
+    let effective = read
         .pointer("/config/mcp_servers")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    for server in servers.values_mut().filter_map(Value::as_object_mut) {
-        if let Some(root) = &root
-            && server.contains_key("command")
-            && !server.contains_key("cwd")
-        {
-            server.insert("cwd".into(), json!(root));
+        .and_then(Value::as_object);
+    let mut servers = Map::new();
+    for layer in project_layers(read) {
+        let root = layer
+            .pointer("/name/dotCodexFolder")
+            .and_then(Value::as_str)
+            .and_then(|folder| Path::new(folder).parent());
+        let Some(project) = layer
+            .pointer("/config/mcp_servers")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        for (name, server) in project {
+            servers.entry(name.clone()).or_insert_with(|| {
+                let mut server = effective
+                    .and_then(|servers| servers.get(name))
+                    .unwrap_or(server)
+                    .clone();
+                remove_unset_options(&mut server);
+                if let Some(config) = server.as_object_mut()
+                    && let Some(root) = root
+                    && config.contains_key("command")
+                    && !config.contains_key("cwd")
+                {
+                    config.insert("cwd".into(), json!(root.display().to_string()));
+                }
+                server
+            });
         }
     }
     servers
@@ -2805,6 +2816,55 @@ mod tests {
         );
         assert!(project_servers(&read(Some("add it as a trusted project"))).is_empty());
         assert!(project_servers(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn project_servers_include_inherited_layers_with_effective_settings() {
+        let read = json!({
+            "layers": [
+                { "name": { "type": "project", "dotCodexFolder": "/workspace/repo/.codex" },
+                  "config": { "mcp_servers": {
+                      "repository": { "command": "node", "args": ["repo.js"] },
+                      "shared": { "args": ["child.js"] }
+                  } } },
+                { "name": { "type": "project", "dotCodexFolder": "/workspace/.codex" },
+                  "config": { "mcp_servers": {
+                      "workspace": { "command": "node", "args": ["workspace.js"] },
+                      "shared": { "command": "node", "args": ["parent.js"],
+                                  "env": { "PARENT": "kept" } },
+                      "own": { "command": "uv", "cwd": "/elsewhere" },
+                      "remote": { "url": "https://mcp.example.invalid" }
+                  } } },
+                { "name": { "type": "project", "dotCodexFolder": "/ignored/.codex" },
+                  "disabledReason": "untrusted",
+                  "config": { "mcp_servers": { "ignored": { "command": "false" } } } },
+                { "name": { "type": "user" },
+                  "config": { "mcp_servers": { "personal": { "command": "false" } } } }
+            ],
+            "config": { "mcp_servers": {
+                "repository": { "command": "node", "args": ["repo.js"],
+                                "tool_timeout_sec": null },
+                "workspace": { "command": "node", "args": ["workspace.js"] },
+                "shared": { "command": "node", "args": ["child.js"],
+                            "env": { "PARENT": "kept" }, "cwd": null },
+                "own": { "command": "uv", "cwd": "/elsewhere" },
+                "remote": { "url": "https://mcp.example.invalid" },
+                "personal": { "command": "false" }
+            } }
+        });
+        assert_eq!(
+            Value::Object(project_servers(&read)),
+            json!({
+                "repository": { "command": "node", "args": ["repo.js"],
+                                "cwd": "/workspace/repo" },
+                "workspace": { "command": "node", "args": ["workspace.js"],
+                               "cwd": "/workspace" },
+                "shared": { "command": "node", "args": ["child.js"],
+                            "env": { "PARENT": "kept" }, "cwd": "/workspace/repo" },
+                "own": { "command": "uv", "cwd": "/elsewhere" },
+                "remote": { "url": "https://mcp.example.invalid" }
+            })
+        );
     }
 
     #[test]
