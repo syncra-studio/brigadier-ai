@@ -172,9 +172,9 @@ async function steps(seen: Record<string, unknown>): Promise<void> {
   content().focus(); caretAtEnd(); await wait(50); type("!"); await wait(50);
   const theirs = put(FIRST, { title: "Launch plan", emoji: null, body: "Their version" });
   emitPageChanged({ id: FIRST, revision: theirs.revision });
-  await until(() => one('.page-banner[data-tone="warning"]') !== null);
-  const banner = one('.page-banner[data-tone="warning"]');
-  seen.conflict = banner ? [banner.querySelector(".page-banner-text")?.textContent, ...[...banner.querySelectorAll("button")].map((button) => button.textContent)] : null;
+  await until(() => one('[data-slot="banner"][data-tone="warning"]') !== null);
+  const banner = one('[data-slot="banner"][data-tone="warning"]');
+  seen.conflict = banner ? [banner.querySelector(":scope > span")?.textContent, ...[...banner.querySelectorAll("button")].map((button) => button.textContent)] : null;
   [...(banner?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Keep both")?.click();
   await until(() => sessionTabs(ID).tabs.length === 2);
   const copy = sessionTabs(ID).tabs.find((tab) => tab.kind === "page" && tab.pageId !== FIRST);
@@ -182,7 +182,7 @@ async function steps(seen: Record<string, unknown>): Promise<void> {
   seen.keptBoth = { mine: copyId ? pages.get(copyId)?.content.body.slice(-30) : null, title: copyId ? pages.get(copyId)?.content.title : null, theirs: pages.get(FIRST)?.content.body };
   if (copyId) pages.delete(copyId);
   useSessionTabs.setState({ sessions: { [ID]: { tabs: sessionTabs(ID).tabs.filter((tab) => tab.id === "page:fixture"), active: "page:fixture" } } });
-  await until(() => one(".page-banner") === null);
+  await until(() => one('[data-slot="banner"]') === null);
   seen.editorShowsTheirs = content().textContent;
   // More typing, saved in the page.
   content().focus(); caretAtEnd(); await wait(50); type(" before sending!"); await wait(900);

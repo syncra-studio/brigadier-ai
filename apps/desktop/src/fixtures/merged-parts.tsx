@@ -5,6 +5,7 @@ import { LabeledDivider } from "@/components/assistant-ui/elements/labeled-divid
 import { OfferBody, OfferCard } from "@/app/conversation/OfferCard";
 import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
 import { Branch, Download, Folder, Globe, Info } from "@/components/icons";
+import { Banner } from "@/components/ui/banner";
 import { DropdownMenuLabel, itemBase, MenuRow } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
@@ -33,6 +34,11 @@ function probe(css: string) {
   const value = { width: style.width, background: style.backgroundColor, color: style.color, fontSize: style.fontSize, radius: style.borderTopLeftRadius, fontFamily: style.fontFamily };
   node.remove();
   return value;
+}
+
+/** The fill of a reference swatch in the banner group. */
+function ref(name: string) {
+  return getComputedStyle(document.querySelector(`[data-group="banner"] > [data-${name}]`)!).backgroundColor;
 }
 
 /** The look of each part the near-duplicates were merged into, read back for a render test. */
@@ -72,7 +78,20 @@ function measure() {
     align: getComputedStyle(node).textAlign,
     icon: node.querySelector("svg")?.getBoundingClientRect().width ?? null,
   }));
+  const banners = [...document.querySelectorAll('[data-group="banner"] [data-slot="banner"]')].map((node) => ({
+    ...box(node),
+    role: node.getAttribute("role"),
+    border: parseFloat(getComputedStyle(node).borderBottomWidth),
+    dismiss: node.querySelector("button")?.textContent ?? null,
+  }));
   return {
+    banner: {
+      banners,
+      wash: ref("wash"),
+      red: ref("red"),
+      destructive: probe("color: var(--destructive)").color,
+      textSm: probe("font-size: var(--text-sm)").fontSize,
+    },
     empty: {
       empties,
       dim: getComputedStyle(document.querySelector('[data-group="empty"] > [data-dim]')!).color,
@@ -134,6 +153,12 @@ function Fixture() {
             Continued from chat
           </span>
         </LabeledDivider>
+      </section>
+      <section data-group="banner" className="flex flex-col">
+        <span data-wash className="bg-foreground/5" />
+        <span data-red className="bg-destructive/10" />
+        <Banner text="The shell exited." />
+        <Banner tone="error" text="Could not open the page" onDismiss={() => {}} />
       </section>
       <section data-group="empty" className="flex w-80 flex-col">
         <ul>

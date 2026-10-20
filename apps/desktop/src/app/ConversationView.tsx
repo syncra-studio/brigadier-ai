@@ -84,6 +84,7 @@ import {
 import { LinkConversationContext, OpenFileContext } from "@/components/assistant-ui/file-links";
 import { ThreadHistoryContext, type RailEntry, type ThreadHistory } from "@/components/assistant-ui/message-rail";
 import { Thread, type ThreadComponents } from "@/components/assistant-ui/thread";
+import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/use-now";
 import type {
@@ -918,20 +919,7 @@ export function ConversationView({
                       <div className="relative flex min-h-0 flex-1">
                       <div className="flex h-full min-w-0 flex-1 flex-col">
                           {error && (
-                            <p
-                              role="alert"
-                              className="bg-destructive/10 text-destructive border-destructive/20 flex items-center gap-2 border-b px-4 py-2 text-sm"
-                            >
-                              <span className="min-w-0 flex-1">{error}</span>
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                aria-label="Dismiss"
-                                onClick={() => setError(null)}
-                              >
-                                <X />
-                              </Button>
-                            </p>
+                            <Banner tone="error" text={error} onDismiss={() => setError(null)} />
                           )}
                           <div className="relative flex min-h-0 flex-1">
                           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">

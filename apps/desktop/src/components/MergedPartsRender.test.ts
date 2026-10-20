@@ -7,6 +7,15 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("merged parts draw one look per group", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "merged-parts.html", "merged-parts-result", 30000));
 
+  // Banner: a 14px strip, 8 by 16 in, a hairline under it; info on a light wash, error red and
+  // announced, with a × to dismiss it.
+  const [info, failed] = seen.banner.banners;
+  for (const banner of seen.banner.banners) {
+    assert.deepEqual([banner.paddingTop, banner.paddingLeft, banner.border, banner.fontSize], [8, 16, 1, seen.banner.textSm]);
+  }
+  assert.deepEqual([info.role, info.background, info.dismiss], ["status", seen.banner.wash, null]);
+  assert.deepEqual([failed.role, failed.background, failed.color, failed.dismiss], ["alert", seen.banner.red, seen.banner.destructive, "Dismiss"]);
+
   // Empty state: one dim 14px line; a list's is a row tall and not a status; centred has a
   // larger icon.
   const [inList, inCard, centered] = seen.empty.empties;

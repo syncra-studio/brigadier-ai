@@ -36,9 +36,9 @@ import {
   Sidebar,
   Trash,
   Unpin,
-  X,
 } from "@/components/icons";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
+import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -443,15 +443,7 @@ export function AppSidebar() {
       </div>
 
       {error && (
-        <div
-          role="alert"
-          className="border-destructive/40 bg-destructive/10 text-destructive rounded-control m-2 flex items-start gap-2 border px-2 py-1.5 text-xs"
-        >
-          <p className="min-w-0 flex-1 wrap-break-word">{error}</p>
-          <Button variant="ghost" size="icon-xs" aria-label="Dismiss" onClick={() => setError(null)}>
-            <X />
-          </Button>
-        </div>
+        <Banner tone="error" text={error} onDismiss={() => setError(null)} />
       )}
 
       <ProjectDialog

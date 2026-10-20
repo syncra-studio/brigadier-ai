@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { TerminalView } from "@/app/conversation/TerminalView";
+import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { changeSessionTab, type TerminalTabState } from "@/state/sessionTabs";
 import { endMainTerminal, openMainTerminal } from "@/state/sessionTabResources";
@@ -25,10 +26,9 @@ export function MainTerminalTab({ conversationId, tab, active }: { conversationI
     setAttempt((count) => count + 1);
   };
   return <>
-    {exited && <div className="border-border flex shrink-0 items-center gap-2 border-b px-4 py-2">
-      <span role="status" className="text-muted-foreground min-w-0 flex-1 truncate text-sm">The shell exited.</span>
+    {exited && <Banner text="The shell exited.">
       <Button size="xs" variant="ghost" onClick={restart}>Restart</Button>
-    </div>}
+    </Banner>}
     <TerminalView key={attempt} open={open} onExit={onExit} onTitle={onTitle} onCwd={onCwd} focus={active} />
   </>;
 }

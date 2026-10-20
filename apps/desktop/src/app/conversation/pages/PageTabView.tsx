@@ -1,6 +1,7 @@
 import type { LexicalEditor } from "lexical";
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { openLink } from "@/state/links";
 import { pageEditing, usePageEdits } from "@/state/pageEditing";
@@ -148,11 +149,3 @@ function OpenPage({ conversationId, tab, pageId, active }: { conversationId: str
   );
 }
 
-function Banner({ tone, text, children }: { tone: "warning" | "error"; text: string; children?: ReactNode }) {
-  return (
-    <div role={tone === "error" ? "alert" : "status"} data-tone={tone} className="page-banner">
-      <span className="page-banner-text">{text}</span>
-      {children}
-    </div>
-  );
-}

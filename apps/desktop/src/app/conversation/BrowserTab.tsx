@@ -33,6 +33,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Banner } from "@/components/ui/banner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { browserFocus, browserGo, browserPlace, browserPrint, browserSnapshot, openUrl } from "@/ipc/client";
@@ -779,14 +780,10 @@ export function BrowserTab({
       </div>
       {finding && native && <FindBar id={conversationId} input={findInput} onClose={hideFind} />}
       {paused && driver !== null && (
-        <div
-          role="status"
+        <Banner
           data-slot="browser-paused"
-          className="border-border bg-muted/40 flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm"
+          text={<>You're using this page, so <span className="font-medium">{driver}</span> is waiting.</>}
         >
-          <span className="min-w-0 flex-1 truncate">
-            You're using this page, so <span className="font-medium">{driver}</span> is waiting.
-          </span>
           <button
             type="button"
             onClick={() => handBack(conversationId)}
@@ -794,17 +791,13 @@ export function BrowserTab({
           >
             Continue
           </button>
-        </div>
+        </Banner>
       )}
       {page?.blocked && (
-        <div
-          role="status"
-          className="border-border bg-muted/40 flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-sm"
+        <Banner
+          text={<>This can't open here: <span className="text-muted-foreground">{page.blocked}</span></>}
+          onDismiss={() => dismissBlocked(conversationId)}
         >
-          <span className="min-w-0 flex-1 truncate">
-            This can't open here:{" "}
-            <span className="text-muted-foreground">{page.blocked}</span>
-          </span>
           {webAddress(page.blocked) && (
             <button
               type="button"
@@ -814,14 +807,7 @@ export function BrowserTab({
               Open in browser
             </button>
           )}
-          <TooltipIconButton
-            tooltip="Dismiss"
-            size="icon-xs"
-            onClick={() => dismissBlocked(conversationId)}
-          >
-            <X />
-          </TooltipIconButton>
-        </div>
+        </Banner>
       )}
       <div
         ref={area}

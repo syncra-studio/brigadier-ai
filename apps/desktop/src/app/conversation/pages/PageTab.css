@@ -51,10 +51,6 @@
 .page-emoji-choice:hover, .page-emoji-choice[aria-selected="true"] { background: var(--toolbar-hover); }
 .page-emoji-choice:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 
-.page-banner { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--spacing) * 2); padding: calc(var(--spacing) * 2) calc(var(--spacing) * 4); border-bottom: 1px solid var(--page-rule); background: var(--page-wash); font-size: var(--text-label); }
-.page-banner[data-tone="error"] { color: var(--destructive); }
-.page-banner-text { flex: 1; min-width: calc(var(--spacing) * 48); }
-
 /* The bar over the page: File and Insert capsules, 48 high. */
 .page-top-bar { display: flex; flex-shrink: 0; align-items: center; gap: calc(var(--spacing) * 1.5); height: calc(var(--spacing) * 12); padding: calc(var(--spacing) * 2); }
 .page-capsule {
