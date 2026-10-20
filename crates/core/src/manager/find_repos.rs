@@ -3,6 +3,7 @@
 //! from a quick, bounded look through the usual code folders, never the whole disk.
 
 use std::collections::{BTreeSet, HashMap};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -43,6 +44,8 @@ const MAX_FOLDERS: usize = 4000;
 const LOOK_BUDGET: Duration = Duration::from_millis(1500);
 /// Repositories listed, at most.
 const MAX_REPOS: usize = 300;
+/// Git itself rejects gitfiles over 1 MiB.
+const MAX_GITFILE_BYTES: u64 = 1024 * 1024;
 /// Folders never looked into: packages, build output, the system's own.
 const SKIPPED_NAMES: &[&str] = &[
     "node_modules",
@@ -283,12 +286,22 @@ fn git_activity_ms_with(
 pub(super) fn git_dir(root: &Path, protected: &ProtectedFolders) -> Option<PathBuf> {
     let (mut git, entry) = git_entry(root, protected)?;
     if entry.is_file() {
-        let target = std::fs::read_to_string(&git)
-            .ok()
-            .and_then(|text| {
-                text.strip_prefix("gitdir:")
-                    .map(|path| PathBuf::from(path.trim()))
-            })
+        if entry.len() > MAX_GITFILE_BYTES {
+            return None;
+        }
+        // Bound the read too: the file may grow after its metadata was checked.
+        let mut text = String::new();
+        std::fs::File::open(&git)
+            .ok()?
+            .take(MAX_GITFILE_BYTES + 1)
+            .read_to_string(&mut text)
+            .ok()?;
+        if text.len() as u64 > MAX_GITFILE_BYTES {
+            return None;
+        }
+        let target = text
+            .strip_prefix("gitdir:")
+            .map(|path| PathBuf::from(path.trim()))
             .filter(|path| !path.as_os_str().is_empty())
             // Git resolves relative gitdir paths from the checkout, even for a linked file.
             .and_then(|path| protected.canonicalize(&root.join(path)))?;
@@ -319,7 +332,7 @@ mod tests {
     impl Temp {
         fn new() -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "20261018-1945-issues-run-2-w41-find-repos-{}",
+                "20261020-1537-issues-sweep-w06-find-repos-{}",
                 uuid::Uuid::now_v7()
             ));
             std::fs::create_dir_all(&dir).unwrap();
@@ -335,6 +348,32 @@ mod tests {
 
     fn repo(path: &Path) {
         std::fs::create_dir_all(path.join(".git")).unwrap();
+    }
+
+    #[test]
+    fn gitfiles_larger_than_one_mib_are_rejected() {
+        let temp = Temp::new();
+        let target = temp.0.join("actual");
+        std::fs::create_dir(&target).unwrap();
+        let gitfile = temp.0.join(".git");
+        let mut text = String::from("gitdir: actual\n");
+        text.extend(std::iter::repeat_n(' ', 1024 * 1024 - text.len()));
+        std::fs::write(&gitfile, &text).unwrap();
+        let protected = ProtectedFolders::default();
+        assert_eq!(git_dir(&temp.0, &protected), Some(target));
+        text.push(' ');
+        std::fs::write(&gitfile, &text).unwrap();
+        assert_eq!(git_dir(&temp.0, &protected), None);
+    }
+
+    #[test]
+    fn oversized_sparse_gitfiles_are_rejected() {
+        let temp = Temp::new();
+        std::fs::File::create(temp.0.join(".git"))
+            .unwrap()
+            .set_len(64 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(git_dir(&temp.0, &ProtectedFolders::default()), None);
     }
 
     #[test]
