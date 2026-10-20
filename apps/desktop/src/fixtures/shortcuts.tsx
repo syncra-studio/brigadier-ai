@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ShortcutsPage } from "@/app/settings/ShortcutsPage";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import { useApp } from "@/state/store";
 
 /*

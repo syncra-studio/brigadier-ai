@@ -8,8 +8,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { BrowserImportPage } from "@/app/settings/BrowserImportPage";
-import { Toaster } from "@/components/overlays/toast";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { Toaster, TooltipProvider } from "@/components/overlays";
 import type { ImportOutcome, ImportProgress, ImportRecord, ImportSource } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 

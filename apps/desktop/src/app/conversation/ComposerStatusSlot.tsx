@@ -18,10 +18,10 @@ import {
 import { stripWords } from "@/app/conversation/activity/stripView";
 import { useWorkersStrip, WorkersStrip } from "@/app/conversation/activity/WorkersStrip";
 import { useAction } from "@/app/conversation/useAction";
-import { ComposerRailItem } from "@/components/conversation/elements/composer-rail";
+import { ComposerRailItem } from "@/components/conversation";
 import { Branch, Check, ChevronRight, Spinner, X } from "@/components/icons";
-import { Button } from "@/components/controls/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
+import { Button } from "@/components/controls";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { openUrl } from "@/ipc/client";
 import { cn } from "@/lib/utils";
 import { cancelMerge } from "@/state/actions";

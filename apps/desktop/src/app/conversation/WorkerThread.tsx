@@ -19,20 +19,16 @@ import { actionDetail } from "@/app/conversation/activity/StepDetail";
 import { workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, itemCall, stepWords } from "@/app/conversation/activity/words";
-import { ROW } from "@/components/conversation/elements/activity-row";
+import { ROW, RateItem, RateMenu, MarkdownBlock, ErrorState } from "@/components/conversation";
 import { useAction } from "@/app/conversation/useAction";
-import { RateItem, RateMenu } from "@/components/conversation/rate-menu";
-import { MarkdownBlock } from "@/components/conversation/thread";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton, Button } from "@/components/controls";
 import {
   shownCommand,
   type ThreadEntry,
   threadEntries,
 } from "@/components/conversation/transcript/activity";
 import { type TranscriptItem, TranscriptFolder } from "@/components/conversation/transcript/transcript";
-import { ErrorState } from "@/components/conversation/elements/error-state";
-import { Button } from "@/components/controls/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout";
 import {
   Check,
   ChevronRight,

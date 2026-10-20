@@ -7,7 +7,7 @@
 export async function warmCode(): Promise<void> {
   const [highlight, diffs] = await Promise.all([
     import("@/lib/highlight"),
-    import("@/components/views/PierreDiff"),
+    import("@/components/views/diff"),
     import("@/app/conversation/diffView").then((view) => view.preloadDiffView()),
     import("@/app/conversation/SessionTabBar").then((bar) => bar.preloadCodeTabs()),
   ]);

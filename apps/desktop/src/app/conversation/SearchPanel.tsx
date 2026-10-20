@@ -3,7 +3,7 @@ import {
   type FC, type KeyboardEvent, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
 } from "react";
 
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls";
 import {
   ChevronDown,
   ChevronRight,
@@ -16,7 +16,7 @@ import {
   WholeWordGlyph,
   X,
 } from "@/components/icons";
-import { ConfirmDialog } from "@/components/overlays/confirm-dialog";
+import { ConfirmDialog } from "@/components/overlays";
 import type { ReplaceOutcome, ReplaceSkip, SearchFile, SearchLine, SearchQuery } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { useApp } from "@/state/store";
@@ -25,7 +25,7 @@ import {
   clearSearch, dismissSearchFile, EMPTY_FORM, replaceResults, runSearch, sameQuery, searchId, searchQuery, type SearchForm,
   setSearchForm, stopSearch, useWorkspaceSearch,
 } from "@/state/workspaceSearch";
-import { SettingsSearch } from "@/components/shared/settings-search";
+import { SettingsSearch } from "@/components/shared";
 
 /**
  * The right sidebar's Search (⇧⌘F): text or a pattern across the checkout, with match case,

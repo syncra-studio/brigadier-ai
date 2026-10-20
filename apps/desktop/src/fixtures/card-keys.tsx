@@ -9,7 +9,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { type PendingAction, PendingActionCard } from "@/app/conversation/ActionCards";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { Plan, Question, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";

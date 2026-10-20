@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { OnboardingDialog } from "@/app/onboarding/OnboardingDialog";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import { OVERVIEWS } from "@/fixtures/agents";
 import { fixtureClick } from "@/fixtures/input";
 import type { Request } from "@/ipc/generated";

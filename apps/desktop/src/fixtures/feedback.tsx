@@ -11,8 +11,8 @@ import { createRoot } from "react-dom/client";
 
 import { FeedbackDialog } from "@/app/feedback/FeedbackDialog";
 import { SidebarFoot } from "@/app/SidebarFoot";
-import { SidebarProvider } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { SidebarProvider } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
 import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
 import type { ProviderOverview } from "@/ipc/generated";
 import { openFeedback, useFeedbackUi } from "@/state/feedback";

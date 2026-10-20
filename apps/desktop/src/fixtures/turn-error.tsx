@@ -10,7 +10,7 @@ import "@/fixtures/flow";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { ErrorState } from "@/components/conversation/elements/error-state";
+import { ErrorState } from "@/components/conversation";
 import type { Notice, Request } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 

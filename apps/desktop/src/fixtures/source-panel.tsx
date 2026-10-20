@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { SourcePanel } from "@/app/conversation/SourcePanel";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Request, SourceBranch, SourceFile, SourceState } from "@/ipc/generated";
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";

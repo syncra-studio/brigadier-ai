@@ -6,10 +6,8 @@ import { PRIMARY_BUTTON, PRIMARY_KEY, useFocusOnMount } from "@/app/onboarding/p
 import { StaggerText } from "@/app/onboarding/StaggerText";
 import { playWelcomeSound, preloadWelcomeSound } from "@/app/onboarding/welcomeSound";
 import { BrigadierGlyph, Spinner } from "@/components/icons";
-import { Button } from "@/components/controls/button";
-import { DialogTitle } from "@/components/overlays/dialog";
-import { Input } from "@/components/controls/input";
-import { Kbd } from "@/components/controls/kbd";
+import { Button, Input, Kbd } from "@/components/controls";
+import { DialogTitle } from "@/components/overlays";
 import { introBegin, introFinish, introRelease, introShaped, onIntroEnded } from "@/ipc/client";
 
 /** How long the intro waits for its sound to load before it starts without it. */

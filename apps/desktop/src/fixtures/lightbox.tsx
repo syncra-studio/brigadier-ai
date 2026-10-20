@@ -1,7 +1,7 @@
 /** Standalone image-preview measurements; native=1 keeps real IPC for the dev-app check. */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
-import { ImagePreview } from "@/components/conversation/elements/image-viewer";
+import { ImagePreview } from "@/components/conversation";
 import { saveCopy } from "@/ipc/client";
 import { useToasts } from "@/state/toasts";
 

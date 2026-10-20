@@ -11,7 +11,7 @@ import {
   useRef,
 } from "react";
 
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton, Badge } from "@/components/controls";
 import { useCheckoutRoot } from "@/components/conversation/file-links";
 import { SidebarActivityMark, SidebarError, statusWords } from "@/app/SessionStatus";
 import { UNTITLED } from "@/app/TopBar";
@@ -37,15 +37,14 @@ import { undoTabClose } from "@/state/terminalPlaces";
 import { ChatActions } from "@/app/conversation/ChatActions";
 import { OutputTab } from "@/app/conversation/OutputTab";
 import { MockupTabIcon, MockupTabStatus, useMockupTab } from "@/app/conversation/MockupTabIcon";
-import { FileTypeIcon } from "@/components/conversation/elements/file-type-icon";
-import { Badge } from "@/components/controls/badge";
+import { FileTypeIcon } from "@/components/conversation";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "@/components/overlays/context-menu";
+} from "@/components/overlays";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { Conversation } from "@/ipc/generated";
 import { preloadable } from "@/lib/preloadable";

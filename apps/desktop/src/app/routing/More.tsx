@@ -5,8 +5,8 @@ import { Badge, HAIRLINE_BOTTOM, HAIRLINE_TOP, OpenChevron, StepNumber } from "@
 import { faded, reviewers, reviewsWords, ROUTED_KINDS, strengthFor, tierFor } from "@/app/routing/words";
 import { SettingsSection, SettingsSelect } from "@/app/settings/parts";
 import { ArrowRotateCw, ListOrderedIcon, ProviderGlyph, SpeedometerLatencySpeed } from "@/components/icons";
-import { Button } from "@/components/controls/button";
-import { RowText, SettingsCard } from "@/components/shared/settings-card";
+import { Button } from "@/components/controls";
+import { RowText, SettingsCard } from "@/components/shared";
 import type { RoutePreview, TaskCategory } from "@/ipc/generated";
 import { PLAIN_KIND_NAMES, TIER_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";

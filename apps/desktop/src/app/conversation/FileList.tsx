@@ -2,8 +2,7 @@ import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
-import { Button } from "@/components/controls/button";
+import { TooltipIconButton, Button } from "@/components/controls";
 import { DownloadSimple, File, FileCode, FileDocument, FileImage } from "@/components/icons";
 import { openArtifact, saveArtifact } from "@/ipc/client";
 import type { ArtifactRef } from "@/ipc/generated";

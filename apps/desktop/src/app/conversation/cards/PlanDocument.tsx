@@ -1,10 +1,9 @@
 import { type ComponentProps, type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { CopyButton } from "@/components/shared/copy-button";
-import { RateItem, RateMenu } from "@/components/conversation/rate-menu";
-import { MarkdownBlock } from "@/components/conversation/thread";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { CopyButton } from "@/components/shared";
+import { RateItem, RateMenu, MarkdownBlock } from "@/components/conversation";
+import { TooltipIconButton } from "@/components/controls";
 import { ExpandSm, Lightbulb } from "@/components/icons";
 import { useAction } from "@/app/conversation/useAction";
 import type { Rating } from "@/ipc/generated";

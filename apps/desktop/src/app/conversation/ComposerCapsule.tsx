@@ -12,10 +12,10 @@ import {
   planStepStatus,
   stepStates,
 } from "@/app/conversation/planProgress";
-import { StepGlyph } from "@/components/conversation/elements/step-glyph";
+import { StepGlyph } from "@/components/conversation";
 import { mono } from "@/components/conversation/elements/surfaces";
 import { Clock, StopCircle, X } from "@/components/icons";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import type { DiffStat, FileStat } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { openFileTab } from "@/state/sessionTabs";

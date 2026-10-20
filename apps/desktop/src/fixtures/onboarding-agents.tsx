@@ -16,8 +16,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AgentsStep } from "@/app/onboarding/AgentsStep";
-import { Dialog, DialogContent } from "@/components/overlays/dialog";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { Dialog, DialogContent, TooltipProvider } from "@/components/overlays";
 import { OVERVIEWS, status } from "@/fixtures/agents";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { AgentConnect, ProviderKind, ProviderOverview, ProviderStatus, Request } from "@/ipc/generated";

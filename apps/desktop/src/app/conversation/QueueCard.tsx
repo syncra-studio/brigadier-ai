@@ -17,21 +17,15 @@ import { InlineImageText } from "@/app/conversation/InlineImage";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { useAction } from "@/app/conversation/useAction";
-import { ComposerRailItem } from "@/components/conversation/elements/composer-rail";
-import {
-  MessageQueue,
-  MessageQueueItem,
-  MessageQueuePaused,
-} from "@/components/conversation/elements/message-queue";
+import { ComposerRailItem, MessageQueue, MessageQueueItem, MessageQueuePaused } from "@/components/conversation";
 import { ghostButton } from "@/components/conversation/elements/surfaces";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
-import { Button } from "@/components/controls/button";
+import { TooltipIconButton, Button } from "@/components/controls";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/overlays/dropdown-menu";
+} from "@/components/overlays";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { AttachmentRef, MovedMessage, QueuedMessage } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

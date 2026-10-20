@@ -1,7 +1,7 @@
 import { Section } from "@/app/conversation/cards/common";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import type { ModelGroup } from "@/components/shared/model-selector";
-import { Badge } from "@/components/controls/badge";
+import type { ModelGroup } from "@/components/shared";
+import { Badge } from "@/components/controls";
 import { useNow } from "@/hooks/use-now";
 import type { Attempt, Explanation, RankingUse, Task } from "@/ipc/generated";
 import { formatDateTime, formatTime } from "@/lib/format";

@@ -14,8 +14,8 @@ import { createRoot } from "react-dom/client";
 
 import { ActivityGroup, type Described, StepRow } from "@/app/conversation/activity/ActivityGroup";
 import { stepWords } from "@/app/conversation/activity/words";
-import { MarkdownBlock } from "@/components/conversation/thread";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { MarkdownBlock } from "@/components/conversation";
+import { TooltipProvider } from "@/components/overlays";
 import type { Request } from "@/ipc/generated";
 
 const query = new URLSearchParams(location.search);

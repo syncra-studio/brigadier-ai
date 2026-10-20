@@ -12,8 +12,7 @@ import { navRow, NavHeader, NavList, NavSection } from "@/app/sidebar/nav";
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
-import { EmptyState } from "@/components/shared/empty-state";
-import { SettingsSearch } from "@/components/shared/settings-search";
+import { EmptyState, SettingsSearch } from "@/components/shared";
 
 /** Opens a result's page, then brings the setting it found into view. */
 function openResult({ page, row }: SettingsSearchResult) {

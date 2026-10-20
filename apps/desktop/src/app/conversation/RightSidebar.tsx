@@ -1,13 +1,12 @@
 import { type CSSProperties, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { WORKERS_LABEL, WorkersTab } from "@/app/conversation/Agents";
 import { outcomeWords } from "@/app/conversation/workerPresentation";
-import { TitlebarTips } from "@/components/shared/titlebar-button";
+import { TitlebarTips } from "@/components/shared";
 import { X } from "@/components/icons";
-import { SidebarReveal, SidebarResizeHandle, useSidebarChoice, useSidebarWidth } from "@/components/layout/sidebar-layout";
-import { useSidebar } from "@/components/layout/sidebar";
+import { SidebarReveal, SidebarResizeHandle, useSidebarChoice, useSidebarWidth, useSidebar } from "@/components/layout";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 import { rightSidebarFolds, type RightSidebarTab, selectRightSidebarTab, setRightSidebarOpen, useRightSidebarState } from "@/state/rightSidebar";

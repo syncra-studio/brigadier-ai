@@ -58,10 +58,8 @@ import { NewSessionChip, PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } fro
 import { ViewContext } from "@/app/conversation/viewContext";
 import { requestWaitsOnCard, turnSpans, workedMs } from "@/app/conversation/blocks";
 import { SelectionPill } from "@/app/conversation/SelectionPill";
-import { ComposerRail, ComposerRailItem } from "@/components/conversation/elements/composer-rail";
-import { ComposerAttachments } from "@/components/conversation/elements/attachment";
-import { ModelSelector } from "@/components/shared/model-selector";
-import { ContextRing } from "@/components/conversation/context-ring";
+import { ComposerRail, ComposerRailItem, ComposerAttachments, ContextRing, type ComposerProps } from "@/components/conversation";
+import { ModelSelector } from "@/components/shared";
 import {
   ArrowUp,
   ArrowUpRight,
@@ -73,10 +71,8 @@ import {
   Warning,
   X,
 } from "@/components/icons";
-import { Button } from "@/components/controls/button";
+import { Button, TooltipIconButton } from "@/components/controls";
 import type { Conversation, RunState } from "@/ipc/generated";
-import type { ComposerProps } from "@/components/conversation/thread";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import { whenRevealed } from "@/lib/splash";
 import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";

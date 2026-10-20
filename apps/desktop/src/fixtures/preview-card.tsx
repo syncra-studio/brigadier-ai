@@ -43,7 +43,7 @@ import { webPreviewUrl } from "@/app/conversation/activity/webPreview";
 import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { driveFold } from "@/fixtures/cardFold";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, Preview, PreviewState, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { sessionTabs } from "@/state/sessionTabs";

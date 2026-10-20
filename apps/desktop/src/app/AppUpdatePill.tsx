@@ -1,8 +1,8 @@
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls";
 import { BarItem } from "@/app/BarItem";
 import { FOOT_CHIP } from "@/app/UpdatesRow";
 import { ArrowRotateCw, BrigadierGlyph, DownloadSimple, Spinner } from "@/components/icons";
-import { useSidebar } from "@/components/layout/sidebar";
+import { useSidebar } from "@/components/layout";
 import { type AppUpdate, clickAppUpdate, useAppUpdate } from "@/state/appUpdate";
 
 const TIPS: Record<AppUpdate["state"], (version: string) => string> = {

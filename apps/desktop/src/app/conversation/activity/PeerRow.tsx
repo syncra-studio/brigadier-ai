@@ -16,7 +16,7 @@ import {
 import { type BlockOrchestratorStep, heldForWait, type PeerSentStep } from "@/app/conversation/blocks";
 import { usePeerName } from "@/app/conversation/peerParts";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { ThreadActivity } from "@/components/conversation/elements/thread-activity";
+import { ThreadActivity } from "@/components/conversation";
 import { Chat, Clock } from "@/components/icons";
 import type { Conversation, OrchestratorStepKind, PeerMessage, Project } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

@@ -12,15 +12,15 @@ import {
 
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { Counts } from "@/app/conversation/Counts";
-import { FileTypeIcon } from "@/components/conversation/elements/file-type-icon";
+import { FileTypeIcon } from "@/components/conversation";
 import { useCheckoutRoot } from "@/components/conversation/file-links";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/overlays/dropdown-menu";
+} from "@/components/overlays";
 import {
   Check,
   ChevronDown,

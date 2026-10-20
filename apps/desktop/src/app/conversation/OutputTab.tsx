@@ -3,7 +3,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { previewActions, previewActive, previewWord } from "@/app/conversation/previewStatus";
 import { useAction } from "@/app/conversation/useAction";
-import { Button } from "@/components/controls/button";
+import { Button } from "@/components/controls";
 import { request } from "@/ipc/client";
 import type { BackgroundRun, ItemStatus, Preview } from "@/ipc/generated";
 import { pausePreview, previewLogTail, resumePreview, stopPreview } from "@/state/actions";

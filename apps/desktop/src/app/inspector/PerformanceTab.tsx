@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import { useDiagnosticsPolling } from "@/app/inspector/ProcessesTab";
-import { Badge } from "@/components/controls/badge";
+import { Badge } from "@/components/controls";
 import type { Budget, DaemonMetrics, LatencySummary } from "@/ipc/generated";
 import { formatBytes, formatDuration, formatMb, formatMs } from "@/lib/format";
 import { frameGaps, ingestToPaint, summarize } from "@/lib/perf";

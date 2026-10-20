@@ -27,7 +27,7 @@ import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { stepWords } from "@/app/conversation/activity/words";
 import { WorkerThread } from "@/app/conversation/WorkerThread";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { ItemStatus, RawEntry, Request, Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 

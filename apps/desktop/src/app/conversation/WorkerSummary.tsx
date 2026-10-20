@@ -9,7 +9,7 @@ import {
   useWorkerName,
   WorkerGlyph,
 } from "@/app/conversation/WorkerChip";
-import { SummaryRowButton, SummarySection } from "@/components/conversation/elements/summary-section";
+import { SummaryRowButton, SummarySection } from "@/components/conversation";
 import type { DiffStat, Task } from "@/ipc/generated";
 import { refreshWorkerDiffs } from "@/state/actions";
 import { useBoard } from "@/state/board";

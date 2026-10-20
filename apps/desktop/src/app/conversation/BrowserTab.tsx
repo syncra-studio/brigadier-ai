@@ -26,16 +26,9 @@ import {
   Warning,
   X,
 } from "@/components/icons";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/overlays/dropdown-menu";
-import { Banner } from "@/components/shared/banner";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
+import { Banner } from "@/components/shared";
+import { TooltipIconButton } from "@/components/controls";
 import { browserFocus, browserGo, browserPlace, browserPrint, browserSnapshot, openUrl } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
 import { closeFind, findInPage, findLabel, NO_FIND, openFind, useBrowserFind } from "@/state/browserFind";

@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { unwrapCommand } from "@/app/conversation/activity/words";
-import { ROW_DETAIL } from "@/components/conversation/elements/activity-row";
-import { ThreadActivity } from "@/components/conversation/elements/thread-activity";
+import { ROW_DETAIL, ThreadActivity } from "@/components/conversation";
 import { Stop, Terminal } from "@/components/icons";
 import type { BackgroundRun, ItemStatus } from "@/ipc/generated";
 import { request } from "@/ipc/client";

@@ -1,6 +1,6 @@
 import { type FC, useMemo } from "react";
 
-import { MemoryChips } from "@/components/conversation/elements/memory-chips";
+import { MemoryChips } from "@/components/conversation";
 import type { MemoryChange } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 import { forgetMemory } from "@/state/brain";

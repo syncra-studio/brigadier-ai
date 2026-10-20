@@ -16,9 +16,8 @@ import {
 } from "@/app/settings/storage/model";
 import { RoundBadge } from "@/app/settings/storage/parts";
 import { Check, ChevronDown, ChevronRight, ChevronUp, FolderOpen, Lock, Sparkles, Spinner } from "@/components/icons";
-import { Button } from "@/components/controls/button";
-import { Checkbox } from "@/components/controls/checkbox";
-import { RowText, SettingsCard } from "@/components/shared/settings-card";
+import { Button, Checkbox } from "@/components/controls";
+import { RowText, SettingsCard } from "@/components/shared";
 import { revealPath } from "@/ipc/client";
 import type { CleanItem, CleanReport, StorageReport } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

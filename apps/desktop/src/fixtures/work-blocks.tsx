@@ -32,8 +32,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
-import { SidebarProvider } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { SidebarProvider } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
 import type {
   BackgroundRun,
   Conversation,

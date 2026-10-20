@@ -11,7 +11,7 @@ import { openFileTab, replaceNewTabWithFile } from "@/state/sessionTabs";
 import {
   type FileList, onWorkspaceChanged, readFiles, readFolder, readSource, useCachedEntry, useCheckoutKey, type WorkspaceTarget,
 } from "@/state/workspaceCache";
-import { SettingsSearch } from "@/components/shared/settings-search";
+import { SettingsSearch } from "@/components/shared";
 
 /**
  * The Files panel (⌘P): the session checkout's files as a tree with a search field. A click

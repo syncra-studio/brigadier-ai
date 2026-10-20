@@ -9,7 +9,7 @@ import { createRoot } from "react-dom/client";
 
 import { BrowserTab } from "@/app/conversation/BrowserTab";
 import { modalOpen } from "@/app/conversation/browserLayer";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { BrowserDownload, BrowserVisit } from "@/ipc/generated";
 import { type BrowserAsking, useBrowsers } from "@/state/browsers";
 import { CHAT_TAB, useSessionTabs } from "@/state/sessionTabs";

@@ -1,9 +1,8 @@
 import { type ReactNode, type RefObject, useEffect, useRef } from "react";
 
 import { ArrowLeft, Spinner } from "@/components/icons";
-import { Button } from "@/components/controls/button";
-import { Kbd } from "@/components/controls/kbd";
-import { DialogTitle } from "@/components/overlays/dialog";
+import { Button, Kbd } from "@/components/controls";
+import { DialogTitle } from "@/components/overlays";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 

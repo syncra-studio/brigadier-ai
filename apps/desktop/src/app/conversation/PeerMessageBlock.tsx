@@ -4,7 +4,7 @@ import type { FC } from "react";
 import { sentByCaption, UNKNOWN_SESSION } from "@/app/conversation/activity/peerWords";
 import type { PeerOf } from "@/app/conversation/blocks";
 import { FoldedMarkdown, usePeerName } from "@/app/conversation/peerParts";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls";
 import { Chat, Check, Copy } from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";

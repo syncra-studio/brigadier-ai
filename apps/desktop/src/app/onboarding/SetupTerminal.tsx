@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { ExclamationMarkCircle, Spinner } from "@/components/icons";
-import { Button } from "@/components/controls/button";
+import { Button } from "@/components/controls";
 import type { ProviderKind, ProviderOverview, TerminalInfo } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { loadProviders, refreshProviders } from "@/state/actions";
@@ -15,7 +15,7 @@ import { useApp } from "@/state/store";
 
 // The terminal (xterm) loads only when an account signs in.
 const TerminalView = lazy(() =>
-  import("@/components/views/TerminalView").then((module) => ({ default: module.TerminalView })),
+  import("@/components/views/terminal").then((module) => ({ default: module.TerminalView })),
 );
 
 /** How often an agent is checked again while its sign-in terminal is open. */

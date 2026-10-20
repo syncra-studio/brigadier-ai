@@ -22,26 +22,14 @@ import { revealOvernight } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
-import {
-  ActionCard,
-  ActionCardActions,
-  ActionCardQuestion,
-  ActionCardTitle,
-  ActionFileList,
-  ActionFreeText,
-  ActionOption,
-  actionButton,
-  staggered,
-} from "@/components/conversation/elements/action-card";
-import { ComposerRailItem } from "@/components/conversation/elements/composer-rail";
-import { ToolBox } from "@/components/conversation/elements/tool-box";
-import { Button } from "@/components/controls/button";
+import { ActionCard, ActionCardActions, ActionCardQuestion, ActionCardTitle, ActionFileList, ActionFreeText, ActionOption, actionButton, staggered, ComposerRailItem, ToolBox } from "@/components/conversation";
+import { Button, TooltipIconButton, Kbd } from "@/components/controls";
 import { Commit, Dock, Globe, Key, Mic, PencilSquare, QuestionMarkCircle, Reply, Sparkle, Spinner } from "@/components/icons";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/overlays/tooltip";
+} from "@/components/overlays";
 import type {
   AnswerInput,
   ApprovalDecision,
@@ -62,8 +50,6 @@ import {
   stopDictation,
   useDictation,
 } from "@/state/dictation";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
-import { Kbd } from "@/components/controls/kbd";
 
 /* Pending decisions sit on the rail above the full composer. Their shortcuts leave
  * text fields, focused controls and open overlays to handle their own keys. */

@@ -18,7 +18,7 @@ import { createRoot } from "react-dom/client";
 
 import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, FileReview, Request, UserRequest } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { useSessionTabs } from "@/state/sessionTabs";

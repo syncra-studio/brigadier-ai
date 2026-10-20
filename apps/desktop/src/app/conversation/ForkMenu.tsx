@@ -2,14 +2,14 @@ import type { FC } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { BranchAlt, Spinner } from "@/components/icons";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuTrigger,
-} from "@/components/overlays/dropdown-menu";
+} from "@/components/overlays";
 import type { ConversationKind, ForkPlace } from "@/ipc/generated";
 import { forkConversation } from "@/state/actions";
 

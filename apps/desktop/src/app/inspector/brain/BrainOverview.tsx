@@ -2,8 +2,7 @@ import { type ReactNode, useEffect, useState } from "react";
 
 import { KINDS, NODE_KINDS } from "@/app/inspector/brain/kinds";
 import { Spinner } from "@/components/icons";
-import { Badge } from "@/components/controls/badge";
-import { Button } from "@/components/controls/button";
+import { Badge, Button } from "@/components/controls";
 import { useNow } from "@/hooks/use-now";
 import type {
   BrainJob,

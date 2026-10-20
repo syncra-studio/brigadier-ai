@@ -5,15 +5,9 @@
  * the app's parts reads the same as the part it uses (#385).
  */
 import { PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
-import { SettingsSearch } from "@/components/shared/settings-search";
-import { Badge } from "@/components/controls/badge";
-import { Button } from "@/components/controls/button";
-import { Checkbox } from "@/components/controls/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays/dialog";
-import { Input } from "@/components/controls/input";
-import { Kbd } from "@/components/controls/kbd";
-import { Segmented } from "@/components/controls/segmented";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/overlays/tooltip";
+import { SettingsSearch } from "@/components/shared";
+import { Badge, Button, Checkbox, Input, Kbd, Segmented } from "@/components/controls";
+import { Dialog, DialogContent, DialogDescription, DialogTitle, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/overlays";
 
 /** The shared parts, unseen. Mount it only to measure: its dialog is one more open layer. */
 export function Canon() {

@@ -1,5 +1,5 @@
 import { revealPlan } from "@/app/conversation/summaryState";
-import { Button } from "@/components/controls/button";
+import { Button } from "@/components/controls";
 import type { PlanState } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 

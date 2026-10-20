@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 
-import { Button } from "@/components/controls/button";
+import { Button, Input } from "@/components/controls";
 import {
   Dialog,
   DialogContent,
@@ -8,8 +8,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/overlays/dialog";
-import { Input } from "@/components/controls/input";
+} from "@/components/overlays";
 
 export type NameDialogProps = {
   open: boolean;

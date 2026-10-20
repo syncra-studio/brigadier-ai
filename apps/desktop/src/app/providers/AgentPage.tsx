@@ -17,15 +17,14 @@ import { bestFor } from "@/app/routing/models";
 
 import { SettingsPage, SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 
-import { Button } from "@/components/controls/button";
+import { Button } from "@/components/controls";
 
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout";
 
 import { ChevronRight, InfoCircle, ProviderGlyph } from "@/components/icons";
 
-import { SettingsCard, settingsRows } from "@/components/shared/settings-card";
+import { SettingsCard, settingsRows, StateDot } from "@/components/shared";
 
-import { StateDot } from "@/components/shared/state-dot";
 import { pickFile, request } from "@/ipc/client";
 
 import type { AccountView, MergedModel, ModelInfo, ProviderKind, ProviderOverview } from "@/ipc/generated";

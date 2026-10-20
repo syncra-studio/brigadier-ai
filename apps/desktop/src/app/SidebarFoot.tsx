@@ -1,6 +1,6 @@
 import { type ReactNode, useRef } from "react";
 
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls";
 import { AppUpdatePill } from "@/app/AppUpdatePill";
 import { KeepAwakeMenu, UsageMenu } from "@/app/BarStatus";
 import { useShortcuts } from "@/app/shortcuts";
@@ -13,8 +13,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/overlays/dropdown-menu";
-import { useSidebar } from "@/components/layout/sidebar";
+} from "@/components/overlays";
+import { useSidebar } from "@/components/layout";
 import { cn } from "@/lib/utils";
 import { openSettings, toggleSettings } from "@/state/actions";
 import { openFeedback } from "@/state/feedback";

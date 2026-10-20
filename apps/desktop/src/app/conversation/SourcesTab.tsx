@@ -1,7 +1,7 @@
 import { type ReactNode, useMemo } from "react";
 
 import { hostOf, useUsedSources } from "@/app/conversation/PinnedSummary";
-import { McpServerPanel } from "@/components/conversation/elements/mcp-server-panel";
+import { McpServerPanel } from "@/components/conversation";
 import { Globe, Search } from "@/components/icons";
 import { useMcpServers } from "@/state/mcpServers";
 import { toast } from "@/state/toasts";

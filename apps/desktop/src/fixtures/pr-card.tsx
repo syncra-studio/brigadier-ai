@@ -8,8 +8,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
-import { SidebarProvider } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { SidebarProvider } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, PullRequest, Request } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";

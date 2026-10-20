@@ -11,7 +11,7 @@ import { createRoot } from "react-dom/client";
 
 import { SessionTabBar } from "@/app/conversation/SessionTabBar";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, Request } from "@/ipc/generated";
 import { closeTab, newSessionTab, selectTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";

@@ -1,8 +1,7 @@
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
-import { Badge } from "@/components/controls/badge";
-import { Button } from "@/components/controls/button";
-import { SettingsCard } from "@/components/shared/settings-card";
+import { Badge, Button } from "@/components/controls";
+import { SettingsCard } from "@/components/shared";
 import type { ComputerPermission, ComputerUseStatus, PermissionState } from "@/ipc/generated";
 import {
   grantComputerPermission,

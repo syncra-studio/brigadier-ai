@@ -15,8 +15,7 @@ import { createRoot } from "react-dom/client";
 
 import { LinkConversationContext, LinkTimeContext } from "@/components/conversation/file-links";
 import { FileChip } from "@/components/conversation/markdown-text";
-import { Toaster } from "@/components/overlays/toast";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { Toaster, TooltipProvider } from "@/components/overlays";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { ArtifactRef, Conversation, Request } from "@/ipc/generated";
 import { useApp } from "@/state/store";

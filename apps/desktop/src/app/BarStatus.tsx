@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton, Button, Segmented, Switch } from "@/components/controls";
 import { errorText } from "@/app/dialogs/fields";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
@@ -11,18 +11,14 @@ import { footMenuPlacement } from "@/app/sidebar/nav";
 
 import { BarChart, ChevronRight, Lightbulb, ProviderGlyph } from "@/components/icons";
 
-import { Button } from "@/components/controls/button";
 
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 
-import { Segmented } from "@/components/controls/segmented";
 
-import { useSidebar } from "@/components/layout/sidebar";
+import { useSidebar } from "@/components/layout";
 
-import { StateDot } from "@/components/shared/state-dot";
-import { Switch } from "@/components/controls/switch";
+import { StateDot, UsageBar } from "@/components/shared";
 
-import { UsageBar } from "@/components/shared/usage-bar";
 
 import type { AccountView, ProviderKind, ProviderOverview, QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
 

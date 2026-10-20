@@ -35,7 +35,7 @@ export type DiffViewProps<T> = {
 
 // Once its code is in (warmed at idle), a diff draws at once: a lazy view would hold its plain
 // lines for a moment more.
-const engine = preloadable(() => import("@/components/views/PierreDiff").then((module) => module.default as (props: DiffViewProps<unknown>) => ReactNode));
+const engine = preloadable(() => import("@/components/views/diff").then((module) => module.default as (props: DiffViewProps<unknown>) => ReactNode));
 const PierreDiff = engine.View;
 
 /** Loads the diff engine's code ahead of the first diff. */

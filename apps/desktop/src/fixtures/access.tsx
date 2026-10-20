@@ -15,7 +15,7 @@ import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ConversationPermissionPicker } from "@/app/conversation/SetupPickers";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { ConfigurationPage } from "@/app/settings/ConfigurationPage";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, PermissionLevel, Request } from "@/ipc/generated";
 import { resolvePermission } from "@/lib/setup";
 import { useApp } from "@/state/store";

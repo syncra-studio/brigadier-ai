@@ -2,13 +2,10 @@ import { useCallback, useEffect, useId, useState } from "react";
 
 import { CheckboxRow, errorText } from "@/app/dialogs/fields";
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
-import { Badge } from "@/components/controls/badge";
-import { Button } from "@/components/controls/button";
-import { Checkbox } from "@/components/controls/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/overlays/dialog";
+import { Badge, Button, Checkbox } from "@/components/controls";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/overlays";
 import { Globe } from "@/components/icons";
-import { SettingsCard } from "@/components/shared/settings-card";
-import { UsageBar } from "@/components/shared/usage-bar";
+import { SettingsCard, UsageBar } from "@/components/shared";
 import type { ImportFailure, ImportProgress, ImportSource } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";

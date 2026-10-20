@@ -13,7 +13,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { FileTabView } from "@/app/conversation/FileTabView";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, FileReview, PendingFile, Request, UserRequest } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { useSessionTabs } from "@/state/sessionTabs";

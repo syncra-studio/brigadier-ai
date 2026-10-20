@@ -23,8 +23,8 @@ import { newSessionTab, useSessionTabs, useSessionTabsOf, selectTab, closeTab } 
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
-import { SidebarPanel, SidebarProvider, useSidebar } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { SidebarPanel, SidebarProvider, useSidebar } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import type { BrowserBounds, Conversation, Request, Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";

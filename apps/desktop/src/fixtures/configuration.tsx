@@ -14,7 +14,7 @@ import { createRoot } from "react-dom/client";
 import { useReveal } from "@/app/settings/reveal";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import { OVERVIEWS } from "@/fixtures/agents";
 import type { Node, Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";

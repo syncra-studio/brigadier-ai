@@ -2,9 +2,8 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 
 import { ErrorLine, errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
 import { Branch, Chats, Folder, Spinner, X } from "@/components/icons";
-import { Button } from "@/components/controls/button";
-import { Checkbox } from "@/components/controls/checkbox";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays/dialog";
+import { Button, Checkbox } from "@/components/controls";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays";
 import type { Project, ProjectRemoval, RemovalBranch, RemoveProjectReport } from "@/ipc/generated";
 import { formatBytes, shortPath } from "@/lib/format";
 import { cn } from "@/lib/utils";

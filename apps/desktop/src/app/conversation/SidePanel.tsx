@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls";
 import { BarItem } from "@/app/BarItem";
 import { useWorkspacePane } from "@/app/conversation/WorkspacePane";
 import { useRightSidebar } from "@/app/conversation/RightSidebar";

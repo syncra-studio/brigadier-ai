@@ -16,8 +16,8 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
-import { SidebarProvider } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { SidebarProvider } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, ConversationView as View, EventEnvelope, Message, Request } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";

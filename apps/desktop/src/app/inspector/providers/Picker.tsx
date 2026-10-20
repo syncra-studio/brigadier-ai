@@ -1,11 +1,11 @@
-import { Button } from "@/components/controls/button";
+import { Button } from "@/components/controls";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
-} from "@/components/overlays/dropdown-menu";
+} from "@/components/overlays";
 import { ChevronDown } from "@/components/icons";
 import { cn } from "@/lib/utils";
 

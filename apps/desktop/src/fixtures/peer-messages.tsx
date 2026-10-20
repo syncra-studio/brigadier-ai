@@ -28,8 +28,8 @@ import { createRoot } from "react-dom/client";
 import { AppSidebar, AppStrip, TitlebarNav } from "@/app/AppSidebar";
 import { ConversationView } from "@/app/ConversationView";
 import { SidebarFoot } from "@/app/SidebarFoot";
-import { SidebarPanel, SidebarProvider } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { SidebarPanel, SidebarProvider } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
 import type {
   Conversation,
   ConversationView as View,

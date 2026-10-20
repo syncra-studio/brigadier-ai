@@ -15,17 +15,8 @@ import { createRoot } from "react-dom/client";
 import { AppSidebar, AppStrip } from "@/app/AppSidebar";
 import { FeedbackDialog } from "@/app/feedback/FeedbackDialog";
 import { SidebarFoot } from "@/app/SidebarFoot";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-  itemBase,
-} from "@/components/overlays/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
-import { SidebarPanel, SidebarProvider } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger, itemBase, Popover, PopoverContent, PopoverTrigger, TooltipProvider } from "@/components/overlays";
+import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { colourOf, surface } from "@/fixtures/look";
 import type { AccountsView, AccountView, ProviderKind, ProviderOverview, QuotaWindow, Request } from "@/ipc/generated";
 import { useAgentPageAsk } from "@/state/agentPage";

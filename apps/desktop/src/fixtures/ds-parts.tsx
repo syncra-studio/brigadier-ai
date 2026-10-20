@@ -7,11 +7,9 @@ import { createRoot } from "react-dom/client";
 
 import { Picker } from "@/app/inspector/providers/Picker";
 import { Grid, SquareImage } from "@/components/icons";
-import { Segmented } from "@/components/controls/segmented";
-import { SettingsSearch } from "@/components/shared/settings-search";
-import { StateDot } from "@/components/shared/state-dot";
-import { TooltipProvider } from "@/components/overlays/tooltip";
-import { UsageBar } from "@/components/shared/usage-bar";
+import { Segmented } from "@/components/controls";
+import { SettingsSearch, StateDot, UsageBar } from "@/components/shared";
+import { TooltipProvider } from "@/components/overlays";
 import { colourOf, wait } from "@/fixtures/look";
 
 const one = (selector: string) => document.querySelector(selector);

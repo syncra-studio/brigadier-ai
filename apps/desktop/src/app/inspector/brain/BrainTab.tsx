@@ -4,7 +4,7 @@ import { BrainGraphPanel, preloadGraphCanvas } from "@/app/inspector/brain/Brain
 import { BrainOverviewView } from "@/app/inspector/brain/BrainOverview";
 import { BrainSearch } from "@/app/inspector/brain/BrainSearch";
 import { Picker } from "@/app/inspector/providers/Picker";
-import { ToggleGroup, ToggleGroupItem } from "@/components/controls/toggle-group";
+import { ToggleGroup, ToggleGroupItem } from "@/components/controls";
 import type { BrainOverview } from "@/ipc/generated";
 import { loadBrain, PERSONAL, selectBrain, useBrain } from "@/state/brain";
 import { inspectedConversation } from "@/state/actions";

@@ -7,7 +7,7 @@ import { useWorkersStrip, WorkersStrip } from "@/app/conversation/activity/Worke
 import { WorkersSummary } from "@/app/conversation/WorkerSummary";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { WorkersTab } from "@/app/conversation/Agents";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import type { Task } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";

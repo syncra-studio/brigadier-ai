@@ -5,8 +5,8 @@ import { createRoot } from "react-dom/client";
 
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
-import { SidebarProvider } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { SidebarProvider } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
 import { fixtureInput } from "@/fixtures/input";
 import { colourOf, fillsCard, surface, switchLook, wait as pause } from "@/fixtures/look";
 import { accounts, overviews, previewRoutes, projects, rankings, rules, usageView } from "@/fixtures/routingData";

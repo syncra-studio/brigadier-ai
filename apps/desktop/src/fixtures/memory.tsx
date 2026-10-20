@@ -12,7 +12,7 @@ import { createRoot } from "react-dom/client";
 
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Node, Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";

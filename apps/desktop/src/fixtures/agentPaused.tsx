@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { BrowserTab } from "@/app/conversation/BrowserTab";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Request } from "@/ipc/generated";
 import { isPaused, pageUsed, userUsed } from "@/state/agentPause";
 import { useBrowsers } from "@/state/browsers";

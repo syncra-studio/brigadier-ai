@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
-import { TerminalView } from "@/components/views/TerminalView";
-import { Banner } from "@/components/shared/banner";
-import { Button } from "@/components/controls/button";
+import { TerminalView } from "@/components/views/terminal";
+import { Banner } from "@/components/shared";
+import { Button } from "@/components/controls";
 import { changeSessionTab, type TerminalTabState } from "@/state/sessionTabs";
 import { endMainTerminal, openMainTerminal } from "@/state/sessionTabResources";
 

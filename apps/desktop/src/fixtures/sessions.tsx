@@ -13,12 +13,11 @@ import { createRoot } from "react-dom/client";
 
 import { AppSidebar, AppStrip } from "@/app/AppSidebar";
 import { SessionTabBar } from "@/app/conversation/SessionTabBar";
-import { SidebarPanel, SidebarProvider } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { SidebarPanel, SidebarProvider } from "@/components/layout";
+import { TooltipProvider, Toaster } from "@/components/overlays";
 import type { Conversation, ConversationActivity, EventEnvelope, Project, Request } from "@/ipc/generated";
 import { fromSnapshot, useActivity } from "@/state/activity";
 import { useApp } from "@/state/store";
-import { Toaster } from "@/components/overlays/toast";
 import { useToasts } from "@/state/toasts";
 import { applySettledTabEvents, useSettledTabs } from "@/state/tabStates";
 

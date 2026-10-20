@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton, Button, Kbd } from "@/components/controls";
 import { errorText } from "@/app/dialogs/fields";
 import { ProjectDialog } from "@/app/dialogs/ProjectDialog";
 import { RemoveProjectDialog } from "@/app/dialogs/RemoveProjectDialog";
@@ -37,29 +37,9 @@ import {
   Trash,
   Unpin,
 } from "@/components/icons";
-import { TitlebarTips } from "@/components/shared/titlebar-button";
-import { Banner } from "@/components/shared/banner";
-import { Button } from "@/components/controls/button";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/overlays/context-menu";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/overlays/dropdown-menu";
-import { EmptyState } from "@/components/shared/empty-state";
-import { Kbd } from "@/components/controls/kbd";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
-import { useSidebar } from "@/components/layout/sidebar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
+import { TitlebarTips, Banner, EmptyState } from "@/components/shared";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
+import { useSidebar } from "@/components/layout";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, Project } from "@/ipc/generated";
 import { SessionStatusLabel, SidebarActivityMark, SidebarError } from "@/app/SessionStatus";

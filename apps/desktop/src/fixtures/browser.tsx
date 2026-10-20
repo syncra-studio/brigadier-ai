@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { BrowserPage } from "@/app/settings/BrowserPage";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type {
   BrowserClear,
   BrowserDownload,

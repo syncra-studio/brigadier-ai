@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { type PeerName, peerNameOf } from "@/app/conversation/activity/peerWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { MarkdownBlock } from "@/components/conversation/thread";
+import { MarkdownBlock } from "@/components/conversation";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 

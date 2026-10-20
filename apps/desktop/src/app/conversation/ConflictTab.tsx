@@ -17,8 +17,8 @@ import {
 } from "@/app/conversation/conflicts";
 import { DiffView } from "@/app/conversation/diffView";
 import { StepCounter } from "@/app/conversation/StepCounter";
-import { Button } from "@/components/controls/button";
-import { ConfirmDialog } from "@/components/overlays/confirm-dialog";
+import { Button } from "@/components/controls";
+import { ConfirmDialog } from "@/components/overlays";
 import { request } from "@/ipc/client";
 import type { ConflictFile, SourceState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

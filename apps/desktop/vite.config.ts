@@ -34,6 +34,9 @@ export default defineConfig({
     // several at cold start (measured by the smoke check). The Inspector is split out lazily.
     chunkSizeWarningLimit: 1024,
     rolldownOptions: {
+      // Component modules only define things, so a folder's index.ts pulls in just the parts the
+      // importer uses, and the lazy views keep their own chunks.
+      treeshake: { moduleSideEffects: (id) => (/\/src\/components\/(?!icons\/).+\.tsx?$/.test(id) ? false : undefined) },
       output: {
         // Left to itself the bundler splits what startup needs into dozens of chunks shared with
         // the lazy views, each a request the webview makes before the app's code runs.

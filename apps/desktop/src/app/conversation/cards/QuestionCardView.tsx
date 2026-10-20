@@ -9,9 +9,8 @@ import {
   plainCode,
   questionRowWords,
 } from "@/app/conversation/cards/questionRound";
-import { MarkdownBlock } from "@/components/conversation/thread";
-import { CHEVRON, OPENS, ROW, ROW_TOGGLE } from "@/components/conversation/elements/activity-row";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout/collapsible";
+import { MarkdownBlock, CHEVRON, OPENS, ROW, ROW_TOGGLE } from "@/components/conversation";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout";
 import { ChevronRightAlt, QuestionMarkCircle } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";

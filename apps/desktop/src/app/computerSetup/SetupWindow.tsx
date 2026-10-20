@@ -3,7 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
-import { Button } from "@/components/controls/button";
+import { Button } from "@/components/controls";
 import { Check, Cursor } from "@/components/icons";
 import type { ComputerPermission, ComputerUseStatus } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

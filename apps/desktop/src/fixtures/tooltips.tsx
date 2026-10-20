@@ -6,8 +6,8 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { Button } from "@/components/controls/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/overlays/tooltip";
+import { Button } from "@/components/controls";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/overlays";
 import { fixtureInput } from "@/fixtures/input";
 
 const params = new URLSearchParams(location.search);

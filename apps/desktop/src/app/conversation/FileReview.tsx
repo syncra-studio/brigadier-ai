@@ -3,9 +3,8 @@ import { type FC, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, u
 import { DiffView, type DiffNote } from "@/app/conversation/diffView";
 import { StepCounter } from "@/app/conversation/StepCounter";
 import { shortcutKeys } from "@/app/shortcutCatalog";
-import { Button } from "@/components/controls/button";
+import { Button, Kbd } from "@/components/controls";
 import { ChevronRight } from "@/components/icons";
-import { Kbd } from "@/components/controls/kbd";
 import type { PendingFile } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { changeLine, reviewPatch } from "@/lib/reviewPatch";

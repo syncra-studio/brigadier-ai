@@ -11,20 +11,19 @@ import { agentState } from "@/app/onboarding/SetupTerminal";
 import { PlanChip, ROW_LINE, ROW_TITLE, UsageMeter } from "@/app/providers/parts";
 import { SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 
-import { Button } from "@/components/controls/button";
+import { Button } from "@/components/controls";
 
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/overlays/dropdown-menu";
+} from "@/components/overlays";
 
 import { ArrowUpRight, ChevronRight, Plus, ProviderGlyph } from "@/components/icons";
 
-import { SettingsCard } from "@/components/shared/settings-card";
+import { SettingsCard, StateDot } from "@/components/shared";
 
-import { StateDot } from "@/components/shared/state-dot";
 import type { AccountView, ProviderKind, ProviderOverview, QuotaWindow } from "@/ipc/generated";
 
 import { used, windowTitle } from "@/lib/quota";

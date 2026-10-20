@@ -3,8 +3,7 @@ import { useEffect, useState } from "react";
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { SettingsPage, SettingsSection, SettingsSelect } from "@/app/settings/parts";
 import { Camera, Mic } from "@/components/icons";
-import { EmptyState } from "@/components/shared/empty-state";
-import { SettingsCard } from "@/components/shared/settings-card";
+import { EmptyState, SettingsCard } from "@/components/shared";
 import type { BrowserSite, SitePermission } from "@/ipc/generated";
 import { browserSites, setSite } from "@/state/browserData";
 

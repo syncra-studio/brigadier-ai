@@ -22,7 +22,7 @@ import {
   type OvernightCardModel,
   type OvernightCommand,
 } from "@/app/conversation/overnightAdapter";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type {
   Conversation,
   OvernightRun,

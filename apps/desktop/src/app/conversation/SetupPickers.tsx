@@ -5,7 +5,7 @@ import { ProjectDialog } from "@/app/dialogs/ProjectDialog";
 import {
   ModelSelector,
   type ModelGroup,
-} from "@/components/shared/model-selector";
+} from "@/components/shared";
 import { composerPill } from "@/components/conversation/elements/surfaces";
 import {
   Check,
@@ -20,23 +20,8 @@ import {
   Shuffle,
   Warning,
 } from "@/components/icons";
-import { Button } from "@/components/controls/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/overlays/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/overlays/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
+import { Button } from "@/components/controls";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { useNow } from "@/hooks/use-now";
 import type {
   Conversation,

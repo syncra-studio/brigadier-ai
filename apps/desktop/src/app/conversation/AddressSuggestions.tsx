@@ -3,7 +3,7 @@ import { type RefObject, useEffect, useMemo, useState } from "react";
 import { addressSuggestions, type OpenTab, type Suggestion } from "./browserSuggestions";
 
 import { Globe, Search, X } from "@/components/icons";
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/overlays/popover";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/overlays";
 import type { BrowserVisit } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { browserHistory, removeHistory } from "@/state/browserData";

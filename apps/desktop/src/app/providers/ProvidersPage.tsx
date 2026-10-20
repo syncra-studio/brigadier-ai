@@ -14,7 +14,7 @@ import { SettingsPage } from "@/app/settings/parts";
 
 import { useReveal } from "@/app/settings/reveal";
 
-import { StateDot } from "@/components/shared/state-dot";
+import { StateDot } from "@/components/shared";
 import { useNow } from "@/hooks/use-now";
 
 import type { ProviderKind } from "@/ipc/generated";

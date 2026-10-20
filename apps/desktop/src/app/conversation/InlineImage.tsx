@@ -3,7 +3,7 @@ import { Fragment } from "react";
 
 import { normalizedImages } from "@/lib/inlineImages";
 import { splitAtImages } from "@/app/conversation/inlineImages";
-import { MessageInlineImage } from "@/components/conversation/elements/inline-image";
+import { MessageInlineImage } from "@/components/conversation";
 import type { AttachmentRef } from "@/ipc/generated";
 
 const PlainText = ({ text }: { text: string }) => <>{text}</>;

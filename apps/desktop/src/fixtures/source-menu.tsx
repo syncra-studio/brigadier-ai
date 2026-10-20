@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { SourcePanel } from "@/app/conversation/SourcePanel";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Request, SourceBranch, SourceGitRun, SourceState } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";

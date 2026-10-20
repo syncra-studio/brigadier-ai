@@ -1,6 +1,6 @@
 import { useAction } from "@/app/conversation/useAction";
 import { workerStoppable } from "@/app/conversation/workerPresentation";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls";
 import { StopCircle } from "@/components/icons";
 import { stopTask } from "@/state/actions";
 import { useBoard } from "@/state/board";

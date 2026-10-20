@@ -7,8 +7,8 @@ import { Welcome } from "@/app/ConversationView";
 import { ConversationComposer } from "@/app/conversation/Composer";
 import { MentionMemory, mentionsIn, pageMentions, UserMessageText } from "@/app/conversation/Mentions";
 import { RequestBlock } from "@/app/conversation/RequestBlock";
-import { Thread } from "@/components/conversation/thread";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { Thread } from "@/components/conversation";
+import { TooltipProvider } from "@/components/overlays";
 import type { Mention } from "@/ipc/generated";
 
 const page: Mention = { type: "page", id: "page-one", title: "Launch plan <draft>" };

@@ -10,8 +10,8 @@ import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
 import { FolderDropZone } from "@/app/FolderDropZone";
-import { SidebarProvider } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { SidebarProvider } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, ConversationView as View, Message, Request, RunState, UserRequest } from "@/ipc/generated";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import { select } from "@/state/actions";

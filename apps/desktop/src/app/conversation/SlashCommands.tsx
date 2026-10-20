@@ -6,13 +6,9 @@ import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
 import { useAction } from "@/app/conversation/useAction";
 import { NameDialog } from "@/app/NameDialog";
-import { ContextArc, contextShare } from "@/components/conversation/context-ring";
-import {
-  type ComposerCommand,
-  ComposerCommands,
-} from "@/components/conversation/elements/composer-commands";
-import { DropdownMenu, DropdownMenuTrigger } from "@/components/overlays/dropdown-menu";
-import { findModel, type ModelGroup } from "@/components/shared/model-selector";
+import { ContextArc, contextShare, type ComposerCommand, ComposerCommands } from "@/components/conversation";
+import { DropdownMenu, DropdownMenuTrigger } from "@/components/overlays";
+import { findModel, type ModelGroup } from "@/components/shared";
 import { PERMISSION_ICONS } from "@/app/conversation/SetupPickers";
 import {
   Archive,

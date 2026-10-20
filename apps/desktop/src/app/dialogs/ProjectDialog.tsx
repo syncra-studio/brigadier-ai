@@ -2,11 +2,9 @@ import { useId, useState, type FormEvent, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine, errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
-import { Button } from "@/components/controls/button";
-import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/overlays/dialog";
+import { Button, Input, Switch } from "@/components/controls";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/overlays";
 import { Plus, Trash, X } from "@/components/icons";
-import { Input } from "@/components/controls/input";
-import { Switch } from "@/components/controls/switch";
 import { pickFolder } from "@/ipc/client";
 import type { Project } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";

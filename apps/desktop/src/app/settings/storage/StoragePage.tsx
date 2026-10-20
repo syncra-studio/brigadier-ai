@@ -16,11 +16,10 @@ import { ProjectsCard, type UnusedFreeUp } from "@/app/settings/storage/Projects
 
 import { FolderOpen, Reload } from "@/components/icons";
 
-import { Button } from "@/components/controls/button";
+import { Button } from "@/components/controls";
 
-import { RowText, SettingsCard } from "@/components/shared/settings-card";
+import { RowText, SettingsCard, StateDot } from "@/components/shared";
 
-import { StateDot } from "@/components/shared/state-dot";
 import { revealPath } from "@/ipc/client";
 
 import type { StorageReport } from "@/ipc/generated";

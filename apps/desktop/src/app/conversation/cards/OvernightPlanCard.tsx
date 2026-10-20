@@ -21,16 +21,10 @@ import {
   type OvernightCardModel,
   type OvernightCommand,
 } from "@/app/conversation/overnightAdapter";
-import {
-  AgentPlan,
-  type AgentPlanStep,
-  type AgentPlanStepStatus,
-} from "@/components/conversation/elements/agent-plan";
-import { ProgressLine, type ProgressOutcomeStatus } from "@/components/shared/progress-line";
+import { AgentPlan, type AgentPlanStep, type AgentPlanStepStatus, Timeline, type TimelineEvent } from "@/components/conversation";
+import { ProgressLine, type ProgressOutcomeStatus } from "@/components/shared";
 import { disclosureRow } from "@/components/conversation/elements/surfaces";
-import { Timeline, type TimelineEvent } from "@/components/conversation/elements/timeline";
-import { Badge } from "@/components/controls/badge";
-import { Button } from "@/components/controls/button";
+import { Badge, Button } from "@/components/controls";
 import { Moon } from "@/components/icons";
 import type { OvernightPhase, OvernightRun } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

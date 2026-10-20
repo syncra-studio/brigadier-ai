@@ -11,20 +11,9 @@ import {
 import { updateDraft } from "@/app/conversation/draftSetup";
 import { useAction } from "@/app/conversation/useAction";
 import { composerPill, floatingMenu } from "@/components/conversation/elements/surfaces";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-  MenuRow,
-} from "@/components/overlays/dropdown-menu";
+import { TooltipIconButton } from "@/components/controls";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger, MenuRow, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { ArrowUpRight, Chat, Folder, Lightbulb, Paperclip, Plus } from "@/components/icons";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
 import type { Mention } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";

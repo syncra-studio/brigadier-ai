@@ -1,8 +1,7 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
-import { ThreadHistoryContext } from "@/components/conversation/message-rail";
-import type { ThreadOverlayProps } from "@/components/conversation/thread";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { ThreadHistoryContext, type ThreadOverlayProps } from "@/components/conversation";
+import { TooltipIconButton } from "@/components/controls";
 import { ChevronLeft, ChevronRight, Search, X } from "@/components/icons";
 import type { MessageMatch } from "@/ipc/generated";
 import { showHighlight } from "@/lib/highlightRules";

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { Badge } from "@/components/controls/badge";
+import { Badge } from "@/components/controls";
 import { Folder } from "@/components/icons";
 import type { Lifecycle } from "@/ipc/generated";
 import { useApp } from "@/state/store";

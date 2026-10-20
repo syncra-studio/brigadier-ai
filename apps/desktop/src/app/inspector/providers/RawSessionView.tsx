@@ -10,9 +10,8 @@ import {
   type TranscriptItem,
   type TranscriptStats,
 } from "@/components/conversation/transcript/transcript";
-import { TranscriptRow } from "@/components/conversation/transcript/TranscriptRow";
-import { Badge } from "@/components/controls/badge";
-import { Button } from "@/components/controls/button";
+import { TranscriptRow } from "@/components/conversation";
+import { Badge, Button } from "@/components/controls";
 import { ArrowLeft } from "@/components/icons";
 import type { ApprovalRequest, RawSession } from "@/ipc/generated";
 import {

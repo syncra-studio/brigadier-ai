@@ -36,12 +36,10 @@ import {
   Stack,
 } from "@/components/icons";
 
-import { Button } from "@/components/controls/button";
+import { Button } from "@/components/controls";
 
-import { SettingsCard } from "@/components/shared/settings-card";
+import { SettingsCard, StateDot, UsageBar } from "@/components/shared";
 
-import { StateDot } from "@/components/shared/state-dot";
-import { UsageBar } from "@/components/shared/usage-bar";
 
 import { revealPath } from "@/ipc/client";
 

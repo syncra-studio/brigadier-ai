@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
 
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton, Button } from "@/components/controls";
 import { BarItem, ITEM_MS } from "@/app/BarItem";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { footMenuPlacement } from "@/app/sidebar/nav";
 import { BrigadierGlyph, Check, Copy, DownloadSimple, ProviderGlyph, Spinner, X } from "@/components/icons";
-import { Button } from "@/components/controls/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
-import { useSidebar } from "@/components/layout/sidebar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
+import { Popover, PopoverContent, PopoverTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
+import { useSidebar } from "@/components/layout";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import type { UpdateItem, UpdateTarget } from "@/ipc/generated";
 import { pillClick, shownUpdates, skipUpdate, startUpdate, useUpdates } from "@/state/updates";

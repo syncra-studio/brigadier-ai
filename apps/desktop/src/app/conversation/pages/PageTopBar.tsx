@@ -2,19 +2,15 @@ import type { LexicalEditor } from "lexical";
 import { useEffect, useRef, useState } from "react";
 
 import { shortcutLabel } from "@/app/conversation/SidePanel";
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
-import { ConfirmDialog } from "@/components/overlays/confirm-dialog";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/overlays/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/overlays/dropdown-menu";
+import { TooltipIconButton, Input } from "@/components/controls";
+import { ConfirmDialog, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/overlays";
 import { ChevronDown, Copy, Document, Download, EditPencil, SquarePlus, Trash } from "@/components/icons";
-import { Input } from "@/components/controls/input";
 import { pageDelete, pageList, saveCopy } from "@/ipc/client";
 import type { PageContent, PageSummary } from "@/ipc/generated";
 import { pageEditing } from "@/state/pageEditing";
 import { dropPageTabs, openPageTab } from "@/state/sessionTabs";
 
-import { BLOCKS, applyBlock } from "../../../components/views/page-editor/pageBlocks";
-import { BlockRow } from "../../../components/views/page-editor/PageTools";
+import { BLOCKS, applyBlock, BlockRow } from "@/components/views/page-editor";
 import { when } from "../NewTabTools";
 
 /** A page as one Markdown document: its title as the top heading, then its body. */

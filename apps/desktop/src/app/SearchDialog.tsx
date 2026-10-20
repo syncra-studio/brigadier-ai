@@ -1,15 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { create } from "zustand";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/overlays/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle, MenuRow } from "@/components/overlays";
 import { Chat, Comment, Folder, Search, Terminal } from "@/components/icons";
-import { MenuRow } from "@/components/overlays/dropdown-menu";
-import { Kbd } from "@/components/controls/kbd";
+import { Kbd } from "@/components/controls";
 import { cn } from "@/lib/utils";
 import { openConversation, select, setProjectExpanded } from "@/state/actions";
 import { openFeedback } from "@/state/feedback";

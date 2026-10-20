@@ -1,6 +1,6 @@
 import { createContext, type CSSProperties, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls";
 import { FilesTab } from "@/app/conversation/FilesTab";
 import { ProjectDraftPane } from "@/app/conversation/ProjectDraftPane";
 import { SearchPanel } from "@/app/conversation/SearchPanel";
@@ -8,8 +8,8 @@ import { SourcePanel } from "@/app/conversation/SourcePanel";
 import { shortcutKeys } from "@/app/shortcutCatalog";
 import { SidebarGlyph } from "@/app/SidebarToggle";
 import { FilesGlyph, SearchGlyph, SourceControlGlyph } from "@/components/icons";
-import { TitlebarTips } from "@/components/shared/titlebar-button";
-import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/layout/sidebar-layout";
+import { TitlebarTips } from "@/components/shared";
+import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/layout";
 import { cn } from "@/lib/utils";
 import { browserFocus } from "@/ipc/client";
 import { CHAT_TAB, openFileTab, useSessionTabs } from "@/state/sessionTabs";

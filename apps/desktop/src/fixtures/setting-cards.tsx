@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 
 import { ThreadStep } from "@/app/conversation/activity/Notice";
 import { ViewContext } from "@/app/conversation/viewContext";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, Request } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 

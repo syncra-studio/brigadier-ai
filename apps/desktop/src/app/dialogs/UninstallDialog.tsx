@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 
 import { CheckboxRow, ErrorLine, errorText } from "@/app/dialogs/fields";
 import { Spinner } from "@/components/icons";
-import { Badge } from "@/components/controls/badge";
-import { Button } from "@/components/controls/button";
+import { Badge, Button } from "@/components/controls";
 import {
   Dialog,
   DialogContent,
@@ -11,7 +10,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/overlays/dialog";
+} from "@/components/overlays";
 import type { RemovalBranch, UninstallPlan, UninstallReport } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
 import {

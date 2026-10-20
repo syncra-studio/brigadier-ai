@@ -28,7 +28,7 @@ import type { Merged } from "@/app/conversation/activity/revert";
 import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { driveFold } from "@/fixtures/cardFold";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, FileStat, MergeRecord, OrchestratorStep, Request, ReviewRun, UserRequest } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { sessionTabs } from "@/state/sessionTabs";

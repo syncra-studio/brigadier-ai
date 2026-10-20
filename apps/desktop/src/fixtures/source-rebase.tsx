@@ -11,7 +11,7 @@ import { createRoot } from "react-dom/client";
 
 import { ConflictTab } from "@/app/conversation/ConflictTab";
 import { SourcePanel } from "@/app/conversation/SourcePanel";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { ConflictFile, Request, SourceFile, SourceRebase, SourceState } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 import { useToasts } from "@/state/toasts";

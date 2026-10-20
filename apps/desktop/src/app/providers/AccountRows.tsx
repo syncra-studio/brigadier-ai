@@ -6,18 +6,15 @@ import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { SetupTerminal } from "@/app/onboarding/SetupTerminal";
 import { ROW_LINE, UsageMeter } from "@/app/providers/parts";
 import { SettingsRow } from "@/app/settings/parts";
-import { Badge } from "@/components/controls/badge";
-import { Button } from "@/components/controls/button";
+import { Badge, Button, Input } from "@/components/controls";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/overlays/dropdown-menu";
+} from "@/components/overlays";
 import { CheckMd, DotsHorizontal, Eye, EyeOff, Plus } from "@/components/icons";
-import { Input } from "@/components/controls/input";
-import { SettingsCard } from "@/components/shared/settings-card";
-import { UsageBar } from "@/components/shared/usage-bar";
+import { SettingsCard, UsageBar } from "@/components/shared";
 import type { AccountView, ProviderKind, QuotaWindow } from "@/ipc/generated";
 import { hasEmail, maskEmailsIn } from "@/lib/email";
 import { VENDOR_LABELS } from "@/lib/routing";

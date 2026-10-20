@@ -13,7 +13,7 @@ import { create } from "zustand";
 import { BrowserTab } from "@/app/conversation/BrowserTab";
 import { BrowserImportPage } from "@/app/settings/BrowserImportPage";
 import { BrowserPage } from "@/app/settings/BrowserPage";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { TooltipProvider } from "@/components/overlays";
 import type { Request } from "@/ipc/generated";
 import { useBrowserFind } from "@/state/browserFind";
 import { useBrowserSettingsView } from "@/state/browserSettings";

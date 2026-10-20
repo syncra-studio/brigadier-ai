@@ -4,8 +4,8 @@ import { createRoot } from "react-dom/client";
 
 import { TerminalPane } from "@/app/conversation/TerminalTab";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
-import { SidebarProvider } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { SidebarProvider } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, Project, Request } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 import { emitTerminalOutput, setTerminalOpen, useTerminalPlaces } from "@/state/terminalPlaces";

@@ -13,15 +13,8 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { Button } from "@/components/controls/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/overlays/dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
+import { Button } from "@/components/controls";
+import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger, Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 import { trackPageHidden } from "@/lib/pageHidden";
 
 trackPageHidden();

@@ -2,9 +2,7 @@ import { useId, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { Picker } from "@/app/inspector/providers/Picker";
-import { Button } from "@/components/controls/button";
-import { Input } from "@/components/controls/input";
-import { ToggleGroup, ToggleGroupItem } from "@/components/controls/toggle-group";
+import { Button, Input, ToggleGroup, ToggleGroupItem } from "@/components/controls";
 import { request } from "@/ipc/client";
 import type { FaultTarget, ProviderKind } from "@/ipc/generated";
 import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";

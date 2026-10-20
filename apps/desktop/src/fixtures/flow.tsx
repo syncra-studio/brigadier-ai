@@ -19,8 +19,8 @@ import { AppSidebar, AppStrip, TitlebarNav } from "@/app/AppSidebar";
 import { ConversationView } from "@/app/ConversationView";
 import { SidebarFoot } from "@/app/SidebarFoot";
 import { revealPlan, useSummary } from "@/app/conversation/summaryState";
-import { SidebarPanel, SidebarProvider } from "@/components/layout/sidebar";
-import { TooltipProvider } from "@/components/overlays/tooltip";
+import { SidebarPanel, SidebarProvider } from "@/components/layout";
+import { TooltipProvider } from "@/components/overlays";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import type {
   Approval,
