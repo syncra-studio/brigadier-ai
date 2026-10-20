@@ -1406,9 +1406,35 @@ mod tests {
 
     /// A store and a platform of their own, to load ledgers from again and again.
     struct Fixture {
-        dir: PathBuf,
         core: Arc<Core>,
         platform: Arc<dyn Platform>,
+        /// Last, so it is removed once the store in `core` is closed.
+        dir: Removed,
+    }
+
+    /// A folder removed when dropped. The store's threads close its database just after the
+    /// store is dropped, and Windows removes no file still open: there it takes a few tries.
+    struct Removed(PathBuf);
+
+    impl std::ops::Deref for Removed {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let tries = if cfg!(windows) { 100 } else { 1 };
+            for _ in 1..tries {
+                if std::fs::remove_dir_all(&self.0).is_ok() || !self.0.exists() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     impl Fixture {
@@ -1428,7 +1454,7 @@ mod tests {
             Self {
                 core: Core::load(store).await.unwrap(),
                 platform,
-                dir,
+                dir: Removed(dir),
             }
         }
 
@@ -1488,12 +1514,6 @@ mod tests {
                 })
                 .collect();
             (kinds, events.last().map_or(0, |event| event.stream_seq))
-        }
-    }
-
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
 
