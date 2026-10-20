@@ -3512,7 +3512,7 @@ impl SessionManager {
                 {
                     server.prompt_tools = vec![super::run::RUN_UNSANDBOXED.into()];
                 }
-                if choice.provider == ProviderKind::Claude {
+                if self.thread_hooked(choice.provider) {
                     let hook_grant = self.grants.issue(
                         &owner,
                         Role::OutputHook {
@@ -3520,7 +3520,7 @@ impl SessionManager {
                         },
                     );
                     grant_values.push(hook_grant.clone());
-                    output_hook = Some(self.output_hook(hook_grant));
+                    output_hook = Some(self.output_hook(hook_grant, choice.provider));
                 }
                 (choice, prompt, vec![server], current)
             }
@@ -3866,16 +3866,21 @@ impl SessionManager {
         }
     }
 
-    /// A Claude thread's output hook (`brigadierd hook post-tool-use`), with its grant.
-    fn output_hook(&self, grant: String) -> OutputHook {
+    /// A thread's output hook (`brigadierd hook post-tool-use`), with its grant; a Codex
+    /// thread's reads Codex's events (`--codex`), for a subfolder's rules only (#121).
+    fn output_hook(&self, grant: String, provider: ProviderKind) -> OutputHook {
+        let mut args: Vec<String> = vec![
+            "hook".into(),
+            "post-tool-use".into(),
+            "--data-dir".into(),
+            self.data_dir.to_string_lossy().into_owned(),
+        ];
+        if provider == ProviderKind::Codex {
+            args.push("--codex".into());
+        }
         OutputHook {
             command: self.config.daemon_exe.clone(),
-            args: vec![
-                "hook".into(),
-                "post-tool-use".into(),
-                "--data-dir".into(),
-                self.data_dir.to_string_lossy().into_owned(),
-            ],
+            args,
             env: vec![(super::tool_output::HOOK_GRANT_ENV.into(), grant)],
             timeout_secs: super::tool_output::HOOK_TIMEOUT_SECS,
         }

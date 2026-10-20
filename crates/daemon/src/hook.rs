@@ -27,13 +27,17 @@
 //!   `AGENTS.md`, left out of its instructions); the hook prints them as
 //!   `hookSpecificOutput.additionalContext`, which follows the call's result (BUILD-PLAN D1.6).
 //!
+//! A Codex thread's hook (`post-tool-use --codex`, from its own home's `hooks.json`, #121) runs
+//! after its shell calls and patches, the way Codex reads and changes files: the files and
+//! folders the command or patch names go to the daemon the same way, for their rules.
+//!
 //! The grant (in [`HOOK_GRANT_ENV`], from the CLI's environment) can only store this thread's
 //! output. Whatever goes wrong, the hook prints nothing and exits 0: the tool call never
 //! breaks. Like `brigadierd mcp`, no async runtime and no logging, so it starts at once.
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use brigadier_core::digest::BASH_WHOLE_MAX;
@@ -68,9 +72,12 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         _ => return ExitCode::SUCCESS,
     };
     let mut data_dir: Option<PathBuf> = None;
+    let mut codex = false;
     while let Some(arg) = args.next() {
         if arg == "--data-dir" {
             data_dir = args.next().map(PathBuf::from);
+        } else if arg == "--codex" {
+            codex = true;
         }
     }
     let mut stdin = String::new();
@@ -89,9 +96,22 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let grant = std::env::var(HOOK_GRANT_ENV).ok();
-    let printed = handle(&stdin, |output, bytes| {
-        send(grant.as_deref(), data_dir.clone(), output, bytes)
-    });
+    let printed = if codex {
+        codex_rules(&stdin, |path| {
+            let header = HookOutput {
+                excerpt: false,
+                status: String::new(),
+                bytes: 0,
+                touched: Some(path.to_owned()),
+                shell: None,
+            };
+            send(grant.as_deref(), data_dir.clone(), &header, &[])?.context
+        })
+    } else {
+        handle(&stdin, |output, bytes| {
+            send(grant.as_deref(), data_dir.clone(), output, bytes)
+        })
+    };
     if let Some(printed) = printed {
         let mut stdout = std::io::stdout().lock();
         let _ = stdout.write_all(printed.as_bytes());
@@ -191,6 +211,159 @@ fn handle(
             )
         }
     }
+}
+
+/// Paths of one Codex call asked about at most.
+const CODEX_PATHS_MAX: usize = 16;
+
+/// What a Codex thread's hook prints for its `PostToolUse` event `stdin`, given a way to ask
+/// the daemon for a path's rules: the rules of the folders of the files and folders its shell
+/// command or patch names, as `additionalContext`, which Codex gives the model after the
+/// call's result; `None`: nothing new.
+fn codex_rules(stdin: &str, mut ask: impl FnMut(&str) -> Option<String>) -> Option<String> {
+    let event: Value = serde_json::from_str(stdin).ok()?;
+    if event.get("hook_event_name").and_then(Value::as_str)? != "PostToolUse" {
+        return None;
+    }
+    let mut cwd = PathBuf::from(event.get("cwd").and_then(Value::as_str)?);
+    let input = event.get("tool_input")?;
+    let command = input.get("command")?.as_str()?;
+    // A call run in a folder of its own (`workdir`) reads from there.
+    if let Some(workdir) = input.get("workdir").and_then(Value::as_str) {
+        cwd = lexical(&cwd.join(workdir));
+    }
+    let paths = match event.get("tool_name").and_then(Value::as_str)? {
+        "Bash" => command_paths(command, &cwd),
+        "apply_patch" => patch_paths(command, &cwd),
+        _ => return None,
+    };
+    let rules: Vec<String> = paths
+        .iter()
+        .take(CODEX_PATHS_MAX)
+        .filter_map(|path| ask(&path.display().to_string()))
+        .collect();
+    if rules.is_empty() {
+        return None;
+    }
+    Some(
+        json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": rules.join("\n\n"),
+            }
+        })
+        .to_string(),
+    )
+}
+
+/// The files and folders a shell command names that are there: `cwd`, the folders it `cd`s
+/// to, and each of its words, as the shell reads them, from `cwd` or the folder a `cd` before
+/// it went to. Options, URLs and
+/// words the shell expands itself are left out.
+fn command_paths(command: &str, cwd: &Path) -> Vec<PathBuf> {
+    let mut dir = cwd.to_owned();
+    // The folder it runs in, which a search there reads without naming it.
+    let mut found: Vec<PathBuf> = vec![dir.clone()];
+    let mut words = command_words(command).into_iter();
+    while let Some(word) = words.next() {
+        if matches!(word.as_str(), "cd" | "pushd") {
+            // The folder it went to counts too: a search there names no path of its own.
+            if let Some(to) = words.next().map(|to| lexical(&dir.join(to)))
+                && to.is_dir()
+            {
+                if !found.contains(&to) {
+                    found.push(to.clone());
+                }
+                dir = to;
+            }
+            continue;
+        }
+        if word.is_empty()
+            || word.starts_with('-')
+            || word.contains("://")
+            || word.contains(['*', '?', '$', '`', '{', '~'])
+        {
+            continue;
+        }
+        let path = lexical(&dir.join(&word));
+        if path.exists() && !found.contains(&path) {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// A command's words: quotes removed, a backslash keeping the next character, and the shell's
+/// operators ending a word.
+fn command_words(command: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => word.extend(chars.by_ref().take_while(|&c| c != '\'')),
+            '"' => {
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => word.extend(chars.next()),
+                        c => word.push(c),
+                    }
+                }
+            }
+            '\\' => word.extend(chars.next()),
+            c if c.is_whitespace() || ";|&<>()".contains(c) => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+            }
+            c => word.push(c),
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// `path` without its `.` and `..` parts, as the daemon matches folders by name: a `..`
+/// takes the part before it away, so `apps/../lib/x.rs` is `lib`'s.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut clean = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                clean.pop();
+            }
+            other => clean.push(other),
+        }
+    }
+    clean
+}
+
+/// The files a Codex patch adds, changes, deletes or moves to, from `cwd`.
+fn patch_paths(patch: &str, cwd: &Path) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    for line in patch.lines() {
+        let named = [
+            "*** Add File: ",
+            "*** Update File: ",
+            "*** Delete File: ",
+            "*** Move to: ",
+        ]
+        .iter()
+        .find_map(|head| line.strip_prefix(head))
+        .map(str::trim)
+        .filter(|path| !path.is_empty());
+        if let Some(path) = named.map(|path| lexical(&cwd.join(path)))
+            && !found.contains(&path)
+        {
+            found.push(path);
+        }
+    }
+    found
 }
 
 /// A `Bash` call about to run (`PreToolUse`) or just ended, as the daemon reads its files for
@@ -711,6 +884,125 @@ mod tests {
         };
         assert_eq!(send(None, None, &header, b""), None);
         assert_eq!(send(Some(""), None, &header, b""), None);
+    }
+
+    /// A Codex thread's shell call or patch asks for the rules of each file and folder it
+    /// names (from its folder, or where a `cd` went), and their rules follow the call's result
+    /// together; with none to give, or for another call, nothing is printed (#121).
+    #[test]
+    fn a_codex_calls_files_bring_the_rules_of_their_folders() {
+        let root =
+            Temp(std::env::temp_dir().join(format!("brigadier-hook-{}", uuid::Uuid::new_v4())));
+        let workspace = root.join("ws");
+        std::fs::create_dir_all(workspace.join("apps/web")).unwrap();
+        std::fs::create_dir_all(workspace.join("docs")).unwrap();
+        std::fs::write(workspace.join("apps/web/page.tsx"), "x").unwrap();
+        let own = root.join("thread");
+        std::fs::create_dir_all(&own).unwrap();
+        let event = |tool: &str, command: &str| {
+            json!({
+                "hook_event_name": "PostToolUse",
+                "tool_name": tool,
+                "tool_input": { "command": command },
+                "tool_response": "Exit code: 0",
+                "cwd": own.display().to_string(),
+                "turn_id": "t1",
+            })
+            .to_string()
+        };
+        let here = own.display().to_string();
+        // The thread's own folder, outside the workspace, has none.
+        let rules = |path: &str| (path != here).then(|| format!("rules for {path}"));
+        let asked = std::cell::RefCell::new(Vec::new());
+        let shell = format!(
+            "cd '{}' && sed -n '1,80p' apps/web/page.tsx && ls -la docs \"apps/web/page.tsx\" | head",
+            workspace.display()
+        );
+        let printed = codex_rules(&event("Bash", &shell), |path| {
+            asked.borrow_mut().push(path.to_owned());
+            rules(path)
+        })
+        .expect("the rules");
+        let ws = workspace.display().to_string();
+        let page = workspace.join("apps/web/page.tsx").display().to_string();
+        let docs = workspace.join("docs").display().to_string();
+        assert_eq!(
+            *asked.borrow(),
+            [here.clone(), ws.clone(), page.clone(), docs.clone()]
+        );
+        let printed: Value = serde_json::from_str(&printed).unwrap();
+        assert_eq!(
+            printed,
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": format!(
+                        "rules for {ws}\n\nrules for {page}\n\nrules for {docs}"
+                    ),
+                }
+            })
+        );
+        // A patch's files, absolute or from its folder; a new file needn't be there yet.
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: {page}\n@@\n-x\n+y\n*** Add File: notes/new.md\n+hi\n*** End Patch"
+        );
+        let asked = std::cell::RefCell::new(Vec::new());
+        let printed = codex_rules(&event("apply_patch", &patch), |path| {
+            asked.borrow_mut().push(path.to_owned());
+            None
+        });
+        assert_eq!(printed, None, "nothing new to give");
+        assert_eq!(
+            *asked.borrow(),
+            [page.clone(), own.join("notes/new.md").display().to_string()]
+        );
+        // A `..` leads out of the folder it follows: `docs` is asked about, not `apps/docs`.
+        asked.borrow_mut().clear();
+        let up = format!(
+            "cd '{}' && ls ../docs ./web/../../apps/web/page.tsx",
+            workspace.join("apps").display()
+        );
+        codex_rules(&event("Bash", &up), |path| {
+            asked.borrow_mut().push(path.to_owned());
+            None
+        });
+        let patched = "*** Begin Patch\n*** Update File: ../ws/docs/../apps/web/page.tsx\n@@\n-x\n+y\n*** End Patch";
+        codex_rules(&event("apply_patch", patched), |path| {
+            asked.borrow_mut().push(path.to_owned());
+            None
+        });
+        let apps = workspace.join("apps").display().to_string();
+        assert_eq!(
+            *asked.borrow(),
+            [here.clone(), apps, docs, page.clone(), page]
+        );
+        // A search names no path: the folder it runs in (its `workdir`) is asked about.
+        let mut search: Value = serde_json::from_str(&event("Bash", "rg TODO")).unwrap();
+        search["tool_input"]["workdir"] = json!(workspace.join("apps/web"));
+        let asked = std::cell::RefCell::new(Vec::new());
+        let printed = codex_rules(&search.to_string(), |path| {
+            asked.borrow_mut().push(path.to_owned());
+            rules(path)
+        });
+        let web = workspace.join("apps/web").display().to_string();
+        assert!(printed.is_some_and(|printed| printed.contains(&format!("rules for {web}"))));
+        assert_eq!(*asked.borrow(), [web]);
+        // A command naming nothing there asks about its own folder only; another tool or
+        // another event asks nothing.
+        let asked = std::cell::RefCell::new(Vec::new());
+        let printed = codex_rules(&event("Bash", "echo hi --x ~/a *.rs"), |path| {
+            asked.borrow_mut().push(path.to_owned());
+            rules(path)
+        });
+        assert_eq!((printed, asked.into_inner()), (None, vec![here.clone()]));
+        let never = |_: &str| -> Option<String> { panic!("asked") };
+        assert_eq!(
+            codex_rules(&event("mcp__brigadier__run", "ls"), never),
+            None
+        );
+        let started = event("Bash", "ls").replace("PostToolUse", "PreToolUse");
+        assert_eq!(codex_rules(&started, never), None);
+        assert_eq!(codex_rules("not json", never), None);
     }
 
     /// A file tool's call asks for the rules of its file's folders, and the daemon's rules

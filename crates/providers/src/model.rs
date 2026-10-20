@@ -1221,7 +1221,9 @@ pub struct McpServer {
 /// A command Claude runs after each of a thread's `Bash` calls, with the call's event on its
 /// stdin (`PostToolUse` and `PostToolUseFailure` hooks, matcher `Bash`). Its reply may replace
 /// a successful call's output for the model: Brigadier's lossless trimming (`brigadierd hook
-/// post-tool-use`, THREAD-PLAN.md Q4). Only a [`ToolSet::Thread`] session gets it.
+/// post-tool-use`, THREAD-PLAN.md Q4). Only a [`ToolSet::Thread`] session gets it. Codex runs
+/// it after a thread's shell calls and patches, from the thread's own home
+/// ([`crate::codex::runs_thread_hook`]), for a subfolder's rules only (#121).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputHook {
     pub command: PathBuf,
@@ -1306,15 +1308,15 @@ pub struct SessionSpec {
     /// (the user's setting, for sessions that commit): Claude through its attribution
     /// settings; Codex, which has none, is told in its instructions by the caller.
     pub omit_ai_coauthors: bool,
-    /// A Claude thread's output hook; Codex runs no hooks.
+    /// A thread's output hook (Claude's and Codex's, see [`OutputHook`]).
     pub output_hook: Option<OutputHook>,
     /// A Claude worker's `Stop` hook: the command answers whether its turn may end (it
-    /// refuses a turn that ends with no report, BUILD-PLAN E2). Codex runs no hooks.
+    /// refuses a turn that ends with no report, BUILD-PLAN E2). Codex doesn't run it.
     pub stop_hook: Option<OutputHook>,
     /// Every tool call is refused before it runs, with this reason for the model: a Claude
     /// `PreToolUse` hook that denies all tools, native and MCP. Hooks run in the client, so the
     /// tool list (and the cached prefix it starts) stays the same; `--disallowedTools` would
-    /// change it (BUILD-PLAN B5, a thread's note fork). Codex runs no hooks: it ignores this.
+    /// change it (BUILD-PLAN B5, a thread's note fork). Codex ignores this.
     pub deny_tools: Option<String>,
     /// What the session may never write (other sessions' branches, the base, Brigadier's
     /// bookkeeping; PLAN bug 6). Below Full access the CLI's sandbox grants none of it

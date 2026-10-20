@@ -286,7 +286,8 @@ async fn a_trimmed_output_is_read_back_whole_by_its_own_session_only() {
 }
 
 /// A Codex thread runs commands through `run`, with a 30-minute tool timeout; under Ask for
-/// approval it also has `run_unsandboxed`, whose calls Codex asks about first. It has no hook.
+/// approval it also has `run_unsandboxed`, whose calls Codex asks about first. Its hook only
+/// brings a subfolder's rules (#121), so it trims nothing.
 #[tokio::test]
 async fn a_codex_thread_runs_commands_through_brigadier() {
     for (permission, run, prompted) in [
@@ -315,10 +316,11 @@ async fn a_codex_thread_runs_commands_through_brigadier() {
         flow.say("Hello.").await;
         flow.settled().await;
         let (spec, grant, hook) = thread(&flow);
-        assert!(
-            hook.is_none() && spec.output_hook.is_none(),
-            "{permission:?}"
-        );
+        let hooked = brigadier_providers::codex::runs_thread_hook(flow.manager.runtime.cli_env());
+        assert_eq!(hook.is_some(), hooked, "{permission:?}");
+        if let Some(hook) = &spec.output_hook {
+            assert_eq!(hook.args.last().map(String::as_str), Some("--codex"));
+        }
         // Longer than run's longest command, so the call returns its status and output.
         assert_eq!(
             spec.mcp_servers[0].tool_timeout_secs,

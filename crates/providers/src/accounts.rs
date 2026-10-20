@@ -160,7 +160,7 @@ pub fn remove_home(home: &Path) -> io::Result<()> {
     }
 }
 
-fn create_private_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -176,14 +176,14 @@ fn create_private_dir(dir: &Path) -> io::Result<()> {
 }
 
 #[cfg(unix)]
-fn link_to(target: &Path, link: &Path, _dir: bool) -> io::Result<()> {
+pub(crate) fn link_to(target: &Path, link: &Path, _dir: bool) -> io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }
 
 /// Windows: a folder is linked by a junction (no privilege needed), a file by a hard link (a
 /// CLI that replaces the file then keeps its own copy).
 #[cfg(windows)]
-fn link_to(target: &Path, link: &Path, dir: bool) -> io::Result<()> {
+pub(crate) fn link_to(target: &Path, link: &Path, dir: bool) -> io::Result<()> {
     if dir {
         junction::create(target, link)
     } else {

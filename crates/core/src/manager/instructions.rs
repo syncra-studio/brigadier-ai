@@ -24,9 +24,10 @@
 //!
 //! Only what applies is loaded (BUILD-PLAN D1.6): the root's files (and `.claude`'s) always
 //! come whole; a subfolder's come whole to a worker whose spec names a path under it, and to
-//! a Claude thread with the first file it reads or changes there (its output hook,
-//! [`SessionManager::hook_rules`]). The rest are listed by path, so none is unknown. A Codex
-//! thread, with no hook, gets them all.
+//! a thread with the first file it reads or changes there (its output hook,
+//! [`SessionManager::hook_rules`]; a Codex thread's runs from a home of its own, #121). The
+//! rest are listed by path, so none is unknown. A thread without the hook (a Codex login kept
+//! in the system's keyring) gets them all.
 
 use std::path::{Path, PathBuf};
 
@@ -63,14 +64,14 @@ pub(crate) async fn for_worker(provider: ProviderKind, worktree: &Path, spec: &s
 
 /// The workspace's instruction files, formatted for the thread's prompt: its working
 /// directory is its own folder outside the repository, so neither CLI finds them itself. A
-/// Claude thread gets the root's whole and a subfolder's listed: its output hook gives it a
-/// subfolder's rules with the first file it reads or changes there ([`rules_for`],
-/// BUILD-PLAN D1.6). A Codex thread has no such hook and gets them all.
-pub(crate) async fn for_thread(workspace: &Path, provider: ProviderKind) -> String {
+/// thread with its output hook (`hooked`) gets the root's whole and a subfolder's listed: the
+/// hook gives it a subfolder's rules with the first file it reads or changes there
+/// ([`rules_for`], BUILD-PLAN D1.6). A thread without one gets them all.
+pub(crate) async fn for_thread(workspace: &Path, hooked: bool) -> String {
     let workspace = workspace.to_owned();
     tokio::task::spawn_blocking(move || {
         let rules = found_rules(&workspace, true);
-        let (pinned, left_out): (Vec<Rule>, Vec<Rule>) = if provider == ProviderKind::Claude {
+        let (pinned, left_out): (Vec<Rule>, Vec<Rule>) = if hooked {
             rules.into_iter().partition(|rule| rule.folder.is_none())
         } else {
             (rules, Vec::new())
@@ -117,7 +118,8 @@ pub(crate) fn rules_for(workspace: &Path, touched: &Path) -> Vec<(String, String
 
 impl SessionManager {
     /// What a thread's output hook asks after a file tool's call (`brigadierd hook
-    /// post-tool-use`): the rules of the touched file's subfolders its session hasn't had
+    /// post-tool-use`; a Codex thread's after a shell call or patch, for each file it names):
+    /// the rules of the touched file's subfolders its session hasn't had
     /// yet, each once per CLI session (a new session's hook has a new grant). `None` from
     /// the grant: it isn't a live hook grant.
     pub async fn hook_rules(&self, grant: &str, touched: &str) -> Option<Option<String>> {
@@ -365,8 +367,8 @@ mod tests {
             "Keep components small.\n",
         )
         .unwrap();
-        // A Codex thread has no hook to bring a subfolder's rules: it gets them all.
-        let thread = for_thread(&dir, ProviderKind::Codex).await;
+        // A thread without a hook to bring a subfolder's rules gets them all.
+        let thread = for_thread(&dir, false).await;
         assert!(thread.contains("### AGENTS.md\nUse pnpm."), "{thread}");
         assert_eq!(thread.matches("Use pnpm.").count(), 1, "{thread}");
         assert!(thread.contains("### app/CLAUDE.md (applies to files under app/)"));
@@ -408,8 +410,8 @@ mod tests {
         let web_rules = "Web components stay under 200 lines.\n".repeat(200);
         std::fs::write(web.join("CLAUDE.md"), &web_rules).unwrap();
         std::fs::write(api.join("CLAUDE.md"), "Every handler logs its route.\n").unwrap();
-        let lean = for_thread(&dir, ProviderKind::Claude).await;
-        let whole = for_thread(&dir, ProviderKind::Codex).await;
+        let lean = for_thread(&dir, true).await;
+        let whole = for_thread(&dir, false).await;
         assert!(lean.contains("### AGENTS.md\nUse pnpm."), "{lean}");
         assert!(!lean.contains("Web components"), "{lean}");
         assert!(!lean.contains("Every handler"), "{lean}");

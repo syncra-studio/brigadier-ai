@@ -198,7 +198,7 @@ fn claude_keychain_account(user: Option<&OsStr>) -> String {
 
 /// Whether Codex keeps its login in `auth.json`, from its `config.toml` (`file` by default;
 /// `keyring` and `auto` use the system's keyring).
-fn codex_stores_in_file(config: &str) -> bool {
+pub(crate) fn codex_stores_in_file(config: &str) -> bool {
     let Ok(document) = config.parse::<toml_edit::Document<String>>() else {
         return true;
     };

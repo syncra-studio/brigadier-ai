@@ -954,8 +954,8 @@ fn refuse_compaction_hook() -> Value {
 const REFUSED_COMPACTION: &str =
     "Brigadier continues this session in a fresh one instead of compacting it.";
 
-/// `text` as one word for the shell Claude runs a hook command with.
-fn shell_quote(text: &str) -> String {
+/// `text` as one word for the shell a CLI runs a hook command with.
+pub(crate) fn shell_quote(text: &str) -> String {
     if !text.is_empty()
         && text
             .chars()

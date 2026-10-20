@@ -290,6 +290,18 @@ impl SessionManager {
         }
     }
 
+    /// Whether a thread on `provider` gets its output hook, which brings a subfolder's rules
+    /// with the first file it touches there: a Claude thread always; a Codex thread when its
+    /// login can follow it to a home of its own, where Codex runs the hook (#121).
+    pub(crate) fn thread_hooked(&self, provider: ProviderKind) -> bool {
+        match provider {
+            ProviderKind::Claude => true,
+            ProviderKind::Codex => {
+                brigadier_providers::codex::runs_thread_hook(self.runtime.cli_env())
+            }
+        }
+    }
+
     /// The thread's instructions: its role, its workspace, and the workspace's own
     /// instruction files (its CLI doesn't find them from its working directory).
     pub(crate) async fn thread_prompt(
@@ -333,7 +345,8 @@ impl SessionManager {
             super::browser_tool::agents_browse(self.core.settings().browser_enabled),
         ));
         if let Some(workspace) = workspace {
-            prompt.push_str(&super::instructions::for_thread(&workspace.path, provider).await);
+            let hooked = self.thread_hooked(provider);
+            prompt.push_str(&super::instructions::for_thread(&workspace.path, hooked).await);
         }
         // Claude's attribution settings hold its commits to it; Codex is told.
         if provider == ProviderKind::Codex && self.core.settings().omit_ai_coauthors {
