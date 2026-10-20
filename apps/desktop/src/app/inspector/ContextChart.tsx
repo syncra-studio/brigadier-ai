@@ -10,7 +10,6 @@ import {
 import { useSize } from "@/hooks/use-size";
 import type { RebirthThresholds } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
-import { useApp } from "@/state/store";
 
 /** A round upper bound for the y axis: 1, 2 or 5 times a power of ten. */
 function niceMax(value: number): number {
@@ -35,12 +34,10 @@ export function ContextChart({
   thresholds: RebirthThresholds | null;
 }) {
   const { ref, size } = useSize();
-  const density = useApp((s) => s.settings.density);
   const [hover, setHover] = useState<number | null>(null);
 
-  // Geometry comes from the spacing token, re-read when density switches it.
-  // oxlint-disable-next-line react-hooks/exhaustive-deps
-  const unit = useMemo(() => tokenPx("--spacing"), [density]);
+  // Geometry comes from the spacing token.
+  const unit = useMemo(() => tokenPx("--spacing"), []);
   const n = log.injections.length;
   const padLeft = unit * 9;
   const padRight = unit * 2;

@@ -5,8 +5,8 @@
  *
  * Query: `view=running` (default: the second request works, three approvals wait) or
  * `view=done` (it finished, with a final answer and what waits on the user); `approvals=0`
- * (none wait); `worker=1` (the lead's own thread open in the Workers panel); `sidebar=0`;
- * `density=compact`. Composer slot and review line (SESSION-FIXES-PLAN.md phase 5): `slot=1`
+ * (none wait); `worker=1` (the lead's own thread open in the Workers panel); `sidebar=0`.
+ * Composer slot and review line (SESSION-FIXES-PLAN.md phase 5): `slot=1`
  * (a second worker, a CI watch and a held merge over the composer); `reviews=before` or
  * `reviews=after` (two reviews whose findings the thread recorded, before or after the merge);
  * `update=1` (with `view=done`: a late event's update line under the answer). `window.flow`
@@ -43,7 +43,6 @@ import { type Board, emptyBoard, useBoard } from "@/state/board";
 import { emptyThread, useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
-document.documentElement.dataset.density = query.get("density") === "compact" ? "compact" : "normal";
 const done = query.get("view") === "done";
 const approvals = !done && query.get("approvals") !== "0";
 

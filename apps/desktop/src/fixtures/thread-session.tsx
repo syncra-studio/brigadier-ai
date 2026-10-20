@@ -14,7 +14,7 @@
  *   `at=1791603740000` while "Implement this plan?" waits, `at=1791603900000` while phase 1
  *   builds.
  *
- * Query: `density=compact`; `sidebar=0` (closed); `summary=1` (the side panel pinned); `at=<ms>`
+ * Query: `sidebar=0` (closed); `summary=1` (the side panel pinned); `at=<ms>`
  * (only the events up to that time, a live moment of the session); `done=1` (the turn that waits
  * on the user's merge answer as done, its work folded).
  */
@@ -40,7 +40,6 @@ import { applyToBoard, emptyBoard, useBoard } from "@/state/board";
 import { emptyThread, useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
-document.documentElement.dataset.density = query.get("density") === "compact" ? "compact" : "normal";
 const isGrill = query.get("session") === "grill";
 const isPlan = query.get("session") === "plan";
 const recorded = isGrill ? grill : isPlan ? planned : t1;

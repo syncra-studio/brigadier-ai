@@ -4,7 +4,7 @@
  * (`boards/overnight-2026-10-03.json`), in the app's own window layout. Requests are answered here
  * and never reach a daemon.
  *
- * Query: `density=compact`; `sidebar=0` (closed); `run=live` (the run still working) or
+ * Query: `sidebar=0` (closed); `run=live` (the run still working) or
  * `run=none` (a normal session: its plan is an ordinary plan card); `plans=N` (N more plan cards).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -22,7 +22,6 @@ import { type Board, emptyBoard, useBoard } from "@/state/board";
 import { emptyThread, useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
-document.documentElement.dataset.density = query.get("density") === "compact" ? "compact" : "normal";
 const id = night.conversationId;
 const created = Math.min(...night.messages.map((message) => (message as unknown as Message).createdAtMs));
 const conversation: Conversation = {

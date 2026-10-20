@@ -37,38 +37,34 @@ const TARGET = {
 const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true });
 const failures = [];
 try {
-  for (const density of ["normal", "compact"]) {
-    for (const path of PAGES) {
-      const page = await browser.newPage({ viewport: { width: 1728, height: 1024 }, deviceScaleFactor: 2, colorScheme: "dark", reducedMotion: "reduce" });
-      const errors = [];
-      page.on("pageerror", (error) => errors.push(error.message));
-      await page.goto(`${base}/fixtures/${path}&density=${density}`);
-      await page.locator('[data-slot="request-work-header"]').first().waitFor();
-      await page.evaluate(openEverything);
-      await page.waitForTimeout(400);
-      const measured = await page.evaluate(measure);
-      const { chevrons } = measured;
-      // To a hundredth of a pixel; null where the page has no such thing.
-      const sizes = Object.fromEntries(
-        Object.entries(measured.sizes).map(([key, value]) => [key, typeof value === "number" && !Number.isNaN(value) ? Math.round(value * 100) / 100 : null]),
-      );
-      const label = `${path}, ${density}`;
-      const off = chevrons.filter((chevron) => Math.abs(chevron.dy) > CENTRED_PX);
-      console.log(`${label}: ${chevrons.length} chevrons, ${off.length} off centre (largest ${Math.max(0, ...chevrons.map((chevron) => Math.abs(chevron.dy))).toFixed(2)}px)`);
-      for (const chevron of off) failures.push(`${label}: "${chevron.text}" chevron ${chevron.dy.toFixed(2)}px off its line`);
-      if (chevrons.length === 0) failures.push(`${label}: no chevrons found`);
-      console.log(`  ${JSON.stringify(sizes)}`);
-      if (density === "normal") {
-        for (const [key, value] of Object.entries(sizes)) {
-          const want = TARGET[key];
-          if (want === undefined || value === null) continue;
-          const tolerance = key === "bubbleMaxShare" ? 0.01 : SIZE_PX;
-          if (Math.abs(value - want) > tolerance) failures.push(`${label}: ${key} is ${value}, the target ${want}`);
-        }
-      }
-      assert.deepEqual(errors, [], `${label}: page errors`);
-      await page.close();
+  for (const path of PAGES) {
+    const page = await browser.newPage({ viewport: { width: 1728, height: 1024 }, deviceScaleFactor: 2, colorScheme: "dark", reducedMotion: "reduce" });
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`${base}/fixtures/${path}`);
+    await page.locator('[data-slot="request-work-header"]').first().waitFor();
+    await page.evaluate(openEverything);
+    await page.waitForTimeout(400);
+    const measured = await page.evaluate(measure);
+    const { chevrons } = measured;
+    // To a hundredth of a pixel; null where the page has no such thing.
+    const sizes = Object.fromEntries(
+      Object.entries(measured.sizes).map(([key, value]) => [key, typeof value === "number" && !Number.isNaN(value) ? Math.round(value * 100) / 100 : null]),
+    );
+    const label = path;
+    const off = chevrons.filter((chevron) => Math.abs(chevron.dy) > CENTRED_PX);
+    console.log(`${label}: ${chevrons.length} chevrons, ${off.length} off centre (largest ${Math.max(0, ...chevrons.map((chevron) => Math.abs(chevron.dy))).toFixed(2)}px)`);
+    for (const chevron of off) failures.push(`${label}: "${chevron.text}" chevron ${chevron.dy.toFixed(2)}px off its line`);
+    if (chevrons.length === 0) failures.push(`${label}: no chevrons found`);
+    console.log(`  ${JSON.stringify(sizes)}`);
+    for (const [key, value] of Object.entries(sizes)) {
+      const want = TARGET[key];
+      if (want === undefined || value === null) continue;
+      const tolerance = key === "bubbleMaxShare" ? 0.01 : SIZE_PX;
+      if (Math.abs(value - want) > tolerance) failures.push(`${label}: ${key} is ${value}, the target ${want}`);
     }
+    assert.deepEqual(errors, [], `${label}: page errors`);
+    await page.close();
   }
 } finally {
   await browser.close();

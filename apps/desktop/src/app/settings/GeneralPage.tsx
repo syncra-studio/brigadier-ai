@@ -16,9 +16,8 @@ import {
   openNotificationSettings,
   setLoginItem,
 } from "@/ipc/client";
-import type { Density, FollowUp, NotifyFinished } from "@/ipc/generated";
+import type { FollowUp, NotifyFinished } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { setDensity } from "@/state/actions";
 import {
   keepAwakeOptions,
   lidClosedHint,
@@ -36,10 +35,6 @@ export const GENERAL_ROWS = {
   name: {
     label: "Your name",
     description: "What Brigadier calls you",
-  },
-  density: {
-    label: "Density",
-    description: "Smaller controls and tighter spacing across the app",
   },
   sidebarClosed: {
     label: "When the sidebar is closed",
@@ -95,11 +90,6 @@ export const GENERAL_ROWS = {
   },
 } as const;
 
-const DENSITIES = [
-  { value: "compact", label: "Compact" },
-  { value: "normal", label: "Normal" },
-] as const satisfies readonly { value: Density; label: string }[];
-
 const FOLLOW_UPS = [
   { value: "queue", label: "Queue" },
   { value: "steer", label: "Steer" },
@@ -128,25 +118,11 @@ export function GeneralPage() {
 }
 
 function AppearanceSection() {
-  const density = useApp((s) => s.settings.density);
   const { collapseMode, setCollapseMode } = useSidebar();
-  const densityAction = useAction();
   return (
     <SettingsSection title="Appearance">
       <SettingsCard>
         <NameRow />
-        <SettingsRow
-          label={GENERAL_ROWS.density.label}
-          description={GENERAL_ROWS.density.description}
-          error={densityAction.error}
-        >
-          <Segmented
-            label={GENERAL_ROWS.density.label}
-            value={density}
-            options={DENSITIES}
-            onChange={(value) => densityAction.run(() => setDensity(value))}
-          />
-        </SettingsRow>
         <SettingsRow
           label={GENERAL_ROWS.sidebarClosed.label}
           description={GENERAL_ROWS.sidebarClosed.description}

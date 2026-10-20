@@ -1,7 +1,7 @@
 /**
  * The folder trust question over a faked shell and daemon: four projects, `invoice-service` and
- * `ops-scripts` never asked about, `invoice-service` open in its new session. ?density=compact
- * for the compact sizes, ?long=1 for a path too long for its line. ?drive=1 moves between a
+ * `ops-scripts` never asked about, `invoice-service` open in its new session.
+ * ?long=1 for a path too long for its line. ?drive=1 moves between a
  * plain chat, an answered project and the two unanswered ones, answers both and comes back,
  * and writes what it saw to #trust-result
  * (TrustDialogRender.test.ts reads it). ?look=1 sets the open dialog, its two answers and the
@@ -20,7 +20,6 @@ import { revealApp } from "@/lib/splash";
 import { type Selection, useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
-document.documentElement.dataset.density = params.get("density") === "compact" ? "compact" : "normal";
 if (params.has("drive") || params.has("look")) {
   const still = document.createElement("style");
   still.textContent =

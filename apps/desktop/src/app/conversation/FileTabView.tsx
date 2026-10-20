@@ -242,7 +242,6 @@ const CodeLines: FC<{
 }> = ({ text, language, line, reveal, active }) => {
   const lines = useMemo(() => text.replace(/\n$/, "").split("\n"), [text]);
   const [tokens, setTokens] = useState<{ text: string; tokens: Token[][] | null } | null>(null);
-  const density = useApp((s) => s.settings.density);
   const mac = useApp((s) => s.info?.platform === "macos");
   const scrollRef = useRef<HTMLDivElement>(null);
   // The line gone to with ⌃G, until a link asks for another.
@@ -301,9 +300,6 @@ const CodeLines: FC<{
     estimateSize: () => tokenPx("--spacing") * 5,
     overscan: 20,
   });
-  useLayoutEffect(() => {
-    virtualizer.measure();
-  }, [density, virtualizer]);
   // A link (again) at a line marks it and brings it into view.
   useLayoutEffect(() => {
     if (line !== null && line > 0) virtualizer.scrollToIndex(line - 1, { align: "center" });

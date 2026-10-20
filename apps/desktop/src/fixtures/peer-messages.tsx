@@ -21,7 +21,6 @@
  * answer it carries; `drive=jump` (with `history=long`) jumps from a sent row to its message in
  * the receiver and from a received message to its sent row, and checks the sidebar's unread dot;
  * `drive=live` reads API schema's newest turn. Each writes what it saw to `<pre id="peer-result">`.
- * `density=compact` for the compact density.
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
@@ -51,7 +50,6 @@ import { CHAT_TAB, sessionTabs, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
 
 const query = new URLSearchParams(location.search);
-document.documentElement.dataset.density = query.get("density") === "compact" ? "compact" : "normal";
 document.documentElement.dataset.platform = "macos";
 // Nothing opened before: the sidebar's unread marks start from none.
 localStorage.removeItem(LAST_OPENED_KEY);

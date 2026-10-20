@@ -18,7 +18,7 @@
  *               border-divider (hairlines between columns, rows and cards), bg-toggle-on (a
  *               switch that is on), chart-1…5, text-glyph-1…8 (a worker's glyph).
  *               Opacity modifiers (bg-muted/40) are fine.
- *   Spacing     the numeric scale (p-2, gap-1.5, mt-3 …) multiplies --spacing, which density sets.
+ *   Spacing     the numeric scale (p-2, gap-1.5, mt-3 …) multiplies --spacing.
  *   Controls    h-control-{xs,sm,md,lg}       heights of buttons, inputs, menu rows, toggles
  *               px-button-{xs,sm,md,lg}       horizontal padding of text buttons
  *               size-icon-button-{xs,sm,md,lg} square icon-only buttons
@@ -134,9 +134,6 @@
  *   Motion      ease-summary-shift, ease-summary-card (the pinned summary), ease-sidebar (the
  *               sidebar opening and closing), ease-panel (the side panel), ease-enter (a section's list opening or closing),
  *               ease-standard (a disclosure chevron turning)
- *
- * Density: <html data-density="normal|compact">. Every size and spacing token below is
- * redefined for compact, so switching the attribute tightens the whole app at once.
  */
 
 @theme {
@@ -167,7 +164,6 @@
   /* The thread's prose: a touch heavier than normal on the system face. */
   --font-weight-prose: 430;
 
-  /* Normal density (default). Compact overrides live at the bottom of this file. */
   --spacing: 0.25rem;
 
   --spacing-control-xs: 1.5rem;
@@ -381,7 +377,7 @@
   --spacing-thread-find: 24rem;
   --container-thread-find-max: 70vw;
   --browser-address-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
-  /* Bottom shell sessions keep the native terminal's measurements at either density. */
+  /* Bottom shell sessions keep the native terminal's measurements. */
   --spacing-terminal-header: 2.5rem;
   --spacing-terminal-tab-height: 2rem;
   --spacing-terminal-tab: 14.875rem;
@@ -835,132 +831,12 @@
   --sidebar-ring: oklch(0.556 0.004 var(--tint));
 }
 
-/* On macOS Back's centre sits 26px past the traffic lights and level with them (they stay put
-   at any density); in full screen they are gone and it moves to the titlebar's start. */
+/* On macOS Back's centre sits 26px past the traffic lights and level with them; in full screen they are gone and it moves to the titlebar's start. */
 :root[data-platform="macos"]:not([data-fullscreen]) {
   --spacing-titlebar-start: calc(
     var(--spacing-traffic-lights) + 1.625rem - var(--spacing-icon-button-md) / 2
   );
   --spacing-titlebar-toggle: 2.75rem;
-}
-
-:root[data-density="compact"] {
-  --spacing: 0.1875rem;
-
-  --spacing-control-xs: 1.25rem;
-  --spacing-control-sm: 1.5rem;
-  --spacing-control-md: 1.625rem;
-  --spacing-control-lg: 2rem;
-  --spacing-button-xs: 0.375rem;
-  --spacing-button-sm: 0.5rem;
-  --spacing-button-md: 0.625rem;
-  --spacing-button-lg: 0.875rem;
-  --spacing-icon-button-xs: 1rem;
-  --spacing-icon-button-sm: 1.25rem;
-  --spacing-icon-button-md: 1.375rem;
-  --spacing-icon-button-lg: 1.625rem;
-  --spacing-icon-xs: 0.625rem;
-  --spacing-icon-sm: 0.75rem;
-  --spacing-icon-md: 0.875rem;
-  --spacing-icon-lg: 1rem;
-  --spacing-pill: 1rem;
-  --spacing-pill-x: 0.375rem;
-  --spacing-row: 1.625rem;
-  --spacing-row-sm: 1.375rem;
-  --spacing-activity: 0.75rem;
-  --spacing-activity-row: 1.25rem;
-  --spacing-activity-row-gap: 0.1875rem;
-  --spacing-chevron: 0.75rem;
-  --spacing-group-list: 12rem;
-  --spacing-group-fade: 1.25rem;
-  --spacing-shell-output: 7.875rem;
-  --spacing-shell-fade: 1.5rem;
-  --spacing-thought: 7.5rem;
-  --spacing-fold-slide: 0.375rem;
-  --spacing-answer-actions-gap: 0.25rem;
-  --spacing-answer-action: 1.375rem;
-  --spacing-answer-actions-between: 0.125rem;
-  --spacing-kbd: 0.9375rem;
-  --spacing-menu: 7rem;
-  --spacing-composer: 2.25rem;
-  --spacing-attachment-thumb: 6.5rem;
-  --spacing-attachment-card: 12.5rem;
-  --spacing-rail-inset: 0.625rem;
-  --spacing-rail-tuck: 0.1875rem;
-  --spacing-sidebar: 16rem;
-  --spacing-sidebar-min: 10.5rem;
-  --spacing-sidebar-max: 26rem;
-  --spacing-nav-row: 1.625rem;
-  --spacing-nav-header: 2.75rem;
-  --spacing-nav-search: 1.875rem;
-  --spacing-switch-width: 1.75rem;
-  --spacing-switch-height: 1.125rem;
-  --spacing-switch-thumb: 0.875rem;
-  --spacing-settings-control: min(7.5rem, 40cqw);
-  --spacing-page-toolbar: 2.5rem;
-  --spacing-titlebar: 2.5rem;
-  --spacing-agents: 22rem;
-  --spacing-side-panel-min: 20rem;
-  --spacing-side-panel-chat-min: 20rem;
-  --spacing-side-panel-preferred: 35rem;
-  --spacing-side-panel-chat-room: 27.5rem;
-  --spacing-panel-resize-step: 0.5rem;
-  --spacing-panel-tab: 13rem;
-  --spacing-panel-tab-min: 4.75rem;
-  --spacing-session-tab-separator-height: 0.625rem;
-
-  --radius-xs: 0.125rem;
-  --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
-  --radius-xl: 0.625rem;
-  --radius-2xl: 0.75rem;
-  --radius-document: 0.25rem;
-  --radius-control: 0.375rem;
-  --radius-surface: 0.5rem;
-  --radius-dialog: 0.625rem;
-  --radius-question: 1rem;
-  --radius-thread: 0.75rem;
-  --radius-composer: 1.125rem;
-  --radius-bubble: 1.125rem;
-  --radius-shell: 0.625rem;
-  --radius-rail: 1rem;
-  --radius-menu: 1rem;
-  --radius-summary: 1rem;
-  --radius-tooltip: 0.75rem;
-  --radius-nav: 0.625rem;
-  --radius-settings: 0.75rem;
-  --radius-toolbar-button: 0.5rem;
-  --radius-strip-button: 0.5rem;
-
-  --text-2xs: 0.625rem;
-  --text-2xs--line-height: 0.875rem;
-  --text-xs: 0.6875rem;
-  --text-xs--line-height: 0.9375rem;
-  --text-sm: 0.8125rem;
-  --text-sm--line-height: 1.125rem;
-  --text-session-tab: 0.75rem;
-  --text-session-tab--line-height: 1rem;
-  --text-browser: 0.75rem;
-  --text-browser--line-height: 1rem;
-  --text-base: 0.875rem;
-  --text-base--line-height: 1.3125rem;
-  --text-lg: 1rem;
-  --text-lg--line-height: 1.5rem;
-  --text-xl: 1.125rem;
-  --text-xl--line-height: 1.5rem;
-  --text-2xl: 1.3125rem;
-  --text-2xl--line-height: 1.75rem;
-  --text-hero: 1.5rem;
-  --text-hero--line-height: 1.875rem;
-  --text-page-title: 1.5rem;
-  --text-page-title--line-height: 1.875rem;
-  --text-label: 0.75rem;
-  --text-label--line-height: 1rem;
-  --text-nav-title: 1rem;
-  --text-nav-title--line-height: 1.375rem;
-  --text-code: 0.75rem;
-  --text-code--line-height: 1.125rem;
 }
 
 /* WebKit before 17.2 has no linear() easing: the springs fall back to the closest curve. */

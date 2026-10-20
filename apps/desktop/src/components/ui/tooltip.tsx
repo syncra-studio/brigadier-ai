@@ -37,7 +37,7 @@ function TooltipTrigger({
 
 function TooltipContent({
   className,
-  // One spacing step, so the gap to the trigger follows density.
+  // One spacing step from the trigger.
   sideOffset = tokenPx("--spacing"),
   children,
   ...props

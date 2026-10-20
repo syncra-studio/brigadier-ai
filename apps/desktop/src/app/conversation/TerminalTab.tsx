@@ -420,7 +420,6 @@ export function TerminalTab({
   /** Takes the keyboard. */
   active: boolean;
 }) {
-  const density = useApp((s) => s.settings.density);
   const [provider, setProvider] = useState<ProviderKind | null>(null);
   const [checkout, setCheckout] = useState<string | null>(null);
   const open = useCallback(
@@ -498,7 +497,6 @@ export function TerminalTab({
       )}
       <Suspense fallback={null}>
         <TerminalView
-          key={density}
           open={open}
           focus={active}
           restored={restored}

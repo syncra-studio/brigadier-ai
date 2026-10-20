@@ -7,17 +7,13 @@ function Fixture() {
   useEffect(() => {
     const badge = document.querySelector('[data-slot="badge"]')!;
     const probe = document.getElementById("padding-token")!;
-    const sizes = ["normal", "compact"].map((density) => {
-      document.documentElement.dataset["density"] = density;
-      const style = getComputedStyle(badge);
-      return {
-        density,
-        token: parseFloat(getComputedStyle(probe).width),
-        left: parseFloat(style.paddingLeft),
-        right: parseFloat(style.paddingRight),
-        height: parseFloat(style.height),
-      };
-    });
+    const style = getComputedStyle(badge);
+    const sizes = {
+      token: parseFloat(getComputedStyle(probe).width),
+      left: parseFloat(style.paddingLeft),
+      right: parseFloat(style.paddingRight),
+      height: parseFloat(style.height),
+    };
     const result = document.createElement("pre");
     result.id = "badge-result";
     result.textContent = JSON.stringify(sizes);

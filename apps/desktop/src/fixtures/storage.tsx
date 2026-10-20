@@ -23,7 +23,6 @@ import { useApp } from "@/state/store";
  */
 const params = new URLSearchParams(location.search);
 const look = params.get("drive") === "look";
-document.documentElement.dataset.density = "normal";
 if (params.has("drive")) {
   const still = document.createElement("style");
   still.textContent =

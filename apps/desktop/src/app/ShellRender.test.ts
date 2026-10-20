@@ -33,7 +33,7 @@ test("the window never scrolls: only the panes inside it do", { timeout: 120000 
 type Panels = Record<string, unknown> & { filesOpen: { top: number; row: number }; workersOpen: { top: number; row: number; state: string; width: number } };
 type Start = { nav: string[]; divider: number; sidebarEnd: number; toggleEnd: number; strip: string[]; firstTab: number; rule: { width: number; shown: boolean } };
 
-for (const [name, page] of [["", "shell.html?drive=layout"], [", a widened left sidebar", "shell.html?drive=layout&wide=1"], [", compact", "shell.html?drive=layout&density=compact"]] as const) {
+for (const [name, page] of [["", "shell.html?drive=layout"], [", a widened left sidebar", "shell.html?drive=layout&wide=1"]] as const) {
   test(`the titlebar spans the window, the right panels open below it and nothing in it moves${name}`, { timeout: 120000 }, async (t) => {
     const seen = JSON.parse(await renderFixtureLive(t, page, "shell-result", 90000)) as Record<string, unknown>;
     if (process.env.SHELL_SEEN) console.log(JSON.stringify(seen, null, 2));

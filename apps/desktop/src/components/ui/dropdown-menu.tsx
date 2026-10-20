@@ -32,7 +32,7 @@ function DropdownMenuTrigger({
 
 function DropdownMenuContent({
   className,
-  // One spacing step, so the gap to the trigger follows density.
+  // One spacing step from the trigger.
   sideOffset = tokenPx("--spacing"),
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {

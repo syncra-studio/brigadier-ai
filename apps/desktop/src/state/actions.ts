@@ -9,7 +9,6 @@ import type {
   BranchChoice,
   Conversation,
   ConversationStatus,
-  Density,
   DiffStat,
   ForkPlace,
   Mention,
@@ -37,7 +36,6 @@ import { saveSummaryShown } from "@/lib/pinnedSummary";
 import { startReveal } from "@/state/reveal";
 import { recordPlace, replacePlace, stepPlace, type HistoryMode } from "@/state/history";
 import { CHAT_TAB, openSideChatTab, selectTab } from "@/state/sessionTabs";
-import { setSetting } from "@/state/settings";
 import { isTaskTab } from "@/state/tabStates";
 import {
   boardFromView,
@@ -1640,10 +1638,6 @@ export async function loadEarlierOrchestratorLog(): Promise<void> {
 }
 
 // ----- settings --------------------------------------------------------------------------
-
-export async function setDensity(density: Density): Promise<void> {
-  await setSetting("density", density);
-}
 
 /** Shows or hides a conversation's summary card, the one in front by default, until changed. */
 export function setPinnedSummary(shown: boolean, key = summaryKey(useApp.getState().selection)): void {

@@ -313,7 +313,6 @@ function ResultList({ files, collapsed, onToggle, onOpen, onReplace, onDismiss }
   const scrollRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
   const current = Math.max(0, Math.min(active, rows.length - 1));
-  const density = useApp((s) => s.settings.density);
   // The app does not use React Compiler, so the virtualizer's unmemoizable API is fine here.
   // oxlint-disable-next-line react/incompatible-library
   const virtualizer = useVirtualizer({
@@ -329,9 +328,6 @@ function ResultList({ files, collapsed, onToggle, onOpen, onReplace, onDismiss }
       return drawn.toSorted((a, b) => a - b);
     },
   });
-  useLayoutEffect(() => {
-    virtualizer.measure();
-  }, [density, virtualizer]);
   // A key moved the keyboard's row: it is brought into view, then focused once drawn.
   const focusing = useRef(false);
   useLayoutEffect(() => {

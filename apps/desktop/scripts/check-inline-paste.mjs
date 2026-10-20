@@ -147,9 +147,6 @@ await page.reload();
 await page.locator('.aui-lexical-input').waitFor();
 await page.getByRole('button',{name:'Remove Image #1',exact:true}).waitFor();
 console.log('PASS saved draft restores the numbered chip');
-await page.evaluate(()=>{document.documentElement.dataset.density='compact'});
-await page.waitForFunction(()=>document.querySelector('.aui-lexical-input img')?.naturalWidth>0);
-await page.screenshot({path:out+'/composer-compact.png'});
 // Start with a fresh composer for the opposite failed-copy order and focus guard.
 await page.evaluate(()=>localStorage.removeItem('brigadier.drafts'));
 await page.reload();await page.locator('.aui-lexical-input').waitFor();

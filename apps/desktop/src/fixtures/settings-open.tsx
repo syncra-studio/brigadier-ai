@@ -35,7 +35,6 @@ import { openSettings } from "@/state/actions";
 import { type SettingsPageId, useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
-document.documentElement.dataset.density = "normal";
 document.documentElement.dataset.platform = "macos";
 // Headless Chromium in one process stops on a media permission check: Voice lists no microphones.
 Object.defineProperty(navigator, "mediaDevices", {

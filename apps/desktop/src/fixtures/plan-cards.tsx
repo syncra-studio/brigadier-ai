@@ -22,7 +22,6 @@ import {
   type OvernightCardModel,
   type OvernightCommand,
 } from "@/app/conversation/overnightAdapter";
-import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
   Conversation,
@@ -485,7 +484,6 @@ function OvernightFixture({ initial }: { initial: OvernightCardModel }) {
 }
 
 function FixturePage() {
-  const [compact, setCompact] = useState(false);
   const [worker, setWorker] = useState<string | null | undefined>(undefined);
   const cards = useOvernightCards(session.id);
   const runtime = useExternalStoreRuntime<ThreadMessage>({
@@ -503,18 +501,6 @@ function FixturePage() {
           <main className="mx-auto flex min-h-full max-w-screen-xl flex-col gap-6 p-4">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-lg">Plan card fixtures</h1>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  const next = !compact;
-                  setCompact(next);
-                  document.documentElement.dataset.density = next ? "compact" : "normal";
-                }}
-              >
-                {compact ? "Normal density" : "Compact density"}
-              </Button>
               <span className="text-muted-foreground text-xs">
                 Synthetic data · no daemon calls · {cards.length} reachable overnight cards
               </span>

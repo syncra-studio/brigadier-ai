@@ -24,7 +24,6 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { trackPageHidden } from "@/lib/pageHidden";
 
-document.documentElement.dataset.density = "normal";
 trackPageHidden();
 
 const SURFACES = {

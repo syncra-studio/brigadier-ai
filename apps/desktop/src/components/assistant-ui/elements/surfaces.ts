@@ -1,6 +1,6 @@
 /**
  * Shared surface classes for the assistant-ui elements (https://www.assistant-ui.com/elements),
- * rewritten onto Brigadier's tokens: dark only, density-driven sizes, no raw values.
+ * rewritten onto Brigadier's tokens: dark only, token sizes, no raw values.
  */
 
 /** A raised card: task, approval, question and plan cards, the queue's running row. */

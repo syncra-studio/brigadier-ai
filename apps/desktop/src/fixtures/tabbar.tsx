@@ -1,7 +1,7 @@
 /**
  * Headless exercise of a session's top bar: a title with ⋯, the toolbar and "+" last while nothing is open,
  * tabs with "+" after them once something is, their measures at both densities, the widths kept
- * after a close, and Delete on a tab. `compact=1` runs it at compact density.
+ * after a close, and Delete on a tab.
  */
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -17,7 +17,6 @@ import { closeTab, newSessionTab, selectTab, sessionTabs, useSessionTabs } from 
 import { useApp } from "@/state/store";
 
 const params = new URLSearchParams(location.search);
-if (params.has("compact")) document.documentElement.dataset.density = "compact";
 // Headless virtual time doesn't run CSS transitions: the checks read where they end.
 if (!params.has("live")) document.head.append(Object.assign(document.createElement("style"), { textContent: "*, ::after { transition: none !important; }" }));
 const id = "tabbar-fixture";

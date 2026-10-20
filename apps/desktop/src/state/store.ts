@@ -19,7 +19,6 @@ import type {
   RawSession,
   Settings,
 } from "@/ipc/generated";
-import { applyDensity, cachedDensity } from "@/lib/density";
 import { cachedSummaryShown } from "@/lib/pinnedSummary";
 import { confirmPending } from "@/state/shownIds";
 
@@ -190,7 +189,6 @@ export const useApp = create<AppState>()(() => ({
   projects: {},
   conversations: {},
   settings: {
-    density: cachedDensity(),
     defaultPermission: "approveForMe",
     defaultOrchestrator: null,
     defaultChatModel: null,
@@ -288,10 +286,9 @@ function shownSettings(): Settings {
   return pendingEdits.reduce((settings, edit) => edit(settings), base);
 }
 
-/** Shows `shownSettings()`, switching the density tokens with it. */
+/** Shows `shownSettings()`. */
 function showSettings(): Settings {
   const settings = shownSettings();
-  applyDensity(settings.density);
   useApp.setState({ settings });
   return settings;
 }
@@ -299,9 +296,7 @@ function showSettings(): Settings {
 /** Records settings the daemon reported (a load, a write's answer or an event). */
 function confirmSettings(settings: Settings): Settings {
   confirmedSettings = settings;
-  const shown = pendingEdits.reduce((current, edit) => edit(current), settings);
-  applyDensity(shown.density);
-  return shown;
+  return pendingEdits.reduce((current, edit) => edit(current), settings);
 }
 
 /** Starts showing `edit`; the settings writer sends it in its turn (state/settings.ts). */

@@ -1,6 +1,6 @@
 /**
  * Resolves a length token from styles/tokens.css to CSS pixels, for APIs that need numbers
- * (e.g. a virtualizer's row size). Re-read it whenever density changes.
+ * (e.g. a virtualizer's row size).
  */
 export function tokenPx(name: `--${string}`): number {
   // Rendered on the server (a test's static markup) there are no styles to read.

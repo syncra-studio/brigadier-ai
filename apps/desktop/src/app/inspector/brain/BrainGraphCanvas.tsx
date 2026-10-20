@@ -8,7 +8,6 @@ import type { NodeDisplayData, PartialButFor } from "sigma/types";
 import { KINDS, NODE_KINDS } from "@/app/inspector/brain/kinds";
 import type { BrainGraph, NodeKind } from "@/ipc/generated";
 import { tokenColor, tokenPx } from "@/lib/tokens";
-import { useApp } from "@/state/store";
 
 type NodeAttributes = {
   x: number;
@@ -105,7 +104,7 @@ function buildGraph(
   return graph;
 }
 
-/** Better-linked nodes are bigger; `unit` is the density's spacing token. */
+/** Better-linked nodes are bigger; `unit` is the spacing token. */
 function sizeNodes(graph: MultiDirectedGraph<NodeAttributes>, unit: number) {
   graph.forEachNode((id) => {
     graph.setNodeAttribute(id, "size", unit * (1 + Math.sqrt(graph.degree(id)) * 0.6));
@@ -176,7 +175,6 @@ export default function BrainGraphCanvas({
   /** Re-reads the selection into the reducers (set while the graph is shown). */
   const refocusRef = useRef<() => void>(() => {});
   const onSelectRef = useRef(onSelect);
-  const density = useApp((s) => s.settings.density);
 
   useLayoutEffect(() => {
     onSelectRef.current = onSelect;
@@ -290,7 +288,7 @@ export default function BrainGraphCanvas({
     }
   }, [selected]);
 
-  // Sizes are density tokens.
+  // Sizes are tokens.
   useEffect(() => {
     const sigma = sigmaRef.current;
     if (!sigma) return;
@@ -298,9 +296,7 @@ export default function BrainGraphCanvas({
     sizeNodes(sigma.getGraph(), unit);
     sigma.setSetting("labelSize", tokenPx("--text-2xs"));
     sigma.setSetting("labelRenderedSizeThreshold", unit * 2);
-    // The tokens are re-read when density switches them.
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies
-  }, [density]);
+  }, []);
 
   return <div ref={container} aria-label="Brain graph" className="absolute inset-0" />;
 }

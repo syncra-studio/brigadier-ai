@@ -16,7 +16,6 @@ import { useApp } from "@/state/store";
  * older version saved) and opens an unplugged microphone, then writes what it saw to #voice-result (VoicePageRender.test.ts reads it).
  */
 const params = new URLSearchParams(location.search);
-document.documentElement.dataset.density = params.get("density") === "compact" ? "compact" : "normal";
 if (params.has("drive")) {
   const still = document.createElement("style");
   still.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; }";

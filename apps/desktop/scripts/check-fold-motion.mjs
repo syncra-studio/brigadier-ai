@@ -23,24 +23,22 @@ const CASES = [
 const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true });
 const failures = [];
 try {
-  for (const density of ["normal", "compact"]) {
-    for (const check of CASES) {
-      const page = await browser.newPage({ viewport: { width: 1728, height: 1024 }, deviceScaleFactor: 2, colorScheme: "dark" });
-      const errors = [];
-      page.on("pageerror", (error) => errors.push(error.message));
-      await page.goto(`${base}/fixtures/${check.page}&density=${density}`);
-      await page.locator('[data-slot="request-work-header"]').first().waitFor();
-      await page.waitForTimeout(500);
-      const label = `${check.name}, ${density}`;
-      for (const action of ["open", "close"]) {
-        const result = await page.evaluate(sampleToggle, { block: check.block, action });
-        const problems = judge(result);
-        console.log(`${label}, ${action}: ${result.frames.length} frames, work ${result.from.toFixed(1)} → ${result.to.toFixed(1)}px, below moved ${(result.moved - result.headerMoved).toFixed(1)}px, header moved ${result.headerMoved.toFixed(1)}px${problems.length ? ` — ${problems.join("; ")}` : ""}`);
-        for (const problem of problems) failures.push(`${label}, ${action}: ${problem}`);
-      }
-      assert.deepEqual(errors, [], `${label}: page errors`);
-      await page.close();
+  for (const check of CASES) {
+    const page = await browser.newPage({ viewport: { width: 1728, height: 1024 }, deviceScaleFactor: 2, colorScheme: "dark" });
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto(`${base}/fixtures/${check.page}`);
+    await page.locator('[data-slot="request-work-header"]').first().waitFor();
+    await page.waitForTimeout(500);
+    const label = check.name;
+    for (const action of ["open", "close"]) {
+      const result = await page.evaluate(sampleToggle, { block: check.block, action });
+      const problems = judge(result);
+      console.log(`${label}, ${action}: ${result.frames.length} frames, work ${result.from.toFixed(1)} → ${result.to.toFixed(1)}px, below moved ${(result.moved - result.headerMoved).toFixed(1)}px, header moved ${result.headerMoved.toFixed(1)}px${problems.length ? ` — ${problems.join("; ")}` : ""}`);
+      for (const problem of problems) failures.push(`${label}, ${action}: ${problem}`);
     }
+    assert.deepEqual(errors, [], `${label}: page errors`);
+    await page.close();
   }
 } finally {
   await browser.close();

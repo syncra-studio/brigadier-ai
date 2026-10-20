@@ -785,15 +785,6 @@ pub struct Message {
     pub answer_at_ms: Option<i64>,
 }
 
-/// Global size and spacing scale for every control.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum Density {
-    Compact,
-    #[default]
-    Normal,
-}
-
 /// How commit messages or pull requests are written (Settings › Git).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -876,7 +867,6 @@ pub enum LinkTarget {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
-    pub density: Density,
     /// Permission level for new sessions without an explicit choice.
     /// Older saved records without this field keep their former default.
     #[serde(default = "saved_default_permission")]
@@ -1160,7 +1150,6 @@ pub struct ModelRef {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            density: Density::default(),
             default_permission: PermissionLevel::ApproveForMe,
             default_orchestrator: None,
             default_chat_model: None,
@@ -2877,6 +2866,18 @@ pub mod streams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_saved_with_the_old_density_still_load() {
+        let saved = r#"{"density":"compact","hibernateAfterMinutes":12}"#;
+        let settings: Settings = serde_json::from_str(saved).unwrap();
+        assert_eq!(settings.hibernate_after_minutes, 12);
+        assert!(
+            !serde_json::to_string(&settings)
+                .unwrap()
+                .contains("density")
+        );
+    }
 
     #[test]
     fn a_folder_mention_is_stored_and_read_back_as_a_folder() {

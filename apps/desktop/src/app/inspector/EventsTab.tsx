@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useLayoutEffect, useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import type { DomainEvent, EventEnvelope } from "@/ipc/generated";
@@ -36,7 +36,7 @@ function summary(event: DomainEvent): string {
     case "messageAppended":
       return imagePreview(event.message.text, event.message.attachments).slice(0, 120).replace(/\s+/g, " ");
     case "settingsChanged":
-      return `density ${event.settings.density}`;
+      return "settings";
     case "probe":
       return `probe ${event.index + 1}/${event.count}`;
     case "draftPinned":
@@ -261,7 +261,6 @@ function useProbeBurst() {
 
 export function EventsTab() {
   const events = useApp((s) => s.inspector.events);
-  const density = useApp((s) => s.settings.density);
   const scrollRef = useRef<HTMLDivElement>(null);
   const probe = useProbeBurst();
 
@@ -274,11 +273,6 @@ export function EventsTab() {
     getItemKey: (index) => events[index]?.seq ?? index,
     overscan: 10,
   });
-
-  // Row height is a density token.
-  useLayoutEffect(() => {
-    virtualizer.measure();
-  }, [density, virtualizer]);
 
   return (
     <>

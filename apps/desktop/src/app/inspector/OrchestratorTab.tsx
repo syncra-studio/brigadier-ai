@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { ContextChart } from "@/app/inspector/ContextChart";
 import { Picker } from "@/app/inspector/providers/Picker";
@@ -322,7 +322,6 @@ function InjectionList({
   generations: readonly Generation[];
   loading: boolean;
 }) {
-  const density = useApp((s) => s.settings.density);
   const tasks = useBoard((s) => s.board?.tasks);
   const scrollRef = useRef<HTMLDivElement>(null);
   // A single generation needs no header.
@@ -349,11 +348,6 @@ function InjectionList({
     },
     overscan: 10,
   });
-
-  // Row height is a density token.
-  useLayoutEffect(() => {
-    virtualizer.measure();
-  }, [density, virtualizer]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

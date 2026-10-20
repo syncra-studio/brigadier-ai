@@ -9,7 +9,7 @@
  * `?drive=layout` opens and closes the right panels (Files, Workers, both) with the sidebar
  * expanded and folded, and in a narrow window, measuring every titlebar control on every frame:
  * none moves, the panels open below the titlebar, the left sidebar keeps its width; and where
- * the divider before the tabs sits. `wide=1` widens the left sidebar, `density=compact`.
+ * the divider before the tabs sits. `wide=1` widens the left sidebar.
  *
  * `?drive=scroll` checks that the window itself never scrolls: the titlebar and both sidebars
  * stay where they are whatever scrolls inside them (the thread, a page, the tab strip, Settings),
@@ -34,7 +34,6 @@ const query = new URLSearchParams(location.search);
 // A left sidebar the user widened.
 if (query.has("wide")) localStorage.setItem("brigadier.sidebarWidth", "420");
 else localStorage.removeItem("brigadier.sidebarWidth");
-if (query.get("density") === "compact") document.documentElement.dataset.density = "compact";
 document.documentElement.dataset.platform = "macos";
 
 // The plan session of 2026-10-10 while phase 1 builds: its workers show over the composer

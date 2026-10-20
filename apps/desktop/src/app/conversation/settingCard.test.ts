@@ -12,8 +12,6 @@ Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
   key: (at: number) => [...data.keys()][at] ?? null,
 } });
 Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage } });
-// Settings carry the density, which the page's root element shows.
-Object.defineProperty(globalThis, "document", { configurable: true, value: { documentElement: { dataset: {} } } });
 const { isMade, makeChange, settingPage, settingWords } = await import("./settingCard");
 const { useApp } = await import("@/state/store");
 

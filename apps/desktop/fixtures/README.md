@@ -19,7 +19,7 @@ window and a 320px window: the plan is a section of the context card, the run's 
 beneath it, and View plan opens the floating summary at narrow widths. Earlier revision links
 open the current card, whose history folds. The summary fixture holds only normal plans; the application adapter uses real run records when present.
 
-Check both density modes; Tab through folds, worker/report links and buttons, and use
+Tab through folds, worker/report links and buttons, and use
 Enter or Space to activate them. The `/overnight` menu item only prepares a draft.
 Normal approval/rejection still sends `decidePlan`; automatic normal proposals have
 no user Start or approval control. Stop settles after one successful fixture call;
@@ -39,7 +39,7 @@ showed 53 before one row per task. Open a row's chevron for its checks round by 
 run card's Phase 2 for its steps.
 
 The page has the app's window layout (rail, sidebar, top bar), so the summary sits where it does in the
-app. Query switches: `density=compact`; `sidebar=0` (sidebar closed); `run=live` (the run still working)
+app. Query switches: `sidebar=0` (sidebar closed); `run=live` (the run still working)
 or `run=none` (a normal session, whose plan is the context card's Plan section); `plans=N` (N more
 plans: the latest shows, the rest sit under Earlier plans).
 `window.night` holds the stores and `revealPlan`/`revealOvernight` for probes.
@@ -66,7 +66,7 @@ files, failed refreshes, and plain chats. This entry is absent from the producti
 (`src/fixtures/flow.tsx`): a finished request, and a second one whose lead works while three approvals
 wait in the composer's place (a command, a keychain action, "Start this plan?"). Answering an approval
 removes it, as the daemon would. Query: `view=done` (the second request finished, with what waits on the
-user), `approvals=0`, `sidebar=0`, `summary=0`, `density=compact`. `window.flow` holds the stores and
+user), `approvals=0`, `sidebar=0`, `summary=0`. `window.flow` holds the stores and
 the recorded requests (`calls`).
 
 # Live thinking

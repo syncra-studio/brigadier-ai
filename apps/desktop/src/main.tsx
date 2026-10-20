@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "@/app/App";
 import { appInfo } from "@/ipc/client";
-import { applyDensity, cachedDensity } from "@/lib/density";
 import { trackFocusInput } from "@/lib/focusRing";
 import { trackFullscreen } from "@/lib/fullscreen";
 import { trackPageHidden } from "@/lib/pageHidden";
@@ -35,8 +34,6 @@ async function start(): Promise<void> {
 }
 
 async function startApp(): Promise<void> {
-  // Density and platform are known before the first React paint, so nothing jumps.
-  applyDensity(cachedDensity());
   trackFocusInput();
   trackPageHidden();
   const info = await appInfo();
