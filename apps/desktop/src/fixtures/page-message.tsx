@@ -3,7 +3,10 @@ import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime }
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { Welcome } from "@/app/ConversationView";
+import { ConversationComposer } from "@/app/conversation/Composer";
 import { MentionMemory, mentionsIn, pageMentions, UserMessageText } from "@/app/conversation/Mentions";
+import { RequestBlock } from "@/app/conversation/RequestBlock";
 import { Thread } from "@/components/assistant-ui/thread";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Mention } from "@/ipc/generated";
@@ -36,7 +39,7 @@ function Fixture() {
   }, []);
   return <TooltipProvider>
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread components={{ UserText: UserMessageText }} autoFocus={false} />
+      <Thread components={{ Welcome, Composer: ConversationComposer, AssistantMessage: RequestBlock, UserText: UserMessageText }} autoFocus={false} />
     </AssistantRuntimeProvider>
     {result && <pre id="page-message-result">{result}</pre>}
   </TooltipProvider>;

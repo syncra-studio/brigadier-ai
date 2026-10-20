@@ -4,7 +4,6 @@ import {
   type AssistantState,
   BranchPickerPrimitive,
   ComposerPrimitive,
-  ErrorPrimitive,
   MessagePrimitive,
   TextMessagePartProvider,
   type TextMessagePartProps,
@@ -14,7 +13,6 @@ import {
 } from "@assistant-ui/react";
 import {
   ArrowDown,
-  ArrowUp,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -22,7 +20,6 @@ import {
   Copy,
   EditPencil,
   Paperclip,
-  Stop,
 } from "@openai/apps-sdk-ui/components/Icon";
 import {
   createContext,
@@ -54,17 +51,15 @@ import { formatDaySeparator, formatSentAt, separatesTurn } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /**
- * Optional overrides: `AssistantMessage`, `Welcome` and `Composer` replace whole sections;
+ * `AssistantMessage`, `Welcome` and `Composer` are whole sections the app supplies;
  * `BeforeMessages` renders above the message list (e.g. a "load earlier" control);
- * `MessageFooter` renders under each assistant message; `UserAttachments` above a user
- * message's text (its files);
+ * `UserAttachments` above a user message's text (its files);
  * `AboveComposer` renders between the messages and the composer (queue, notices).
  */
 export type ThreadComponents = {
-  AssistantMessage?: ComponentType | undefined;
-  Welcome?: ComponentType | undefined;
+  AssistantMessage: ComponentType;
+  Welcome: ComponentType;
   BeforeMessages?: ComponentType | undefined;
-  MessageFooter?: ComponentType | undefined;
   UserAttachments?: ComponentType | undefined;
   AboveComposer?: ComponentType | undefined;
   /** A message another session sent, in the user message's place (its `custom.peer` is set). */
@@ -73,7 +68,7 @@ export type ThreadComponents = {
   UserText?: ComponentType<TextMessagePartProps> | undefined;
   /** Floats centred just above the composer, over the thread (the capsule). */
   Capsule?: ComponentType | undefined;
-  Composer?: ComponentType<ComposerProps> | undefined;
+  Composer: ComponentType<ComposerProps>;
   /** Over the thread's top end: the app's find bar (⌘F). */
   Find?: ComponentType<ThreadOverlayProps> | undefined;
 };
@@ -84,17 +79,20 @@ export type ThreadOverlayProps = { viewport: HTMLDivElement | null; scroller: Th
 export type ComposerProps = { autoFocus: boolean; placeholder: string };
 
 export type ThreadProps = {
-  components?: ThreadComponents | undefined;
+  components: ThreadComponents;
   autoFocus?: boolean | undefined;
   placeholder?: string | undefined;
   /** Where the thread was scrolled is kept under this key (the conversation) while it is away. */
   scrollKey?: string | undefined;
 };
 
-const EMPTY_COMPONENTS: ThreadComponents = {};
+const ThreadComponentsContext = createContext<ThreadComponents | null>(null);
 
-const ThreadComponentsContext =
-  createContext<ThreadComponents>(EMPTY_COMPONENTS);
+function useThreadComponents(): ThreadComponents {
+  const components = useContext(ThreadComponentsContext);
+  if (!components) throw new Error("useThreadComponents is used outside a Thread");
+  return components;
+}
 
 // Startup exposes a loading placeholder thread; treat it as a new chat so
 // the composer mounts centered. Loads after startup keep the docked layout.
@@ -117,7 +115,7 @@ const ThreadHistoryLoading: FC = () => (
 );
 
 export const Thread: FC<ThreadProps> = ({
-  components = EMPTY_COMPONENTS,
+  components,
   autoFocus = true,
   placeholder = "Send a message...",
   scrollKey,
@@ -293,14 +291,7 @@ const ThreadRoot: FC<{
   placeholder: string;
   scrollKey: string | null;
 }> = ({ isEmpty, autoFocus, placeholder, scrollKey }) => {
-  const {
-    Welcome = ThreadWelcome,
-    BeforeMessages,
-    AboveComposer,
-    Capsule,
-    Composer: ComposerComponent = Composer,
-    Find,
-  } = useContext(ThreadComponentsContext);
+  const { Welcome, BeforeMessages, AboveComposer, Capsule, Composer, Find } = useThreadComponents();
   const [scroller] = useState(() => new ThreadScroller());
   const { viewport, setViewport, setColumn, setGroup, setSpacer, setPad, setFooter } = useThreadScroll(
     scroller,
@@ -396,7 +387,7 @@ const ThreadRoot: FC<{
               <div className="pointer-events-auto flex flex-col gap-4">
                 <LatestResponse />
                 {AboveComposer && <AboveComposer />}
-                <ComposerComponent autoFocus={autoFocus} placeholder={placeholder} />
+                <Composer autoFocus={autoFocus} placeholder={placeholder} />
               </div>
             </div>
           </div>
@@ -408,8 +399,7 @@ const ThreadRoot: FC<{
 };
 
 const ThreadMessage: FC = () => {
-  const { AssistantMessage: AssistantMessageComponent = AssistantMessage } =
-    useContext(ThreadComponentsContext);
+  const { AssistantMessage } = useThreadComponents();
   const role = useAuiState((s) => s.message.role);
   const editing = useAuiState((s) => s.message.composer.isEditing);
 
@@ -418,7 +408,7 @@ const ThreadMessage: FC = () => {
   if (role === "system") return <SystemMessage />;
   return (
     <TurnBoundary>
-      <AssistantMessageComponent />
+      <AssistantMessage />
     </TurnBoundary>
   );
 };
@@ -485,85 +475,6 @@ const ThreadScrollToBottom: FC = () => {
 const noSubscribe = () => () => {};
 const notShown = () => false;
 
-const ThreadWelcome: FC = () => {
-  return (
-    <div className="aui-thread-welcome-root mb-6 flex flex-col px-2">
-      <p className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both font-display text-2xl font-medium tracking-tight duration-200">
-        How can I help you today?
-      </p>
-    </div>
-  );
-};
-
-const Composer: FC<ComposerProps> = ({
-  autoFocus,
-  placeholder,
-}) => {
-  return (
-    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
-      <div
-        data-slot="aui_composer-shell"
-        className="border-foreground/10 focus-within:border-foreground/25 bg-muted/30 rounded-thread flex w-full cursor-text flex-col gap-2 border p-2 transition-[border-color]"
-      >
-        <ComposerPrimitive.Input
-          placeholder={placeholder}
-          className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 min-h-composer max-h-48 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
-          rows={1}
-          autoFocus={autoFocus}
-          enterKeyHint="send"
-          aria-label="Message input"
-        />
-        <ComposerAction />
-      </div>
-    </ComposerPrimitive.Root>
-  );
-};
-
-const ComposerAction: FC = () => {
-  return (
-    <div className="aui-composer-action-wrapper relative flex items-center justify-end gap-1.5">
-      <AuiIf condition={(s) => !s.composer.canCancel}>
-        <ComposerPrimitive.Send asChild>
-          <TooltipIconButton
-            tooltip="Send message"
-            side="bottom"
-            type="button"
-            variant="default"
-            size="icon-md"
-            className="aui-composer-send rounded-capsule"
-            aria-label="Send message"
-          >
-            <ArrowUp className="aui-composer-send-icon" />
-          </TooltipIconButton>
-        </ComposerPrimitive.Send>
-      </AuiIf>
-      <AuiIf condition={(s) => s.composer.canCancel}>
-        <ComposerPrimitive.Cancel asChild>
-          <Button
-            type="button"
-            variant="default"
-            size="icon-md"
-            className="aui-composer-cancel rounded-capsule"
-            aria-label="Stop generating"
-          >
-            <Stop className="aui-composer-cancel-icon size-icon-sm" />
-          </Button>
-        </ComposerPrimitive.Cancel>
-      </AuiIf>
-    </div>
-  );
-};
-
-export const MessageError: FC = () => {
-  return (
-    <MessagePrimitive.Error>
-      <ErrorPrimitive.Root className="aui-message-error-root border-destructive bg-destructive/5 text-destructive mt-2 rounded-md border p-3 text-sm">
-        <ErrorPrimitive.Message className="aui-message-error-message line-clamp-2" />
-      </ErrorPrimitive.Root>
-    </MessagePrimitive.Error>
-  );
-};
-
 // The markdown stack (remark, micromark, mdast) loads with the first reply, not at startup.
 const MarkdownText = lazy(() =>
   import("@/components/assistant-ui/markdown-text").then((module) => ({
@@ -628,40 +539,9 @@ export const CommentaryMessageText: FC<TextMessagePartProps> = (props) => (
   </MessageTime>
 );
 
-const AssistantMessage: FC = () => {
-  return (
-    <MessagePrimitive.Root
-      data-slot="aui_assistant-message-root"
-      data-role="assistant"
-      className="relative -mb-7.5 pb-7.5 last:mb-0"
-    >
-      <div
-        data-slot="aui_assistant-message-content"
-        className="text-foreground px-2 leading-relaxed wrap-break-word"
-      >
-        <MessagePrimitive.Parts components={{ Text: MessageText }} />
-        <MessageError />
-      </div>
-
-      <div
-        data-slot="aui_assistant-message-footer"
-        className="ms-2 flex min-h-7.5 items-center gap-2 pt-1.5"
-      >
-        <AssistantActionBar />
-        <MessageFooter />
-      </div>
-    </MessagePrimitive.Root>
-  );
-};
-
 const UserAttachments: FC = () => {
-  const { UserAttachments: Attachments } = useContext(ThreadComponentsContext);
+  const { UserAttachments: Attachments } = useThreadComponents();
   return Attachments ? <Attachments /> : null;
-};
-
-const MessageFooter: FC = () => {
-  const { MessageFooter: Footer } = useContext(ThreadComponentsContext);
-  return Footer ? <Footer /> : null;
 };
 
 const CopyIcon: FC = () => (
@@ -675,25 +555,9 @@ const CopyIcon: FC = () => (
   </>
 );
 
-const AssistantActionBar: FC = () => {
-  return (
-    <ActionBarPrimitive.Root
-      hideWhenRunning
-      autohide="not-last"
-      className="aui-assistant-action-bar-root text-muted-foreground animate-in fade-in -ms-1 flex gap-1 duration-200"
-    >
-      <ActionBarPrimitive.Copy asChild>
-        <TooltipIconButton tooltip="Copy">
-          <CopyIcon />
-        </TooltipIconButton>
-      </ActionBarPrimitive.Copy>
-    </ActionBarPrimitive.Root>
-  );
-};
-
 const UserMessage: FC = () => {
   const id = useAuiState((s) => s.message.id);
-  const { PeerMessage } = useContext(ThreadComponentsContext);
+  const { PeerMessage } = useThreadComponents();
   const peer = useAuiState((s) => s.message.metadata.custom["peer"] !== undefined);
   if (peer && PeerMessage) {
     return (
@@ -781,7 +645,7 @@ export const TimeSeparator: FC<{ atMs: number; className?: string }> = ({ atMs, 
 
 /** The user's text in its bubble; a long message is clipped until "Show more". */
 const UserMessageText: FC = () => {
-  const { UserText } = useContext(ThreadComponentsContext);
+  const { UserText } = useThreadComponents();
   const ref = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [clipped, setClipped] = useState(false);

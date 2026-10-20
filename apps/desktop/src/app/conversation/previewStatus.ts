@@ -1,4 +1,3 @@
-import type { AgentState } from "@/components/assistant-ui/elements/agent-status";
 import type { Preview, PreviewState } from "@/ipc/generated";
 
 export function previewActive(state: PreviewState): boolean {
@@ -45,12 +44,6 @@ export function previewWord(preview: Preview): string {
     case "stopped": return "Stopped";
     case "exited": return state.code === 0 ? "Stopped" : "Failed";
   }
-}
-
-export function previewIndicator(state: PreviewState): AgentState {
-  if (state.type === "exited") return state.code === 0 ? "done" : "failed";
-  if (state.type === "stopped") return "done";
-  return state.type === "paused" ? "waiting" : "working";
 }
 
 /** Every preview contributes to the inbox summary, including paused and ended processes. */

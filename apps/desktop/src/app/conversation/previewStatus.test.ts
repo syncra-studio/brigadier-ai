@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { latestLine, previewIndicator, previewActions, previewActive, previewStateLabel, previewSummary, previewWord } from "@/app/conversation/previewStatus";
+import { latestLine, previewActions, previewActive, previewStateLabel, previewSummary, previewWord } from "@/app/conversation/previewStatus";
 import type { EventEnvelope, Preview, PreviewState } from "@/ipc/generated";
 import { applyToBoard, emptyBoard } from "@/state/board";
 
@@ -58,15 +58,6 @@ test("an activity's state word: building, starting, running for an app, showing 
   assert.equal(previewWord(web({ type: "exited", code: 0, status: "exit 0" })), "Stopped");
   assert.equal(previewWord(web({ type: "stopped", reason: "by the user" } as PreviewState)), "Stopped");
   assert.equal(previewWord(web({ type: "exited", code: 1, status: "exit 1" })), "Failed");
-  assert.equal(previewIndicator({ type: "exited", code: null, status: "signal 9" }), "failed");
-});
-
-test("preview states map onto the standalone agent-status states", () => {
-  assert.deepEqual([
-    { type: "starting" }, { type: "running" }, { type: "paused" },
-    { type: "exited", code: 0, status: "exit 0" }, { type: "stopped", reason: "session closed" },
-    { type: "exited", code: 1, status: "exit 1" },
-  ].map((state) => previewIndicator(state as PreviewState)), ["working", "working", "waiting", "done", "done", "failed"]);
 });
 
 test("the inbox counts every preview state without calling finished work ready", () => {

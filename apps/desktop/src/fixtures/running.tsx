@@ -7,7 +7,6 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { AgentStatus, type AgentState } from "@/components/assistant-ui/elements/agent-status";
 import { OutputTab } from "@/app/conversation/OutputTab";
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { previewActive } from "@/app/conversation/previewStatus";
@@ -190,10 +189,4 @@ function Fixture() {
     </AssistantRuntimeProvider>
   );
 }
-function Reference() {
-  return <main className="bg-background text-foreground flex h-screen items-center justify-center">
-    <AgentStatus state={(params.get("state") ?? "working") as AgentState}
-      label={params.get("label") ?? "Refactoring composer"} elapsed={params.get("elapsed") ?? "0s"} />
-  </main>;
-}
-createRoot(document.getElementById("root")!).render(params.has("reference") ? <Reference /> : <TooltipProvider><SidebarProvider defaultOpen={false}><Fixture /></SidebarProvider></TooltipProvider>);
+createRoot(document.getElementById("root")!).render(<TooltipProvider><SidebarProvider defaultOpen={false}><Fixture /></SidebarProvider></TooltipProvider>);

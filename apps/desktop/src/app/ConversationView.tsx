@@ -995,7 +995,7 @@ function greeting(now: number): string {
 
 /** The hero over a new chat: a faint mark, a greeting by name once it's known, over "What
  * should we build in {project}?". A side chat, or a tab's own chat, says what it is for instead. */
-const Welcome: FC = () => {
+export const Welcome: FC = () => {
   const { selection, conversation, embedded } = useContext(ViewContext);
   const name = useApp((s) => s.settings.userName);
   const now = useNow(name ? 60_000 : null);
