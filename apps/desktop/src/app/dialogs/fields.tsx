@@ -1,5 +1,5 @@
 import { Check, FolderOpen } from "@openai/apps-sdk-ui/components/Icon";
-import { Checkbox as CheckboxPrimitive, RadioGroup } from "radix-ui";
+import { Checkbox as CheckboxPrimitive } from "radix-ui";
 import { useId, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -94,48 +94,6 @@ export function FolderField({
       </div>
       <ErrorLine error={error} />
     </div>
-  );
-}
-
-/** One choice out of a few, each with an optional explanation. */
-export function RadioChoice<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: T;
-  options: readonly { value: T; label: ReactNode; hint?: ReactNode }[];
-  onChange: (value: T) => void;
-}) {
-  const base = useId();
-  return (
-    <RadioGroup.Root
-      aria-label={label}
-      value={value}
-      onValueChange={(next) => onChange(next as T)}
-      className="grid gap-2"
-    >
-      {options.map((option) => {
-        const id = `${base}-${option.value}`;
-        return (
-          <div key={option.value} className="flex items-start gap-2.5">
-            <RadioGroup.Item
-              id={id}
-              value={option.value}
-              className="border-input data-[state=checked]:border-primary mt-0.5 flex size-icon-md shrink-0 items-center justify-center rounded-full border"
-            >
-              <RadioGroup.Indicator className="bg-primary size-1.5 rounded-full" />
-            </RadioGroup.Item>
-            <label htmlFor={id} className="grid gap-0.5">
-              <span className="text-sm">{option.label}</span>
-              {option.hint && <span className="text-muted-foreground text-xs">{option.hint}</span>}
-            </label>
-          </div>
-        );
-      })}
-    </RadioGroup.Root>
   );
 }
 
