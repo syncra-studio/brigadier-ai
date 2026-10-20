@@ -1,6 +1,11 @@
 /*
  * Brigadier design tokens — the only file allowed to hold raw colors and lengths.
  *
+ * The design tokens are generated from foundations.pen (~/Documents/brigadier-design): the
+ * `@theme static` block below is written by scripts/gen-tokens.mjs, so change a token in Pen and
+ * run it (docs/design-system.md, "Updating tokens"). Everything outside that block is
+ * hand-written: Tailwind's resets and aliases, the system font stacks, calc() and runtime values.
+ *
  * Adapted from the assistant-ui design system (https://www.assistant-ui.com/design.md):
  * one tint knob drives every low-chroma neutral, semantic color pairs, semantic radii.
  * Brigadier is dark only, so the palette below is assistant-ui's dark set.
@@ -157,6 +162,97 @@
   --font-mono:
     ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", "Menlo", "Consolas",
     "DejaVu Sans Mono", monospace;
+  --spacing-icon-text: 1em;
+  /* A worker's expanded run of actions shows this many rows, then scrolls. */
+  --spacing-action-list: calc(var(--spacing-row-sm) * 9);
+  /* The composer's / menu shows ten rows and half of the next, so it reads as scrollable. */
+  --spacing-command-list: calc(var(--spacing-row-sm) * 10.5);
+  --spacing-rail-list: min(70vh, 40rem);
+  /* The composer grows with its text up to a quarter of the window, then scrolls. */
+  --spacing-composer-max: 25dvh;
+  /* The Full access card above the composer: nine tenths of a card's padding, gaps, icon and
+     buttons, its heights on whole pixels so the thread's floating footer stays on the pixel
+     grid. */
+  --spacing-notice-x: calc(var(--spacing) * 3.6);
+  --spacing-notice-y: round(calc(var(--spacing) * 2.7), 1px);
+  --spacing-notice-gap: round(calc(var(--spacing) * 1.8), 1px);
+  --spacing-notice-gap-wide: calc(var(--spacing) * 2.7);
+  --spacing-notice-icon: calc(var(--spacing-icon-md) * 0.9);
+  --spacing-notice-button: round(calc(var(--spacing-control-xs) * 0.9), 1px);
+  --spacing-notice-close: round(calc(var(--spacing-icon-button-sm) * 0.9), 1px);
+  --spacing-notice-close-icon: calc(var(--spacing-icon-sm) * 0.9);
+  /* The pinned summary: its gap to the top bar and the thread pane's edges (also the gap
+     between its cards), how short a card may get before the cards scroll together instead (its
+     own height when shorter), and how far the thread's column moves aside for it in a pane too
+     narrow to keep the column centred beside it (half the card and its gap, so the column
+     centres in what the card leaves). */
+  --spacing-summary-inset: calc(var(--spacing) * 3);
+  --spacing-summary-card-min: calc(var(--spacing-row) * 4);
+  --spacing-summary-shift: calc((var(--container-summary) + var(--spacing-summary-inset)) / 2);
+  /* The queue card on the rail grows to this, then scrolls. */
+  --spacing-queue-max: 30dvh;
+  /* A decision card ends this far up the rail: out of the tuck, a small gap above the card. */
+  --spacing-rail-clear: calc(var(--spacing-rail-tuck) + 0.5rem);
+  --sidebar-other-width: 0px;
+  /* The sidebar panel collapsed to a strip of icons: each icon where it sits in the expanded
+     rows (a 16px icon 16px in, the rows' insets), centred. */
+  --spacing-sidebar-strip: calc(var(--spacing) * 8 + var(--spacing-icon-md));
+  /* An icon button on the strip or at the sidebar's foot: the strip's width less its insets. */
+  --spacing-strip-button: calc(var(--spacing-sidebar-strip) - var(--spacing) * 4);
+  /* How far the thumb moves to the on side (it rests 2px from either end). */
+  --spacing-switch-travel: calc(var(--spacing-switch-width) - var(--spacing-switch-thumb) - 0.125rem);
+  /* The band atop a Settings page, over its title, that drags the window; it scrolls away with
+     the page. */
+  --spacing-settings-band: var(--spacing-page-toolbar);
+  /* A Settings row keeps at least this much room for its control. */
+  --spacing-settings-control: min(10rem, 40cqw);
+  /* Back, Forward and the sidebar toggle stay in the titlebar where they start (just after the
+     traffic lights on macOS, see below), 6px apart.
+     They end at titlebar-nav-end, which the top bars beside them keep clear of (ps-clear-*). */
+  --spacing-titlebar-start: calc(var(--spacing) * 2);
+  --spacing-titlebar-nav-end: calc(
+    var(--spacing-titlebar-start) + var(--spacing-icon-button-md) * 3 + var(--spacing) * 3
+  );
+  /* The band they centre in: the titlebar, or on macOS the traffic lights'. */
+  --spacing-titlebar-toggle: var(--spacing-titlebar);
+  --spacing-thread-find-top: calc(var(--spacing-browser-find-row) + 1.5rem);
+  --container-thread-find-max: 70vw;
+  --browser-address-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
+  /* The shell's type: the system's monospace face at 12px, lines 1.2 apart. */
+  --font-terminal:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  --color-terminal-background: var(--terminal-background);
+  --color-terminal-divider: var(--terminal-divider);
+  --color-terminal-foreground: var(--terminal-foreground);
+  --color-terminal-tab: var(--terminal-tab);
+  --color-terminal-tab-active: var(--terminal-tab-active);
+  --color-terminal-tab-inactive: var(--terminal-tab-inactive);
+  --session-tab-title-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
+  --spacing-setup: min(60rem, calc(100dvh - 2rem));
+  --spacing-picker: min(34rem, calc(100dvh - 6rem));
+  --spacing-user-message: 20lh;
+  --spacing-peer-message: 6lh;
+  --container-setup: min(68rem, calc(100vw - 2rem));
+  --container-summary-stack: calc(var(--container-summary) + var(--spacing-summary-inset) * 2);
+  /* The thread's column beside the pinned summary, in a pane too narrow for both side by side:
+     narrowed to leave the card's column its own gutter, so messages wrap before the card. */
+  --container-thread-beside-summary: min(var(--container-thread), calc(100% - var(--container-summary-stack)));
+  --radius-capsule: 9999px;
+  /* A note's marker on a mockup: round but for the corner that points at its place. */
+  --radius-marker: 50% 50% 50% 0.1875rem;
+  /* The Full access card's text and its buttons' (nine tenths of text-sm and text-xs). */
+  --text-notice: calc(var(--text-sm) * 0.9);
+  --text-notice--line-height: round(calc(var(--text-sm--line-height) * 0.9), 1px);
+  --text-notice-button: calc(var(--text-xs) * 0.9);
+  --text-code-inline: 0.85em;
+  /* Its top edge: where the 549px list view sits centred, kept for every view and while the list
+     loads, so a height change moves only the bottom edge. */
+  --spacing-add-project-top: max(1rem, calc(50% - 17.15625rem));
+}
+
+@theme static {
+  /* generated from foundations.pen — edit there, then run gen-tokens */
   --font-weight-normal: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
@@ -182,7 +278,6 @@
   --spacing-icon-sm: 0.875rem;
   --spacing-icon-md: 1rem;
   --spacing-icon-lg: 1.25rem;
-  --spacing-icon-text: 1em;
   --spacing-pill: 1.25rem;
   --spacing-pill-x: 0.5rem;
   --spacing-row: 2rem;
@@ -213,10 +308,6 @@
   --spacing-answer-actions-gap: 0.375rem;
   --spacing-answer-action: 1.625rem;
   --spacing-answer-actions-between: 0.125rem;
-  /* A worker's expanded run of actions shows this many rows, then scrolls. */
-  --spacing-action-list: calc(var(--spacing-row-sm) * 9);
-  /* The composer's / menu shows ten rows and half of the next, so it reads as scrollable. */
-  --spacing-command-list: calc(var(--spacing-row-sm) * 10.5);
   --spacing-kbd: 1.125rem;
   --spacing-menu: 8rem;
   --spacing-composer: 2.75rem;
@@ -236,37 +327,13 @@
   --spacing-rail-line: 0.375rem;
   --spacing-rail-line-hover: 1.625rem;
   --spacing-rail-line-height: 0.125rem;
-  --spacing-rail-list: min(70vh, 40rem);
   --spacing-rail-fade: 2.5rem;
-  /* The composer grows with its text up to a quarter of the window, then scrolls. */
-  --spacing-composer-max: 25dvh;
-  /* The Full access card above the composer: nine tenths of a card's padding, gaps, icon and
-     buttons, its heights on whole pixels so the thread's floating footer stays on the pixel
-     grid. */
-  --spacing-notice-x: calc(var(--spacing) * 3.6);
-  --spacing-notice-y: round(calc(var(--spacing) * 2.7), 1px);
-  --spacing-notice-gap: round(calc(var(--spacing) * 1.8), 1px);
-  --spacing-notice-gap-wide: calc(var(--spacing) * 2.7);
-  --spacing-notice-icon: calc(var(--spacing-icon-md) * 0.9);
-  --spacing-notice-button: round(calc(var(--spacing-control-xs) * 0.9), 1px);
-  --spacing-notice-close: round(calc(var(--spacing-icon-button-sm) * 0.9), 1px);
-  --spacing-notice-close-icon: calc(var(--spacing-icon-sm) * 0.9);
-  /* The pinned summary: its gap to the top bar and the thread pane's edges (also the gap
-     between its cards), how short a card may get before the cards scroll together instead (its
-     own height when shorter), and how far the thread's column moves aside for it in a pane too
-     narrow to keep the column centred beside it (half the card and its gap, so the column
-     centres in what the card leaves). */
-  --spacing-summary-inset: calc(var(--spacing) * 3);
-  --spacing-summary-card-min: calc(var(--spacing-row) * 4);
-  --spacing-summary-shift: calc((var(--container-summary) + var(--spacing-summary-inset)) / 2);
   /* The narrowest thread pane that keeps the pinned summary in its own gutter, beside a thread
      column of 30rem (the card's column, --container-summary-stack, and that); in a narrower one it
      floats over the thread instead, opened from the top bar. And the room either side of the
      thread's column from which the card sits beside the column without moving it. */
   --spacing-summary-gutter-from: 50.25rem;
   --spacing-summary-beside-from: 25rem;
-  /* The queue card on the rail grows to this, then scrolls. */
-  --spacing-queue-max: 30dvh;
   /* Attachments: an image thumbnail's side, a file card's width. */
   --spacing-attachment-thumb: 7.625rem;
   /* An image the user sent, above their bubble. */
@@ -293,19 +360,11 @@
   /* The composer rail: inset from the card's sides, tucked under its top edge. */
   --spacing-rail-inset: 0.8125rem;
   --spacing-rail-tuck: 0.25rem;
-  /* A decision card ends this far up the rail: out of the tuck, a small gap above the card. */
-  --spacing-rail-clear: calc(var(--spacing-rail-tuck) + 0.5rem);
   /* The sidebar panel: its width, and how far it resizes. */
   --spacing-sidebar: 18rem;
   --spacing-sidebar-thread-min: 20rem;
-  --sidebar-other-width: 0px;
   --spacing-sidebar-min: 11.75rem;
   --spacing-sidebar-max: 29.25rem;
-  /* The sidebar panel collapsed to a strip of icons: each icon where it sits in the expanded
-     rows (a 16px icon 16px in, the rows' insets), centred. */
-  --spacing-sidebar-strip: calc(var(--spacing) * 8 + var(--spacing-icon-md));
-  /* An icon button on the strip or at the sidebar's foot: the strip's width less its insets. */
-  --spacing-strip-button: calc(var(--spacing-sidebar-strip) - var(--spacing) * 4);
   --spacing-nav-row: 1.875rem;
   /* The sidebar panel's header (its title and actions); the Settings search field. */
   --spacing-nav-header: 3.25rem;
@@ -327,27 +386,11 @@
   --spacing-switch-width: 2rem;
   --spacing-switch-height: 1.25rem;
   --spacing-switch-thumb: 1rem;
-  /* How far the thumb moves to the on side (it rests 2px from either end). */
-  --spacing-switch-travel: calc(var(--spacing-switch-width) - var(--spacing-switch-thumb) - 0.125rem);
   /* The strip atop a Settings page, over its title. */
   --spacing-page-toolbar: 2.875rem;
-  /* The band atop a Settings page, over its title, that drags the window; it scrolls away with
-     the page. */
-  --spacing-settings-band: var(--spacing-page-toolbar);
-  /* A Settings row keeps at least this much room for its control. */
-  --spacing-settings-control: min(10rem, 40cqw);
   /* Window chrome: top bars, room for the macOS traffic lights. */
   --spacing-titlebar: 2.75rem;
   --spacing-traffic-lights: 4.75rem;
-  /* Back, Forward and the sidebar toggle stay in the titlebar where they start (just after the
-     traffic lights on macOS, see below), 6px apart.
-     They end at titlebar-nav-end, which the top bars beside them keep clear of (ps-clear-*). */
-  --spacing-titlebar-start: calc(var(--spacing) * 2);
-  --spacing-titlebar-nav-end: calc(
-    var(--spacing-titlebar-start) + var(--spacing-icon-button-md) * 3 + var(--spacing) * 3
-  );
-  /* The band they centre in: the titlebar, or on macOS the traffic lights'. */
-  --spacing-titlebar-toggle: var(--spacing-titlebar);
   --spacing-agents: 26rem;
   /* The side panel beside the thread. Its width is at least side-panel-min and leaves the
      thread at least side-panel-chat-min; by default it takes side-panel-preferred, or more
@@ -372,11 +415,8 @@
   /* The page's find bar: 340 wide, a 44 high row. */
   --spacing-browser-find: 21.25rem;
   --spacing-browser-find-row: 2.75rem;
-  --spacing-thread-find-top: calc(var(--spacing-browser-find-row) + 1.5rem);
   /* Find in the chat's bar: 384 wide, never more than 70% of the window. */
   --spacing-thread-find: 24rem;
-  --container-thread-find-max: 70vw;
-  --browser-address-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
   /* Bottom shell sessions keep the native terminal's measurements. */
   --spacing-terminal-header: 2.5rem;
   --spacing-terminal-tab-height: 2rem;
@@ -386,21 +426,11 @@
   --spacing-terminal-tab-start: 0.625rem;
   --spacing-terminal-tab-end: 0.4375rem;
   --spacing-terminal-label-fade: 1rem;
-  /* The shell's type: the system's monospace face at 12px, lines 1.2 apart. */
-  --font-terminal:
-    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono",
-    monospace;
   --font-weight-terminal-tab: 430;
   --text-terminal-tab: 0.8125rem;
   --text-terminal-tab--line-height: 1.25rem;
   --text-terminal: 0.75rem;
   --text-terminal--line-height: 0.9rem;
-  --color-terminal-background: var(--terminal-background);
-  --color-terminal-divider: var(--terminal-divider);
-  --color-terminal-foreground: var(--terminal-foreground);
-  --color-terminal-tab: var(--terminal-tab);
-  --color-terminal-tab-active: var(--terminal-tab-active);
-  --color-terminal-tab-inactive: var(--terminal-tab-inactive);
   --shadow-terminal-tab: inset 0 0 0 0.5px oklch(1 0 0 / 5%);
   --spacing-side-panel-min: 20rem;
   --spacing-side-panel-chat-min: 20rem;
@@ -422,14 +452,9 @@
   --text-session-tab--line-height: 1.125rem;
   --radius-session-tab: 0.625rem;
   --container-new-tab-tools: 40rem;
-  --session-tab-title-mask: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
-  --spacing-setup: min(60rem, calc(100dvh - 2rem));
   --spacing-setup-card: 15rem;
   --spacing-setup-agent-card: 20rem;
-  --spacing-picker: min(34rem, calc(100dvh - 6rem));
   --spacing-agent-mark: 2.75rem;
-  --spacing-user-message: 20lh;
-  --spacing-peer-message: 6lh;
   /* Placeholder height for off-screen messages skipped by content-visibility. */
 
   --container-2xs: 14rem;
@@ -443,7 +468,6 @@
   --container-feedback: 37.5rem;
   /* The search palette's card, from the user's design. */
   --container-palette: 40rem;
-  --container-setup: min(68rem, calc(100vw - 2rem));
   /* The first-run setup's column and its projects' line, from the user's design. */
   --container-onboarding: 51rem;
   --container-thread: 46rem;
@@ -453,10 +477,6 @@
   --container-git-output: 42rem;
   /* The pinned summary's cards, and their column with its gap to the pane's edges. */
   --container-summary: 18.75rem;
-  --container-summary-stack: calc(var(--container-summary) + var(--spacing-summary-inset) * 2);
-  /* The thread's column beside the pinned summary, in a pane too narrow for both side by side:
-     narrowed to leave the card's column its own gutter, so messages wrap before the card. */
-  --container-thread-beside-summary: min(var(--container-thread), calc(100% - var(--container-summary-stack)));
 
   --radius-xs: 0.1875rem;
   --radius-sm: 0.375rem;
@@ -485,9 +505,6 @@
   /* The pinned summary's cards, floating over the thread like menus. */
   --radius-summary: 1.25rem;
   --radius-tooltip: 1rem;
-  --radius-capsule: 9999px;
-  /* A note's marker on a mockup: round but for the corner that points at its place. */
-  --radius-marker: 50% 50% 50% 0.1875rem;
   /* The page surface; sidebar and Settings navigation rows; a Settings card. */
   --radius-page: 0.75rem;
   /* Every icon button: the titlebar's, the side panel's, and Button's icon sizes. */
@@ -503,10 +520,6 @@
   --text-xs--line-height: 1rem;
   --text-sm: 0.875rem;
   --text-sm--line-height: 1.25rem;
-  /* The Full access card's text and its buttons' (nine tenths of text-sm and text-xs). */
-  --text-notice: calc(var(--text-sm) * 0.9);
-  --text-notice--line-height: round(calc(var(--text-sm--line-height) * 0.9), 1px);
-  --text-notice-button: calc(var(--text-xs) * 0.9);
   --text-base: 0.9375rem;
   --text-base--line-height: 1.5rem;
   --text-lg: 1.0625rem;
@@ -531,7 +544,6 @@
   --text-hero--line-height: 2.25rem;
   --text-code: 0.8125rem;
   --text-code--line-height: 1.25rem;
-  --text-code-inline: 0.85em;
   /* A diff's lines, in a thread row and in the Review tab (12px on a 21.6px line). */
   --text-diff: 0.75rem;
   --text-diff--line-height: 1.35rem;
@@ -590,97 +602,6 @@
   --container-project-dialog: 35rem;
   /* Add project: its list's height (five rows). */
   --spacing-add-project-list: 18.625rem;
-  /* Its top edge: where the 549px list view sits centred, kept for every view and while the list
-     loads, so a height change moves only the bottom edge. */
-  --spacing-add-project-top: max(1rem, calc(50% - 17.15625rem));
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-code-surface: var(--code-surface);
-  --color-composer: var(--composer);
-  --color-rail: var(--rail);
-  --color-rail-controls: var(--rail-controls);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-destructive-fill: var(--destructive-fill);
-  --color-warning: var(--warning);
-  --color-warning-foreground: var(--warning-foreground);
-  --color-success: var(--success);
-  --color-success-foreground: var(--success-foreground);
-  --color-link: var(--link);
-  --color-file-blue: var(--file-blue);
-  --color-file-green: var(--file-green);
-  --color-file-orange: var(--file-orange);
-  --color-file-yellow: var(--file-yellow);
-  --color-file-purple: var(--file-purple);
-  --color-file-red: var(--file-red);
-  --color-file-pink: var(--file-pink);
-  --color-file-grey: var(--file-grey);
-  --color-file-white: var(--file-white);
-  --color-file-ignore: var(--file-ignore);
-  --color-full-access: var(--full-access);
-  --color-full-access-foreground: var(--full-access-foreground);
-  --color-brand-claude: var(--brand-claude);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --color-glyph-1: var(--glyph-1);
-  --color-glyph-2: var(--glyph-2);
-  --color-glyph-3: var(--glyph-3);
-  --color-glyph-4: var(--glyph-4);
-  --color-glyph-5: var(--glyph-5);
-  --color-glyph-6: var(--glyph-6);
-  --color-glyph-7: var(--glyph-7);
-  --color-glyph-8: var(--glyph-8);
-  --color-chrome: var(--chrome);
-  --color-toolbar-foreground: var(--toolbar-foreground);
-  --color-toolbar-hover: var(--toolbar-hover);
-  --color-toolbar-active: var(--toolbar-active);
-  --color-toolbar-pressed: var(--toolbar-pressed);
-  --color-toolbar-pressed-hover: var(--toolbar-pressed-hover);
-  --color-panel-tab: var(--panel-tab);
-  --color-session-tab-separator: var(--session-tab-separator);
-  --color-divider: var(--divider);
-  --color-row-chevron: var(--row-chevron);
-  --color-row-object: var(--row-object);
-  --color-work-rule: var(--work-rule);
-  --color-toggle-on: var(--toggle-on);
-  --color-marker: var(--marker);
-  --color-mockup-stage: var(--mockup-stage);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
-}
-
-:root {
-  color-scheme: dark;
-
-  /* The single neutral knob: hue of every low-chroma neutral. */
-  --tint: 106;
 
   /* The surfaces: page #181818, composer #353535, utility bar #1f1f1f, menus #2d2d2d.
      The other neutrals keep their steps above the page. */
@@ -832,29 +753,9 @@
   --sidebar-accent-foreground: oklch(0.985 0.002 var(--tint));
   --sidebar-border: oklch(0.985 0.002 var(--tint) / 10%);
   --sidebar-ring: oklch(0.556 0.004 var(--tint));
-}
 
-/* On macOS Back's centre sits 26px past the traffic lights and level with them; in full screen they are gone and it moves to the titlebar's start. */
-:root[data-platform="macos"]:not([data-fullscreen]) {
-  --spacing-titlebar-start: calc(
-    var(--spacing-traffic-lights) + 1.625rem - var(--spacing-icon-button-md) / 2
-  );
-  --spacing-titlebar-toggle: 2.75rem;
-}
-
-/* WebKit before 17.2 has no linear() easing: the springs fall back to the closest curve. */
-@supports not (transition-timing-function: linear(0, 1)) {
-  :root {
-    --ease-summary-shift: cubic-bezier(0.26, 0.2, 0.2, 1);
-    --ease-summary-card: cubic-bezier(0.34, 0.75, 0.15, 1);
-    --ease-sidebar: cubic-bezier(0.38, 0.85, 0.15, 1);
-  }
-}
-
-/* ── Startup screen ─────────────────────────────────────────────────────────────────────────
-   Brigadier's mark on the window's backdrop while the app starts (styles/splash.css,
-   lib/splash.ts). Dark only, like the rest of the app. */
-:root {
+  /* ── Startup screen: Brigadier's mark on the window's backdrop while the app starts
+     (styles/splash.css, lib/splash.ts). Dark only, like the rest of the app. */
   --splash-mark-size: 3.5rem;
   --splash-mark-color: color-mix(in oklab, var(--foreground) 68%, transparent);
   /* The band of light that crosses the mark: its soft edges and its brightest line. */
@@ -869,24 +770,12 @@
   /* When "Still starting…" appears (lib/splash.ts gives up waiting at the same time). */
   --splash-late-after: 10s;
   --splash-foot-gap: 1.25rem;
-}
 
-/* ── First launch ───────────────────────────────────────────────────────────────────────────
-   The welcome intro and the setup after it (styles/onboarding.css, app/setup/onboarding), from the
-   moment the intro starts, with its music. The orb and the window it opens into are drawn by
-   app/setup/onboarding/IntroCanvas.tsx: the orb grows into sight from 0.58 s and idles, swells, then
-   bursts out into the window at 4.07 s, filling it by 4.34 s; its light evens out into a mist
-   and the dark comes into focus under it by 4.89 s. The window's chrome comes back at 4.69 s
-   (src-tauri/src/intro.rs dims the desktop from 0.95 s). The welcome sound's moments match
-   (scripts/render-welcome-sound.mjs): the music drops at 4.8 s, as the mark is read; its
-   motion stops as the mark has faded (6.75 s) and its chord rings on under the title from
-   7.2 s; a soft note marks the button at 9 s. */
-:root {
+  /* ── First launch: the welcome intro and the setup after it (see "First launch" below). */
   /* The mark at the window's centre: up from here, read clearly at 4.8 s as the music drops,
      held, faded out by the end (6.75 s, when the music's motion stops). */
   --intro-mark-at: 4.7s;
   --intro-mark-for: 2.05s;
-  --intro-held-mark-size: clamp(6.5rem, 11vw, 11rem);
   --intro-held-mark-glow: drop-shadow(0 0 0.5rem rgb(255 255 255 / 0.5)) drop-shadow(0 0 2.5rem rgb(255 255 255 / 0.2));
   /* The desktop's dim lifts from here, over this long, while the mark is held. */
   --intro-dim-lift-at: 5.45s;
@@ -914,8 +803,128 @@
   --welcome-heading: 3rem;
   --onboarding-heading: 2.75rem;
   --onboarding-heading-tracking: -0.032em;
-  /* The welcome's two-line title, and the button's distance under it. */
-  --welcome-title: clamp(2.75rem, 6vw, 4.75rem);
   --welcome-title-tracking: -0.035em;
   --welcome-title-gap: 1.75rem;
+  /* end generated */
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-code-surface: var(--code-surface);
+  --color-composer: var(--composer);
+  --color-rail: var(--rail);
+  --color-rail-controls: var(--rail-controls);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-fill: var(--destructive-fill);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-link: var(--link);
+  --color-file-blue: var(--file-blue);
+  --color-file-green: var(--file-green);
+  --color-file-orange: var(--file-orange);
+  --color-file-yellow: var(--file-yellow);
+  --color-file-purple: var(--file-purple);
+  --color-file-red: var(--file-red);
+  --color-file-pink: var(--file-pink);
+  --color-file-grey: var(--file-grey);
+  --color-file-white: var(--file-white);
+  --color-file-ignore: var(--file-ignore);
+  --color-full-access: var(--full-access);
+  --color-full-access-foreground: var(--full-access-foreground);
+  --color-brand-claude: var(--brand-claude);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-glyph-1: var(--glyph-1);
+  --color-glyph-2: var(--glyph-2);
+  --color-glyph-3: var(--glyph-3);
+  --color-glyph-4: var(--glyph-4);
+  --color-glyph-5: var(--glyph-5);
+  --color-glyph-6: var(--glyph-6);
+  --color-glyph-7: var(--glyph-7);
+  --color-glyph-8: var(--glyph-8);
+  --color-chrome: var(--chrome);
+  --color-toolbar-foreground: var(--toolbar-foreground);
+  --color-toolbar-hover: var(--toolbar-hover);
+  --color-toolbar-active: var(--toolbar-active);
+  --color-toolbar-pressed: var(--toolbar-pressed);
+  --color-toolbar-pressed-hover: var(--toolbar-pressed-hover);
+  --color-panel-tab: var(--panel-tab);
+  --color-session-tab-separator: var(--session-tab-separator);
+  --color-divider: var(--divider);
+  --color-row-chevron: var(--row-chevron);
+  --color-row-object: var(--row-object);
+  --color-work-rule: var(--work-rule);
+  --color-toggle-on: var(--toggle-on);
+  --color-marker: var(--marker);
+  --color-mockup-stage: var(--mockup-stage);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+:root {
+  color-scheme: dark;
+
+  /* The single neutral knob: hue of every low-chroma neutral. */
+  --tint: 106;
+}
+
+/* On macOS Back's centre sits 26px past the traffic lights and level with them; in full screen they are gone and it moves to the titlebar's start. */
+:root[data-platform="macos"]:not([data-fullscreen]) {
+  --spacing-titlebar-start: calc(
+    var(--spacing-traffic-lights) + 1.625rem - var(--spacing-icon-button-md) / 2
+  );
+  --spacing-titlebar-toggle: 2.75rem;
+}
+
+/* WebKit before 17.2 has no linear() easing: the springs fall back to the closest curve. */
+@supports not (transition-timing-function: linear(0, 1)) {
+  :root {
+    --ease-summary-shift: cubic-bezier(0.26, 0.2, 0.2, 1);
+    --ease-summary-card: cubic-bezier(0.34, 0.75, 0.15, 1);
+    --ease-sidebar: cubic-bezier(0.38, 0.85, 0.15, 1);
+  }
+}
+
+/* ── First launch ───────────────────────────────────────────────────────────────────────────
+   The welcome intro and the setup after it (styles/onboarding.css, app/setup/onboarding), from the
+   moment the intro starts, with its music. The orb and the window it opens into are drawn by
+   app/setup/onboarding/IntroCanvas.tsx: the orb grows into sight from 0.58 s and idles, swells, then
+   bursts out into the window at 4.07 s, filling it by 4.34 s; its light evens out into a mist
+   and the dark comes into focus under it by 4.89 s. The window's chrome comes back at 4.69 s
+   (src-tauri/src/intro.rs dims the desktop from 0.95 s). The welcome sound's moments match
+   (scripts/render-welcome-sound.mjs): the music drops at 4.8 s, as the mark is read; its
+   motion stops as the mark has faded (6.75 s) and its chord rings on under the title from
+   7.2 s; a soft note marks the button at 9 s. */
+:root {
+  --intro-held-mark-size: clamp(6.5rem, 11vw, 11rem);
+  /* The welcome's two-line title, and the button's distance under it. */
+  --welcome-title: clamp(2.75rem, 6vw, 4.75rem);
 }
