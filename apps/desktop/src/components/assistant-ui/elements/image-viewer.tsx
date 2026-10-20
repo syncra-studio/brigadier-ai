@@ -366,8 +366,8 @@ function ShownImage({ image, size, morph, imageRef, zoomKeys, onBackdrop, count 
         {url && <ImageContextMenu image={{ ...image, url }}><img
           ref={(element) => { imageRef.current = element; }} src={url} alt={image.name} draggable={false}
           onLoad={(event) => setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
-          style={{ ...(natural ? { width: natural.width * current, height: natural.height * current } : { maxWidth: "100%", maxHeight: room.height }), ...(morph ? { viewTransitionName: MORPH } : {}) }}
-          className="shrink-0 rounded-lg object-contain max-w-none"
+          style={{ ...(natural ? { width: natural.width * current, height: natural.height * current } : { maxHeight: room.height }), ...(morph ? { viewTransitionName: MORPH } : {}) }}
+          className={cn("shrink-0 rounded-lg object-contain", natural ? "max-w-none" : "max-w-full")}
         /></ImageContextMenu>}
       </div>
     </div>
