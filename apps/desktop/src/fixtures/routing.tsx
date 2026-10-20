@@ -6,6 +6,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { GENERAL_ROWS } from "@/app/settings/GeneralPage";
 import { ROUTING_PAGE_ROWS } from "@/app/settings/routing/RoutingPage";
 import { revealSetting } from "@/app/settings/reveal";
 import { SettingsNav } from "@/app/settings/SettingsNav";
@@ -43,11 +44,11 @@ if (params.has("drive")) {
 const auto = params.get("auto");
 const edge = params.has("edge");
 const look = params.get("drive") === "look";
-/** A card's, a select's and a chosen pill's look, under `root`. */
-const looks = (root: ParentNode, cards: string) => ({
+/** A card's, a select's and a chosen pill's look, under `root`; the pill in `choices` if given. */
+const looks = (root: ParentNode, cards: string, choices = "") => ({
   cards: all(cards, root).map(surface),
   select: surface(root.querySelector('[data-slot="settings-page"] button[aria-haspopup="menu"]')),
-  chosen: surface(root.querySelector('[data-slot="settings-page"] button[role="radio"][data-state="on"]')),
+  chosen: surface(root.querySelector(`[data-slot="settings-page"] ${choices} button[role="radio"][data-state="on"]`)),
 });
 useApp.setState((state) => ({
   info: { ...state.info, platform: "macos" } as typeof state.info,
@@ -174,7 +175,8 @@ function Fixture() {
       steps = [
         () => openSettings("general"),
         () => {
-          seen.general = looks(document, '[data-slot="settings-card"]');
+          // General's pills are Follow-up's; its sidebar choice is two pictures, not pills.
+          seen.general = looks(document, '[data-slot="settings-card"]', `[aria-label="${GENERAL_ROWS.followUp.label}"]`);
           openSettings("routing");
         },
         () => kindButton("Review changes")?.click(),
