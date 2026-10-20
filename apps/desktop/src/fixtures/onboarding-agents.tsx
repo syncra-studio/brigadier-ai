@@ -119,11 +119,21 @@ async function until(check: () => boolean, what: string, ms = 10_000) {
     if (check()) return;
     await wait(50);
   }
-  throw new Error(`never: ${what}`);
+  throw new Error(`never: ${what} (Claude Code's card: ${JSON.stringify(claudeCard())})`);
 }
 
 const button = (name: string) =>
   [...document.querySelectorAll("button")].find((element) => text(element) === name);
+
+/**
+ * Presses Sign in, then takes the pointer away: Waiting… takes its place, and under a pointer
+ * left there it reads Cancel (hovered) as soon as the browser notices, which may be before the
+ * card is read (#455).
+ */
+async function signIn() {
+  await fixtureClick(button("Sign in")!);
+  await fixtureInput({ type: "pointer", x: 0, y: 0 });
+}
 
 /** The line under the title, the footer's count and whether Continue can be pressed. */
 function step() {
@@ -161,7 +171,7 @@ function Fixture() {
         await until(() => claudeCard().action === "Sign in", "found, signed out");
         seen.found = claudeCard();
 
-        await fixtureClick(button("Sign in")!);
+        await signIn();
         await until(() => claudeCard().action === "Waiting…", "waiting");
         seen.waiting = claudeCard();
 
@@ -175,16 +185,15 @@ function Fixture() {
         await fixtureClick(waitButton);
         await until(() => claudeCard().action === "Sign in", "cancelled");
         seen.cancelled = claudeCard();
-        await fixtureInput({ type: "pointer", x: 0, y: 0 });
 
-        await fixtureClick(button("Sign in")!);
+        await signIn();
         await until(() => claudeCard().action === "Waiting…", "waiting after the cancel");
 
         claudeAt({ type: "failed", step: "signIn", error: "The sign-in didn't finish. Try again." });
         await until(() => claudeCard().action === "Sign in", "the failure");
         seen.failed = claudeCard();
 
-        await fixtureClick(button("Sign in")!);
+        await signIn();
         await until(() => claudeCard().action === "Waiting…", "waiting again");
         claudeAt({ type: "connected" });
         claudeStatus = { ...claudeStatus, loggedIn: true, authMethod: "claude.ai", plan: "max" };
