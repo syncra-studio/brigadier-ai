@@ -243,6 +243,9 @@ How values come out:
   stand-ins for the system stacks), `--radius-capsule` (999 in Pen, 9999px in code, both fully
   round), and `--wash-10`, `--warning-fill`, `--success-fill` (Pen's stand-ins for opacity
   modifiers).
+- Pen can't put an opacity on a variable, so a token at an opacity (the code's
+  `border-foreground/16`) is drawn in Pen as that colour's hex with alpha (`#FAFAF929`). Shadow
+  colours and icon artwork are raw hex in Pen too. None of these are Pen variables.
 - Outside the block, `tokens.css` stays hand-written: Tailwind's resets and `@theme inline`
   aliases, the font stacks, values built with `calc()`, `min()`, `clamp()` or em/vh/lh, and
   platform overrides.
