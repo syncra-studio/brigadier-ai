@@ -535,6 +535,10 @@ mod tests {
 
     /// A hook of the user's keeps its trust (and its being off) under its key in the session's
     /// home; other entries aren't carried.
+    #[cfg_attr(
+        windows,
+        ignore = "threads have no home of their own on Windows (runs_thread_hook), and the keys here are Unix paths"
+    )]
     #[test]
     fn the_users_hook_trust_is_carried_to_the_session_homes_keys() {
         let base = Path::new("/Users/me/.codex");
