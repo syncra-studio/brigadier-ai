@@ -114,7 +114,7 @@ pub(crate) fn rules_for(workspace: &Path, touched: &Path) -> Vec<(String, String
     rules.sort_by_key(|rule| rule.rel.components().count());
     rules
         .iter()
-        .map(|rule| (rule.rel.display().to_string(), rule.section()))
+        .map(|rule| (shown(&rule.rel), rule.section()))
         .collect()
 }
 
@@ -279,9 +279,9 @@ impl Rule {
         let scope = self
             .folder
             .as_ref()
-            .map(|p| format!(" (applies to files under {}/)", p.display()))
+            .map(|p| format!(" (applies to files under {}/)", shown(p)))
             .unwrap_or_default();
-        format!("\n\n### {}{scope}\n{}", self.rel.display(), self.content)
+        format!("\n\n### {}{scope}\n{}", shown(&self.rel), self.content)
     }
 }
 
@@ -367,6 +367,17 @@ fn found_rules(worktree: &Path, root_agents: bool) -> Vec<Rule> {
 
 /// The prompt's section: the `pinned` rules whole, then the `left_out` ones named, with `how`
 /// they are had; `precedence` says what wins over them.
+/// A workspace path as the agent reads it: with `/`, as git names it, on Windows too, where a
+/// folder would otherwise read `apps\web/`.
+fn shown(path: &Path) -> String {
+    let text = path.display().to_string();
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text
+    }
+}
+
 fn format_rules(pinned: &[Rule], left_out: &[Rule], precedence: &str, how: &str) -> String {
     let mut text = String::new();
     for rule in pinned {
@@ -382,7 +393,7 @@ fn format_rules(pinned: &[Rule], left_out: &[Rule], precedence: &str, how: &str)
             .iter()
             .map(|rule| {
                 let folder = rule.folder.as_deref().unwrap_or(Path::new("."));
-                format!("{} (files under {}/)", rule.rel.display(), folder.display())
+                format!("{} (files under {}/)", shown(&rule.rel), shown(folder))
             })
             .collect();
         text.push_str(&format!(
