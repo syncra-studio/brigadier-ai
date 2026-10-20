@@ -54,7 +54,7 @@ export function isNewModel(rules: readonly OverrideRule[], model: ModelRef): boo
 }
 
 /** A rule keeping a model from all work everywhere (what the old model switch wrote). */
-export function blocksModel(rule: OverrideRule, model: ModelRef): boolean {
+function blocksModel(rule: OverrideRule, model: ModelRef): boolean {
   return (
     rule.effect === "never" &&
     rule.target.type === "model" &&

@@ -89,15 +89,6 @@ export const PLAIN_KIND_WORDS: Record<TaskCategory, string> = {
   gitText: "writing commit messages",
 };
 
-/** A quality tier in plain words, for the Models page. */
-export const PLAIN_TIERS: Record<QualityTier, string> = {
-  frontier: "Most capable",
-  strong: "Strong",
-  standard: "Balanced",
-  light: "Fast and light",
-  unrated: "Not rated yet",
-};
-
 /** The least capable tier each kind of work runs on unless the orchestrator asks for more. A copy of the router's `default_floor`, which decides; a router test fails when they differ. */
 export const DEFAULT_FLOORS: Record<TaskCategory, QualityTier> = {
   scout: "light",

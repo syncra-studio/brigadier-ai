@@ -109,11 +109,6 @@ export function setActivityShown(shown: boolean): void {
   if (shown) void loadActivity();
 }
 
-export function setUsageProject(projectId: string | null): void {
-  useUsage.setState({ projectId });
-  void loadUsage();
-}
-
 export function setUsageShown(shown: boolean): void {
   useUsage.setState({ shown });
 }
