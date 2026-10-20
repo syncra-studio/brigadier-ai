@@ -846,8 +846,10 @@ export function ConversationView({
   // Every standalone conversation and draft can show its context card.
   const summary = !embedded;
   // A session's own view has tabs; another tab in front covers the conversation (kept as it was).
-  const tabbed = !embedded && conversation?.kind === "session";
-  const { active: activeTab } = useSessionTabsOf(tabbed ? conversationId : null);
+  // A Chat has them once an agent opens a Browser tab in it, so the user can see and take it (#361).
+  const standalone = !embedded && (conversation?.kind === "session" || conversation?.kind === "chat");
+  const { tabs: openTabs, active: activeTab } = useSessionTabsOf(standalone ? conversationId : null);
+  const tabbed = standalone && (conversation?.kind === "session" || openTabs.length > 0);
   // A pasted text a chip opened in a Chat or a draft, which have no tabs: over the thread (#427).
   const place = conversationId ?? "draft";
   const [pastedOver, setPastedOver] = useState<{ place: string; n: number; paste: AttachmentRef | null } | null>(null);
@@ -896,7 +898,8 @@ export function ConversationView({
                     <div className="flex h-full min-h-0 min-w-0 flex-col">
                     {tabbed && conversation ? (
                       <SessionTabBar conversation={conversation} onRename={() => setRenaming(true)}>
-                        <ConversationToolbar kind="session" onContext={() => conversationId && selectTab(conversationId, CHAT_TAB)} />
+                        <ConversationToolbar kind={conversation.kind === "session" || workspace.enabled ? "session" : "chat"}
+                          onContext={() => conversationId && selectTab(conversationId, CHAT_TAB)} />
                       </SessionTabBar>
                     ) : (
                       !embedded && (
