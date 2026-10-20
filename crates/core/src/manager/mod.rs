@@ -103,6 +103,7 @@ mod routing;
 mod run;
 pub mod search;
 mod secrets;
+mod setup_script;
 mod shell_changes;
 mod side_chat;
 mod sidecars;

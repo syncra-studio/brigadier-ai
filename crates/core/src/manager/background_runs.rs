@@ -117,6 +117,23 @@ impl Drop for Handoff {
     }
 }
 
+/// Work the session's Stop ends ([`SessionManager::stoppable`]), until dropped.
+pub(super) struct Stoppable<'a> {
+    runs: &'a BackgroundRuns,
+    key: (ConversationId, String),
+    pub(super) cancel: CancellationToken,
+}
+
+impl Drop for Stoppable<'_> {
+    fn drop(&mut self) {
+        self.runs
+            .running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.key);
+    }
+}
+
 /// A run whose end is being recorded: taken from the running ones into the ended ones as its
 /// end is chosen, so a Stop then is refused rather than lost and no look takes it for missed.
 /// Dropped before its end is stored (`stored`), its watcher was cut off: the end is free for
@@ -684,6 +701,24 @@ impl SessionManager {
             )
             .await?;
         Ok(())
+    }
+
+    /// Work of the session's, not a background run, that its Stop ends as it ends them (a new
+    /// worktree's setup script): `name` keeps it apart from their ids. It is stoppable until
+    /// the returned guard drops.
+    pub(super) fn stoppable(&self, id: &ConversationId, name: &str) -> Stoppable<'_> {
+        let key = (id.clone(), name.to_owned());
+        let cancel = CancellationToken::new();
+        self.background_runs
+            .running
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(key.clone(), cancel.clone());
+        Stoppable {
+            runs: &self.background_runs,
+            key,
+            cancel,
+        }
     }
 
     /// Ends the session's background runs (the user's Stop, an archive or delete): each is

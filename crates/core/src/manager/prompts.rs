@@ -2836,8 +2836,9 @@ pub(crate) struct WorkerEnvironment<'a> {
     pub branch: Option<&'a str>,
     /// It runs at low OS priority.
     pub low_priority: bool,
-    /// Its new worktree has the repository's setup script to run first.
-    pub setup: bool,
+    /// What it is told about its new worktree's setup script: how the engine's run of it
+    /// went, or that it runs it first.
+    pub setup: Option<&'a str>,
 }
 
 /// What a worker or the thread is told about the dependency installs and build caches copied
@@ -2857,7 +2858,8 @@ pub(crate) fn copied_in_line(warmed: &[String]) -> String {
 /// The repository's tracked script that sets up a new worktree.
 pub(crate) const SETUP_SCRIPT: &str = ".brigadier/setup";
 
-/// A new worktree with the repository's setup script: run it once, as any command.
+/// A new worktree with the repository's setup script, where the engine can't run it under the
+/// session's access: run it once, as any command.
 pub(crate) const SETUP_LINE: &str = "This repository sets up each new worktree with its script `.brigadier/setup`, which hasn't run in yours yet: run it once from your worktree's root before you build, test or start the app.";
 
 /// What the thread is told about the user's gitignored files copied into its new worktree.
@@ -2879,8 +2881,8 @@ pub(crate) fn environment(env: &WorkerEnvironment<'_>) -> String {
     if !env.warmed.is_empty() {
         lines.push(copied_in_line(env.warmed));
     }
-    if env.setup {
-        lines.push(SETUP_LINE.into());
+    if let Some(setup) = env.setup {
+        lines.push(setup.into());
     }
     lines.push(format!(
         "Your test data folder, for whatever a test or a smoke run writes outside the checkout (an app's data folder, a test database): {}. Never use an app's real data folder.",
@@ -3868,7 +3870,7 @@ mod environment_tests {
             run_repo: run.then_some(Path::new("/Users/me/project")),
             branch: Some("brigadier/abc/task-3"),
             low_priority: run,
-            setup: false,
+            setup: None,
         })
     }
 

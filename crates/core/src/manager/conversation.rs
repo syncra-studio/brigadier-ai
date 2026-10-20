@@ -3294,6 +3294,13 @@ impl SessionManager {
             self.fail_turn(&conv, users, envelopes, &message).await;
             return;
         }
+        // The user's Stop came while the turn was starting (its CLI, or a new worktree's setup
+        // script, #326), with no CLI turn to stop yet: it stops this one now.
+        if conv.state.lock().await.interrupted
+            && let Err(err) = cli.session.interrupt().await
+        {
+            tracing::warn!(conversation = %conv.id, error = %err, "could not stop a turn the user stopped as it started");
+        }
         #[cfg(test)]
         if envelopes
             .iter()

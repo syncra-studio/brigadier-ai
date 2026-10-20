@@ -1641,8 +1641,8 @@ impl SessionManager {
             .as_ref()
             .map(|p| p.prefs.secret_files.clone())
             .unwrap_or_default();
-        // A writer's new worktree with the repository's setup script runs it first, as any of
-        // its commands (never a reader's, never in a folder the user doesn't trust).
+        // A writer's new worktree with the repository's setup script has it run before the
+        // worker starts (never a reader's, never in a folder the user doesn't trust).
         let setup = match (&workspace.worktree, &origin) {
             (Some(worktree), Origin::New) if task.kind.writes() && task.attempts.len() <= 1 => {
                 self.repo_trust(&conversation_id) == Some(true) && {
@@ -1739,6 +1739,23 @@ impl SessionManager {
             (Some(_), Some(worktree)) => self.worker_access(task, &workspace, worktree),
             _ => self.worker_access(task, &workspace, &cwd),
         };
+        // Under the worker's own access, once its worktree has the checkout's env files.
+        let setup = match (&workspace.worktree, setup) {
+            (Some(worktree), true) => Some(
+                self.run_setup_script(
+                    &conversation_id,
+                    &owner,
+                    worktree,
+                    &access,
+                    None,
+                    &worker_env(&workspace.scratch),
+                    // A stopped worker's processes end with its owner's.
+                    tokio_util::sync::CancellationToken::new(),
+                )
+                .await,
+            ),
+            _ => None,
+        };
         repo_note.push_str("\n\n");
         repo_note.push_str(&prompts::environment(&prompts::WorkerEnvironment {
             access: &access,
@@ -1747,7 +1764,7 @@ impl SessionManager {
             run_repo: task.run.as_ref().map(|_| workspace.repo.as_path()),
             branch: workspace.branch.as_deref(),
             low_priority: true,
-            setup,
+            setup: setup.as_deref(),
         }));
         let native = match &workspace.worktree {
             Some(worktree) => instructions::for_worker(provider, worktree, &task.spec).await,
@@ -2723,15 +2740,6 @@ impl SessionManager {
                     ))
                     .await;
                 }
-                // The setup script runs as any command of the thread does, under its access;
-                // never in a folder the user doesn't trust.
-                if setup
-                    && self.repo_trust(conversation_id) == Some(true)
-                    && let Ok(conv) = self.conv(conversation_id)
-                {
-                    conv.note(format!("[setup] {}", super::prompts::SETUP_LINE))
-                        .await;
-                }
                 if !warmed.is_empty()
                     && let Ok(conv) = self.conv(conversation_id)
                 {
@@ -2804,9 +2812,48 @@ impl SessionManager {
                         )
                         .await?;
                 }
+                // The repository's setup script runs once in the new worktree before the
+                // thread's first turn, under the thread's access; never in a folder the user
+                // doesn't trust. Other sessions' worktrees needn't wait for it.
+                if setup && self.repo_trust(conversation_id) == Some(true) {
+                    drop(_creating);
+                    let line = self.run_thread_setup(conversation_id, &worktree).await;
+                    if let Ok(conv) = self.conv(conversation_id) {
+                        conv.note(format!("[setup] {line}")).await;
+                    }
+                }
                 Ok(branch.clone())
             }
         }
+    }
+
+    /// Runs the setup script in the thread's new `worktree` under the thread's access.
+    async fn run_thread_setup(&self, id: &ConversationId, worktree: &Path) -> String {
+        let tmp = match self.thread_temp(id).await {
+            Ok(tmp) => tmp,
+            Err(err) => {
+                tracing::warn!(conversation = %id, %err, "can't run the setup script; the thread runs it");
+                return super::prompts::SETUP_LINE.into();
+            }
+        };
+        // As the thread's CLI is started for it (`thread_launch`).
+        let scratch = self.owned_dir("orch", &id.0);
+        let workspace = self.planned_workspace(id);
+        let (access, _) = self.thread_access(id, workspace.as_ref(), &scratch, self.permission(id));
+        let protection =
+            self.thread_protection(id, workspace.as_ref(), &scratch, access == Access::Full);
+        // The user's Stop ends it.
+        let stoppable = self.stoppable(id, "setup");
+        self.run_setup_script(
+            id,
+            &super::background_runs::background_owner(id),
+            worktree,
+            &access,
+            Some(&protection),
+            &worker_env(&tmp),
+            stoppable.cancel.clone(),
+        )
+        .await
     }
 
     /// Where workers start: the target's tip, or a snapshot of the user's uncommitted changes
