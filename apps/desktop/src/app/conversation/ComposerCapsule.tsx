@@ -12,8 +12,9 @@ import {
   planStepStatus,
   stepStates,
 } from "@/app/conversation/planProgress";
+import { StepGlyph } from "@/components/assistant-ui/elements/step-glyph";
 import { mono } from "@/components/assistant-ui/elements/surfaces";
-import { Check, Clock, Spinner, StopCircle, X } from "@/components/icons";
+import { Clock, StopCircle, X } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { DiffStat, FileStat } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -131,9 +132,7 @@ const StepList: FC<{ steps: readonly { title: string; status: ReturnType<typeof 
   <ol className="flex max-h-(--radix-tooltip-content-available-height) max-w-80 flex-col gap-2 overflow-y-auto px-0.5 py-1 text-start">
     {steps.map((step, index) => (
       <li key={index} className="flex min-w-0 items-start gap-2">
-        <span className="flex size-4 shrink-0 items-center justify-center">
-          <StepGlyph status={step.status} />
-        </span>
+        <StepGlyph status={step.status} size="xs" />
         <span
           className={cn(
             "min-w-0 max-w-72 leading-4 wrap-break-word",
@@ -174,21 +173,6 @@ const Donut: FC<{ done: number; total: number }> = ({ done, total }) => (
     />
   </svg>
 );
-
-const StepGlyph: FC<{ status: ReturnType<typeof planStepStatus> }> = ({ status }) => {
-  switch (status) {
-    case "done":
-      return <Check className="text-muted-foreground size-icon-xs" />;
-    case "active":
-      return <Spinner className="size-icon-xs animate-spin motion-reduce:animate-none" />;
-    case "failed":
-      return <X className="text-destructive size-icon-xs" />;
-    case "stopped":
-      return <StopCircle className="text-muted-foreground size-icon-xs" />;
-    case "pending":
-      return <span className="border-foreground/35 size-icon-xs rounded-full border" />;
-  }
-};
 
 /**
  * The active request's plan progress and landed diff. Overnight runs keep their phase capsule.

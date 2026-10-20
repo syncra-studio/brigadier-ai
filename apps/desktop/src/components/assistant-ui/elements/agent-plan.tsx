@@ -1,10 +1,11 @@
 import { type ComponentProps, type ReactNode, useId, useState } from "react";
 
 import { disclosureRow, paper } from "@/components/assistant-ui/elements/surfaces";
-import { Check, ChevronRight, Minus, PlanPartial, Spinner, StopCircle, X } from "@/components/icons";
+import { StepGlyph, type StepStatus } from "@/components/assistant-ui/elements/step-glyph";
+import { ChevronRight } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
-export type AgentPlanStepStatus = "pending" | "active" | "done" | "partial" | "failed" | "skipped" | "stopped";
+export type AgentPlanStepStatus = StepStatus;
 
 export type AgentPlanStep = {
   key: string;
@@ -109,7 +110,7 @@ function StepRow({ step }: { step: AgentPlanStep }) {
   } | null>(null);
   const open = fold?.status === step.status ? fold.open : !step.folded;
   const foldable = step.folded !== undefined && Boolean(step.detail);
-  const icon = <StepMark status={step.status} />;
+  const icon = <StepGlyph status={step.status} />;
   const heading = (
     <span className="flex min-w-0 flex-1 flex-col">
       <span className="wrap-anywhere">{step.title}</span>
@@ -163,28 +164,5 @@ function StepRow({ step }: { step: AgentPlanStep }) {
         </div>
       )}
     </li>
-  );
-}
-
-/** A step's mark: done, at work, failed, stopped, skipped, partly done, or still to come. */
-export function StepMark({ status, className }: { status: AgentPlanStepStatus; className?: string }) {
-  return (
-    <span className={cn("flex h-(--text-sm--line-height) w-icon-md shrink-0 items-center justify-center", className)}>
-      {status === "done" ? (
-        <Check className="text-muted-foreground size-icon-sm" />
-      ) : status === "active" ? (
-        <Spinner className="text-foreground size-icon-sm animate-spin motion-reduce:animate-none" />
-      ) : status === "failed" ? (
-        <X className="text-destructive size-icon-sm" />
-      ) : status === "stopped" ? (
-        <StopCircle className="text-muted-foreground size-icon-sm" />
-      ) : status === "skipped" ? (
-        <Minus className="text-muted-foreground size-icon-sm" />
-      ) : status === "partial" ? (
-        <PlanPartial aria-hidden className="text-muted-foreground size-icon-sm" />
-      ) : (
-        <span aria-hidden className="border-foreground/35 size-icon-xs rounded-full border" />
-      )}
-    </span>
   );
 }
