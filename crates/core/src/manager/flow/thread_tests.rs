@@ -1452,6 +1452,12 @@ async fn a_running_preview_leaves_the_answer_done_and_a_running_review_keeps_it_
     let flow = Flow::start(
         "thread-background-work",
         Options {
+            // Findings steered into a turn that runs then (one a late message started) are
+            // taken in there, as a real CLI's model would, not dropped (#296).
+            behavior: Arc::new(super::FakeBehavior {
+                take_in_steers: true,
+                ..super::FakeBehavior::default()
+            }),
             reviews: Some(script(move |_| {
                 let gate = review_wait.clone();
                 async move {

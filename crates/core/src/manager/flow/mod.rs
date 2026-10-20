@@ -1928,7 +1928,24 @@ impl Flow {
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "timed out waiting for {what}; tasks: {:#?}",
+                "timed out waiting for {what}; run {:?}, requests {:?}, reviews {:?}, previews \
+                 {:?}; tasks: {:#?}",
+                board.run,
+                board
+                    .requests
+                    .values()
+                    .map(|request| &request.state)
+                    .collect::<Vec<_>>(),
+                board
+                    .reviews
+                    .values()
+                    .map(|review| &review.state)
+                    .collect::<Vec<_>>(),
+                board
+                    .previews
+                    .values()
+                    .map(|preview| (&preview.name, &preview.state))
+                    .collect::<Vec<_>>(),
                 board
                     .tasks
                     .values()
