@@ -13,7 +13,7 @@ import {
   shownIds,
   SORT_CHOICES,
 } from "@/app/settings/archived";
-import { SettingsPage, SettingsSearch, SettingsSelect, SettingsSelectTrigger } from "@/app/settings/parts";
+import { SettingsPage, SettingsSelect, SettingsSelectTrigger } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -40,6 +40,7 @@ import { formatDateTime } from "@/lib/format";
 import { openConversation, restoreAll } from "@/state/actions";
 import { askDelete, clearPicked, pickClick, prunePicked, usePicked } from "@/state/picking";
 import { useApp } from "@/state/store";
+import { SettingsSearch } from "@/components/ui/settings-search";
 
 /** The Archived page's rows, for Settings search. */
 export const ARCHIVED_ROWS = {

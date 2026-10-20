@@ -8,10 +8,15 @@ import {
   useState,
 } from "react";
 
+
 import { type ResolvedDraft, updateDraft } from "@/app/conversation/draftSetup";
+
 import { resetsAt, windowName } from "@/app/conversation/StatusCard";
+
 import { composerPill } from "@/components/assistant-ui/elements/surfaces";
+
 import { MenuRow } from "@/components/ui/dropdown-menu";
+
 import {
   Branch,
   BranchAlt,
@@ -19,18 +24,25 @@ import {
   ChevronDown,
   ChevronRight,
   Folder,
-  MagnifyingGlassSearch,
   Plus,
   SpeedometerLatencySpeed,
   X,
 } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+
 import type { Project, QuotaWindow } from "@/ipc/generated";
+
 import { usageTone } from "@/lib/quota";
+
 import { cn } from "@/lib/utils";
+
 import { loadProviders, select } from "@/state/actions";
+
 import { openAddProject } from "@/state/addProject";
+
 import { useApp } from "@/state/store";
+import { SettingsSearch } from "@/components/ui/settings-search";
+
 
 /*
  * The utility bar on the composer rail, shown on a new chat only: the project, where the
@@ -85,41 +97,6 @@ function useHighlight(count: number, query: string) {
     }
   };
   return { index, setIndex, onKeyDown };
-}
-
-function SearchField({
-  value,
-  onChange,
-  placeholder,
-  autoFocus,
-  onKeyDown,
-  controls,
-}: {
-  controls: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-  autoFocus: boolean;
-  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
-}) {
-  return (
-    <div className="border-foreground/10 mb-1 flex items-center gap-2 border-b px-2 pb-1">
-      <MagnifyingGlassSearch aria-hidden className="text-muted-foreground size-icon-md shrink-0" />
-      <input
-        role="combobox"
-        aria-expanded
-        aria-controls={controls}
-        aria-label={placeholder}
-        value={value}
-        placeholder={placeholder}
-        // oxlint-disable-next-line jsx-a11y/no-autofocus
-        autoFocus={autoFocus}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={onKeyDown}
-        className="placeholder:text-muted-foreground h-control-md min-w-0 flex-1 bg-transparent text-sm outline-none"
-      />
-    </div>
-  );
 }
 
 // ----- project ---------------------------------------------------------------------------
@@ -207,13 +184,19 @@ export function ProjectCombobox({
           align={inHeading ? "center" : "start"}
           className={cn(MENU, "w-xs")}
         >
-          <SearchField
-            controls={listId}
+          <SettingsSearch
+            variant="bordered"
+            label="Search projects"
             value={query}
             onChange={setQuery}
-            placeholder="Search projects"
+            clearable={false}
+            clearOnEscape={false}
+            role="combobox"
+            aria-expanded
+            aria-controls={listId}
             autoFocus
             onKeyDown={(event) => onKeyDown(event, (at) => rows[at]?.run())}
+            className="mb-1"
           />
           <div
             id={listId}
@@ -412,12 +395,17 @@ export function BranchPopover({ resolved }: { resolved: ResolvedDraft }) {
           onKeyDown(event, (at) => matches[at] && pick(matches[at]));
         }}
       >
-        <SearchField
-          controls={listId}
+        <SettingsSearch
+          variant="bordered"
+          label={`Search ${repoName} branches`}
           value={query}
           onChange={setQuery}
-          placeholder={`Search ${repoName} branches`}
-          autoFocus={false}
+          clearable={false}
+          clearOnEscape={false}
+          role="combobox"
+          aria-expanded
+          aria-controls={listId}
+          className="mb-1"
         />
         <p className="text-muted-foreground px-2 py-1 text-sm">Local branches</p>
         <div id={listId} role="listbox" aria-label="Branches" className="h-command-list overflow-y-auto">

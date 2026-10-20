@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { recordKeyPress } from "@/app/keyCapture";
 import { SettingsPage } from "@/app/settings/parts";
 import { SHORTCUTS, formatKeys, searchShortcuts, shortcutsFor, type Shortcut } from "@/app/shortcutCatalog";
-import { KeyboardShortcut, MagnifyingGlassSearch, X } from "@/components/icons";
+import { KeyboardShortcut } from "@/components/icons";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Kbd } from "@/components/ui/kbd";
 import { SettingsCard } from "@/components/ui/settings-card";
+import { SettingsSearch } from "@/components/ui/settings-search";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
@@ -45,7 +46,42 @@ export function ShortcutsPage() {
   return (
     <SettingsPage title="Keyboard shortcuts">
       <div className="flex flex-col gap-6">
-        <SearchField search={search} mac={mac} onSearch={setSearch} />
+        <SettingsSearch
+          label="Search shortcuts"
+          value={search.type === "words" ? search.words : ""}
+          onChange={(words) => setSearch({ type: "words", words })}
+          recording={recording}
+          display={
+            search.type === "recording" ? (
+              <span role="status" className="text-foreground/65 min-w-0 flex-1 truncate text-sm">
+                Press a shortcut… Esc cancels.
+              </span>
+            ) : search.type === "press" ? (
+              <span className="flex min-w-0 flex-1 items-center gap-2 text-sm">
+                <KeyChip keys={formatKeys(search.press, mac)} />
+              </span>
+            ) : undefined
+          }
+          className="flex-none"
+        >
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="Search by keystrokes"
+                aria-pressed={recording}
+                className={cn(
+                  "hover:text-foreground flex shrink-0 items-center rounded-xs",
+                  recording ? "text-foreground" : "text-foreground/65",
+                )}
+                onClick={() => setSearch(recording ? { type: "words", words: "" } : { type: "recording" })}
+              >
+                <KeyboardShortcut className="size-icon-md" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Search by keystrokes</TooltipContent>
+          </Tooltip>
+        </SettingsSearch>
         {shown.length > 0 ? (
           <SettingsCard>
             {shown.map((shortcut) => (
@@ -57,90 +93,6 @@ export function ShortcutsPage() {
         )}
       </div>
     </SettingsPage>
-  );
-}
-
-function SearchField({
-  search,
-  mac,
-  onSearch,
-}: {
-  search: Search;
-  mac: boolean;
-  onSearch: (search: Search) => void;
-}) {
-  const input = useRef<HTMLInputElement>(null);
-  const words = search.type === "words" ? search.words : "";
-  return (
-    <div
-      data-slot="shortcuts-search"
-      className={cn(
-        "rounded-capsule bg-foreground/8 flex h-8 min-w-0 items-center gap-2 border px-2.5",
-        search.type === "recording" ? "border-ring" : "border-foreground/16",
-      )}
-    >
-      <MagnifyingGlassSearch aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
-      {search.type === "words" ? (
-        <input
-          ref={input}
-          type="search"
-          value={words}
-          placeholder="Search shortcuts"
-          aria-label="Search shortcuts"
-          spellCheck={false}
-          autoComplete="off"
-          className="placeholder:text-foreground/50 min-w-0 flex-1 bg-transparent text-sm outline-none [&::-webkit-search-cancel-button]:hidden"
-          onChange={(event) => onSearch({ type: "words", words: event.target.value })}
-          onKeyDown={(event) => {
-            if (event.key === "Escape" && words) {
-              // Esc clears the search before it leaves Settings.
-              event.stopPropagation();
-              onSearch({ type: "words", words: "" });
-            }
-          }}
-        />
-      ) : search.type === "recording" ? (
-        <span role="status" className="text-foreground/65 min-w-0 flex-1 truncate text-sm">
-          Press a shortcut… Esc cancels.
-        </span>
-      ) : (
-        <span className="flex min-w-0 flex-1 items-center gap-2 text-sm">
-          <KeyChip keys={formatKeys(search.press, mac)} />
-        </span>
-      )}
-      {(words || search.type === "press") && (
-        <button
-          type="button"
-          aria-label="Clear search"
-          className="text-foreground/50 hover:text-foreground flex shrink-0 items-center"
-          onClick={() => {
-            onSearch({ type: "words", words: "" });
-            requestAnimationFrame(() => input.current?.focus());
-          }}
-        >
-          <X className="size-icon-sm" />
-        </button>
-      )}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label="Search by keystrokes"
-            aria-pressed={search.type === "recording"}
-            className={cn(
-              "hover:text-foreground flex shrink-0 items-center rounded-xs",
-              search.type === "recording" ? "text-foreground" : "text-foreground/65",
-            )}
-            onClick={() =>
-              onSearch(search.type === "recording" ? { type: "words", words: "" } : { type: "recording" })
-            }
-          >
-            <KeyboardShortcut className="size-icon-md" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent>Search by keystrokes</TooltipContent>
-      </Tooltip>
-    </div>
   );
 }
 

@@ -1,7 +1,15 @@
-import { useId, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
+import { useId, type ComponentProps, type ReactNode } from "react";
+
+
 
 import { useAction } from "@/app/conversation/useAction";
+
+
+
 import { ErrorLine } from "@/app/dialogs/fields";
+
+
+
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,20 +17,39 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  MagnifyingGlassSearch,
-  XCircleFilled,
-} from "@/components/icons";
+
+
+
+import { Check, ChevronDown, ChevronLeft } from "@/components/icons";
+
 import { ScrollFade } from "@/components/ui/scroll-fade";
+
+
+
 import type { Choice } from "@/components/ui/segmented";
+
+
+
 import { Switch } from "@/components/ui/switch";
+
+
+
 import type { Settings } from "@/ipc/generated";
+
+
+
 import { cn } from "@/lib/utils";
+
+
+
 import { setSetting } from "@/state/settings";
+
+
+
 import { useApp } from "@/state/store";
+
+
+
 
 /*
  * The parts every Settings page is built from: a page (title, optional description and actions,
@@ -358,63 +385,5 @@ export function SettingsSelect<T extends string>({
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-/** A search field over a list; Esc empties it before it leaves Settings. */
-export function SettingsSearch({
-  label,
-  value,
-  onChange,
-  onKeyDown,
-  autoFocus,
-  className,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  /** Keys after its own (Esc empties it). */
-  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
-  autoFocus?: boolean;
-  className?: string;
-}) {
-  return (
-    <label
-      className={cn(
-        "rounded-capsule border-foreground/16 bg-foreground/8 flex h-8 min-w-0 flex-1 items-center gap-2 border px-2.5",
-        className,
-      )}
-    >
-      <MagnifyingGlassSearch aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
-      <input
-        type="search"
-        value={value}
-        placeholder={label}
-        aria-label={label}
-        spellCheck={false}
-        autoComplete="off"
-        className="placeholder:text-foreground/50 min-w-0 flex-1 bg-transparent text-sm outline-none [&::-webkit-search-cancel-button]:hidden"
-        onChange={(event) => onChange(event.target.value)}
-        autoFocus={autoFocus}
-        onKeyDown={(event) => {
-          if (event.key === "Escape" && value) {
-            event.stopPropagation();
-            onChange("");
-            return;
-          }
-          onKeyDown?.(event);
-        }}
-      />
-      {value && (
-        <button
-          type="button"
-          aria-label="Clear search"
-          className="text-foreground/50 hover:text-foreground flex shrink-0 items-center"
-          onClick={() => onChange("")}
-        >
-          <XCircleFilled className="size-icon-sm" />
-        </button>
-      )}
-    </label>
   );
 }

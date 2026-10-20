@@ -25,6 +25,7 @@ import {
   clearSearch, dismissSearchFile, EMPTY_FORM, replaceResults, runSearch, sameQuery, searchId, searchQuery, type SearchForm,
   setSearchForm, stopSearch, useWorkspaceSearch,
 } from "@/state/workspaceSearch";
+import { SettingsSearch } from "@/components/ui/settings-search";
 
 /**
  * The right sidebar's Search (⇧⌘F): text or a pattern across the checkout, with match case,
@@ -144,23 +145,25 @@ export function SearchPanel({ target, onOpen, readOnly }: {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-border flex shrink-0 flex-col gap-1.5 border-b p-2">
-        <Field label="Search" value={form.text} onChange={(text) => { set({ text }); setOutcome(null); }}
-          onEnter={() => query && runSearch(target, query, true)}>
+        <SettingsSearch variant="bordered" icon={null} clearable={false} clearOnEscape={false} className={FIELD}
+          label="Search" value={form.text} onChange={(text) => { set({ text }); setOutcome(null); }}
+          onKeyDown={onEnter(() => query && runSearch(target, query, true))}>
           <Toggle label="Match case" pressed={form.matchCase} onChange={(matchCase) => set({ matchCase })}><MatchCaseGlyph /></Toggle>
           <Toggle label="Whole word" pressed={form.wholeWord} onChange={(wholeWord) => set({ wholeWord })}><WholeWordGlyph /></Toggle>
           <Toggle label="Regular expression" pressed={form.regex} onChange={(regex) => set({ regex })}><RegexGlyph /></Toggle>
-        </Field>
+        </SettingsSearch>
         {readOnly ? (
           <p data-slot="own-copy-note" className="text-muted-foreground px-1 text-xs">
             This session will work in its own copy: Replace works there once it starts
           </p>
         ) : (
-          <Field label="Replace" value={form.replace} onChange={(value) => set({ replace: value })}
-            onEnter={() => canReplace && setConfirming({})}>
+          <SettingsSearch variant="bordered" icon={null} clearable={false} clearOnEscape={false} className={FIELD}
+            label="Replace" value={form.replace} onChange={(value) => set({ replace: value })}
+            onKeyDown={onEnter(() => canReplace && setConfirming({}))}>
             <TooltipIconButton tooltip="Replace all" size="icon-xs" disabled={!canReplace} onClick={() => setConfirming({})}>
               <ReplaceAllGlyph />
             </TooltipIconButton>
-          </Field>
+          </SettingsSearch>
         )}
         <div className="flex items-center justify-end">
           <TooltipIconButton tooltip={form.details ? "Hide files to include and exclude" : "Files to include and exclude"}
@@ -217,23 +220,16 @@ export function SearchPanel({ target, onOpen, readOnly }: {
   );
 }
 
-const Field: FC<{ label: string; value: string; onChange: (value: string) => void; onEnter: () => void; children: ReactNode }> = ({
-  label, value, onChange, onEnter, children,
-}) => (
-  // Not a label: the buttons inside would take its text as their names.
-  <div className="border-border rounded-control focus-within:border-ring flex h-control-md items-center gap-0.5 border ps-2 pe-0.5">
-    <input value={value} placeholder={label} aria-label={label} spellCheck={false}
-      onChange={(event) => onChange(event.target.value)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-          event.preventDefault();
-          onEnter();
-        }
-      }}
-      className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none" />
-    {children}
-  </div>
-);
+/** The search and replace fields hold their buttons close to the end. */
+const FIELD = "gap-0.5 ps-2 pe-0.5";
+
+/** Enter (not while composing) runs `run`. */
+const onEnter = (run: () => void) => (event: KeyboardEvent<HTMLInputElement>) => {
+  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+    event.preventDefault();
+    run();
+  }
+};
 
 const Toggle: FC<{ label: string; pressed: boolean; onChange: (pressed: boolean) => void; children: ReactNode }> = ({
   label, pressed, onChange, children,

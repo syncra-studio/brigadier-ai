@@ -12,7 +12,7 @@ import {
 } from "react";
 
 import { ErrorLine, errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
-import { SettingsSearch } from "@/app/settings/parts";
+import { SettingsSearch } from "@/components/ui/settings-search";
 import { ArrowLeft, Check, Folder, FolderOpen, Link, Plus, Spinner, X } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

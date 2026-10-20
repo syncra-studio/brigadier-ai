@@ -69,14 +69,14 @@ function Fixture() {
       }],
       [0, () => button("Search by keystrokes")?.click()],
       [0, () => {
-        seen.recording = text(document.querySelector('[data-slot="shortcuts-search"] [role="status"]'));
+        seen.recording = text(document.querySelector('[data-slot="settings-search"] [role="status"]'));
         key("BracketLeft", "[", { metaKey: true });
         // The macOS menu sends its item again as the same key, right after.
         key("BracketLeft", "[", { metaKey: true });
       }],
       [0, () => {
         seen.byPress = rows();
-        seen.pressChip = all('[data-slot="shortcuts-search"] kbd').map(text);
+        seen.pressChip = all('[data-slot="settings-search"] kbd').map(text);
         seen.reachedWhileRecording = [...reached];
         button("Search by keystrokes")?.click();
       }],

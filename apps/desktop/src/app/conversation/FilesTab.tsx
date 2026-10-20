@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 
 import { type ChangeMarks, changeMarks, LETTERS } from "@/app/conversation/sourceStatus";
 import { fuzzyMatch } from "@/components/assistant-ui/elements/menuMatch";
-import { ChevronDown, ChevronRight, FileIcon, Search } from "@/components/icons";
+import { ChevronDown, ChevronRight, FileIcon } from "@/components/icons";
 import type { SourceState, SourceStatus, WorkspaceFolder } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { listFiles, listProjectFiles } from "@/state/actions";
@@ -11,6 +11,7 @@ import { openFileTab, replaceNewTabWithFile } from "@/state/sessionTabs";
 import {
   type FileList, onWorkspaceChanged, readFiles, readFolder, readSource, useCachedEntry, useCheckoutKey, type WorkspaceTarget,
 } from "@/state/workspaceCache";
+import { SettingsSearch } from "@/components/ui/settings-search";
 
 /**
  * The Files panel (⌘P): the session checkout's files as a tree with a search field. A click
@@ -353,31 +354,29 @@ function FileBrowser({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-border shrink-0 border-b p-2">
-        <label className="border-border rounded-control flex h-control-md items-center gap-1.5 border px-2">
-          <Search className="text-muted-foreground size-icon-sm shrink-0" />
-          <input
-            ref={search}
-            value={query}
-            placeholder="Search files"
-            aria-label="Search files"
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setActive(0);
-            }}
-            onKeyDown={(event) => {
-              if (!results) return;
-              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                event.preventDefault();
-                const step = event.key === "ArrowDown" ? 1 : -1;
-                setActive((index) => Math.min(results.length - 1, Math.max(0, index + step)));
-              } else if (event.key === "Enter") {
-                const path = results[active];
-                if (path) onOpen(path, true);
-              }
-            }}
-            className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
-          />
-        </label>
+        <SettingsSearch
+          ref={search}
+          variant="bordered"
+          label="Search files"
+          value={query}
+          onChange={(value) => {
+            setQuery(value);
+            setActive(0);
+          }}
+          clearable={false}
+          clearOnEscape={false}
+          onKeyDown={(event) => {
+            if (!results) return;
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              const step = event.key === "ArrowDown" ? 1 : -1;
+              setActive((index) => Math.min(results.length - 1, Math.max(0, index + step)));
+            } else if (event.key === "Enter") {
+              const path = results[active];
+              if (path) onOpen(path, true);
+            }
+          }}
+        />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {!list ? null : list.files.length === 0 ? (

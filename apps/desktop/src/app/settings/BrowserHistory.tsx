@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { SettingsPage, SettingsSearch, SettingsSection, SettingsSelect } from "@/app/settings/parts";
+import { SettingsPage, SettingsSection, SettingsSelect } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -17,6 +17,7 @@ import type { BrowserVisit, HistoryFilter } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { browserHistory, byDay, HISTORY_PAGE, removeHistory, siteOf } from "@/state/browserData";
 import { openLink } from "@/state/links";
+import { SettingsSearch } from "@/components/ui/settings-search";
 
 const FILTERS = [
   { value: "all", label: "All" },

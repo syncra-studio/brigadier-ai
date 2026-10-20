@@ -9,14 +9,11 @@ import {
 } from "@/app/settings/pages";
 import { revealSetting } from "@/app/settings/reveal";
 import { navRow, NavHeader, NavList, NavSection } from "@/app/sidebar/nav";
-import {
-  MagnifyingGlassSearch,
-  XCircleFilled,
-} from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { EmptyState } from "@/components/ui/empty-state";
+import { SettingsSearch } from "@/components/ui/settings-search";
 
 /** Opens a result's page, then brings the setting it found into view. */
 function openResult({ page, row }: SettingsSearchResult) {
@@ -44,44 +41,23 @@ export function SettingsNav() {
     <>
       <NavHeader title="Settings" />
       <div className="px-2 pb-2">
-        <label className="h-nav-search rounded-capsule bg-foreground/8 flex items-center gap-2 px-3">
-          <MagnifyingGlassSearch aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
-          <input
-            type="search"
-            value={query}
-            placeholder="Search"
-            aria-label="Search settings"
-            spellCheck={false}
-            autoComplete="off"
-            className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none [&::-webkit-search-cancel-button]:hidden"
-            onChange={(event) => search(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && query) {
-                // Esc clears the search first, before it leaves Settings.
-                event.stopPropagation();
-                search("");
-              }
-              if (!results?.length) return;
-              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                event.preventDefault();
-                const step = event.key === "ArrowDown" ? 1 : -1;
-                setActive((index) => (index + step + results.length) % results.length);
-              }
-              const chosen = results[active];
-              if (event.key === "Enter" && chosen) openResult(chosen);
-            }}
-          />
-          {query && (
-            <button
-              type="button"
-              aria-label="Clear search"
-              className="text-muted-foreground hover:text-foreground flex shrink-0 items-center"
-              onClick={() => search("")}
-            >
-              <XCircleFilled className="size-icon-md" />
-            </button>
-          )}
-        </label>
+        <SettingsSearch
+          label="Search settings"
+          placeholder="Search"
+          value={query}
+          onChange={search}
+          className="h-nav-search px-3"
+          onKeyDown={(event) => {
+            if (!results?.length) return;
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              const step = event.key === "ArrowDown" ? 1 : -1;
+              setActive((index) => (index + step + results.length) % results.length);
+            }
+            const chosen = results[active];
+            if (event.key === "Enter" && chosen) openResult(chosen);
+          }}
+        />
       </div>
 
       <div className="scroll-edge-fade flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pt-1 pb-2">

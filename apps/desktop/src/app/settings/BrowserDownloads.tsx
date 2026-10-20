@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { SettingsPage, SettingsSearch, SettingsSection } from "@/app/settings/parts";
+import { SettingsPage, SettingsSection } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -18,6 +18,7 @@ import type { BrowserDownload } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { browserDownloads, byDay, removeDownloads, siteOf } from "@/state/browserData";
 import { useApp } from "@/state/store";
+import { SettingsSearch } from "@/components/ui/settings-search";
 
 const STATES: Record<BrowserDownload["state"], string | null> = {
   running: "Downloading",

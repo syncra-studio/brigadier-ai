@@ -5,7 +5,7 @@
  * the app's parts reads the same as the part it uses (#385).
  */
 import { PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
-import { SettingsSearch } from "@/app/settings/parts";
+import { SettingsSearch } from "@/components/ui/settings-search";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
