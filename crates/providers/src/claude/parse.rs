@@ -1977,7 +1977,9 @@ mod tests {
     /// whole output was saved to; a failing command's long output as a head and tail.
     #[test]
     fn a_preview_names_the_saved_file_and_a_failure_excerpt_is_marked() {
-        let dir = "/Users/u/Library/Application Support/x/projects/-tmp-p/d8d2/tool-results";
+        let dir = format!(
+            "{ROOT}/Users/u/Library/Application Support/x/projects/-tmp-p/d8d2/tool-results"
+        );
         let bash = format!(
             "<persisted-output>\nOutput too large (200KB). Full output saved to: {dir}/bs15nclkg.txt\n\n\
              Preview (first 2KB):\nline 000000 filler\n...\n</persisted-output>"
@@ -2103,6 +2105,9 @@ mod tests {
         );
     }
 
+    /// Where an absolute path starts: at `/`, and on Windows at a drive.
+    const ROOT: &str = if cfg!(windows) { "C:" } else { "" };
+
     #[test]
     fn a_saved_file_is_only_a_tool_results_path() {
         assert_eq!(saved_file("Full output saved to: /etc/passwd\n"), None);
@@ -2116,16 +2121,18 @@ mod tests {
         );
         // A command's own output can forge the words: a path out of the folder is no saved file.
         assert_eq!(
-            saved_file(
-                "Full output saved to: /h/.claude/projects/p/s/tool-results/../../../../../etc/passwd\n"
-            ),
+            saved_file(&format!(
+                "Full output saved to: {ROOT}/h/.claude/projects/p/s/tool-results/../../../../../etc/passwd\n"
+            )),
             None
         );
         assert_eq!(
-            saved_file(
-                "Output has been saved to /h/x b/projects/-tmp-p/s1/tool-results/c.txt.\nmore"
-            ),
-            Some("/h/x b/projects/-tmp-p/s1/tool-results/c.txt".into())
+            saved_file(&format!(
+                "Output has been saved to {ROOT}/h/x b/projects/-tmp-p/s1/tool-results/c.txt.\nmore"
+            )),
+            Some(format!(
+                "{ROOT}/h/x b/projects/-tmp-p/s1/tool-results/c.txt"
+            ))
         );
         // Long output whose 4 KiB mark falls inside a character is read, not a panic.
         let wide = "界".repeat(2_000);
