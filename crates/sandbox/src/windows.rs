@@ -30,7 +30,7 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL};
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{
-    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, GetCurrentProcess,
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, GetCurrentProcess,
     GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenProcessToken,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess,
 };
@@ -291,7 +291,10 @@ impl Processes for WindowsProcesses {
             command.creation_flags(flags);
             command.spawn()
         };
-        let base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+        // A console of its own that has no window, not none at all (DETACHED_PROCESS): every
+        // console program it starts (git, the agents' CLIs) shares it, where without one each
+        // would open a console window of its own. Still apart from the caller's console.
+        let base = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
         // Break away from the caller's job object when allowed so closing the app does not
         // take the daemon down; fall back when the job forbids breakaway.
         let child = match spawn(base | CREATE_BREAKAWAY_FROM_JOB) {
@@ -308,11 +311,7 @@ impl Processes for WindowsProcesses {
         } else {
             0
         };
-        command.creation_flags(
-            CREATE_NEW_PROCESS_GROUP
-                | windows_sys::Win32::System::Threading::CREATE_NO_WINDOW
-                | priority,
-        );
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | priority);
         command
     }
 
@@ -349,7 +348,7 @@ impl Processes for WindowsProcesses {
     fn kill_tree(&self, pid: u32) -> Result<()> {
         let status = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+            .creation_flags(CREATE_NO_WINDOW)
             .output()?
             .status;
         if status.success() || !self.is_alive(pid) {
