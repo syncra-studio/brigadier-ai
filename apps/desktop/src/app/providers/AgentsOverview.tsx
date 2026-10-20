@@ -5,7 +5,6 @@ import { ErrorLine } from "@/app/dialogs/fields";
 import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
 import { agentState } from "@/app/onboarding/SetupTerminal";
 import {
-  AgentMark,
   PlanChip,
   ProvidersSection,
   ROW_LINE,
@@ -21,7 +20,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ArrowUpRight, ChevronRight, Plus } from "@/components/icons";
+import { ArrowUpRight, ChevronRight, Plus, ProviderGlyph } from "@/components/icons";
 import type { AccountView, ProviderKind, ProviderOverview, QuotaWindow } from "@/ipc/generated";
 import { used, windowTitle } from "@/lib/quota";
 import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";
@@ -138,7 +137,7 @@ export function AgentsOverview({
           {missing.map((provider) => (
             <div key={provider} data-slot="agent-not-set-up" className="flex flex-col">
               <div className="flex items-center gap-3.5 px-4 py-3">
-                <AgentMark provider={provider} idle />
+                <ProviderGlyph provider={provider} tile="md" idle />
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <span className={ROW_TITLE}>{VENDOR_LABELS[provider]}</span>
                   <span className={ROW_LINE}>
@@ -171,7 +170,7 @@ export function AgentsOverview({
                     disabled={added || settingUp(provider)}
                     onSelect={() => void connectAgent(provider)}
                   >
-                    <AgentMark provider={provider} idle />
+                    <ProviderGlyph provider={provider} tile="md" idle />
                     <span className="flex-1">{VENDOR_LABELS[provider]}</span>
                     {added && <span className="text-muted-foreground text-xs">Added</span>}
                   </DropdownMenuItem>
@@ -254,7 +253,7 @@ function AgentRow({
       onKeyDown={onKeyDown}
       className="hover:bg-foreground/5 flex cursor-default items-center gap-3.5 px-4 py-3 transition-colors"
     >
-      <AgentMark provider={provider} dim={!on} />
+      <ProviderGlyph provider={provider} tile="md" dim={!on} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="flex min-w-0 items-center gap-2">
           <span className={cn(ROW_TITLE, !on && "text-foreground/65")}>

@@ -4,7 +4,6 @@ import { useAction } from "@/app/conversation/useAction";
 import {
   Badge,
   Card,
-  Glyph,
   HAIRLINE_TOP,
   LinkButton,
   OpenChevron,
@@ -50,6 +49,7 @@ import {
   GripIcon,
   Nodes,
   Plus,
+  ProviderGlyph,
   PullRequestMerged,
   PullRequestOpen,
   Telescope,
@@ -204,7 +204,7 @@ function NowPick({
         </span>
       ) : (
         <span className="flex items-center gap-1.75">
-          <Glyph provider={outcome.choice.provider} className="size-3.5" />
+          <ProviderGlyph provider={outcome.choice.provider} className="shrink-0 size-3.5" />
           <span className="text-xs text-foreground">
             {shortModelName(groups, outcome.choice.provider, outcome.choice.model ?? "")}
           </span>
@@ -330,7 +330,7 @@ function AutoPicks({
         <div key={`${candidate.provider}/${candidate.model}`} data-slot="auto-pick" className="flex h-10 items-center gap-3">
           <span className="text-xs text-muted-foreground w-2 shrink-0 font-mono">{index + 1}</span>
           <span className="flex min-w-0 flex-1 items-center gap-2">
-            <Glyph provider={candidate.provider} className="size-3.5" />
+            <ProviderGlyph provider={candidate.provider} className="shrink-0 size-3.5" />
             <span className="text-label text-foreground truncate">{name(candidate.provider, candidate.model)}</span>
           </span>
           {byAuthor ? (
@@ -481,7 +481,7 @@ function OrderPlace({
         <span className="text-xs text-muted-foreground w-2 font-mono">{position}</span>
       </button>
       <span className="flex min-w-0 flex-1 items-center gap-2">
-        <Glyph provider={target.provider} className="size-3.5" />
+        <ProviderGlyph provider={target.provider} className="shrink-0 size-3.5" />
         <span className="text-label text-foreground truncate">{name}</span>
       </span>
       <DropdownMenu modal={false}>

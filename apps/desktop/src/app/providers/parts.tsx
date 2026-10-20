@@ -2,8 +2,8 @@ import type { ComponentProps, ReactNode } from "react";
 
 import { SettingsButton, SettingsSection } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
-import { ProviderGlyph, Reload } from "@/components/icons";
-import type { ProviderKind, QuotaWindow } from "@/ipc/generated";
+import { Reload } from "@/components/icons";
+import type { QuotaWindow } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
 import { usageTone, used, windowTitle } from "@/lib/quota";
 import { cn } from "@/lib/utils";
@@ -70,44 +70,6 @@ export function PlanChip({ plan, large = false }: { plan: string; large?: boolea
       {plan.charAt(0).toUpperCase()}
       {plan.slice(1)}
     </Badge>
-  );
-}
-
-/**
- * An agent's mark in its rounded square; `idle` for one not set up, `dim` for one off, `large`
- * beside an agent page's title.
- */
-export function AgentMark({
-  provider,
-  idle = false,
-  dim = false,
-  large = false,
-}: {
-  provider: ProviderKind;
-  idle?: boolean;
-  dim?: boolean;
-  large?: boolean;
-}) {
-  return (
-    <span
-      aria-hidden
-      data-slot="agent-mark"
-      data-provider={provider}
-      className={cn(
-        "rounded-nav flex shrink-0 items-center justify-center",
-        large ? "size-11" : "size-8.5",
-        idle ? "border-divider border" : "bg-foreground/8",
-        dim && "opacity-50",
-      )}
-    >
-      <ProviderGlyph
-        provider={provider}
-        className={cn(
-          large ? "size-5.5" : "size-4.25",
-          provider === "codex" && (idle ? "text-muted-foreground" : "text-foreground/85"),
-        )}
-      />
-    </span>
   );
 }
 

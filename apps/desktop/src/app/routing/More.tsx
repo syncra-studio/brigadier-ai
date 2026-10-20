@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 
 import { refreshRunning } from "@/app/routing/rankings";
-import { Badge, Card, Glyph, HAIRLINE_BOTTOM, HAIRLINE_TOP, LinkButton, OpenChevron, PillSelect, RowText, Section, StepNumber } from "@/app/routing/parts";
+import { Badge, Card, HAIRLINE_BOTTOM, HAIRLINE_TOP, LinkButton, OpenChevron, PillSelect, RowText, Section, StepNumber } from "@/app/routing/parts";
 import { faded, reviewers, reviewsWords, ROUTED_KINDS, strengthFor, tierFor } from "@/app/routing/words";
-import { ArrowRotateCw, ListOrderedIcon, SpeedometerLatencySpeed } from "@/components/icons";
+import { ArrowRotateCw, ListOrderedIcon, ProviderGlyph, SpeedometerLatencySpeed } from "@/components/icons";
 import type { RoutePreview, TaskCategory } from "@/ipc/generated";
 import { PLAIN_KIND_NAMES, TIER_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
@@ -139,7 +139,7 @@ export function More({
                 >
                   <span className="text-xs text-muted-foreground w-3.5 shrink-0 font-mono">{index + 1}</span>
                   <span className={cn("flex min-w-0 flex-1 items-center gap-2.5", dim && "opacity-50")}>
-                    <Glyph provider={model.provider} className="size-3.75" />
+                    <ProviderGlyph provider={model.provider} className="shrink-0 size-3.75" />
                     <span className="flex min-w-0 items-center gap-2">
                       <span data-slot="strength-name" className="text-label text-foreground truncate font-medium">
                         {model.displayName}

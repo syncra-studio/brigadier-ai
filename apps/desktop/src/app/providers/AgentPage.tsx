@@ -6,11 +6,11 @@ import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
 import { agentState } from "@/app/onboarding/SetupTerminal";
 import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows";
 import { CLI_NAMES, OVERVIEW_ROWS } from "@/app/providers/AgentsOverview";
-import { AgentMark, CheckAgainButton, PlanChip, ProvidersSection, ROW_LINE, ROW_TITLE, StateDot } from "@/app/providers/parts";
+import { CheckAgainButton, PlanChip, ProvidersSection, ROW_LINE, ROW_TITLE, StateDot } from "@/app/providers/parts";
 import { bestFor } from "@/app/routing/models";
 import { SettingsButton, SettingsCard, SettingsPage, SettingsRow, settingsRows, SettingsSwitch } from "@/app/settings/parts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronRight, InfoCircle } from "@/components/icons";
+import { ChevronRight, InfoCircle, ProviderGlyph } from "@/components/icons";
 import { pickFile, request } from "@/ipc/client";
 import type { AccountView, MergedModel, ModelInfo, ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";
@@ -65,7 +65,7 @@ export function AgentSettingsPage({
   return (
     <SettingsPage
       back={{ label: "Providers", onBack }}
-      mark={<AgentMark provider={provider} idle={state === "install"} dim={!on} large />}
+      mark={<ProviderGlyph provider={provider} tile="lg" idle={state === "install"} dim={!on} />}
       title={
         <span className="flex items-center gap-2.5">
           {label}

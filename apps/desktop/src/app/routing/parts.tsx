@@ -1,7 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
 
 import { selectTrigger, SettingsButton, settingsCard, SettingsSection } from "@/app/settings/parts";
-import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, ProviderGlyph, Upgrade } from "@/components/icons";
+import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/icons";
 import { Badge as ChipBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,7 +12,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Segmented } from "@/components/ui/segmented";
-import type { ProviderKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 
 /*
@@ -94,16 +93,6 @@ export function BanIcon({ className }: { className?: string }) {
 /** "Prefer" in a rule: an arrow up, in blue. */
 export function PreferIcon({ className }: { className?: string }) {
   return <Upgrade aria-hidden className={cn("text-link size-icon-sm shrink-0", className)} />;
-}
-
-/** A model's agent mark, Codex's in the page's light grey. */
-export function Glyph({ provider, className }: { provider: ProviderKind; className?: string }) {
-  return (
-    <ProviderGlyph
-      provider={provider}
-      className={cn("shrink-0", provider === "codex" && "text-foreground/85", className)}
-    />
-  );
 }
 
 /** A small rounded mark: green (Picked now) or a plain one (New). */
