@@ -6,7 +6,9 @@
 //     fine), no px/rem/em lengths but 0 and 1px/2px hairlines (%, vw and vh are layout);
 //   - `style={{…}}` holds only computed values: a property set to a plain literal is a class;
 //   - @openai/apps-sdk-ui and Radix are imported only inside components/ui (the kit's icons only
-//     in components/icons/kit.ts).
+//     in components/icons/kit.ts);
+//   - icons live in components/icons: no <svg> markup anywhere else (charts and rings drawn from
+//     live values are listed in check-styles.allow as `<svg`).
 // What can't follow yet is listed in check-styles.allow, one file per line with the exact values
 // it may keep and why: `<path from src> <value> [<value>…]  # reason`. An entry no longer needed
 // fails the check too, so the list only shrinks.
@@ -25,6 +27,8 @@ const COLOR_FUNCTION = /\b(?:rgba?|hsla?|hwb|oklch|oklab|lab|lch|color)\(/gi;
 const LENGTH = /(?<![\w.#-])-?(\d*\.?\d+)(?:px|rem|em|ch|ex|lh|pt|pc|cm|mm|in|q)\b/gi;
 const HAIRLINE = /^-?[12]px$/;
 const KIT_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']((?:@openai\/apps-sdk-ui|radix-ui|@radix-ui\/)[^"']*)["']/g;
+const KIT_ICONS = "@openai/apps-sdk-ui/components/Icon";
+const SVG = /<svg\b/g;
 const STATIC_STYLE = /(?:^|[{,])\s*([\w$]+|"[^"]+")\s*:\s*(?:"[^"$`]*"|'[^']*'|-?\d*\.?\d+)\s*(?=[,}]|$)/g;
 
 /** Every source file under `dir`, without fixtures and tests. */
@@ -65,8 +69,14 @@ export function problems(path, text) {
     }
     return found;
   }
-  if (!path.includes("components/ui/") && path !== "components/icons/kit.ts") {
-    for (const [, name] of text.matchAll(KIT_IMPORT)) found.push([name, "a kit import: use the components/ui wrapper"]);
+  if (path !== "components/icons/kit.ts") {
+    for (const [, name] of text.matchAll(KIT_IMPORT)) {
+      if (name.startsWith(KIT_ICONS)) found.push([name, "a kit import: icons come from components/icons"]);
+      else if (!path.includes("components/ui/")) found.push([name, "a kit import: use the components/ui wrapper"]);
+    }
+  }
+  if (!path.startsWith("components/icons/")) {
+    for (const [svg] of text.matchAll(SVG)) found.push([svg, "icon markup: icons live in components/icons"]);
   }
   for (const object of styleObjects(text)) {
     for (const [pair, key] of object.matchAll(STATIC_STYLE)) {

@@ -63,3 +63,22 @@ test("the allowlist lets a file keep the values it names, and an entry no longer
   ]);
   assert.equal(check(files, "a.css 12px").ok, false);
 });
+
+test("icons live in components/icons: svg markup and the kit's icons anywhere else fail", () => {
+  const good = check({
+    "components/icons/kit.ts": 'export * from "@openai/apps-sdk-ui/components/Icon";',
+    "components/icons/app-glyphs/a.tsx": 'export const A = () => <svg viewBox="0 0 16 16" />;',
+    "app/b.tsx": 'import { A } from "@/components/icons";\nexport const B = () => <A />;',
+  });
+  assert.deepEqual(good, { ok: true, errors: [] });
+
+  const bad = check({
+    "app/b.tsx": 'export const B = () => <svg viewBox="0 0 16 16" />;',
+    "components/ui/c.tsx": 'import { X } from "@openai/apps-sdk-ui/components/Icon";',
+  });
+  assert.deepEqual(bad.errors.map((error) => error.split(" is ")[0]), [
+    'src/app/b.tsx: "<svg"',
+    'src/components/ui/c.tsx: "@openai/apps-sdk-ui/components/Icon"',
+  ]);
+  assert.equal(check({ "app/b.tsx": "export const B = () => <svg />;" }, "app/b.tsx <svg  # a chart").ok, true);
+});
