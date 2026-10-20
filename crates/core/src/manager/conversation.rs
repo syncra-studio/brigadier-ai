@@ -2437,6 +2437,28 @@ impl SessionManager {
         }
     }
 
+    /// After a start: follow-ups still deciding when the daemon stopped wait in the queue for
+    /// their own turn, as after a stopped or failed turn. Their judging (the thread's ask and
+    /// its timer) didn't outlive the stop, so nothing else would ever settle them (#449).
+    pub(crate) async fn settle_unjudged_follow_ups(&self, id: &ConversationId) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        let deciding: Vec<String> = board
+            .queue
+            .items
+            .iter()
+            .filter(|item| item.deciding)
+            .map(|item| item.id.clone())
+            .collect();
+        if deciding.is_empty() {
+            return;
+        }
+        if let Err(err) = self.core.settle_queued(id, &deciding).await {
+            tracing::warn!(conversation = %id, error = %err, "could not settle follow-ups after a restart");
+        }
+    }
+
     /// After a start: the request whose thread turn the daemon's last stop cut off (a quit
     /// or a crash) ends interrupted, never as answered, and the thread's Continue picks it up.
     pub(crate) async fn mark_cut_off_turn(&self, id: &ConversationId) {

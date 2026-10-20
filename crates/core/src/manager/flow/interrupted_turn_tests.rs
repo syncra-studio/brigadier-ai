@@ -287,3 +287,56 @@ async fn a_crash_after_the_send_sends_it_again_with_a_word_to_check() {
     );
     flow.stop().await;
 }
+
+/// #449: a follow-up still deciding when the daemon dies waits in the queue for its own turn
+/// after the start, rather than holding itself and everything queued after it for good.
+#[tokio::test]
+async fn a_follow_up_deciding_through_a_crash_waits_for_its_own_turn() {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let mut flow = Flow::start(
+        "interrupted-deciding",
+        Options::default(),
+        holding(seen.clone()),
+    )
+    .await;
+    let request = held_turn(&flow, &seen).await;
+    flow.say("Also check the formatting.").await;
+    flow.until("the follow-up deciding", |board| {
+        board
+            .queue
+            .items
+            .first()
+            .is_some_and(|queued| queued.deciding)
+    })
+    .await;
+    flow.crash().await;
+    flow.until("the request interrupted", |board| {
+        board
+            .requests
+            .get(&request)
+            .is_some_and(|r| super::super::conversation::interrupted_by_quit(&r.state))
+    })
+    .await;
+    // Settled, it goes as its own request, never held behind its lost judging.
+    super::eventually("the follow-up sent as its own request", || {
+        seen.lock().unwrap().iter().any(|input| {
+            input.contains("Also check the formatting.") && !input.contains("[follow-up ")
+        })
+    })
+    .await;
+    let board = flow
+        .until("the follow-up answered", |board| {
+            board.queue.items.is_empty()
+                && board
+                    .requests
+                    .values()
+                    .any(|r| r.id != request && r.state == RequestState::Done)
+        })
+        .await;
+    assert!(
+        super::super::conversation::interrupted_by_quit(&board.requests[&request].state),
+        "{:?}",
+        board.requests[&request].state
+    );
+    flow.stop().await;
+}
