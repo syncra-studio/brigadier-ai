@@ -1,29 +1,53 @@
 import { type ReactNode, useEffect, useRef } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
+
 import { ErrorLine } from "@/app/dialogs/fields";
+
 import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
+
 import { agentState } from "@/app/onboarding/SetupTerminal";
+
 import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows";
+
 import { CLI_NAMES, OVERVIEW_ROWS } from "@/app/providers/AgentsOverview";
-import { CheckAgainButton, PlanChip, ROW_LINE, ROW_TITLE, StateDot } from "@/app/providers/parts";
+
+import { CheckAgainButton, PlanChip, ROW_LINE, ROW_TITLE } from "@/app/providers/parts";
 import { bestFor } from "@/app/routing/models";
+
 import { SettingsPage, SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
+
 import { Button } from "@/components/ui/button";
+
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+
 import { ChevronRight, InfoCircle, ProviderGlyph } from "@/components/icons";
+
 import { SettingsCard, settingsRows } from "@/components/ui/settings-card";
+
+import { StateDot } from "@/components/ui/state-dot";
 import { pickFile, request } from "@/ipc/client";
+
 import type { AccountView, MergedModel, ModelInfo, ProviderKind, ProviderOverview } from "@/ipc/generated";
+
 import { formatAgo } from "@/lib/format";
+
 import { isExpensive, TIER_LABELS, VENDOR_LABELS } from "@/lib/routing";
+
 import { cn } from "@/lib/utils";
+
 import { refreshProviders } from "@/state/actions";
+
 import { refreshAccounts, setSwitchAccounts, switchesAccounts } from "@/state/accounts";
+
 import { connectAgent, connecting, useConnectProgress } from "@/state/connect";
+
 import { modelAvailable, providerOn, setModelAvailable, setProviderOn } from "@/state/providers";
+
 import { setSetting } from "@/state/settings";
+
 import { useApp } from "@/state/store";
+
 import { startUpdate, useUpdates } from "@/state/updates";
 
 /** Who makes each agent's CLI, on its page's line. */

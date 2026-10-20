@@ -9,6 +9,7 @@ import { Picker } from "@/app/inspector/providers/Picker";
 import { Grid, SquareImage } from "@/components/icons";
 import { Segmented } from "@/components/ui/segmented";
 import { SettingsSearch } from "@/components/ui/settings-search";
+import { StateDot } from "@/components/ui/state-dot";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UsageBar } from "@/components/ui/usage-bar";
 import { colourOf, wait } from "@/fixtures/look";
@@ -107,6 +108,12 @@ function bar(slot: string) {
 
 function read() {
   return {
+    dots: Array.from(document.querySelectorAll('[data-group="dots"] > span')).map((dot) => ({
+      size: dot.getBoundingClientRect().width,
+      fill: getComputedStyle(dot).backgroundColor,
+      hidden: dot.getAttribute("aria-hidden"),
+    })),
+    dotFills: ["bg-success", "bg-warning", "bg-muted-foreground", "bg-chart-2"].map((fill) => colourOf(fill)),
     bars: {
       sm: bar("bar-sm"),
       md: bar("bar-md"),
@@ -215,6 +222,12 @@ function Fixture() {
           />
         </section>
         <Searches />
+        <section data-group="dots" className="flex items-center gap-2">
+          <StateDot tone="ready" />
+          <StateDot tone="needs" />
+          <StateDot tone="off" />
+          <StateDot color="bg-chart-2" />
+        </section>
         <section data-group="bars" className="flex w-50 flex-col gap-2">
           <UsageBar data-probe="bar-sm" value={40} fill="bg-warning" className="w-25" />
           <UsageBar

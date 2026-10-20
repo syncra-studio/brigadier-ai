@@ -1,25 +1,44 @@
 import { useEffect, useId, useRef, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
+
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
+
 import { agentState } from "@/app/onboarding/SetupTerminal";
-import { StateDot } from "@/app/providers/parts";
+
 import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
+
 import { BarChart, ChevronRight, Lightbulb, ProviderGlyph } from "@/components/icons";
+
 import { Button } from "@/components/ui/button";
+
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+
 import { Segmented } from "@/components/ui/segmented";
+
 import { useSidebar } from "@/components/ui/sidebar";
+
+import { StateDot } from "@/components/ui/state-dot";
 import { Switch } from "@/components/ui/switch";
+
 import { UsageBar } from "@/components/ui/usage-bar";
+
 import type { AccountView, ProviderKind, ProviderOverview, QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
+
 import { maskEmailsIn } from "@/lib/email";
+
 import { formatCountdown } from "@/lib/format";
+
 import { levelTone, ordered, USAGE_DANGER_FROM, type UsageLevel, usageLevel, used, windowTitle } from "@/lib/quota";
+
 import { cn } from "@/lib/utils";
+
 import { accountLabel, accountsOf, loadAccounts, oneRowPerAccount } from "@/state/accounts";
+
 import { loadProviders, openSettings, refreshProviders } from "@/state/actions";
+
 import { openAgentPage } from "@/state/agentPage";
+
 import {
   keepAwakeOptions,
   keepAwakeState,
@@ -29,7 +48,9 @@ import {
   setKeepAwakeLidClosed,
   useKeepAwake,
 } from "@/state/keepAwake";
+
 import { type Availability, providerOn } from "@/state/providers";
+
 import { useApp } from "@/state/store";
 
 /** Usage is checked again this often while Brigadier is in front… */

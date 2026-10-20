@@ -1,29 +1,48 @@
 import type { KeyboardEvent, MouseEvent } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
+
 import { ErrorLine } from "@/app/dialogs/fields";
+
 import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
+
 import { agentState } from "@/app/onboarding/SetupTerminal";
-import { PlanChip, ROW_LINE, ROW_TITLE, StateDot, UsageMeter } from "@/app/providers/parts";
+
+import { PlanChip, ROW_LINE, ROW_TITLE, UsageMeter } from "@/app/providers/parts";
 import { SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
+
 import { Button } from "@/components/ui/button";
+
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+
 import { ArrowUpRight, ChevronRight, Plus, ProviderGlyph } from "@/components/icons";
+
 import { SettingsCard } from "@/components/ui/settings-card";
+
+import { StateDot } from "@/components/ui/state-dot";
 import type { AccountView, ProviderKind, ProviderOverview, QuotaWindow } from "@/ipc/generated";
+
 import { used, windowTitle } from "@/lib/quota";
+
 import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";
+
 import { cn } from "@/lib/utils";
+
 import { openSettings } from "@/state/actions";
+
 import { accountsOf, oneRowPerAccount } from "@/state/accounts";
+
 import { connectAgent, connecting, useConnect } from "@/state/connect";
+
 import { providerOn, setProviderOn } from "@/state/providers";
+
 import { setSetting } from "@/state/settings";
+
 import { useApp } from "@/state/store";
 
 /** The overview's copy, for Settings search; the page renders this. */

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 
 import { SettingsSelect } from "@/app/settings/parts";
+
 import {
   PROJECTS_PAGE,
   PROJECT_SORTS,
@@ -18,7 +19,9 @@ import {
   type Part,
   type ProjectSort,
 } from "@/app/settings/storage/model";
-import { Dot, RoundBadge } from "@/app/settings/storage/parts";
+
+import { RoundBadge } from "@/app/settings/storage/parts";
+
 import {
   ChevronDown,
   ChevronRight,
@@ -32,12 +35,20 @@ import {
   Spinner,
   Stack,
 } from "@/components/icons";
+
 import { Button } from "@/components/ui/button";
+
 import { SettingsCard } from "@/components/ui/settings-card";
+
+import { StateDot } from "@/components/ui/state-dot";
 import { UsageBar } from "@/components/ui/usage-bar";
+
 import { revealPath } from "@/ipc/client";
+
 import type { ProjectUsage, StorageReport } from "@/ipc/generated";
+
 import { shortPath } from "@/lib/format";
+
 import { cn } from "@/lib/utils";
 
 /** Each part's share of everything Brigadier uses, for a project's 200-wide bar. */
@@ -375,7 +386,7 @@ function ExpandableRow({
 function DetailRow({ part, line }: { part: Part; line: string }) {
   return (
     <div data-part-row={part.key} className="border-divider flex items-center gap-3 border-t py-2.5">
-      <Dot color={part.color} />
+      <StateDot color={part.color} />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-foreground text-xs font-medium">{part.label}</span>
         <span className="text-foreground/65 text-xs">{line}</span>

@@ -1,21 +1,38 @@
 import { useEffect, useState } from "react";
+
 import { create } from "zustand";
 
 import { errorText } from "@/app/dialogs/fields";
+
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
+
 import { FreeUpCard, type FreeUp } from "@/app/settings/storage/FreeUpCard";
+
 import { checkedWords, count, size, startTicked, usageParts } from "@/app/settings/storage/model";
-import { Dot, UsageBar } from "@/app/settings/storage/parts";
+
+import { UsageBar } from "@/app/settings/storage/parts";
+
 import { ProjectsCard, type UnusedFreeUp } from "@/app/settings/storage/ProjectsCard";
+
 import { FolderOpen, Reload } from "@/components/icons";
+
 import { Button } from "@/components/ui/button";
+
 import { RowText, SettingsCard } from "@/components/ui/settings-card";
+
+import { StateDot } from "@/components/ui/state-dot";
 import { revealPath } from "@/ipc/client";
+
 import type { StorageReport } from "@/ipc/generated";
+
 import { shortPath } from "@/lib/format";
+
 import { cn } from "@/lib/utils";
+
 import { openSettings } from "@/state/actions";
+
 import { cleanStorage, freeUpProjects, onCleanProgress, openUninstall, scanStorage } from "@/state/storage";
+
 import { useApp } from "@/state/store";
 
 /** The Storage page's rows, for the page and for Settings search. */
@@ -272,7 +289,7 @@ function UsageCard({ report, error }: { report: StorageReport | null; error: str
         {parts.map((part) => (
           <div key={part.key} data-legend={part.key} className="flex flex-col gap-1.25">
             <span className="text-foreground/65 flex items-center gap-1.75 text-xs">
-              <Dot color={part.color} />
+              <StateDot color={part.color} />
               {part.label}
             </span>
             <span

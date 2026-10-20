@@ -25,11 +25,6 @@ export function RoundBadge({ tone = "plain", children }: { tone?: "plain" | "don
   );
 }
 
-/** A part's coloured dot, as the legend and an opened project show it. */
-export function Dot({ color }: { color: string }) {
-  return <span aria-hidden className={cn("size-1.75 shrink-0 rounded-full", color)} />;
-}
-
 /** The usage bar: each part's share of the total, 2 apart; a part too small to see still shows. */
 export function UsageBar({ parts, pending = false }: { parts: readonly Part[]; pending?: boolean }) {
   const shown = parts.filter((part) => part.bytes > 0);

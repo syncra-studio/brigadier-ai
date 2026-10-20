@@ -1,20 +1,36 @@
 import { useEffect, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
+
 import { agentState } from "@/app/onboarding/SetupTerminal";
+
 import { AgentPage, AgentSettingsPage } from "@/app/providers/AgentPage";
+
 import { AgentsOverview, OVERVIEW_ROWS } from "@/app/providers/AgentsOverview";
-import { CheckAgainButton, CheckedNote } from "@/app/providers/parts";
+
+import { CheckAgainButton } from "@/app/providers/parts";
+
 import { SettingsPage } from "@/app/settings/parts";
+
 import { useReveal } from "@/app/settings/reveal";
+
+import { StateDot } from "@/components/ui/state-dot";
 import { useNow } from "@/hooks/use-now";
+
 import type { ProviderKind } from "@/ipc/generated";
+
 import { formatAgo } from "@/lib/format";
+
 import { PROVIDERS } from "@/lib/routing";
+
 import { refreshProviders } from "@/state/actions";
+
 import { useAgentPageAsk } from "@/state/agentPage";
+
 import { accountsOf, loadAccounts, refreshAccounts } from "@/state/accounts";
+
 import { useApp } from "@/state/store";
+
 import { useUsage, useUsageRefresh } from "@/state/usage";
 
 /** The page's rows, for Settings search; its parts render this copy. */
@@ -133,7 +149,12 @@ export function ProvidersPage() {
         description={DESCRIPTION}
         actions={
           <>
-            {checkedAtMs > 0 && <CheckedNote>Checked {formatAgo(checkedAtMs, now)}</CheckedNote>}
+            {checkedAtMs > 0 && (
+              <span className="text-muted-foreground text-label flex items-center gap-1.5">
+                <StateDot tone="ready" />
+                Checked {formatAgo(checkedAtMs, now)}
+              </span>
+            )}
             <CheckAgainButton
               busy={refresh.busy}
               aria-label="Check the agents and accounts again"

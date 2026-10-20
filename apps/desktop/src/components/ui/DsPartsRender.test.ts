@@ -6,6 +6,13 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("the merged small parts draw as one look each", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "ds-parts.html", "parts-result", 60000));
 
+  // One status dot: 6px, hidden, a state's tone or any colour class.
+  assert.deepEqual(
+    seen.dots.map((dot: { fill: string }) => dot.fill),
+    seen.dotFills,
+  );
+  for (const dot of seen.dots) assert.deepEqual([dot.size, dot.hidden], [6, "true"]);
+
   // One meter bar: a muted capsule track 4 or 6 high, a rounded fill to its share; stacked parts
   // have square ends and a sliver still shows; waiting pulses a third; hidden unless it has a role.
   const { bars, radii } = seen;

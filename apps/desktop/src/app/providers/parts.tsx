@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Reload } from "@/components/icons";
@@ -29,16 +29,6 @@ export function CheckAgainButton({ busy, ...props }: ComponentProps<"button"> & 
   );
 }
 
-/** "Checked 3m ago" with its dot. */
-export function CheckedNote({ children }: { children: ReactNode }) {
-  return (
-    <span className="text-muted-foreground text-label flex items-center gap-1.5">
-      <span aria-hidden className="bg-success size-1.5 rounded-full" />
-      {children}
-    </span>
-  );
-}
-
 /** An agent's plan ("Max"), beside its name; `large` beside an agent page's title. */
 export function PlanChip({ plan, large = false }: { plan: string; large?: boolean }) {
   return (
@@ -46,19 +36,6 @@ export function PlanChip({ plan, large = false }: { plan: string; large?: boolea
       {plan.charAt(0).toUpperCase()}
       {plan.slice(1)}
     </Badge>
-  );
-}
-
-/** The dot before an agent's state: ready, needing a step, or off. */
-export function StateDot({ tone }: { tone: "ready" | "needs" | "off" }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "size-1.5 shrink-0 rounded-full",
-        tone === "ready" ? "bg-success" : tone === "needs" ? "bg-warning" : "bg-muted-foreground",
-      )}
-    />
   );
 }
 
