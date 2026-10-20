@@ -114,8 +114,8 @@ test("search finds every row of Providers and Routing on its page", async () => 
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { searchSettings } = await server.ssrLoadModule("/src/app/settings/pages.ts");
-    const { PROVIDERS_ROWS } = await server.ssrLoadModule("/src/app/providers/ProvidersPage.tsx");
-    const { ROUTING_PAGE_ROWS } = await server.ssrLoadModule("/src/app/routing/RoutingPage.tsx");
+    const { PROVIDERS_ROWS } = await server.ssrLoadModule("/src/app/settings/providers/ProvidersPage.tsx");
+    const { ROUTING_PAGE_ROWS } = await server.ssrLoadModule("/src/app/settings/routing/RoutingPage.tsx");
     type Row = { label: string; target?: string };
     type Result = { page: { id: string }; row: Row | null };
     const found = (query: string): Result[] => searchSettings(query);

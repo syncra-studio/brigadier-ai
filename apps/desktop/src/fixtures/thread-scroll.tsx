@@ -15,7 +15,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { ConversationView } from "@/app/ConversationView";
+import { ConversationView } from "@/app/conversation/ConversationView";
 import planned from "@/fixtures/boards/thread-plan-2026-10-10.events.json";
 import { roomFor } from "@/components/conversation/thread-scroll";
 import { SidebarProvider } from "@/components/layout";

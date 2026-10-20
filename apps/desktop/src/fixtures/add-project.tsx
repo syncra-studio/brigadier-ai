@@ -14,7 +14,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { AddProjectDialog } from "@/app/dialogs/AddProjectDialog";
+import { AddProjectDialog } from "@/app/shell/dialogs/AddProjectDialog";
 import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { Project, RepoSuggestion, Request } from "@/ipc/generated";

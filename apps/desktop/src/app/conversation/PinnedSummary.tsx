@@ -28,7 +28,7 @@ import {
 import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, openSummaryByItself, useSummary } from "@/app/conversation/summaryState";
-import { RightSidebarContext } from "@/app/conversation/RightSidebar";
+import { RightSidebarContext } from "@/app/side-panel/RightSidebar";
 import {
   Branch,
   Globe,
@@ -46,7 +46,7 @@ import {
 import { CHAT_TAB, openPanelTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
-import { WorkersSummary } from "@/app/conversation/WorkerSummary";
+import { WorkersSummary } from "@/app/side-panel/WorkerSummary";
 import {
   SummaryRow,
   SummaryRowButton,

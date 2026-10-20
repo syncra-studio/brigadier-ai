@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { errorText } from "@/app/dialogs/fields";
+import { errorText } from "@/app/shell/dialogs/fields";
 import { SettingsPage, SettingsRow } from "@/app/settings/parts";
 import { Brain } from "@/components/icons";
 import { Button, Input } from "@/components/controls";

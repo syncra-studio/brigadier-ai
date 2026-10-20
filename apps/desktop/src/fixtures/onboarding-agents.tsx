@@ -15,7 +15,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { AgentsStep } from "@/app/onboarding/AgentsStep";
+import { AgentsStep } from "@/app/setup/onboarding/AgentsStep";
 import { Dialog, DialogContent, TooltipProvider } from "@/components/overlays";
 import { OVERVIEWS, status } from "@/fixtures/agents";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";

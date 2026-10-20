@@ -1,4 +1,4 @@
-// Renders the first launch's welcome sound, src/app/onboarding/welcome-sound.m4a.
+// Renders the first launch's welcome sound, src/app/setup/onboarding/welcome-sound.m4a.
 //
 //   node scripts/render-welcome-sound.mjs [out.m4a]
 //
@@ -32,7 +32,7 @@ import { join, resolve } from "node:path";
 
 import { audioToWav, SoundBankLoader, SpessaSynthProcessor } from "spessasynth_core";
 
-const OUT = resolve(process.argv[2] ?? new URL("../src/app/onboarding/welcome-sound.m4a", import.meta.url).pathname);
+const OUT = resolve(process.argv[2] ?? new URL("../src/app/setup/onboarding/welcome-sound.m4a", import.meta.url).pathname);
 
 /**
  * What joins the strings' chord once the mark has gone:

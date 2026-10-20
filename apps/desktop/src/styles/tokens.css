@@ -872,9 +872,9 @@
 }
 
 /* ── First launch ───────────────────────────────────────────────────────────────────────────
-   The welcome intro and the setup after it (styles/onboarding.css, app/onboarding), from the
+   The welcome intro and the setup after it (styles/onboarding.css, app/setup/onboarding), from the
    moment the intro starts, with its music. The orb and the window it opens into are drawn by
-   app/onboarding/IntroCanvas.tsx: the orb grows into sight from 0.58 s and idles, swells, then
+   app/setup/onboarding/IntroCanvas.tsx: the orb grows into sight from 0.58 s and idles, swells, then
    bursts out into the window at 4.07 s, filling it by 4.34 s; its light evens out into a mist
    and the dark comes into focus under it by 4.89 s. The window's chrome comes back at 4.69 s
    (src-tauri/src/intro.rs dims the desktop from 0.95 s). The welcome sound's moments match
@@ -891,7 +891,7 @@
   /* The desktop's dim lifts from here, over this long, while the mark is held. */
   --intro-dim-lift-at: 5.45s;
   --intro-dim-lift: 0.8s;
-  /* The title, a letter at a time, one line after the other (app/onboarding/StaggerText.tsx):
+  /* The title, a letter at a time, one line after the other (app/setup/onboarding/StaggerText.tsx):
      its first letter is seen about 0.12 s after it starts, at 7.2 s. */
   --intro-heading: 7.08s;
   --intro-letter-stagger: 35ms;

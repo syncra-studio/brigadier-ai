@@ -15,9 +15,9 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { AppSidebar, AppStrip, TitlebarNav } from "@/app/AppSidebar";
-import { ConversationView } from "@/app/ConversationView";
-import { SidebarFoot } from "@/app/SidebarFoot";
+import { AppSidebar, AppStrip, TitlebarNav } from "@/app/shell/AppSidebar";
+import { ConversationView } from "@/app/conversation/ConversationView";
+import { SidebarFoot } from "@/app/shell/SidebarFoot";
 import { revealPlan, useSummary } from "@/app/conversation/summaryState";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";

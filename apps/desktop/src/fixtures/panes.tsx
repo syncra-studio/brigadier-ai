@@ -10,17 +10,17 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { TitlebarNav } from "@/app/AppSidebar";
+import { TitlebarNav } from "@/app/shell/AppSidebar";
 import { revealApp } from "@/lib/splash";
-import { WorkspacePane, WorkspacePaneContext, WorkspacePaneToggle } from "@/app/conversation/WorkspacePane";
-import { RightSidebar, RightSidebarContext } from "@/app/conversation/RightSidebar";
+import { WorkspacePane, WorkspacePaneContext, WorkspacePaneToggle } from "@/app/side-panel/WorkspacePane";
+import { RightSidebar, RightSidebarContext } from "@/app/side-panel/RightSidebar";
 import {
   TerminalButton,
   useSidePanel,
-} from "@/app/conversation/SidePanel";
-import { SessionTabBar, SessionTabViews } from "@/app/conversation/SessionTabBar";
+} from "@/app/side-panel/SidePanel";
+import { SessionTabBar, SessionTabViews } from "@/app/shell/SessionTabBar";
 import { newSessionTab, useSessionTabs, useSessionTabsOf, selectTab, closeTab } from "@/state/sessionTabs";
-import { TerminalPane } from "@/app/conversation/TerminalTab";
+import { TerminalPane } from "@/app/side-panel/TerminalTab";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { SidebarPanel, SidebarProvider, useSidebar } from "@/components/layout";

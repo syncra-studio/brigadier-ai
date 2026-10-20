@@ -4,7 +4,7 @@ import {
   FullAccessDialog,
   setSessionPermission,
   useUntrusted,
-} from "@/app/conversation/SetupPickers";
+} from "@/app/shell/SetupPickers";
 import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { WorkerLine } from "@/app/conversation/WorkerChip";

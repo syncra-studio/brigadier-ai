@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
 
-import { ErrorLine, errorText } from "@/app/dialogs/fields";
+import { ErrorLine, errorText } from "@/app/shell/dialogs/fields";
 import { Button, Checkbox, Segmented } from "@/components/controls";
 import {
   Dialog,

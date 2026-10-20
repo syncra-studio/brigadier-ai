@@ -7,7 +7,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { SearchPanel } from "@/app/conversation/SearchPanel";
+import { SearchPanel } from "@/app/side-panel/SearchPanel";
 import type { Request, SearchFile } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 import { emitSearchUpdate } from "@/state/workspaceSearch";

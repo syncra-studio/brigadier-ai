@@ -10,7 +10,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { SessionTabBar, SessionTabViews } from "@/app/conversation/SessionTabBar";
+import { SessionTabBar, SessionTabViews } from "@/app/shell/SessionTabBar";
 import { TooltipProvider } from "@/components/overlays";
 import type { ArtifactRef, Conversation, Request, Task } from "@/ipc/generated";
 import { tokenColor } from "@/lib/tokens";

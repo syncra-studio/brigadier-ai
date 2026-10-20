@@ -2,7 +2,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { MainTerminalTab } from "@/app/conversation/MainTerminalTab";
+import { MainTerminalTab } from "@/app/side-panel/MainTerminalTab";
 import type { Request } from "@/ipc/generated";
 import { newSessionTab, sessionTabs, type TerminalTabState } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";

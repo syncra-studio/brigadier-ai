@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ThreadStep } from "@/app/conversation/activity/Notice";
-import { ConversationPermissionPicker } from "@/app/conversation/SetupPickers";
+import { ConversationPermissionPicker } from "@/app/shell/SetupPickers";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { ConfigurationPage } from "@/app/settings/ConfigurationPage";
 import { TooltipProvider } from "@/components/overlays";

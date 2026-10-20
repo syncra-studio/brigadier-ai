@@ -8,12 +8,12 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { ConversationToolbar } from "@/app/conversation/ConversationToolbar";
+import { ConversationToolbar } from "@/app/shell/ConversationToolbar";
 import { PinnedSummary, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
-import { RightSidebarContext } from "@/app/conversation/RightSidebar";
-import { SessionTabBar } from "@/app/conversation/SessionTabBar";
-import { useSidePanel } from "@/app/conversation/SidePanel";
-import { WorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
+import { RightSidebarContext } from "@/app/side-panel/RightSidebar";
+import { SessionTabBar } from "@/app/shell/SessionTabBar";
+import { useSidePanel } from "@/app/side-panel/SidePanel";
+import { WorkspacePane, WorkspacePaneContext } from "@/app/side-panel/WorkspacePane";
 import { fixtureInput } from "@/fixtures/input";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";

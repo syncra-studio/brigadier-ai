@@ -3,7 +3,7 @@ import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime }
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { Welcome } from "@/app/ConversationView";
+import { Welcome } from "@/app/conversation/ConversationView";
 import { ConversationComposer } from "@/app/conversation/Composer";
 import { MentionMemory, mentionsIn, pageMentions, UserMessageText } from "@/app/conversation/Mentions";
 import { RequestBlock } from "@/app/conversation/RequestBlock";

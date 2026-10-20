@@ -9,8 +9,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { FeedbackDialog } from "@/app/feedback/FeedbackDialog";
-import { SidebarFoot } from "@/app/SidebarFoot";
+import { FeedbackDialog } from "@/app/shell/feedback/FeedbackDialog";
+import { SidebarFoot } from "@/app/shell/SidebarFoot";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";

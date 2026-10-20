@@ -10,7 +10,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { Welcome } from "@/app/onboarding/Welcome";
+import { Welcome } from "@/app/setup/onboarding/Welcome";
 import { Dialog, DialogContent } from "@/components/overlays";
 import { fixtureInput } from "@/fixtures/input";
 

@@ -7,8 +7,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { AppSidebar, AppStrip } from "@/app/AppSidebar";
-import { SidebarFoot } from "@/app/SidebarFoot";
+import { AppSidebar, AppStrip } from "@/app/shell/AppSidebar";
+import { SidebarFoot } from "@/app/shell/SidebarFoot";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { fixtureClick } from "@/fixtures/input";

@@ -8,7 +8,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { BrowserTab } from "@/app/conversation/BrowserTab";
+import { BrowserTab } from "@/app/side-panel/BrowserTab";
 import { TooltipProvider } from "@/components/overlays";
 import type { Request } from "@/ipc/generated";
 import { isPaused, pageUsed, userUsed } from "@/state/agentPause";

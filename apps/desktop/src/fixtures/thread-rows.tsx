@@ -35,7 +35,7 @@ import { ShellBox, ToolResult } from "@/app/conversation/activity/StepDetail";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { stepWords } from "@/app/conversation/activity/words";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
-import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
+import { ArtifactDialog } from "@/app/side-panel/ArtifactDialog";
 import { UserMarkdownText } from "@/app/conversation/Mentions";
 import { CompactionRow } from "@/app/conversation/RequestBlock";
 import { ChangesCard } from "@/app/conversation/ChangesCard";

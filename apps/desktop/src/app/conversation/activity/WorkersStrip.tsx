@@ -8,7 +8,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
 import { workerDone, workerState } from "@/app/conversation/workerPresentation";
-import { workerStat } from "@/app/conversation/WorkerSummary";
+import { workerStat } from "@/app/side-panel/WorkerSummary";
 import { Button } from "@/components/controls";
 import { ChevronRight, StopCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";

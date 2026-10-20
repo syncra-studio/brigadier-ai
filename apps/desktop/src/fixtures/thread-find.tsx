@@ -18,7 +18,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { ConversationView } from "@/app/ConversationView";
+import { ConversationView } from "@/app/conversation/ConversationView";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { ACTIVE_BUTTON, ACTIVE_MATCH, FINDING, MATCHES } from "@/app/conversation/ThreadFind";
 import { ChangesCard } from "@/app/conversation/ChangesCard";

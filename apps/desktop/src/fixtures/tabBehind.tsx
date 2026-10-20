@@ -8,7 +8,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { SessionTabViews } from "@/app/conversation/SessionTabBar";
+import { SessionTabViews } from "@/app/shell/SessionTabBar";
 import { TooltipProvider } from "@/components/overlays";
 import { useBrowsers } from "@/state/browsers";
 import { CHAT_TAB, selectTab, useSessionTabs } from "@/state/sessionTabs";

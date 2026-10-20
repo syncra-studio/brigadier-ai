@@ -3,7 +3,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { SetupWindow } from "@/app/computerSetup/SetupWindow";
+import { SetupWindow } from "@/app/setup/computerSetup/SetupWindow";
 import type { ComputerSetup, ComputerUseStatus, PermissionState, Request } from "@/ipc/generated";
 import { onComputerUse } from "@/state/computerUse";
 

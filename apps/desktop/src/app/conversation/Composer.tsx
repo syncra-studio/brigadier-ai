@@ -22,7 +22,7 @@ import {
   ProjectSettingsButton,
   ProvidersButton,
   useShownPermission,
-} from "@/app/conversation/SetupPickers";
+} from "@/app/shell/SetupPickers";
 import { SuggestionContext, useSuggestion } from "@/app/conversation/suggestion";
 import type { ComposerInputProps } from "@/components/conversation/ComposerEditor";
 import { type MentionMemory, Mentions } from "@/app/conversation/Mentions";
@@ -42,7 +42,7 @@ import {
 } from "@/app/conversation/ActionCards";
 import { ComposerStatusSlot } from "@/app/conversation/ComposerStatusSlot";
 import { QueueCard } from "@/app/conversation/QueueCard";
-import { shortcutLabel } from "@/app/conversation/SidePanel";
+import { shortcutLabel } from "@/app/side-panel/SidePanel";
 import { useComposerDraft } from "@/app/conversation/composerDraft";
 import {
   type BlobAttachmentAdapter,

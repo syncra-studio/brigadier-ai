@@ -15,7 +15,7 @@ import { Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { SettingsNav, SettingsView, warmSettings } from "@/app/settings/lazy";
-import { SidebarFoot } from "@/app/SidebarFoot";
+import { SidebarFoot } from "@/app/shell/SidebarFoot";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import { whenIdle } from "@/lib/preloadable";

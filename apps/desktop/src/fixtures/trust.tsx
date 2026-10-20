@@ -12,7 +12,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { TrustDialog } from "@/app/dialogs/TrustDialog";
+import { TrustDialog } from "@/app/shell/dialogs/TrustDialog";
 import { Folder } from "@/components/icons";
 import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
 import type { Conversation, Project, Request } from "@/ipc/generated";

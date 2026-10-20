@@ -3,7 +3,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { DeleteDialog } from "@/app/dialogs/DeleteDialog";
+import { DeleteDialog } from "@/app/shell/dialogs/DeleteDialog";
 import { ArchivedPage } from "@/app/settings/ArchivedPage";
 import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, Project, Request } from "@/ipc/generated";

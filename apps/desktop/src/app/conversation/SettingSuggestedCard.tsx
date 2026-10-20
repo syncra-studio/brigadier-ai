@@ -1,5 +1,5 @@
 import { isMade, makeChange, settingPage, settingWords } from "@/app/conversation/settingCard";
-import { setSessionPermission } from "@/app/conversation/SetupPickers";
+import { setSessionPermission } from "@/app/shell/SetupPickers";
 import { OfferCard, OfferError } from "@/app/conversation/OfferCard";
 import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";

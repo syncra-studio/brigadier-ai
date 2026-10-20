@@ -8,11 +8,11 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { type ComposerTarget, ComposerTargetContext } from "@/app/conversation/composerTarget";
-import { ConversationToolbar } from "@/app/conversation/ConversationToolbar";
+import { ConversationToolbar } from "@/app/shell/ConversationToolbar";
 import { MentionMemory } from "@/app/conversation/Mentions";
-import { RightSidebarContext } from "@/app/conversation/RightSidebar";
-import { useSidePanel } from "@/app/conversation/SidePanel";
-import { WorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
+import { RightSidebarContext } from "@/app/side-panel/RightSidebar";
+import { useSidePanel } from "@/app/side-panel/SidePanel";
+import { WorkspacePane, WorkspacePaneContext } from "@/app/side-panel/WorkspacePane";
 import { TitlebarTips } from "@/components/shared";
 import { SidebarProvider } from "@/components/layout";
 import type { Conversation, Request, SourceFile } from "@/ipc/generated";

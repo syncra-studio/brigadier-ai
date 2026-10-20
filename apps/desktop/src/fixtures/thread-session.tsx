@@ -26,9 +26,9 @@ import type { BrowserEvent } from "@/ipc/generated";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { AppSidebar, AppStrip, TitlebarNav } from "@/app/AppSidebar";
-import { ConversationView } from "@/app/ConversationView";
-import { SidebarFoot } from "@/app/SidebarFoot";
+import { AppSidebar, AppStrip, TitlebarNav } from "@/app/shell/AppSidebar";
+import { ConversationView } from "@/app/conversation/ConversationView";
+import { SidebarFoot } from "@/app/shell/SidebarFoot";
 import grill from "@/fixtures/boards/thread-grill-2026-10-09.events.json";
 import planned from "@/fixtures/boards/thread-plan-2026-10-10.events.json";
 import t1 from "@/fixtures/boards/thread-t1-2026-10-08.events.json";

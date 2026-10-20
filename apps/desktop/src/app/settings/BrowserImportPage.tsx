@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useState } from "react";
 
-import { CheckboxRow, errorText } from "@/app/dialogs/fields";
+import { CheckboxRow, errorText } from "@/app/shell/dialogs/fields";
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
 import { Badge, Button, Checkbox } from "@/components/controls";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/overlays";

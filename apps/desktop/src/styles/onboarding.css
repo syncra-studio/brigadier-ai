@@ -1,4 +1,4 @@
-/* The first launch (app/onboarding): the welcome intro, the name, then the setup steps. Its
+/* The first launch (app/setup/onboarding): the welcome intro, the name, then the setup steps. Its
    timings and sizes are the "First launch" tokens in tokens.css.
 
    The intro, from the moment it starts (`data-started` on `.welcome`): the orb, the window it

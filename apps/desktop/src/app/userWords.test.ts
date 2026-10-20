@@ -10,15 +10,15 @@ const WORD = /\bworkspaces?\b/i;
 
 /** Where the sidebar, the tab strip and the session's menus write what the user reads. */
 const FILES = [
-  "app/AppSidebar.tsx",
-  "app/sidebar/nav.tsx",
-  "app/TopBar.tsx",
-  "app/conversation/SessionTabBar.tsx",
-  "app/conversation/ChatActions.tsx",
+  "app/shell/AppSidebar.tsx",
+  "app/shell/sidebar/nav.tsx",
+  "app/shell/TopBar.tsx",
+  "app/shell/SessionTabBar.tsx",
+  "app/shell/ChatActions.tsx",
   "app/conversation/ForkMenu.tsx",
   "app/conversation/SlashCommands.tsx",
-  "app/conversation/NewTabTools.tsx",
-  "app/conversation/TaskDetails.tsx",
+  "app/side-panel/NewTabTools.tsx",
+  "app/side-panel/TaskDetails.tsx",
   "app/conversation/ActionCards.tsx",
   "app/conversation/SessionOffer.tsx",
   "app/inspector/providers/ProvidersTab.tsx",

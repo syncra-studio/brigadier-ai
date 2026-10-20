@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { RANKINGS_POLL_MS, refreshRunning } from "@/app/routing/rankings";
+import { RANKINGS_POLL_MS, refreshRunning } from "@/app/settings/routing/rankings";
 import { request } from "@/ipc/client";
 import type { RankingsRefresh } from "@/ipc/generated";
 import { useApp } from "@/state/store";

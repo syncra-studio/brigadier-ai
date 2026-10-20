@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 
-import { BrowserTab } from "@/app/conversation/BrowserTab";
+import { BrowserTab } from "@/app/side-panel/BrowserTab";
 import { BrowserImportPage } from "@/app/settings/BrowserImportPage";
 import { BrowserPage } from "@/app/settings/BrowserPage";
 import { TooltipProvider } from "@/components/overlays";

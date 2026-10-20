@@ -6,7 +6,7 @@ import { useAction } from "@/app/conversation/useAction";
 
 
 
-import { ErrorLine } from "@/app/dialogs/fields";
+import { ErrorLine } from "@/app/shell/dialogs/fields";
 
 
 

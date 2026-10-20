@@ -9,8 +9,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { ConflictTab } from "@/app/conversation/ConflictTab";
-import { SourcePanel } from "@/app/conversation/SourcePanel";
+import { ConflictTab } from "@/app/side-panel/ConflictTab";
+import { SourcePanel } from "@/app/side-panel/SourcePanel";
 import { TooltipProvider } from "@/components/overlays";
 import type { ConflictFile, Request, SourceFile, SourceRebase, SourceState } from "@/ipc/generated";
 import { useApp } from "@/state/store";

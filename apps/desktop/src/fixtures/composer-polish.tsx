@@ -8,8 +8,8 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { ConversationView } from "@/app/ConversationView";
-import { FolderDropZone } from "@/app/FolderDropZone";
+import { ConversationView } from "@/app/conversation/ConversationView";
+import { FolderDropZone } from "@/app/shell/FolderDropZone";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, ConversationView as View, Message, Request, RunState, UserRequest } from "@/ipc/generated";

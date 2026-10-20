@@ -2,7 +2,7 @@ import { getSharedHighlighter } from "@pierre/diffs";
 import { type DiffLineAnnotation, type FileDiffOptions, MultiFileDiff, PatchDiff } from "@pierre/diffs/react";
 import { type CSSProperties, type ReactNode, useMemo } from "react";
 
-import type { DiffSource, DiffViewProps } from "@/app/conversation/diffView";
+import type { DiffSource, DiffViewProps } from "@/app/side-panel/diffView";
 import { COMMON_LANGUAGES, WARM_PIECES, yieldToPage } from "@/lib/highlight";
 
 /**

@@ -9,7 +9,7 @@ import { emit } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { SessionTabBar } from "@/app/conversation/SessionTabBar";
+import { SessionTabBar } from "@/app/shell/SessionTabBar";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, Request } from "@/ipc/generated";

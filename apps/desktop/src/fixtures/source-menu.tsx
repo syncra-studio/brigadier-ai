@@ -8,7 +8,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { SourcePanel } from "@/app/conversation/SourcePanel";
+import { SourcePanel } from "@/app/side-panel/SourcePanel";
 import { TooltipProvider } from "@/components/overlays";
 import type { Request, SourceBranch, SourceGitRun, SourceState } from "@/ipc/generated";
 import { useApp } from "@/state/store";

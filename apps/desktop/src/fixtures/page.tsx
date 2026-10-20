@@ -2,7 +2,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { PageTabView } from "@/app/conversation/pages/PageTabView";
+import { PageTabView } from "@/app/side-panel/pages/PageTabView";
 import { TooltipProvider } from "@/components/overlays";
 import type { Conversation, Page, PageContent } from "@/ipc/generated";
 import { emitPageChanged } from "@/state/pageChanges";

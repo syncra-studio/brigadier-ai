@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { create } from "zustand";
 
-import { errorText } from "@/app/dialogs/fields";
+import { errorText } from "@/app/shell/dialogs/fields";
 
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
 

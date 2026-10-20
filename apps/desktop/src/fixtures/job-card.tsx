@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { JobCard, StackCard, WaitCard } from "@/app/conversation/cards/JobCard";
 import { type Job, jobShown } from "@/app/conversation/job";
-import { JobTimeline } from "@/app/conversation/JobTab";
+import { JobTimeline } from "@/app/side-panel/JobTab";
 import { SummaryRow, SummarySection } from "@/components/conversation";
 
 // Each column is the summary's column of cards (PinnedSummary's STACK), at a fixed clock.

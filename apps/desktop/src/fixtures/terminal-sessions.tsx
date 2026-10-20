@@ -2,7 +2,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { TerminalPane } from "@/app/conversation/TerminalTab";
+import { TerminalPane } from "@/app/side-panel/TerminalTab";
 import { usePaneShortcuts } from "@/app/paneShortcuts";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";

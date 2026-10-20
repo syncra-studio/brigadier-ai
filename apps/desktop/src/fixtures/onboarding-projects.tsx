@@ -9,7 +9,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { ProjectsStep } from "@/app/onboarding/ProjectsStep";
+import { ProjectsStep } from "@/app/setup/onboarding/ProjectsStep";
 import { Dialog, DialogContent, TooltipProvider } from "@/components/overlays";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { ProjectCandidate, Request } from "@/ipc/generated";

@@ -8,7 +8,7 @@ import {
   type SettingsSearchResult,
 } from "@/app/settings/pages";
 import { revealSetting } from "@/app/settings/reveal";
-import { navRow, NavHeader, NavList, NavSection } from "@/app/sidebar/nav";
+import { navRow, NavHeader, NavList, NavSection } from "@/app/shell/sidebar/nav";
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";

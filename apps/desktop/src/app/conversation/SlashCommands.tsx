@@ -5,11 +5,11 @@ import { ForkPlaces } from "@/app/conversation/ForkMenu";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
 import { useAction } from "@/app/conversation/useAction";
-import { NameDialog } from "@/app/NameDialog";
+import { NameDialog } from "@/app/shell/NameDialog";
 import { ContextArc, contextShare, type ComposerCommand, ComposerCommands } from "@/components/conversation";
 import { DropdownMenu, DropdownMenuTrigger } from "@/components/overlays";
 import { findModel, type ModelGroup } from "@/components/shared";
-import { PERMISSION_ICONS } from "@/app/conversation/SetupPickers";
+import { PERMISSION_ICONS } from "@/app/shell/SetupPickers";
 import {
   Archive,
   ArrowUpRight,

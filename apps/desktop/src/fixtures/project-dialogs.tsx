@@ -7,8 +7,8 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
-import { ProjectDialog } from "@/app/dialogs/ProjectDialog";
-import { RemoveProjectDialog } from "@/app/dialogs/RemoveProjectDialog";
+import { ProjectDialog } from "@/app/shell/dialogs/ProjectDialog";
+import { RemoveProjectDialog } from "@/app/shell/dialogs/RemoveProjectDialog";
 import type { Project, ProjectRemoval, RemovalBranch, Request } from "@/ipc/generated";
 import { revealApp } from "@/lib/splash";
 import { useApp } from "@/state/store";

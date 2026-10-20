@@ -11,8 +11,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { AppSidebar, AppStrip } from "@/app/AppSidebar";
-import { SessionTabBar } from "@/app/conversation/SessionTabBar";
+import { AppSidebar, AppStrip } from "@/app/shell/AppSidebar";
+import { SessionTabBar } from "@/app/shell/SessionTabBar";
 import { SidebarPanel, SidebarProvider } from "@/components/layout";
 import { TooltipProvider, Toaster } from "@/components/overlays";
 import type { Conversation, ConversationActivity, EventEnvelope, Project, Request } from "@/ipc/generated";

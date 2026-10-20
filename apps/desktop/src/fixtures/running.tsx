@@ -7,7 +7,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { OutputTab } from "@/app/conversation/OutputTab";
+import { OutputTab } from "@/app/side-panel/OutputTab";
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
 import { previewActive } from "@/app/conversation/previewStatus";
 import { SidebarProvider } from "@/components/layout";

@@ -4,7 +4,7 @@
  * marked `data-canon`. `look` reads what an element looks like as drawn, so a dialog drawn with
  * the app's parts reads the same as the part it uses (#385).
  */
-import { PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
+import { PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/shell/dialogs/fields";
 import { SettingsSearch } from "@/components/shared";
 import { Badge, Button, Checkbox, Input, Kbd, Segmented } from "@/components/controls";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/overlays";

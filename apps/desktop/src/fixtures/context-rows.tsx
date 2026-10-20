@@ -10,8 +10,8 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
-import { SessionJobTab } from "@/app/conversation/JobTab";
-import { SourcesTab } from "@/app/conversation/SourcesTab";
+import { SessionJobTab } from "@/app/side-panel/JobTab";
+import { SourcesTab } from "@/app/side-panel/SourcesTab";
 import { AgentsPanelContext, type AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { SidebarProvider } from "@/components/layout";
 import { TooltipProvider } from "@/components/overlays";

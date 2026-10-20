@@ -7,7 +7,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { BrowserTab } from "@/app/conversation/BrowserTab";
+import { BrowserTab } from "@/app/side-panel/BrowserTab";
 import { modalOpen } from "@/app/conversation/browserLayer";
 import { TooltipProvider } from "@/components/overlays";
 import type { BrowserDownload, BrowserVisit } from "@/ipc/generated";

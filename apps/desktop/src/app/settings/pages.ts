@@ -11,8 +11,8 @@ import { MEMORY_ROWS, MemoryPage } from "@/app/settings/MemoryPage";
 import { STORAGE_ROWS, StoragePage } from "@/app/settings/storage/StoragePage";
 import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
-import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
-import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/routing/RoutingPage";
+import { PROVIDERS_ROWS, ProvidersPage } from "@/app/settings/providers/ProvidersPage";
+import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/settings/routing/RoutingPage";
 import {
   Archive,
   Brain,

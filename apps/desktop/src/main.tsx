@@ -22,7 +22,7 @@ void start();
 async function start(): Promise<void> {
   try {
     if (new URLSearchParams(location.search).get("window") === "computer-setup") {
-      const { startComputerSetup } = await import("@/app/computerSetup/start");
+      const { startComputerSetup } = await import("@/app/setup/computerSetup/start");
       await startComputerSetup();
     } else {
       await startApp();

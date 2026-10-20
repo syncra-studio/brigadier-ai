@@ -4,7 +4,7 @@ import { createContext, type MouseEventHandler, useCallback, useContext, useEffe
 
 import { literalMarkdown } from "@/components/conversation/composerMarkdown";
 import { PageEditor } from "@/components/views/page-editor/PageEditor";
-import "@/app/conversation/pages/PageTab.css";
+import "@/app/side-panel/pages/PageTab.css";
 import {
   AttachmentReaderContext,
   type AttachmentSource,

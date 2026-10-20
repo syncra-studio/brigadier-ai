@@ -10,8 +10,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { FeedbackDialog } from "@/app/feedback/FeedbackDialog";
-import { GlobalSearch, openSearch } from "@/app/SearchDialog";
+import { FeedbackDialog } from "@/app/shell/feedback/FeedbackDialog";
+import { GlobalSearch, openSearch } from "@/app/shell/SearchDialog";
 import { TooltipProvider } from "@/components/overlays";
 import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
 import { useFeedbackUi } from "@/state/feedback";

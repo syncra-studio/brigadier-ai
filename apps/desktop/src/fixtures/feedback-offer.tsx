@@ -7,7 +7,7 @@
  */
 import { createRoot } from "react-dom/client";
 
-import { FeedbackDialog } from "@/app/feedback/FeedbackDialog";
+import { FeedbackDialog } from "@/app/shell/feedback/FeedbackDialog";
 import type { OrchestratorStep } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
 import { closeFeedback, useFeedbackUi } from "@/state/feedback";

@@ -8,7 +8,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { FilesTab } from "@/app/conversation/FilesTab";
+import { FilesTab } from "@/app/side-panel/FilesTab";
 import type { Conversation, Request, SourceFile } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { useApp } from "@/state/store";

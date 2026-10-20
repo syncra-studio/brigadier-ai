@@ -165,7 +165,7 @@ This entry is absent from the production build.
 `http://localhost:1426/fixtures/mockup.html` shows a session's mockup (SESSION-FIXES-PLAN.md Q10) in its
 Mockup tab of the session tab strip, with screenshots drawn in the page. Query switches:
 `stage=building|ready|compared|stopped`, `chat=1` (Chat stays in front, to see the tab itself),
-`comment=1` (two notes already marked). `drive=1` runs the flow `src/app/conversation/MockupRender.test.ts`
+`comment=1` (two notes already marked). `drive=1` runs the flow `src/app/side-panel/MockupRender.test.ts`
 checks: the tab busy while it builds, then ready; opening it, Comment, two markers with notes, ⌘↩ sends
 one message with the marked screenshot, Working, the revision's See latest changes, closing the tab and
 its return at the comparison. Requests never reach a daemon.
@@ -173,7 +173,7 @@ its return at the comparison. Requests never reach a daemon.
 # Sidebar and updates
 
 `http://localhost:1426/fixtures/updates.html` shows the expanded sidebar with Claude Code and Codex updates
-waiting, for screenshots. With `?drive=1` it backs `src/app/SidebarUpdatesRender.test.ts` (run by `pnpm test`):
+waiting, for screenshots. With `?drive=1` it backs `src/app/shell/SidebarUpdatesRender.test.ts` (run by `pnpm test`):
 it clicks the Chats section's "+", runs a lone agent's update from the chip, runs one of two from the list and
 watches the finished row leave the open list by itself, and has an update fail to start. `?frames=1` has the
 shell offer a nightly update of Brigadier, clicks its pill and records the foot's icons on every frame until it

@@ -3,8 +3,8 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { BrowserTabIcon } from "@/app/conversation/BrowserTabIcon";
-import { NewTabTools } from "@/app/conversation/NewTabTools";
-import { useWorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
+import { NewTabTools } from "@/app/side-panel/NewTabTools";
+import { useWorkspacePane, WorkspacePaneContext } from "@/app/side-panel/WorkspacePane";
 import { TooltipProvider } from "@/components/overlays";
 import type { BrowserVisit, Conversation, Request } from "@/ipc/generated";
 import { useBrowsers } from "@/state/browsers";
