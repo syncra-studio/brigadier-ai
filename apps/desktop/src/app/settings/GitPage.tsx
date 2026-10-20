@@ -11,10 +11,10 @@ import {
   SettingsSelect,
   selectTrigger,
   SwitchSetting,
-  type Choice,
 } from "@/app/settings/parts";
 import { findModel, ModelSelector } from "@/components/assistant-ui/elements/model-selector";
 import { Input } from "@/components/ui/input";
+import type { Choice } from "@/components/ui/segmented";
 import type { GitStyle, ModelChoice } from "@/ipc/generated";
 import {
   AUTOSAVE_MS,

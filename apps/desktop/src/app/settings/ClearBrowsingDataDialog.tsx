@@ -2,7 +2,7 @@ import { Check, Download, Globe, Images, SettingsCog, Trash } from "@openai/apps
 import { type ReactNode, useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { Segmented, SettingsCard } from "@/app/settings/parts";
+import { SettingsCard } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Segmented } from "@/components/ui/segmented";
 import type { BrowserClear } from "@/ipc/generated";
 import { clearBrowsingData, type ClearRange, rangeStart, siteDataCount } from "@/state/browserData";
 

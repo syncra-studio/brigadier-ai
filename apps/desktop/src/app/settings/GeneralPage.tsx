@@ -3,7 +3,6 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { useAction } from "@/app/conversation/useAction";
 import { LicensesDialog } from "@/app/settings/LicensesDialog";
 import {
-  Segmented,
   SettingsButton,
   SettingsCard,
   SettingsPage,
@@ -15,6 +14,7 @@ import {
 } from "@/app/settings/parts";
 import { SidebarClosedChoice } from "@/app/settings/SidebarClosedChoice";
 import { Input } from "@/components/ui/input";
+import { Segmented } from "@/components/ui/segmented";
 import { useSidebar } from "@/components/ui/sidebar";
 import {
   type LoginItem,

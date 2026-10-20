@@ -1,5 +1,4 @@
-import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui";
-
+import { Segment, SegmentedRoot } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
 import type { SidebarCollapseMode } from "@/state/sidebar";
 
@@ -38,7 +37,7 @@ export function SidebarClosedChoice({
   onChange: (mode: SidebarCollapseMode) => void;
 }) {
   return (
-    <ToggleGroupPrimitive.Root
+    <SegmentedRoot
       type="single"
       aria-label={label}
       value={value}
@@ -47,7 +46,7 @@ export function SidebarClosedChoice({
       className="flex gap-3"
     >
       {CHOICES.map((choice) => (
-        <ToggleGroupPrimitive.Item
+        <Segment
           key={choice.mode}
           value={choice.mode}
           className={cn(
@@ -57,8 +56,8 @@ export function SidebarClosedChoice({
         >
           <Picture strip={choice.mode === "strip"} />
           {choice.label}
-        </ToggleGroupPrimitive.Item>
+        </Segment>
       ))}
-    </ToggleGroupPrimitive.Root>
+    </SegmentedRoot>
   );
 }

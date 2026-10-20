@@ -1,7 +1,7 @@
 import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentProps, ReactNode, SVGProps } from "react";
 
-import { selectTrigger, SettingsButton, settingsCard, SettingsSection, Segmented } from "@/app/settings/parts";
+import { selectTrigger, SettingsButton, settingsCard, SettingsSection } from "@/app/settings/parts";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Badge as ChipBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Segmented } from "@/components/ui/segmented";
 import type { ProviderKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 

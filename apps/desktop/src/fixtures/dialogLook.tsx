@@ -4,12 +4,12 @@
  * marked `data-canon`. `look` reads what an element looks like as drawn, so a dialog drawn with
  * the app's parts reads the same as the part it uses (#385).
  */
-import { Segmented } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
+import { Segmented } from "@/components/ui/segmented";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 /** The shared parts, unseen. Mount it only to measure: its dialog is one more open layer. */

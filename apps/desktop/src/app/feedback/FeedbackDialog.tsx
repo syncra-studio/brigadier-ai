@@ -2,10 +2,10 @@ import { ArrowUpRight, Bug, Eye, Lightbulb, X } from "@openai/apps-sdk-ui/compon
 import { type ReactNode, useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { Segmented } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Segmented } from "@/components/ui/segmented";
 import { detailsItems, type FeedbackKind } from "@/lib/feedbackUrl";
 import { closeFeedback, feedbackDetails, type FeedbackDraft, sendFeedback, useFeedbackUi } from "@/state/feedback";
 

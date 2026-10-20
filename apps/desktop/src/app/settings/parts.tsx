@@ -5,7 +5,6 @@ import {
   MagnifyingGlassSearch,
   XCircleFilled,
 } from "@openai/apps-sdk-ui/components/Icon";
-import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui";
 import { useId, type ComponentProps, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -19,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollFade } from "@/components/ui/scroll-fade";
+import type { Choice } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
 import type { Settings } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -272,56 +272,6 @@ export function SwitchSetting({
         onCheckedChange={(on) => save.run(() => setSetting(setting, on))}
       />
     </SettingsRow>
-  );
-}
-
-export type Choice<T extends string> = { value: T; label: ReactNode; hint?: ReactNode };
-
-/**
- * One of a few choices as pills side by side; the chosen one is filled. With `fill` the pills
- * share the whole width, on a track.
- */
-export function Segmented<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-  disabled,
-  fill = false,
-}: {
-  label: string;
-  value: T;
-  options: readonly Choice<T>[];
-  onChange: (value: T) => void;
-  disabled?: boolean;
-  fill?: boolean;
-}) {
-  return (
-    <ToggleGroupPrimitive.Root
-      type="single"
-      aria-label={label}
-      value={value}
-      disabled={disabled ?? false}
-      // A single choice is always made: pressing the chosen pill again keeps it.
-      onValueChange={(next) => next && onChange(next as T)}
-      className={cn(
-        "flex max-w-full min-w-0 items-center gap-0.5",
-        fill && "bg-foreground/5 rounded-capsule w-full p-0.5",
-      )}
-    >
-      {options.map((option) => (
-        <ToggleGroupPrimitive.Item
-          key={option.value}
-          value={option.value}
-          className={cn(
-            "text-foreground/50 hover:text-foreground data-[state=on]:bg-foreground/5 data-[state=on]:text-foreground rounded-capsule text-label h-6 shrink-0 border border-transparent px-2 whitespace-nowrap transition-colors disabled:opacity-50",
-            fill && "data-[state=on]:bg-foreground/10 min-w-0 flex-auto truncate",
-          )}
-        >
-          {option.label}
-        </ToggleGroupPrimitive.Item>
-      ))}
-    </ToggleGroupPrimitive.Root>
   );
 }
 
