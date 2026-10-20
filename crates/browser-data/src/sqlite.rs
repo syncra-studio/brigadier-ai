@@ -130,7 +130,13 @@ mod tests {
     #[test]
     fn copies_a_database_with_odd_characters_in_its_path() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("a dir ?#%").join("db.sqlite");
+        // Windows allows no `?` in a file name.
+        let odd = if cfg!(windows) {
+            "a dir #%"
+        } else {
+            "a dir ?#%"
+        };
+        let path = dir.path().join(odd).join("db.sqlite");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         {
             let conn = Connection::open(&path).unwrap();
