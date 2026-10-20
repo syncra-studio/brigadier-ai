@@ -167,7 +167,8 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 )
               }
             >
-              <span className="min-w-0 flex-1 truncate" title={preview || undefined}>
+              {/* The message comes first: with no room for both, the status note gives way, down to its first words (#447). */}
+              <span data-slot="queue-item-text" className="min-w-0 flex-auto truncate" title={preview || undefined}>
                 {item.text ? (
                   <>
                     <InlineImageText text={item.text} attachments={item.attachments} />
@@ -178,7 +179,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 )}
               </span>
               {item.deciding && item.heldBy ? (
-                <HeldNote held={item.heldBy} className="shrink-0 truncate" />
+                <HeldNote held={item.heldBy} className="min-w-24 shrink-8 truncate" />
               ) : item.deciding ? (
                 <span
                   title="Brigadier is checking whether this belongs to the answer in progress"

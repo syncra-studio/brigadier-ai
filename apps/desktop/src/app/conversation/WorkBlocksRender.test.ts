@@ -177,6 +177,7 @@ test("a message steered in before the turn did anything sits under the first, ab
 test("a message steered in while a command runs leaves the command's row saying it runs, and sums the work above it up once it ends (issue 445)", { timeout: 120000 }, async (t) => {
   const seen = await drive<{
     before: Seen; after: Seen; stillRuns: string | null; ended: string | null; bubble: string | null; deciding: { note: string | null; shimmer: string | null };
+    narrow: { messageShown: number | null; noteWidth: number | null };
     steerHeld: string | null; steerRead: string | null;
   }>(t, "drive=steer");
   assert.deepEqual([seen.before.newest, seen.before.newestShimmers], ["Running sleep 30", true]);
@@ -188,6 +189,9 @@ test("a message steered in while a command runs leaves the command's row saying 
   assert.match(seen.bubble ?? "", /^Use banker's rounding instead/);
   // Behind the thread's command, a follow-up and a steered message say when they are read, not "Deciding".
   assert.deepEqual(seen.deciding, { note: "Read when the current command ends · running 2m", shimmer: null });
+  // Issue 447: on a narrow rail the queued message stays readable, and the note still shows its first words.
+  assert.ok((seen.narrow.messageShown ?? 0) >= 0.8, `message shown ${seen.narrow.messageShown}`);
+  assert.ok((seen.narrow.noteWidth ?? 0) >= 90, `note ${seen.narrow.noteWidth}px`);
   assert.equal(seen.steerHeld, "Read when the current command ends · running 2m");
   assert.equal(seen.steerRead, null);
 });
