@@ -20,6 +20,10 @@ const SILENT_MS = 5 * 60_000;
 const given = process.argv.slice(2);
 const named = given.some((arg) => /\.test\.[cm]?[jt]s$/.test(arg));
 const retry = process.env.CI === "true";
+// Windows runs a few test files at a time unless told otherwise: there each render test's
+// headless browser is a dozen processes, and node's default (a file per core) took a whole
+// machine.
+const concurrency = process.platform === "win32" && !given.some((arg) => arg.startsWith("--test-concurrency")) ? ["--test-concurrency=4"] : [];
 
 /** Whether `files` (with `node --test`'s options) take in a render test: a glob may. */
 function rendering(files) {
@@ -40,7 +44,7 @@ function runOnce(files) {
        "--test-reporter=./scripts/failed-files-reporter.mjs", `--test-reporter-destination=${failedList}`]
     : [];
   const run = spawn(process.execPath, [
-    "--import", "./scripts/test-alias.mjs", "--test", "--test-timeout=180000", "--test-force-exit", ...reporters,
+    "--import", "./scripts/test-alias.mjs", "--test", "--test-timeout=180000", "--test-force-exit", ...concurrency, ...reporters,
     ...(rendering(files) ? ["--test-global-setup=./src/fixtures/headless.ts"] : []),
     ...files,
   ], { stdio: ["inherit", "pipe", "pipe"], windowsHide: true });
