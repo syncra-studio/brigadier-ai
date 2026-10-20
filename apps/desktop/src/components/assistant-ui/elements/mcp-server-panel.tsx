@@ -1,9 +1,9 @@
-import { Mcp } from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, useId, useState } from "react";
 
 import { mono } from "@/components/assistant-ui/elements/surfaces";
 import { summaryRow, summaryRowInteractive } from "@/components/assistant-ui/elements/summary-section";
 import { Spinner } from "@/components/glyphs/spinner";
+import { Mcp } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 /**

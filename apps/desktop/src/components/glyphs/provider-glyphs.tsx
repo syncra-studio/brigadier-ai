@@ -1,6 +1,6 @@
-import { OpenaiLogoRegular } from "@openai/apps-sdk-ui/components/Icon";
 import type { FC, SVGProps } from "react";
 
+import { OpenaiLogoRegular } from "@/components/ui/icon";
 import type { ProviderKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 

@@ -10,7 +10,6 @@ import {
 import { $isCodeNode } from "@lexical/code";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { mergeRegister } from "@lexical/utils";
-import { Globe } from "@openai/apps-sdk-ui/components/Icon";
 import {
   $createTextNode,
   $getNearestNodeFromDOMNode,
@@ -58,6 +57,7 @@ import {
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { ComposerInlineImage } from "@/components/assistant-ui/elements/inline-image";
 import { ComposerPastedText } from "@/components/assistant-ui/elements/pasted-text";
+import { Globe } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 export {

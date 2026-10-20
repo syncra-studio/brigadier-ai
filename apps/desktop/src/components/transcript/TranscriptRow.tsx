@@ -1,4 +1,3 @@
-import { ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
 import { memo, type ReactNode } from "react";
 
 import type { TranscriptItem } from "@/components/transcript/transcript";
@@ -8,6 +7,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { ChevronRight } from "@/components/ui/icon";
 import type { Decider, ProviderError } from "@/ipc/generated";
 import { formatDateTime, formatMs } from "@/lib/format";
 import { cn } from "@/lib/utils";

@@ -1,12 +1,4 @@
 import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
-import {
-  ArrowRight,
-  Check,
-  Code,
-  Copy,
-  DotsHorizontal,
-  ExpandLg,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -17,6 +9,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ArrowRight,
+  Check,
+  Code,
+  Copy,
+  DotsHorizontal,
+  ExpandLg,
+} from "@/components/ui/icon";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import type { Token } from "@/lib/languages";
 import { cn } from "@/lib/utils";

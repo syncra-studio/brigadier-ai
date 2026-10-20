@@ -1,7 +1,7 @@
 import type * as React from "react";
-import { Check, ChevronRight, Dot } from "@openai/apps-sdk-ui/components/Icon";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 
+import { Check, ChevronRight, Dot } from "@/components/ui/icon";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 

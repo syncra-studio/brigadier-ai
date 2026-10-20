@@ -1,8 +1,8 @@
-import { ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
 import type * as React from "react";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 
 import { itemBase, itemVariants, menuSurface } from "@/components/ui/dropdown-menu";
+import { ChevronRight } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 /** A menu opened by a right-click (or the context-menu key) on its trigger, styled like the others. */

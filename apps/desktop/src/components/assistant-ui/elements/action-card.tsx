@@ -1,4 +1,3 @@
-import { ArrowRight, Pencil, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type ComponentProps,
   type CSSProperties,
@@ -9,6 +8,7 @@ import {
 } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { ArrowRight, Pencil, X } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 /* Approval and question content on the composer rail; each section pads itself. */

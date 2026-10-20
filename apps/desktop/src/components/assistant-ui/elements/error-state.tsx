@@ -1,8 +1,8 @@
-import { Check, ChevronRight, Copy, Regenerate, Warning } from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentProps } from "react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { Check, ChevronRight, Copy, Regenerate, Warning } from "@/components/ui/icon";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 

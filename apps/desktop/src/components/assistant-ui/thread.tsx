@@ -12,16 +12,6 @@ import {
   useAuiState,
 } from "@assistant-ui/react";
 import {
-  ArrowDown,
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  ChevronRightAlt,
-  Copy,
-  EditPencil,
-  Paperclip,
-} from "@openai/apps-sdk-ui/components/Icon";
-import {
   createContext,
   lazy,
   Suspense,
@@ -43,6 +33,16 @@ import { ThreadScroller } from "@/components/assistant-ui/thread-scroll";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
 import { Button } from "@/components/ui/button";
+import {
+  ArrowDown,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ChevronRightAlt,
+  Copy,
+  EditPencil,
+  Paperclip,
+} from "@/components/ui/icon";
 import { ScrollFade } from "@/components/ui/scroll-fade";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";

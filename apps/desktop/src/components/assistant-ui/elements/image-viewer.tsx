@@ -1,10 +1,10 @@
-import { ChevronLeft, ChevronRight, Download, Minus, Plus, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref, useEffect, useEffectEvent, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { type AttachmentSource, useAttachmentUrl } from "@/components/assistant-ui/elements/attachment-url";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Dialog, DialogClose, DialogPlainContent, DialogPlainOverlay, DialogPortal, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { ChevronLeft, ChevronRight, Download, Minus, Plus, X } from "@/components/ui/icon";
 import { saveCopy } from "@/ipc/client";
 import { toast } from "@/state/toasts";
 import { cn } from "@/lib/utils";

@@ -1,7 +1,7 @@
-import { Search } from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentProps } from "react";
 
 import { field, mono } from "@/components/assistant-ui/elements/surfaces";
+import { Search } from "@/components/ui/icon";
 import { openLink } from "@/state/links";
 import { cn } from "@/lib/utils";
 

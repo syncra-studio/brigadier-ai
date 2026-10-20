@@ -1,5 +1,6 @@
-import { File, FileCode, FileDocument, FileImage } from "@openai/apps-sdk-ui/components/Icon";
 import type { ReactNode } from "react";
+
+import { File, FileCode, FileDocument, FileImage } from "@/components/ui/icon";
 
 /** A file's icon by its extension. */
 export function FileTypeIcon({ name, className }: { name: string; className?: string }): ReactNode {

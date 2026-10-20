@@ -4,7 +4,6 @@ import {
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
-import { ChevronRight, Warning } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useContext, useState } from "react";
 
 import {
@@ -24,6 +23,7 @@ import {
 import { inComposerText } from "@/components/assistant-ui/elements/inline-image";
 import { PastedTextDialog } from "@/components/assistant-ui/elements/pasted-text";
 import { Spinner } from "@/components/glyphs/spinner";
+import { ChevronRight, Warning } from "@/components/ui/icon";
 
 /**
  * One composer attachment (the assistant-ui Attachment element): an

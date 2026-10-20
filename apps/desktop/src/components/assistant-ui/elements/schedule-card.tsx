@@ -1,7 +1,7 @@
-import { Check, Clock, X } from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentProps } from "react";
 
 import { mono } from "@/components/assistant-ui/elements/surfaces";
+import { Check, Clock, X } from "@/components/ui/icon";
 import { formatCountdown, formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 

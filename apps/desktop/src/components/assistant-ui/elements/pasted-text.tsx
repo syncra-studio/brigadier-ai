@@ -1,5 +1,4 @@
 import { useAui, useAuiState } from "@assistant-ui/react";
-import { FileDocument } from "@openai/apps-sdk-ui/components/Icon";
 import type { LexicalEditor } from "lexical";
 import { createContext, type MouseEventHandler, useCallback, useContext, useEffect, useRef, useState } from "react";
 
@@ -20,6 +19,7 @@ import { composerInlineNumber } from "@/components/assistant-ui/elements/inline-
 import { bound, editing, rebound } from "@/components/assistant-ui/elements/pasteBinding";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
+import { FileDocument } from "@/components/ui/icon";
 import type { AttachmentRef } from "@/ipc/generated";
 import { openLink } from "@/state/links";
 import { cn } from "@/lib/utils";

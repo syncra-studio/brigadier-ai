@@ -1,6 +1,6 @@
-import { CheckCircle, InfoCircle, Warning, X } from "@openai/apps-sdk-ui/components/Icon";
 import { Toast as ToastPrimitive } from "radix-ui";
 
+import { CheckCircle, InfoCircle, Warning, X } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { dismissToast, type Toast, useToasts } from "@/state/toasts";
 

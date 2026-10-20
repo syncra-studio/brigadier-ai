@@ -17,7 +17,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { TextMessagePartProvider, type TextMessagePartProps } from "@assistant-ui/react";
-import { Check, Copy, Document, DownloadSimple, ExpandLg, Globe, Mail } from "@openai/apps-sdk-ui/components/Icon";
 
 import { CodeBlock, CodeHeader } from "@/components/assistant-ui/code-block";
 import {
@@ -47,6 +46,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
+import { Check, Copy, Document, DownloadSimple, ExpandLg, Globe, Mail } from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { openArtifact, openFolder, openUrl, pageRead, request, revealPath, saveArtifact, saveCopy } from "@/ipc/client";

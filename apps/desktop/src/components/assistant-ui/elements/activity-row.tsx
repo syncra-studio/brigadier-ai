@@ -1,3 +1,6 @@
+import type { FC } from "react";
+
+import type { WorkKind } from "@/app/conversation/activity/words";
 import {
   Chat,
   EditPencil,
@@ -9,10 +12,7 @@ import {
   Sparkle,
   Terminal,
   Tools,
-} from "@openai/apps-sdk-ui/components/Icon";
-import type { FC } from "react";
-
-import type { WorkKind } from "@/app/conversation/activity/words";
+} from "@/components/ui/icon";
 
 /**
  * The one row recipe of a thread's activity (THREAD-UX-PLAN.md §3.7), the lead's and a worker's

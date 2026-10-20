@@ -1,11 +1,3 @@
-import {
-  ThumbDown,
-  ThumbDownFilled,
-  Thumbs,
-  ThumbUp,
-  ThumbUpFilled,
-  Undo,
-} from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentProps, ReactNode } from "react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -16,6 +8,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ThumbDown,
+  ThumbDownFilled,
+  Thumbs,
+  ThumbUp,
+  ThumbUpFilled,
+  Undo,
+} from "@/components/ui/icon";
 import type { Rating } from "@/ipc/generated";
 
 /**

@@ -1,6 +1,6 @@
-import { ChevronDown } from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, type ReactNode, useId, useState } from "react";
 
+import { ChevronDown } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 /**

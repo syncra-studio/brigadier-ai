@@ -1,8 +1,8 @@
-import { Check, ChevronRight, Minus, StopCircle, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, type ReactNode, useId, useState } from "react";
 
 import { disclosureRow, paper } from "@/components/assistant-ui/elements/surfaces";
 import { Spinner } from "@/components/glyphs/spinner";
+import { Check, ChevronRight, Minus, StopCircle, X } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 export type AgentPlanStepStatus = "pending" | "active" | "done" | "partial" | "failed" | "skipped" | "stopped";

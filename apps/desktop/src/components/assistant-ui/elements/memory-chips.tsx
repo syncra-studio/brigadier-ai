@@ -1,7 +1,7 @@
-import { Brain, X } from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentProps } from "react";
 
 import { field, ghostButton, mono } from "@/components/assistant-ui/elements/surfaces";
+import { Brain, X } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 export type MemoryChipChange = "added" | "updated" | "existing";

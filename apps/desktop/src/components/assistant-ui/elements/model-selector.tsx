@@ -1,4 +1,3 @@
-import { Bolt, Check, ChevronDown } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useState } from "react";
 
 import { composerPill } from "@/components/assistant-ui/elements/surfaces";
@@ -16,6 +15,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Bolt, Check, ChevronDown } from "@/components/ui/icon";
 import type { ModelChoice, ModelInfo, ProviderKind } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";

@@ -1,11 +1,4 @@
 import {
-  FileDocument,
-  FileImage,
-  Paperclip,
-  Warning,
-  X,
-} from "@openai/apps-sdk-ui/components/Icon";
-import {
   type ComponentPropsWithRef,
   type ReactNode,
   useContext,
@@ -24,6 +17,13 @@ import { ImageContextMenu, ImagePreview, type ViewerImage } from "@/components/a
 
 export { type AttachmentReader, AttachmentReaderContext, type AttachmentSource, useAttachmentUrl };
 export { ImagePreview };
+import {
+  FileDocument,
+  FileImage,
+  Paperclip,
+  Warning,
+  X,
+} from "@/components/ui/icon";
 import { fileName } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
