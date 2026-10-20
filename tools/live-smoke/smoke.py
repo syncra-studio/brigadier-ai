@@ -510,8 +510,9 @@ class Smoke:
         replies = [p for p in v["peerMessages"] if not p["outgoing"] and p.get("replyTo") == sent["messageId"]]
         check(sc, "its state is replied", sent["state"]["type"] == "replied", f"state {sent['state']['type']}")
         waits = [s for s in tool_steps(v, "wait_for_replies") if s.get("requestId") == rid]
-        check(sc, "a wait_for_replies ran and completed", any(s["status"] == "completed" for s in waits),
-              f"waits: {[s['status'] for s in waits]}")
+        completed = any(s["status"] == "completed" for s in waits)
+        check(sc, "a wait_for_replies ran and completed", completed,
+              f"waits: {[s['status'] for s in waits]}" + ("" if completed else f"; {self.wait_calls(sender, rid)}"))
         check(sc, "exactly one reply came back", len(replies) == 1, f"{len(replies)} replies")
         hold = (replies[0].get("hold") or {}).get("type") if replies else None
         check(sc, "the wait took the reply", hold == "taken", f"hold {hold}")
@@ -543,6 +544,17 @@ class Smoke:
         for p in got:
             if p.get("requestId"):
                 self.expected[to].setdefault(p["requestId"], []).append(reply_code)
+
+    def wait_calls(self, name, rid):
+        """What `name`'s wait_for_replies calls in request `rid` were given and answered, as its
+        tool log holds them: a failed wait's error says which way it ended (#456)."""
+        try:
+            page = self.ipc.call({"method": "listThreadItems", "conversationId": self.convs[name],
+                                  "requestId": rid, "turn": None, "after": None, "limit": 200})["page"]
+        except Exception as err:
+            return f"its calls couldn't be read: {err}"
+        calls = [json.dumps(e)[:600] for e in page["entries"] if "wait_for_replies" in json.dumps(e)]
+        return "calls: " + (" | ".join(calls) or "none in its tool log")
 
     def scenario_messages(self):
         self.message_with_wait("3a Claude->Codex, idle", "C3", "X", code("A"))
