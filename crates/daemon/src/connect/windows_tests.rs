@@ -20,10 +20,7 @@ impl Home {
         ));
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         std::fs::write(dir.join("agent.ps1"), AGENT).unwrap();
-        std::fs::write(
-            dir.join("agent.cmd"),
-            "@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%BRIGADIER_CONNECT_TEST_HOME%\\agent.ps1\" %*\r\nexit /b %errorlevel%\r\n",
-        ).unwrap();
+        std::fs::write(dir.join("agent.cmd"), AGENT_COMMAND).unwrap();
         std::fs::write(dir.join("install.ps1"), INSTALLER).unwrap();
         Self(dir)
     }
@@ -42,6 +39,32 @@ impl Drop for Home {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+// Status checks must stay cheap while the separate PowerShell sign-in is running. Starting
+// another PowerShell host for every poll makes the fixture measure shell startup instead.
+const AGENT_COMMAND: &str = r#"@echo off
+if "%~1"=="--version" (
+  echo 2.1.302
+  exit /b 0
+)
+if "%~1 %~2"=="auth status" (
+  if exist "%BRIGADIER_CONNECT_TEST_HOME%\signed-in" (
+    echo {"loggedIn":true,"authMethod":"oauth"}
+  ) else (
+    echo {"loggedIn":false}
+  )
+  exit /b 0
+)
+if "%~1 %~2"=="login status" (
+  if exist "%BRIGADIER_CONNECT_TEST_HOME%\signed-in" (
+    echo Logged in using a browser
+    exit /b 0
+  )
+  exit /b 1
+)
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%BRIGADIER_CONNECT_TEST_HOME%\agent.ps1" %*
+exit /b %errorlevel%
+"#;
 
 const INSTALLER: &str = r#"
 $root = $env:BRIGADIER_CONNECT_TEST_HOME
@@ -64,16 +87,6 @@ Copy-Item (Join-Path $root 'agent.cmd') (Join-Path $bin ($env:BRIGADIER_CONNECT_
 
 const AGENT: &str = r#"
 $root = $env:BRIGADIER_CONNECT_TEST_HOME
-$signed = Test-Path (Join-Path $root 'signed-in')
-if ($args[0] -eq '--version') { Write-Output '2.1.302'; exit 0 }
-if ($args[0] -eq 'auth' -and $args[1] -eq 'status') {
-    @{ loggedIn = $signed; authMethod = 'oauth' } | ConvertTo-Json -Compress
-    exit 0
-}
-if ($args[0] -eq 'login' -and $args[1] -eq 'status') {
-    if ($signed) { [Console]::Error.WriteLine('Logged in using a browser'); exit 0 }
-    exit 1
-}
 $expected = if ($env:BRIGADIER_CONNECT_TEST_PROVIDER -eq 'claude') { 'auth login' } else { 'login' }
 if (($args -join ' ') -ne $expected) { throw 'wrong sign-in command' }
 Add-Content (Join-Path $root 'pids') $PID
@@ -98,6 +111,10 @@ if ($mode -eq 'stay') { Start-Sleep 60 }
 "#;
 
 fn ops(home: &Home, provider: ProviderKind) -> Ops {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_test_writer()
+        .try_init();
     let platform = brigadier_sandbox::native(brigadier_sandbox::PlatformOptions {
         data_dir: Some(home.0.join("data")),
     })
@@ -147,7 +164,7 @@ fn ops(home: &Home, provider: ProviderKind) -> Ops {
         installer: Arc::new(|_| {
             "& (Join-Path $env:BRIGADIER_CONNECT_TEST_HOME 'install.ps1')".into()
         }),
-        install_timeout: Duration::from_secs(20),
+        install_timeout: Duration::from_secs(60),
         sign_in_timeout: Duration::from_secs(20),
         poll: Duration::from_millis(500),
         mark: Arc::new(|_| None),
@@ -166,22 +183,23 @@ fn no_codes() -> Codes {
 
 async fn run(ops: &Ops, provider: ProviderKind) -> (Option<ConnectProgress>, Vec<ConnectProgress>) {
     let seen = Mutex::new(Vec::new());
-    let outcome = tokio::time::timeout(
-        Duration::from_secs(45),
-        connect(
-            ops,
-            provider,
-            &CancellationToken::new(),
-            &|step| {
-                seen.lock().unwrap().push(step);
-            },
-            &mut no_codes(),
-        ),
-    )
-    .await
-    .expect("Connect ended")
-    .map(|ended| ended.progress);
-    (outcome, seen.into_inner().unwrap())
+    let cancel = CancellationToken::new();
+    let report = |step| seen.lock().unwrap().push(step);
+    let mut codes = no_codes();
+    let attempt = connect(ops, provider, &cancel, &report, &mut codes);
+    tokio::pin!(attempt);
+    let outcome = match tokio::time::timeout(Duration::from_secs(90), &mut attempt).await {
+        Ok(outcome) => outcome.map(|ended| ended.progress),
+        Err(_) => {
+            // Give Connect its cancellation path before a failed test drops the runtime.
+            cancel.cancel();
+            let _ = tokio::time::timeout(Duration::from_secs(10), &mut attempt).await;
+            panic!("Connect did not end; steps: {:?}", seen.lock().unwrap());
+        }
+    };
+    eprintln!("{provider}: {outcome:?}; steps: {:?}", seen.lock().unwrap());
+    let steps = seen.lock().unwrap().clone();
+    (outcome, steps)
 }
 
 async fn stopped(home: &Home, ops: &Ops) {
@@ -270,17 +288,23 @@ async fn failed_downloads_fail_instead_of_piping_nothing_and_retry_works() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_install_error_or_missing_binary_never_starts_sign_in() {
-    for mode in ["broken", "nothing"] {
+    for (mode, error) in [
+        ("broken", "Claude Code couldn't be installed. Try again."),
+        (
+            "nothing",
+            "Claude Code was installed, but Brigadier can't find it. Try again.",
+        ),
+    ] {
         let home = Home::new();
         home.mode("install", mode);
         let ops = ops(&home, ProviderKind::Claude);
-        assert!(matches!(
+        assert_eq!(
             run(&ops, ProviderKind::Claude).await.0,
             Some(ConnectProgress::Failed {
                 step: ConnectStep::Install,
-                ..
+                error: error.into()
             })
-        ));
+        );
         assert!(!home.0.join("login-started").exists());
         stopped(&home, &ops).await;
     }

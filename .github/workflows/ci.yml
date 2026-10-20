@@ -158,8 +158,8 @@ jobs:
         # Connect's fakes use the real PowerShell runner and the daemon staged above as the
         # BROWSER link catcher. No vendor install, account, network request or browser opens.
         run: |
-          cargo test --locked -p brigadier-daemon --bin brigadierd connect::windows_tests -- --test-threads=1
-          cargo test --locked -p brigadier-desktop --bin brigadier browser_agent:: -- --test-threads=1
+          cargo test --locked -p brigadier-daemon --bin brigadierd connect::windows_tests -- --test-threads=1 --nocapture
+          cargo test --locked -p brigadier-desktop --bin brigadier browser_agent:: -- --test-threads=1 --nocapture
 
   rust-tests:
     name: Rust tests (Linux)
