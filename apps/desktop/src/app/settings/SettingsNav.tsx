@@ -12,7 +12,7 @@ import { navRow, NavHeader, NavList, NavSection } from "@/app/sidebar/nav";
 import {
   MagnifyingGlassSearch,
   XCircleFilled,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";

@@ -11,7 +11,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/ui/icon";
+import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/icons";
 import { Segmented } from "@/components/ui/segmented";
 import type { ProviderKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

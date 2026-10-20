@@ -48,7 +48,7 @@ import {
   QuestionMarkCircle,
   Reply,
   Sparkle,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import {
   Tooltip,
   TooltipContent,

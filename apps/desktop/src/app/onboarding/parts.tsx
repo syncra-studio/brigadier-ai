@@ -2,7 +2,7 @@ import { type ReactNode, type RefObject, useEffect, useRef } from "react";
 
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Check } from "@/components/ui/icon";
+import { ArrowLeft, Check } from "@/components/icons";
 import { Kbd } from "@/components/ui/kbd";
 import { DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";

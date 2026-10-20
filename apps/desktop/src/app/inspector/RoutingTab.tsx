@@ -18,7 +18,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronRight, Clock, Reload } from "@/components/ui/icon";
+import { ChevronRight, Clock, Reload } from "@/components/icons";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useNow } from "@/hooks/use-now";
 import { request } from "@/ipc/client";

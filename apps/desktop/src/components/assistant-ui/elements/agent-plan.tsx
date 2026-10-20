@@ -2,7 +2,7 @@ import { type ComponentProps, type ReactNode, useId, useState } from "react";
 
 import { disclosureRow, paper } from "@/components/assistant-ui/elements/surfaces";
 import { Spinner } from "@/components/glyphs/spinner";
-import { Check, ChevronRight, Minus, StopCircle, X } from "@/components/ui/icon";
+import { Check, ChevronRight, Minus, StopCircle, X } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 export type AgentPlanStepStatus = "pending" | "active" | "done" | "partial" | "failed" | "skipped" | "stopped";

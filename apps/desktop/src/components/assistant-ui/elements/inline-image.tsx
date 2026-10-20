@@ -12,7 +12,7 @@ import {
 } from "@/components/assistant-ui/elements/attachment-tile";
 import { ImageContextMenu, ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import type { InlineKind } from "@/app/conversation/inlineImages";
-import { FileImage } from "@/components/ui/icon";
+import { FileImage } from "@/components/icons";
 import type { AttachmentRef } from "@/ipc/generated";
 import { inlineImageLabel } from "@/components/assistant-ui/elements/chipText";
 import { cn } from "@/lib/utils";

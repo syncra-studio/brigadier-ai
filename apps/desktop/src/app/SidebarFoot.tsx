@@ -13,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Comment, Keyboard, Settings } from "@/components/ui/icon";
+import { Comment, Keyboard, Settings } from "@/components/icons";
 import { useSidebar } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import { openSettings, toggleSettings } from "@/state/actions";

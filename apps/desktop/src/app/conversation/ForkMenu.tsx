@@ -10,7 +10,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { BranchAlt } from "@/components/ui/icon";
+import { BranchAlt } from "@/components/icons";
 import type { ConversationKind, ForkPlace } from "@/ipc/generated";
 import { forkConversation } from "@/state/actions";
 

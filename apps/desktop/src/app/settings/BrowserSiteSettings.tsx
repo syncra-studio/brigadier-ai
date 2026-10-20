@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { SettingsCard, SettingsPage, SettingsSection, SettingsSelect } from "@/app/settings/parts";
-import { Camera, Mic } from "@/components/ui/icon";
+import { Camera, Mic } from "@/components/icons";
 import type { BrowserSite, SitePermission } from "@/ipc/generated";
 import { browserSites, setSite } from "@/state/browserData";
 

@@ -15,7 +15,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Bolt, Check, ChevronDown } from "@/components/ui/icon";
+import { Bolt, Check, ChevronDown } from "@/components/icons";
 import type { ModelChoice, ModelInfo, ProviderKind } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";

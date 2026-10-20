@@ -33,7 +33,7 @@ import {
   FolderOpen,
   Lock,
   Sparkles,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { revealPath } from "@/ipc/client";
 import type { CleanItem, CleanReport, StorageReport } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

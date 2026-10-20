@@ -1,6 +1,6 @@
 import { TITLEBAR_BUTTON } from "@/components/titlebar-button";
 import { Button } from "@/components/ui/button";
-import { Sidebar, SidebarFloatingLeft } from "@/components/ui/icon";
+import { Sidebar, SidebarFloatingLeft } from "@/components/icons";
 
 /**
  * A sidebar toggle's icon: a window with its sidebar shown, or floating while it is hidden. The

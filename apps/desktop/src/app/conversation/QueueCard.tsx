@@ -7,7 +7,7 @@ import {
   Stack,
   Trash,
   X,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { normalizedImages } from "@/lib/inlineImages";
 import { namedImages } from "@/app/conversation/inlineImages";
 import { useAui, useAuiState } from "@assistant-ui/react";

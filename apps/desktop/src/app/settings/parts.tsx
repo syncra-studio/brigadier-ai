@@ -16,7 +16,7 @@ import {
   ChevronLeft,
   MagnifyingGlassSearch,
   XCircleFilled,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { ScrollFade } from "@/components/ui/scroll-fade";
 import type { Choice } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";

@@ -8,7 +8,7 @@ import {
 } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import { ArrowRight, Pencil, X } from "@/components/ui/icon";
+import { ArrowRight, Pencil, X } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /* Approval and question content on the composer rail; each section pads itself. */

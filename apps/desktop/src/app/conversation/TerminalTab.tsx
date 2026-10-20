@@ -15,7 +15,7 @@ import {
   Dock,
   Plus,
   X,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { request } from "@/ipc/client";
 import type { ProviderKind, TerminalInfo } from "@/ipc/generated";
 import { whenRevealed } from "@/lib/splash";

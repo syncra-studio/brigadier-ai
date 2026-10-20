@@ -10,7 +10,7 @@ import { SessionOffer } from "@/app/conversation/SessionOffer";
 import { WorkerLine } from "@/app/conversation/WorkerChip";
 import { ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
-import { Branch, CheckCircle, Clock, PauseCircle, PlayCircle } from "@/components/ui/icon";
+import { Branch, CheckCircle, Clock, PauseCircle, PlayCircle } from "@/components/icons";
 import type { ProviderKind } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { VENDOR_LABELS } from "@/lib/routing";

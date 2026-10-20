@@ -10,7 +10,7 @@ import { useWorkerText, WorkerChip } from "@/app/conversation/WorkerChip";
 import { mono } from "@/components/assistant-ui/elements/surfaces";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Branch, BranchAlt } from "@/components/ui/icon";
+import { Branch, BranchAlt } from "@/components/icons";
 import type { ArtifactRef, KeptWork, RestoreOutcome, Task } from "@/ipc/generated";
 import { useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";

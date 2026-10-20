@@ -73,7 +73,7 @@ import {
   Stop,
   Warning,
   X,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import type { Conversation, RunState } from "@/ipc/generated";
 import type { ComposerProps } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";

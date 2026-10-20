@@ -1,7 +1,7 @@
 import type * as React from "react";
 import { Checkbox as CheckboxPrimitive } from "radix-ui";
 
-import { Check } from "@/components/ui/icon";
+import { Check } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /** The one checkbox: a small square that fills with the switch's blue and shows a white tick when checked. */

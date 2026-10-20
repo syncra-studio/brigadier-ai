@@ -39,7 +39,7 @@ import {
   Plus,
   Trash,
   Unpin,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, ForkPlace } from "@/ipc/generated";
 import {

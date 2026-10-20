@@ -4,7 +4,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
-import { DownloadSimple, File, FileCode, FileDocument, FileImage } from "@/components/ui/icon";
+import { DownloadSimple, File, FileCode, FileDocument, FileImage } from "@/components/icons";
 import { openArtifact, saveArtifact } from "@/ipc/client";
 import type { ArtifactRef } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";

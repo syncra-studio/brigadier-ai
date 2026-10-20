@@ -7,7 +7,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChevronRight } from "@/components/ui/icon";
+import { ChevronRight } from "@/components/icons";
 import type { Decider, ProviderError } from "@/ipc/generated";
 import { formatDateTime, formatMs } from "@/lib/format";
 import { cn } from "@/lib/utils";

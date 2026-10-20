@@ -5,7 +5,7 @@ import { RULES, Rules } from "@/app/routing/Rules";
 import { WHO_DOES_WHAT, WhoDoesWhat } from "@/app/routing/WhoDoesWhat";
 import { SettingsPage } from "@/app/settings/parts";
 import { revealSetting, useReveal } from "@/app/settings/reveal";
-import { Info } from "@/components/ui/icon";
+import { Info } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import type { Area, TaskCategory } from "@/ipc/generated";
 import { useModelGroups } from "@/lib/setup";

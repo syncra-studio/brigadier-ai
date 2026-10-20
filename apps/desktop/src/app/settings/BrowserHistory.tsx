@@ -31,7 +31,7 @@ import {
   Filter,
   Globe,
   Trash,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import type { BrowserVisit, HistoryFilter } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";

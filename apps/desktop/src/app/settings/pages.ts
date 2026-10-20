@@ -28,7 +28,7 @@ import {
   SettingsSlider,
   Shuffle,
   Storage,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { preloadable } from "@/lib/preloadable";
 import { prefetchImportSources } from "@/state/browserImport";
 import { type SettingsPageId, useApp } from "@/state/store";

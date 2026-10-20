@@ -12,7 +12,7 @@ import {
   SwitchSetting,
 } from "@/app/settings/parts";
 import { findModel, ModelSelector } from "@/components/assistant-ui/elements/model-selector";
-import { Check } from "@/components/ui/icon";
+import { Check } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import type { Choice } from "@/components/ui/segmented";
 import type { GitStyle, ModelChoice } from "@/ipc/generated";

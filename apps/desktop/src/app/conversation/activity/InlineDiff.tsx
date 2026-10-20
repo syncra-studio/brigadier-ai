@@ -2,7 +2,7 @@ import { useMemo } from "react";
 
 import { DiffView } from "@/app/conversation/diffView";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Check, Copy } from "@/components/ui/icon";
+import { Check, Copy } from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { deletesFile, diffCounts, parseDiff, singleFilePatch } from "@/lib/patch";
 import { cn } from "@/lib/utils";

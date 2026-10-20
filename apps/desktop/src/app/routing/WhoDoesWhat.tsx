@@ -53,7 +53,7 @@ import {
   PullRequestMerged,
   PullRequestOpen,
   Telescope,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { OverrideTarget, RankedEntry, Ranking, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";

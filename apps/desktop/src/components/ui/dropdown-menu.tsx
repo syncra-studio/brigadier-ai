@@ -1,7 +1,7 @@
 import type * as React from "react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 
-import { Check, ChevronRight, Dot } from "@/components/ui/icon";
+import { Check, ChevronRight, Dot } from "@/components/icons";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 

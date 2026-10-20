@@ -8,7 +8,7 @@ import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowUpRight, Check } from "@/components/ui/icon";
+import { ArrowUpRight, Check } from "@/components/icons";
 import { openUrl } from "@/ipc/client";
 import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

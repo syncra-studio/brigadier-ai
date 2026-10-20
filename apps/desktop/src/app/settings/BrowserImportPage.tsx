@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Globe } from "@/components/ui/icon";
+import { Globe } from "@/components/icons";
 import type { ImportFailure, ImportProgress, ImportSource } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";

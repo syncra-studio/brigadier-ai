@@ -7,7 +7,7 @@ import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import { Check, Copy, DownloadSimple, X } from "@/components/ui/icon";
+import { Check, Copy, DownloadSimple, X } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";

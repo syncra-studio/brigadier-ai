@@ -3,7 +3,7 @@ import { type FC, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, u
 import { DiffView, type DiffNote } from "@/app/conversation/diffView";
 import { shortcutKeys } from "@/app/shortcutCatalog";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "@/components/ui/icon";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "@/components/icons";
 import { Kbd } from "@/components/ui/kbd";
 import type { PendingFile } from "@/ipc/generated";
 import { request } from "@/ipc/client";

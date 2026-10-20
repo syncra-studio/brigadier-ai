@@ -6,7 +6,7 @@ import { Welcome } from "@/app/onboarding/Welcome";
 import { preloadWelcomeSound } from "@/app/onboarding/welcomeSound";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { X } from "@/components/ui/icon";
+import { X } from "@/components/icons";
 import {
   Tooltip,
   TooltipContent,

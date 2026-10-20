@@ -1,6 +1,6 @@
 import { pastedTextLabel } from "@/components/assistant-ui/elements/chipText";
 import { PastedTextView } from "@/components/assistant-ui/elements/pasted-text";
-import { FileDocument, X } from "@/components/ui/icon";
+import { FileDocument, X } from "@/components/icons";
 import type { AttachmentRef } from "@/ipc/generated";
 
 /**

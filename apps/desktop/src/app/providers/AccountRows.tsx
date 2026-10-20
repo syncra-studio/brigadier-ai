@@ -14,7 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { CheckMd, DotsHorizontal, Eye, EyeOff, Plus } from "@/components/ui/icon";
+import { CheckMd, DotsHorizontal, Eye, EyeOff, Plus } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import type { AccountView, ProviderKind, QuotaWindow } from "@/ipc/generated";
 import { hasEmail, maskEmailsIn } from "@/lib/email";

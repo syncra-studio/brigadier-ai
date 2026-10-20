@@ -3,7 +3,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { SettingsButton, settingsCard, SettingsSection } from "@/app/settings/parts";
 import type { Part } from "@/app/settings/storage/model";
 import { Button } from "@/components/ui/button";
-import { Check, ChevronRight, Minus } from "@/components/ui/icon";
+import { Check, ChevronRight, Minus } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /*

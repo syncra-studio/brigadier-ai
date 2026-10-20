@@ -38,7 +38,7 @@ import {
   ChevronRight,
   Copy,
   ShieldCheck,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
 import type { ArtifactRef, ErrorKind, Rating, RawEntry, Task } from "@/ipc/generated";

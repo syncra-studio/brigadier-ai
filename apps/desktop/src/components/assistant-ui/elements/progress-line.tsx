@@ -2,7 +2,7 @@ import type { ComponentProps, ReactNode } from "react";
 
 import { mono } from "@/components/assistant-ui/elements/surfaces";
 import { Spinner } from "@/components/glyphs/spinner";
-import { Check, ExclamationMarkCircle, X } from "@/components/ui/icon";
+import { Check, ExclamationMarkCircle, X } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /**

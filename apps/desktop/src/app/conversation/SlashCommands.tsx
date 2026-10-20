@@ -28,7 +28,7 @@ import {
   Pin,
   SettingsSlider,
   Unpin,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import type { Conversation, PermissionLevel } from "@/ipc/generated";
 import { PERMISSION_LABELS, useCanCompact } from "@/lib/setup";
 import {

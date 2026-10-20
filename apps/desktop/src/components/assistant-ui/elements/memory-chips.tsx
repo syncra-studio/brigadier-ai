@@ -1,7 +1,7 @@
 import type { ComponentProps } from "react";
 
 import { field, ghostButton, mono } from "@/components/assistant-ui/elements/surfaces";
-import { Brain, X } from "@/components/ui/icon";
+import { Brain, X } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 export type MemoryChipChange = "added" | "updated" | "existing";

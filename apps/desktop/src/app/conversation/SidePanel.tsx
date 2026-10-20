@@ -4,7 +4,7 @@ import { useWorkspacePane } from "@/app/conversation/WorkspacePane";
 import { useRightSidebar } from "@/app/conversation/RightSidebar";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { TitlebarButton } from "@/components/titlebar-button";
-import { Dock } from "@/components/ui/icon";
+import { Dock } from "@/components/icons";
 import { tokenPx } from "@/lib/tokens";
 import { takePaneClose } from "@/state/closedPanes";
 import { HOME_PLACE, placeOf, terminalWorksHere, toggleTerminal, undoTabClose, useTerminalPlaces } from "@/state/terminalPlaces";

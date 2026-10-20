@@ -1,7 +1,7 @@
 import type { ComponentProps } from "react";
 
 import { field, mono } from "@/components/assistant-ui/elements/surfaces";
-import { Search } from "@/components/ui/icon";
+import { Search } from "@/components/icons";
 import { openLink } from "@/state/links";
 import { cn } from "@/lib/utils";
 

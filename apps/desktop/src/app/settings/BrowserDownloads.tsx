@@ -9,7 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { DotsHorizontal, Download, Folder, Trash } from "@/components/ui/icon";
+import { DotsHorizontal, Download, Folder, Trash } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import { revealPath } from "@/ipc/client";
 import type { BrowserDownload } from "@/ipc/generated";

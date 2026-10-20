@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { ViewContext } from "@/app/conversation/viewContext";
-import { ChatCompose, Plus } from "@/components/ui/icon";
+import { ChatCompose, Plus } from "@/components/icons";
 import { request } from "@/ipc/client";
 import { saveDraft } from "@/state/drafts";
 import { openSideChatTab } from "@/state/sessionTabs";

@@ -16,7 +16,7 @@ import {
   Globe,
   Sparkle,
   X,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import type { CardState } from "@/ipc/generated";
 import { NEVER_PUSHES_NOTE } from "@/lib/setup";
 import { type ShownApproval, useBoard } from "@/state/board";

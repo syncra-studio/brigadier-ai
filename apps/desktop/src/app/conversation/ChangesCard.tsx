@@ -24,7 +24,7 @@ import {
   PullRequestMerged,
   TriangleExclamationErrorWarning,
   Trash,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import type { DiffStat, FileReview, FileStat, HeldPath, MergeUndo, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { formatTime } from "@/lib/format";

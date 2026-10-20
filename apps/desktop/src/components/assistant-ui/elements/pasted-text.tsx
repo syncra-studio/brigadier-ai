@@ -19,7 +19,7 @@ import { composerInlineNumber } from "@/components/assistant-ui/elements/inline-
 import { bound, editing, rebound } from "@/components/assistant-ui/elements/pasteBinding";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
-import { FileDocument } from "@/components/ui/icon";
+import { FileDocument } from "@/components/icons";
 import type { AttachmentRef } from "@/ipc/generated";
 import { openLink } from "@/state/links";
 import { cn } from "@/lib/utils";

@@ -46,7 +46,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
-import { Check, Copy, Document, DownloadSimple, ExpandLg, Globe, Mail } from "@/components/ui/icon";
+import { Check, Copy, Document, DownloadSimple, ExpandLg, Globe, Mail } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { openArtifact, openFolder, openUrl, pageRead, request, revealPath, saveArtifact, saveCopy } from "@/ipc/client";

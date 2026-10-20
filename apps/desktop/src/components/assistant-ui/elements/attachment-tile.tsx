@@ -23,7 +23,7 @@ import {
   Paperclip,
   Warning,
   X,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { fileName } from "@/lib/format";
 import { cn } from "@/lib/utils";
 

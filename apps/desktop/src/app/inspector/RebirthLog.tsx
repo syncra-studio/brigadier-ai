@@ -4,7 +4,7 @@ import { formatTokens, type RebirthRow } from "@/app/inspector/orchestratorLog";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronRight } from "@/components/ui/icon";
+import { ChevronRight } from "@/components/icons";
 import { request } from "@/ipc/client";
 import type { RebirthRecord } from "@/ipc/generated";
 import { formatClock, formatDuration } from "@/lib/format";

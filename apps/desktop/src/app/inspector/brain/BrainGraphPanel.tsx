@@ -13,7 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronDown } from "@/components/ui/icon";
+import { ChevronDown } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import type { BrainGraph, BrainOverview, NodeFilter, NodeKind } from "@/ipc/generated";
 import { getBrainGraph, projectOf } from "@/state/brain";

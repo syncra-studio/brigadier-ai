@@ -5,7 +5,7 @@ import { ImageGeneration } from "@/components/assistant-ui/elements/image-genera
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
-import { ImageSquare } from "@/components/ui/icon";
+import { ImageSquare } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useThreadImages } from "@/state/threadImages";
 

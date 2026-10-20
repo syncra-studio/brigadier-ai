@@ -3,7 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import { ExclamationMarkCircle } from "@/components/ui/icon";
+import { ExclamationMarkCircle } from "@/components/icons";
 import type { ProviderKind, ProviderOverview, TerminalInfo } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { loadProviders, refreshProviders } from "@/state/actions";

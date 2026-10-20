@@ -33,7 +33,7 @@ import {
   Folders,
   Reload,
   Text,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { openFolder, request, revealPath } from "@/ipc/client";
 import type { ReviewDiff, ReviewFile, ReviewScope } from "@/ipc/generated";

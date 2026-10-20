@@ -1,7 +1,7 @@
 import type * as React from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
-import { X } from "@/components/ui/icon";
+import { X } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 

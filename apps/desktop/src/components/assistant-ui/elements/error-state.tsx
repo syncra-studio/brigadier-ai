@@ -2,7 +2,7 @@ import type { ComponentProps } from "react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
-import { Check, ChevronRight, Copy, Regenerate, Warning } from "@/components/ui/icon";
+import { Check, ChevronRight, Copy, Regenerate, Warning } from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { cn } from "@/lib/utils";
 

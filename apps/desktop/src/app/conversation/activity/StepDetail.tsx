@@ -10,7 +10,7 @@ import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { searchResults, WebSearch } from "@/components/assistant-ui/elements/web-search";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Check, Copy } from "@/components/ui/icon";
+import { Check, Copy } from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import type { TranscriptItem } from "@/components/transcript/transcript";
 import type { ItemStatus, ThreadItem } from "@/ipc/generated";

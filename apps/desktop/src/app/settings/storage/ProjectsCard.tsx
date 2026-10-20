@@ -48,7 +48,7 @@ import {
   Search,
   Sparkles,
   Stack,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { revealPath } from "@/ipc/client";
 import type { ProjectUsage, StorageReport } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";

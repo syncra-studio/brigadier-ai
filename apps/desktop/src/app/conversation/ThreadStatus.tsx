@@ -3,7 +3,7 @@ import { type FC, useMemo } from "react";
 import { answeredHead, elapsedWords, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
 import type { BlockState } from "@/app/conversation/blocks";
-import { Tasks } from "@/components/ui/icon";
+import { Tasks } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import type { QuotaWait } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

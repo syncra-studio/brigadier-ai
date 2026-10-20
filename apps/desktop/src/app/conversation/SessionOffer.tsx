@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { field } from "@/components/assistant-ui/elements/surfaces";
-import { Branch, Check } from "@/components/ui/icon";
+import { Branch, Check } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { openConversation, startOfferedSession } from "@/state/actions";
 import { useBoard } from "@/state/board";

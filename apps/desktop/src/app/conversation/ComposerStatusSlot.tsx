@@ -21,7 +21,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import { Branch, Check, ChevronRight, X } from "@/components/ui/icon";
+import { Branch, Check, ChevronRight, X } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { openUrl } from "@/ipc/client";
 import { cn } from "@/lib/utils";

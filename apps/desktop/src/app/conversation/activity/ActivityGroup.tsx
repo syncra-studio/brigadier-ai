@@ -9,7 +9,7 @@ import { foldRepeats, labelParts, stepLabel, type StepWords, summarize, summaryL
 import { CHEVRON, LIST_ICON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE, WORK_ICONS } from "@/components/assistant-ui/elements/activity-row";
 import { GROUP_LIST, RowOpens, ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronRightAlt, Clock, Globe, Stop, Tasks } from "@/components/ui/icon";
+import { ChevronRightAlt, Clock, Globe, Stop, Tasks } from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import type { ItemStatus } from "@/ipc/generated";
 import { formatDuration } from "@/lib/format";

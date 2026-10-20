@@ -4,7 +4,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { Plus, Trash, X } from "@/components/ui/icon";
+import { Plus, Trash, X } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { pickFolder } from "@/ipc/client";

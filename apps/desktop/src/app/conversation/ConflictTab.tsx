@@ -26,7 +26,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ArrowDown, ArrowUp } from "@/components/ui/icon";
+import { ArrowDown, ArrowUp } from "@/components/icons";
 import { request } from "@/ipc/client";
 import type { ConflictFile, SourceState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

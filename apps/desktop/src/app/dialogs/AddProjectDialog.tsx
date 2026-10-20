@@ -25,7 +25,7 @@ import {
   Link,
   Plus,
   X,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import { pickFolder } from "@/ipc/client";
 import type { FolderCheck, RepoSuggestion } from "@/ipc/generated";

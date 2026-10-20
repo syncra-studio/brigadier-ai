@@ -6,7 +6,7 @@ import { PILL_BUTTON, RAISED_BUTTON, StepFooter, StepHeader, TickMark } from "@/
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import { FolderOpen } from "@/components/ui/icon";
+import { FolderOpen } from "@/components/icons";
 import { pickFolder, warmFolderPicker } from "@/ipc/client";
 import type { ProjectCandidate } from "@/ipc/generated";
 import { formatAgo, shortPath } from "@/lib/format";

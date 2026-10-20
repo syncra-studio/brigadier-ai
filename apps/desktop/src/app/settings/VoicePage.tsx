@@ -11,7 +11,7 @@ import {
 } from "@/app/settings/parts";
 import { cleanWords, languageChoices, microphoneChoices } from "@/app/settings/voice";
 import { ProgressLine } from "@/components/assistant-ui/elements/progress-line";
-import { Plus, Trash } from "@/components/ui/icon";
+import { Plus, Trash } from "@/components/icons";
 import { formatBytes } from "@/lib/format";
 import {
   cancelSpeechModelDownload,

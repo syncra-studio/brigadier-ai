@@ -42,7 +42,7 @@ import {
   Folder,
   Trash,
   Unarchive,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import type { Conversation } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";

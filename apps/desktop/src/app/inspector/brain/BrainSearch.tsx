@@ -6,7 +6,7 @@ import { Picker } from "@/app/inspector/providers/Picker";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronRight, Search } from "@/components/ui/icon";
+import { ChevronRight, Search } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import type { BrainAnswer, BrainHit, NodeKind } from "@/ipc/generated";
 import { formatMs } from "@/lib/format";

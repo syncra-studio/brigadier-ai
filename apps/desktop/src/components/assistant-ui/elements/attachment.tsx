@@ -23,7 +23,7 @@ import {
 import { inComposerText } from "@/components/assistant-ui/elements/inline-image";
 import { PastedTextDialog } from "@/components/assistant-ui/elements/pasted-text";
 import { Spinner } from "@/components/glyphs/spinner";
-import { ChevronRight, Warning } from "@/components/ui/icon";
+import { ChevronRight, Warning } from "@/components/icons";
 
 /**
  * One composer attachment (the assistant-ui Attachment element): an

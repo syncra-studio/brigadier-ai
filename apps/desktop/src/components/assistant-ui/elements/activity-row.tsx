@@ -12,7 +12,7 @@ import {
   Sparkle,
   Terminal,
   Tools,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 
 /**
  * The one row recipe of a thread's activity (THREAD-UX-PLAN.md §3.7), the lead's and a worker's

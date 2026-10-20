@@ -3,7 +3,7 @@ import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactN
 import { type ImageState, type LoadedImage, loadImage, markedScreenshot, useStoredImage } from "@/app/conversation/mockupImages";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ArrowUp, Check, ChevronDown, Comment, Grid, ImageSquare, SquareImage, Trash, X } from "@/components/ui/icon";
+import { ArrowUp, Check, ChevronDown, Comment, Grid, ImageSquare, SquareImage, Trash, X } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ArtifactRef } from "@/ipc/generated";

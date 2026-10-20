@@ -34,7 +34,7 @@ import {
   Settings as SettingsIcon,
   Shuffle,
   Warning,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import type {

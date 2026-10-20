@@ -1,6 +1,6 @@
 import { useId, type ComponentProps, type ReactNode } from "react";
 
-import { ChevronDown } from "@/components/ui/icon";
+import { ChevronDown } from "@/components/icons";
 import { Kbd } from "@/components/ui/kbd";
 import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";

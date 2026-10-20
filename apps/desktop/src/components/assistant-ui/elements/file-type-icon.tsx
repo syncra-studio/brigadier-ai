@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { File, FileCode, FileDocument, FileImage } from "@/components/ui/icon";
+import { File, FileCode, FileDocument, FileImage } from "@/components/icons";
 
 /** A file's icon by its extension. */
 export function FileTypeIcon({ name, className }: { name: string; className?: string }): ReactNode {

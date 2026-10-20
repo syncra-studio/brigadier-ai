@@ -1,6 +1,6 @@
 import { Toast as ToastPrimitive } from "radix-ui";
 
-import { CheckCircle, InfoCircle, Warning, X } from "@/components/ui/icon";
+import { CheckCircle, InfoCircle, Warning, X } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { dismissToast, type Toast, useToasts } from "@/state/toasts";
 

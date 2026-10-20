@@ -21,7 +21,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ArrowUpRight, ChevronRight, Plus } from "@/components/ui/icon";
+import { ArrowUpRight, ChevronRight, Plus } from "@/components/icons";
 import type { AccountView, ProviderKind, ProviderOverview, QuotaWindow } from "@/ipc/generated";
 import { used, windowTitle } from "@/lib/quota";
 import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";

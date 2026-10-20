@@ -42,7 +42,7 @@ import {
   Copy,
   EditPencil,
   Paperclip,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { ScrollFade } from "@/components/ui/scroll-fade";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";

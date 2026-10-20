@@ -7,7 +7,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Chat, Comment, Folder, Search, Terminal } from "@/components/ui/icon";
+import { Chat, Comment, Folder, Search, Terminal } from "@/components/icons";
 import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { openConversation, select, setProjectExpanded } from "@/state/actions";

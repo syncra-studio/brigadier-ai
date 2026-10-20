@@ -10,7 +10,7 @@ import {
 import { FileIcon } from "@/components/glyphs/fileIcons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ChevronDown, ChevronRight, X } from "@/components/ui/icon";
+import { ChevronDown, ChevronRight, X } from "@/components/icons";
 import type { ReplaceOutcome, ReplaceSkip, SearchFile, SearchLine, SearchQuery } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { useApp } from "@/state/store";

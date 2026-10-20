@@ -7,7 +7,7 @@ import { StateDot } from "@/app/providers/parts";
 import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Button } from "@/components/ui/button";
-import { BarChart, ChevronRight, Lightbulb } from "@/components/ui/icon";
+import { BarChart, ChevronRight, Lightbulb } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Segmented } from "@/components/ui/segmented";
 import { useSidebar } from "@/components/ui/sidebar";

@@ -9,7 +9,7 @@ import { Pill, RoundBadge, RowText, StorageCard } from "@/app/settings/storage/p
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { buttonVariants } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ArrowRotateCw, ArrowUpRight, ChevronDown, ChevronUp, Document, Globe, ImageSquare, Mobile, Play, Terminal } from "@/components/ui/icon";
+import { ArrowRotateCw, ArrowUpRight, ChevronDown, ChevronUp, Document, Globe, ImageSquare, Mobile, Play, Terminal } from "@/components/icons";
 import type { OrchestratorStepKind, Preview, PreviewKind, ProofKind } from "@/ipc/generated";
 import { openPdf, openSimulator, openUrl } from "@/ipc/client";
 import { formatTime } from "@/lib/format";

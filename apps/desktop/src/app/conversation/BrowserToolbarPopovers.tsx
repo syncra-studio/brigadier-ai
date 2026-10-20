@@ -2,7 +2,7 @@ import { type RefObject, useEffect, useState } from "react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
-import { Camera, Download, Mic, X } from "@/components/ui/icon";
+import { Camera, Download, Mic, X } from "@/components/icons";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { revealPath } from "@/ipc/client";
 import type { BrowserDownload } from "@/ipc/generated";

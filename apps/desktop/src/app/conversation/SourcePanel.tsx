@@ -38,7 +38,7 @@ import {
   Reload,
   Sparkles,
   Undo,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { request } from "@/ipc/client";
 import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import type { CommitOutcome, SourceAction, SourceBranch, SourceChange, SourceFile, SourceGitRun, SourceScope, SourceState } from "@/ipc/generated";

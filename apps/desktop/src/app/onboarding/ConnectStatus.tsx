@@ -4,7 +4,7 @@ import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
-import { ExclamationMarkCircle } from "@/components/ui/icon";
+import { ExclamationMarkCircle } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import { openUrl } from "@/ipc/client";
 import type { ProviderKind } from "@/ipc/generated";

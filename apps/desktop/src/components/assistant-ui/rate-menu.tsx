@@ -15,7 +15,7 @@ import {
   ThumbUp,
   ThumbUpFilled,
   Undo,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import type { Rating } from "@/ipc/generated";
 
 /**

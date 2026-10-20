@@ -5,7 +5,8 @@
 //   - CSS files other than tokens.css: no hex colours or colour functions (color-mix of tokens is
 //     fine), no px/rem/em lengths but 0 and 1px/2px hairlines (%, vw and vh are layout);
 //   - `style={{…}}` holds only computed values: a property set to a plain literal is a class;
-//   - @openai/apps-sdk-ui and Radix are imported only inside components/ui.
+//   - @openai/apps-sdk-ui and Radix are imported only inside components/ui (the kit's icons only
+//     in components/icons/kit.ts).
 // What can't follow yet is listed in check-styles.allow, one file per line with the exact values
 // it may keep and why: `<path from src> <value> [<value>…]  # reason`. An entry no longer needed
 // fails the check too, so the list only shrinks.
@@ -64,7 +65,7 @@ export function problems(path, text) {
     }
     return found;
   }
-  if (!path.includes("components/ui/")) {
+  if (!path.includes("components/ui/") && path !== "components/icons/kit.ts") {
     for (const [, name] of text.matchAll(KIT_IMPORT)) found.push([name, "a kit import: use the components/ui wrapper"]);
   }
   for (const object of styleObjects(text)) {

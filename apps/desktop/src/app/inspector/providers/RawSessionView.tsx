@@ -13,7 +13,7 @@ import {
 import { TranscriptRow } from "@/components/transcript/TranscriptRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft } from "@/components/ui/icon";
+import { ArrowLeft } from "@/components/icons";
 import type { ApprovalRequest, RawSession } from "@/ipc/generated";
 import {
   answerApproval,

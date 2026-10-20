@@ -4,7 +4,7 @@ import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { ArrowUpRight, Bug, Eye, Lightbulb, X } from "@/components/ui/icon";
+import { ArrowUpRight, Bug, Eye, Lightbulb, X } from "@/components/icons";
 import { Segmented } from "@/components/ui/segmented";
 import { detailsItems, type FeedbackKind } from "@/lib/feedbackUrl";
 import { closeFeedback, feedbackDetails, type FeedbackDraft, sendFeedback, useFeedbackUi } from "@/state/feedback";

@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Check, Download, Globe, Images, SettingsCog, Trash } from "@/components/ui/icon";
+import { Check, Download, Globe, Images, SettingsCog, Trash } from "@/components/icons";
 import { Segmented } from "@/components/ui/segmented";
 import type { BrowserClear } from "@/ipc/generated";
 import { clearBrowsingData, type ClearRange, rangeStart, siteDataCount } from "@/state/browserData";

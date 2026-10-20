@@ -14,7 +14,7 @@ import {
 import { WorkerThread } from "@/app/conversation/WorkerThread";
 import { effortLabel } from "@/components/assistant-ui/elements/model-selector";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { ArrowLeft } from "@/components/ui/icon";
+import { ArrowLeft } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import type { Task } from "@/ipc/generated";

@@ -4,7 +4,7 @@ import { flushSync } from "react-dom";
 import { type AttachmentSource, useAttachmentUrl } from "@/components/assistant-ui/elements/attachment-url";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Dialog, DialogClose, DialogPlainContent, DialogPlainOverlay, DialogPortal, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { ChevronLeft, ChevronRight, Download, Minus, Plus, X } from "@/components/ui/icon";
+import { ChevronLeft, ChevronRight, Download, Minus, Plus, X } from "@/components/icons";
 import { saveCopy } from "@/ipc/client";
 import { toast } from "@/state/toasts";
 import { cn } from "@/lib/utils";

@@ -1,6 +1,6 @@
 import { type ComponentProps, type ReactNode, useId, useState } from "react";
 
-import { ChevronDown } from "@/components/ui/icon";
+import { ChevronDown } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /**

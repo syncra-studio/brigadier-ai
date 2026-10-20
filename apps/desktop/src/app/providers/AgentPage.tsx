@@ -10,7 +10,7 @@ import { AgentMark, CheckAgainButton, PlanChip, ProvidersSection, ROW_LINE, ROW_
 import { bestFor } from "@/app/routing/models";
 import { SettingsButton, SettingsCard, SettingsPage, SettingsRow, settingsRows, SettingsSwitch } from "@/app/settings/parts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronRight, InfoCircle } from "@/components/ui/icon";
+import { ChevronRight, InfoCircle } from "@/components/icons";
 import { pickFile, request } from "@/ipc/client";
 import type { AccountView, MergedModel, ModelInfo, ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";

@@ -16,7 +16,7 @@ import {
   Copy,
   DotsHorizontal,
   ExpandLg,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import type { Token } from "@/lib/languages";
 import { cn } from "@/lib/utils";

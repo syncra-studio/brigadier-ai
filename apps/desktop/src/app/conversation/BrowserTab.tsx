@@ -32,7 +32,7 @@ import {
   Search,
   Warning,
   X,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { browserFocus, browserGo, browserPlace, browserPrint, browserSnapshot, openUrl } from "@/ipc/client";

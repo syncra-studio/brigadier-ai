@@ -4,7 +4,7 @@ import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { WORKERS_LABEL, WorkersTab } from "@/app/conversation/Agents";
 import { outcomeWords } from "@/app/conversation/workerPresentation";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
-import { X } from "@/components/ui/icon";
+import { X } from "@/components/icons";
 import { SidebarReveal, SidebarResizeHandle, useSidebarChoice, useSidebarWidth } from "@/components/ui/sidebar-layout";
 import { useSidebar } from "@/components/ui/sidebar";
 import { tokenPx } from "@/lib/tokens";

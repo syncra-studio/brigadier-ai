@@ -1,6 +1,6 @@
 import { type FC, useEffect, useMemo, useRef, useState } from "react";
 
-import { Branch } from "@/components/ui/icon";
+import { Branch } from "@/components/icons";
 import type { SourceBranch } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 

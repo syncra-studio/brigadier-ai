@@ -22,7 +22,7 @@ import { createPortal } from "react-dom";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ChevronDown, Code, Link } from "@/components/ui/icon";
+import { ChevronDown, Code, Link } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 import { $currentBlock, applyBlock, type Block, BLOCKS, blockMatches, type BlockKind, TURN_INTO } from "./pageBlocks";

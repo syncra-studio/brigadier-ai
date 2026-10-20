@@ -15,7 +15,7 @@ import {
   UsageBar,
 } from "@/app/settings/storage/parts";
 import { ProjectsCard, type UnusedFreeUp } from "@/app/settings/storage/ProjectsCard";
-import { FolderOpen, Reload } from "@/components/ui/icon";
+import { FolderOpen, Reload } from "@/components/icons";
 import { revealPath } from "@/ipc/client";
 import type { StorageReport } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";

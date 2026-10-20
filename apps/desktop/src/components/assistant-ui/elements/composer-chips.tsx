@@ -57,7 +57,7 @@ import {
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { ComposerInlineImage } from "@/components/assistant-ui/elements/inline-image";
 import { ComposerPastedText } from "@/components/assistant-ui/elements/pasted-text";
-import { Globe } from "@/components/ui/icon";
+import { Globe } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 export {

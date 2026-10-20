@@ -5,7 +5,7 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { WorkerLine } from "@/app/conversation/WorkerChip";
 import { ShieldExclamation } from "@/components/glyphs/permission-glyphs";
 import { Button } from "@/components/ui/button";
-import { Branch, Globe } from "@/components/ui/icon";
+import { Branch, Globe } from "@/components/icons";
 import type { SettingChange } from "@/ipc/generated";
 import { PERMISSION_LABELS } from "@/lib/setup";
 import { openSettings } from "@/state/actions";

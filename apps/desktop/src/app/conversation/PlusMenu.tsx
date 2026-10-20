@@ -22,7 +22,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ArrowUpRight, Chat, Folder, Lightbulb, Paperclip, Plus } from "@/components/ui/icon";
+import { ArrowUpRight, Chat, Folder, Lightbulb, Paperclip, Plus } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Mention } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";

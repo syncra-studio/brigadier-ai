@@ -54,7 +54,7 @@ import {
   Trash,
   Unpin,
   X,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { Kbd } from "@/components/ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSidebar } from "@/components/ui/sidebar";

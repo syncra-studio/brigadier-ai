@@ -12,7 +12,7 @@ import { MessageInlineImage } from "@/components/assistant-ui/elements/inline-im
 import { InlineImageContext, InlinePasteContext, TaskMentionContext } from "@/components/assistant-ui/file-links";
 import { MessagePastedText } from "@/components/assistant-ui/elements/pasted-text";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
-import { Chat, File, Folder, Globe } from "@/components/ui/icon";
+import { Chat, File, Folder, Globe } from "@/components/icons";
 import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
 import { normalizedImages } from "@/lib/inlineImages";
 import { foldersOf, mentionSections, type MentionRow, type MentionTab, type MentionTarget } from "@/app/conversation/mentionSearch";

@@ -3,7 +3,7 @@ import { FootButton } from "@/app/sidebar/nav";
 import { FOOT_CHIP } from "@/app/UpdatesRow";
 import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { Spinner } from "@/components/glyphs/spinner";
-import { ArrowRotateCw, DownloadSimple } from "@/components/ui/icon";
+import { ArrowRotateCw, DownloadSimple } from "@/components/icons";
 import { useSidebar } from "@/components/ui/sidebar";
 import { type AppUpdate, clickAppUpdate, useAppUpdate } from "@/state/appUpdate";
 

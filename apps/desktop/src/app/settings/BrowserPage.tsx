@@ -15,7 +15,7 @@ import {
   SettingsSwitch,
   SwitchSetting,
 } from "@/app/settings/parts";
-import { Globe } from "@/components/ui/icon";
+import { Globe } from "@/components/icons";
 import { pickFolder } from "@/ipc/client";
 import type { LinkTarget } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";

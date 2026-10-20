@@ -6,7 +6,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronDown } from "@/components/ui/icon";
+import { ChevronDown } from "@/components/icons";
 
 export type PickerOption = { value: string; label: string; hint?: string };
 

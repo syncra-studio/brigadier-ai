@@ -5,7 +5,7 @@ import { sentByCaption, UNKNOWN_SESSION } from "@/app/conversation/activity/peer
 import type { PeerOf } from "@/app/conversation/blocks";
 import { FoldedMarkdown, usePeerName } from "@/app/conversation/peerParts";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Chat, Check, Copy } from "@/components/ui/icon";
+import { Chat, Check, Copy } from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
 import { formatSentAt } from "@/lib/format";

@@ -42,7 +42,7 @@ import {
   PullRequestMerged,
   PullRequestOpen,
   Tasks,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { CHAT_TAB, openPanelTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";

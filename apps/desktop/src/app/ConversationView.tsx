@@ -38,7 +38,7 @@ import { interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/co
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import { foldedEntries } from "@/app/conversation/railHistory";
 import { useSidePanel } from "@/app/conversation/SidePanel";
-import { Info, Unarchive, Warning, X } from "@/components/ui/icon";
+import { Info, Unarchive, Warning, X } from "@/components/icons";
 import { queuedImageRefs, reconcileImages } from "@/lib/inlineImages";
 import { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { sendLane } from "@/app/conversation/composerKeys";

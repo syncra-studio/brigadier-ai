@@ -6,7 +6,7 @@ import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversati
 import { workerDone, workerPreview, workerState, workerWorking } from "@/app/conversation/workerPresentation";
 import { ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
-import { CheckCircle, Chat, Commit, StopCircle } from "@/components/ui/icon";
+import { CheckCircle, Chat, Commit, StopCircle } from "@/components/icons";
 import type { OrchestratorStepKind, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format";

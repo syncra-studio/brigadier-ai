@@ -2,7 +2,7 @@ import { type ComponentProps, createContext, type ReactNode, useContext, useRef,
 
 import { CHEVRON, OPENS, ROW, ROW_DETAIL, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronRightAlt } from "@/components/ui/icon";
+import { ChevronRightAlt } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /** The list an opened group's rows scroll in. */

@@ -14,7 +14,7 @@ import {
 } from "@/app/conversation/planProgress";
 import { mono } from "@/components/assistant-ui/elements/surfaces";
 import { Spinner } from "@/components/glyphs/spinner";
-import { Check, Clock, StopCircle, X } from "@/components/ui/icon";
+import { Check, Clock, StopCircle, X } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { DiffStat, FileStat } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

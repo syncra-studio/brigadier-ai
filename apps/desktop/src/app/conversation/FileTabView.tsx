@@ -21,7 +21,7 @@ import {
   FolderOpen,
   Search,
   X,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { request, RequestError, revealPath } from "@/ipc/client";
 import type { CheckoutFile } from "@/ipc/generated";

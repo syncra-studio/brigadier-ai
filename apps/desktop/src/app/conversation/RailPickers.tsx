@@ -22,7 +22,7 @@ import {
   Plus,
   SpeedometerLatencySpeed,
   X,
-} from "@/components/ui/icon";
+} from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { Project, QuotaWindow } from "@/ipc/generated";
 import { usageTone } from "@/lib/quota";

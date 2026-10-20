@@ -3,7 +3,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { SettingsButton, SettingsSection } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
-import { Reload } from "@/components/ui/icon";
+import { Reload } from "@/components/icons";
 import type { ProviderKind, QuotaWindow } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
 import { usageTone, used, windowTitle } from "@/lib/quota";

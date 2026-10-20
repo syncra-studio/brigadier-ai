@@ -24,7 +24,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { DotsHorizontal, Info, Plus, Warning } from "@/components/ui/icon";
+import { DotsHorizontal, Info, Plus, Warning } from "@/components/icons";
 import type { OverrideRule, OverrideTarget, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { newRuleId, PLAIN_KIND_NAMES, ruleSentence } from "@/lib/routing";
 import { isNewModelRule } from "@/state/providers";
