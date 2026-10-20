@@ -265,9 +265,11 @@ impl BrowserHub {
 }
 
 /// Whether agents get the browser tools with the built-in browser `on`: they drive it on macOS
-/// for now (Windows: a GitHub issue; Linux has no built-in browser).
+/// for now (Windows awaits its first verified run; Linux has no built-in browser).
 pub(crate) fn agents_browse(on: bool) -> bool {
-    cfg!(target_os = "macos") && on
+    (cfg!(target_os = "macos")
+        || (cfg!(target_os = "windows") && crate::browser::WINDOWS_AGENT_BROWSER_ENABLED))
+        && on
 }
 
 /// The op a tool call asks of the app; a call that says too little or too much is refused.
@@ -855,7 +857,11 @@ mod tests {
     /// macOS, with no switch of their own.
     #[test]
     fn agents_browse_wherever_the_browser_is_on_on_macos() {
-        assert_eq!(agents_browse(true), cfg!(target_os = "macos"));
+        assert_eq!(
+            agents_browse(true),
+            cfg!(target_os = "macos")
+                || (cfg!(target_os = "windows") && crate::browser::WINDOWS_AGENT_BROWSER_ENABLED)
+        );
         assert!(!agents_browse(false));
     }
 

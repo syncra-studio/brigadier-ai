@@ -574,7 +574,9 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ts-rs",
+ "webview2-com",
  "window-vibrancy",
+ "windows 0.61.3",
  "wry",
 ]
 

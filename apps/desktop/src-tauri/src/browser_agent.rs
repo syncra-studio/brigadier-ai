@@ -1,13 +1,13 @@
 //! The browser tool's commands (Q74): what the app does on a Browser tab's page for an agent.
 //! The app's own code (`state/agentBrowser.ts`) takes the agent's call from the daemon, runs it
 //! with these and answers it. Reading and acting go through `browser_agent.js`, run fresh in
-//! the page for each call; a screenshot is WebKit's picture of the page.
+//! the page for each call; a screenshot is the system webview's picture of the page.
 //!
-//! macOS only for now: Windows' pages can't be read or pictured yet, and Linux has no
-//! embedded page.
+//! Windows plumbing is compiled but disabled until a Windows browser flow run proves it.
+//! Linux has no embedded page.
 
 use brigadier_ipc::protocol::IpcError;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::sync::Mutex;
 
 /// The script, as a function of one op (see its head).
@@ -26,6 +26,18 @@ fn unsupported() -> IpcError {
     }
 }
 
+/// Windows stays off until its browser flow and render tests have run on that platform.
+fn check_supported() -> Result<(), IpcError> {
+    #[cfg(target_os = "windows")]
+    if !brigadier_core::browser::WINDOWS_AGENT_BROWSER_ENABLED {
+        return Err(unsupported());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    return Err(unsupported());
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    Ok(())
+}
+
 /// Reads tab `id`'s page or acts on it as `op` says, and returns what the page answered.
 #[tauri::command]
 pub async fn browser_agent(
@@ -33,11 +45,13 @@ pub async fn browser_agent(
     id: String,
     op: serde_json::Value,
 ) -> Result<serde_json::Value, IpcError> {
-    #[cfg(target_os = "macos")]
+    check_supported()?;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         let script = script(&op);
         let json = crate::browser::on_page(&app, id, move |webview, sent| {
             let sent = Mutex::new(Some(sent));
+            // wry uses WebKit on macOS and ICoreWebView2::ExecuteScript on Windows.
             let _ = webview.evaluate_script_with_callback(&script, move |json| {
                 if let Some(sent) = sent
                     .lock()
@@ -54,7 +68,7 @@ pub async fn browser_agent(
             message: format!("the page didn't answer: {err}"),
         })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (app, id, script(&op));
         Err(unsupported())
@@ -64,13 +78,14 @@ pub async fn browser_agent(
 /// Opens `url` in tab `id`'s page where it is, without moving or showing it.
 #[tauri::command]
 pub fn browser_agent_load(id: String, url: String) -> Result<(), IpcError> {
+    check_supported()?;
     crate::browser::check_enabled()?;
     crate::browser::web_page_only(&url)?;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         crate::browser::embedded::load(&id, &url)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = id;
         Err(unsupported())
@@ -83,6 +98,7 @@ pub async fn browser_agent_capture(
     app: tauri::AppHandle,
     id: String,
 ) -> Result<tauri::ipc::Response, IpcError> {
+    check_supported()?;
     #[cfg(target_os = "macos")]
     {
         let png = crate::browser::on_page(&app, id, |webview, sent| {
@@ -96,7 +112,13 @@ pub async fn browser_agent_capture(
             message: "the page's picture couldn't be taken".into(),
         })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        crate::browser::on_page(&app, id, windows::capture)
+            .await?
+            .map(tauri::ipc::Response::new)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (app, id);
         Err(unsupported())
@@ -106,6 +128,16 @@ pub async fn browser_agent_capture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_follow_the_same_platform_gate_as_the_tools() {
+        assert_eq!(
+            check_supported().is_ok(),
+            cfg!(target_os = "macos")
+                || (cfg!(target_os = "windows")
+                    && brigadier_core::browser::WINDOWS_AGENT_BROWSER_ENABLED)
+        );
+    }
 
     #[test]
     fn the_script_is_called_with_its_op() {
@@ -123,3 +155,7 @@ mod tests {
         );
     }
 }
+
+/// WebView2's capture writes a PNG to an in-memory COM stream, including for a background tab.
+#[cfg(target_os = "windows")]
+mod windows;

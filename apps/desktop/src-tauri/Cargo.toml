@@ -51,5 +51,10 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std"
 # applies it with).
 window-vibrancy = "0.6.0"
 
+# WebView2's CapturePreview uses the same COM bindings as wry.
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.38.2"
+windows = { version = "0.61.3", features = ["Win32_System_Com_StructuredStorage"] }
+
 [lints]
 workspace = true

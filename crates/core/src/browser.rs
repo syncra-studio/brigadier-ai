@@ -7,6 +7,10 @@ use ts_rs::TS;
 
 use crate::{ConversationId, TaskId};
 
+/// Enable only after browser flow and render tests pass on a Windows machine (#334).
+/// Shared by tool advertisement and the app commands, so both turn on together.
+pub const WINDOWS_AGENT_BROWSER_ENABLED: bool = false;
+
 /// A call an agent made of its session's Browser tabs, for the app to run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

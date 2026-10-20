@@ -913,7 +913,6 @@ pub(crate) mod embedded {
     }
 
     /// Loads `url` in the tab's page where it is, shown or not.
-    #[cfg(target_os = "macos")]
     pub fn load(id: &str, url: &str) -> Result<(), IpcError> {
         BROWSERS.with_borrow(|browsers| {
             browsers
@@ -962,7 +961,6 @@ pub(crate) mod embedded {
     }
 
     /// Runs `action` with the tab's page; an error when it has none.
-    #[cfg(target_os = "macos")]
     pub fn with_page<T>(id: &str, action: impl FnOnce(&WebView) -> T) -> Result<T, IpcError> {
         BROWSERS.with_borrow(|browsers| {
             browsers
@@ -1307,7 +1305,7 @@ pub fn browser_go(id: String, action: String) -> Result<(), IpcError> {
 }
 
 /// Runs `action` with the tab's page on the main thread, and waits for what it sends.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) async fn on_page<T: Send + 'static>(
     app: &tauri::AppHandle,
     id: String,
