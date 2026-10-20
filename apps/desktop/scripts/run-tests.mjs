@@ -11,7 +11,7 @@
 //
 // A run with render tests starts one Vite server for all of them (src/fixtures/headless.ts),
 // its dependencies optimized before the first test file starts.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -58,6 +58,12 @@ function runOnce(files) {
     clearInterval(watch);
     stopped = true;
     console.error(`\nNo test printed anything for ${SILENT_MS / 60_000} minutes, so the run stops here. The files still running are named below.`);
+    if (process.platform === "win32") {
+      // Windows ends only the process signalled, not the test files' processes and the browsers
+      // they started: taskkill ends the whole tree.
+      spawnSync("taskkill", ["/pid", String(run.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      return;
+    }
     run.kill("SIGTERM");
     setTimeout(() => run.kill("SIGKILL"), 30_000).unref();
   }, 5_000);

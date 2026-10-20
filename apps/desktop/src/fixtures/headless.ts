@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { accessSync, closeSync, constants, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -93,9 +93,11 @@ async function startFixtureServer(): Promise<{ server: FixtureServer; child: Chi
     await optimizer?.scanProcessing;
     await Promise.all(Object.values(optimizer?.metadata.discovered ?? {}).map((dep) => dep.processing));
     console.log("ready " + server.resolvedUrls.local[0]);
-    // A run stopped outright (its teardown never ran) leaves no server behind.
+    // A run stopped outright (its teardown never ran) leaves no server behind. Windows never
+    // changes a process's ppid, so there it asks whether the parent is still running.
     const parent = process.ppid;
-    setInterval(() => { if (process.ppid !== parent) process.exit(0); }, 1000).unref();
+    const gone = () => { try { process.kill(parent, 0); return false; } catch { return true; } };
+    setInterval(() => { if (process.ppid !== parent || (process.platform === "win32" && gone())) process.exit(0); }, 1000).unref();
   `], { stdio: ["ignore", out, err] });
   serversStarted += 1;
   closeSync(out);
@@ -228,6 +230,34 @@ function unanswered(log: string): string[] {
 let oneProcess = false;
 
 /**
+ * Kills `pid` outright with every process it started: its group, which it leads (`detached`).
+ * Windows has no process groups to signal (`process.kill(-pid)` throws there), so taskkill ends
+ * its process tree instead. Taskkill fails when one of the tree ends on its own meanwhile (a
+ * renderer closing), which is no failure once `pid` itself is gone: it throws only for a process
+ * still running.
+ */
+function killTree(pid: number): void {
+  if (process.platform !== "win32") {
+    process.kill(-pid, "SIGKILL");
+    return;
+  }
+  const running = () => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (let tries = 0; tries < 3; tries += 1) {
+    if (!running()) return;
+    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+  }
+  if (!running()) return;
+  throw new Error(`taskkill could not end process ${pid}`);
+}
+
+/**
  * A headless Chromium on a scratch profile in `scratch`, driven over the DevTools protocol: its
  * page's socket, `call` (a call the browser never answers fails at `deadline`), its log, and
  * `stop`, which also runs when the test ends.
@@ -257,11 +287,11 @@ async function openBrowser(
   const stop = async () => {
     if (browser.exitCode === null && browser.signalCode === null) {
       const stopped = new Promise((resolve) => browser.once("exit", resolve));
-      process.kill(-browser.pid!, "SIGKILL");
+      killTree(browser.pid!);
       await stopped;
     } else {
       try {
-        process.kill(-browser.pid!, "SIGKILL");
+        killTree(browser.pid!);
       } catch {
         // None of them is left.
       }
