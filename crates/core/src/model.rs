@@ -1777,6 +1777,11 @@ pub enum ConnectProgress {
 pub struct AgentConnect {
     pub provider: ProviderKind,
     pub progress: ConnectProgress,
+    /// While it signs in: the page that shows a code to paste back into the sign-in (Claude
+    /// Code's), for when the browser can't hand the sign-in back by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub code_page: Option<String>,
 }
 
 /// Every agent Connect ran for since launch: one cancelled is left out, and one connected

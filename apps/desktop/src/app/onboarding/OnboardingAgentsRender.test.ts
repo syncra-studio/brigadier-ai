@@ -72,3 +72,26 @@ test("onboarding: no agent connected holds Continue", { timeout: 60000 }, async 
   // Enter on Sign in is Continue's, held back: nothing signs in, nothing goes on.
   assert.deepEqual(seen.enter, { continued: 0, asked: [] });
 });
+
+// When the browser can't hand Claude Code's sign-in back, its card offers the page with the code
+// and a field for it; Enter in the field sends the code to the sign-in, not Continue (#321).
+test("onboarding: a code pasted from the sign-in's page goes to the sign-in", { timeout: 60000 }, async (t) => {
+  const seen = parse(
+    await renderFixtureLive(t, "onboarding-agents.html?drive=1&claude=signedOut&code=1", "onboarding-agents-result", 30000),
+  );
+  assert.equal(seen.error, undefined);
+  assert.deepEqual(seen.offered, {
+    name: "Claude Code",
+    line: "Complete sign-in in your browser",
+    action: "Waiting…",
+    says: "Browser didn't finish? Open the code page, then paste the code it shows.",
+    placeholder: "Paste the code from the page",
+    send: false,
+  });
+  assert.deepEqual(seen.typed, { send: true });
+  assert.deepEqual(seen.sent, {
+    asked: ["openUrl https://claude.com/cai/oauth/authorize?code=true", "sendConnectCode claude abc#xyz"],
+    continued: 0,
+  });
+  assert.deepEqual(seen.connected, { name: "Claude Code", line: "Max plan", action: "Connected", field: false });
+});

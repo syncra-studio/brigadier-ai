@@ -2517,6 +2517,11 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
             heap(|| crate::connect::cancel(daemon, provider)).await;
             Response::CancelConnect
         }
+        Request::SendConnectCode { provider, code } => {
+            crate::connect::send_code(daemon, provider, code)
+                .map_err(brigadier_core::Error::Invalid)?;
+            Response::SendConnectCode
+        }
         Request::GetAccounts => Response::GetAccounts {
             accounts: daemon.runtime.accounts_view(),
         },

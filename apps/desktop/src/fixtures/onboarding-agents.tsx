@@ -1,13 +1,15 @@
 /**
  * Onboarding's agents step over a faked daemon. ?claude= and ?codex= set how each agent is
  * found (missing, signedOut or connected; Claude Code missing and Codex connected unless said),
- * ?waiting=claude has Claude Code's sign-in under way and ?plan= names the plan Codex reports:
+ * ?waiting=claude has Claude Code's sign-in under way (offering its code page with ?code=1)
+ * and ?plan= names the plan Codex reports:
  * the step stays as it opens, for screenshots. ?drive=1 presses Claude Code's Install, has it
  * installed meanwhile (the window coming back), presses Sign in, cancels it from Waiting… (which
  * reads Cancel when hovered), signs in again, fails it, signs in again and has the sign-in
  * noticed, writing what each card and the step said at every point to
  * #onboarding-agents-result (OnboardingAgentsRender.test.ts reads it). The faked daemon moves on
- * only when the drive says, so every point is read as it stands.
+ * only when the drive says, so every point is read as it stands. With ?code=1 the drive instead
+ * has Claude Code's sign-in offer its code page, opens it, pastes a code and presses Enter.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -63,7 +65,9 @@ function publish(agents: AgentConnect[]) {
     { seq: 0, stream: "connect", kind: "agent.connectChanged", atMs: Date.now(), event: { type: "agentConnectChanged", connect: { agents } } },
   ] as never);
 }
-const claudeAt = (progress: AgentConnect["progress"]) => publish([{ provider: "claude", progress }]);
+const claudeAt = (progress: AgentConnect["progress"], codePage?: string) =>
+  publish([{ provider: "claude", progress, ...(codePage === undefined ? {} : { codePage }) }]);
+const CODE_PAGE = "https://claude.com/cai/oauth/authorize?code=true";
 
 const asked: string[] = [];
 mockIPC((command, payload) => {
@@ -78,6 +82,7 @@ mockIPC((command, payload) => {
   if (req.method === "refreshProviders") {
     show();
   }
+  if (req.method === "sendConnectCode") asked.push(`sendConnectCode ${req.provider} ${req.code}`);
   if (req.method === "connectAgent" || req.method === "cancelConnect") {
     asked.push(`${req.method} ${req.provider}`);
     if (req.method === "connectAgent") claudeAt({ type: "signingIn" });
@@ -90,7 +95,7 @@ useApp.setState({ connection: { status: "connected", daemon: null, reason: null 
 // ?mac=1 reads as on a Mac ("this Mac", ⌘ shortcuts), for screenshots.
 if (params.has("mac")) useApp.setState((state) => ({ info: { ...state.info, platform: "macos" } as typeof state.info }));
 show();
-if (params.get("waiting") === "claude") claudeAt({ type: "signingIn" });
+if (params.get("waiting") === "claude") claudeAt({ type: "signingIn" }, params.has("code") ? CODE_PAGE : undefined);
 
 let continued = 0;
 const text = (element: Element | null | undefined) => element?.textContent?.trim() ?? "";
@@ -112,6 +117,7 @@ function card(index: number) {
 function shown(waitButton: Element) {
   return text([...waitButton.children].find((label) => getComputedStyle(label).visibility === "visible"));
 }
+const form = () => document.querySelector('[data-slot="connect-code"]');
 const claudeCard = () => card(cards().findIndex((element) => text(element.querySelector("p")) === "Claude Code"));
 
 async function until(check: () => boolean, what: string, ms = 10_000) {
@@ -160,6 +166,31 @@ function Fixture() {
           await fixtureInput({ type: "key", key: "Enter" });
           await wait(200);
           seen.enter = { continued, asked };
+          setResult(JSON.stringify(seen));
+          return;
+        }
+
+        if (params.has("code")) {
+          // The browser couldn't hand the sign-in back: its code page is offered.
+          claudeAt({ type: "signingIn" }, CODE_PAGE);
+          await until(() => form() !== null, "the code field");
+          const field = form()!.querySelector("input")!;
+          const send = () => [...form()!.querySelectorAll("button")].find((element) => text(element) === "Send")!;
+          seen.offered = { ...claudeCard(), says: text(form()!.querySelector("p")), placeholder: field.placeholder, send: !send().disabled };
+          await fixtureClick(button("Open the code page")!);
+          await fixtureClick(field);
+          await fixtureInput({ type: "type", text: "abc#xyz" });
+          seen.typed = { send: !send().disabled };
+          // Enter sends the code: the field's own, not the step's Continue.
+          await fixtureInput({ type: "key", key: "Enter" });
+          await until(() => asked.some((what) => what.startsWith("sendConnectCode")), "the code sent");
+          await until(() => field.value === "", "the field cleared");
+          seen.sent = { asked, continued };
+          claudeAt({ type: "connected" });
+          claudeStatus = { ...claudeStatus, loggedIn: true, authMethod: "claude.ai", plan: "max" };
+          show();
+          await until(() => claudeCard().action === "Connected", "connected");
+          seen.connected = { ...claudeCard(), field: form() !== null };
           setResult(JSON.stringify(seen));
           return;
         }

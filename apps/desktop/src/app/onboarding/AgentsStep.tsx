@@ -2,6 +2,7 @@ import { ArrowUpRight, Check } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
+import { ConnectCode } from "@/app/onboarding/ConnectStatus";
 import { PILL_BUTTON, RAISED_BUTTON, StepFooter, StepHeader } from "@/app/onboarding/parts";
 import { type AgentState, agentState, checkAgents } from "@/app/onboarding/SetupTerminal";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
@@ -158,66 +159,70 @@ function AgentCard({
     <li
       data-slot="agent-card"
       data-state={waiting ? "waiting" : state}
-      className="bg-card rounded-settings flex min-w-0 items-center gap-3.5 border p-4"
+      className="bg-card rounded-settings flex min-w-0 flex-col gap-3 border p-4"
     >
-      <span className="bg-muted rounded-control size-agent-mark grid shrink-0 place-items-center">
-        <ProviderGlyph provider={provider} className="size-6.5" />
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <p className="truncate text-base font-medium">{label}</p>
-        <p
-          data-slot="agent-line"
-          role={error ? "alert" : undefined}
-          className={cn(
-            "truncate text-xs",
-            error ? "text-destructive" : ready ? "text-muted-foreground" : "text-muted-foreground/70",
-          )}
-          title={error ?? undefined}
-        >
-          {line}
-        </p>
+      <div className="flex min-w-0 items-center gap-3.5">
+        <span className="bg-muted rounded-control size-agent-mark grid shrink-0 place-items-center">
+          <ProviderGlyph provider={provider} className="size-6.5" />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <p className="truncate text-base font-medium">{label}</p>
+          <p
+            data-slot="agent-line"
+            role={error ? "alert" : undefined}
+            className={cn(
+              "truncate text-xs",
+              error ? "text-destructive" : ready ? "text-muted-foreground" : "text-muted-foreground/70",
+            )}
+            title={error ?? undefined}
+          >
+            {line}
+          </p>
+        </div>
+        {ready ? (
+          <Badge variant="success" className="bg-success/10 h-7 gap-1.5 px-2.5">
+            <Check />
+            Connected
+          </Badge>
+        ) : waiting ? (
+          // Waiting… is the way out too: hovered or focused it reads Cancel, in the same room (the
+          // wider of the two holds it), and stops the sign-in.
+          <button
+            type="button"
+            data-slot="agent-wait"
+            aria-label={`Cancel sign-in to ${label}`}
+            onClick={() => void cancelConnect(provider)}
+            className={cn(
+              PILL_BUTTON,
+              "group/wait text-muted-foreground hover:text-foreground focus-visible:text-foreground grid shrink-0 items-center px-1 font-medium transition-colors",
+            )}
+          >
+            <span className="col-start-1 row-start-1 flex items-center gap-1.75 group-hover/wait:invisible group-focus-visible/wait:invisible">
+              <Spinner className="size-3.25 animate-spin" />
+              Waiting…
+            </span>
+            <span className="invisible col-start-1 row-start-1 text-center group-hover/wait:visible group-focus-visible/wait:visible">
+              Cancel
+            </span>
+          </button>
+        ) : state === "signIn" ? (
+          <Button size="sm" variant="outline" className={RAISED_BUTTON} onClick={() => void connectAgent(provider)}>
+            Sign in
+          </Button>
+        ) : state === "install" ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className={RAISED_BUTTON}
+            onClick={() => openUrl(INSTALL_GUIDES[provider]).catch((cause: unknown) => console.error(cause))}
+          >
+            Install
+            <ArrowUpRight className="text-muted-foreground size-icon-xs" />
+          </Button>
+        ) : null}
       </div>
-      {ready ? (
-        <Badge variant="success" className="bg-success/10 h-7 gap-1.5 px-2.5">
-          <Check />
-          Connected
-        </Badge>
-      ) : waiting ? (
-        // Waiting… is the way out too: hovered or focused it reads Cancel, in the same room (the
-        // wider of the two holds it), and stops the sign-in.
-        <button
-          type="button"
-          data-slot="agent-wait"
-          aria-label={`Cancel sign-in to ${label}`}
-          onClick={() => void cancelConnect(provider)}
-          className={cn(
-            PILL_BUTTON,
-            "group/wait text-muted-foreground hover:text-foreground focus-visible:text-foreground grid shrink-0 items-center px-1 font-medium transition-colors",
-          )}
-        >
-          <span className="col-start-1 row-start-1 flex items-center gap-1.75 group-hover/wait:invisible group-focus-visible/wait:invisible">
-            <Spinner className="size-3.25 animate-spin" />
-            Waiting…
-          </span>
-          <span className="invisible col-start-1 row-start-1 text-center group-hover/wait:visible group-focus-visible/wait:visible">
-            Cancel
-          </span>
-        </button>
-      ) : state === "signIn" ? (
-        <Button size="sm" variant="outline" className={RAISED_BUTTON} onClick={() => void connectAgent(provider)}>
-          Sign in
-        </Button>
-      ) : state === "install" ? (
-        <Button
-          size="sm"
-          variant="outline"
-          className={RAISED_BUTTON}
-          onClick={() => openUrl(INSTALL_GUIDES[provider]).catch((cause: unknown) => console.error(cause))}
-        >
-          Install
-          <ArrowUpRight className="text-muted-foreground size-icon-xs" />
-        </Button>
-      ) : null}
+      {/* The browser couldn't hand the sign-in back: the code its page shows goes in here. */}
+      {waiting && <ConnectCode provider={provider} />}
     </li>
   );
 }

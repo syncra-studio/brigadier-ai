@@ -31,6 +31,16 @@ export function useConnectProgress(provider: ProviderKind): ConnectProgress | nu
   return useConnect((s) => s.view?.agents.find((agent) => agent.provider === provider)?.progress ?? null);
 }
 
+/** The page that shows a code to paste back into `provider`'s sign-in, while it offers one. */
+export function useConnectCodePage(provider: ProviderKind): string | null {
+  return useConnect((s) => s.view?.agents.find((agent) => agent.provider === provider)?.codePage ?? null);
+}
+
+/** Passes a code pasted from the agent's code page to its sign-in; rejects with why not. */
+export async function sendConnectCode(provider: ProviderKind, code: string): Promise<void> {
+  await request({ method: "sendConnectCode", provider, code });
+}
+
 /** Whether it is installing or signing in now. */
 export function connecting(progress: ConnectProgress | null): boolean {
   return progress?.type === "installing" || progress?.type === "signingIn";

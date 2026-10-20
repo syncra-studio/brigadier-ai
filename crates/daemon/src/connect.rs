@@ -20,7 +20,9 @@
 //!   `CODEX_NON_INTERACTIVE=1` skips both questions (the answer is no), as having no
 //!   terminal does; it is set either way.
 //! - Each sign-in (`claude auth login`, `codex login`) opens the browser and waits, with no
-//!   terminal; Claude Code's also offers to read a pasted code, which nobody types here.
+//!   terminal. Claude Code's also prints a page that shows a code and reads that code pasted on
+//!   stdin: for when the browser can't hand the sign-in back (a firewall, a browser that blocks
+//!   localhost), the page is offered and a pasted code passed on.
 //!   Whatever opens the browser hands it its own environment, home included (`open` and
 //!   LaunchServices alike). So the sign-in gets a `BROWSER` that only passes the link back,
 //!   and Brigadier opens it with the account's own home. Claude Code uses it; Codex ignores
@@ -51,6 +53,7 @@ use brigadier_providers::process::{self, CliProcess};
 use brigadier_providers::{ProviderKind, ProviderStatus};
 use brigadier_sandbox::{Platform, SpawnSpec};
 use brigadier_store::{NewEvent, Retention};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::server::Daemon;
@@ -100,6 +103,10 @@ struct Entry {
     progress: ConnectProgress,
     /// Present while it runs.
     cancel: Option<CancellationToken>,
+    /// While it signs in: the page that shows a code to paste, once the sign-in offered one.
+    code_page: Option<String>,
+    /// Takes pasted codes to the sign-in, while it runs.
+    codes: Option<mpsc::UnboundedSender<String>>,
 }
 
 impl Connects {
@@ -132,9 +139,53 @@ impl Connects {
                 attempt,
                 progress,
                 cancel: Some(cancel.clone()),
+                code_page: None,
+                codes: None,
             },
         );
         Some((attempt, cancel))
+    }
+
+    /// Where the running attempt's pasted codes arrive. None once it is not the running one.
+    fn listen(
+        &self,
+        provider: ProviderKind,
+        attempt: u64,
+    ) -> Option<mpsc::UnboundedReceiver<String>> {
+        let mut state = self.state();
+        let entry = state
+            .get_mut(&provider)
+            .filter(|entry| entry.attempt == attempt && entry.cancel.is_some())?;
+        let (sender, pasted) = mpsc::unbounded_channel();
+        entry.codes = Some(sender);
+        Some(pasted)
+    }
+
+    /// The running attempt's sign-in offers `page` for a code; false once it is not the
+    /// running one.
+    fn offer_code_page(&self, provider: ProviderKind, attempt: u64, page: String) -> bool {
+        let mut state = self.state();
+        match state.get_mut(&provider) {
+            Some(entry)
+                if entry.attempt == attempt
+                    && entry.cancel.is_some()
+                    && entry.progress == ConnectProgress::SigningIn =>
+            {
+                entry.code_page = Some(page);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Passes `code` to the sign-in running for `provider`; false when none offered a page.
+    fn send_code(&self, provider: ProviderKind, code: String) -> bool {
+        let state = self.state();
+        state
+            .get(&provider)
+            .filter(|entry| entry.code_page.is_some())
+            .and_then(|entry| entry.codes.as_ref())
+            .is_some_and(|codes| codes.send(code).is_ok())
     }
 
     /// The attempt's next step; false (nothing to publish) once it is not the running one.
@@ -142,6 +193,9 @@ impl Connects {
         let mut state = self.state();
         match state.get_mut(&provider) {
             Some(entry) if entry.attempt == attempt && entry.cancel.is_some() => {
+                if progress != ConnectProgress::SigningIn {
+                    entry.code_page = None;
+                }
                 entry.progress = progress;
                 true
             }
@@ -171,6 +225,8 @@ impl Connects {
                         attempt,
                         progress,
                         cancel: None,
+                        code_page: None,
+                        codes: None,
                     },
                 );
             }
@@ -203,6 +259,7 @@ fn view_of(state: &HashMap<ProviderKind, Entry>) -> ConnectView {
                 state.get(&provider).map(|entry| AgentConnect {
                     provider,
                     progress: entry.progress.clone(),
+                    code_page: entry.code_page.clone(),
                 })
             })
             .collect(),
@@ -301,6 +358,19 @@ pub fn start(daemon: &Arc<Daemon>, provider: ProviderKind) -> Result<(), String>
     let Some((attempt, cancel)) = daemon.connects.begin(provider, progress) else {
         return Ok(());
     };
+    let offerer = daemon.clone();
+    let mut codes = Codes {
+        offer: Box::new(move |page| {
+            if offerer.connects.offer_code_page(provider, attempt, page) {
+                let offerer = offerer.clone();
+                tokio::spawn(async move { publish(&offerer).await });
+            }
+        }),
+        pasted: daemon
+            .connects
+            .listen(provider, attempt)
+            .unwrap_or_else(|| mpsc::unbounded_channel().1),
+    };
     let daemon = daemon.clone();
     tokio::spawn(async move {
         publish(&daemon).await;
@@ -312,7 +382,7 @@ pub fn start(daemon: &Arc<Daemon>, provider: ProviderKind) -> Result<(), String>
                 tokio::spawn(async move { publish(&reporter).await });
             }
         };
-        let ended = connect(&ops, provider, &cancel, &report).await;
+        let ended = connect(&ops, provider, &cancel, &report, &mut codes).await;
         let outcome = match ended {
             Some(Ended {
                 progress: ConnectProgress::Connected,
@@ -344,6 +414,34 @@ pub fn start(daemon: &Arc<Daemon>, provider: ProviderKind) -> Result<(), String>
         }
     });
     Ok(())
+}
+
+/// Passes a code pasted from the agent's code page to its running sign-in.
+pub fn send_code(daemon: &Daemon, provider: ProviderKind, code: String) -> Result<(), String> {
+    let code = whole_code(&code)?;
+    if daemon.connects.send_code(provider, code.to_owned()) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}'s sign-in isn't waiting for a code. Sign in again.",
+            provider.label()
+        ))
+    }
+}
+
+/// The code as the page shows it (`code#state`), trimmed. Claude Code answers a part of one
+/// only on stderr and goes on waiting, so a part is refused here, where it can be said.
+fn whole_code(code: &str) -> Result<&str, String> {
+    let code = code.trim();
+    if code.is_empty() {
+        return Err("Paste the code from the page first.".into());
+    }
+    match code.split_once('#') {
+        Some((code_part, state)) if !code_part.is_empty() && !state.is_empty() => Ok(code),
+        _ => Err(
+            "That isn't the whole code. Copy all of it from the page, then paste it again.".into(),
+        ),
+    }
 }
 
 /// Stops the agent's Connect, if it runs; its row leaves the view either way.
@@ -518,6 +616,13 @@ impl Ended {
     }
 }
 
+/// A sign-in's way back besides the browser: `offer` is told the page that shows a code to
+/// paste, as the sign-in prints it, and codes pasted from it arrive on `pasted`.
+struct Codes {
+    offer: Box<dyn Fn(String) + Send + Sync>,
+    pasted: mpsc::UnboundedReceiver<String>,
+}
+
 /// Connects `provider`: installs it when it is missing, then signs it in unless it is. Each
 /// step is reported as it begins. Answers how it ended, or `None` once cancelled.
 async fn connect(
@@ -525,6 +630,7 @@ async fn connect(
     provider: ProviderKind,
     cancel: &CancellationToken,
     report: &(dyn Fn(ConnectProgress) + Send + Sync),
+    codes: &mut Codes,
 ) -> Option<Ended> {
     let failed = |step, error: String| Some(Ended::failed(step, error));
     let label = provider.label();
@@ -553,7 +659,7 @@ async fn connect(
     }
     report(ConnectProgress::SigningIn);
     let binary = PathBuf::from(status.path.unwrap_or_default());
-    sign_in(ops, provider, binary, cancel).await
+    sign_in(ops, provider, binary, cancel, codes).await
 }
 
 enum Installed {
@@ -685,6 +791,7 @@ async fn sign_in(
     provider: ProviderKind,
     binary: PathBuf,
     cancel: &CancellationToken,
+    codes: &mut Codes,
 ) -> Option<Ended> {
     let label = provider.label();
     let failed = |error: String| Some(Ended::failed(ConnectStep::SignIn, error));
@@ -723,6 +830,10 @@ async fn sign_in(
     let mut stdout_open = true;
     let mut errors = child.stderr_lines();
     let mut stderr_open = true;
+    let mut offered = false;
+    let mut pasted_open = true;
+    // A code was passed on: a sign-in that ends without signing in didn't take it.
+    let mut pasted = false;
     // The link it wants opened, opened by Brigadier the moment it arrives.
     #[cfg(unix)]
     let opener = tokio::spawn({
@@ -761,18 +872,39 @@ async fn sign_in(
                     break Some(Ended::connected(status));
                 }
                 tracing::info!(%provider, code = ?exit.code, stderr = ?child.stderr_tail(), "the sign-in ended without signing in");
+                if pasted {
+                    break failed("That code didn't work. Try again.".into());
+                }
                 break failed(format!("Signing in to {label} didn't finish. Try again."));
             }
             () = &mut given_up => {
                 break failed(format!("Signing in to {label} took too long. Try again."));
             }
             line = lines.recv(), if stdout_open => {
-                if line.is_none() {
+                let Some(line) = line else {
                     stdout_open = false;
                     continue;
-                }
+                };
                 // Lines that came together are one reason to ask.
-                while lines.try_recv().is_ok() {}
+                for line in std::iter::once(line).chain(std::iter::from_fn(|| lines.try_recv().ok())) {
+                    if !offered && let Some(page) = code_page(provider, &line) {
+                        tracing::info!(%provider, "the sign-in offers a code to paste");
+                        offered = true;
+                        (codes.offer)(page);
+                    }
+                }
+            }
+            code = codes.pasted.recv(), if pasted_open => {
+                let Some(code) = code else {
+                    pasted_open = false;
+                    continue;
+                };
+                tracing::info!(%provider, "passing a pasted code to the sign-in");
+                if let Err(error) = child.write_line(&code).await {
+                    tracing::warn!(%provider, %error, "the sign-in didn't take the code");
+                }
+                pasted = true;
+                continue;
             }
             changed = errors.changed(), if stderr_open => {
                 if changed.is_err() {
@@ -825,6 +957,21 @@ async fn sign_in(
         }
     }
     outcome
+}
+
+/// The page Claude Code's sign-in prints for a code to paste back ("If the browser didn't open,
+/// visit: …", a terminal link): its first `https` address. Codex's sign-in prints only the
+/// browser's own page, which hands no code back.
+fn code_page(provider: ProviderKind, line: &str) -> Option<String> {
+    if provider != ProviderKind::Claude {
+        return None;
+    }
+    let start = line.find("https://")?;
+    let page: String = line[start..]
+        .chars()
+        .take_while(|c| !c.is_whitespace() && !c.is_control())
+        .collect();
+    Some(page)
 }
 
 /// The agent's status once its sign-in ended or its login was stored: it may say so a moment
@@ -892,7 +1039,9 @@ mod tests {
     /// `wait` (never signs in, never ends), `linger` (as Claude Code's: signs in, says so, then
     /// takes seconds to end), `quick` (as Codex's: signs in, says so on stderr, ends), `stored`
     /// (as Claude Code's really does: stores the login, says so only 3 s later, then ends), `late`
-    /// (ends well, signed in only by the third time it is asked after), `never` (ends well, never signs in).
+    /// (ends well, signed in only by the third time it is asked after), `never` (ends well, never signs in),
+    /// `paste` (as Claude Code's when the browser can't come back: prints its code page as a
+    /// terminal link, then signs in once `good#state` is pasted, fails on any other code).
     /// Where it keeps its login, the file `signed-in`, is what the tests' [`LoginMark`] watches.
     const FAKE_CLAUDE: &str = r#"#!/bin/sh
 home="$HOME"
@@ -928,6 +1077,12 @@ case "$1 $2" in
       never) exit 0 ;;
       quick) sleep 1; confirm; touch "$home/signed-in"; echo "Successfully logged in" >&2 ;;
       stored) sleep 1; now > "$home/stored-at"; touch "$home/signed-in"; sleep 3; echo "Login successful."; sleep 1 ;;
+      paste)
+        esc=$(printf '\033'); bel=$(printf '\007'); page="https://example.test/code?x=1"
+        echo "If the browser didn't open, visit: ${esc}]8;;${page}${bel}${page}${esc}]8;;${bel}"
+        read -r code
+        if [ "$code" = "good#state" ]; then touch "$home/signed-in"; echo "Login successful."
+        else echo "Login failed: Request failed with status code 400"; exit 1; fi ;;
       *) sleep 60 ;;
     esac ;;
 esac
@@ -1005,13 +1160,21 @@ echo "Claude Code successfully installed!"
         let cancel = CancellationToken::new();
         let outcome = tokio::time::timeout(
             Duration::from_secs(40),
-            connect(ops, ProviderKind::Claude, &cancel, &report),
+            connect(ops, ProviderKind::Claude, &cancel, &report, &mut no_codes()),
         )
         .await
         .expect("Connect ends")
         .map(|ended| ended.progress);
         let seen = seen.lock().unwrap().clone();
         (outcome, seen)
+    }
+
+    /// Nothing offered, nothing pasted.
+    fn no_codes() -> Codes {
+        Codes {
+            offer: Box::new(|_| {}),
+            pasted: mpsc::unbounded_channel().1,
+        }
     }
 
     fn failed(step: ConnectStep, error: &str) -> Option<ConnectProgress> {
@@ -1201,6 +1364,114 @@ echo "asked: $answer" > "$HOME/asked"
         );
     }
 
+    /// When the browser can't hand the sign-in back, Claude Code's code page is offered and a
+    /// code pasted from it reaches the sign-in: one it takes signs in, one it doesn't says so.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_code_pasted_from_claude_codes_page_signs_in() {
+        for (code, outcome) in [
+            (
+                "bad#state",
+                failed(ConnectStep::SignIn, "That code didn't work. Try again."),
+            ),
+            ("good#state", Some(ConnectProgress::Connected)),
+        ] {
+            let home = Home::new("paste");
+            std::fs::write(home.0.join("login-mode"), "paste").unwrap();
+            let ops = ops(&home);
+            let (sender, pasted) = mpsc::unbounded_channel();
+            let offered = Arc::new(Mutex::new(None));
+            let mut codes = Codes {
+                // Pasted the moment the page is offered.
+                offer: Box::new({
+                    let offered = offered.clone();
+                    move |page| {
+                        *offered.lock().unwrap() = Some(page);
+                        sender.send(code.to_owned()).unwrap();
+                    }
+                }),
+                pasted,
+            };
+            let cancel = CancellationToken::new();
+            let ended = tokio::time::timeout(
+                Duration::from_secs(40),
+                connect(&ops, ProviderKind::Claude, &cancel, &|_| {}, &mut codes),
+            )
+            .await
+            .expect("Connect ends")
+            .map(|ended| ended.progress);
+            assert_eq!(ended, outcome, "{code}");
+            assert_eq!(
+                offered.lock().unwrap().as_deref(),
+                Some("https://example.test/code?x=1")
+            );
+        }
+    }
+
+    /// Only a whole code (`code#state`, as the page shows it) is passed on; a part is refused
+    /// with why, since Claude Code would only say so on stderr and go on waiting.
+    #[test]
+    fn only_a_whole_code_is_passed_on() {
+        assert_eq!(whole_code("  abc#xyz \n"), Ok("abc#xyz"));
+        for part in ["abc", "abc#", "#xyz"] {
+            assert_eq!(
+                whole_code(part),
+                Err(
+                    "That isn't the whole code. Copy all of it from the page, then paste it again."
+                        .into()
+                )
+            );
+        }
+        assert_eq!(
+            whole_code("  "),
+            Err("Paste the code from the page first.".into())
+        );
+    }
+
+    /// Codex's sign-in prints only the browser's own page: no code page is offered for it.
+    #[test]
+    fn only_claude_codes_sign_in_offers_a_code_page() {
+        let line = "If the browser didn't open, visit: \u{1b}]8;;https://claude.com/cai/oauth/authorize?code=true\u{7}https://claude.com/x\u{1b}]8;;\u{7}";
+        assert_eq!(
+            code_page(ProviderKind::Claude, line).as_deref(),
+            Some("https://claude.com/cai/oauth/authorize?code=true")
+        );
+        assert_eq!(
+            code_page(ProviderKind::Claude, "Opening browser to sign in…"),
+            None
+        );
+        assert_eq!(
+            code_page(
+                ProviderKind::Codex,
+                "If your browser did not open, navigate to this URL to authenticate: https://auth.example.test/oauth"
+            ),
+            None
+        );
+    }
+
+    /// A code goes to the running sign-in only once it offered its page, and the page goes
+    /// from the view as the sign-in ends.
+    #[test]
+    fn a_code_reaches_only_a_sign_in_that_offered_its_page() {
+        let connects = Connects::default();
+        let (attempt, _cancel) = connects
+            .begin(ProviderKind::Claude, ConnectProgress::SigningIn)
+            .unwrap();
+        let mut pasted = connects.listen(ProviderKind::Claude, attempt).unwrap();
+        assert!(!connects.send_code(ProviderKind::Claude, "early".into()));
+        assert!(!connects.offer_code_page(ProviderKind::Claude, attempt + 1, "https://old".into()));
+        assert!(connects.offer_code_page(ProviderKind::Claude, attempt, "https://page".into()));
+        assert_eq!(
+            connects.view().agents[0].code_page.as_deref(),
+            Some("https://page")
+        );
+        assert!(!connects.send_code(ProviderKind::Codex, "other".into()));
+        assert!(connects.send_code(ProviderKind::Claude, "code#state".into()));
+        assert_eq!(pasted.try_recv().ok().as_deref(), Some("code#state"));
+        assert!(connects.report(ProviderKind::Claude, attempt, ConnectProgress::Connected));
+        assert_eq!(connects.view().agents[0].code_page, None);
+        assert!(!connects.send_code(ProviderKind::Claude, "late".into()));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_sign_in_is_noticed_while_the_page_is_still_open_and_its_process_ends() {
         let home = Home::new("stay");
@@ -1289,7 +1560,13 @@ echo "asked: $answer" > "$HOME/asked"
         });
         let outcome = tokio::time::timeout(
             Duration::from_secs(10),
-            connect(&ops, ProviderKind::Claude, &cancel, &|_| {}),
+            connect(
+                &ops,
+                ProviderKind::Claude,
+                &cancel,
+                &|_| {},
+                &mut no_codes(),
+            ),
         )
         .await
         .expect("cancel ends it");

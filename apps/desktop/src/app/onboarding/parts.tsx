@@ -53,8 +53,8 @@ export const PRIMARY_KEY = "in-data-[slot=button]:text-2xs px-1.5";
  * hairline, 12 to a side. */
 export const RAISED_BUTTON = cn(PILL_BUTTON, "border-input border px-3 gap-1.5");
 
-/** Where Enter belongs to what's open (a menu, a list), not to the step. */
-const OWN_ENTER = "[role=menu], [role=listbox], [role=combobox]";
+/** Where Enter belongs to what's open (a menu, a list) or a field that sends, not to the step. */
+const OWN_ENTER = "[role=menu], [role=listbox], [role=combobox], [data-own-enter]";
 
 /**
  * The footer, across the window under a rule: Back (also on ⌘[, Alt ← elsewhere) at the start

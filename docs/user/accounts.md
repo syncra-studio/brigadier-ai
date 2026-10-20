@@ -9,7 +9,9 @@ The account your terminal's `claude` or `codex` is signed in to is the first acc
 and your terminal share it. If a CLI isn't installed or signed in yet, Brigadier's setup
 (**Connect**) and **Settings › Providers** (**Set up**, **Sign in**) install it with its maker's
 own installer and run its own sign-in (`claude auth login`, `codex login`), which opens in your
-browser.
+browser. If the browser can't hand Claude Code's sign-in back to Brigadier (a firewall, or a
+browser that blocks the local page), choose **Open the code page** under it and paste the code
+that page shows.
 
 ## More than one account
 

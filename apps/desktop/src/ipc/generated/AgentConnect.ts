@@ -5,4 +5,9 @@ import type { ProviderKind } from "./ProviderKind";
 /**
  * One agent's Connect.
  */
-export type AgentConnect = { provider: ProviderKind, progress: ConnectProgress, };
+export type AgentConnect = { provider: ProviderKind, progress: ConnectProgress, 
+/**
+ * While it signs in: the page that shows a code to paste back into the sign-in (Claude
+ * Code's), for when the browser can't hand the sign-in back by itself.
+ */
+codePage?: string, };

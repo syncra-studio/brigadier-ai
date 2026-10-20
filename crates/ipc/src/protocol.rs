@@ -1185,6 +1185,12 @@ pub enum Request {
     CancelConnect {
         provider: ProviderKind,
     },
+    /// A code pasted from the agent's code page (`AgentConnect::code_page`), passed to the
+    /// sign-in running for it.
+    SendConnectCode {
+        provider: ProviderKind,
+        code: String,
+    },
     /// Settings → Accounts: each provider's own login and extra accounts, who is signed in
     /// to each (as its CLI says) and its quota. Changes arrive as `accountsChecked`.
     GetAccounts,
@@ -1870,6 +1876,7 @@ pub enum Response {
     },
     ConnectAgent,
     CancelConnect,
+    SendConnectCode,
     GetAccounts {
         accounts: AccountsView,
     },
