@@ -28,7 +28,8 @@
 //! stable one, which a resume and the cached start of a session's workers need), so the
 //! project's `.mcp.json` and `.claude` entries are linked there ([`files::link_project`]) for a
 //! folder the user trusts ([`SessionSpec::project`]); the instruction files are left out, as
-//! the session's prompt carries them. Brigadier's own `--settings` win over all of these
+//! the session's prompt carries them, and a settings file's command hooks are linked as a copy
+//! that runs each in the project. Brigadier's own `--settings` win over all of these
 //! (permission prompt tool, sandbox, ask and deny rules, the model allowlist). A hook of the
 //! user's that answers a permission request answers it before Brigadier is asked: their own
 //! rule, as in their terminal; the sandbox and deny rules still hold. Every other session

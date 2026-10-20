@@ -17,7 +17,8 @@
 //! config, `AGENTS.md`, plugins, hooks and MCP servers, beside Brigadier's. Threads keep the
 //! skills catalog; workers leave it out of their instructions to keep their start small;
 //! the project's `.codex` config too where Codex reads it (a worker working in its worktree of
-//! a trusted project). Every other session keeps the user's setup out: plugins and hooks are
+//! a trusted project), and a thread working from a folder of Brigadier's gets that config's MCP
+//! servers ([`project_servers`]). Every other session keeps the user's setup out: plugins and hooks are
 //! switched off per process, and the MCP servers from their config are disabled per thread.
 //! Apps, computer and browser use, memories and `notify` are off for every session.
 //!
@@ -1212,11 +1213,33 @@ async fn thread_config(
             &json!({ "includeLayers": false, "cwd": cwd.display().to_string() }),
         )
         .await?;
+    let mut servers = mcp_config(&effective, spec);
+    // A thread works from a folder of Brigadier's, where Codex reads no project config: its
+    // trusted project's MCP servers come along (#315).
+    if let Some(project) = spec
+        .project
+        .as_deref()
+        .filter(|project| *project != cwd && spec.tools.user_setup())
+    {
+        let read: Result<Value> = rpc
+            .call(
+                "config/read",
+                &json!({ "includeLayers": true, "cwd": project.display().to_string() }),
+            )
+            .await;
+        match read {
+            Ok(read) => {
+                for (name, server) in project_servers(&read) {
+                    servers.entry(name).or_insert(server);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(project = %project.display(), error = %err, "could not read the project's Codex config");
+            }
+        }
+    }
     let mut config = Map::new();
-    config.insert(
-        "mcp_servers".into(),
-        Value::Object(mcp_config(&effective, spec)),
-    );
+    config.insert("mcp_servers".into(), Value::Object(servers));
     if !spec.auto_compact {
         // Codex clamps the limit to 90% of the model's window.
         config.insert(
@@ -1255,6 +1278,42 @@ async fn thread_config(
         );
     }
     Ok(config)
+}
+
+/// The MCP servers of a project's own `.codex/config.toml` from a `config/read` with layers in
+/// the project, when Codex loads that file (the user trusts the project in Codex), each started
+/// in the project unless it names its own folder: a session working outside the project gets
+/// them as they run there.
+fn project_servers(read: &Value) -> Map<String, Value> {
+    let Some(layer) = read
+        .get("layers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|layer| layer.pointer("/name/type").and_then(Value::as_str) == Some("project"))
+        .filter(|layer| layer.get("disabledReason").is_none_or(Value::is_null))
+    else {
+        return Map::new();
+    };
+    let root = layer
+        .pointer("/name/dotCodexFolder")
+        .and_then(Value::as_str)
+        .and_then(|folder| Path::new(folder).parent())
+        .map(|root| root.display().to_string());
+    let mut servers = layer
+        .pointer("/config/mcp_servers")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for server in servers.values_mut().filter_map(Value::as_object_mut) {
+        if let Some(root) = &root
+            && server.contains_key("command")
+            && !server.contains_key("cwd")
+        {
+            server.insert("cwd".into(), json!(root));
+        }
+    }
+    servers
 }
 
 /// MCP overrides leave the user's servers inherited in sessions with their setup, and add
@@ -2591,6 +2650,39 @@ mod tests {
             let off = disabled(&app_server_args(Some(&spec(tools, None))));
             assert!(!off.iter().any(|f| f == "image_generation"), "{tools:?}");
         }
+    }
+
+    /// A trusted project's own Codex MCP servers, for a thread working outside it: started in
+    /// the project; none while Codex leaves the project's config unloaded (#315).
+    #[test]
+    fn a_trusted_projects_codex_servers_start_in_the_project() {
+        let read = |disabled: Option<&str>| {
+            json!({ "layers": [
+                { "name": { "type": "sessionFlags" }, "config": {} },
+                {
+                    "name": { "type": "project", "dotCodexFolder": "/repo/wt/.codex" },
+                    "config": { "mcp_servers": {
+                        "docs": { "command": "node", "args": ["scripts/mcp.js"] },
+                        "own": { "command": "uv", "cwd": "/elsewhere" },
+                        "remote": { "url": "https://mcp.example.invalid" },
+                    }},
+                    "disabledReason": disabled,
+                },
+                { "name": { "type": "user", "file": "/home/u/.codex/config.toml" },
+                  "config": { "mcp_servers": { "personal": { "command": "p" } } } },
+            ]})
+        };
+        let servers = project_servers(&read(None));
+        assert_eq!(
+            Value::Object(servers),
+            json!({
+                "docs": { "command": "node", "args": ["scripts/mcp.js"], "cwd": "/repo/wt" },
+                "own": { "command": "uv", "cwd": "/elsewhere" },
+                "remote": { "url": "https://mcp.example.invalid" },
+            })
+        );
+        assert!(project_servers(&read(Some("add it as a trusted project"))).is_empty());
+        assert!(project_servers(&json!({})).is_empty());
     }
 
     #[test]

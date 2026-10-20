@@ -96,25 +96,7 @@ pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
             .ok()
             .and_then(|text| mcp_in_project(&text, project))
         {
-            Some(text) => {
-                let copy = cwd.join(MCP_COPY);
-                if std::fs::read_to_string(&copy).ok().as_deref() != Some(&text) {
-                    std::fs::create_dir_all(&dot_claude)?;
-                    let temp = cwd.join(format!("{MCP_COPY}.{}.tmp", std::process::id()));
-                    // Made anew, never through what the session's commands left at its name.
-                    let _ = std::fs::remove_file(&temp);
-                    std::io::Write::write_all(
-                        &mut std::os::unix::fs::OpenOptionsExt::mode(
-                            std::fs::OpenOptions::new().write(true).create_new(true),
-                            0o600,
-                        )
-                        .open(&temp)?,
-                        text.as_bytes(),
-                    )?;
-                    std::fs::rename(&temp, &copy)?;
-                }
-                copy
-            }
+            Some(text) => write_copy(cwd, MCP_COPY, &text)?,
             None => mcp,
         };
         wanted.push((cwd.join(".mcp.json"), target));
@@ -123,7 +105,8 @@ pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             if !UNLINKED.iter().any(|unlinked| name == *unlinked) {
-                wanted.push((dot_claude.join(&name), entry.path()));
+                let target = settings_target(cwd, project, &name.to_string_lossy(), entry.path())?;
+                wanted.push((dot_claude.join(&name), target));
             }
         }
     }
@@ -132,9 +115,107 @@ pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
         && let Some(main) = super::main_checkout(&project.join(".git"))
         && main.join(".claude/settings.local.json").is_file()
     {
-        wanted.push((local, main.join(".claude/settings.local.json")));
+        let target = settings_target(
+            cwd,
+            project,
+            "settings.local.json",
+            main.join(".claude/settings.local.json"),
+        )?;
+        wanted.push((local, target));
     }
     sync_links(cwd, &wanted)
+}
+
+/// What a link to the project's `.claude` entry `name` at `path` points to: a settings file
+/// whose hooks run commands, a copy of it where they run in `project` ([`hooks_in_project`]);
+/// anything else, itself.
+#[cfg(unix)]
+fn settings_target(cwd: &Path, project: &Path, name: &str, path: PathBuf) -> io::Result<PathBuf> {
+    let Some((_, copy)) = SETTINGS_COPIES.iter().find(|(file, _)| *file == name) else {
+        return Ok(path);
+    };
+    match std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| hooks_in_project(&text, project))
+    {
+        Some(text) => write_copy(cwd, copy, &text),
+        None => Ok(path),
+    }
+}
+
+/// Writes `text` to `cwd`'s copy `name` unless it holds it already, made anew (never through
+/// what the session's commands left at its name) and readable by the user alone (it may hold
+/// secrets); then where it is.
+#[cfg(unix)]
+fn write_copy(cwd: &Path, name: &str, text: &str) -> io::Result<PathBuf> {
+    let copy = cwd.join(name);
+    if std::fs::read_to_string(&copy).ok().as_deref() != Some(text) {
+        if let Some(parent) = copy.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let temp = cwd.join(format!("{name}.{}.tmp", std::process::id()));
+        let _ = std::fs::remove_file(&temp);
+        std::io::Write::write_all(
+            &mut std::os::unix::fs::OpenOptionsExt::mode(
+                std::fs::OpenOptions::new().write(true).create_new(true),
+                0o600,
+            )
+            .open(&temp)?,
+            text.as_bytes(),
+        )?;
+        std::fs::rename(&temp, &copy)?;
+    }
+    Ok(copy)
+}
+
+/// The project's settings files whose copies [`link_project`] keeps, and where.
+#[cfg(unix)]
+const SETTINGS_COPIES: &[(&str, &str)] = &[
+    ("settings.json", ".claude/.settings.project.json"),
+    (
+        "settings.local.json",
+        ".claude/.settings.local.project.json",
+    ),
+];
+
+/// `text`, a project's Claude settings, with each command hook run in `project`: Claude runs
+/// hooks in the session's folder with `CLAUDE_PROJECT_DIR` set to it, so a hook that runs
+/// `npm`, `git` or a script relative to the project would fail there (#315). Each command
+/// first goes to `project`, with `CLAUDE_PROJECT_DIR` set to it, as in the user's own
+/// checkout. None when it has no command hooks (or isn't JSON).
+#[cfg(unix)]
+fn hooks_in_project(text: &str, project: &Path) -> Option<String> {
+    let mut settings: serde_json::Value = serde_json::from_str(text).ok()?;
+    let quoted = shell_quoted(&project.display().to_string());
+    let mut changed = false;
+    let events = settings.get_mut("hooks")?.as_object_mut()?;
+    for hook in events
+        .values_mut()
+        .filter_map(|groups| groups.as_array_mut())
+        .flatten()
+        .filter_map(|group| group.get_mut("hooks")?.as_array_mut())
+        .flatten()
+        .filter_map(|hook| hook.as_object_mut())
+    {
+        if hook.get("type").and_then(|kind| kind.as_str()) != Some("command") {
+            continue;
+        }
+        let Some(command) = hook.get("command").and_then(|c| c.as_str()) else {
+            continue;
+        };
+        hook.insert(
+            "command".into(),
+            format!("cd {quoted} || exit 1\nexport CLAUDE_PROJECT_DIR={quoted}\n{command}").into(),
+        );
+        changed = true;
+    }
+    changed.then(|| serde_json::to_string_pretty(&settings).ok())?
+}
+
+/// `text` quoted for a POSIX shell.
+#[cfg(unix)]
+fn shell_quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 /// [`link_project`]'s copy of a project's `.mcp.json` whose local servers have paths in the
@@ -334,12 +415,14 @@ fn sync_links(cwd: &Path, wanted: &[(PathBuf, PathBuf)]) -> io::Result<()> {
         std::os::unix::fs::symlink(target, &temp)?;
         std::fs::rename(&temp, link)?;
     }
-    // A copy of an `.mcp.json` that no link reads any more.
-    let copy = cwd.join(MCP_COPY);
-    if !wanted.iter().any(|(_, target)| *target == copy) {
-        match std::fs::remove_file(&copy) {
-            Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
-            _ => {}
+    // A copy of an `.mcp.json` or a settings file that no link reads any more.
+    for name in std::iter::once(MCP_COPY).chain(SETTINGS_COPIES.iter().map(|(_, copy)| *copy)) {
+        let copy = cwd.join(name);
+        if !wanted.iter().any(|(_, target)| *target == copy) {
+            match std::fs::remove_file(&copy) {
+                Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+                _ => {}
+            }
         }
     }
     Ok(())
@@ -1154,6 +1237,66 @@ mod link_tests {
         std::os::unix::fs::symlink(main.join(".mcp.json"), worktree.join(".mcp.json")).unwrap();
         unlink_project(&worktree).unwrap();
         assert!(worktree.join(".mcp.json").is_symlink());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Claude runs a project's hooks in the session's folder: a settings file whose hooks run
+    /// commands is linked as a copy where each first goes to the project, with
+    /// `CLAUDE_PROJECT_DIR` set to it (#315); one without stays a link to the file itself.
+    #[test]
+    fn a_projects_hooks_run_in_the_project() {
+        let root = std::env::temp_dir().join(format!("brigadier-link-{}", uuid::Uuid::new_v4()));
+        let (project, cwd) = (root.join("it's a project"), root.join("orch"));
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        let settings = serde_json::json!({
+            "permissions": { "allow": ["Bash(npm test)"] },
+            "hooks": { "PostToolUse": [{
+                "matcher": "Edit",
+                "hooks": [
+                    { "type": "command", "command": "pwd > where.txt; echo \"$CLAUDE_PROJECT_DIR\" >> where.txt" },
+                    { "type": "prompt", "prompt": "Check it." },
+                ],
+            }]},
+        });
+        std::fs::write(project.join(".claude/settings.json"), settings.to_string()).unwrap();
+        link_project(&cwd, &project).unwrap();
+        let link = cwd.join(".claude/settings.json");
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            cwd.join(".claude/.settings.project.json")
+        );
+        let copied: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&link).unwrap()).unwrap();
+        assert_eq!(copied["permissions"], settings["permissions"]);
+        let hooks = &copied["hooks"]["PostToolUse"][0]["hooks"];
+        assert_eq!(hooks[1], settings["hooks"]["PostToolUse"][0]["hooks"][1]);
+        // Run from the session's folder, as Claude runs it, it runs in the project.
+        let ran = std::process::Command::new("/bin/sh")
+            .args(["-c", hooks[0]["command"].as_str().unwrap()])
+            .current_dir(&cwd)
+            .env("CLAUDE_PROJECT_DIR", &cwd)
+            .status()
+            .unwrap();
+        assert!(ran.success());
+        let real = project.canonicalize().unwrap();
+        let where_ = std::fs::read_to_string(project.join("where.txt")).unwrap();
+        let lines: Vec<&str> = where_.lines().collect();
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| std::path::Path::new(line).canonicalize().unwrap())
+                .collect::<Vec<_>>(),
+            [real.clone(), real]
+        );
+        // Without command hooks it is the file itself, and the copy goes.
+        std::fs::write(project.join(".claude/settings.json"), "{}").unwrap();
+        link_project(&cwd, &project).unwrap();
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            project.join(".claude/settings.json")
+        );
+        assert!(!cwd.join(".claude/.settings.project.json").exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
