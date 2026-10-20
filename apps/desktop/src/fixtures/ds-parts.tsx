@@ -14,12 +14,30 @@ import { colourOf, wait } from "@/fixtures/look";
 
 const one = (selector: string) => document.querySelector(selector);
 
+/** Opens the dropdown `label` and reads its choices: each one's top, bottom and height. */
+async function pickerRows(label: string) {
+  one(`[aria-label="${label}"]`)?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+  for (let tries = 0; tries < 100 && !one('[role="menuitemradio"]'); tries++) await wait(20);
+  return Array.from(document.querySelectorAll('[role="menuitemradio"]')).map((item) => {
+    const box = item.getBoundingClientRect();
+    return { top: box.top, bottom: box.bottom, height: box.height };
+  });
+}
+
 /** The corner `className` gives, read off a probe. */
 function radiusOf(className: string): string {
   const element = document.body.appendChild(Object.assign(document.createElement("div"), { className }));
   const radius = getComputedStyle(element).borderTopLeftRadius;
   element.remove();
   return radius;
+}
+
+/** The height `className` gives, read off a probe. */
+function heightOf(className: string): number {
+  const element = document.body.appendChild(Object.assign(document.createElement("div"), { className }));
+  const height = element.getBoundingClientRect().height;
+  element.remove();
+  return height;
 }
 
 /** A dropdown trigger's words, whether it is off, and how it sits in its grid cell. */
@@ -137,6 +155,11 @@ const WINDOWS = [
   { value: "five_hour", label: "five_hour" },
   { value: "seven_day", label: "seven_day" },
 ];
+const HINTED = [
+  { value: "default", label: "Default", hint: "Uses the provider's own setting" },
+  { value: "high", label: "High", hint: "Thinks longer before it answers" },
+  { value: "low", label: "Low" },
+];
 
 /** The search fields, each holding words. */
 function Searches() {
@@ -182,10 +205,13 @@ function Fixture() {
     const result = document.createElement("pre");
     result.id = "parts-result";
     const seen = read();
-    void escapes().then((search) => {
+    void escapes().then(async (search) => {
+      const hinted = await pickerRows("Effort");
       result.textContent = JSON.stringify({
         ...seen,
         search,
+        hinted,
+        controlSm: heightOf("h-control-sm"),
         radii: {
           capsule: radiusOf("rounded-capsule"),
           control: radiusOf("rounded-control"),
@@ -258,6 +284,7 @@ function Fixture() {
             className="max-w-full justify-self-start"
           />
           <Picker label="Task" value="" options={[]} onChange={() => {}} placeholder="Pick…" />
+          <Picker label="Effort" value="high" options={HINTED} onChange={() => {}} />
         </section>
       </div>
     </TooltipProvider>

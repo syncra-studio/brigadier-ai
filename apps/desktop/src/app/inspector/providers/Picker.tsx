@@ -48,7 +48,11 @@ export function Picker({
       <DropdownMenuContent align="start" className="max-w-sm">
         <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
           {options.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value} className="text-xs">
+            <DropdownMenuRadioItem
+              key={option.value}
+              value={option.value}
+              className={cn("text-xs", option.hint && "h-auto py-1.5")}
+            >
               <span className="flex min-w-0 flex-col">
                 <span className="truncate">{option.label}</span>
                 {option.hint && (

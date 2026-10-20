@@ -80,4 +80,12 @@ test("the merged small parts draw as one look each", { timeout: 90000 }, async (
   assert.equal(picker.unpicked.text, "Pick…");
   assert.equal(picker.unpicked.justify, "flex-start");
   assert.equal(picker.empty.disabled, true);
+
+  // Its choices: a plain one keeps the small control height, one with a hint line grows to fit it,
+  // so no choice runs into the next.
+  const { hinted, controlSm } = seen;
+  assert.equal(hinted.length, 3);
+  assert.equal(hinted[2].height, controlSm);
+  for (const row of hinted.slice(0, 2)) assert.ok(row.height > controlSm, `a hinted choice is ${row.height} high`);
+  for (let i = 1; i < hinted.length; i++) assert.ok(hinted[i].top >= hinted[i - 1].bottom - 0.5, "choices don't overlap");
 });
