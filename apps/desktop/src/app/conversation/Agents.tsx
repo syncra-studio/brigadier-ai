@@ -28,28 +28,6 @@ export const WORKERS_LABEL = "Workers";
 
 /** The session's flat worker list and read-only worker threads. */
 
-/** Glyphs stacked in a summary row. */
-const STACKED = 4;
-
-/** Up to four workers' seeded glyphs in a row. */
-export function WorkerGlyphs({
-  taskIds,
-}: {
-  taskIds: readonly string[];
-}) {
-  return (
-    <span className="flex shrink-0 items-center gap-1.5">
-      {taskIds.slice(0, STACKED).map((id) => (
-        <WorkerGlyph
-          key={id}
-          taskId={id}
-          className="animate-glyph-in motion-reduce:animate-none"
-        />
-      ))}
-    </span>
-  );
-}
-
 /** Live elapsed time; done rows show recency and remain openable. */
 function RowTime({ task }: { task: Task }) {
   const done = workerDone(task);

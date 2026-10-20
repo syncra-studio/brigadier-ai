@@ -16,17 +16,6 @@ export function Section({ title, children }: { title: string; children: ReactNod
   );
 }
 
-export function Lines({ items }: { items: readonly string[] }) {
-  if (items.length === 0) return <p className="text-muted-foreground text-xs">None.</p>;
-  return (
-    <ul className="flex list-disc flex-col gap-0.5 ps-4 text-sm">
-      {items.map((item, index) => (
-        <li key={index}>{item}</li>
-      ))}
-    </ul>
-  );
-}
-
 export function DiffStatView({ stat }: { stat: DiffStat }) {
   return (
     <div className="flex flex-col gap-0.5">

@@ -5,7 +5,7 @@ import { IdGlyph } from "@/components/glyphs/worker-glyphs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Task, TaskState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
-import { type Board, useBoard } from "@/state/board";
+import { useBoard } from "@/state/board";
 
 /**
  * A worker named anywhere in the conversation: its chip (glyph and name in a pill, which opens
@@ -58,12 +58,6 @@ export function WorkerGlyph({
   className?: string | undefined;
 }) {
   return <IdGlyph id={taskId} dot={working} className={cn(className, tone)} />;
-}
-
-/** The task a checker (a review or a verifier) checks, while the board still has it. */
-function checkSubject(board: Board | null | undefined, task: Task | undefined): Task | undefined {
-  if ((task?.kind !== "review" && task?.kind !== "verify") || !task.subject) return undefined;
-  return board?.tasks[task.subject];
 }
 
 /** What a worker is called (see `workerName`), rather than its `task-N`. */
@@ -149,28 +143,5 @@ export const WorkerChip = memo(function WorkerChip({
         <span className="text-muted-foreground text-xs">{stateLabel}</span>
       </TooltipContent>
     </Tooltip>
-  );
-});
-
-/**
- * How a line names a worker: its chip, and for a check of another worker the check's chip,
- * then "of" and that worker's chip ("[Review] of [Add tests]"). Items of a flex line.
- */
-export const WorkerMention = memo(function WorkerMention({
-  taskId,
-  tone,
-}: {
-  taskId: string;
-  tone?: string | null | undefined;
-}) {
-  const subject = useBoard((s) => checkSubject(s.board, s.board?.tasks[taskId])?.id ?? null);
-  const kind = useBoard((s) => s.board?.tasks[taskId]?.kind);
-  if (subject === null) return <WorkerChip taskId={taskId} tone={tone} />;
-  return (
-    <>
-      <WorkerChip taskId={taskId} tone={tone} label={kind === "verify" ? "Check" : "Review"} className="shrink-0" />
-      <span className="shrink-0">of</span>
-      <WorkerChip taskId={subject} />
-    </>
   );
 });

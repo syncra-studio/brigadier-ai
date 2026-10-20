@@ -46,38 +46,6 @@ export function ActionCard({
   );
 }
 
-/**
- * The approval's header: "▣ Terminal" small and dim, the question, a muted line under it.
- * Announced as a whole when it appears.
- */
-export function ActionCardHeader({
-  icon,
-  kind,
-  title,
-  detail,
-  children,
-}: {
-  icon: ReactNode;
-  kind: ReactNode;
-  title: ReactNode;
-  detail?: ReactNode;
-  /** Rows under the header (a warning badge). */
-  children?: ReactNode;
-}) {
-  return (
-    <div className="flex min-w-0 flex-col gap-2 px-4 pt-4 pb-3">
-      <div role="alert" aria-atomic="true" className="flex min-w-0 flex-col gap-2">
-        <p className="text-foreground/65 text-code flex items-center gap-2 leading-5 [&_svg]:size-4.5 [&_svg]:shrink-0">
-          {icon}
-          {kind}
-        </p>
-        <ActionCardTitle detail={detail}>{title}</ActionCardTitle>
-      </div>
-      {children}
-    </div>
-  );
-}
-
 /** The question the card asks, and a muted line under it. */
 export function ActionCardTitle({ children, detail }: { children: ReactNode; detail?: ReactNode }) {
   return (

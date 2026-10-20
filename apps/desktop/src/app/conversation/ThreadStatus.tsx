@@ -61,17 +61,6 @@ export const StatusLine: FC<{ head: StatusHead }> = ({ head }) => {
   );
 };
 
-/**
- * The last line of a live turn, one line: what happens right now ("Thinking", "Delegating to a
- * worker"), what waits on the user ("Waiting for your approval"), or how many workers the turn
- * waits for (each worker's progress is in the Workers strip on the composer). It is gone once
- * the turn is over. Token ticks never announce a live region.
- */
-export const ThreadStatus: FC<ThreadStatusProps> = (props) => {
-  const head = useThreadStatusHead(props);
-  return head ? <StatusLine head={head} /> : null;
-};
-
 /** The line under an answer whose request still waits (see `answeredHead`). */
 export const AnsweredStatus: FC<ThreadStatusProps & { waiting: boolean; reopened: boolean }> = ({ waiting, reopened, ...props }) => {
   const head = answeredHead(useThreadStatusHead(props), { waitingFor: props.waitingFor ?? NONE, waiting, reopened });

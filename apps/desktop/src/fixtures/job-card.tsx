@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { JobCard, StackCard, WaitCard } from "@/app/conversation/cards/JobCard";
 import { type Job, jobShown } from "@/app/conversation/job";
-import { JobTab } from "@/app/conversation/JobTab";
+import { JobTimeline } from "@/app/conversation/JobTab";
 import { SummaryRow, SummarySection } from "@/components/assistant-ui/elements/summary-section";
 
 // Each column is the summary's column of cards (PinnedSummary's STACK), at a fixed clock.
@@ -92,7 +92,7 @@ function Fixture() {
         },
       ]),
     );
-    const tab = document.querySelector('[data-slot="job-tab"]')!;
+    const tab = document.querySelector('[data-shot="tab"]')!;
     const steps = [...tab.querySelectorAll('[data-slot="timeline"] > li')];
     const result = document.createElement("pre");
     result.id = "job-card-result";
@@ -135,7 +135,7 @@ function Fixture() {
         {show(DONE)}
       </Column>
       <div data-shot="tab" className="bg-background w-160">
-        <JobTab job={FAILED} details={{ review: FINDINGS }} />
+        <JobTimeline job={FAILED} details={{ review: FINDINGS }} />
       </div>
     </div>
   );

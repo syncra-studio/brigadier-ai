@@ -17,19 +17,6 @@ function stepDetail(step: JobStep, next: boolean): string | undefined {
   return next ? "Next" : undefined;
 }
 
-/**
- * The Job card's tab: every step of the job on a timeline (Q88), each with when it ran, what
- * happened and what comes next; under a step, what it holds in full (`details`: a review's
- * findings, the checks of a merge).
- */
-export function JobTab({ job, details }: { job: Job; details?: Readonly<Record<string, ReactNode>> }) {
-  return (
-    <TabPage>
-      <JobTimeline job={job} details={details} />
-    </TabPage>
-  );
-}
-
 function TabPage({ children }: { children: ReactNode }) {
   return (
     <div data-slot="job-tab" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -38,8 +25,12 @@ function TabPage({ children }: { children: ReactNode }) {
   );
 }
 
-/** One job's steps on a timeline, under its phase when it is a plan's. */
-function JobTimeline({ job, title, details }: { job: Job; title?: ReactNode; details?: Readonly<Record<string, ReactNode>> | undefined }) {
+/**
+ * One job's steps on a timeline (Q88), under its phase when it is a plan's: each with when it
+ * ran, what happened and what comes next; under a step, what it holds in full (`details`: a
+ * review's findings, the checks of a merge).
+ */
+export function JobTimeline({ job, title, details }: { job: Job; title?: ReactNode; details?: Readonly<Record<string, ReactNode>> | undefined }) {
   const next = job.steps.find((step) => step.state === "pending");
   const events: TimelineEvent[] = job.steps.map((step) => {
     const at = step.startedAtMs ?? step.endedAtMs;

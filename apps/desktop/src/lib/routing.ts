@@ -1,7 +1,6 @@
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import type {
   Area,
-  Attempt,
   Heat,
   LimitHit,
   ModelChoice,
@@ -25,7 +24,7 @@ export { isNoWorkRule, noWorkRule, WORKER_CATEGORIES } from "@/lib/workRules";
 
 /**
  * Routing in words: the names the Usage page, worker cards, the Providers page and the
- * Inspector's preview share, and the sentences they build (hand-offs, rules, reset times).
+ * Inspector's preview share, and the sentences they build (limits, rules, reset times).
  */
 
 /** Vendors as sentences name them ("Claude opus hit its 5-hour limit"). */
@@ -264,33 +263,6 @@ export function limitPhrase(
     case "credits":
       return `ran out of credits${resets}`;
   }
-}
-
-/**
- * One hand-off as the card says it: "Claude Opus 5.5 hit its 5-hour limit (resets 21:10) →
- * Codex gpt-6-sol". `next` is the attempt that took over.
- */
-export function handoffLine(
-  attempt: Attempt,
-  next: Attempt,
-  groups: readonly ModelGroup[],
-  providers: readonly ProviderOverview[] | undefined,
-  nowMs: number,
-): string {
-  const from = choiceName(groups, attempt.route.choice);
-  const to = choiceName(groups, next.route.choice);
-  const end = attempt.end;
-  if (!end) return `${from} → ${to}`;
-  const why =
-    end.type === "limit"
-      ? limitPhrase(end.limit, attempt.route.choice.provider, providers, nowMs)
-      : `failed (${end.message})`;
-  return `${from} ${why} → ${to}`;
-}
-
-/** The hand-offs of a task's attempts, oldest first. */
-export function handoffs(attempts: readonly Attempt[]): Array<[Attempt, Attempt]> {
-  return attempts.slice(1).map((next, index) => [attempts[index] as Attempt, next]);
 }
 
 // ----- rules -----------------------------------------------------------------------------

@@ -1,18 +1,14 @@
-import { Clock, Shuffle } from "@openai/apps-sdk-ui/components/Icon";
-
 import { Section } from "@/app/conversation/cards/common";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { Badge } from "@/components/ui/badge";
 import { useNow } from "@/hooks/use-now";
-import type { Attempt, Explanation, QuotaWait, RankingUse, Task } from "@/ipc/generated";
-import { formatCountdown, formatDateTime, formatTime } from "@/lib/format";
+import type { Attempt, Explanation, RankingUse, Task } from "@/ipc/generated";
+import { formatDateTime, formatTime } from "@/lib/format";
 import {
   choiceName,
   formatDelta,
   formatScore,
-  handoffLine,
-  handoffs,
   hasResetCountdown,
   limitPhrase,
   placeName,
@@ -20,86 +16,13 @@ import {
   TIER_LABELS,
   withResetTime,
 } from "@/lib/routing";
-import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
 
 /**
- * Why a worker runs on its model, on its row and in the Workers panel: the one-line reason, the
- * hand-off that brought it there, a wait for quota, and in the details the explanation behind
- * the choice and every model that ran it. None of it goes into the conversation's thread.
+ * Why a worker runs on its model, in its details: the explanation behind the choice and every
+ * model that ran it. None of it goes into the conversation's thread.
  */
-
-/** The routing reason in one muted line, the full text on hover. */
-export function RouteReason({ task, className }: { task: Task; className?: string }) {
-  const now = useNow(hasResetCountdown(task.route.reason) ? 60_000 : null);
-  if (!task.route.reason) return null;
-  const reason = routeReason(task.route, now, task.quotaWait?.resetsAtMs ?? null);
-  return (
-    <span
-      data-slot="route-reason"
-      title={reason}
-      className={cn("text-muted-foreground block truncate text-xs", className)}
-    >
-      {reason}
-    </span>
-  );
-}
-
-/** The latest hand-off, when the task changed models: "Claude Opus 5.5 hit its … → Codex …". */
-export function HandoffLine({
-  task,
-  groups,
-  className,
-}: {
-  task: Task;
-  groups: readonly ModelGroup[];
-  className?: string;
-}) {
-  const providers = useApp((s) => s.providers.view?.providers);
-  const last = handoffs(task.attempts).at(-1);
-  // The reset time in the line ticks only when there is a hand-off to show.
-  const now = useNow(last ? 60_000 : null);
-  if (!last) return null;
-  const line = `Handed off: ${handoffLine(last[0], last[1], groups, providers, now)}`;
-  return (
-    <span
-      data-slot="route-handoff"
-      title={line}
-      className={cn("text-muted-foreground flex min-w-0 items-center gap-1 text-xs", className)}
-    >
-      <Shuffle aria-hidden className="size-icon-xs shrink-0" />
-      <span className="truncate">{line}</span>
-    </span>
-  );
-}
-
-/**
- * A task paused for quota: what it waits for, the countdown to the reset, and the user rule
- * that keeps it from other models. It resumes on its own.
- */
-export function QuotaWaitLine({ wait }: { wait: QuotaWait }) {
-  const now = useNow(30_000);
-  return (
-    <span data-slot="quota-wait" className="flex flex-col gap-0.5">
-      <span className="text-warning flex items-center gap-1">
-        <Clock aria-hidden className="size-icon-xs shrink-0" />
-        <span>
-          Waiting for quota: {withResetTime(wait.reason, wait.resetsAtMs, now)}
-          {wait.resetsAtMs !== null && ` · ${formatCountdown(wait.resetsAtMs, now)} left`}
-        </span>
-      </span>
-      {wait.rule && <span>Your rule keeps it from other models: {wait.rule}</span>}
-      {wait.ranking && (
-        <span>
-          {wait.ranking.charAt(0).toUpperCase()}
-          {wait.ranking.slice(1)} keeps it for those models.
-        </span>
-      )}
-      <span>It resumes on its own when quota frees up.</span>
-    </span>
-  );
-}
 
 /** The explanation behind a choice: its factors, the runners-up and what decided it. */
 export function ExplanationView({
