@@ -151,7 +151,7 @@ function FolderPath({ folder }: { folder: string }) {
           className="bg-popover text-popover-foreground border-border rounded-tooltip shadow-tooltip pointer-events-none absolute top-full -right-2 -left-2 z-10 mt-1.75 flex flex-col gap-1.5 border px-3 py-2.5"
         >
           {/* Lines break after a slash: each part with its slash is one piece, split only when wider than a line. */}
-          <span className="font-mono text-xs leading-[1.5] wrap-anywhere">
+          <span className="font-mono text-xs leading-normal wrap-anywhere">
             {folder.split(/(?<=\/)/).map((part, index) => (
               <span key={index} className="inline-block max-w-full">
                 {part}

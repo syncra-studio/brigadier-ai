@@ -587,6 +587,20 @@
   mask-image: linear-gradient(to bottom, black calc(100% - var(--spacing) * 6), transparent);
 }
 
+/* A terminal tab's name too long for it fades out at its end. */
+@utility terminal-label-fade {
+  mask-image: linear-gradient(to right, black calc(100% - var(--spacing-terminal-label-fade)), transparent);
+}
+
+/* The colours an image tile sharpens into once its image is made (image-generation.tsx). */
+@utility image-generation-wash {
+  background:
+    radial-gradient(120% 90% at 20% 100%, var(--file-blue) 0%, transparent 55%),
+    radial-gradient(110% 80% at 85% 90%, var(--file-purple) 0%, transparent 60%),
+    radial-gradient(130% 100% at 60% 0%, var(--file-yellow) 0%, var(--file-orange) 45%, transparent 75%),
+    linear-gradient(to top, var(--card), var(--muted));
+}
+
 /* Cuts off whatever paints past the start edge (a shadow over the strip beside it), keeping
    the other sides' shadow. */
 @utility clip-start {

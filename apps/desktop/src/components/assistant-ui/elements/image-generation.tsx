@@ -49,13 +49,9 @@ export function ImageGeneration({
       <div
         aria-hidden
         className={cn(
-          "absolute inset-0 transition-[opacity,filter] duration-1000 ease-out motion-reduce:transition-none",
+          "image-generation-wash absolute inset-0 transition-[opacity,filter] duration-1000 ease-out motion-reduce:transition-none",
           generating ? "opacity-0 blur-xl" : "blur-0 opacity-100",
         )}
-        style={{
-          background:
-            "radial-gradient(120% 90% at 20% 100%, var(--file-blue) 0%, transparent 55%), radial-gradient(110% 80% at 85% 90%, var(--file-purple) 0%, transparent 60%), radial-gradient(130% 100% at 60% 0%, var(--file-yellow) 0%, var(--file-orange) 45%, transparent 75%), linear-gradient(to top, var(--card), var(--muted))",
-        }}
       />
     </div>
   );

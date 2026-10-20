@@ -373,12 +373,8 @@ function TabLabel({ name, hidden }: { name: string; hidden: boolean }) {
       className={cn(
         "min-w-0 flex-1 overflow-hidden text-start whitespace-nowrap",
         hidden && "hidden",
+        overflowing && "terminal-label-fade",
       )}
-      style={{
-        maskImage: overflowing
-          ? "linear-gradient(to right, black calc(100% - var(--spacing-terminal-label-fade)), transparent)"
-          : undefined,
-      }}
     >
       {name}
     </span>

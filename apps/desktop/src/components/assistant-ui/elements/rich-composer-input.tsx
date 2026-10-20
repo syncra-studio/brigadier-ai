@@ -496,10 +496,9 @@ export const RichComposerInput = forwardRef<HTMLDivElement, RichComposerInputPro
       <LexicalExtensionComposer extension={richComposer} contentEditable={null}>
         <div
           ref={ref}
-          className={className ? `aui-lexical-editor ${className}` : "aui-lexical-editor"}
+          className={className ? `aui-lexical-editor overflow-y-auto ${className}` : "aui-lexical-editor overflow-y-auto"}
           data-rich-composer=""
           {...rest}
-          style={{ overflowY: "auto", ...rest.style }}
         >
           <ContentEditable
             className="aui-lexical-input"

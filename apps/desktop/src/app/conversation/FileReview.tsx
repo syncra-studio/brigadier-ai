@@ -235,7 +235,7 @@ const ChangeBar: FC<{ review: FileReviewState; index: number }> = ({ review, ind
   const now = index === review.current;
   return (
     <div data-slot="review-change" data-index={index} data-current={now || undefined} className="relative h-0 font-sans">
-      <div className="absolute end-3 flex gap-1" style={{ top: "calc(-1 * var(--text-diff--line-height))" }}>
+      <div className="absolute -top-(--text-diff--line-height) end-3 flex gap-1">
         <span className="bg-muted rounded-control flex h-control-xs items-center px-1">
           <Steps slot="review-change-steps" label="change" words={`${index + 1} of ${file.hunks.length}`} onStep={(by) => review.step(by, index)} />
         </span>
@@ -254,8 +254,7 @@ const ChangeBar: FC<{ review: FileReviewState; index: number }> = ({ review, ind
         </Button>
         <Button
           size="xs"
-          className="text-background"
-          style={{ background: "var(--success)" }}
+          className="text-background bg-success hover:bg-success"
           disabled={review.busy}
           onClick={() => {
             review.setCurrent(index);

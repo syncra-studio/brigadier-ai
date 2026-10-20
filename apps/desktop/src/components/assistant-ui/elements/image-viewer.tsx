@@ -336,8 +336,8 @@ function ShownImage({ image, size, morph, imageRef, zoomKeys, onBackdrop, count 
     </div>
     {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- Esc and the close button provide keyboard dismissal */}
     <div ref={frame} data-slot="image-preview-frame" tabIndex={-1}
-      className="min-h-0 shrink-0 overflow-hidden outline-none select-none"
-      style={{ width: viewWidth, height: viewHeight, cursor: canPan ? panning ? "grabbing" : "grab" : undefined, touchAction: "none" }}
+      className={cn("min-h-0 shrink-0 touch-none overflow-hidden outline-none select-none", canPan && (panning ? "cursor-grabbing" : "cursor-grab"))}
+      style={{ width: viewWidth, height: viewHeight }}
       onClick={(event) => { if (suppressClick.current) { suppressClick.current = false; return; } if (event.target === event.currentTarget || (event.target instanceof HTMLElement && event.target.dataset.slot === "image-preview-canvas")) onBackdrop(); }}
       onPointerDown={(event) => {
         if (!canPan || event.button !== 0) return;
