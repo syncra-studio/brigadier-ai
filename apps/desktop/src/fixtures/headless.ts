@@ -220,6 +220,14 @@ function unanswered(log: string): string[] {
 }
 
 /**
+ * Whether Chromium runs as one process: only where its multi-process browser can't start (a
+ * sandbox, below). One process stops answering the DevTools protocol now and then, every call
+ * after left unanswered, even with the machine idle: about 1 render in 6 of TurnErrorRender's
+ * first test (#393). Linux Chrome crashes (SIGTRAP) in one process, and never needs it.
+ */
+let oneProcess = false;
+
+/**
  * A headless Chromium on a scratch profile in `scratch`, driven over the DevTools protocol: its
  * page's socket, `call` (a call the browser never answers fails at `deadline`), its log, and
  * `stop`, which also runs when the test ends.
@@ -232,22 +240,20 @@ async function openBrowser(
   deadline: number,
 ): Promise<{ socket: WebSocket; call: (method: string, params?: object) => Promise<unknown>; log: () => string; stop: () => Promise<void> }> {
   const profile = join(scratch, "profile");
-  // One process on macOS: a worker's sandbox lets Chromium look up Mach services but not register
-  // the one its child processes rendezvous on, so the multi-process browser aborts there. Linux
-  // Chrome crashes (SIGTRAP) in single-process mode, so it keeps the default.
   // Scrollbars hidden: Linux Chrome's take room where macOS's float, and the page lays out alike.
-  const oneProcess = process.platform === "darwin" ? ["--single-process"] : [];
   // A mouse, as the app's window has: Chrome on a machine with none (a CI runner) reports
   // `hover: none`, and every hover: style, which sits inside `@media (hover: hover)`, would stay off.
   const mouse = `--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4`;
-  const browser = spawn(chromium(), [
-    "--headless", "--no-sandbox", ...oneProcess, "--disable-gpu", "--hide-scrollbars", mouse, "--no-first-run", "--no-default-browser-check",
-    ...flags, "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank",
+  const launch = () => spawn(chromium(), [
+    "--headless", "--no-sandbox", ...(oneProcess ? ["--single-process"] : []), "--disable-gpu", "--hide-scrollbars", mouse, "--no-first-run",
+    "--no-default-browser-check", ...flags, "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank",
   ], { stdio: ["ignore", "ignore", "pipe"], detached: true });
+  let browser = launch();
   let browserLog = "";
-  browser.stderr.on("data", (chunk: Buffer) => { browserLog += chunk.toString(); });
+  const listen = () => browser.stderr.on("data", (chunk: Buffer) => { browserLog += chunk.toString(); });
+  listen();
   // A throwaway browser on a scratch profile: killed outright (one process ignores SIGTERM), with
-  // the processes it started (its own group: Linux Chrome's renderers and helpers).
+  // the processes it started (its own group: its renderers and helpers).
   const stop = async () => {
     if (browser.exitCode === null && browser.signalCode === null) {
       const stopped = new Promise((resolve) => browser.once("exit", resolve));
@@ -263,7 +269,7 @@ async function openBrowser(
     browser.stderr.destroy();
   };
   stopFirst(stop);
-  const port = await new Promise<number>((resolve, reject) => {
+  const started = () => new Promise<number>((resolve, reject) => {
     const poll = setInterval(() => {
       try {
         const found = Number(readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0]);
@@ -272,13 +278,28 @@ async function openBrowser(
           resolve(found);
         }
       } catch {
-        if (Date.now() > deadline || browser.exitCode !== null) {
+        if (Date.now() > deadline || browser.exitCode !== null || browser.signalCode !== null) {
           clearInterval(poll);
           reject(new Error(`Chromium did not start: ${browserLog.slice(-2000)}`));
         }
       }
     }, 100);
   });
+  let port: number;
+  try {
+    port = await started();
+  } catch (error) {
+    // A worker's macOS sandbox lets Chromium look up Mach services but not register the one its
+    // child processes rendezvous on, so the multi-process browser aborts at once: one process
+    // there, for the rest of the run.
+    if (oneProcess || process.platform !== "darwin" || !browserLog.includes("MachPortRendezvous")) throw error;
+    await stop();
+    oneProcess = true;
+    browserLog = "";
+    browser = launch();
+    listen();
+    port = await started();
+  }
   const targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as { type: string; webSocketDebuggerUrl: string }[];
   const target = targets.find((candidate) => candidate.type === "page");
   assert.ok(target, "Chromium has a page");
@@ -330,9 +351,14 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
   const deadline = started + 45000;
   const browser = await openBrowser(t, scratch, stopFirst, ["--enable-logging=stderr"], deadline);
   let expired = false;
-  browser.socket.addEventListener("message", (event) => {
-    const message = JSON.parse(String(event.data)) as { method?: string };
-    if (message.method === "Emulation.virtualTimeBudgetExpired") expired = true;
+  const spent = new Promise<void>((resolve) => {
+    browser.socket.addEventListener("message", (event) => {
+      const message = JSON.parse(String(event.data)) as { method?: string };
+      if (message.method === "Emulation.virtualTimeBudgetExpired") {
+        expired = true;
+        resolve();
+      }
+    });
   });
   const evaluate = async (expression: string) =>
     ((await browser.call("Runtime.evaluate", { expression, returnByValue: true })) as { result: { value: unknown } }).result.value;
@@ -346,6 +372,12 @@ export async function renderFixturePage(t: TestContext, page: string, resultId: 
     await browser.call("Emulation.setVirtualTimePolicy", { policy: "pause" });
     await browser.call("Page.navigate", { url: `${url}fixtures/${page}` });
     await browser.call("Emulation.setVirtualTimePolicy", { policy: "pauseIfNetworkFetchesPending", budget: budgetMs });
+    // Nothing is asked while the budget runs: a one-process Chrome (a sandbox's) asked as the
+    // page's clock races to the budget's end stops answering more often (#393: TurnErrorRender's
+    // first test 1 render in 6 asked every 100 ms, 1 in 50 asked once spent).
+    let waited: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([spent, new Promise((resolve) => { waited = setTimeout(resolve, 10000); })]);
+    clearTimeout(waited);
     while (Date.now() < deadline) {
       // The fixture's clock, not about:blank's before it. A loaded machine's one-process Chrome
       // can stop sending the page's events, the budget's end among them, while it still answers
