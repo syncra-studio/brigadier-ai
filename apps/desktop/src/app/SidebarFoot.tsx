@@ -1,10 +1,11 @@
 import { type ReactNode, useRef } from "react";
 
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { AppUpdatePill } from "@/app/AppUpdatePill";
 import { KeepAwakeMenu, UsageMenu } from "@/app/BarStatus";
 import { useShortcuts } from "@/app/shortcuts";
 import { preloadSettings } from "@/app/settings/lazy";
-import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
+import { footMenuPlacement } from "@/app/sidebar/nav";
 import { UpdatesRow } from "@/app/UpdatesRow";
 import { Comment, HelpIcon, Keyboard, Settings } from "@/components/icons";
 import {
@@ -30,15 +31,18 @@ export function SidebarFoot() {
   const shortcuts = useShortcuts();
   const { open } = useSidebar();
   const settings = (
-    <FootButton
-      tip="Settings"
+    <TooltipIconButton
+      look="strip"
+      side={open ? "top" : "right"}
+      tooltip="Settings"
       shortcut={shortcuts.settings}
-      icon={<Settings />}
       // Its code loads as the pointer comes (if idle hasn't loaded it yet), before the click.
       onPointerEnter={preloadSettings}
       onFocus={preloadSettings}
       onClick={toggleSettings}
-    />
+    >
+      <Settings />
+    </TooltipIconButton>
   );
   return (
     <div
@@ -103,7 +107,9 @@ function HelpMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <FootButton tip="Help" icon={<HelpIcon />} />
+        <TooltipIconButton look="strip" side={open ? "top" : "right"} tooltip="Help">
+          <HelpIcon />
+        </TooltipIconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         {...(open ? ({ side: "top", align: "end" } as const) : footMenuPlacement(false))}

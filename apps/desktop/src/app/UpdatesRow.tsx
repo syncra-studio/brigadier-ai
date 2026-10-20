@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { BarItem, ITEM_MS } from "@/app/BarItem";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
+import { footMenuPlacement } from "@/app/sidebar/nav";
 import { BrigadierGlyph, Check, Copy, DownloadSimple, ProviderGlyph, Spinner, X } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -62,17 +63,10 @@ export function UpdatesRow() {
     <BarItem show={!empty || open} axis={expanded ? "x" : "y"}>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <FootButton
-            tip={direct === "menu" ? rowLabel(shown) : `Update ${UPDATE_NAMES[direct.target]} to ${direct.latest}`}
-            icon={
-              busy ? (
-                <Spinner aria-hidden className="animate-spin" />
-              ) : finished ? (
-                <Check aria-hidden />
-              ) : (
-                <DownloadSimple aria-hidden />
-              )
-            }
+          <TooltipIconButton
+            look="strip"
+            side={expanded ? "top" : "right"}
+            tooltip={direct === "menu" ? rowLabel(shown) : `Update ${UPDATE_NAMES[direct.target]} to ${direct.latest}`}
             dot={expanded || busy || finished ? null : "bg-foreground"}
             className={expanded ? FOOT_CHIP : undefined}
             onClick={(event) => {
@@ -83,21 +77,27 @@ export function UpdatesRow() {
                 if (!started) setOpen(true);
               });
             }}
-            end={
-              expanded && (
-                <span className="flex items-center">
-                  <BarItem show={outdated.has("app")}>
-                    <BrigadierGlyph aria-hidden className="size-icon-sm mx-0.5 shrink-0" />
+          >
+            {busy ? (
+              <Spinner aria-hidden className="animate-spin" />
+            ) : finished ? (
+              <Check aria-hidden />
+            ) : (
+              <DownloadSimple aria-hidden />
+            )}
+            {expanded && (
+              <span className="flex items-center">
+                <BarItem show={outdated.has("app")}>
+                  <BrigadierGlyph aria-hidden className="size-icon-sm mx-0.5 shrink-0" />
+                </BarItem>
+                {CLIS.map((cli) => (
+                  <BarItem key={cli} show={outdated.has(cli)}>
+                    <ProviderGlyph provider={cli} className="size-icon-sm mx-0.5 shrink-0" />
                   </BarItem>
-                  {CLIS.map((cli) => (
-                    <BarItem key={cli} show={outdated.has(cli)}>
-                      <ProviderGlyph provider={cli} className="size-icon-sm mx-0.5 shrink-0" />
-                    </BarItem>
-                  ))}
-                </span>
-              )
-            }
-          />
+                ))}
+              </span>
+            )}
+          </TooltipIconButton>
         </PopoverTrigger>
         <PopoverContent
           {...footMenuPlacement(expanded)}

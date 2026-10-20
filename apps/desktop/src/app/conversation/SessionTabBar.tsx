@@ -11,8 +11,8 @@ import {
   useRef,
 } from "react";
 
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
-import { TitlebarButton } from "@/components/titlebar-button";
 import { SidebarActivityMark, SidebarError, statusWords } from "@/app/SessionStatus";
 import { UNTITLED } from "@/app/TopBar";
 import {
@@ -270,8 +270,8 @@ export function SessionTabBar({
     closeTab(id, tab);
   };
   const newTab = (
-    <TitlebarButton tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} className="ms-0.5"
-      onClick={() => { lock.release(); create("newTab"); }}><Plus /></TitlebarButton>
+    <TooltipIconButton look="toolbar" tooltip="New tab" shortcut={shortcutLabel("⌘T", mac)} className="ms-0.5"
+      onClick={() => { lock.release(); create("newTab"); }}><Plus /></TooltipIconButton>
   );
   const connecting = connection !== "connected" && (
     <Badge variant="warning" role="status" className="shrink-0">

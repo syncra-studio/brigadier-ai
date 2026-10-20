@@ -8,8 +8,9 @@ import {
   useState,
 } from "react";
 
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { useReveal } from "@/app/conversation/SidePanel";
-import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
+import { TitlebarTips } from "@/components/titlebar-button";
 import {
   ChevronDown,
   Dock,
@@ -321,17 +322,17 @@ export function TerminalPane({ place }: { place: string }) {
             })}
           </div>
           <TitlebarTips>
-            <TitlebarButton
+            <TooltipIconButton look="toolbar"
               tooltip="New terminal"
               className="shrink-0"
               onClick={() => addTab(place)}
             >
               <Plus />
-            </TitlebarButton>
+            </TooltipIconButton>
             <div className="flex-1" />
-            <TitlebarButton tooltip="Hide terminal" shortcut="⌘J" className="shrink-0" onClick={hide}>
+            <TooltipIconButton look="toolbar" tooltip="Hide terminal" shortcut="⌘J" className="shrink-0" onClick={hide}>
               <ChevronDown />
-            </TitlebarButton>
+            </TooltipIconButton>
           </TitlebarTips>
         </header>
         {data.tabs.map((tab) => (

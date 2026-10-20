@@ -1,5 +1,5 @@
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { BarItem } from "@/app/BarItem";
-import { FootButton } from "@/app/sidebar/nav";
 import { FOOT_CHIP } from "@/app/UpdatesRow";
 import { ArrowRotateCw, BrigadierGlyph, DownloadSimple, Spinner } from "@/components/icons";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -25,23 +25,24 @@ export function AppUpdatePill() {
   const busy = state === "updating";
   return (
     <BarItem show={update !== null} axis={expanded ? "x" : "y"}>
-      <FootButton
-        tip={TIPS[state](update?.version ?? "")}
+      <TooltipIconButton
+        look="strip"
+        side={expanded ? "top" : "right"}
+        tooltip={TIPS[state](update?.version ?? "")}
         aria-busy={busy || undefined}
-        icon={
-          busy ? (
-            <Spinner aria-hidden className="animate-spin" />
-          ) : state === "ready" ? (
-            <ArrowRotateCw aria-hidden />
-          ) : (
-            <DownloadSimple aria-hidden />
-          )
-        }
         dot={expanded || busy ? null : "bg-foreground"}
         className={expanded ? FOOT_CHIP : undefined}
         onClick={clickAppUpdate}
-        end={expanded && <BrigadierGlyph aria-hidden className="size-icon-sm mx-0.5 shrink-0" />}
-      />
+      >
+        {busy ? (
+          <Spinner aria-hidden className="animate-spin" />
+        ) : state === "ready" ? (
+          <ArrowRotateCw aria-hidden />
+        ) : (
+          <DownloadSimple aria-hidden />
+        )}
+        {expanded && <BrigadierGlyph aria-hidden className="size-icon-sm mx-0.5 shrink-0" />}
+      </TooltipIconButton>
     </BarItem>
   );
 }

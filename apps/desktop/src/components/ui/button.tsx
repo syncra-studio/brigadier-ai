@@ -27,7 +27,7 @@ const buttonVariants = cva(
         // Blue words that act (Show all, Add model); its icon, if any, is a child.
         "link-blue": "text-link hover:underline",
       },
-      // Buttons with words are capsules; icon buttons keep the control corner.
+      // Buttons with words are capsules; icon buttons have the icon-button corner (10px).
       size: {
         default: "rounded-capsule h-control-md px-button-md",
         xs: "rounded-capsule h-control-xs px-button-xs gap-1 text-xs [&_svg:not([class*='size-'])]:size-icon-xs",
@@ -36,13 +36,13 @@ const buttonVariants = cva(
         // Words with no box of their own (a row's "Show all"); `inline-flex` for words in a sentence.
         inline:
           "flex h-auto gap-1 p-0 text-xs font-medium [&_svg:not([class*='size-'])]:size-icon-xs",
-        icon: "rounded-control size-icon-button-lg",
+        icon: "rounded-toolbar-button size-icon-button-lg",
         "icon-xs":
-          "rounded-control size-icon-button-xs [&_svg:not([class*='size-'])]:size-icon-xs",
+          "rounded-toolbar-button size-icon-button-xs [&_svg:not([class*='size-'])]:size-icon-xs",
         "icon-sm":
-          "rounded-control size-icon-button-sm [&_svg:not([class*='size-'])]:size-icon-sm",
-        "icon-md": "rounded-control size-icon-button-md",
-        "icon-lg": "rounded-control size-icon-button-lg [&_svg:not([class*='size-'])]:size-icon-lg",
+          "rounded-toolbar-button size-icon-button-sm [&_svg:not([class*='size-'])]:size-icon-sm",
+        "icon-md": "rounded-toolbar-button size-icon-button-md",
+        "icon-lg": "rounded-toolbar-button size-icon-button-lg [&_svg:not([class*='size-'])]:size-icon-lg",
       },
     },
     defaultVariants: {

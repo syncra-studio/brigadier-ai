@@ -53,7 +53,6 @@ import {
   SummarySection,
 } from "@/components/assistant-ui/elements/summary-section";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { TitlebarButton } from "@/components/titlebar-button";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -1004,25 +1003,25 @@ export function PinnedSummaryToggle() {
   const floating = useSummary((s) => s.floating);
   if (!float) {
     return (
-      <TitlebarButton
+      <TooltipIconButton look="toolbar"
         tooltip="Context"
         aria-label="Context"
         aria-pressed={pinned}
         onClick={() => setPinnedSummary(!pinned)}
       >
         <Tasks />
-      </TitlebarButton>
+      </TooltipIconButton>
     );
   }
   return (
     <PopoverTrigger asChild>
-      <TitlebarButton
+      <TooltipIconButton look="toolbar"
         tooltip="Context"
         aria-label="Context"
         aria-pressed={floating}
       >
         <Tasks />
-      </TitlebarButton>
+      </TooltipIconButton>
     </PopoverTrigger>
   );
 }

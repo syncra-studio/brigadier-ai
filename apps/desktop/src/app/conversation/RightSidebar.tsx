@@ -1,9 +1,10 @@
 import { type CSSProperties, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { WORKERS_LABEL, WorkersTab } from "@/app/conversation/Agents";
 import { outcomeWords } from "@/app/conversation/workerPresentation";
-import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
+import { TitlebarTips } from "@/components/titlebar-button";
 import { X } from "@/components/icons";
 import { SidebarReveal, SidebarResizeHandle, useSidebarChoice, useSidebarWidth } from "@/components/ui/sidebar-layout";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -116,7 +117,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
           {!workerHeader && <div role="tablist" aria-label="Right panel" className="h-page-toolbar bg-background flex shrink-0 items-center gap-1 px-2">
             <TitlebarTips>
               {TABS.map(({ id, title }) => (
-                <TitlebarButton
+                <TooltipIconButton look="toolbar"
                   key={id}
                   role="tab"
                   id={`right-sidebar-${id}`}
@@ -128,12 +129,12 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
                   onClick={() => panel.selectTab(id)}
                 >
                   {title}
-                </TitlebarButton>
+                </TooltipIconButton>
               ))}
             </TitlebarTips>
             <span className="flex-1" />
             <TitlebarTips>
-              <TitlebarButton tooltip="Close right panel" onClick={() => panel.setOpen(false)}><X /></TitlebarButton>
+              <TooltipIconButton look="toolbar" tooltip="Close right panel" onClick={() => panel.setOpen(false)}><X /></TooltipIconButton>
             </TitlebarTips>
           </div>}
           <div
@@ -148,7 +149,7 @@ export function RightSidebar({ conversationId }: { conversationId: string }) {
             )}
           >
             {mounted && <WorkersTab conversationId={conversationId} headerActions={<TitlebarTips>
-              <TitlebarButton tooltip="Close right panel" onClick={() => panel.setOpen(false)}><X /></TitlebarButton>
+              <TooltipIconButton look="toolbar" tooltip="Close right panel" onClick={() => panel.setOpen(false)}><X /></TooltipIconButton>
             </TitlebarTips>} />}
           </div>
         </div>

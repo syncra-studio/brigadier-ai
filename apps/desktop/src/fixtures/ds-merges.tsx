@@ -74,7 +74,7 @@ function read() {
       softDestructive: button("button-soft-destructive"),
       linkBlue: button("button-link-blue"),
       icon: button("button-icon"),
-      radii: { capsule: radiusOf("rounded-capsule"), control: radiusOf("rounded-control") },
+      radii: { capsule: radiusOf("rounded-capsule"), iconButton: radiusOf("rounded-toolbar-button") },
       colours: {
         soft: colourOf("bg-foreground/5"),
         softDestructive: colourOf("bg-destructive/10"),

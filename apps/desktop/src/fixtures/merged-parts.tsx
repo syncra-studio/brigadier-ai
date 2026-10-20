@@ -4,7 +4,9 @@ import { createRoot } from "react-dom/client";
 import { LabeledDivider } from "@/components/assistant-ui/elements/labeled-divider";
 import { OfferBody, OfferCard } from "@/app/conversation/OfferCard";
 import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
-import { Branch, Download, Folder, Globe, Info } from "@/components/icons";
+import { Branch, Download, Folder, Globe, Info, Plus, Settings, X } from "@/components/icons";
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TitlebarTips } from "@/components/titlebar-button";
 import { Banner } from "@/components/ui/banner";
 import { DropdownMenuLabel, itemBase, MenuRow } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -84,7 +86,19 @@ function measure() {
     border: parseFloat(getComputedStyle(node).borderBottomWidth),
     dismiss: node.querySelector("button")?.textContent ?? null,
   }));
+  const icons = [...document.querySelectorAll('[data-group="icon"] button')].map((node) => ({
+    ...box(node),
+    label: node.getAttribute("aria-label"),
+    pressed: node.getAttribute("aria-pressed"),
+    dot: node.querySelector("span.rounded-full") !== null,
+  }));
   return {
+    icon: {
+      icons,
+      corner: probe("border-radius: var(--radius-toolbar-button)").radius,
+      strip: probe("border-radius: var(--radius-strip-button)").radius,
+      navRow: parseFloat(probe("width: var(--spacing-nav-row)").width),
+    },
     banner: {
       banners,
       wash: ref("wash"),
@@ -153,6 +167,13 @@ function Fixture() {
             Continued from chat
           </span>
         </LabeledDivider>
+      </section>
+      <section data-group="icon" className="flex gap-2">
+        <TitlebarTips>
+          <TooltipIconButton tooltip="Close"><X /></TooltipIconButton>
+          <TooltipIconButton look="toolbar" tooltip="New tab" pressed><Plus /></TooltipIconButton>
+          <TooltipIconButton look="strip" tooltip="Settings" dot="bg-warning"><Settings /></TooltipIconButton>
+        </TitlebarTips>
       </section>
       <section data-group="banner" className="flex flex-col">
         <span data-wash className="bg-foreground/5" />

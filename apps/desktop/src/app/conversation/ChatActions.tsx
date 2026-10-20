@@ -5,7 +5,6 @@ import { FORK_PLACES } from "@/app/conversation/ForkMenu";
 import { useLatestAnswer } from "@/app/conversation/SlashCommands";
 import { NameDialog } from "@/app/NameDialog";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { TitlebarButton } from "@/components/titlebar-button";
 import {
   Archive,
   BranchAlt,
@@ -143,20 +142,20 @@ export const ChatActions: FC<{
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
-  const ActionsButton = compact ? TooltipIconButton : TitlebarButton;
   const key = (keys: string) =>
     mac ? keys : keys.replace("⌥", "Alt+").replace("⇧", "Shift+").replace("⌘", "Ctrl+");
   return (
     <>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
-          <ActionsButton
+          <TooltipIconButton
+            look={compact ? "ghost" : "toolbar"}
             tooltip="Chat actions"
             size={compact ? "icon-xs" : "icon-md"}
             className={className}
           >
             <DotsHorizontal />
-          </ActionsButton>
+          </TooltipIconButton>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {!archived && (

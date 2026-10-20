@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { errorText } from "@/app/dialogs/fields";
 import { ProjectDialog } from "@/app/dialogs/ProjectDialog";
 import { RemoveProjectDialog } from "@/app/dialogs/RemoveProjectDialog";
@@ -14,7 +15,6 @@ import {
   NavList,
   NavSection,
   rowAction,
-  StripButton,
   besideStrip,
 } from "@/app/sidebar/nav";
 import {
@@ -37,7 +37,7 @@ import {
   Trash,
   Unpin,
 } from "@/components/icons";
-import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
+import { TitlebarTips } from "@/components/titlebar-button";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import {
@@ -99,7 +99,7 @@ export function TitlebarNav() {
   return (
     <div data-slot="titlebar-nav" className="h-titlebar-toggle start-titlebar-start absolute top-0 z-20 flex items-center gap-1.5">
       <TitlebarTips>
-        <TitlebarButton
+        <TooltipIconButton look="toolbar"
           tooltip="Back"
           shortcut={shortcuts.back}
           disabled={!can.back}
@@ -107,8 +107,8 @@ export function TitlebarNav() {
           onClick={() => stepHistory(-1)}
         >
           <ArrowLeft />
-        </TitlebarButton>
-        <TitlebarButton
+        </TooltipIconButton>
+        <TooltipIconButton look="toolbar"
           tooltip="Forward"
           shortcut={shortcuts.forward}
           disabled={!can.forward}
@@ -116,7 +116,7 @@ export function TitlebarNav() {
           onClick={() => stepHistory(1)}
         >
           <ArrowLeft className="-scale-x-100" />
-        </TitlebarButton>
+        </TooltipIconButton>
         {/* Settings holds the panel open, so it has no toggle; Back and Forward stay put. */}
         {canToggle && (
           <SidebarToggle open={open} onToggle={toggleSidebar} />
@@ -486,8 +486,9 @@ export function StripMark() {
   const { setOpen, peek } = useSidebar();
   return (
     <div data-sidebar-peek-trigger className="h-nav-header flex shrink-0 items-center px-2">
-      <StripButton
-        label="Show sidebar"
+      <TooltipIconButton
+        look="strip"
+        tooltip="Show sidebar"
         tip={false}
         data-state={peek === "open" ? "open" : undefined}
         className="group/mark"
@@ -495,7 +496,7 @@ export function StripMark() {
       >
         <BrigadierGlyph className="size-5! group-hover/mark:hidden group-focus-visible/mark:hidden" />
         <Sidebar className="hidden group-hover/mark:block group-focus-visible/mark:block" />
-      </StripButton>
+      </TooltipIconButton>
     </div>
   );
 }
@@ -512,14 +513,14 @@ export function AppStrip() {
       <StripMark />
       <NavList className="px-2 pt-1">
         <li>
-          <StripButton label="New chat" selected={isChatDraft} onClick={() => select({ type: "draft", kind: "chat" })}>
+          <TooltipIconButton look="strip" side="right" tooltip="New chat" pressed={isChatDraft} className="w-full" onClick={() => select({ type: "draft", kind: "chat" })}>
             <ComposeEditSquare />
-          </StripButton>
+          </TooltipIconButton>
         </li>
         <li>
-          <StripButton label="Search" shortcut={shortcuts.search} onClick={() => openSearch()}>
+          <TooltipIconButton look="strip" side="right" tooltip="Search" shortcut={shortcuts.search} className="w-full" onClick={() => openSearch()}>
             <MagnifyingGlassSearch />
-          </StripButton>
+          </TooltipIconButton>
         </li>
         <li>
           <Flyout label="Projects" icon={<Folders />}>
@@ -557,7 +558,7 @@ function Flyout({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <StripButton label={label}>{icon}</StripButton>
+        <TooltipIconButton look="strip" side="right" tooltip={label} className="w-full">{icon}</TooltipIconButton>
       </PopoverTrigger>
       <PopoverContent
         side="right"

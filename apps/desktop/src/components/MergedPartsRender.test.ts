@@ -7,6 +7,15 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("merged parts draw one look per group", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "merged-parts.html", "merged-parts-result", 30000));
 
+  // Icon buttons: one 10px corner; the ghost one is named by its hidden words, the toolbar and
+  // strip ones by aria-label; a strip icon is a row tall and can carry a dot.
+  const [ghost, toolbar, strip] = seen.icon.icons;
+  assert.deepEqual([ghost.radius, toolbar.radius, strip.radius], [seen.icon.corner, seen.icon.corner, seen.icon.strip]);
+  assert.deepEqual([ghost.label, toolbar.label, strip.label], [null, "New tab", "Settings"]);
+  assert.deepEqual([toolbar.pressed, ghost.pressed], ["true", null]);
+  assert.equal(strip.height, seen.icon.navRow);
+  assert.deepEqual([ghost.dot, strip.dot], [false, true]);
+
   // Banner: a 14px strip, 8 by 16 in, a hairline under it; info on a light wash, error red and
   // announced, with a × to dismiss it.
   const [info, failed] = seen.banner.banners;

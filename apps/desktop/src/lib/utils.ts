@@ -90,6 +90,7 @@ const twMerge = extendTailwindMerge({
         "page",
         "nav",
         "strip-button",
+        "toolbar-button",
         "settings",
         "summary",
         "browser-menu",

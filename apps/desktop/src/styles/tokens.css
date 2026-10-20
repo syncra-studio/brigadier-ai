@@ -68,7 +68,7 @@
  *               ps-clear-N                    a top bar's start padding, N spacing steps or
  *                                             more to clear them (globals.css)
  *               w-agents                      a session's agents panel
- *               rounded-toolbar-button        the titlebar's icon buttons
+ *               rounded-toolbar-button        every icon button (Button's icon sizes, the titlebar's)
  *               side-panel-{min,chat-min,preferred,chat-room}  the side panel's width: its
  *                                             least, the least it leaves the thread, its
  *                                             preferred, and the room it leaves by default
@@ -490,7 +490,7 @@
   --radius-marker: 50% 50% 50% 0.1875rem;
   /* The page surface; sidebar and Settings navigation rows; a Settings card. */
   --radius-page: 0.75rem;
-  /* The titlebar's icon buttons (the sidebar toggle, the side panel's buttons). */
+  /* Every icon button: the titlebar's, the side panel's, and Button's icon sizes. */
   --radius-toolbar-button: 0.625rem;
   --radius-nav: 0.78125rem;
   /* An icon on the sidebar's strip or at its foot, and a flyout's trigger: its highlight. */

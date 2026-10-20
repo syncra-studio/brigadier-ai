@@ -1,12 +1,13 @@
 import { useEffect, useId, useRef, useState } from "react";
 
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { errorText } from "@/app/dialogs/fields";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 
 import { agentState } from "@/app/onboarding/SetupTerminal";
 
-import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
+import { footMenuPlacement } from "@/app/sidebar/nav";
 
 import { BarChart, ChevronRight, Lightbulb, ProviderGlyph } from "@/components/icons";
 
@@ -222,12 +223,15 @@ export function UsageMenu() {
       }}
     >
       <PopoverTrigger ref={trigger} asChild>
-        <FootButton
-          tip={label}
-          selected={onPage}
-          icon={<BarChart className={alert ?? undefined} />}
+        <TooltipIconButton
+          look="strip"
+          side={expanded ? "top" : "right"}
+          tooltip={label}
+          pressed={onPage}
           dot={alert && (alert === "text-destructive" ? "bg-destructive" : "bg-warning")}
-        />
+        >
+          <BarChart className={alert ?? undefined} />
+        </TooltipIconButton>
       </PopoverTrigger>
       <PopoverContent
         data-slot="usage-popover"
@@ -405,15 +409,14 @@ export function KeepAwakeMenu() {
       }}
     >
       <PopoverTrigger asChild>
-        <FootButton
-          tip={`Keep awake: ${option?.label ?? ""} · ${state.text}`}
-          icon={
-            <Lightbulb
-              className={cn(state.awake && "text-foreground", shownError && "text-warning")}
-            />
-          }
+        <TooltipIconButton
+          look="strip"
+          side={expanded ? "top" : "right"}
+          tooltip={`Keep awake: ${option?.label ?? ""} · ${state.text}`}
           dot={shownError ? "bg-warning" : state.awake ? "bg-foreground" : null}
-        />
+        >
+          <Lightbulb className={cn(state.awake && "text-foreground", shownError && "text-warning")} />
+        </TooltipIconButton>
       </PopoverTrigger>
       <PopoverContent
         {...footMenuPlacement(expanded)}

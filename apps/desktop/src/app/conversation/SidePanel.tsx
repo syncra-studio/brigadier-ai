@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { BarItem } from "@/app/BarItem";
 import { useWorkspacePane } from "@/app/conversation/WorkspacePane";
 import { useRightSidebar } from "@/app/conversation/RightSidebar";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
-import { TitlebarButton } from "@/components/titlebar-button";
 import { Dock } from "@/components/icons";
 import { tokenPx } from "@/lib/tokens";
 import { takePaneClose } from "@/state/closedPanes";
@@ -99,14 +99,14 @@ export function TerminalButton() {
   const open = useTerminalPlaces((s) => s.places[place]?.open ?? false);
   return (
     <BarItem show={works}>
-      <TitlebarButton
+      <TooltipIconButton look="toolbar"
         tooltip="Terminal"
         shortcut={shortcutLabel("⌘J", mac)}
         aria-pressed={open}
         onClick={() => toggleTerminal()}
       >
         <Dock />
-      </TitlebarButton>
+      </TooltipIconButton>
     </BarItem>
   );
 }

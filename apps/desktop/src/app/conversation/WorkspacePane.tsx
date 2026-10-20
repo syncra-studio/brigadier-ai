@@ -1,5 +1,6 @@
 import { createContext, type CSSProperties, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { FilesTab } from "@/app/conversation/FilesTab";
 import { ProjectDraftPane } from "@/app/conversation/ProjectDraftPane";
 import { SearchPanel } from "@/app/conversation/SearchPanel";
@@ -7,7 +8,7 @@ import { SourcePanel } from "@/app/conversation/SourcePanel";
 import { shortcutKeys } from "@/app/shortcutCatalog";
 import { SidebarGlyph } from "@/app/SidebarToggle";
 import { FilesGlyph, SearchGlyph, SourceControlGlyph } from "@/components/icons";
-import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
+import { TitlebarTips } from "@/components/titlebar-button";
 import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/ui/sidebar-layout";
 import { cn } from "@/lib/utils";
 import { browserFocus } from "@/ipc/client";
@@ -136,12 +137,12 @@ export function WorkspacePaneToggle() {
   if (!pane?.enabled) return null;
   const changes = pane.changed > 0 && !(pane.open && pane.active === "source");
   return (
-    <TitlebarButton tooltip={changes ? `Right sidebar · ${pane.changed === 1 ? "1 change" : `${pane.changed} changes`} in Source` : "Right sidebar"}
+    <TooltipIconButton look="toolbar" tooltip={changes ? `Right sidebar · ${pane.changed === 1 ? "1 change" : `${pane.changed} changes`} in Source` : "Right sidebar"}
       shortcut={shortcutKeys("right-sidebar", mac)} aria-label="Right sidebar" className="relative"
       aria-pressed={pane.open} aria-controls="workspace-pane-content" onPointerEnter={pane.prefetch} onClick={pane.toggleOpen}>
       <SidebarGlyph side="right" open={pane.open} />
       {changes && <span data-slot="source-changes-dot" aria-label="Changes in Source" className="bg-link absolute end-1 top-1 size-2 rounded-full" />}
-    </TitlebarButton>
+    </TooltipIconButton>
   );
 }
 
@@ -197,7 +198,7 @@ export function WorkspacePane() {
           <div role="tablist" aria-label="Right sidebar" className="h-page-toolbar bg-background flex shrink-0 items-center justify-center gap-1 px-2">
             <TitlebarTips>
               {VIEWS.map(({ id, title, shortcut, Icon }, index) => (
-                <TitlebarButton key={id} role="tab" id={`workspace-pane-${id}`} aria-controls="workspace-pane-content"
+                <TooltipIconButton look="toolbar" key={id} role="tab" id={`workspace-pane-${id}`} aria-controls="workspace-pane-content"
                   aria-selected={pane.active === id} tabIndex={pane.active === id ? 0 : -1}
                   className="aria-selected:bg-toolbar-pressed aria-selected:text-foreground relative"
                   tooltip={title} shortcut={shortcutKeys(shortcut, mac)}
@@ -219,7 +220,7 @@ export function WorkspacePane() {
                       {pane.changed > 99 ? "99+" : pane.changed}
                     </span>
                   )}
-                </TitlebarButton>
+                </TooltipIconButton>
               ))}
             </TitlebarTips>
           </div>
