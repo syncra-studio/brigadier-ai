@@ -519,7 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_server_that_accepts_but_does_not_answer_yet_is_not_ready() {
-        use tokio::io::AsyncWriteExt as _;
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (answer_tx, mut answer_rx) = tokio::sync::watch::channel(false);
@@ -527,6 +527,10 @@ mod tests {
             loop {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 if *answer_rx.borrow_and_update() {
+                    // The request read first, as a server does: Windows resets a connection
+                    // closed with input unread, and the answer with it.
+                    let mut request = [0; 1024];
+                    let _ = stream.read(&mut request).await;
                     let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
                 } else {
                     // Accepted, never answered: held until the probe gives up.
