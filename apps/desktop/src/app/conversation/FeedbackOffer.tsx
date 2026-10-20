@@ -1,10 +1,9 @@
 import { createContext, useContext, useEffect, useState } from "react";
 
+import { OfferBody, OfferCard, OfferError, offerButton } from "@/app/conversation/OfferCard";
 import { useAction } from "@/app/conversation/useAction";
-import { field } from "@/components/assistant-ui/elements/surfaces";
 import { ArrowUpRight, Check, FeedbackGlyph } from "@/components/icons";
 import { detailsLine, type FeedbackKind } from "@/lib/feedbackUrl";
-import { cn } from "@/lib/utils";
 import { answerFeedbackOffer } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { feedbackDetails, openFeedback, sendFeedback } from "@/state/feedback";
@@ -49,74 +48,42 @@ export function FeedbackOfferCard({
     };
   }, []);
   if (state === "dismissed") return null;
-  return (
-    <section
-      aria-label="Send this as feedback?"
-      data-slot="orchestrator-step"
-      data-kind="feedbackOffered"
-      className="bg-rail border-foreground/10 rounded-question my-1 flex flex-col gap-3 border p-4 text-sm"
-    >
-      {state === "sent" ? (
+  if (state === "sent") {
+    return (
+      <OfferCard label="Send this as feedback?" kind="feedbackOffered">
         <p role="status" className="flex items-center gap-2.5">
           <Check className="text-success size-icon-md shrink-0" />
           Opened on GitHub: finish it there and post it.
         </p>
-      ) : (
+      </OfferCard>
+    );
+  }
+  return (
+    <OfferCard
+      label="Send this as feedback?"
+      kind="feedbackOffered"
+      icon={<FeedbackGlyph />}
+      title="Send this as feedback?"
+      line={`${KIND_LABEL[kind]} · written from this chat, for Brigadier’s developers`}
+      actions={
         <>
-          <div className="flex min-w-0 items-center gap-2.5">
-            <span className="bg-foreground/5 text-muted-foreground rounded-control size-icon-button-md flex shrink-0 items-center justify-center">
-              <FeedbackGlyph className="size-icon-sm" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="font-medium">Send this as feedback?</p>
-              <p className="text-muted-foreground text-xs">
-                {KIND_LABEL[kind]} · written from this chat, for Brigadier’s developers
-              </p>
-            </div>
-          </div>
-          <div className={cn(field, "rounded-settings flex flex-col gap-1 px-3 py-2.5")}>
-            <p className="font-medium wrap-break-word">{title}</p>
-            <p className="text-muted-foreground line-clamp-4 whitespace-pre-line wrap-break-word">{body}</p>
-          </div>
-          {details && <p className="text-foreground/50 text-xs">Adds {details}</p>}
-          {error && (
-            <p role="alert" className="text-destructive text-xs">
-              {error}
-            </p>
-          )}
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onSend}
-              className="bg-foreground text-background rounded-capsule h-control-sm flex items-center gap-1.5 px-3.5 text-sm font-medium transition-opacity hover:opacity-90 active:scale-95 disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none"
-            >
-              Open on GitHub
-              <ArrowUpRight className="size-icon-sm" />
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onEdit}
-              className={cn(
-                field,
-                "rounded-capsule h-control-sm hover:bg-foreground/10 px-3.5 text-sm transition-colors disabled:opacity-40",
-              )}
-            >
-              Edit first
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onDismiss}
-              className="text-muted-foreground hover:text-foreground rounded-capsule h-control-sm px-3 text-sm transition-colors disabled:opacity-40"
-            >
-              Dismiss
-            </button>
-          </div>
+          <button type="button" disabled={busy} onClick={onSend} className={offerButton("primary")}>
+            Open on GitHub
+            <ArrowUpRight className="size-icon-sm" />
+          </button>
+          <button type="button" disabled={busy} onClick={onEdit} className={offerButton("soft")}>
+            Edit first
+          </button>
+          <button type="button" disabled={busy} onClick={onDismiss} className={offerButton("quiet")}>
+            Dismiss
+          </button>
         </>
-      )}
-    </section>
+      }
+    >
+      <OfferBody title={title} text={body} />
+      {details && <p className="text-foreground/50 text-xs">Adds {details}</p>}
+      {error && <OfferError>{error}</OfferError>}
+    </OfferCard>
   );
 }
 

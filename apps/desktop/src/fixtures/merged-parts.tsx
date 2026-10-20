@@ -2,8 +2,9 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { LabeledDivider } from "@/components/assistant-ui/elements/labeled-divider";
+import { OfferBody, OfferCard } from "@/app/conversation/OfferCard";
 import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
-import { Branch, Info } from "@/components/icons";
+import { Branch, Globe, Info } from "@/components/icons";
 
 /** A node's box and colours. */
 function box(node: Element | null) {
@@ -23,10 +24,10 @@ function box(node: Element | null) {
 /** A colour a CSS declaration resolves to. */
 function probe(css: string) {
   const node = document.createElement("span");
-  node.style.cssText = css;
+  node.style.cssText = `display: block; ${css}`;
   document.body.append(node);
   const style = getComputedStyle(node);
-  const value = { background: style.backgroundColor, color: style.color, fontSize: style.fontSize, radius: style.borderTopLeftRadius, fontFamily: style.fontFamily };
+  const value = { width: style.width, background: style.backgroundColor, color: style.color, fontSize: style.fontSize, radius: style.borderTopLeftRadius, fontFamily: style.fontFamily };
   node.remove();
   return value;
 }
@@ -46,7 +47,16 @@ function measure() {
     font: getComputedStyle(node.querySelector("[data-selectable]")!).fontFamily,
     expand: [...node.querySelectorAll("button")].map((button) => button.textContent),
   }));
+  const offers = [...document.querySelectorAll('[data-group="offer"] > section')].map((node) => {
+    const tile = node.querySelector(":scope > div > span");
+    return { ...box(node), tile: tile && box(tile), tileWidth: tile?.getBoundingClientRect().width };
+  });
   return {
+    offer: {
+      offers,
+      radius: probe("border-radius: var(--radius-question)").radius,
+      tile: parseFloat(probe("width: var(--spacing-icon-button-md)").width),
+    },
     box: {
       boxes,
       surface: probe("background: var(--code-surface)").background,
@@ -93,6 +103,12 @@ function Fixture() {
             Continued from chat
           </span>
         </LabeledDivider>
+      </section>
+      <section data-group="offer" className="flex flex-col">
+        <OfferCard label="Start as session?" kind="sessionOffered" icon={<Branch />} title="Start this as its own session?" line="Its own branch and worktree, in this project">
+          <OfferBody title="Fix uploads" text="Find why uploads stall at 99%." />
+        </OfferCard>
+        <OfferCard label="Turn on the browser" kind="settingSuggested" icon={<Globe />} title="Turn on the browser" line="It needs to check the docs page." />
       </section>
       <section data-group="box" className="flex flex-col gap-2">
         <ToolBox title="Output">{"Compiling brigadier v0.1.0\nFinished in 2.3s"}</ToolBox>

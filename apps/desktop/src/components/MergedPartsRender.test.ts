@@ -7,6 +7,14 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("merged parts draw one look per group", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "merged-parts.html", "merged-parts-result", 30000));
 
+  // Offer card: every offer is the same card, its icon in a square of the icon-button size.
+  assert.equal(seen.offer.offers.length, 2);
+  for (const offer of seen.offer.offers) {
+    assert.equal(offer.radius, seen.offer.radius);
+    assert.equal(offer.paddingTop, offer.paddingLeft);
+    assert.equal(offer.tileWidth, seen.offer.tile);
+  }
+
   // Mono box: one quiet code-surface box with no border, mono unless prose; a clamped one
   // offers Expand.
   assert.equal(seen.box.boxes.length, 3);
