@@ -316,13 +316,19 @@ fn checkout_file(word: &str, dir: &Path, root: &Path) -> Option<String> {
         .ok()
         .and_then(Path::to_str)
         .filter(|relative| !relative.is_empty())?;
+    // As git names it, with `/` on Windows too: it is read from git by that name.
+    let relative = if cfg!(windows) {
+        relative.replace('\\', "/")
+    } else {
+        relative.to_owned()
+    };
     if relative == ".git" || relative.starts_with(".git/") {
         return None;
     }
     if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_dir()) {
         return None;
     }
-    Some(relative.to_owned())
+    Some(relative)
 }
 
 impl SessionManager {
@@ -509,6 +515,16 @@ mod tests {
         let names = |command: &str, cwd: &Path, path: &str| {
             named(command, cwd).iter().any(|named| named == path)
         };
+        // A path as a shell command names it: with `/` on Windows too (Git Bash), where a `\`
+        // would escape the letter after it.
+        let shell_path = |path: &Path| {
+            let text = path.display().to_string();
+            if cfg!(windows) {
+                text.replace('\\', "/")
+            } else {
+                text
+            }
+        };
         assert!(names("echo x >> notes.md", &root, "notes.md"));
         let perl = "perl -pi -e 's/a/b/' src/lib.rs notes.md";
         assert!(names(perl, &root, "src/lib.rs") && names(perl, &root, "notes.md"));
@@ -522,9 +538,9 @@ mod tests {
             &root.join("src"),
             "src/lib.rs"
         ));
-        let absolute = format!("cat {}", root.join("notes.md").display());
+        let absolute = format!("cat {}", shell_path(&root.join("notes.md")));
         assert!(names(&absolute, Path::new("/"), "notes.md"));
-        let elsewhere = format!("cd {} && echo x >> lib.rs", root.join("src").display());
+        let elsewhere = format!("cd {} && echo x >> lib.rs", shell_path(&root.join("src")));
         assert!(names(&elsewhere, Path::new("/"), "src/lib.rs"));
         let left_out = named("ls ../outside/x https://x.dev/a --flag .", &root);
         assert_eq!(left_out, ["ls"], "only a word that could be a new file");
@@ -538,7 +554,6 @@ mod tests {
         std::fs::write(root.join(".git/notes"), "x").unwrap();
         std::fs::write(root.join("-dash.md"), "x").unwrap();
         std::fs::create_dir_all(root.join("src/other")).unwrap();
-        std::fs::write(root.join("a\\ b.md"), "x").unwrap();
         for command in [
             "mv n*.md all.md",
             "mv \"$SRC\" notes.md",
@@ -558,17 +573,21 @@ mod tests {
             assert_eq!(named(command, &root), [] as [String; 0], "{command}");
         }
         assert!(names("echo '$x *' >> notes.md", &root, "notes.md"));
-        let away = format!("mv {} notes.md", outside.join("x.md").display());
+        let away = format!("mv {} notes.md", shell_path(&outside.join("x.md")));
         assert_eq!(named(&away, &root), [] as [String; 0]);
         let script = format!(
             "python3 -c 'import shutil; shutil.move(\"{}\", \"notes.md\")'",
-            outside.join("x.md").display()
+            shell_path(&outside.join("x.md"))
         );
         assert_eq!(named(&script, &root), [] as [String; 0]);
-        let spaced = format!("cd  {} && mv x.md notes.md", outside.display());
+        let spaced = format!("cd  {} && mv x.md notes.md", shell_path(&outside));
         assert_eq!(named(&spaced, &root), [] as [String; 0]);
         assert!(names("echo x > /dev/null; cat notes.md", &root, "notes.md"));
-        assert!(names("mv \"a\\ b.md\" notes.md", &root, "a\\ b.md"));
+        // A name holding a `\`, which Windows allows in none.
+        if cfg!(not(windows)) {
+            std::fs::write(root.join("a\\ b.md"), "x").unwrap();
+            assert!(names("mv \"a\\ b.md\" notes.md", &root, "a\\ b.md"));
+        }
         std::fs::write(root.join("cash$notes.md"), "x").unwrap();
         assert!(names("mv \"cash\\$notes.md\" n.md", &root, "cash$notes.md"));
         std::fs::write(root.join("old name.txt"), "x").unwrap();
