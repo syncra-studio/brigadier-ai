@@ -702,6 +702,7 @@ mod tests {
     /// A folder `real/scratch/outputs` and a symlink `link` → `real`, as `/tmp` → `/private/tmp`.
     struct Linked {
         base: PathBuf,
+        linked: bool,
     }
 
     impl Linked {
@@ -712,17 +713,35 @@ mod tests {
             std::fs::create_dir_all(base.join("real/scratch/outputs")).unwrap();
             #[cfg(unix)]
             std::os::unix::fs::symlink(base.join("real"), base.join("link")).unwrap();
+            #[cfg(unix)]
+            let linked = true;
+            // Windows makes symlinks only for an administrator or in Developer Mode: without
+            // the privilege (ERROR_PRIVILEGE_NOT_HELD) the checks through the link are left out.
             #[cfg(windows)]
-            std::os::windows::fs::symlink_dir(base.join("real"), base.join("link")).unwrap();
-            Self { base }
+            let linked =
+                match std::os::windows::fs::symlink_dir(base.join("real"), base.join("link")) {
+                    Ok(()) => true,
+                    Err(err) if err.raw_os_error() == Some(1314) => {
+                        eprintln!("no privilege to make symlinks: checks through one left out");
+                        false
+                    }
+                    Err(err) => panic!("symlink: {err}"),
+                };
+            Self { base, linked }
         }
 
         fn real(&self) -> PathBuf {
             self.base.join("real").canonicalize().unwrap()
         }
 
+        /// The symlink; where none could be made, `real` as it is spelled before it is
+        /// resolved (on Windows a resolved path starts `\\?\`), the other spelling left.
         fn link(&self) -> PathBuf {
-            self.base.join("link")
+            if self.linked {
+                self.base.join("link")
+            } else {
+                self.base.join("real")
+            }
         }
     }
 
