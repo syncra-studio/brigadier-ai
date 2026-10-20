@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
+import { SettingsSearch } from "@/app/settings/parts";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,7 +24,6 @@ import {
   FolderOpen,
   Link,
   Plus,
-  Search,
   X,
 } from "@/components/ui/icon";
 import { useNow } from "@/hooks/use-now";
@@ -148,9 +148,9 @@ function FieldLabel({ htmlFor, label, aside }: { htmlFor?: string; label: string
   );
 }
 
-/** A 42-high box for a field, in the app's field look: its icon, then its content. */
+/** A 42-high box for a field, in the app's field look (and the Input's when invalid): its icon, then its content. */
 const BOX =
-  "bg-muted/60 focus-within:bg-background rounded-control flex h-10.5 items-center gap-2.5 border border-transparent transition-colors [&>svg]:size-icon-sm [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
+  "bg-muted/60 focus-within:bg-background rounded-control flex h-10.5 items-center gap-2.5 border border-transparent transition-colors [&>svg]:size-icon-sm [&>svg]:shrink-0 [&>svg]:text-muted-foreground has-aria-invalid:border-destructive/50 has-aria-invalid:ring-destructive/40 has-aria-invalid:ring-1";
 
 /** A field's own input inside its box. */
 const BOX_INPUT = "text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent font-mono text-xs outline-none";
@@ -351,20 +351,14 @@ function PickView({
     <div className="flex flex-col">
       <Header title="Add project" line="Pick a git repository for your sessions to work in." />
       <div className="flex items-center gap-2.5 px-7">
-        <label className="bg-muted/60 focus-within:bg-background rounded-control flex h-9 min-w-0 flex-1 items-center gap-2 border border-transparent px-3.5 transition-colors">
-          <Search className="size-icon-sm text-muted-foreground shrink-0" />
-          <input
-            value={query}
-            autoFocus
-            spellCheck={false}
-            autoComplete="off"
-            aria-label="Search repositories"
-            placeholder="Search repositories"
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={onSearchKey}
-            className="text-foreground placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-sm outline-none"
-          />
-        </label>
+        <SettingsSearch
+          label="Search repositories"
+          value={query}
+          autoFocus
+          className="h-9"
+          onChange={setQuery}
+          onKeyDown={onSearchKey}
+        />
         <Button variant="outline" className="h-9" onClick={choose}>
           <FolderOpen />
           Choose folder…
@@ -456,8 +450,8 @@ function RepoRow({
       onClick={onPick}
       onDoubleClick={onAdd}
       className={cn(
-        "rounded-control focus-visible:ring-ring flex h-14.5 w-full shrink-0 cursor-default items-center gap-3 px-3 text-left outline-none focus-visible:ring-2",
-        chosen ? "bg-accent text-accent-foreground" : "hover:bg-foreground/5",
+        "rounded-control focus-visible:ring-ring flex h-14.5 w-full shrink-0 cursor-default items-center gap-3 border px-3 text-left outline-none focus-visible:ring-2",
+        chosen ? "bg-accent text-accent-foreground border-border" : "hover:bg-foreground/5 border-transparent",
         added && "opacity-55",
       )}
     >
@@ -482,7 +476,7 @@ function RepoRow({
             aria-hidden
             className={cn(
               "flex size-4.5 shrink-0 items-center justify-center rounded-full",
-              chosen ? "bg-primary text-primary-foreground" : "ring-foreground/16 ring-1",
+              chosen ? "bg-toggle-on text-foreground" : "ring-foreground/16 ring-1",
             )}
           >
             {chosen && <Check className="size-icon-xs" />}
@@ -512,6 +506,8 @@ function CloneView({ onBack }: { onBack: () => void }) {
   const [url, setUrl] = useState("");
   const [parent, setParent] = useState(DEFAULT_PARENT);
   const [error, setError] = useState<string | null>(null);
+  // The error is about the URL itself: its field shows it.
+  const [invalid, setInvalid] = useState(false);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(false);
   useEffect(() => {
@@ -527,10 +523,12 @@ function CloneView({ onBack }: { onBack: () => void }) {
     if (busy) return;
     if (!url.trim()) {
       setError("Paste the repository's URL.");
+      setInvalid(true);
       return;
     }
     if (!folder) {
       setError("That URL doesn't name a repository.");
+      setInvalid(true);
       return;
     }
     setBusy(true);
@@ -571,9 +569,11 @@ function CloneView({ onBack }: { onBack: () => void }) {
               autoComplete="off"
               disabled={busy}
               placeholder="https://github.com/owner/repo.git"
+              aria-invalid={invalid || undefined}
               onChange={(event) => {
                 setUrl(event.target.value);
                 setError(null);
+                setInvalid(false);
               }}
               className={BOX_INPUT}
             />
@@ -615,6 +615,8 @@ function NewRepoView({
   const [name, setName] = useState(initialName);
   const [parent, setParent] = useState(initialParent);
   const [error, setError] = useState<string | null>(null);
+  // The error is about the name itself: its field shows it.
+  const [invalid, setInvalid] = useState(false);
   const [busy, setBusy] = useState(false);
   const folder = name.trim();
 
@@ -623,6 +625,7 @@ function NewRepoView({
     if (busy) return;
     if (!folder || folder === "." || folder === ".." || /[/\\]/.test(folder)) {
       setError(folder ? `"${folder}" can't be a folder name.` : "Name the repository.");
+      setInvalid(true);
       return;
     }
     setBusy(true);
@@ -658,9 +661,11 @@ function NewRepoView({
               maxLength={200}
               disabled={busy}
               placeholder="my-project"
+              aria-invalid={invalid || undefined}
               onChange={(event) => {
                 setName(event.target.value);
                 setError(null);
+                setInvalid(false);
               }}
               className={BOX_INPUT}
             />

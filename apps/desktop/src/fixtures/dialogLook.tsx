@@ -1,11 +1,13 @@
 /**
  * The app's shared dialog parts, drawn unseen, for a fixture to compare a dialog with: its
- * card, title, buttons, field, key hint, badge, tooltip, choice pills and list-row colours, each
+ * card, title, buttons, field, search field, key hint, badge, tooltip, choice pills and list-row colours, each
  * marked `data-canon`. `look` reads what an element looks like as drawn, so a dialog drawn with
  * the app's parts reads the same as the part it uses (#385).
  */
+import { SettingsSearch } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
@@ -40,6 +42,10 @@ export function Canon() {
           C
         </Button>
         <Input data-canon="input" placeholder="Canon" />
+        <Checkbox data-canon="checked" checked />
+        <div data-canon="search">
+          <SettingsSearch label="Canon" value="" onChange={() => {}} />
+        </div>
         <Kbd data-canon="kbd">↵</Kbd>
         <Badge data-canon="badge" variant="secondary">
           Canon

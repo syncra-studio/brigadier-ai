@@ -1,4 +1,4 @@
-import { useId, type ComponentProps, type ReactNode } from "react";
+import { useId, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
@@ -358,13 +358,25 @@ export function SettingsSearch({
   label,
   value,
   onChange,
+  onKeyDown,
+  autoFocus,
+  className,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  /** Keys after its own (Esc empties it). */
+  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void;
+  autoFocus?: boolean;
+  className?: string;
 }) {
   return (
-    <label className="rounded-capsule border-foreground/16 bg-foreground/8 flex h-8 min-w-0 flex-1 items-center gap-2 border px-2.5">
+    <label
+      className={cn(
+        "rounded-capsule border-foreground/16 bg-foreground/8 flex h-8 min-w-0 flex-1 items-center gap-2 border px-2.5",
+        className,
+      )}
+    >
       <MagnifyingGlassSearch aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
       <input
         type="search"
@@ -375,11 +387,14 @@ export function SettingsSearch({
         autoComplete="off"
         className="placeholder:text-foreground/50 min-w-0 flex-1 bg-transparent text-sm outline-none [&::-webkit-search-cancel-button]:hidden"
         onChange={(event) => onChange(event.target.value)}
+        autoFocus={autoFocus}
         onKeyDown={(event) => {
           if (event.key === "Escape" && value) {
             event.stopPropagation();
             onChange("");
+            return;
           }
+          onKeyDown?.(event);
         }}
       />
       {value && (
