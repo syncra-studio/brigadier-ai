@@ -13,15 +13,24 @@ through its MCP server, never as text.
 | File | What it holds |
 |---|---|
 | `README.pen` | The Read me board: the file map, how files link, naming, the design rules, how to save. Start here. |
-| `foundations.pen` | All variables (colours, radii, sizes, type), the `Icon / <Name>` icons, primitives (buttons, badges, inputs, switches, the checkbox, menus, tabs…), glyphs and indicators, every popover, menu and dialog, and the parts several areas share. |
-| `app.pen` | The main window: shell and sidebar, session tabs, onboarding, activity rows, thread and messages, composer and rail, thread cards, side panel, tab pages, browser and terminal. Plus every main-window screen. |
-| `settings.pen` | The Settings window, including the Inspector (a page inside Settings), and every Settings and Inspector screen. |
+| `foundations.pen` | The design system only: all variables (colours, radii, sizes, type), the `Icon / <Name>` icons, glyphs and indicators, controls (buttons, badges, inputs, switches, the checkbox, tabs…), menu, popover and dialog shells, and the shared app parts that both `app.pen` and `settings.pen` use. |
+| `app.pen` | The main window, one board group per surface in app order: App shell, Conversation, Side panel, Setup. Each surface's screens, dialogs and components sit on its own boards. |
+| `settings.pen` | The Settings window, including the Inspector (a page inside Settings): boards per page in `pages.ts` order, with every Settings and Inspector screen. |
 | `unused.pen` | Components nothing in the app renders today, each with a cleanup note (what to remove in the code, and how sure). Never build from it. |
+
+## Boards
+
+- Every `app.pen` and `settings.pen` board is titled "Surface · Topic" and reads top to bottom:
+  ① Screens, ② Dialogs, ③ Components. Cards are titled "#NN Name" (the number from the
+  components inventory) and show the component's code path.
+- Boards sit in rows, not columns, left to right in app order, with a label above each group.
+  A board is at most 8,400 × 5,000 and always landscape; when a surface needs more, it gets
+  another board beside it.
 
 ## How the files link
 
 Every file except `foundations.pen` imports it under the alias `f`, and nothing else. Imports are
-one level deep, so anything two areas share must live in `foundations.pen`.
+one level deep, so a part both `app.pen` and `settings.pen` use must live in `foundations.pen`.
 
 - Instance of a foundations component: `{ "type": "ref", "ref": "f:<id>" }`.
 - Override inside it: every path segment that names a foundations node carries the prefix,
@@ -52,7 +61,8 @@ one level deep, so anything two areas share must live in `foundations.pen`.
 ## Keeping it in sync
 
 - When the UI changes, update the component and all its states first, then the screens that show
-  it. New shared parts go in `foundations.pen`; parts used by one area go in that area's file.
+  it. Parts both windows use go in `foundations.pen`; parts used by one window go on
+  its surface's or page's board in that window's file.
 - When code removes a component, delete it from `unused.pen` too (and its foundations copy if its
   note says so).
 - Agents editing through the MCP: pass the file's full real path, and make sure the file is open
