@@ -41,7 +41,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use brigadier_core::digest::BASH_WHOLE_MAX;
-use brigadier_core::manager::{HOOK_GRANT_ENV, OUTPUT_MAX_BYTES, STOP_GRANT_ENV};
+use brigadier_core::manager::{
+    COMMAND_PATHS_MAX, HOOK_GRANT_ENV, OUTPUT_MAX_BYTES, STOP_GRANT_ENV, command_paths, lexical,
+};
 use brigadier_ipc::protocol::{ClientFrame, HookOutput, HookReply, ShellCall, StopHookReply};
 use brigadier_sandbox::PlatformOptions;
 use serde_json::{Map, Value, json};
@@ -213,9 +215,6 @@ fn handle(
     }
 }
 
-/// Paths of one Codex call asked about at most.
-const CODEX_PATHS_MAX: usize = 16;
-
 /// What a Codex thread's hook prints for its `PostToolUse` event `stdin`, given a way to ask
 /// the daemon for a path's rules: the rules of the folders of the files and folders its shell
 /// command or patch names, as `additionalContext`, which Codex gives the model after the
@@ -239,7 +238,7 @@ fn codex_rules(stdin: &str, mut ask: impl FnMut(&str) -> Option<String>) -> Opti
     };
     let rules: Vec<String> = paths
         .iter()
-        .take(CODEX_PATHS_MAX)
+        .take(COMMAND_PATHS_MAX)
         .filter_map(|path| ask(&path.display().to_string()))
         .collect();
     if rules.is_empty() {
@@ -254,93 +253,6 @@ fn codex_rules(stdin: &str, mut ask: impl FnMut(&str) -> Option<String>) -> Opti
         })
         .to_string(),
     )
-}
-
-/// The files and folders a shell command names that are there: `cwd`, the folders it `cd`s
-/// to, and each of its words, as the shell reads them, from `cwd` or the folder a `cd` before
-/// it went to. Options, URLs and
-/// words the shell expands itself are left out.
-fn command_paths(command: &str, cwd: &Path) -> Vec<PathBuf> {
-    let mut dir = cwd.to_owned();
-    // The folder it runs in, which a search there reads without naming it.
-    let mut found: Vec<PathBuf> = vec![dir.clone()];
-    let mut words = command_words(command).into_iter();
-    while let Some(word) = words.next() {
-        if matches!(word.as_str(), "cd" | "pushd") {
-            // The folder it went to counts too: a search there names no path of its own.
-            if let Some(to) = words.next().map(|to| lexical(&dir.join(to)))
-                && to.is_dir()
-            {
-                if !found.contains(&to) {
-                    found.push(to.clone());
-                }
-                dir = to;
-            }
-            continue;
-        }
-        if word.is_empty()
-            || word.starts_with('-')
-            || word.contains("://")
-            || word.contains(['*', '?', '$', '`', '{', '~'])
-        {
-            continue;
-        }
-        let path = lexical(&dir.join(&word));
-        if path.exists() && !found.contains(&path) {
-            found.push(path);
-        }
-    }
-    found
-}
-
-/// A command's words: quotes removed, a backslash keeping the next character, and the shell's
-/// operators ending a word.
-fn command_words(command: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut word = String::new();
-    let mut chars = command.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' => word.extend(chars.by_ref().take_while(|&c| c != '\'')),
-            '"' => {
-                while let Some(c) = chars.next() {
-                    match c {
-                        '"' => break,
-                        '\\' => word.extend(chars.next()),
-                        c => word.push(c),
-                    }
-                }
-            }
-            '\\' => word.extend(chars.next()),
-            c if c.is_whitespace() || ";|&<>()".contains(c) => {
-                if !word.is_empty() {
-                    words.push(std::mem::take(&mut word));
-                }
-            }
-            c => word.push(c),
-        }
-    }
-    if !word.is_empty() {
-        words.push(word);
-    }
-    words
-}
-
-/// `path` without its `.` and `..` parts, as the daemon matches folders by name: a `..`
-/// takes the part before it away, so `apps/../lib/x.rs` is `lib`'s.
-fn lexical(path: &Path) -> PathBuf {
-    use std::path::Component;
-    let mut clean = PathBuf::new();
-    for part in path.components() {
-        match part {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                clean.pop();
-            }
-            other => clean.push(other),
-        }
-    }
-    clean
 }
 
 /// The files a Codex patch adds, changes, deletes or moves to, from `cwd`.

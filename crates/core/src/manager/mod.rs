@@ -156,6 +156,7 @@ pub use brains::{BrainCounters, IndexRunStats};
 pub use closing::Turn;
 pub use conversation::SendOutcome;
 pub(crate) use conversation::interrupted_by_quit;
+pub use instructions::{COMMAND_PATHS_MAX, command_paths, lexical};
 pub(crate) use integrated_checks::integrated_check_number;
 pub(crate) use landing::held_merge;
 pub use side_chat::BrowserPage;

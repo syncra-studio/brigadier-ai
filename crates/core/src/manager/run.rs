@@ -283,8 +283,22 @@ impl SessionManager {
             };
             Ok((ran.status, reply))
         };
-        self.in_foreground(id, (tool, name), command, cli.ended.clone(), cancel, work)
-            .await
+        let reply = self
+            .in_foreground(id, (tool, name), command, cli.ended.clone(), cancel, work)
+            .await?;
+        // A subfolder's rules come with the result of a call there, as its hook gives them
+        // after its CLI's own (#460).
+        let Some(grant) = launch.hook_grant.as_deref() else {
+            return Ok(reply);
+        };
+        let paths = super::command_paths(command, &workdir)
+            .into_iter()
+            .take(super::COMMAND_PATHS_MAX)
+            .collect();
+        Ok(match self.rules_not_given(id, grant, paths).await {
+            Some(rules) => format!("{reply}\n\n{rules}"),
+            None => reply,
+        })
     }
 
     /// What runs `command` in `workdir` held to `access`: the shell itself at full access,

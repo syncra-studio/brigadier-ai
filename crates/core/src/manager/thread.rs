@@ -84,6 +84,9 @@ pub(crate) struct ThreadLaunch {
     pub access: Access,
     /// What it may never write ([`SessionManager::thread_protection`]).
     pub protection: brigadier_sandbox::Protection,
+    /// Its output hook's grant, under which the subfolder rules its CLI session has had are
+    /// kept; `None` without the hook (it has every rule up front).
+    pub hook_grant: Option<String>,
 }
 
 impl ThreadLaunch {
@@ -254,6 +257,7 @@ impl SessionManager {
                 permission,
                 access,
                 protection,
+                hook_grant: None,
             },
             auto_review,
         ))

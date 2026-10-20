@@ -25,7 +25,8 @@
 //! Only what applies is loaded (BUILD-PLAN D1.6): the root's files (and `.claude`'s) always
 //! come whole; a subfolder's come whole to a worker whose spec names a path under it, and to
 //! a thread with the first file it reads or changes there (its output hook,
-//! [`SessionManager::hook_rules`]; a Codex thread's runs from a home of its own, #121). The
+//! [`SessionManager::hook_rules`]; a Codex thread's runs from a home of its own, #121) or the
+//! first `run` call there (#460). The
 //! rest are listed by path, so none is unknown. A thread without the hook (a Codex login kept
 //! in the system's keyring) gets them all.
 
@@ -34,6 +35,7 @@ use std::path::{Path, PathBuf};
 use brigadier_providers::ProviderKind;
 
 use super::SessionManager;
+use crate::model::ConversationId;
 use crate::tools::Role;
 
 /// Bytes of instructions carried at most.
@@ -126,19 +128,33 @@ impl SessionManager {
         let Some(Role::OutputHook { conversation_id }) = self.grants.resolve(grant) else {
             return None;
         };
-        let Some(workspace) = self
-            .recorded_workspace(&conversation_id)
-            .map(|workspace| workspace.path)
-        else {
-            return Some(None);
-        };
-        let touched = PathBuf::from(touched);
-        let found = tokio::task::spawn_blocking(move || rules_for(&workspace, &touched))
-            .await
-            .unwrap_or_default();
+        Some(
+            self.rules_not_given(&conversation_id, grant, vec![PathBuf::from(touched)])
+                .await,
+        )
+    }
+
+    /// The rules of the subfolders that hold `paths` the thread of `id` hasn't had yet in its
+    /// CLI session (whose hook has `grant`), now given: what its hook answers, and what its
+    /// `run` and `run_unsandboxed` calls bring with their result (#460).
+    pub(crate) async fn rules_not_given(
+        &self,
+        id: &ConversationId,
+        grant: &str,
+        paths: Vec<PathBuf>,
+    ) -> Option<String> {
+        let workspace = self.recorded_workspace(id)?.path;
+        let found = tokio::task::spawn_blocking(move || {
+            paths
+                .iter()
+                .flat_map(|path| rules_for(&workspace, path))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
         let new: Vec<String> = {
             let mut given = self.rules_given.lock().unwrap();
-            let (of, had) = given.entry(conversation_id).or_default();
+            let (of, had) = given.entry(id.clone()).or_default();
             if of != grant {
                 *of = grant.to_owned();
                 had.clear();
@@ -150,13 +166,103 @@ impl SessionManager {
                 .collect()
         };
         if new.is_empty() {
-            return Some(None);
+            return None;
         }
-        Some(Some(format!(
-            "[Brigadier] Repository rules for the folder of the file you just touched. Follow them for the files under it; the user's request wins over them, and a file in a subfolder wins over one higher up:{}",
+        Some(format!(
+            "[Brigadier] Repository rules for the folder you just worked in. Follow them for the files under it; the user's request wins over them, and a file in a subfolder wins over one higher up:{}",
             new.concat()
-        )))
+        ))
     }
+}
+
+/// Paths of one shell call asked about for their rules at most.
+pub const COMMAND_PATHS_MAX: usize = 16;
+
+/// The files and folders a shell command names that are there: `cwd`, the folders it `cd`s
+/// to, and each of its words, as the shell reads them, from `cwd` or the folder a `cd` before
+/// it went to. Options, URLs and
+/// words the shell expands itself are left out.
+pub fn command_paths(command: &str, cwd: &Path) -> Vec<PathBuf> {
+    let mut dir = cwd.to_owned();
+    // The folder it runs in, which a search there reads without naming it.
+    let mut found: Vec<PathBuf> = vec![dir.clone()];
+    let mut words = command_words(command).into_iter();
+    while let Some(word) = words.next() {
+        if matches!(word.as_str(), "cd" | "pushd") {
+            // The folder it went to counts too: a search there names no path of its own.
+            if let Some(to) = words.next().map(|to| lexical(&dir.join(to)))
+                && to.is_dir()
+            {
+                if !found.contains(&to) {
+                    found.push(to.clone());
+                }
+                dir = to;
+            }
+            continue;
+        }
+        if word.is_empty()
+            || word.starts_with('-')
+            || word.contains("://")
+            || word.contains(['*', '?', '$', '`', '{', '~'])
+        {
+            continue;
+        }
+        let path = lexical(&dir.join(&word));
+        if path.exists() && !found.contains(&path) {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// A command's words: quotes removed, a backslash keeping the next character, and the shell's
+/// operators ending a word.
+fn command_words(command: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => word.extend(chars.by_ref().take_while(|&c| c != '\'')),
+            '"' => {
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => word.extend(chars.next()),
+                        c => word.push(c),
+                    }
+                }
+            }
+            '\\' => word.extend(chars.next()),
+            c if c.is_whitespace() || ";|&<>()".contains(c) => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+            }
+            c => word.push(c),
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// `path` without its `.` and `..` parts, as the daemon matches folders by name: a `..`
+/// takes the part before it away, so `apps/../lib/x.rs` is `lib`'s.
+pub fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut clean = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                clean.pop();
+            }
+            other => clean.push(other),
+        }
+    }
+    clean
 }
 
 /// One instruction file to carry.

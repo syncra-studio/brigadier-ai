@@ -3520,6 +3520,9 @@ impl SessionManager {
                         },
                     );
                     grant_values.push(hook_grant.clone());
+                    if let Some(launch) = launch.as_mut() {
+                        launch.hook_grant = Some(hook_grant.clone());
+                    }
                     output_hook = Some(self.output_hook(hook_grant, choice.provider));
                 }
                 (choice, prompt, vec![server], current)
