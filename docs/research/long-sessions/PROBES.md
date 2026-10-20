@@ -143,3 +143,34 @@ text.
   `~/.codex/hooks.json` ran (`sessionStart`, `userPromptSubmit`; `source: "user"`). The per-session `CODEX_HOME` route
   was not tried. Codex hooks stay off (`DISABLED_FEATURES`); Codex is kept from compacting by the hand-off guard below
   its ~90% clamp alone (BUILD-PLAN D2.3, D2.3b).
+
+## P6. Codex, Brigadier's own hooks through a per-session `CODEX_HOME` (2026-10-20; codex-cli 0.163.0 app-server on gpt-6.1-sol at low)
+
+A scratch main home (a copy of the sign-in, a `hooks.json` of its own) and two session homes that link back to it
+the way an extra account's home does (`auth.json`, `config.toml`, `sessions/`, `archived_sessions/`), each with its own
+`hooks.json` (`SessionStart` and `PostToolUse`, each logging which home it came from). One turn ran `ls`.
+
+- **Do hooks fire under app-server? Yes, but only trusted ones.** The session home's `hooks.json` is listed as
+  `source: "user"`, `trustStatus: "untrusted"` (`hooks/list`), and an untrusted hook never runs, with
+  `--enable hooks` or without. Codex 0.163 trusts a hook only through a `[hooks.state."<path>:<event>:0:0"]`
+  `trusted_hash` in the home's own `config.toml`: the same entry given with `-c` still lists as untrusted, and
+  `--dangerously-bypass-hook-trust` is a flag of the TUI and `exec` that `app-server` rejects. (This is likely why
+  P5's inline `-c hooks.PostToolUse=[…]` never ran either.) With the entries written into a session home's own
+  `config.toml` (hashes from `hooks/list`'s `currentHash`), both hooks fired: `hook/started`/`hook/completed` on the
+  stream, `SessionStart` once, and `PostToolUse` after the command, with `tool_name: "Bash"` and the command.
+- **Does sign-in survive? Yes, through a linked `auth.json`.** `account/read` gave the ChatGPT account and the turn
+  ran. No token refresh fell inside the probe. A refresh writes `auth.json`, and whether that write keeps the link
+  or replaces it with a file of its own (which would split the sign-in, a refresh token used up in one copy) was not
+  seen.
+- **Does resume still find the thread? Yes.** The rollout landed in the main home's `sessions/` through the link,
+  and `thread/resume` found it from the main home and from the other session home. Each session home still grows its
+  own `state_5.sqlite`, `thread_history_1.sqlite`, `goals_1.sqlite` and `memories_1.sqlite`, which aren't linked.
+- **Are the user's hooks kept out? Yes.** Only the `CODEX_HOME`'s own `hooks.json` loads: the main home's never
+  showed in `hooks/list` and never ran.
+
+So the route works, but it isn't a small change. The trust entries mean the session home can't link the user's
+`config.toml`. It needs a copy made at each launch, with the entries added, so the user's later config edits don't
+reach a running session and what Codex writes back lands in the copy. A thread runs with the user's setup
+(`ToolSet::user_setup`, hooks on), so its home would also have to carry the user's hooks, copied in and trusted
+again under new keys on the user's behalf. The sign-in link's behavior on a token refresh is still unknown, and so
+are the unlinked databases above. A Codex thread keeps every rule up front (issue #121 stays open).
