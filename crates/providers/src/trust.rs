@@ -389,12 +389,28 @@ impl Lock {
                 self.dir.display()
             )));
         }
-        let _ = fs::File::open(&self.dir).and_then(|dir| dir.set_modified(SystemTime::now()));
+        let _ = set_folder_modified(&self.dir, SystemTime::now());
         if let Some(now) = modified() {
             self.stamp = now;
         }
         Ok(())
     }
+}
+
+/// Sets a folder's mtime. Windows opens a folder only with FILE_FLAG_BACKUP_SEMANTICS (a plain
+/// open is refused, access denied), and writes its times only with write access.
+fn set_folder_modified(dir: &Path, at: SystemTime) -> io::Result<()> {
+    #[cfg(windows)]
+    let folder = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(0x0200_0000)
+            .open(dir)
+    };
+    #[cfg(not(windows))]
+    let folder = fs::File::open(dir);
+    folder?.set_modified(at)
 }
 
 impl Drop for Lock {

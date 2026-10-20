@@ -242,7 +242,7 @@ fn claude_writes_wait_for_its_lock_and_take_over_a_stale_one() {
     assert!(lock.is_dir());
     // Stale (its holder died): taken over.
     let old = SystemTime::now() - Duration::from_secs(30);
-    fs::File::open(&lock).unwrap().set_modified(old).unwrap();
+    set_folder_modified(&lock, old).unwrap();
     assert_eq!(
         write(TrustCli::Claude, &file, FOLDER, &TrustBefore::NoEntry).unwrap(),
         Written::Trusted
