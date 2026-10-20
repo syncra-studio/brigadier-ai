@@ -92,6 +92,9 @@ Run the full checks locally before you ask for review. All must pass:
 tools/full-checks.sh
 ```
 
+On Windows, run it from Git Bash, after the setup in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#windows).
+
 That runs `cargo fmt --all --check`, the TypeScript bindings check, the build, `cargo clippy
 --workspace --all-targets -- -D warnings`, the Rust tests (`cargo test --locked --workspace
 --lib --bins --tests`), `pnpm typecheck`, `pnpm lint` and `pnpm test`. CI then builds, clippies

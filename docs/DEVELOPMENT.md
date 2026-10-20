@@ -38,6 +38,8 @@ docs/          design plans and evidence (see docs/README.md)
   macOS has libclang with the Xcode Command Line Tools; on Windows install LLVM, on Linux
   `libclang-dev`.
 
+Windows needs more setup first: see [Windows](#windows) below.
+
 ## Develop
 
 ```sh
@@ -47,15 +49,64 @@ pnpm tauri:dev          # builds and stages brigadierd, starts Vite and the app
 
 `pnpm tauri:dev` and `pnpm tauri:debug-app` (a debug `Brigadier Dev.app`) run as
 `ai.brigadier.dev`, so they never hand a launch to an installed Brigadier. Any debug build
-keeps its data in `/tmp/brigadier-dev` unless `BRIGADIER_DATA_DIR` names another directory.
+keeps its data in `/tmp/brigadier-dev` (`%TEMP%\brigadier-dev` on Windows) unless
+`BRIGADIER_DATA_DIR` names another directory.
 
-The app launches `brigadierd` detached; closing the window keeps both running in the menu bar.
-Quit from the menu-bar item (or Cmd+Q) to stop the daemon too.
+The app launches `brigadierd` detached; closing the window keeps both running in the menu bar
+(the notification area on Windows). Quit from the menu-bar item (or Cmd+Q) to stop the daemon
+too.
 
 Release identity `ai.brigadier.app` keeps its data in `~/Library/Application Support/Brigadier`
 (`%LOCALAPPDATA%\Brigadier`, `~/.local/share/brigadier`). Other release builds default to a
 folder named after their bundle identifier in the same parent directory. Set
 `BRIGADIER_DATA_DIR` to use a throwaway directory; each data directory gets its own daemon.
+
+## Windows
+
+Windows 11 builds, tests and runs the dev app with these, all from `winget` (the first two need
+an administrator's prompt):
+
+```powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install --id LLVM.LLVM -e        # libclang for whisper.cpp's bindings, in C:\Program Files\LLVM\bin
+winget install --id Kitware.CMake -e
+winget install --id Rustlang.Rustup -e  # the toolchain in rust-toolchain.toml comes on first use
+winget install --id Schniz.fnm -e       # then: fnm install 24, and corepack enable for pnpm
+winget install --id Git.Git -e          # Git Bash runs the tools/*.sh scripts
+```
+
+WebView2 comes with Windows 11. An older Node on PATH (a system Node 22, say) must come after
+Node 24. From Git Bash, put the fnm Node first in its Unix spelling, as a Windows one in PATH
+breaks the pnpm shim:
+
+```sh
+export PATH="$(cygpath -u "$APPDATA")/fnm/node-versions/v24.22.0/installation:$HOME/.cargo/bin:$PATH"
+```
+
+Then `pnpm install` and `pnpm tauri:dev` as above. `pnpm tauri:debug-app` makes a macOS `.app`;
+on Windows build the same debug app without a bundle, and smoke-check it:
+
+```sh
+cd apps/desktop && pnpm tauri build --debug --no-bundle --config src-tauri/tauri.dev.conf.json
+cd ../.. && BRIGADIER_DATA_DIR="$(cygpath -w "$(mktemp -d)")" target/debug/brigadier.exe --smoke
+```
+
+A debug build misses the smoke check's timing budgets (startup, runtime stalls); CI judges a
+release build. The other checks are as on the Mac, with these differences:
+
+- Run them from Git Bash. `tools/full-checks.sh` takes its niceness from `nice` there (its
+  `ps` has no `-o`).
+- `pnpm test` runs four files at a time on Windows unless `--test-concurrency` says otherwise:
+  each render test's headless browser is a dozen processes there, and a file per core takes
+  the whole machine. The render tests take Playwright's headless shell from
+  `%LOCALAPPDATA%\ms-playwright` before an installed Chrome (whose scrollbars take 16 px of
+  every layout there), or `CHROME_BIN`.
+- Some Rust tests make symlinks, which Windows allows only an administrator or with Developer
+  Mode on (Settings › System › For developers). Without it they leave out just the checks
+  through a symlink. Tests of what Windows doesn't do yet (the checks' commits through
+  `/bin/sh`, a Codex thread's own home) are ignored there, each saying why.
+- Git for Windows checks files out with CRLF line endings (`core.autocrlf`). `cargo fmt` and the
+  generated bindings write LF, so `git status` may list files whose `git diff` is empty.
 
 ## Checks
 
@@ -104,7 +155,8 @@ pnpm tauri:debug-app
 BRIGADIER_DATA_DIR=$(mktemp -d) "target/debug/bundle/macos/Brigadier Dev.app/Contents/MacOS/brigadier" --smoke
 ```
 
-For a test build, use `pnpm tauri:debug-app` and `target/debug/bundle/macos/Brigadier Dev.app`.
+For a test build, use `pnpm tauri:debug-app` and `target/debug/bundle/macos/Brigadier Dev.app`
+(on Windows, `target/debug/brigadier.exe`: see [Windows](#windows)).
 Never smoke-test a bundle with the release identity (`ai.brigadier.app`) on a throwaway data
 directory if you also use that identity for real. The check needs the logged-in desktop
 session: inside a sandbox that blocks the window server, or over SSH, it says so and exits
