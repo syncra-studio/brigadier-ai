@@ -365,8 +365,6 @@ fn found_rules(worktree: &Path, root_agents: bool) -> Vec<Rule> {
     rules
 }
 
-/// The prompt's section: the `pinned` rules whole, then the `left_out` ones named, with `how`
-/// they are had; `precedence` says what wins over them.
 /// A workspace path as the agent reads it: with `/`, as git names it, on Windows too, where a
 /// folder would otherwise read `apps\web/`.
 fn shown(path: &Path) -> String {
@@ -378,6 +376,8 @@ fn shown(path: &Path) -> String {
     }
 }
 
+/// The prompt's section: the `pinned` rules whole, then the `left_out` ones named, with `how`
+/// they are had; `precedence` says what wins over them.
 fn format_rules(pinned: &[Rule], left_out: &[Rule], precedence: &str, how: &str) -> String {
     let mut text = String::new();
     for rule in pinned {
