@@ -603,8 +603,9 @@ def cmd_ask(a):
 
 def cmd_set(a):
     root = check_root(a.root)
+    asks = v3lib.ask_files(a.asks)
     for r in range(1, a.reruns + 1):
-        for ask in v3lib.ask_files(a.asks):
+        for ask in asks:
             attempt(root, ask, a.regime, a.brain, a.first + r - 1, a.tag, [root])
 
 
@@ -617,8 +618,9 @@ def cmd_ab(a):
         sys.exit("ab: two builds, as --roots A=R1,B=R2")
     for name in names:
         roots[name] = check_root(roots[name])
+    asks = v3lib.ask_files(a.asks)
     for r in range(1, a.reruns + 1):
-        for i, ask in enumerate(v3lib.ask_files(a.asks)):
+        for i, ask in enumerate(asks):
             order = names if (i + r) % 2 == 0 else names[::-1]
             for name in order:
                 attempt(roots[name], ask, a.regime, a.brain, r, name, list(roots.values()))

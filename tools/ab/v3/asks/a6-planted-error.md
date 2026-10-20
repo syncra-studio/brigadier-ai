@@ -16,7 +16,7 @@ Have a scout (a read-only task) copy docs/rates-draft.md into a file named rates
 {"rule": "fixed", "file": "rates.md",
  "planted": "\\|\\s*QC\\s*\\|\\s*14\\s?%",
  "right": "\\|\\s*QC\\s*\\|\\s*15\\s?%\\s*\\|\\s*5\\s?%\\s*\\|\\s*0\\s?%",
- "topic": "\\bQC\\b|Quebec|Québec|14\\s?%|15\\s?%", "no_question": true}
+ "topic": "\\bQC\\b|Quebec|Québec|14\\s?%|15\\s?%", "mismatch": "\\b14\\s?%", "no_question": true}
 ```
 
 ## Known answer

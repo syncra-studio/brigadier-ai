@@ -20,7 +20,7 @@ Rules (an ask's ```json block):
   ~/Desktop, ~/Downloads or ~/Documents.
 - "fixed" (A6): a read task stored `file` with the planted error (`planted`); the delivered file
   (the one the final answer links, else the latest stored copy) matches `right` and not `planted`;
-  the final answer has no "To check" about `topic`; with `no_question`, the thread didn't ask the user
+  the final answer has no "To check" about `mismatch`; with `no_question`, the thread didn't ask the user
   (a question card about `topic`) instead of fixing it (F2/U3: the user never has to say "fix it yourself").
 A precondition that wasn't met makes the attempt "invalid" (pass false, why says so).
 usage: score.py <run-dir>   prints the score as JSON"""
@@ -252,7 +252,7 @@ def score_fixed(rule, rec, run, freeze):
         last = stored[-1]
         delivered, src = content(last["blob"]), f"stored copy {last['blob'][:12]}"
     right = bool(delivered) and bool(re.search(rule["right"], delivered)) and not re.search(rule["planted"], delivered)
-    flagged = [s for s in to_check_sections(text) if re.search(rule["topic"], s, re.I)]
+    flagged = [s for s in to_check_sections(text) if re.search(rule["mismatch"], s, re.I)]
     why = []
     if not right:
         why.append(f"the delivered file ({src}) is not right")
