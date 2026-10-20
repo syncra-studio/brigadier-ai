@@ -4,8 +4,8 @@ import { KINDS, NODE_KINDS } from "@/app/inspector/brain/kinds";
 import { NodeDetail } from "@/app/inspector/brain/NodeDetail";
 import { Picker } from "@/app/inspector/providers/Picker";
 import { ChevronDown, Spinner } from "@/components/icons";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/controls/button";
+import { Checkbox } from "@/components/controls/checkbox";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -13,14 +13,14 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
+} from "@/components/overlays/dropdown-menu";
+import { Input } from "@/components/controls/input";
 import type { BrainGraph, BrainOverview, NodeFilter, NodeKind } from "@/ipc/generated";
 import { getBrainGraph, projectOf } from "@/state/brain";
 import { useApp } from "@/state/store";
 
 // sigma and graphology load only once the Brain tab is open (see `preloadGraphCanvas`).
-const loadGraphCanvas = () => import("@/app/inspector/brain/BrainGraphCanvas");
+const loadGraphCanvas = () => import("@/components/views/BrainGraphCanvas");
 const BrainGraphCanvas = lazy(loadGraphCanvas);
 
 /** Loads the graph's libraries ahead of time, so showing the graph doesn't also evaluate them. */

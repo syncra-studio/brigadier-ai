@@ -1,12 +1,12 @@
 // The style check (`pnpm lint` runs it after oxlint): the app takes every colour and length from
-// styles/tokens.css and every control from components/ui. It covers what the oxlint rule
+// styles/tokens.css and every control from src/components. It covers what the oxlint rule
 // brigadier/no-raw-design-values (lint/brigadier-plugin.js) doesn't, which already keeps raw
 // colours, lengths and Tailwind arbitrary values out of ts/tsx:
 //   - CSS files other than tokens.css: no hex colours or colour functions (color-mix of tokens is
 //     fine), no px/rem/em lengths but 0 and 1px/2px hairlines (%, vw and vh are layout);
 //   - `style={{…}}` holds only computed values: a property set to a plain literal is a class;
-//   - @openai/apps-sdk-ui and Radix are imported only inside components/ui (the kit's icons only
-//     in components/icons/kit.ts);
+//   - @openai/apps-sdk-ui and Radix are imported only inside the wrappers in components/controls,
+//     overlays and layout (the kit's icons only in components/icons/kit.ts);
 //   - icons live in components/icons: no <svg> markup anywhere else (charts and rings drawn from
 //     live values are listed in check-styles.allow as `<svg`).
 // What can't follow yet is listed in check-styles.allow, one file per line with the exact values
@@ -28,6 +28,7 @@ const LENGTH = /(?<![\w.#-])-?(\d*\.?\d+)(?:px|rem|em|ch|ex|lh|pt|pc|cm|mm|in|q)
 const HAIRLINE = /^-?[12]px$/;
 const KIT_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']((?:@openai\/apps-sdk-ui|radix-ui|@radix-ui\/)[^"']*)["']/g;
 const KIT_ICONS = "@openai/apps-sdk-ui/components/Icon";
+const KIT_WRAPPERS = /^components\/(controls|overlays|layout)\//;
 const SVG = /<svg\b/g;
 const STATIC_STYLE = /(?:^|[{,])\s*([\w$]+|"[^"]+")\s*:\s*(?:"[^"$`]*"|'[^']*'|-?\d*\.?\d+)\s*(?=[,}]|$)/g;
 
@@ -72,7 +73,7 @@ export function problems(path, text) {
   if (path !== "components/icons/kit.ts") {
     for (const [, name] of text.matchAll(KIT_IMPORT)) {
       if (name.startsWith(KIT_ICONS)) found.push([name, "a kit import: icons come from components/icons"]);
-      else if (!path.includes("components/ui/")) found.push([name, "a kit import: use the components/ui wrapper"]);
+      else if (!KIT_WRAPPERS.test(path)) found.push([name, "a kit import: use the wrapper in components/controls, overlays or layout"]);
     }
   }
   if (!path.startsWith("components/icons/")) {

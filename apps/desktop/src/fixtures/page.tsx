@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { PageTabView } from "@/app/conversation/pages/PageTabView";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { Conversation, Page, PageContent } from "@/ipc/generated";
 import { emitPageChanged } from "@/state/pageChanges";
 import { sessionTabs, useSessionTabs } from "@/state/sessionTabs";

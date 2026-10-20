@@ -5,10 +5,10 @@ import { type BackgroundRow, type BackgroundState, backgroundRows, rowEnded } fr
 import { commandWords, elapsedWords } from "@/app/conversation/liveStatus";
 import { latestLine, previewWord } from "@/app/conversation/previewStatus";
 import { workerName } from "@/app/conversation/rowWords";
-import { SummaryRowButton, SummarySection } from "@/components/assistant-ui/elements/summary-section";
+import { SummaryRowButton, SummarySection } from "@/components/conversation/elements/summary-section";
 import { Check, Pause, Spinner, Terminal, X } from "@/components/icons";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Button } from "@/components/ui/button";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { Button } from "@/components/controls/button";
 import { request } from "@/ipc/client";
 import type { Preview } from "@/ipc/generated";
 import { dismissBackground, previewLogTail, restartBackgroundRun, restartPreview, stopBackgroundRun, stopPreview } from "@/state/actions";

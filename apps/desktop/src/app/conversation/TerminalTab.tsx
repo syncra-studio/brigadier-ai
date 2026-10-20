@@ -8,9 +8,9 @@ import {
   useState,
 } from "react";
 
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import { useReveal } from "@/app/conversation/SidePanel";
-import { TitlebarTips } from "@/components/titlebar-button";
+import { TitlebarTips } from "@/components/shared/titlebar-button";
 import {
   ChevronDown,
   Dock,
@@ -51,7 +51,7 @@ import {
 // screen fades out.
 const TerminalView = lazy(() =>
   whenRevealed()
-    .then(() => import("@/app/conversation/TerminalView"))
+    .then(() => import("@/components/views/TerminalView"))
     .then((module) => ({ default: module.TerminalView })),
 );
 

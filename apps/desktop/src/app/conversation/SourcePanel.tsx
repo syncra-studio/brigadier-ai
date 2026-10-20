@@ -19,16 +19,16 @@ import {
   Spinner,
   Undo,
 } from "@/components/icons";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Button } from "@/components/ui/button";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { Button } from "@/components/controls/button";
+import { ConfirmDialog } from "@/components/overlays/confirm-dialog";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/overlays/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,7 +38,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/overlays/dropdown-menu";
 import { request } from "@/ipc/client";
 import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import type { CommitOutcome, SourceAction, SourceBranch, SourceChange, SourceFile, SourceGitRun, SourceScope, SourceState } from "@/ipc/generated";

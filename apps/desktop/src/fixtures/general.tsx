@@ -15,8 +15,8 @@ import { createRoot } from "react-dom/client";
 
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { SettingsView } from "@/app/settings/SettingsView";
-import { SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { SidebarProvider } from "@/components/layout/sidebar";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { Request } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";

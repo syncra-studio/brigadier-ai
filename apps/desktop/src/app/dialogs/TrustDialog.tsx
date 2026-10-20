@@ -2,14 +2,14 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/controls/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/overlays/dialog";
 import type { Project } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
 import { useRevealed } from "@/lib/splash";

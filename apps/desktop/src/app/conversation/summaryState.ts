@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { jumpInThread } from "@/components/assistant-ui/thread-scroll";
+import { jumpInThread } from "@/components/conversation/thread-scroll";
 import type { EventEnvelope } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 import { useBoard } from "@/state/board";

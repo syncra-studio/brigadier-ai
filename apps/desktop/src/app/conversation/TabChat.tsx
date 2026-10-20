@@ -2,7 +2,7 @@ import { createContext, type ReactNode, type RefObject, useContext, useEffect, u
 import { createPortal } from "react-dom";
 
 import { ConversationView } from "@/app/ConversationView";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import { Chat, ChatCompose, MinimizeRight, X } from "@/components/icons";
 import { browserRead, request } from "@/ipc/client";
 import { cn } from "@/lib/utils";

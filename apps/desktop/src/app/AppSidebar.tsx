@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import { errorText } from "@/app/dialogs/fields";
 import { ProjectDialog } from "@/app/dialogs/ProjectDialog";
 import { RemoveProjectDialog } from "@/app/dialogs/RemoveProjectDialog";
@@ -37,16 +37,16 @@ import {
   Trash,
   Unpin,
 } from "@/components/icons";
-import { TitlebarTips } from "@/components/titlebar-button";
-import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
+import { TitlebarTips } from "@/components/shared/titlebar-button";
+import { Banner } from "@/components/shared/banner";
+import { Button } from "@/components/controls/button";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+} from "@/components/overlays/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,12 +54,12 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { EmptyState } from "@/components/ui/empty-state";
-import { Kbd } from "@/components/ui/kbd";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useSidebar } from "@/components/ui/sidebar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+} from "@/components/overlays/dropdown-menu";
+import { EmptyState } from "@/components/shared/empty-state";
+import { Kbd } from "@/components/controls/kbd";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
+import { useSidebar } from "@/components/layout/sidebar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, Project } from "@/ipc/generated";
 import { SessionStatusLabel, SidebarActivityMark, SidebarError } from "@/app/SessionStatus";

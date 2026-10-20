@@ -8,10 +8,10 @@ import { createRoot } from "react-dom/client";
 
 import { Counts } from "@/app/conversation/Counts";
 import { StepCounter } from "@/app/conversation/StepCounter";
-import { CopyButton } from "@/components/assistant-ui/copy-button";
-import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/kbd";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { CopyButton } from "@/components/shared/copy-button";
+import { Button } from "@/components/controls/button";
+import { Kbd } from "@/components/controls/kbd";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { colourOf } from "@/fixtures/look";
 
 const one = (selector: string) => document.querySelector(selector);

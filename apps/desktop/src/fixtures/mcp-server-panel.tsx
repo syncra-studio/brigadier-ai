@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { type McpServer, McpServerPanel } from "@/components/assistant-ui/elements/mcp-server-panel";
+import { type McpServer, McpServerPanel } from "@/components/conversation/elements/mcp-server-panel";
 
 const SERVERS: McpServer[] = [
   { id: "github", name: "github", transport: "http", status: "connected", tools: ["list_issues", "create_pr", "get_diff"] },

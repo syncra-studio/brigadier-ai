@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/controls/button";
 import {
   Dialog,
   DialogContent,
@@ -9,7 +9,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/overlays/dialog";
 import { useBoard } from "@/state/board";
 
 /**

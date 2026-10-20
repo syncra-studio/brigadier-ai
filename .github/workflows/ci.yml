@@ -76,7 +76,7 @@ jobs:
           git diff --exit-code -- apps/desktop/src/ipc/generated
           test -z "$(git status --porcelain -- apps/desktop/src/ipc/generated)"
       - run: pnpm typecheck
-      - name: Lint and the style check (tokens and components/ui only)
+      - name: Lint and the style check (tokens and src/components only)
         run: pnpm lint
 
   app-tests:

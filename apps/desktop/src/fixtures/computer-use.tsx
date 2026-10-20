@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ComputerUsePage } from "@/app/settings/ComputerUsePage";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { ComputerSetup, ComputerUseStatus, PermissionState, Request, Settings } from "@/ipc/generated";
 import { onComputerUse } from "@/state/computerUse";
 import { useApp } from "@/state/store";

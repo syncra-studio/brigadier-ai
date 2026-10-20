@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 
 import { DeleteDialog } from "@/app/dialogs/DeleteDialog";
 import { ArchivedPage } from "@/app/settings/ArchivedPage";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { Conversation, Project, Request } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 

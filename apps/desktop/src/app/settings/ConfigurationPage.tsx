@@ -4,9 +4,9 @@ import {
   findModel,
   ModelSelector,
   type ModelGroup,
-} from "@/components/assistant-ui/elements/model-selector";
-import { Badge } from "@/components/ui/badge";
-import { SettingsCard } from "@/components/ui/settings-card";
+} from "@/components/shared/model-selector";
+import { Badge } from "@/components/controls/badge";
+import { SettingsCard } from "@/components/shared/settings-card";
 import type { ModelChoice, PermissionLevel } from "@/ipc/generated";
 import {
   builtInDefault,

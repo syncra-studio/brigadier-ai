@@ -1,4 +1,4 @@
-import { findModel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
+import { findModel, type ModelGroup } from "@/components/shared/model-selector";
 import type {
   MergedModel,
   OverrideTarget,

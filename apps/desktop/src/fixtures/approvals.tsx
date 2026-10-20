@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ApprovalAction } from "@/app/conversation/ActionCards";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { ApprovalRequest, Request } from "@/ipc/generated";
 import { emptyBoard, type ShownApproval, useBoard } from "@/state/board";
 

@@ -5,8 +5,8 @@ import { createRoot } from "react-dom/client";
 
 import { SettingsView } from "@/app/settings/SettingsView";
 import { StoragePage } from "@/app/settings/storage/StoragePage";
-import { SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { SidebarProvider } from "@/components/layout/sidebar";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { surface } from "@/fixtures/look";
 import type { CleanItem, ProjectUsage, Request, StorageReport } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";

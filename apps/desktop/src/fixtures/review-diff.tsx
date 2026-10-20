@@ -18,7 +18,7 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ReviewTab } from "@/app/conversation/ReviewTab";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { Conversation, Request, ReviewDiff } from "@/ipc/generated";
 import { setReviewOption } from "@/state/review";
 import { useApp } from "@/state/store";

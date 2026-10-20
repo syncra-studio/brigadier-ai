@@ -1,9 +1,9 @@
 import type { ComponentProps } from "react";
 
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@/components/controls/badge";
 import { Reload } from "@/components/icons";
-import { Button } from "@/components/ui/button";
-import { UsageBar } from "@/components/ui/usage-bar";
+import { Button } from "@/components/controls/button";
+import { UsageBar } from "@/components/shared/usage-bar";
 import type { QuotaWindow } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
 import { usageTone, used, windowTitle } from "@/lib/quota";

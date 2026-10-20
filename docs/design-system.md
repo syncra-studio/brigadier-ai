@@ -59,7 +59,7 @@ one level deep, so a part both `app.pen` and `settings.pen` use must live in `fo
 - Plain words. No names or marks of other chat apps or of the UI kit's vendor.
 - In the code every colour, length, radius, font and shadow comes from
   `apps/desktop/src/styles/tokens.css`, and the UI kit and Radix are used only inside
-  `src/components/ui`. `pnpm lint` checks it (the oxlint rule `no-raw-design-values` for ts/tsx,
+  the wrappers in `src/components/controls`, `overlays` and `layout`. `pnpm lint` checks it (the oxlint rule `no-raw-design-values` for ts/tsx,
   `scripts/check-styles.mjs` for CSS files, fixed inline styles and kit imports), and so does CI.
   A value that can't follow yet goes in `scripts/check-styles.allow` with its reason.
 

@@ -8,7 +8,7 @@ import { ProcessesTab } from "@/app/inspector/ProcessesTab";
 import { ProvidersTab } from "@/app/inspector/providers/ProvidersTab";
 import { RoutingTab } from "@/app/inspector/RoutingTab";
 import { SettingsPage } from "@/app/settings/parts";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/controls/tabs";
 import { setInspectorTab } from "@/state/actions";
 import { type InspectorTab, useApp } from "@/state/store";
 

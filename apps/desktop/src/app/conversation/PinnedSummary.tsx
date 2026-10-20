@@ -51,15 +51,15 @@ import {
   SummaryRow,
   SummaryRowButton,
   SummarySection,
-} from "@/components/assistant-ui/elements/summary-section";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Button } from "@/components/ui/button";
+} from "@/components/conversation/elements/summary-section";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { Button } from "@/components/controls/button";
 import {
   Popover,
   PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
-} from "@/components/ui/popover";
+} from "@/components/overlays/popover";
 import { request } from "@/ipc/client";
 import { openLink as openWebLink } from "@/state/links";
 import type {

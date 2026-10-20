@@ -25,12 +25,12 @@ import {
   AgentPlan,
   type AgentPlanStep,
   type AgentPlanStepStatus,
-} from "@/components/assistant-ui/elements/agent-plan";
-import { ProgressLine, type ProgressOutcomeStatus } from "@/components/assistant-ui/elements/progress-line";
-import { disclosureRow } from "@/components/assistant-ui/elements/surfaces";
-import { Timeline, type TimelineEvent } from "@/components/assistant-ui/elements/timeline";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+} from "@/components/conversation/elements/agent-plan";
+import { ProgressLine, type ProgressOutcomeStatus } from "@/components/shared/progress-line";
+import { disclosureRow } from "@/components/conversation/elements/surfaces";
+import { Timeline, type TimelineEvent } from "@/components/conversation/elements/timeline";
+import { Badge } from "@/components/controls/badge";
+import { Button } from "@/components/controls/button";
 import { Moon } from "@/components/icons";
 import type { OvernightPhase, OvernightRun } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

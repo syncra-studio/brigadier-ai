@@ -1,4 +1,4 @@
-import type { JobStageState } from "@/components/assistant-ui/elements/job-progress";
+import type { JobStageState } from "@/components/conversation/elements/job-progress";
 
 /**
  * A session's job (Q88): the steps it works through, in order. For a change: Building,

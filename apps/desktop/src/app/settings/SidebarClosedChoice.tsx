@@ -1,4 +1,4 @@
-import { Segment, SegmentedRoot } from "@/components/ui/segmented";
+import { Segment, SegmentedRoot } from "@/components/controls/segmented";
 import { cn } from "@/lib/utils";
 import type { SidebarCollapseMode } from "@/state/sidebar";
 

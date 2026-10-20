@@ -9,8 +9,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
-import { SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { SidebarProvider } from "@/components/layout/sidebar";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { fixtureInput } from "@/fixtures/input";
 import type { Conversation, ConversationView as View, Project, Request } from "@/ipc/generated";
 import { select } from "@/state/actions";

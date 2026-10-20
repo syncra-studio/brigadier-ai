@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { ProgressLine } from "@/components/assistant-ui/elements/progress-line";
+import { ProgressLine } from "@/components/shared/progress-line";
 
 /** A download at a third, then each way a job can end. */
 function Fixture() {

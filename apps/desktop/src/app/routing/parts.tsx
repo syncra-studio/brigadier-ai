@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import { ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/icons";
-import { Badge as ChipBadge } from "@/components/ui/badge";
+import { Badge as ChipBadge } from "@/components/controls/badge";
 import { cn } from "@/lib/utils";
 
 /*

@@ -6,10 +6,10 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/overlays/dialog";
 import { Chat, Comment, Folder, Search, Terminal } from "@/components/icons";
-import { MenuRow } from "@/components/ui/dropdown-menu";
-import { Kbd } from "@/components/ui/kbd";
+import { MenuRow } from "@/components/overlays/dropdown-menu";
+import { Kbd } from "@/components/controls/kbd";
 import { cn } from "@/lib/utils";
 import { openConversation, select, setProjectExpanded } from "@/state/actions";
 import { openFeedback } from "@/state/feedback";

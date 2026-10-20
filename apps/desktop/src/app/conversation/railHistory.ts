@@ -1,5 +1,5 @@
 import type { ThreadNode, ThreadTree } from "@/app/conversation/blocks";
-import type { RailEntry } from "@/components/assistant-ui/message-rail";
+import type { RailEntry } from "@/components/conversation/message-rail";
 
 /**
  * The user messages on `full`'s shown branch that `shown` (its folded form) leaves out, oldest

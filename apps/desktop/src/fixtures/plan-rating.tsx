@@ -12,8 +12,8 @@ import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
 import { PlanDocCard } from "@/app/conversation/cards/PlanDocument";
-import { SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { SidebarProvider } from "@/components/layout/sidebar";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { Conversation, ConversationView as View, Message, Plan, Request, UserRequest } from "@/ipc/generated";
 import { select } from "@/state/actions";
 import { useBoard } from "@/state/board";

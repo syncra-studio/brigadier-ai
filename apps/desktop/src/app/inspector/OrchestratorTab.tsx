@@ -17,9 +17,9 @@ import {
 } from "@/app/inspector/orchestratorLog";
 import { RebirthLog } from "@/app/inspector/RebirthLog";
 import { ThreadMetricsPanel } from "@/app/inspector/ThreadMetricsPanel";
-import { Button } from "@/components/ui/button";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { UsageBar } from "@/components/ui/usage-bar";
+import { Button } from "@/components/controls/button";
+import { ToggleGroup, ToggleGroupItem } from "@/components/controls/toggle-group";
+import { UsageBar } from "@/components/shared/usage-bar";
 import type { RebirthThresholds } from "@/ipc/generated";
 import { formatBytes, formatClock } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { type ChangeMarks, changeMarks, LETTERS } from "@/app/conversation/sourceStatus";
-import { fuzzyMatch } from "@/components/assistant-ui/elements/menuMatch";
+import { fuzzyMatch } from "@/components/conversation/elements/menuMatch";
 import { ChevronDown, ChevronRight, FileIcon } from "@/components/icons";
 import type { SourceState, SourceStatus, WorkspaceFolder } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -11,7 +11,7 @@ import { openFileTab, replaceNewTabWithFile } from "@/state/sessionTabs";
 import {
   type FileList, onWorkspaceChanged, readFiles, readFolder, readSource, useCachedEntry, useCheckoutKey, type WorkspaceTarget,
 } from "@/state/workspaceCache";
-import { SettingsSearch } from "@/components/ui/settings-search";
+import { SettingsSearch } from "@/components/shared/settings-search";
 
 /**
  * The Files panel (⌘P): the session checkout's files as a tree with a search field. A click

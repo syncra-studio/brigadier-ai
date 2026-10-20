@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
+import type { ModelGroup } from "@/components/shared/model-selector";
 import type {
   ModelChoice,
   PermissionLevel,

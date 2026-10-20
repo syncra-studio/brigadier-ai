@@ -12,7 +12,7 @@ import { createRoot } from "react-dom/client";
 
 import { FeedbackDialog } from "@/app/feedback/FeedbackDialog";
 import { GlobalSearch, openSearch } from "@/app/SearchDialog";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
 import { useFeedbackUi } from "@/state/feedback";
 import { useApp } from "@/state/store";

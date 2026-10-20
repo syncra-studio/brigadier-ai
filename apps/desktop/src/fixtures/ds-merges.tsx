@@ -7,9 +7,9 @@ import { createRoot } from "react-dom/client";
 
 import { SettingsSection, SettingsSelect } from "@/app/settings/parts";
 import { ChevronRight, Filter, Plus } from "@/components/icons";
-import { Button } from "@/components/ui/button";
-import { RowText, SettingsCard } from "@/components/ui/settings-card";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Button } from "@/components/controls/button";
+import { RowText, SettingsCard } from "@/components/shared/settings-card";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { colourOf, surface } from "@/fixtures/look";
 
 const one = (selector: string) => document.querySelector(selector);

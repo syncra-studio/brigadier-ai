@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 
 import { type Job, jobLabel } from "@/app/conversation/job";
-import { JobProgress } from "@/components/assistant-ui/elements/job-progress";
-import { ScheduleCard } from "@/components/assistant-ui/elements/schedule-card";
+import { JobProgress } from "@/components/conversation/elements/job-progress";
+import { ScheduleCard } from "@/components/conversation/elements/schedule-card";
 import { cn } from "@/lib/utils";
 
 /**

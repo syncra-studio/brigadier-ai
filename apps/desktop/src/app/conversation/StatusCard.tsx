@@ -10,8 +10,8 @@ import { useBoard } from "@/state/board";
 
 import { useApp } from "@/state/store";
 
-import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
-import { UsageBar } from "@/components/ui/usage-bar";
+import { ComposerRailItem } from "@/components/conversation/elements/composer-rail";
+import { UsageBar } from "@/components/shared/usage-bar";
 
 /** Whether the open conversation shows the `/status` card above its composer. */
 export const StatusCardContext = createContext<{ open: boolean; setOpen: (open: boolean) => void }>({

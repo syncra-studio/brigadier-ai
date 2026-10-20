@@ -1,0 +1,295 @@
+import {
+  type ComponentProps,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+
+import { Badge } from "@/components/controls/badge";
+import { ArrowRight, Pencil, X } from "@/components/icons";
+import { cn } from "@/lib/utils";
+
+/* Approval and question content on the composer rail; each section pads itself. */
+
+/**
+ * The card itself; its content decides the keys (digits, arrows) through `onKeyDown`.
+ * `container` names the container query its narrow layout keys off.
+ */
+export function ActionCard({
+  className,
+  container = "approval",
+  onMouseDown,
+  ...props
+}: ComponentProps<"section"> & { container?: "approval" | "request" }) {
+  return (
+    // The mouse handler only keeps focus where it is; the card's keys are its buttons' own.
+    // oxlint-disable-next-line jsx-a11y/no-static-element-interactions
+    <section
+      data-slot="action-card"
+      // A click on the card's blank space keeps the user's current focus.
+      onMouseDown={(event) => {
+        event.stopPropagation();
+        onMouseDown?.(event);
+      }}
+      className={cn(
+        container === "approval" ? "@container/approval-card" : "@container/request-card",
+        "text-foreground flex w-full flex-col outline-none",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+/** The question the card asks, and a muted line under it. */
+export function ActionCardTitle({ children, detail }: { children: ReactNode; detail?: ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <h2 className="min-w-0 text-sm leading-5 font-medium wrap-anywhere">{children}</h2>
+      {detail && <p className="text-foreground/50 text-code">{detail}</p>}
+    </div>
+  );
+}
+
+/** A question card's header: the question, then × that puts it aside. */
+export function ActionCardQuestion({
+  children,
+  kind,
+  detail,
+  aside,
+  onDismiss,
+  dismissLabel = "Dismiss",
+}: {
+  children: ReactNode;
+  /** A few words over the question: a round's title ("Round 2 · Budget"). */
+  kind?: ReactNode;
+  detail?: ReactNode;
+  /** Beside the dismiss button (a round's pager). */
+  aside?: ReactNode;
+  onDismiss: () => void;
+  /** What × does, for its label: a question's × skips it. */
+  dismissLabel?: string | undefined;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-2 ps-4 pe-3 pt-4 pb-2">
+      <div role="alert" aria-atomic="true" className="flex min-w-0 flex-1 flex-col gap-1">
+        {kind && (
+          <p data-slot="action-card-kind" className="text-foreground/65 text-code leading-5">
+            {kind}
+          </p>
+        )}
+        <ActionCardTitle detail={detail}>{children}</ActionCardTitle>
+      </div>
+      {aside}
+      <button
+        type="button"
+        aria-label={dismissLabel}
+        title={dismissLabel}
+        onClick={onDismiss}
+        className="text-foreground/50 hover:bg-foreground/8 rounded-capsule size-icon-button-sm [&_svg]:size-icon-sm -mt-0.5 flex shrink-0 items-center justify-center transition-colors"
+      >
+        <X />
+      </button>
+    </div>
+  );
+}
+
+/** A button's look on the card: a capsule, the primary filled, the other outlined. */
+export function actionButton(variant: "primary" | "outline", className?: string): string {
+  return cn(
+    "group/action h-control-sm rounded-capsule border-foreground/8 text-code inline-flex shrink-0 cursor-default items-center gap-1 border px-2 leading-4.5 font-normal whitespace-nowrap transition-colors select-none disabled:opacity-40",
+    variant === "primary"
+      ? "bg-foreground text-composer enabled:hover:bg-foreground/80 data-[state=open]:bg-foreground/80"
+      : "bg-foreground/3 text-foreground enabled:hover:bg-foreground/8 data-[state=open]:bg-foreground/8",
+    className,
+  );
+}
+
+/**
+ * The approval's buttons: the choices pushed to the end, [Deny Esc] [Allow once ⏎]. Below
+ * 28rem they stack full width and drop their key hints.
+ */
+export function ActionCardActions({
+  leading,
+  className,
+  children,
+}: {
+  /** Before the choices, at the start (an error). */
+  leading?: ReactNode;
+  /** Added to the choices' row. */
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2 px-4 pt-2 pb-4 @max-md/approval-card:flex-col @max-md/approval-card:items-stretch">
+      {leading}
+      <div
+        className={cn(
+          "ms-auto flex min-w-0 items-center gap-2 @max-md/approval-card:ms-0 @max-md/approval-card:w-full @max-md/approval-card:flex-col @max-md/approval-card:items-stretch",
+          className,
+        )}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Files the card asks about: the folder dim, the name bright, a count at the end; scrolls. */
+export function ActionFileList({ files }: { files: { path: string; trailing?: ReactNode }[] }) {
+  return (
+    <div className="px-4 py-2">
+      <div className="border-border bg-background/50 flex flex-col overflow-hidden rounded-lg border">
+        <div className="flex max-h-50 flex-col overflow-y-auto">
+          {files.map(({ path, trailing }) => {
+            const slash = path.lastIndexOf("/");
+            return (
+              <div key={path} className="flex min-w-0 items-center gap-2.5 p-1.5 text-sm font-medium">
+                <span title={path} className="flex min-w-0 flex-1 items-center">
+                  {slash > 0 && (
+                    <span className="text-foreground/50 min-w-0 truncate">{path.slice(0, slash + 1)}</span>
+                  )}
+                  <span className="max-w-full shrink-0 truncate">{path.slice(slash + 1)}</span>
+                </span>
+                {trailing}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The marker of a question row: a 20px outlined square with its number (empty for a lone
+ * answer), a dot once chosen; it stays outlined while its row is lit.
+ */
+function Marker({ chosen, children }: { chosen?: boolean | undefined; children?: ReactNode }) {
+  return (
+    <span
+      aria-hidden
+      data-slot="action-marker"
+      className={cn(
+        "border-foreground/20 text-foreground/70 flex size-5 shrink-0 items-center justify-center self-start rounded-sm border text-xs leading-none font-medium",
+        chosen && "border-foreground text-foreground",
+      )}
+    >
+      {chosen ? <span className="size-1.5 rounded-full bg-current" /> : children}
+    </span>
+  );
+}
+
+/**
+ * A numbered answer: its square (a dot while it commits; empty with no `number`), label,
+ * "Recommended", a description, → while highlighted or hovered.
+ */
+export function ActionOption({
+  number,
+  label,
+  description,
+  recommended,
+  highlighted,
+  chosen,
+  className,
+  ...props
+}: Omit<ComponentProps<"button">, "children"> & {
+  /** `null`: the card's only answer, its square left empty. */
+  number: number | null;
+  label: string;
+  description?: ReactNode;
+  recommended?: boolean | undefined;
+  highlighted: boolean;
+  /** Picked and about to go. */
+  chosen?: boolean | undefined;
+}) {
+  return (
+    <button
+      type="button"
+      data-slot="action-option"
+      data-highlighted={highlighted || undefined}
+      aria-label={label}
+      className={cn(
+        "group text-code flex min-h-8 w-full items-center gap-2 rounded-xl px-2 py-1.5 text-start",
+        highlighted ? "bg-foreground/5" : "hover:bg-foreground/5",
+        className,
+      )}
+      {...props}
+    >
+      <Marker chosen={chosen}>{number}</Marker>
+      <span className="flex min-w-0 flex-1 flex-col gap-y-0.5">
+        <span className="inline-flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 font-medium wrap-anywhere" title={label}>
+            {label}
+          </span>
+          {recommended && (
+            <Badge variant="secondary" className="shrink-0 px-1.5 py-0.5 text-xs">
+              Recommended
+            </Badge>
+          )}
+        </span>
+        {description && <span className="text-foreground/50 min-w-0 wrap-anywhere">{description}</span>}
+      </span>
+      <ArrowRight
+        aria-hidden
+        className={cn(
+          "text-foreground/50 size-icon-md ms-auto shrink-0 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100",
+          highlighted && "opacity-100",
+        )}
+      />
+    </button>
+  );
+}
+
+/**
+ * The last row: ✎ and "No, and tell Brigadier what to do differently", then its button
+ * (Skip until something is typed). Lit while it holds the highlight.
+ */
+export function ActionFreeText({
+  children,
+  highlighted,
+  marker = true,
+  style,
+  className,
+  ...props
+}: ComponentProps<"input"> & {
+  children?: ReactNode;
+  highlighted?: boolean;
+  /** The ✎, for the row under numbered answers; a bare field has none. */
+  marker?: boolean;
+}) {
+  return (
+    <div
+      role="presentation"
+      style={style}
+      className={cn(
+        "text-code flex min-h-8 w-full items-center gap-2 px-2 py-1.5",
+        marker && "hover:bg-foreground/5 rounded-2xl transition-colors",
+        highlighted && "bg-foreground/5",
+        className,
+      )}
+    >
+      {marker && (
+        <span aria-hidden className="text-foreground/50 flex size-5 shrink-0 items-center justify-center">
+          <Pencil className="size-icon-sm" />
+        </span>
+      )}
+      <input
+        className="placeholder:text-foreground/50 min-w-0 flex-1 self-center bg-transparent outline-none"
+        {...props}
+      />
+      {children && <div className="flex items-center gap-2 place-self-end">{children}</div>}
+    </div>
+  );
+}
+
+/**
+ * When one question card follows another, its rows fade in 50ms apart, 300ms each; the
+ * first card shows as is. Reduced motion shows them at once.
+ */
+export function staggered(on: boolean, index: number): { className?: string; style?: CSSProperties } {
+  if (!on) return {};
+  return {
+    className: "animate-in fade-in fill-mode-backwards duration-300 ease-out motion-reduce:animate-none",
+    style: { animationDelay: `${index * 50}ms` },
+  };
+}

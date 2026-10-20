@@ -1,13 +1,13 @@
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { type ImageState, type LoadedImage, loadImage, markedScreenshot, useStoredImage } from "@/app/conversation/mockupImages";
-import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/controls/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/overlays/dropdown-menu";
 import { ArrowUp, Check, ChevronDown, Comment, Grid, ImageSquare, SquareImage, Trash, X } from "@/components/icons";
-import { EmptyState } from "@/components/ui/empty-state";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { type Choice, Segmented } from "@/components/ui/segmented";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { EmptyState } from "@/components/shared/empty-state";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
+import { type Choice, Segmented } from "@/components/controls/segmented";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/overlays/tooltip";
 import type { ArtifactRef } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";

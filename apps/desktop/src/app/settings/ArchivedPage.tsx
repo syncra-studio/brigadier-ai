@@ -14,14 +14,14 @@ import {
   SORT_CHOICES,
 } from "@/app/settings/archived";
 import { SettingsPage, SettingsSelect, SettingsSelectTrigger } from "@/app/settings/parts";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/controls/button";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+} from "@/components/overlays/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,16 +31,16 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/overlays/dropdown-menu";
 import { Branch, Chats, Check, DotsHorizontal, Filter, Folder, Trash, Unarchive } from "@/components/icons";
-import { EmptyState } from "@/components/ui/empty-state";
-import { SettingsCard } from "@/components/ui/settings-card";
+import { EmptyState } from "@/components/shared/empty-state";
+import { SettingsCard } from "@/components/shared/settings-card";
 import type { Conversation } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
 import { openConversation, restoreAll } from "@/state/actions";
 import { askDelete, clearPicked, pickClick, prunePicked, usePicked } from "@/state/picking";
 import { useApp } from "@/state/store";
-import { SettingsSearch } from "@/components/ui/settings-search";
+import { SettingsSearch } from "@/components/shared/settings-search";
 
 /** The Archived page's rows, for Settings search. */
 export const ARCHIVED_ROWS = {

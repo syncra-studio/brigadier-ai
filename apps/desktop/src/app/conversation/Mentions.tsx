@@ -3,15 +3,15 @@ import { type FC, type ReactNode, useCallback, useEffect, useMemo, useState } fr
 import { useShallow } from "zustand/react/shallow";
 
 import { WorkerChip, WorkerGlyph } from "@/app/conversation/WorkerChip";
-import type { ChipMention } from "@/components/assistant-ui/elements/composer-chips";
+import type { ChipMention } from "@/components/conversation/elements/composer-chips";
 import {
   ComposerMentions,
   type MentionGroup,
-} from "@/components/assistant-ui/elements/composer-mentions";
-import { MessageInlineImage } from "@/components/assistant-ui/elements/inline-image";
-import { InlineImageContext, InlinePasteContext, TaskMentionContext } from "@/components/assistant-ui/file-links";
-import { MessagePastedText } from "@/components/assistant-ui/elements/pasted-text";
-import { MarkdownBlock } from "@/components/assistant-ui/thread";
+} from "@/components/conversation/elements/composer-mentions";
+import { MessageInlineImage } from "@/components/conversation/elements/inline-image";
+import { InlineImageContext, InlinePasteContext, TaskMentionContext } from "@/components/conversation/file-links";
+import { MessagePastedText } from "@/components/conversation/elements/pasted-text";
+import { MarkdownBlock } from "@/components/conversation/thread";
 import { Chat, File, Folder, Globe } from "@/components/icons";
 import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
 import { normalizedImages } from "@/lib/inlineImages";

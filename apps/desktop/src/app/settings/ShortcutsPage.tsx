@@ -4,11 +4,11 @@ import { recordKeyPress } from "@/app/keyCapture";
 import { SettingsPage } from "@/app/settings/parts";
 import { SHORTCUTS, formatKeys, searchShortcuts, shortcutsFor, type Shortcut } from "@/app/shortcutCatalog";
 import { KeyboardShortcut } from "@/components/icons";
-import { EmptyState } from "@/components/ui/empty-state";
-import { Kbd } from "@/components/ui/kbd";
-import { SettingsCard } from "@/components/ui/settings-card";
-import { SettingsSearch } from "@/components/ui/settings-search";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { EmptyState } from "@/components/shared/empty-state";
+import { Kbd } from "@/components/controls/kbd";
+import { SettingsCard } from "@/components/shared/settings-card";
+import { SettingsSearch } from "@/components/shared/settings-search";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/state/store";
 

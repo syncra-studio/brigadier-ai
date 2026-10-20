@@ -13,10 +13,10 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { LinkConversationContext, LinkTimeContext } from "@/components/assistant-ui/file-links";
-import { FileChip } from "@/components/assistant-ui/markdown-text";
-import { Toaster } from "@/components/ui/toast";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { LinkConversationContext, LinkTimeContext } from "@/components/conversation/file-links";
+import { FileChip } from "@/components/conversation/markdown-text";
+import { Toaster } from "@/components/overlays/toast";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";
 import type { ArtifactRef, Conversation, Request } from "@/ipc/generated";
 import { useApp } from "@/state/store";

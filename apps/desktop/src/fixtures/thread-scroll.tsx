@@ -17,9 +17,9 @@ import { createRoot } from "react-dom/client";
 
 import { ConversationView } from "@/app/ConversationView";
 import planned from "@/fixtures/boards/thread-plan-2026-10-10.events.json";
-import { roomFor } from "@/components/assistant-ui/thread-scroll";
-import { SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { roomFor } from "@/components/conversation/thread-scroll";
+import { SidebarProvider } from "@/components/layout/sidebar";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { Conversation, ConversationView as View, EventEnvelope, Message, Request, UserRequest } from "@/ipc/generated";
 import { select, send } from "@/state/actions";
 import { applyToBoard, emptyBoard, useBoard } from "@/state/board";

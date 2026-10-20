@@ -10,7 +10,7 @@ import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { ChatActions } from "@/app/conversation/ChatActions";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { fixtureClick } from "@/fixtures/input";
 import type { Conversation, Environment, Request, Setup } from "@/ipc/generated";
 import { useApp } from "@/state/store";

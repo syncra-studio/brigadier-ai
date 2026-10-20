@@ -1,11 +1,11 @@
 import { type ReactNode, useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Badge } from "@/components/controls/badge";
+import { Button } from "@/components/controls/button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays/dialog";
 import { ArrowUpRight, Bug, Eye, Lightbulb, X } from "@/components/icons";
-import { Segmented } from "@/components/ui/segmented";
+import { Segmented } from "@/components/controls/segmented";
 import { detailsItems, type FeedbackKind } from "@/lib/feedbackUrl";
 import { closeFeedback, feedbackDetails, type FeedbackDraft, sendFeedback, useFeedbackUi } from "@/state/feedback";
 

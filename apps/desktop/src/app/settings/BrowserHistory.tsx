@@ -2,22 +2,22 @@ import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { SettingsPage, SettingsSection, SettingsSelect } from "@/app/settings/parts";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/controls/button";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+} from "@/components/layout/collapsible";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/overlays/dropdown-menu";
 import { ChevronDown, DotsHorizontal, ExternalLink, Filter, Globe, Trash } from "@/components/icons";
-import { EmptyState } from "@/components/ui/empty-state";
-import { SettingsCard } from "@/components/ui/settings-card";
+import { EmptyState } from "@/components/shared/empty-state";
+import { SettingsCard } from "@/components/shared/settings-card";
 import { useNow } from "@/hooks/use-now";
 import type { BrowserVisit, HistoryFilter } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { browserHistory, byDay, HISTORY_PAGE, removeHistory, siteOf } from "@/state/browserData";
 import { openLink } from "@/state/links";
-import { SettingsSearch } from "@/components/ui/settings-search";
+import { SettingsSearch } from "@/components/shared/settings-search";
 
 const FILTERS = [
   { value: "all", label: "All" },

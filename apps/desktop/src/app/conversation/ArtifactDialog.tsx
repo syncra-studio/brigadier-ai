@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/controls/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/overlays/dialog";
 import type { ArtifactRef, ArtifactText } from "@/ipc/generated";
 import { formatBytes } from "@/lib/format";
 import { filePatch, patchPaths } from "@/lib/patch";

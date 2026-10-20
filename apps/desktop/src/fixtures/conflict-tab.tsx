@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ConflictTab } from "@/app/conversation/ConflictTab";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { ConflictFile, Request, SourceAction } from "@/ipc/generated";
 import { type ConflictTabState, sessionTabs } from "@/state/sessionTabs";
 

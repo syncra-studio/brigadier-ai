@@ -9,10 +9,10 @@ import {
   foldTranscript,
   type TranscriptItem,
   type TranscriptStats,
-} from "@/components/transcript/transcript";
-import { TranscriptRow } from "@/components/transcript/TranscriptRow";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+} from "@/components/conversation/transcript/transcript";
+import { TranscriptRow } from "@/components/conversation/transcript/TranscriptRow";
+import { Badge } from "@/components/controls/badge";
+import { Button } from "@/components/controls/button";
 import { ArrowLeft } from "@/components/icons";
 import type { ApprovalRequest, RawSession } from "@/ipc/generated";
 import {

@@ -13,9 +13,9 @@ import { type ResolvedDraft, updateDraft } from "@/app/conversation/draftSetup";
 
 import { resetsAt, windowName } from "@/app/conversation/StatusCard";
 
-import { composerPill } from "@/components/assistant-ui/elements/surfaces";
+import { composerPill } from "@/components/conversation/elements/surfaces";
 
-import { MenuRow } from "@/components/ui/dropdown-menu";
+import { MenuRow } from "@/components/overlays/dropdown-menu";
 
 import {
   Branch,
@@ -28,7 +28,7 @@ import {
   SpeedometerLatencySpeed,
   X,
 } from "@/components/icons";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
 
 import type { Project, QuotaWindow } from "@/ipc/generated";
 
@@ -41,7 +41,7 @@ import { loadProviders, select } from "@/state/actions";
 import { openAddProject } from "@/state/addProject";
 
 import { useApp } from "@/state/store";
-import { SettingsSearch } from "@/components/ui/settings-search";
+import { SettingsSearch } from "@/components/shared/settings-search";
 
 
 /*

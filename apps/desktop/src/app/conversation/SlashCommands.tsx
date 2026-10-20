@@ -6,13 +6,13 @@ import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
 import { useAction } from "@/app/conversation/useAction";
 import { NameDialog } from "@/app/NameDialog";
-import { ContextArc, contextShare } from "@/components/assistant-ui/context-ring";
+import { ContextArc, contextShare } from "@/components/conversation/context-ring";
 import {
   type ComposerCommand,
   ComposerCommands,
-} from "@/components/assistant-ui/elements/composer-commands";
-import { DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { findModel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
+} from "@/components/conversation/elements/composer-commands";
+import { DropdownMenu, DropdownMenuTrigger } from "@/components/overlays/dropdown-menu";
+import { findModel, type ModelGroup } from "@/components/shared/model-selector";
 import { PERMISSION_ICONS } from "@/app/conversation/SetupPickers";
 import {
   Archive,

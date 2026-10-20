@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 
 import { workerName } from "@/app/conversation/rowWords";
-import type { McpServer } from "@/components/assistant-ui/elements/mcp-server-panel";
+import type { McpServer } from "@/components/conversation/elements/mcp-server-panel";
 import type { AgentMcpServers, McpServerState, ProviderKind, Task } from "@/ipc/generated";
 import { mcpAgentKey, useBoard } from "@/state/board";
 

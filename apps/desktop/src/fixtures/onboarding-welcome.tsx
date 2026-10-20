@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { Welcome } from "@/app/onboarding/Welcome";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent } from "@/components/overlays/dialog";
 import { fixtureInput } from "@/fixtures/input";
 
 mockIPC(() => null);

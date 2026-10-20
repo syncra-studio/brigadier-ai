@@ -2,12 +2,12 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { SettingsPage, SettingsRow, SettingsSection, SettingsSelect, selectTrigger, SwitchSetting } from "@/app/settings/parts";
-import { findModel, ModelSelector } from "@/components/assistant-ui/elements/model-selector";
+import { findModel, ModelSelector } from "@/components/shared/model-selector";
 import { Check } from "@/components/icons";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import type { Choice } from "@/components/ui/segmented";
-import { SettingsCard } from "@/components/ui/settings-card";
+import { Button } from "@/components/controls/button";
+import { Input } from "@/components/controls/input";
+import type { Choice } from "@/components/controls/segmented";
+import { SettingsCard } from "@/components/shared/settings-card";
 import type { GitStyle, ModelChoice } from "@/ipc/generated";
 import {
   AUTOSAVE_MS,

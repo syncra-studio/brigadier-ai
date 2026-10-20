@@ -1,4 +1,4 @@
-import { fuzzyMatch } from "@/components/assistant-ui/elements/menuMatch";
+import { fuzzyMatch } from "@/components/conversation/elements/menuMatch";
 import type { Mention } from "@/ipc/generated";
 
 /** A worker the composer can @-mention, `title` its name as the user reads it. */

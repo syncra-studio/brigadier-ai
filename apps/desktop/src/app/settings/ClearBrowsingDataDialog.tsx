@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/controls/button";
 import {
   Dialog,
   DialogContent,
@@ -9,11 +9,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/overlays/dialog";
 import { Download, Globe, Images, SettingsCog, Trash } from "@/components/icons";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Segmented } from "@/components/ui/segmented";
-import { SettingsCard } from "@/components/ui/settings-card";
+import { Checkbox } from "@/components/controls/checkbox";
+import { Segmented } from "@/components/controls/segmented";
+import { SettingsCard } from "@/components/shared/settings-card";
 import type { BrowserClear } from "@/ipc/generated";
 import { clearBrowsingData, type ClearRange, rangeStart, siteDataCount } from "@/state/browserData";
 

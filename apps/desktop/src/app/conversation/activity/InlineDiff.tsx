@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 
 import { DiffView } from "@/app/conversation/diffView";
-import { CopyButton } from "@/components/assistant-ui/copy-button";
+import { CopyButton } from "@/components/shared/copy-button";
 import { deletesFile, diffCounts, parseDiff, singleFilePatch } from "@/lib/patch";
 import { cn } from "@/lib/utils";
 

@@ -22,10 +22,10 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
   itemBase,
-} from "@/components/ui/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+} from "@/components/overlays/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
+import { SidebarPanel, SidebarProvider } from "@/components/layout/sidebar";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { colourOf, surface } from "@/fixtures/look";
 import type { AccountsView, AccountView, ProviderKind, ProviderOverview, QuotaWindow, Request } from "@/ipc/generated";
 import { useAgentPageAsk } from "@/state/agentPage";

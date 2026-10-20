@@ -1,8 +1,8 @@
 import type { LexicalEditor } from "lexical";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
+import { Banner } from "@/components/shared/banner";
+import { Button } from "@/components/controls/button";
 import { openLink } from "@/state/links";
 import { pageEditing, usePageEdits } from "@/state/pageEditing";
 import { useApp } from "@/state/store";
@@ -10,7 +10,7 @@ import { ensurePage } from "@/state/pageTabs";
 import { changeSessionTab, closeTab, openPageTab, type PageTabState } from "@/state/sessionTabs";
 
 import { EmojiButton } from "./EmojiButton";
-import { focusPageStart, PageEditor } from "./PageEditor";
+import { focusPageStart, PageEditor } from "../../../components/views/page-editor/PageEditor";
 import { PageTopBar } from "./PageTopBar";
 import "./PageTab.css";
 

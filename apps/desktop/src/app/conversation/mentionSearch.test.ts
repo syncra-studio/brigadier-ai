@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { foldersOf, mentionSections, RESULT_ROWS, type MentionSources } from "@/app/conversation/mentionSearch";
-import { slashTrigger } from "@/components/assistant-ui/elements/menuMatch";
+import { slashTrigger } from "@/components/conversation/elements/menuMatch";
 
 const files = [
   "README.md",

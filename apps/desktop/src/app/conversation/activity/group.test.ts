@@ -4,8 +4,8 @@ import { test } from "node:test";
 
 import { type Activity, groupActivity, type Sorted, thinkingLabel, turnActivity, workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
 import { type BlockOrchestratorStep, blockSequence, buildBlocks, type SequenceEntry } from "@/app/conversation/blocks";
-import type { ThreadEntry } from "@/components/transcript/activity";
-import type { TranscriptItem } from "@/components/transcript/transcript";
+import type { ThreadEntry } from "@/components/conversation/transcript/activity";
+import type { TranscriptItem } from "@/components/conversation/transcript/transcript";
 import { answerWords, questionAnswers, questionRound, questionRowWords } from "@/app/conversation/cards/questionRound";
 import type { EventEnvelope, Message, Question, UserRequest } from "@/ipc/generated";
 import { applyToBoard, emptyBoard } from "@/state/board";

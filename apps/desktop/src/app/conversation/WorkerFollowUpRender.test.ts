@@ -30,7 +30,7 @@ test("a worker messaged after its answer keeps that answer in history, then the 
   Object.assign(globalThis, { document: { documentElement: {} }, getComputedStyle: () => ({ getPropertyValue: () => "" }) });
   try {
     const { WorkerThread } = await server.ssrLoadModule("/src/app/conversation/WorkerThread.tsx");
-    const { TooltipProvider } = await server.ssrLoadModule("/src/components/ui/tooltip.tsx");
+    const { TooltipProvider } = await server.ssrLoadModule("/src/components/overlays/tooltip.tsx");
     const { emptyBoard, BoardStoreContext } = await server.ssrLoadModule("/src/state/board.ts");
     const render = (shown: Task) => {
       const store = createStore(() => ({

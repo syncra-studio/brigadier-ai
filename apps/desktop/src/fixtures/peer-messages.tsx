@@ -28,8 +28,8 @@ import { createRoot } from "react-dom/client";
 import { AppSidebar, AppStrip, TitlebarNav } from "@/app/AppSidebar";
 import { ConversationView } from "@/app/ConversationView";
 import { SidebarFoot } from "@/app/SidebarFoot";
-import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { SidebarPanel, SidebarProvider } from "@/components/layout/sidebar";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type {
   Conversation,
   ConversationView as View,
@@ -739,7 +739,7 @@ async function driveJump(): Promise<object> {
   // The replies' renderer loads with the first reply, at once from the app's own bundle. With
   // `renderer=late` (and a slow server) it arrives after the landing, its replies' loading lines
   // giving way around the message.
-  if (query.get("renderer") !== "late") await import("@/components/assistant-ui/markdown-text");
+  if (query.get("renderer") !== "late") await import("@/components/conversation/markdown-text");
   await shown(API);
   await wait(300);
   const before = dots();

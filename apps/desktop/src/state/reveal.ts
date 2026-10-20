@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { jumpInThread, threadActions } from "@/components/assistant-ui/thread-scroll";
+import { jumpInThread, threadActions } from "@/components/conversation/thread-scroll";
 
 /**
  * A message between sessions the thread is asked to show (SESSION-MESSAGING-PLAN.md §6.3): its

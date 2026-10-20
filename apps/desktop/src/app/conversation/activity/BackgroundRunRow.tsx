@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { unwrapCommand } from "@/app/conversation/activity/words";
-import { ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
-import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
+import { ROW_DETAIL } from "@/components/conversation/elements/activity-row";
+import { ThreadActivity } from "@/components/conversation/elements/thread-activity";
 import { Stop, Terminal } from "@/components/icons";
 import type { BackgroundRun, ItemStatus } from "@/ipc/generated";
 import { request } from "@/ipc/client";

@@ -9,7 +9,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { WorkerLine } from "@/app/conversation/WorkerChip";
 import { ShieldExclamation } from "@/components/icons";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/controls/button";
 import { UNTRUSTED_NOTE } from "@/lib/setup";
 import { openSettings } from "@/state/actions";
 

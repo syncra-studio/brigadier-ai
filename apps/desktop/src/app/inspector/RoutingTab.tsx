@@ -2,14 +2,14 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { ExplanationView } from "@/app/conversation/cards/RouteDetails";
 import { useAction } from "@/app/conversation/useAction";
-import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
-import { effortLabel } from "@/components/assistant-ui/elements/model-selector";
-import { Button } from "@/components/ui/button";
+import type { ModelGroup } from "@/components/shared/model-selector";
+import { effortLabel } from "@/components/shared/model-selector";
+import { Button } from "@/components/controls/button";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+} from "@/components/layout/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,9 +17,9 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/overlays/dropdown-menu";
 import { ChevronRight, Clock, Reload } from "@/components/icons";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { ToggleGroup, ToggleGroupItem } from "@/components/controls/toggle-group";
 import { useNow } from "@/hooks/use-now";
 import { request } from "@/ipc/client";
 import type { Area, RoutePreview } from "@/ipc/generated";

@@ -32,16 +32,16 @@ import {
   ActionOption,
   actionButton,
   staggered,
-} from "@/components/assistant-ui/elements/action-card";
-import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
-import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
-import { Button } from "@/components/ui/button";
+} from "@/components/conversation/elements/action-card";
+import { ComposerRailItem } from "@/components/conversation/elements/composer-rail";
+import { ToolBox } from "@/components/conversation/elements/tool-box";
+import { Button } from "@/components/controls/button";
 import { Commit, Dock, Globe, Key, Mic, PencilSquare, QuestionMarkCircle, Reply, Sparkle, Spinner } from "@/components/icons";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/components/overlays/tooltip";
 import type {
   AnswerInput,
   ApprovalDecision,
@@ -49,7 +49,7 @@ import type {
   Conversation,
   DiffStat,
 } from "@/ipc/generated";
-import { shownCommand } from "@/components/transcript/activity";
+import { shownCommand } from "@/components/conversation/transcript/activity";
 import { answerCard, answerQuestion, decidePlan, putOffPlan } from "@/state/actions";
 import { type ShownApproval, useBoard } from "@/state/board";
 import { type PlanDocRef, planDoc } from "@/state/planDoc";
@@ -62,8 +62,8 @@ import {
   stopDictation,
   useDictation,
 } from "@/state/dictation";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Kbd } from "@/components/ui/kbd";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { Kbd } from "@/components/controls/kbd";
 
 /* Pending decisions sit on the rail above the full composer. Their shortcuts leave
  * text fields, focused controls and open overlays to handle their own keys. */

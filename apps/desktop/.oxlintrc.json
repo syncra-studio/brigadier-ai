@@ -57,7 +57,7 @@
     },
     {
       "files": [
-        "src/components/assistant-ui/markdown-text.tsx"
+        "src/components/conversation/markdown-text.tsx"
       ],
       "rules": {
         "jsx-a11y/heading-has-content": "off",

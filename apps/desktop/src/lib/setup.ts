@@ -5,7 +5,7 @@ import {
   effortFor,
   findModel,
   type ModelGroup,
-} from "@/components/assistant-ui/elements/model-selector";
+} from "@/components/shared/model-selector";
 import type {
   Environment,
   ModelChoice,

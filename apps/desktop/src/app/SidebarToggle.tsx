@@ -1,5 +1,5 @@
-import { TITLEBAR_BUTTON } from "@/components/titlebar-button";
-import { Button } from "@/components/ui/button";
+import { TITLEBAR_BUTTON } from "@/components/shared/titlebar-button";
+import { Button } from "@/components/controls/button";
 import { Sidebar, SidebarFloatingLeft } from "@/components/icons";
 
 /**

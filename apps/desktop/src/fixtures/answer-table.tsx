@@ -9,8 +9,8 @@
 import { type ComponentProps, type FC, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { defaultComponents } from "@/components/assistant-ui/markdown-text";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { defaultComponents } from "@/components/conversation/markdown-text";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { cn } from "@/lib/utils";
 
 /** One of the answer's Markdown parts, as the element it renders. */

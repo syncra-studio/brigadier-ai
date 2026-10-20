@@ -6,8 +6,8 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { MarkdownBlock } from "@/components/assistant-ui/thread";
+} from "@/components/overlays/dialog";
+import { MarkdownBlock } from "@/components/conversation/thread";
 
 /** The notices without their own title: the dialog has one. */
 const NOTICES = notices.replace(/^#[^\n]*\n+/, "").trim();

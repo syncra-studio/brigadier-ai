@@ -16,8 +16,8 @@ import { createRoot } from "react-dom/client";
 
 import { SettingsNav, SettingsView, warmSettings } from "@/app/settings/lazy";
 import { SidebarFoot } from "@/app/SidebarFoot";
-import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { SidebarPanel, SidebarProvider } from "@/components/layout/sidebar";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { whenIdle } from "@/lib/preloadable";
 import { account, OVERVIEWS, window as quotaWindow } from "@/fixtures/agents";
 import type {

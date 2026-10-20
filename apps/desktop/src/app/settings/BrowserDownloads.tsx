@@ -2,23 +2,23 @@ import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { SettingsPage, SettingsSection } from "@/app/settings/parts";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/controls/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/overlays/dropdown-menu";
 import { DotsHorizontal, Download, Folder, Trash } from "@/components/icons";
-import { EmptyState } from "@/components/ui/empty-state";
-import { SettingsCard } from "@/components/ui/settings-card";
+import { EmptyState } from "@/components/shared/empty-state";
+import { SettingsCard } from "@/components/shared/settings-card";
 import { useNow } from "@/hooks/use-now";
 import { revealPath } from "@/ipc/client";
 import type { BrowserDownload } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
 import { browserDownloads, byDay, removeDownloads, siteOf } from "@/state/browserData";
 import { useApp } from "@/state/store";
-import { SettingsSearch } from "@/components/ui/settings-search";
+import { SettingsSearch } from "@/components/shared/settings-search";
 
 const STATES: Record<BrowserDownload["state"], string | null> = {
   running: "Downloading",

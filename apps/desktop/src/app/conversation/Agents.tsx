@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { workerDone, workerWorking, workerState, workerPreview } from "@/app/conversation/workerPresentation";
 import { StopWorker } from "@/app/conversation/activity/StopWorker";
 import { TaskDetails } from "@/app/conversation/TaskDetails";
-import { MarkdownBlock } from "@/components/assistant-ui/thread";
+import { MarkdownBlock } from "@/components/conversation/thread";
 import {
   AgentsPanelContext,
   useWorkerName,
@@ -13,10 +13,10 @@ import {
 } from "@/app/conversation/WorkerChip";
 import { RowTime } from "@/app/conversation/RowTime";
 import { WorkerThread } from "@/app/conversation/WorkerThread";
-import { effortLabel } from "@/components/assistant-ui/elements/model-selector";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { effortLabel } from "@/components/shared/model-selector";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import { ArrowLeft } from "@/components/icons";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
 import type { Task } from "@/ipc/generated";
 import { modelName, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";

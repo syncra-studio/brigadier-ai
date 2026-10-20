@@ -9,8 +9,8 @@ import { createRoot } from "react-dom/client";
 
 import { AppSidebar, AppStrip } from "@/app/AppSidebar";
 import { SidebarFoot } from "@/app/SidebarFoot";
-import { SidebarPanel, SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { SidebarPanel, SidebarProvider } from "@/components/layout/sidebar";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { fixtureClick } from "@/fixtures/input";
 import type { AccountsView, EventEnvelope, Request, UpdateItem, UpdateTarget } from "@/ipc/generated";
 import { APP_UPDATE_EVENT, type AppUpdate, startAppUpdate } from "@/state/appUpdate";

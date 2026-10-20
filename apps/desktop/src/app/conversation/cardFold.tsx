@@ -1,7 +1,7 @@
 import type { FC, HTMLAttributes, MouseEvent, ReactNode } from "react";
 
-import { OPENS } from "@/components/assistant-ui/elements/activity-row";
-import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
+import { OPENS } from "@/components/conversation/elements/activity-row";
+import { Collapsible, CollapsibleContent } from "@/components/layout/collapsible";
 import { cn } from "@/lib/utils";
 
 /** What a click in a card's header leaves to itself: its buttons, links and fields. */

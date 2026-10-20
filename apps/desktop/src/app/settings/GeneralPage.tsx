@@ -4,11 +4,11 @@ import { useAction } from "@/app/conversation/useAction";
 import { LicensesDialog } from "@/app/settings/LicensesDialog";
 import { SettingsPage, SettingsRow, SettingsSection, SettingsSelect, SettingsSwitch, SwitchSetting } from "@/app/settings/parts";
 import { SidebarClosedChoice } from "@/app/settings/SidebarClosedChoice";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Segmented } from "@/components/ui/segmented";
-import { SettingsCard } from "@/components/ui/settings-card";
-import { useSidebar } from "@/components/ui/sidebar";
+import { Button } from "@/components/controls/button";
+import { Input } from "@/components/controls/input";
+import { Segmented } from "@/components/controls/segmented";
+import { SettingsCard } from "@/components/shared/settings-card";
+import { useSidebar } from "@/components/layout/sidebar";
 import {
   type LoginItem,
   loginItem,

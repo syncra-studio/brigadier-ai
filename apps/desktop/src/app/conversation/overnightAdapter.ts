@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { jumpInThread } from "@/components/assistant-ui/thread-scroll";
+import { jumpInThread } from "@/components/conversation/thread-scroll";
 import { openNotificationSettings, request } from "@/ipc/client";
 import type { DiffStat, OvernightRun, TaskId } from "@/ipc/generated";
 import { loadConversation, loadFullText, openConversation, switchBranch } from "@/state/actions";

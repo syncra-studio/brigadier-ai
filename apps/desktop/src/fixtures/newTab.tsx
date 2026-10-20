@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserTabIcon } from "@/app/conversation/BrowserTabIcon";
 import { NewTabTools } from "@/app/conversation/NewTabTools";
 import { useWorkspacePane, WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { BrowserVisit, Conversation, Request } from "@/ipc/generated";
 import { useBrowsers } from "@/state/browsers";
 import { newSessionTab, sessionTabs, useSessionTabs } from "@/state/sessionTabs";

@@ -2,7 +2,7 @@ import { useAuiState } from "@assistant-ui/react";
 import { useContext, useEffect, useRef } from "react";
 
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
-import { findModel } from "@/components/assistant-ui/elements/model-selector";
+import { findModel } from "@/components/shared/model-selector";
 import { IMAGES_UNSUPPORTED, takesImages } from "@/app/conversation/imageModels";
 import type { ModelChoice, ModelInfo } from "@/ipc/generated";
 import { useModelGroups } from "@/lib/setup";

@@ -12,11 +12,11 @@ import {
 } from "react";
 
 import { ErrorLine, errorText, PROJECT_DIALOG_CARD, PROJECT_DIALOG_TITLE } from "@/app/dialogs/fields";
-import { SettingsSearch } from "@/components/ui/settings-search";
+import { SettingsSearch } from "@/components/shared/settings-search";
 import { ArrowLeft, Check, Folder, FolderOpen, Link, Plus, Spinner, X } from "@/components/icons";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Badge } from "@/components/controls/badge";
+import { Button } from "@/components/controls/button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays/dialog";
 import { useNow } from "@/hooks/use-now";
 import { pickFolder } from "@/ipc/client";
 import type { FolderCheck, RepoSuggestion } from "@/ipc/generated";

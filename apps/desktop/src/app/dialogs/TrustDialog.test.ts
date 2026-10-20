@@ -8,7 +8,7 @@ test("the trust question names the folder, its own name apart, and offers Don't 
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
     const { TrustForm } = await server.ssrLoadModule("/src/app/dialogs/TrustDialog.tsx");
-    const { Dialog } = await server.ssrLoadModule("/src/components/ui/dialog.tsx");
+    const { Dialog } = await server.ssrLoadModule("/src/components/overlays/dialog.tsx");
     const project = { id: "p", name: "p", createdAtMs: 1, repos: [{ path: "/code/p", name: "p" }], prefs: {}, trust: [] };
     const html = ReactDOMServer.renderToStaticMarkup(
       React.createElement(Dialog, { open: true },

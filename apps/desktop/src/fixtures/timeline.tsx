@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { Timeline, type TimelineEvent } from "@/components/assistant-ui/elements/timeline";
+import { Timeline, type TimelineEvent } from "@/components/conversation/elements/timeline";
 
 /** Merges in order, as the Reviews tab will list them: two landed, one still under review. */
 const MERGES: TimelineEvent[] = [

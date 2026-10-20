@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 
-import { Badge } from "@/components/ui/badge";
-import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { Badge } from "@/components/controls/badge";
+import { DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/overlays/dropdown-menu";
 import type { OverrideTarget, RouteCandidate } from "@/ipc/generated";
 import { PROVIDERS, sameTarget, VENDOR_LABELS } from "@/lib/routing";
 import { useAvailableModelGroups } from "@/lib/setup";

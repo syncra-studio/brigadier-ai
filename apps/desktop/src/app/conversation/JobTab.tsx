@@ -5,8 +5,8 @@ import { type BoardJob, useSessionJobs } from "@/app/conversation/boardJob";
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import { type Job, type JobStep, phaseWords } from "@/app/conversation/job";
 import type { FindingLabel, FindingRow } from "@/app/conversation/reviewStatus";
-import { Timeline, type TimelineEvent } from "@/components/assistant-ui/elements/timeline";
-import { Badge } from "@/components/ui/badge";
+import { Timeline, type TimelineEvent } from "@/components/conversation/elements/timeline";
+import { Badge } from "@/components/controls/badge";
 import { formatTime } from "@/lib/format";
 import { VENDOR_LABELS } from "@/lib/routing";
 

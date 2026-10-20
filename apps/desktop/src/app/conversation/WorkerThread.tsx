@@ -19,20 +19,20 @@ import { actionDetail } from "@/app/conversation/activity/StepDetail";
 import { workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, itemCall, stepWords } from "@/app/conversation/activity/words";
-import { ROW } from "@/components/assistant-ui/elements/activity-row";
+import { ROW } from "@/components/conversation/elements/activity-row";
 import { useAction } from "@/app/conversation/useAction";
-import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
-import { MarkdownBlock } from "@/components/assistant-ui/thread";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { RateItem, RateMenu } from "@/components/conversation/rate-menu";
+import { MarkdownBlock } from "@/components/conversation/thread";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import {
   shownCommand,
   type ThreadEntry,
   threadEntries,
-} from "@/components/transcript/activity";
-import { type TranscriptItem, TranscriptFolder } from "@/components/transcript/transcript";
-import { ErrorState } from "@/components/assistant-ui/elements/error-state";
-import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+} from "@/components/conversation/transcript/activity";
+import { type TranscriptItem, TranscriptFolder } from "@/components/conversation/transcript/transcript";
+import { ErrorState } from "@/components/conversation/elements/error-state";
+import { Button } from "@/components/controls/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout/collapsible";
 import {
   Check,
   ChevronRight,

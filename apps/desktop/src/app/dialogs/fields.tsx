@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from "react";
 
-import { Checkbox } from "@/components/ui/checkbox";
+import { Checkbox } from "@/components/controls/checkbox";
 import { cn } from "@/lib/utils";
 
 export function errorText(error: unknown): string {

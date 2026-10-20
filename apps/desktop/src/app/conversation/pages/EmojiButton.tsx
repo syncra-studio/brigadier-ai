@@ -1,9 +1,9 @@
 import { useState } from "react";
 
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Button } from "@/components/ui/button";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { Button } from "@/components/controls/button";
 import { SimpleSmile } from "@/components/icons";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
 
 const EMOJI = [
   "📝", "📄", "📌", "📎", "📚", "📖", "🗒️", "🗂️",

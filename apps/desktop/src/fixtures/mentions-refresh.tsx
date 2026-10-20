@@ -5,7 +5,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { Mentions } from "@/app/conversation/Mentions";
-import { ComposerMentions } from "@/components/assistant-ui/elements/composer-mentions";
+import { ComposerMentions } from "@/components/conversation/elements/composer-mentions";
 import type { Conversation, Request } from "@/ipc/generated";
 
 let calls = 0;

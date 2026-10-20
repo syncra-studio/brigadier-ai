@@ -11,8 +11,8 @@ import {
   useRef,
 } from "react";
 
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { useCheckoutRoot } from "@/components/conversation/file-links";
 import { SidebarActivityMark, SidebarError, statusWords } from "@/app/SessionStatus";
 import { UNTITLED } from "@/app/TopBar";
 import {
@@ -37,15 +37,15 @@ import { undoTabClose } from "@/state/terminalPlaces";
 import { ChatActions } from "@/app/conversation/ChatActions";
 import { OutputTab } from "@/app/conversation/OutputTab";
 import { MockupTabIcon, MockupTabStatus, useMockupTab } from "@/app/conversation/MockupTabIcon";
-import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
-import { Badge } from "@/components/ui/badge";
+import { FileTypeIcon } from "@/components/conversation/elements/file-type-icon";
+import { Badge } from "@/components/controls/badge";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+} from "@/components/overlays/context-menu";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { Conversation } from "@/ipc/generated";
 import { preloadable } from "@/lib/preloadable";
@@ -594,7 +594,7 @@ const MockupView = lazy(() => import("./MockupTab").then((module) => ({ default:
 const SessionJobTab = lazy(() => import("./JobTab").then((module) => ({ default: module.SessionJobTab })));
 const SourcesTab = lazy(() => import("./SourcesTab").then((module) => ({ default: module.SourcesTab })));
 const PlanTab = lazy(() => import("./PlanTab").then((module) => ({ default: module.PlanTab })));
-const PastedTextView = lazy(() => import("@/components/assistant-ui/elements/pasted-text").then((module) => ({ default: module.PastedTextView })));
+const PastedTextView = lazy(() => import("@/components/conversation/elements/pasted-text").then((module) => ({ default: module.PastedTextView })));
 const ConflictTab = lazy(() => import("./ConflictTab").then((module) => ({ default: module.ConflictTab })));
 const PageTabView = lazy(() => import("./pages/PageTabView").then((module) => ({ default: module.PageTabView })));
 const TabWithChat = lazy(() => import("./TabChat").then((module) => ({ default: module.TabWithChat })));

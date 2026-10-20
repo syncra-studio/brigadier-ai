@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { GitPage } from "@/app/settings/GitPage";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { ModelInfo, ProviderKind, ProviderOverview, Request, Settings } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 

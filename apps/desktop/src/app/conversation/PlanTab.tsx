@@ -1,5 +1,5 @@
 import { PlanText, usePlanDoc } from "@/app/conversation/cards/PlanDocument";
-import { CopyButton } from "@/components/assistant-ui/copy-button";
+import { CopyButton } from "@/components/shared/copy-button";
 import type { PlanDocRef } from "@/state/planDoc";
 
 /** A plan's own tab: the whole plan the user opened from its card, full screen, to read and copy. */

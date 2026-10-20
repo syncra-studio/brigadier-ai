@@ -16,21 +16,21 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/overlays/dropdown-menu";
 
 
 
 import { Check, ChevronDown, ChevronLeft } from "@/components/icons";
 
-import { ScrollFade } from "@/components/ui/scroll-fade";
+import { ScrollFade } from "@/components/layout/scroll-fade";
 
 
 
-import type { Choice } from "@/components/ui/segmented";
+import type { Choice } from "@/components/controls/segmented";
 
 
 
-import { Switch } from "@/components/ui/switch";
+import { Switch } from "@/components/controls/switch";
 
 
 

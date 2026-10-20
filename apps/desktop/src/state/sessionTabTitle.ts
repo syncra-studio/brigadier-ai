@@ -1,4 +1,4 @@
-import { pastedTextLabel } from "@/components/assistant-ui/elements/chipText";
+import { pastedTextLabel } from "@/components/conversation/elements/chipText";
 import { type SessionTab, sideChatName } from "@/state/sessionTabs";
 
 function baseName(path: string): string {

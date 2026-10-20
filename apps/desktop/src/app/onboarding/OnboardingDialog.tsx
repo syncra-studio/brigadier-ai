@@ -4,15 +4,15 @@ import { AgentsStep } from "@/app/onboarding/AgentsStep";
 import { ProjectsStep } from "@/app/onboarding/ProjectsStep";
 import { Welcome } from "@/app/onboarding/Welcome";
 import { preloadWelcomeSound } from "@/app/onboarding/welcomeSound";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Button } from "@/components/controls/button";
+import { Dialog, DialogContent } from "@/components/overlays/dialog";
 import { X } from "@/components/icons";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/components/overlays/tooltip";
 import { introRelease } from "@/ipc/client";
 import { useRevealed } from "@/lib/splash";
 import { cn } from "@/lib/utils";

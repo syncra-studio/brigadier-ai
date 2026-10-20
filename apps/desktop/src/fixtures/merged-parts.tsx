@@ -1,15 +1,15 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { LabeledDivider } from "@/components/assistant-ui/elements/labeled-divider";
+import { LabeledDivider } from "@/components/shared/labeled-divider";
 import { OfferBody, OfferCard } from "@/app/conversation/OfferCard";
-import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
+import { ToolBox } from "@/components/conversation/elements/tool-box";
 import { Branch, Download, Folder, Globe, Info, Plus, Settings, X } from "@/components/icons";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { TitlebarTips } from "@/components/titlebar-button";
-import { Banner } from "@/components/ui/banner";
-import { DropdownMenuLabel, itemBase, MenuRow } from "@/components/ui/dropdown-menu";
-import { EmptyState } from "@/components/ui/empty-state";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { TitlebarTips } from "@/components/shared/titlebar-button";
+import { Banner } from "@/components/shared/banner";
+import { DropdownMenuLabel, itemBase, MenuRow } from "@/components/overlays/dropdown-menu";
+import { EmptyState } from "@/components/shared/empty-state";
 import { cn } from "@/lib/utils";
 
 /** A node's box and colours. */

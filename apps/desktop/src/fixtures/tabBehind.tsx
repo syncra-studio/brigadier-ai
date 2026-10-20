@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { SessionTabViews } from "@/app/conversation/SessionTabBar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import { useBrowsers } from "@/state/browsers";
 import { CHAT_TAB, selectTab, useSessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";

@@ -14,8 +14,8 @@ import {
   shortPlaceName,
 } from "@/app/routing/words";
 import { SettingsSection, SettingsSelectTrigger } from "@/app/settings/parts";
-import { effortLabel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
-import { Button } from "@/components/ui/button";
+import { effortLabel, type ModelGroup } from "@/components/shared/model-selector";
+import { Button } from "@/components/controls/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,7 +28,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/overlays/dropdown-menu";
 import {
   BookOpen,
   Chat,
@@ -46,8 +46,8 @@ import {
   PullRequestOpen,
   Telescope,
 } from "@/components/icons";
-import { Segmented } from "@/components/ui/segmented";
-import { RowText, SettingsCard } from "@/components/ui/settings-card";
+import { Segmented } from "@/components/controls/segmented";
+import { RowText, SettingsCard } from "@/components/shared/settings-card";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { OverrideTarget, RankedEntry, Ranking, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";

@@ -1,6 +1,6 @@
 import { type BlockOrchestratorStep, isImageStep, type SequenceEntry } from "@/app/conversation/blocks";
 import { isPlumbing } from "@/app/conversation/activity/words";
-import type { ThreadEntry } from "@/components/transcript/activity";
+import type { ThreadEntry } from "@/components/conversation/transcript/activity";
 
 /**
  * How a thread's work is grouped (THREAD-UX-PLAN.md §3.2–§3.3), the same for the lead's turn and

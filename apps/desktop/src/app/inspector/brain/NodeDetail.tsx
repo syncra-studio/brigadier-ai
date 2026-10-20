@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 
 import { KINDS, ORIGIN_LABELS, stateLabel } from "@/app/inspector/brain/kinds";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/controls/badge";
+import { Button } from "@/components/controls/button";
 import { X } from "@/components/icons";
 import type { Edge, EdgeKind, Node, Provenance } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";

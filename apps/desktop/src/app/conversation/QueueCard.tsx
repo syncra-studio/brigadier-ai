@@ -17,21 +17,21 @@ import { InlineImageText } from "@/app/conversation/InlineImage";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { useAction } from "@/app/conversation/useAction";
-import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
+import { ComposerRailItem } from "@/components/conversation/elements/composer-rail";
 import {
   MessageQueue,
   MessageQueueItem,
   MessageQueuePaused,
-} from "@/components/assistant-ui/elements/message-queue";
-import { ghostButton } from "@/components/assistant-ui/elements/surfaces";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Button } from "@/components/ui/button";
+} from "@/components/conversation/elements/message-queue";
+import { ghostButton } from "@/components/conversation/elements/surfaces";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { Button } from "@/components/controls/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/overlays/dropdown-menu";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { AttachmentRef, MovedMessage, QueuedMessage } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

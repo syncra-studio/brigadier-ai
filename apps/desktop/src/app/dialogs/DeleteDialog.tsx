@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import { ConfirmForm } from "@/components/ui/confirm-dialog";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { ConfirmForm } from "@/components/overlays/confirm-dialog";
+import { Dialog, DialogContent } from "@/components/overlays/dialog";
 import type { Conversation, UnlandedBranch } from "@/ipc/generated";
 import { conversationNoun, deleteAll, previewDelete } from "@/state/actions";
 import { clearPicked, useDeleteAsk } from "@/state/picking";

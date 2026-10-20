@@ -1,7 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { memo, useRef, useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/controls/button";
 import type { DomainEvent, EventEnvelope } from "@/ipc/generated";
 import { formatClock, formatMs } from "@/lib/format";
 import { imagePreview } from "@/lib/inlineImages";

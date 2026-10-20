@@ -1,15 +1,15 @@
 import { useState } from "react";
 
-import { MarkdownBlock } from "@/components/assistant-ui/thread";
+import { MarkdownBlock } from "@/components/conversation/thread";
 import { ArtifactDialog } from "@/app/conversation/ArtifactDialog";
 import { DiffStatView, Section, short } from "@/app/conversation/cards/common";
 import { FileList } from "@/app/conversation/FileList";
 import { useAction } from "@/app/conversation/useAction";
 import { RouteSections } from "@/app/conversation/cards/RouteDetails";
 import { useWorkerText, WorkerChip } from "@/app/conversation/WorkerChip";
-import { mono } from "@/components/assistant-ui/elements/surfaces";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { mono } from "@/components/conversation/elements/surfaces";
+import { Badge } from "@/components/controls/badge";
+import { Button } from "@/components/controls/button";
 import { Branch, BranchAlt } from "@/components/icons";
 import type { ArtifactRef, KeptWork, RestoreOutcome, Task } from "@/ipc/generated";
 import { useModelGroups } from "@/lib/setup";

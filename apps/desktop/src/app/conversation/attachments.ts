@@ -8,7 +8,7 @@ import type {
 import { useSyncExternalStore } from "react";
 
 import { draftRefs, inlineKey, inlineRefs } from "@/lib/inlineImages";
-import { inlineNumberOf, isPastedFile } from "@/components/assistant-ui/elements/attachment-tile";
+import { inlineNumberOf, isPastedFile } from "@/components/conversation/elements/attachment-tile";
 import type { AttachmentRef } from "@/ipc/generated";
 import { fileName, formatBytes } from "@/lib/format";
 import { addAttachment } from "@/state/actions";

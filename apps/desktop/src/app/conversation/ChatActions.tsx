@@ -4,7 +4,7 @@ import { type FC, useEffect, useState } from "react";
 import { FORK_PLACES } from "@/app/conversation/ForkMenu";
 import { useLatestAnswer } from "@/app/conversation/SlashCommands";
 import { NameDialog } from "@/app/NameDialog";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import {
   Archive,
   BranchAlt,
@@ -18,7 +18,7 @@ import {
   Trash,
   Unpin,
 } from "@/components/icons";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ConfirmDialog } from "@/components/overlays/confirm-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,7 +29,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/overlays/dropdown-menu";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, ForkPlace } from "@/ipc/generated";
 import {

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@/components/controls/badge";
 
 function Fixture() {
   useEffect(() => {

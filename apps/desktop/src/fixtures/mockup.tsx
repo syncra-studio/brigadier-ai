@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { SessionTabBar, SessionTabViews } from "@/app/conversation/SessionTabBar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { ArtifactRef, Conversation, Request, Task } from "@/ipc/generated";
 import { tokenColor } from "@/lib/tokens";
 import { emptyBoard, useBoard } from "@/state/board";

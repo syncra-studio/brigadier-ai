@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { JobCard, StackCard, WaitCard } from "@/app/conversation/cards/JobCard";
 import { type Job, jobShown } from "@/app/conversation/job";
 import { JobTimeline } from "@/app/conversation/JobTab";
-import { SummaryRow, SummarySection } from "@/components/assistant-ui/elements/summary-section";
+import { SummaryRow, SummarySection } from "@/components/conversation/elements/summary-section";
 
 // Each column is the summary's column of cards (PinnedSummary's STACK), at a fixed clock.
 const NOW = new Date(2026, 9, 19, 2, 0).getTime();

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@/components/controls/badge";
 import { formatDateTime, formatMb } from "@/lib/format";
 import { refreshDiagnostics } from "@/state/actions";
 import { useApp } from "@/state/store";

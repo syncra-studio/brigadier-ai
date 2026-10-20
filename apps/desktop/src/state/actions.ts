@@ -1,5 +1,5 @@
 import { revealSetting } from "@/app/settings/reveal";
-import { expectSentTurn } from "@/components/assistant-ui/thread-scroll";
+import { expectSentTurn } from "@/components/conversation/thread-scroll";
 import { request } from "@/ipc/client";
 import type {
   AnswerInput,

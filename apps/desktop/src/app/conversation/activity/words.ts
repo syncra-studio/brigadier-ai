@@ -1,5 +1,5 @@
 import { namedTasks, workerName } from "@/app/conversation/rowWords";
-import type { TranscriptItem } from "@/components/transcript/transcript";
+import type { TranscriptItem } from "@/components/conversation/transcript/transcript";
 import type { Approval, ItemStatus, OrchestratorStepKind, Task } from "@/ipc/generated";
 
 /**

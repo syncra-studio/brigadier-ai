@@ -36,7 +36,7 @@ test("the style check takes tokens and computed values, and refuses raw ones", (
     "styles/tokens.css": ":root { --x: #fff; --y: 12px; }",
     "a.css": ".a { padding: calc(var(--spacing) * 2); border: 1px solid var(--border); width: 100%; background: color-mix(in oklab, var(--foreground) 5%, transparent); margin: 0; }",
     "b.tsx": 'export const B = ({ w }: { w: number }) => <div className="max-h-(--radix-popover-content-available-height)" style={{ width: `${w}px`, flexBasis: 0, top: w }} />;',
-    "components/ui/c.tsx": 'import { Dialog } from "radix-ui";',
+    "components/controls/c.tsx": 'import { Dialog } from "radix-ui";',
   });
   assert.deepEqual(good, { ok: true, errors: [] });
 
@@ -74,11 +74,11 @@ test("icons live in components/icons: svg markup and the kit's icons anywhere el
 
   const bad = check({
     "app/b.tsx": 'export const B = () => <svg viewBox="0 0 16 16" />;',
-    "components/ui/c.tsx": 'import { X } from "@openai/apps-sdk-ui/components/Icon";',
+    "components/controls/c.tsx": 'import { X } from "@openai/apps-sdk-ui/components/Icon";',
   });
   assert.deepEqual(bad.errors.map((error) => error.split(" is ")[0]), [
     'src/app/b.tsx: "<svg"',
-    'src/components/ui/c.tsx: "@openai/apps-sdk-ui/components/Icon"',
+    'src/components/controls/c.tsx: "@openai/apps-sdk-ui/components/Icon"',
   ]);
   assert.equal(check({ "app/b.tsx": "export const B = () => <svg />;" }, "app/b.tsx <svg  # a chart").ok, true);
 });

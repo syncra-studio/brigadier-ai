@@ -75,17 +75,17 @@ import {
   UserMessageText,
 } from "@/app/conversation/Mentions";
 import { TopBar } from "@/app/TopBar";
-import { MessageAttachments } from "@/components/assistant-ui/elements/message-attachment";
-import { type OpenPastedText, PastedTextOpenerContext } from "@/components/assistant-ui/elements/pasted-text";
+import { MessageAttachments } from "@/components/conversation/elements/message-attachment";
+import { type OpenPastedText, PastedTextOpenerContext } from "@/components/conversation/elements/pasted-text";
 import {
   type AttachmentReader,
   AttachmentReaderContext,
-} from "@/components/assistant-ui/elements/attachment-tile";
-import { LinkConversationContext, OpenFileContext } from "@/components/assistant-ui/file-links";
-import { ThreadHistoryContext, type RailEntry, type ThreadHistory } from "@/components/assistant-ui/message-rail";
-import { Thread, type ThreadComponents } from "@/components/assistant-ui/thread";
-import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
+} from "@/components/conversation/elements/attachment-tile";
+import { LinkConversationContext, OpenFileContext } from "@/components/conversation/file-links";
+import { ThreadHistoryContext, type RailEntry, type ThreadHistory } from "@/components/conversation/message-rail";
+import { Thread, type ThreadComponents } from "@/components/conversation/thread";
+import { Banner } from "@/components/shared/banner";
+import { Button } from "@/components/controls/button";
 import { useNow } from "@/hooks/use-now";
 import type {
   AttachmentRef,

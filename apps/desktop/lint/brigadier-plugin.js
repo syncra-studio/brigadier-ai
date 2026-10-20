@@ -362,7 +362,7 @@ const threadScrollHelper = {
     // The scroller itself moves the view as it decides.
     if (filename.endsWith("thread-scroll.ts")) return {};
     const text = (context.sourceCode ?? context.getSourceCode()).text;
-    const threadFile = text.includes("assistant-ui/thread-scroll") || text.includes("aui_thread-viewport");
+    const threadFile = text.includes("conversation/thread-scroll") || text.includes("aui_thread-viewport");
     // Whether each function around the current node has said it jumps, innermost last.
     const frames = [{ jumped: false }];
     const enter = () => frames.push({ jumped: false });

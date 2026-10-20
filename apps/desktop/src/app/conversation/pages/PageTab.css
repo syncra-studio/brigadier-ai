@@ -186,7 +186,7 @@
   border-radius: var(--radius-checkbox);
   cursor: pointer;
 }
-/* Checked: the checkbox's look (components/ui/checkbox), the switch's blue with a white tick. */
+/* Checked: the checkbox's look (components/controls/checkbox), the switch's blue with a white tick. */
 .page-li-checked::before { border-color: var(--toggle-on); background: var(--toggle-on); }
 .page-li-checked::after {
   content: "";

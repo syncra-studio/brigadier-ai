@@ -16,7 +16,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { BrainTab } from "@/app/inspector/brain/BrainTab";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import type { BrainOverview, BrainUse, Conversation, EventEnvelope, Project, Request, Task } from "@/ipc/generated";
 import { openSettings } from "@/state/actions";
 import { applyBrainEvents, reloadSessionTasks, selectBrain } from "@/state/brain";

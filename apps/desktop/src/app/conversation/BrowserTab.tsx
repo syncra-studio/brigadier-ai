@@ -32,10 +32,10 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Banner } from "@/components/ui/banner";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+} from "@/components/overlays/dropdown-menu";
+import { Banner } from "@/components/shared/banner";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/overlays/popover";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import { browserFocus, browserGo, browserPlace, browserPrint, browserSnapshot, openUrl } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
 import { closeFind, findInPage, findLabel, NO_FIND, openFind, useBrowserFind } from "@/state/browserFind";

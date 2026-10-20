@@ -26,7 +26,7 @@ import { waitingWords, went } from "@/app/conversation/activity/peerWords";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
 import { describePeerStep, peerStepRow, usePeerLookup } from "@/app/conversation/activity/PeerRow";
 import { PeerMessageBlock } from "@/app/conversation/PeerMessageBlock";
-import { CHEVRON, ROW, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
+import { CHEVRON, ROW, ROW_TOGGLE } from "@/components/conversation/elements/activity-row";
 import {
   type BlockCard,
   type BlockCompaction,
@@ -64,8 +64,8 @@ import { useAction } from "@/app/conversation/useAction";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { webPreviewUrl } from "@/app/conversation/activity/webPreview";
 import { TurnPreviews } from "@/app/conversation/activity/PreviewCard";
-import { ErrorState } from "@/components/assistant-ui/elements/error-state";
-import { LabeledDivider } from "@/components/assistant-ui/elements/labeled-divider";
+import { ErrorState } from "@/components/conversation/elements/error-state";
+import { LabeledDivider } from "@/components/shared/labeled-divider";
 import {
   BranchPicker,
   MarkdownBlock,
@@ -73,10 +73,10 @@ import {
   MessageText,
   StreamingMessageText,
   TimeSeparator,
-} from "@/components/assistant-ui/thread";
-import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
-import { jumpInThread } from "@/components/assistant-ui/thread-scroll";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+} from "@/components/conversation/thread";
+import { RateItem, RateMenu } from "@/components/conversation/rate-menu";
+import { jumpInThread } from "@/components/conversation/thread-scroll";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
 import {
   Branch,
   Check,
@@ -95,7 +95,7 @@ import { formatDuration, formatSentAt } from "@/lib/format";
 import { VENDOR_LABELS } from "@/lib/routing";
 import { modelName, sameModel, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
 import { openConversation, rateMessage, resume, send } from "@/state/actions";
 import { toast } from "@/state/toasts";
 import { readAloud, stopReading, useReading } from "@/state/readAloud";

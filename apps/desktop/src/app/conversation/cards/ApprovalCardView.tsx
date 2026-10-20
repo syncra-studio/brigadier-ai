@@ -3,11 +3,11 @@ import { memo, type ReactNode } from "react";
 import { DiffStatView } from "@/app/conversation/cards/common";
 import { WaitingRow } from "@/app/conversation/cards/common";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
-import { ActionCard, ActionCardTitle } from "@/components/assistant-ui/elements/action-card";
-import { paper } from "@/components/assistant-ui/elements/surfaces";
-import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
-import { DECIDERS } from "@/components/transcript/TranscriptRow";
-import { Badge } from "@/components/ui/badge";
+import { ActionCard, ActionCardTitle } from "@/components/conversation/elements/action-card";
+import { paper } from "@/components/conversation/elements/surfaces";
+import { ToolBox } from "@/components/conversation/elements/tool-box";
+import { DECIDERS } from "@/components/conversation/transcript/TranscriptRow";
+import { Badge } from "@/components/controls/badge";
 import {
   Check,
   Commit,

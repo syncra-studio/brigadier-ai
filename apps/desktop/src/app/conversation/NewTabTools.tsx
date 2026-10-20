@@ -2,11 +2,11 @@ import { useContext, useEffect, useState } from "react";
 
 import { WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
-import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useCheckoutRoot } from "@/components/conversation/file-links";
+import { TooltipIconButton } from "@/components/controls/tooltip-icon-button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/overlays/dropdown-menu";
 import { ChatCompose, ChevronDown, Dock, Document, DotsHorizontal, Globe, Grid, Search, X } from "@/components/icons";
-import { Kbd } from "@/components/ui/kbd";
+import { Kbd } from "@/components/controls/kbd";
 import { pageList } from "@/ipc/client";
 import type { BrowserVisit, PageSummary } from "@/ipc/generated";
 import { browserHistory } from "@/state/browserData";

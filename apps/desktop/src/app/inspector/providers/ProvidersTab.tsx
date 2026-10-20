@@ -7,16 +7,16 @@ import {
   QuotaWindows,
   STATE_VARIANTS,
 } from "@/app/inspector/providers/shared";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/controls/badge";
+import { Button } from "@/components/controls/button";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+} from "@/components/layout/collapsible";
 import { ChevronRight, Reload } from "@/components/icons";
-import { Input } from "@/components/ui/input";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Input } from "@/components/controls/input";
+import { ToggleGroup, ToggleGroupItem } from "@/components/controls/toggle-group";
 import { pickFolder } from "@/ipc/client";
 import type { ProviderKind, ProviderOverview, RawSession } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";

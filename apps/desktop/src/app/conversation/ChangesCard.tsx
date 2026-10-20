@@ -25,8 +25,8 @@ import {
   Trash,
   TriangleExclamationErrorWarning,
 } from "@/components/icons";
-import { Button } from "@/components/ui/button";
-import { RowText, SettingsCard } from "@/components/ui/settings-card";
+import { Button } from "@/components/controls/button";
+import { RowText, SettingsCard } from "@/components/shared/settings-card";
 import type { DiffStat, FileReview, FileStat, HeldPath, MergeUndo, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { formatTime } from "@/lib/format";

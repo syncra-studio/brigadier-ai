@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { foldTranscript, type TranscriptItem } from "@/components/transcript/transcript";
+import { foldTranscript, type TranscriptItem } from "@/components/conversation/transcript/transcript";
 import { request } from "@/ipc/client";
 import type { RawEntry, ThreadItemsPage } from "@/ipc/generated";
 

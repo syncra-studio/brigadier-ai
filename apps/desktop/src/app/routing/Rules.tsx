@@ -6,16 +6,16 @@ import { TargetItems } from "@/app/routing/pickers";
 import { type Draft, type DraftEffect, draftRule, type Names, previewDraft, ruleLine, ruleTitle } from "@/app/routing/ruleWords";
 import { ROUTED_KINDS, shortModelName, shortPlaceName } from "@/app/routing/words";
 import { SettingsSection, SettingsSelect, SettingsSelectTrigger } from "@/app/settings/parts";
-import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
-import { Button } from "@/components/ui/button";
+import type { ModelGroup } from "@/components/shared/model-selector";
+import { Button } from "@/components/controls/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/overlays/dropdown-menu";
 import { DotsHorizontal, Info, Plus, Warning } from "@/components/icons";
-import { SettingsCard } from "@/components/ui/settings-card";
+import { SettingsCard } from "@/components/shared/settings-card";
 import type { OverrideRule, OverrideTarget, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { newRuleId, PLAIN_KIND_NAMES, ruleSentence } from "@/lib/routing";
 import { isNewModelRule } from "@/state/providers";

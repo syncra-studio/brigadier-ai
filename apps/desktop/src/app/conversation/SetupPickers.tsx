@@ -5,8 +5,8 @@ import { ProjectDialog } from "@/app/dialogs/ProjectDialog";
 import {
   ModelSelector,
   type ModelGroup,
-} from "@/components/assistant-ui/elements/model-selector";
-import { composerPill } from "@/components/assistant-ui/elements/surfaces";
+} from "@/components/shared/model-selector";
+import { composerPill } from "@/components/conversation/elements/surfaces";
 import {
   Check,
   Clock,
@@ -20,7 +20,7 @@ import {
   Shuffle,
   Warning,
 } from "@/components/icons";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/controls/button";
 import {
   Dialog,
   DialogContent,
@@ -28,15 +28,15 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/overlays/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+} from "@/components/overlays/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays/tooltip";
 import { useNow } from "@/hooks/use-now";
 import type {
   Conversation,

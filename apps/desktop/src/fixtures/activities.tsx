@@ -15,8 +15,8 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { PinnedSummary } from "@/app/conversation/PinnedSummary";
-import { SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { SidebarProvider } from "@/components/layout/sidebar";
+import { TooltipProvider } from "@/components/overlays/tooltip";
 import night from "@/fixtures/boards/overnight-2026-10-03.json";
 import type { BackgroundRun, Conversation, EventEnvelope, Preview, Request, Task, UserRequest } from "@/ipc/generated";
 import { applyBoardEvents, emptyBoard, useBoard } from "@/state/board";
