@@ -3,7 +3,7 @@
  * sidebar over a real daemon, its requests and its `workspaceChanged` frames passed through
  * by `scripts/measure-live-refresh.mjs`, which writes the files and times the frames.
  */
-import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 

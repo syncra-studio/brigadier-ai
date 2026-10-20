@@ -1,4 +1,4 @@
-import { AssistantRuntimeProvider, ComposerPrimitive, ThreadPrimitive, useLocalRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, ComposerPrimitive, ThreadPrimitive, useLocalRuntime } from "@/components/conversation/kit";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import React from "react";

@@ -1,4 +1,4 @@
-import { ComposerPrimitive, useAui } from "@assistant-ui/react";
+import { ComposerPrimitive, useAui, composerPill, floatingMenu } from "@/components/conversation";
 import { type FC, useCallback, useContext, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -10,7 +10,6 @@ import {
 } from "@/app/conversation/composerTarget";
 import { updateDraft } from "@/app/conversation/draftSetup";
 import { useAction } from "@/app/conversation/useAction";
-import { composerPill, floatingMenu } from "@/components/conversation/elements/surfaces";
 import { TooltipIconButton } from "@/components/controls";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger, MenuRow, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import { ArrowUpRight, Chat, Folder, Lightbulb, Paperclip, Plus } from "@/components/icons";

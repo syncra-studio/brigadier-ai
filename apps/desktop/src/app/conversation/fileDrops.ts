@@ -1,4 +1,4 @@
-import { useAui } from "@assistant-ui/react";
+import { useAui } from "@/components/conversation/kit";
 import { type DragEvent, useCallback, useContext, useEffect, useState } from "react";
 
 import { whileReading } from "@/app/conversation/attachments";

@@ -6,7 +6,7 @@
  * it again. The sessions that need the user come first; one that
  * starts needing the user moves up. Writes what it saw to #sessions-result (SessionsRender.test.ts reads it).
  */
-import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";

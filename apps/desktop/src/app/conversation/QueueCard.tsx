@@ -10,15 +10,13 @@ import {
 } from "@/components/icons";
 import { normalizedImages } from "@/lib/inlineImages";
 import { namedImages } from "@/app/conversation/inlineImages";
-import { useAui, useAuiState } from "@assistant-ui/react";
+import { useAui, useAuiState, ComposerRailItem, MessageQueue, MessageQueueItem, MessageQueuePaused, ghostButton } from "@/components/conversation";
 import { useCallback, useContext } from "react";
 
 import { InlineImageText } from "@/app/conversation/InlineImage";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { useAction } from "@/app/conversation/useAction";
-import { ComposerRailItem, MessageQueue, MessageQueueItem, MessageQueuePaused } from "@/components/conversation";
-import { ghostButton } from "@/components/conversation/elements/surfaces";
 import { TooltipIconButton, Button } from "@/components/controls";
 import {
   DropdownMenu,

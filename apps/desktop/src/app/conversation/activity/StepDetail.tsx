@@ -6,10 +6,9 @@ import { cliRunOutput, OWN_RUNS, ownRunOutput } from "@/app/conversation/activit
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, editHunks, fileDiffs, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
 import { CopyButton } from "@/components/shared";
-import { ToolBox, ErrorState, MarkdownBlock, searchResults, WebSearch } from "@/components/conversation";
+import { ToolBox, ErrorState, MarkdownBlock, searchResults, WebSearch, type TranscriptItem } from "@/components/conversation";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/overlays";
 import { Check } from "@/components/icons";
-import type { TranscriptItem } from "@/components/conversation/transcript/transcript";
 import type { ItemStatus, ThreadItem } from "@/ipc/generated";
 import { ansiRuns, stripAnsi } from "@/lib/ansi";
 import { cn } from "@/lib/utils";

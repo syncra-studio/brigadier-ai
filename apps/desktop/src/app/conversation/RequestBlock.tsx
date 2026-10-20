@@ -1,11 +1,4 @@
-import {
-  ActionBarPrimitive,
-  MessagePrimitive,
-  type TextMessagePartProps,
-  TextMessagePartProvider,
-  useAui,
-  useAuiState,
-} from "@assistant-ui/react";
+import { ActionBarPrimitive, MessagePrimitive, type TextMessagePartProps, TextMessagePartProvider, useAui, useAuiState, CHEVRON, ROW, ROW_TOGGLE, ErrorState, BranchPicker, MarkdownBlock, CommentaryMessageText, MessageText, StreamingMessageText, TimeSeparator, RateItem, RateMenu, jumpInThread } from "@/components/conversation";
 import { type ComponentProps, type ComponentType, createContext, type FC, Fragment, lazy, type MouseEvent, Suspense, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -26,7 +19,6 @@ import { waitingWords, went } from "@/app/conversation/activity/peerWords";
 import { describeLeadStep, LeadStepRow } from "@/app/conversation/activity/LeadStep";
 import { describePeerStep, peerStepRow, usePeerLookup } from "@/app/conversation/activity/PeerRow";
 import { PeerMessageBlock } from "@/app/conversation/PeerMessageBlock";
-import { CHEVRON, ROW, ROW_TOGGLE, ErrorState, BranchPicker, MarkdownBlock, CommentaryMessageText, MessageText, StreamingMessageText, TimeSeparator, RateItem, RateMenu } from "@/components/conversation";
 import {
   type BlockCard,
   type BlockCompaction,
@@ -65,7 +57,6 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { webPreviewUrl } from "@/app/conversation/activity/webPreview";
 import { TurnPreviews } from "@/app/conversation/activity/PreviewCard";
 import { LabeledDivider } from "@/components/shared";
-import { jumpInThread } from "@/components/conversation/thread-scroll";
 import { TooltipIconButton } from "@/components/controls";
 import {
   Branch,

@@ -1,4 +1,4 @@
-import { useAui, useAuiState } from "@assistant-ui/react";
+import { useAui, useAuiState } from "@/components/conversation";
 import { type FC, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 

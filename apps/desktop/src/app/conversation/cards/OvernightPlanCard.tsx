@@ -21,9 +21,8 @@ import {
   type OvernightCardModel,
   type OvernightCommand,
 } from "@/app/conversation/overnightAdapter";
-import { AgentPlan, type AgentPlanStep, type AgentPlanStepStatus, Timeline, type TimelineEvent } from "@/components/conversation";
+import { AgentPlan, type AgentPlanStep, type AgentPlanStepStatus, Timeline, type TimelineEvent, disclosureRow } from "@/components/conversation";
 import { ProgressLine, type ProgressOutcomeStatus } from "@/components/shared";
-import { disclosureRow } from "@/components/conversation/elements/surfaces";
 import { Badge, Button } from "@/components/controls";
 import { Moon } from "@/components/icons";
 import type { OvernightPhase, OvernightRun } from "@/ipc/generated";

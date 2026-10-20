@@ -13,7 +13,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { LinkConversationContext, LinkTimeContext } from "@/components/conversation/file-links";
+import { LinkConversationContext, LinkTimeContext } from "@/components/conversation";
 import { FileChip } from "@/components/conversation/markdown-text";
 import { Toaster, TooltipProvider } from "@/components/overlays";
 import { fixtureClick, fixtureInput } from "@/fixtures/input";

@@ -2,7 +2,7 @@
  * The production context card's Background rows for five previews (three still there, two stopped)
  * and the output tab a row opens, with Pause, Resume, Stop and Open; synthetic IPC, no daemon.
  */
-import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";

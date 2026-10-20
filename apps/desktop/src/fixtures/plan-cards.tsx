@@ -4,7 +4,7 @@ import {
   ComposerPrimitive,
   useExternalStoreRuntime,
   type ThreadMessage,
-} from "@assistant-ui/react";
+} from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";

@@ -1,4 +1,4 @@
-import { useAui } from "@assistant-ui/react";
+import { useAui } from "@/components/conversation";
 import { useContext, useMemo } from "react";
 
 import { COMPOSER_EDITABLE, ComposerTargetContext } from "@/app/conversation/composerTarget";

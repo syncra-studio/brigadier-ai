@@ -12,7 +12,7 @@ import {
 } from "react";
 
 import { TooltipIconButton, Badge } from "@/components/controls";
-import { useCheckoutRoot } from "@/components/conversation/file-links";
+import { useCheckoutRoot, FileTypeIcon } from "@/components/conversation";
 import { SidebarActivityMark, SidebarError, statusWords } from "@/app/shell/SessionStatus";
 import { UNTITLED } from "@/app/shell/TopBar";
 import {
@@ -37,7 +37,6 @@ import { undoTabClose } from "@/state/terminalPlaces";
 import { ChatActions } from "@/app/shell/ChatActions";
 import { OutputTab } from "@/app/side-panel/OutputTab";
 import { MockupTabIcon, MockupTabStatus, useMockupTab } from "@/app/conversation/MockupTabIcon";
-import { FileTypeIcon } from "@/components/conversation";
 import {
   ContextMenu,
   ContextMenuContent,

@@ -35,7 +35,7 @@ import { ComposerCapsule } from "@/app/conversation/ComposerCapsule";
 import { ComposerTargetContext, type ComposerTarget } from "@/app/conversation/composerTarget";
 import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
-import { OpenFileContext } from "@/components/conversation/file-links";
+import { OpenFileContext } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
 import type { BackgroundRun, Conversation, OrchestratorStepKind, ProviderEvent, RawEntry, Request, UserRequest } from "@/ipc/generated";
 import { sessionTabs } from "@/state/sessionTabs";

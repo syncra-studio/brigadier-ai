@@ -41,6 +41,7 @@ export * from "./elements/timeline";
 export * from "./elements/tool-box";
 export * from "./elements/web-search";
 export * from "./file-links";
+export * from "./kit";
 export * from "./message-rail";
 export * from "./pasteContent";
 export * from "./rate-menu";

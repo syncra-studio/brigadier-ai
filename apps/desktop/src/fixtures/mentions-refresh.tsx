@@ -1,11 +1,10 @@
 /** Exercises the real menu against files created on disk after the composer mounts. */
-import { AssistantRuntimeProvider, ComposerPrimitive, useLocalRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, ComposerPrimitive, useLocalRuntime, ComposerMentions } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { Mentions } from "@/app/conversation/Mentions";
-import { ComposerMentions } from "@/components/conversation";
 import type { Conversation, Request } from "@/ipc/generated";
 
 let calls = 0;

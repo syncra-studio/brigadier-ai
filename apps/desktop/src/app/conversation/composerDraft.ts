@@ -1,5 +1,5 @@
 import { inlineKind, normalizedImages } from "@/lib/inlineImages";
-import { useAui, useAuiState } from "@assistant-ui/react";
+import { useAui, useAuiState } from "@/components/conversation/kit";
 import { useCallback, useEffect, useRef } from "react";
 
 import type { BlobAttachmentAdapter } from "@/app/conversation/attachments";

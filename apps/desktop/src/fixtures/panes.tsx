@@ -4,7 +4,7 @@ import {
   AssistantRuntimeProvider,
   type ThreadMessage,
   useExternalStoreRuntime,
-} from "@assistant-ui/react";
+} from "@/components/conversation";
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";

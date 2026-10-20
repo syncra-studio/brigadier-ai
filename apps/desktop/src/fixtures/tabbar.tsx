@@ -3,7 +3,7 @@
  * tabs with "+" after them once something is, their measures at both densities, the widths kept
  * after a close, and Delete on a tab.
  */
-import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";

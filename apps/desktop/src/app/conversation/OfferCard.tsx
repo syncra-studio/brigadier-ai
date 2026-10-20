@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { field } from "@/components/conversation/elements/surfaces";
+import { field } from "@/components/conversation";
 import { cn } from "@/lib/utils";
 
 /**

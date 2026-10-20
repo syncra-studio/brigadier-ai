@@ -19,15 +19,9 @@ import { actionDetail } from "@/app/conversation/activity/StepDetail";
 import { workerActivity, workerCliNotice } from "@/app/conversation/activity/group";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, itemCall, stepWords } from "@/app/conversation/activity/words";
-import { ROW, RateItem, RateMenu, MarkdownBlock, ErrorState } from "@/components/conversation";
+import { ROW, RateItem, RateMenu, MarkdownBlock, ErrorState, shownCommand, type ThreadEntry, threadEntries, type TranscriptItem, TranscriptFolder } from "@/components/conversation";
 import { useAction } from "@/app/conversation/useAction";
 import { TooltipIconButton, Button } from "@/components/controls";
-import {
-  shownCommand,
-  type ThreadEntry,
-  threadEntries,
-} from "@/components/conversation/transcript/activity";
-import { type TranscriptItem, TranscriptFolder } from "@/components/conversation/transcript/transcript";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/layout";
 import {
   Check,

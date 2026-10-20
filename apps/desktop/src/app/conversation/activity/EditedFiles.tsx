@@ -6,7 +6,7 @@ import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { leadAction, useLeadItems } from "@/app/conversation/activity/StepDetail";
 import { basename, type StepWords, type ToolStep } from "@/app/conversation/activity/words";
 import { Counts } from "@/app/conversation/Counts";
-import { OpenFileContext } from "@/components/conversation/file-links";
+import { OpenFileContext } from "@/components/conversation";
 import type { FileChange, FileChangeKind, FileStat, ItemStatus } from "@/ipc/generated";
 import { revealPath } from "@/ipc/client";
 import { diffCounts, parseDiff } from "@/lib/patch";

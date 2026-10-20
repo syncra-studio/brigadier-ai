@@ -1,5 +1,5 @@
 /** Renders page context with the production user-message renderer, without a daemon. */
-import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime, Thread } from "@/components/conversation";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -7,7 +7,6 @@ import { Welcome } from "@/app/conversation/ConversationView";
 import { ConversationComposer } from "@/app/conversation/Composer";
 import { MentionMemory, mentionsIn, pageMentions, UserMessageText } from "@/app/conversation/Mentions";
 import { RequestBlock } from "@/app/conversation/RequestBlock";
-import { Thread } from "@/components/conversation";
 import { TooltipProvider } from "@/components/overlays";
 import type { Mention } from "@/ipc/generated";
 

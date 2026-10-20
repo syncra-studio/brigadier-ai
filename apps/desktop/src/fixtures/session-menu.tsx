@@ -4,7 +4,7 @@
  * sends `closeWorkspace`. Driven with the browser's real clicks; IPC is mocked and
  * records the calls, no daemon.
  */
-import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";

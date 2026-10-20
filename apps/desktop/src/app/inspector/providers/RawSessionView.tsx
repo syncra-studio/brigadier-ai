@@ -5,12 +5,7 @@ import {
   QuotaWindows,
   STATE_VARIANTS,
 } from "@/app/inspector/providers/shared";
-import {
-  foldTranscript,
-  type TranscriptItem,
-  type TranscriptStats,
-} from "@/components/conversation/transcript/transcript";
-import { TranscriptRow } from "@/components/conversation";
+import { foldTranscript, type TranscriptItem, type TranscriptStats, TranscriptRow } from "@/components/conversation";
 import { Badge, Button } from "@/components/controls";
 import { ArrowLeft } from "@/components/icons";
 import type { ApprovalRequest, RawSession } from "@/ipc/generated";

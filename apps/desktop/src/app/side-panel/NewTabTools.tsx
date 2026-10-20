@@ -2,7 +2,7 @@ import { useContext, useEffect, useState } from "react";
 
 import { WorkspacePaneContext } from "@/app/side-panel/WorkspacePane";
 import { shortcutLabel } from "@/app/side-panel/SidePanel";
-import { useCheckoutRoot } from "@/components/conversation/file-links";
+import { useCheckoutRoot } from "@/components/conversation";
 import { TooltipIconButton, Kbd } from "@/components/controls";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/overlays";
 import { ChatCompose, ChevronDown, Dock, Document, DotsHorizontal, Globe, Grid, Search, X } from "@/components/icons";

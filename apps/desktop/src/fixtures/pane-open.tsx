@@ -3,7 +3,7 @@
  * over IPC answered after `?delay=` ms (a daemon round trip), measured frame by frame from the
  * key that opens it by `scripts/measure-pane-open.mjs`.
  */
-import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRoot } from "react-dom/client";
 

@@ -1,4 +1,4 @@
-import type { LexicalEditor } from "lexical";
+import { type LexicalEditor, BLOCKS, applyBlock, BlockRow } from "@/components/views/page-editor";
 import { useEffect, useRef, useState } from "react";
 
 import { shortcutLabel } from "@/app/side-panel/SidePanel";
@@ -10,7 +10,6 @@ import type { PageContent, PageSummary } from "@/ipc/generated";
 import { pageEditing } from "@/state/pageEditing";
 import { dropPageTabs, openPageTab } from "@/state/sessionTabs";
 
-import { BLOCKS, applyBlock, BlockRow } from "@/components/views/page-editor";
 import { when } from "../NewTabTools";
 
 /** A page as one Markdown document: its title as the top heading, then its body. */

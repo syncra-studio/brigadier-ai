@@ -13,7 +13,7 @@ import { type ResolvedDraft, updateDraft } from "@/app/conversation/draftSetup";
 
 import { resetsAt, windowName } from "@/app/conversation/StatusCard";
 
-import { composerPill } from "@/components/conversation/elements/surfaces";
+import { composerPill } from "@/components/conversation";
 
 import { MenuRow, Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 

@@ -12,8 +12,7 @@ import {
   planStepStatus,
   stepStates,
 } from "@/app/conversation/planProgress";
-import { StepGlyph } from "@/components/conversation";
-import { mono } from "@/components/conversation/elements/surfaces";
+import { StepGlyph, mono } from "@/components/conversation";
 import { Clock, StopCircle, X } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import type { DiffStat, FileStat } from "@/ipc/generated";

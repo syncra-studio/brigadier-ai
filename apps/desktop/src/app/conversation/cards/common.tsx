@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { mono } from "@/components/conversation/elements/surfaces";
+import { mono } from "@/components/conversation";
 import type { DiffStat } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 

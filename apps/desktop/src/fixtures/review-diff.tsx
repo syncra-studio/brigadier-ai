@@ -12,7 +12,7 @@
  * - `warm=1`: what the app warms at idle loaded first; the diff then draws in its colours at
  *   once, never as plain lines first.
  */
-import { AssistantRuntimeProvider, type ThreadMessage, useAui, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, type ThreadMessage, useAui, useExternalStoreRuntime } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";

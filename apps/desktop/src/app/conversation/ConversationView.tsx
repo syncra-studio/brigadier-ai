@@ -1,16 +1,4 @@
-import {
-  type AppendMessage,
-  AssistantRuntimeProvider,
-  type ExternalStoreBranchChange,
-  ExportedMessageRepository,
-  type ExternalThreadQueueAdapter,
-  type FeedbackAdapter,
-  type QueueItemState,
-  type ThreadMessage,
-  type ThreadMessageLike,
-  useAuiState,
-  useExternalStoreRuntime,
-} from "@assistant-ui/react";
+import { type AppendMessage, AssistantRuntimeProvider, type ExternalStoreBranchChange, ExportedMessageRepository, type ExternalThreadQueueAdapter, type FeedbackAdapter, type QueueItemState, type ThreadMessage, type ThreadMessageLike, useAuiState, useExternalStoreRuntime, MessageAttachments, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type RailEntry, type ThreadHistory, Thread, type ThreadComponents, LinkConversationContext, OpenFileContext } from "@/components/conversation";
 import {
   type FC,
   useCallback,
@@ -75,8 +63,6 @@ import {
   UserMessageText,
 } from "@/app/conversation/Mentions";
 import { TopBar } from "@/app/shell/TopBar";
-import { MessageAttachments, type OpenPastedText, PastedTextOpenerContext, type AttachmentReader, AttachmentReaderContext, ThreadHistoryContext, type RailEntry, type ThreadHistory, Thread, type ThreadComponents } from "@/components/conversation";
-import { LinkConversationContext, OpenFileContext } from "@/components/conversation/file-links";
 import { Banner } from "@/components/shared";
 import { Button } from "@/components/controls";
 import { useNow } from "@/hooks/use-now";

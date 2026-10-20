@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { type ChangeMarks, changeMarks, LETTERS } from "@/app/side-panel/sourceStatus";
-import { fuzzyMatch } from "@/components/conversation/elements/menuMatch";
+import { fuzzyMatch } from "@/components/conversation";
 import { ChevronDown, ChevronRight, FileIcon } from "@/components/icons";
 import type { SourceState, SourceStatus, WorkspaceFolder } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

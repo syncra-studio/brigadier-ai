@@ -1,5 +1,4 @@
-import { pastedTextLabel } from "@/components/conversation/elements/chipText";
-import { PastedTextView } from "@/components/conversation";
+import { pastedTextLabel, PastedTextView } from "@/components/conversation";
 import { FileDocument, X } from "@/components/icons";
 import type { AttachmentRef } from "@/ipc/generated";
 

@@ -1,4 +1,4 @@
-import { useAui } from "@assistant-ui/react";
+import { useAui, SummaryRow, SummaryRowButton, SummarySection } from "@/components/conversation";
 import {
   type ReactNode,
   type UIEvent,
@@ -47,11 +47,6 @@ import { CHAT_TAB, openPanelTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { WorkersSummary } from "@/app/side-panel/WorkerSummary";
-import {
-  SummaryRow,
-  SummaryRowButton,
-  SummarySection,
-} from "@/components/conversation";
 import { TooltipIconButton, Button } from "@/components/controls";
 import {
   Popover,

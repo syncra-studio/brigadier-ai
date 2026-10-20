@@ -22,7 +22,7 @@ import { revealOvernight } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
-import { ActionCard, ActionCardActions, ActionCardQuestion, ActionCardTitle, ActionFileList, ActionFreeText, ActionOption, actionButton, staggered, ComposerRailItem, ToolBox } from "@/components/conversation";
+import { ActionCard, ActionCardActions, ActionCardQuestion, ActionCardTitle, ActionFileList, ActionFreeText, ActionOption, actionButton, staggered, ComposerRailItem, ToolBox, shownCommand } from "@/components/conversation";
 import { Button, TooltipIconButton, Kbd } from "@/components/controls";
 import { Commit, Dock, Globe, Key, Mic, PencilSquare, QuestionMarkCircle, Reply, Sparkle, Spinner } from "@/components/icons";
 import {
@@ -37,7 +37,6 @@ import type {
   Conversation,
   DiffStat,
 } from "@/ipc/generated";
-import { shownCommand } from "@/components/conversation/transcript/activity";
 import { answerCard, answerQuestion, decidePlan, putOffPlan } from "@/state/actions";
 import { type ShownApproval, useBoard } from "@/state/board";
 import { type PlanDocRef, planDoc } from "@/state/planDoc";

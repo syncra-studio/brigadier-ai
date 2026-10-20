@@ -1,4 +1,4 @@
-import { ComposerPrimitive, useAui, useAuiState } from "@assistant-ui/react";
+import { ComposerPrimitive, useAui, useAuiState, ComposerRail, ComposerRailItem, ComposerAttachments, ContextRing, type ComposerProps } from "@/components/conversation";
 import {
   type FC,
   lazy,
@@ -58,7 +58,6 @@ import { NewSessionChip, PLAN_PLACEHOLDER, PlanChip, PlusMenu, usePlanMode } fro
 import { ViewContext } from "@/app/conversation/viewContext";
 import { requestWaitsOnCard, turnSpans, workedMs } from "@/app/conversation/blocks";
 import { SelectionPill } from "@/app/conversation/SelectionPill";
-import { ComposerRail, ComposerRailItem, ComposerAttachments, ContextRing, type ComposerProps } from "@/components/conversation";
 import { ModelSelector } from "@/components/shared";
 import {
   ArrowUp,

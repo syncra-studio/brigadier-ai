@@ -3,8 +3,7 @@ import { memo, type ReactNode } from "react";
 import { DiffStatView } from "@/app/conversation/cards/common";
 import { WaitingRow } from "@/app/conversation/cards/common";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
-import { ActionCard, ActionCardTitle, ToolBox, DECIDERS } from "@/components/conversation";
-import { paper } from "@/components/conversation/elements/surfaces";
+import { ActionCard, ActionCardTitle, ToolBox, DECIDERS, paper } from "@/components/conversation";
 import { Badge } from "@/components/controls";
 import {
   Check,

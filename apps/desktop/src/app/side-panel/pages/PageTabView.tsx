@@ -1,4 +1,4 @@
-import type { LexicalEditor } from "lexical";
+import { type LexicalEditor, focusPageStart, PageEditor } from "@/components/views/page-editor";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Banner } from "@/components/shared";
@@ -10,7 +10,6 @@ import { ensurePage } from "@/state/pageTabs";
 import { changeSessionTab, closeTab, openPageTab, type PageTabState } from "@/state/sessionTabs";
 
 import { EmojiButton } from "./EmojiButton";
-import { focusPageStart, PageEditor } from "@/components/views/page-editor";
 import { PageTopBar } from "./PageTopBar";
 import "./PageTab.css";
 

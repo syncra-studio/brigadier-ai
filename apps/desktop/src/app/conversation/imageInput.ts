@@ -1,4 +1,4 @@
-import { useAuiState } from "@assistant-ui/react";
+import { useAuiState } from "@/components/conversation/kit";
 import { useContext, useEffect, useRef } from "react";
 
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";

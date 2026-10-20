@@ -1,4 +1,4 @@
-import { useAui } from "@assistant-ui/react";
+import { useAui } from "@/components/conversation";
 import { type FC, useEffect, useState } from "react";
 
 import { FORK_PLACES } from "@/app/conversation/ForkMenu";

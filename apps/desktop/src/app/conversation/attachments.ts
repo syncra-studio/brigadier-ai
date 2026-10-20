@@ -4,7 +4,7 @@ import type {
   CompleteAttachment,
   CreateAttachment,
   PendingAttachment,
-} from "@assistant-ui/react";
+} from "@/components/conversation/kit";
 import { useSyncExternalStore } from "react";
 
 import { draftRefs, inlineKey, inlineRefs } from "@/lib/inlineImages";

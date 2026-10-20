@@ -10,8 +10,7 @@ import {
 } from "react";
 
 import { FileReviewBar, FileReviewBody, useFileReview } from "@/app/side-panel/FileReview";
-import { FileTypeIcon } from "@/components/conversation";
-import { useCheckoutRoot } from "@/components/conversation/file-links";
+import { FileTypeIcon, useCheckoutRoot } from "@/components/conversation";
 import { TooltipIconButton } from "@/components/controls";
 import {
   ArrowDown,

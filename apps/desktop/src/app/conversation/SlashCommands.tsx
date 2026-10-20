@@ -1,4 +1,4 @@
-import { useAui, useAuiState } from "@assistant-ui/react";
+import { useAui, useAuiState, ContextArc, contextShare, type ComposerCommand, ComposerCommands } from "@/components/conversation";
 import { type FC, useContext, useMemo, useState } from "react";
 
 import { ForkPlaces } from "@/app/conversation/ForkMenu";
@@ -6,7 +6,6 @@ import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { StatusCardContext } from "@/app/conversation/StatusCard";
 import { useAction } from "@/app/conversation/useAction";
 import { NameDialog } from "@/app/shell/NameDialog";
-import { ContextArc, contextShare, type ComposerCommand, ComposerCommands } from "@/components/conversation";
 import { DropdownMenu, DropdownMenuTrigger } from "@/components/overlays";
 import { findModel, type ModelGroup } from "@/components/shared";
 import { PERMISSION_ICONS } from "@/app/shell/SetupPickers";

@@ -6,7 +6,7 @@ import {
   ModelSelector,
   type ModelGroup,
 } from "@/components/shared";
-import { composerPill } from "@/components/conversation/elements/surfaces";
+import { composerPill } from "@/components/conversation";
 import {
   Check,
   Clock,

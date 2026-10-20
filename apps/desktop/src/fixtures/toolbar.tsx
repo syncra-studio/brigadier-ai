@@ -1,5 +1,5 @@
 /** Headless exercise of production toolbar, workspace pane and panel entry points. */
-import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime, SummarySection } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -16,7 +16,6 @@ import { useSidePanel } from "@/app/side-panel/SidePanel";
 import { WorkspacePane, WorkspacePaneContext } from "@/app/side-panel/WorkspacePane";
 import { fixtureInput } from "@/fixtures/input";
 import { MENU_KEYS } from "@/app/paneShortcuts";
-import { SummarySection } from "@/components/conversation";
 import { TitlebarTips } from "@/components/shared";
 import { SidebarProvider } from "@/components/layout";
 import type { Conversation, EventEnvelope, Request } from "@/ipc/generated";

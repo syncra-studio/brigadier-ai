@@ -1,4 +1,4 @@
-import { useAuiState } from "@assistant-ui/react";
+import { useAuiState } from "@/components/conversation";
 import type { FC } from "react";
 
 import { sentByCaption, UNKNOWN_SESSION } from "@/app/conversation/activity/peerWords";

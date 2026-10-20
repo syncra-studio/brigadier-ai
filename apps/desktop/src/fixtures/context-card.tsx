@@ -3,7 +3,7 @@
  * button opens it over the thread, also while another tab is in front, which brings the chat back.
  * Shown, it stays through a click on the thread and a resize, until the button closes it.
  */
-import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from "@/components/conversation";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";

@@ -1,4 +1,4 @@
-import { useAui } from "@assistant-ui/react";
+import { useAui, FileTypeIcon, useCheckoutRoot } from "@/components/conversation";
 import {
   createContext,
   type FC,
@@ -12,8 +12,6 @@ import {
 
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { Counts } from "@/app/conversation/Counts";
-import { FileTypeIcon } from "@/components/conversation";
-import { useCheckoutRoot } from "@/components/conversation/file-links";
 import { TooltipIconButton } from "@/components/controls";
 import {
   DropdownMenu,
