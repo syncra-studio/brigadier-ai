@@ -13,6 +13,7 @@ For contributors:
 
 - [ACCOUNTS.md](ACCOUNTS.md): how several Claude Code or Codex accounts per agent work inside.
 - [DEVELOPMENT.md](DEVELOPMENT.md): building from source, the checks, the layout, dependency notes.
+- [design-system.md](design-system.md): where the app's design lives and how to build UI from it.
 - [helpers/computer-use/README.md](../helpers/computer-use/README.md): the computer-use helper,
   its vendored upstream driver and what Brigadier changed.
 
