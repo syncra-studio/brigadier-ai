@@ -18,8 +18,9 @@
 //! skills catalog; workers leave it out of their instructions to keep their start small;
 //! the project's `.codex` config too where Codex reads it (a worker working in its worktree of
 //! a trusted project), and a thread working from a folder of Brigadier's gets that config's MCP
-//! servers ([`project_servers`]). Every other session keeps the user's setup out: plugins and hooks are
-//! switched off per process, and the MCP servers from their config are disabled per thread.
+//! servers and compatible options ([`project_options`]). Every other session keeps the user's
+//! setup out: plugins and hooks are switched off per process, and the MCP servers from their
+//! config are disabled per thread.
 //! Apps, computer and browser use, memories and `notify` are off for every session.
 //!
 //! Brigadier never makes Codex write to `~/.codex/config.toml`. Starting a thread with a
@@ -1214,8 +1215,9 @@ async fn thread_config(
         )
         .await?;
     let mut servers = mcp_config(&effective, spec);
+    let mut config = Map::new();
     // A thread works from a folder of Brigadier's, where Codex reads no project config: its
-    // trusted project's MCP servers come along (#315).
+    // trusted project's MCP servers and compatible options come along (#315).
     if let Some(project) = spec
         .project
         .as_deref()
@@ -1229,6 +1231,7 @@ async fn thread_config(
             .await;
         match read {
             Ok(read) => {
+                config.extend(project_options(&read));
                 for (name, server) in project_servers(&read) {
                     servers.entry(name).or_insert(server);
                 }
@@ -1238,7 +1241,6 @@ async fn thread_config(
             }
         }
     }
-    let mut config = Map::new();
     config.insert("mcp_servers".into(), Value::Object(servers));
     if !spec.auto_compact {
         // Codex clamps the limit to 90% of the model's window.
@@ -1280,19 +1282,69 @@ async fn thread_config(
     Ok(config)
 }
 
+/// Loaded project layers only: Codex itself decides whether the project is trusted.
+fn project_layers(read: &Value) -> impl Iterator<Item = &Value> {
+    read.get("layers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|layer| layer.pointer("/name/type").and_then(Value::as_str) == Some("project"))
+        .filter(|layer| layer.get("disabledReason").is_none_or(Value::is_null))
+}
+
+/// Project options that do not conflict with Brigadier's thread controls (Codex's config
+/// schema). Use an allowlist so new upstream settings cannot override permissions, model,
+/// prompts or process features. Project profiles are ignored by Codex itself; hooks need
+/// their own working-folder handling before they can come along.
+fn project_options(read: &Value) -> Map<String, Value> {
+    const KEYS: &[&str] = &[
+        "shell_environment_policy",
+        "tools",
+        "tool_output_token_limit",
+        "background_terminal_max_timeout",
+    ];
+    KEYS.iter()
+        .filter_map(|key| {
+            let value = project_layers(read)
+                .find_map(|layer| layer.get("config").and_then(|config| config.get(*key)))?;
+            // Codex has already merged the project with the user's settings, including
+            // nested tool options and environment policy. Keep that layering intact.
+            let value = read
+                .get("config")
+                .and_then(|all| all.get(*key))
+                .unwrap_or(value);
+            let mut value = value.clone();
+            remove_unset_options(&mut value);
+            Some(((*key).into(), value))
+        })
+        .collect()
+}
+
+/// `config/read` serializes unset optional fields as null. The thread config is converted
+/// back to TOML, which has no null: forwarding those fields makes Codex reject the override.
+fn remove_unset_options(value: &mut Value) {
+    match value {
+        Value::Object(fields) => {
+            fields.retain(|_, value| !value.is_null());
+            for value in fields.values_mut() {
+                remove_unset_options(value);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                remove_unset_options(value);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The MCP servers of a project's own `.codex/config.toml` from a `config/read` with layers in
 /// the project, when Codex loads that file (the user trusts the project in Codex), each started
 /// in the project unless it names its own folder: a session working outside the project gets
 /// them as they run there.
 fn project_servers(read: &Value) -> Map<String, Value> {
-    let Some(layer) = read
-        .get("layers")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .find(|layer| layer.pointer("/name/type").and_then(Value::as_str) == Some("project"))
-        .filter(|layer| layer.get("disabledReason").is_none_or(Value::is_null))
-    else {
+    let Some(layer) = project_layers(read).next() else {
         return Map::new();
     };
     let root = layer
@@ -2652,6 +2704,74 @@ mod tests {
             let off = disabled(&app_server_args(Some(&spec(tools, None))));
             assert!(!off.iter().any(|f| f == "image_generation"), "{tools:?}");
         }
+    }
+
+    #[test]
+    fn project_options_keep_thread_controls_out_and_require_trust() {
+        let mut read = json!({ "layers": [{
+            "name": { "type": "project", "dotCodexFolder": "/repo/.codex" },
+            "config": {
+                "shell_environment_policy": { "set": { "PROJECT": "yes" } },
+                "tools": { "update_plan": { "enabled": false } },
+                "tool_output_token_limit": 1234,
+                "background_terminal_max_timeout": 2000,
+                "model": "other", "model_reasoning_effort": "low",
+                "sandbox_mode": "danger-full-access", "approval_policy": "never",
+                "allow_login_shell": true, "features": { "hooks": true },
+                "hooks": { "SessionStart": [] }, "profile": "other",
+                "profiles": { "other": { "model": "other" } },
+                "web_search": "disabled", "developer_instructions": "replace"
+            }
+        }] });
+        assert_eq!(
+            Value::Object(project_options(&read)),
+            json!({
+                "shell_environment_policy": { "set": { "PROJECT": "yes" } },
+                "tools": { "update_plan": { "enabled": false } },
+                "tool_output_token_limit": 1234,
+                "background_terminal_max_timeout": 2000
+            })
+        );
+        read["config"] = json!({ "shell_environment_policy": {
+            "inherit": "core", "set": { "PROJECT": "yes", "PERSONAL": "kept" },
+            "exclude": null, "include_only": null, "experimental_use_profile": null
+        }, "tools": { "update_plan": { "enabled": false }, "web_search": null } });
+        assert_eq!(
+            project_options(&read)["shell_environment_policy"],
+            json!({ "inherit": "core", "set": { "PROJECT": "yes", "PERSONAL": "kept" } })
+        );
+        assert_eq!(
+            project_options(&read)["tools"],
+            json!({ "update_plan": { "enabled": false } })
+        );
+        read["layers"][0]["disabledReason"] = json!("untrusted");
+        assert!(project_options(&read).is_empty());
+        assert!(project_options(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn project_options_include_inherited_project_layers() {
+        let read = json!({
+            "layers": [
+                { "name": { "type": "project", "dotCodexFolder": "/workspace/repo/.codex" },
+                  "config": { "tool_output_token_limit": 1234 } },
+                { "name": { "type": "project", "dotCodexFolder": "/workspace/.codex" },
+                  "config": { "shell_environment_policy": { "set": { "PROJECT": "yes" } } } },
+                { "name": { "type": "project", "dotCodexFolder": "/ignored/.codex" },
+                  "disabledReason": "untrusted", "config": { "tools": { "view_image": false } } },
+            ],
+            "config": {
+                "tool_output_token_limit": 1234,
+                "shell_environment_policy": { "set": { "PROJECT": "yes", "PERSONAL": "kept" } }
+            }
+        });
+        assert_eq!(
+            Value::Object(project_options(&read)),
+            json!({
+                "tool_output_token_limit": 1234,
+                "shell_environment_policy": { "set": { "PROJECT": "yes", "PERSONAL": "kept" } }
+            })
+        );
     }
 
     /// A trusted project's own Codex MCP servers, for a thread working outside it: started in

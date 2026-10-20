@@ -64,13 +64,14 @@ pub(super) fn staging_dirs(cwd: &Path) -> [PathBuf; 2] {
 /// What of a project's `.claude` folder is never linked into a session's folder
 /// ([`link_project`]): Claude's own staging and worktrees, and the instruction files the session
 /// is given in its prompt already (`instructions` in the core), which would load twice.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const UNLINKED: &[&str] = &[
     STAGING_DIR,
     "worktrees",
     "CLAUDE.md",
     "CLAUDE.local.md",
     "rules",
+    ".project-links.json",
 ];
 
 /// Links `project`'s own Claude setup into `cwd`, a folder of Brigadier's where a thread or a
@@ -78,11 +79,11 @@ const UNLINKED: &[&str] = &[
 /// `.mcp.json`, and what its `.claude` folder holds (settings, hooks, skills, agents, commands),
 /// with the user's `settings.local.json` from their own checkout when a worktree has none (it
 /// is gitignored). Links to what `project` lacks are removed, so a session that moves to
-/// another checkout loads only that one's; nothing but links is ever written or removed, and a
-/// file of Claude's own there is left as it is. Each link is replaced in one rename: a CLI
+/// another checkout loads only that one's; only our links and unchanged copies are removed. A
+/// file of Claude's own there is left as it is. On Unix each link is replaced in one rename: a CLI
 /// starting meanwhile in the same folder (the session's workers share one) reads the old link
-/// or the new one, never none. Unix only: elsewhere nothing is linked.
-#[cfg(unix)]
+/// or the new one, never none. Windows falls back to junctions and tracked file copies.
+#[cfg(any(unix, windows))]
 pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
     let _linking = LINKING.lock().unwrap_or_else(|e| e.into_inner());
     let dot_claude = cwd.join(".claude");
@@ -128,7 +129,7 @@ pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
 /// What a link to the project's `.claude` entry `name` at `path` points to: a settings file
 /// whose hooks run commands, a copy of it where they run in the CLI's project
 /// ([`hooks_in_project`]); anything else, itself.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn settings_target(cwd: &Path, name: &str, path: PathBuf) -> io::Result<PathBuf> {
     let Some((_, copy)) = SETTINGS_COPIES.iter().find(|(file, _)| *file == name) else {
         return Ok(path);
@@ -145,7 +146,7 @@ fn settings_target(cwd: &Path, name: &str, path: PathBuf) -> io::Result<PathBuf>
 /// Writes `text` to `cwd`'s copy `name` unless it holds it already, made anew (never through
 /// what the session's commands left at its name) and readable by the user alone (it may hold
 /// secrets); then where it is.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn write_copy(cwd: &Path, name: &str, text: &str) -> io::Result<PathBuf> {
     let copy = cwd.join(name);
     if std::fs::read_to_string(&copy).ok().as_deref() != Some(text) {
@@ -154,21 +155,18 @@ fn write_copy(cwd: &Path, name: &str, text: &str) -> io::Result<PathBuf> {
         }
         let temp = cwd.join(format!("{name}.{}.tmp", std::process::id()));
         let _ = std::fs::remove_file(&temp);
-        std::io::Write::write_all(
-            &mut std::os::unix::fs::OpenOptionsExt::mode(
-                std::fs::OpenOptions::new().write(true).create_new(true),
-                0o600,
-            )
-            .open(&temp)?,
-            text.as_bytes(),
-        )?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        std::io::Write::write_all(&mut options.open(&temp)?, text.as_bytes())?;
         std::fs::rename(&temp, &copy)?;
     }
     Ok(copy)
 }
 
 /// The project's settings files whose copies [`link_project`] keeps, and where.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const SETTINGS_COPIES: &[(&str, &str)] = &[
     ("settings.json", ".claude/.settings.project.json"),
     (
@@ -187,7 +185,7 @@ pub(super) const PROJECT_DIR_ENV: &str = "BRIGADIER_PROJECT_DIR";
 /// first goes to the CLI's project ([`PROJECT_DIR_ENV`]), with `CLAUDE_PROJECT_DIR` set to it,
 /// as in the user's own checkout; the copy names no project, so workers sharing a folder share
 /// it. None when it has no command hooks (or isn't JSON).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn hooks_in_project(text: &str) -> Option<String> {
     let mut settings: serde_json::Value = serde_json::from_str(text).ok()?;
     let mut changed = false;
@@ -206,13 +204,18 @@ fn hooks_in_project(text: &str) -> Option<String> {
         let Some(command) = hook.get("command").and_then(|c| c.as_str()) else {
             continue;
         };
-        hook.insert(
-            "command".into(),
-            format!(
-                "cd \"${PROJECT_DIR_ENV}\" || exit 1\nexport CLAUDE_PROJECT_DIR=\"$PWD\"\n{command}"
-            )
-            .into(),
+        let wrapped = format!(
+            "cd \"${PROJECT_DIR_ENV}\" || exit 1\nexport CLAUDE_PROJECT_DIR=\"$PWD\"\n{command}"
         );
+        #[cfg(windows)]
+        let wrapped = if hook.get("shell").and_then(|s| s.as_str()) == Some("powershell") {
+            format!(
+                "Set-Location -LiteralPath $env:{PROJECT_DIR_ENV} -ErrorAction Stop\n$env:CLAUDE_PROJECT_DIR = (Get-Location).Path\n{command}"
+            )
+        } else {
+            wrapped
+        };
+        hook.insert("command".into(), wrapped.into());
         changed = true;
     }
     changed.then(|| serde_json::to_string_pretty(&settings).ok())?
@@ -220,7 +223,7 @@ fn hooks_in_project(text: &str) -> Option<String> {
 
 /// [`link_project`]'s copy of a project's `.mcp.json` whose local servers have paths in the
 /// project, in the session's folder, where its `.mcp.json` links to it.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MCP_COPY: &str = ".claude/.mcp.project.json";
 
 /// `text`, a project's `.mcp.json`, with what its local servers name in the project made
@@ -228,7 +231,7 @@ const MCP_COPY: &str = ".claude/.mcp.project.json";
 /// (`./scripts/server`), and the paths a script runner or such a command is given (`node
 /// scripts/mcp.js`); none when there is nothing to change (or it isn't JSON). Other commands'
 /// arguments (`docker run … mcp/server`, `npx -y @acme/mcp`) stay as they are written.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn mcp_in_project(text: &str, project: &Path) -> Option<String> {
     let mut config: serde_json::Value = serde_json::from_str(text).ok()?;
     let mut changed = false;
@@ -247,7 +250,7 @@ fn mcp_in_project(text: &str, project: &Path) -> Option<String> {
             continue;
         };
         let own = with_project_dir(command, project)
-            .or_else(|| path_in_project(command, project).filter(|_| command.contains('/')));
+            .or_else(|| path_in_project(command, project).filter(|_| has_separator(command)));
         let paths = (own.is_some() || runs_scripts(command))
             && !server
                 .get("args")
@@ -280,7 +283,7 @@ fn mcp_in_project(text: &str, project: &Path) -> Option<String> {
 
 /// An argument that chooses the folder the runner reads its paths from (`uv --directory`):
 /// those paths are left to it ([`mcp_in_project`]).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn picks_folder(arg: &str) -> bool {
     const FLAGS: &[&str] = &[
         "--directory",
@@ -295,22 +298,38 @@ fn picks_folder(arg: &str) -> bool {
 }
 
 /// A command that runs the script it is given ([`mcp_in_project`]).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn runs_scripts(command: &str) -> bool {
     const RUNNERS: &[&str] = &[
-        "node", "nodejs", "deno", "bun", "tsx", "ts-node", "uv", "ruby", "perl", "php", "sh",
-        "bash", "zsh",
+        "node",
+        "nodejs",
+        "deno",
+        "bun",
+        "tsx",
+        "ts-node",
+        "uv",
+        "ruby",
+        "perl",
+        "php",
+        "sh",
+        "bash",
+        "zsh",
+        "powershell",
+        "pwsh",
     ];
     let name = Path::new(command)
         .file_name()
         .map(|name| name.to_string_lossy())
         .unwrap_or_default();
-    RUNNERS.contains(&name.as_ref()) || name.starts_with("python")
+    #[cfg(windows)]
+    let name = name.to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    RUNNERS.contains(&name) || name.starts_with("python")
 }
 
 /// `value` with `${CLAUDE_PROJECT_DIR}` or `${CLAUDE_PROJECT_DIR:-default}` in it made
 /// `project`: Claude sets that variable to the folder it runs in, here the session's.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn with_project_dir(value: &str, project: &Path) -> Option<String> {
     const VAR: &str = "${CLAUDE_PROJECT_DIR";
     if !value.contains(VAR) {
@@ -336,16 +355,24 @@ fn with_project_dir(value: &str, project: &Path) -> Option<String> {
     Some(out)
 }
 
+#[cfg(any(unix, windows))]
+fn has_separator(value: &str) -> bool {
+    value.contains('/') || (cfg!(windows) && value.contains('\\'))
+}
+
 /// `value` made absolute in `project` when it is a path there ([`mcp_in_project`]): a file
 /// (`scripts/mcp.js`, `server.py`), or anything named from the folder (`.`, `./data`); never a
 /// flag or a bare word (`run`), nor a folder named like a package (`mcp/server`).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn path_in_project(value: &str, project: &Path) -> Option<String> {
     if value.is_empty() || value.starts_with('-') || Path::new(value).is_absolute() {
         return None;
     }
-    let explicit =
-        value == "." || value == ".." || value.starts_with("./") || value.starts_with("../");
+    let explicit = value == "."
+        || value == ".."
+        || value.starts_with("./")
+        || value.starts_with("../")
+        || (cfg!(windows) && (value.starts_with(".\\") || value.starts_with("..\\")));
     let relative = value.trim_start_matches("./");
     let full = match relative {
         "" | "." => project.to_path_buf(),
@@ -355,7 +382,7 @@ fn path_in_project(value: &str, project: &Path) -> Option<String> {
     let found = if explicit {
         full.exists()
     } else {
-        (value.contains('/') || value.contains('.')) && full.is_file()
+        (has_separator(value) || value.contains('.')) && full.is_file()
     };
     found.then(|| full.display().to_string())
 }
@@ -364,7 +391,7 @@ fn path_in_project(value: &str, project: &Path) -> Option<String> {
 /// setup (its folder's trust was taken back), so the links left from an earlier start don't
 /// load it anyway. Only in a folder of Brigadier's outside any repository: a checkout's own
 /// links are the user's.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn unlink_project(cwd: &Path) -> io::Result<()> {
     if cwd.ancestors().any(|dir| dir.join(".git").exists()) {
         return Ok(());
@@ -375,7 +402,7 @@ pub(super) fn unlink_project(cwd: &Path) -> io::Result<()> {
 
 /// One folder's links made or removed at a time: a session's workers share their folder and
 /// can start together.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 static LINKING: Mutex<()> = Mutex::new(());
 
 /// Makes `cwd`'s links to a project's setup exactly `wanted` (link, target).
@@ -428,15 +455,20 @@ fn sync_links(cwd: &Path, wanted: &[(PathBuf, PathBuf)]) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(super) fn link_project(_cwd: &Path, _project: &Path) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(super) fn unlink_project(_cwd: &Path) -> io::Result<()> {
     Ok(())
 }
+
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows::sync_links;
 
 /// Our live CLIs per working directory, and the outermost staging directory one of them
 /// created there.

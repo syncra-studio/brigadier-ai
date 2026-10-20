@@ -154,12 +154,13 @@ jobs:
           pnpm build
           pnpm --filter @brigadier/desktop stage-sidecar --debug
           cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Windows Connect tests
+      - name: Windows Connect and project setup tests
         if: runner.os == 'Windows'
         # Connect's fakes use the real PowerShell runner and the daemon staged above as the
         # BROWSER link catcher. No vendor install, account, network request or browser opens.
         run: |
           cargo test --locked -p brigadier-daemon --bin brigadierd connect::windows_tests -- --test-threads=1 --nocapture
+          cargo test --locked -p brigadier-providers claude::files::windows::windows_tests -- --test-threads=1 --nocapture
       - name: Windows browser capture tests
         if: runner.os == 'Windows'
         run: |
