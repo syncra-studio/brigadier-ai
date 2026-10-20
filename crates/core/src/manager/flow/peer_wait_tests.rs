@@ -664,6 +664,13 @@ async fn each_message_steered_into_one_turn_gets_its_reply() {
                     steer.contains("answer it on its own now with message_session"),
                     "{steer}"
                 );
+                // Its user's request still ends on the answer to the user (#365).
+                assert!(
+                    steer.contains(
+                        "don't tell them about it: end on your answer to them, or reply [quiet]"
+                    ),
+                    "{steer}"
+                );
                 let id = header_id(&steer).unwrap();
                 let from = super::peer_kit::header_session(&steer).unwrap();
                 let (_, failed) = send(&turn, &from, "Names are in `name`.", Some(&id)).await;

@@ -724,7 +724,8 @@ impl SessionManager {
             return Ok(Delivery::Delivered);
         }
         // Steered into other work, its answer would be mixed with that work's: the thread
-        // answers it on its own.
+        // answers it on its own, and its user's request still ends on the answer to the user
+        // (#365).
         let steered = if reply {
             envelope.clone()
         } else {
@@ -733,9 +734,11 @@ impl SessionManager {
                     "{}\n[It came while you work on something else, so your answer to the user \
                      doesn't reach it: answer it on its own now with message_session (to \
                      {from}, reply_to {message_id}), carrying only what answers it, then carry \
-                     on.]",
+                     on. The user sees that reply in your work, so don't tell them about it: \
+                     end on your answer to them, or reply {quiet} if you already gave it.]",
                     envelope.text,
                     from = record.peer,
+                    quiet = super::prompts::QUIET,
                 ),
                 ..envelope.clone()
             }

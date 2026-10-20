@@ -34,8 +34,9 @@ project's `.smoke/` folder, so "answered" means an assistant message carries it.
    request or its queued message, naming the command, then cleared), and it is
    answered; the follow-up is answered; the command's real output reaches the user; every
    request ends.
-2. **Background job** (C2, alongside 1). The thread starts `sleep 70 && …` as a background job
-   and ends its turn; 5 s later the smoke hibernates the session, as the idle timer would (its
+2. **Background job** (C2, alongside 1). The thread starts `sleep 100 && …` as a background job
+   (`--job`: well past the minute after which a command goes on in the background, so its turn
+   has time to end first) and ends its turn; 5 s later the smoke hibernates the session, as the idle timer would (its
    CLI goes; a refusal is fine too). The turn ended before the job finished; the job finished
    anyway (its output file appeared); its output reaches the user afterwards, told in the
    request's own block; the request ends; and after its CLI went, the next request is answered in
@@ -43,7 +44,8 @@ project's `.smoke/` folder, so "answered" means an assistant message carries it.
 3. **Messages with a wait.** a) C3 → X with X idle; b) X → C1 while C1 runs an unrelated
    command. The sender sent one message, it is replied, a `wait_for_replies` ran and completed,
    exactly one reply came and the wait took it (`taken`), the sender spent exactly one turn
-   (`turn_usage`), its answer carries the reply; the receiver got it once and replied once; the
+   (`turn_usage`) with one answer (a Codex sender's progress notes aside: only the message it
+   marks as its answer, `answerAtMs`, counts), its answer carries the reply; the receiver got it once and replied once; the
    reply carries its answer, and in b) leaves out the receiver's unrelated output.
 4. **Stop during a wait.** C1 runs its own user's `sleep 45` (a Claude thread takes a message
    steered into its turn only after its command, so its reply comes late); C3 messages it and

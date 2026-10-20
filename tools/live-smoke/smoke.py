@@ -14,7 +14,7 @@ messages between sessions, turns metered) and leaves nothing behind.
   5  every request that finished ends on a real answer, not a narration line
 
 usage: smoke.py --daemon <brigadierd> [--claude-model sonnet] [--codex-model gpt-6-luna]
-                [--long 70] [--keep-report PATH] [--tag NAME]
+                [--long 70] [--job 100] [--keep-report PATH] [--tag NAME]
 Exit: 0 all passed (or skipped: a CLI isn't signed in), 1 a check failed, 2 the run broke.
 """
 import argparse, json, os, re, secrets, shutil, signal, socket, sqlite3, struct, subprocess, sys, threading, time
@@ -435,7 +435,7 @@ class Smoke:
 
     def scenario_background_job(self):
         sc = "2 background job"
-        long = self.args.long
+        long = self.args.job
         out = self.projA + "/.smoke/t2.txt"
         cmd = f"sleep {long} && head -c6 /dev/urandom | xxd -p > .smoke/t2.txt && cat .smoke/t2.txt"
         t0 = now_ms()
@@ -518,10 +518,15 @@ class Smoke:
         # One turn: one stretch of work and one answer (a reply pushed after the turn would add both);
         # a Claude thread's turns are also metered one each (Codex meters every model call).
         req = next((r for r in v["requests"] if r["id"] == rid), {})
-        spans, answers = len(req.get("worked") or []), [m for m in messages(v) if m["role"] == "assistant" and m.get("requestId") == rid]
+        said = [m for m in messages(v) if m["role"] == "assistant" and m.get("requestId") == rid]
+        # A CLI that marks its final answer (Codex) also keeps its progress notes as assistant
+        # messages, folded into the work: only the marked ones are answers then (#63).
+        answers = [m for m in said if m.get("answerAtMs")] or said
+        spans = len(req.get("worked") or [])
         n = turns(self.data, self.convs[sender], start, now_ms()) if self.native[sender][0] == "claude" else 1
         check(sc, f"{sender} answered in one turn", spans == 1 and len(answers) == 1 and n == 1,
-              f"{spans} stretches of work, {len(answers)} answers, {n} turns metered")
+              f"{spans} stretches of work, {len(answers)} answers, {n} turns metered",
+              info=f"{len(said) - len(answers)} progress notes" if len(said) > len(answers) else "")
         check(sc, "the answer carries the reply", assistant_after(v, start, reply_code), f"no answer with {reply_code}")
         got = [p for p in rv["peerMessages"] if not p["outgoing"] and p["peer"] == self.convs[sender]
                and p["messageId"] == sent["messageId"]]
@@ -748,7 +753,10 @@ def main():
     ap.add_argument("--daemon", required=True)
     ap.add_argument("--claude-model", default="sonnet")
     ap.add_argument("--codex-model", default="gpt-6-luna")
-    ap.add_argument("--long", type=int, default=70, help="seconds the long command and the background job run")
+    ap.add_argument("--long", type=int, default=70, help="seconds the long command runs")
+    # Well past the minute after which a command goes on in the background, so the turn that
+    # started it has time to end before it does (#279).
+    ap.add_argument("--job", type=int, default=100, help="seconds the background job runs")
     ap.add_argument("--keep-report", help="also write the results as JSON here")
     ap.add_argument("--tag", default="", help="a name for its scratch dir: /tmp/live-smoke-<tag>-<time>-<pid>")
     args = ap.parse_args()
