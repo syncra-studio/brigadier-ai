@@ -18,7 +18,7 @@ function check(files: Record<string, string>, allow = "") {
       writeFileSync(join(dir, "src", name), text);
     }
     writeFileSync(join(dir, "allow"), allow);
-    const run = spawnSync(process.execPath, [script, join(dir, "src"), join(dir, "allow")], { encoding: "utf8" });
+    const run = spawnSync(process.execPath, [script, join(dir, "src"), join(dir, "allow")], { encoding: "utf8", windowsHide: true });
     return { ok: run.status === 0, errors: run.stderr.trim().split("\n").filter(Boolean) };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -26,7 +26,7 @@ function check(files: Record<string, string>, allow = "") {
 }
 
 test("the style check passes the app's own tree", () => {
-  const run = spawnSync(process.execPath, [script], { encoding: "utf8" });
+  const run = spawnSync(process.execPath, [script], { encoding: "utf8", windowsHide: true });
   assert.equal(run.stderr, "");
   assert.equal(run.status, 0);
 });

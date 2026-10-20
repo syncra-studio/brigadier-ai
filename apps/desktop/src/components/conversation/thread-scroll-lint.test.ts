@@ -18,7 +18,7 @@ async function reported(files: Record<string, string>): Promise<Record<string, n
       rules: { "brigadier/thread-scroll-helper": "error" },
     }));
     for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
-    const { stdout } = await run(process.execPath, [resolve("node_modules/oxlint/bin/oxlint"), "-c", join(dir, ".oxlintrc.json"), "-f", "json", dir]).catch(
+    const { stdout } = await run(process.execPath, [resolve("node_modules/oxlint/bin/oxlint"), "-c", join(dir, ".oxlintrc.json"), "-f", "json", dir], { windowsHide: true }).catch(
       (failed: { stdout: string }) => failed,
     );
     const seen: Record<string, number[]> = Object.fromEntries(Object.keys(files).map((name) => [name, []]));

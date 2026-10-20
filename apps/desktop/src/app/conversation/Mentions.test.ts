@@ -73,7 +73,7 @@ test("the mention menu refreshes checkout files on opening, not on each keystrok
     import { join } from "node:path";
     const checkout = join(${JSON.stringify(scratch)}, "checkout");
     mkdirSync(checkout);
-    execFileSync("git", ["init", "--quiet", checkout]);
+    execFileSync("git", ["init", "--quiet", checkout], { windowsHide: true });
     let failNext = false;
     const requests = { name: "requests", configureServer(server) {
       server.middlewares.use((request, response, next) => {
@@ -94,7 +94,7 @@ test("the mention menu refreshes checkout files on opening, not on each keystrok
             response.end("Listing unavailable");
             return;
           }
-          const files = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: checkout, encoding: "utf8" }).split("\\0").filter(Boolean);
+          const files = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: checkout, encoding: "utf8", windowsHide: true }).split("\\0").filter(Boolean);
           response.setHeader("Content-Type", "application/json");
           response.end(JSON.stringify({ method: "listFiles", files, truncated: false }));
           return;
@@ -108,7 +108,7 @@ test("the mention menu refreshes checkout files on opening, not on each keystrok
     await server.listen();
     console.log(server.resolvedUrls.local[0]);
     process.on("SIGTERM", async () => { await server.close(); process.exit(0); });
-  `], { stdio: ["ignore", "pipe", "pipe"] });
+  `], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   let serverErrors = "";
   let serverOutput = "";
   server.stdout.on("data", (chunk: Buffer) => { serverOutput += chunk.toString(); });
@@ -152,7 +152,7 @@ test("the mention menu refreshes checkout files on opening, not on each keystrok
     `--user-data-dir=${join(scratch, "profile")}`,
     "--dump-dom", "--virtual-time-budget=5000",
     `${url}fixtures/mentions-refresh.html`,
-  ], { timeout: 45000, maxBuffer: 4 * 1024 * 1024 });
+  ], { timeout: 45000, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
   const serialized = stdout.match(/<pre id="mentions-refresh-result">([^<]+)<\/pre>/)?.[1];
   if (!serialized) {
     const open = new Map<string, number>();

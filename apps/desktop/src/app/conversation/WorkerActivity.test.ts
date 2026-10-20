@@ -79,7 +79,7 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
     await server.listen();
     console.log(server.resolvedUrls.local[0]);
     process.on("SIGTERM", async () => { await server.close(); process.exit(0); });
-  `], { stdio: ["ignore", "pipe", "pipe"] });
+  `], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   let serverErrors = "";
   let serverOutput = "";
   server.stdout.on("data", (chunk: Buffer) => { serverOutput += chunk.toString(); });
@@ -123,7 +123,7 @@ test("worker lifecycle and overview stay quiet and include waiting and done work
     `--user-data-dir=${join(scratch, "profile")}`,
     "--dump-dom", "--virtual-time-budget=5000",
     `${url}fixtures/worker-activity.html`,
-  ], { timeout: 45000, maxBuffer: 4 * 1024 * 1024 });
+  ], { timeout: 45000, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
   const serialized = stdout.match(/<pre id="worker-activity-result">([^<]+)<\/pre>/)?.[1];
   if (!serialized) {
     const open = new Map<string, number>();

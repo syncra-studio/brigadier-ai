@@ -106,7 +106,7 @@ async function startFixtureServer(): Promise<{ server: FixtureServer; child: Chi
     const parent = process.ppid;
     const gone = () => { try { process.kill(parent, 0); return false; } catch { return true; } };
     setInterval(() => { if (process.ppid !== parent || (process.platform === "win32" && gone())) process.exit(0); }, 1000).unref();
-  `], { stdio: ["ignore", out, err] });
+  `], { stdio: ["ignore", out, err], windowsHide: true });
   serversStarted += 1;
   closeSync(out);
   closeSync(err);
@@ -282,10 +282,13 @@ async function openBrowser(
   // A mouse, as the app's window has: Chrome on a machine with none (a CI runner) reports
   // `hover: none`, and every hover: style, which sits inside `@media (hover: hover)`, would stay off.
   const mouse = `--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4`;
+  // Its own process group (`detached`) where one can be signalled. Windows needs none (taskkill
+  // ends the tree), and a detached process there has no console, so each process the headless
+  // shell starts would open a console window of its own: it shares a hidden one instead.
   const launch = () => spawn(chromium(), [
     "--headless", "--no-sandbox", ...(oneProcess ? ["--single-process"] : []), "--disable-gpu", "--hide-scrollbars", mouse, "--no-first-run",
     "--no-default-browser-check", ...flags, "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank",
-  ], { stdio: ["ignore", "ignore", "pipe"], detached: true });
+  ], { stdio: ["ignore", "ignore", "pipe"], detached: process.platform !== "win32", windowsHide: true });
   let browser = launch();
   let browserLog = "";
   const listen = () => browser.stderr.on("data", (chunk: Buffer) => { browserLog += chunk.toString(); });

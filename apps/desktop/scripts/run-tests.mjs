@@ -43,7 +43,7 @@ function runOnce(files) {
     "--import", "./scripts/test-alias.mjs", "--test", "--test-timeout=180000", "--test-force-exit", ...reporters,
     ...(rendering(files) ? ["--test-global-setup=./src/fixtures/headless.ts"] : []),
     ...files,
-  ], { stdio: ["inherit", "pipe", "pipe"] });
+  ], { stdio: ["inherit", "pipe", "pipe"], windowsHide: true });
 
   let heard = Date.now();
   let stopped = false;
