@@ -212,3 +212,40 @@ indicators board, controls, the other files) places it as a ref.
   instance of a reusable component (insert the new part, move it, delete the old one). After a
   failed edit, close the file without saving and reopen it.
 - Save with ⌘S in that file's own Pen window and check the file's modified time. No backup copies.
+
+## Updating tokens
+
+`apps/desktop/src/styles/tokens.css` takes its design tokens from `foundations.pen`: the
+`@theme static` block between `/* generated from foundations.pen … */` and `/* end generated */`
+is written by `apps/desktop/scripts/gen-tokens.mjs`, one declaration per Pen variable. Don't edit
+that block by hand: change the variable in Pen, then:
+
+1. Open `foundations.pen` in Pen.
+2. Export its variables (an agent, through the pencil MCP, read-only): `execute` with
+   `filePath` `~/Documents/brigadier-design/foundations.pen` written out in full, and the snippet
+   `Print(JSON.stringify(GetVariables().variables))`. Write the printed object, unchanged, to
+   `apps/desktop/scripts/pen-vars.json`.
+3. In `apps/desktop`, run `node scripts/gen-tokens.mjs`, then commit `pen-vars.json` and
+   `tokens.css` together.
+
+How values come out:
+
+- A token whose Pen value matches its value in the block keeps its text and its comment, so
+  `oklch(… var(--tint))`, `color-mix()` and rem stay as written. Colours match within one step
+  per channel (Pen stores 8-bit hex); lengths match when they're the same in px.
+- A changed token takes Pen's value: numbers as rem (px ÷ 16), colours as hex, strings as they
+  are, a Pen variable that points at another as `var(--other)`. A new variable goes at the block's
+  end; one removed from Pen leaves the block.
+- Pen holds colours as plain values, not as mixes of others. Change `--foreground` or
+  `--background` in Pen alone and the code's `color-mix()` colours built on it no longer match
+  Pen's, so they are written as Pen's hex: change those in Pen too if they should follow.
+- Some Pen variables aren't written, listed in the script's `SKIP`: the font variables (Pen holds
+  stand-ins for the system stacks), `--radius-capsule` (999 in Pen, 9999px in code, both fully
+  round), and `--wash-10`, `--warning-fill`, `--success-fill` (Pen's stand-ins for opacity
+  modifiers).
+- Outside the block, `tokens.css` stays hand-written: Tailwind's resets and `@theme inline`
+  aliases, the font stacks, values built with `calc()`, `min()`, `clamp()` or em/vh/lh, and
+  platform overrides.
+
+`pnpm lint` runs `node scripts/gen-tokens.mjs --check`, which fails when the block differs from
+the committed `pen-vars.json` (CI can't read Pen, so it checks against that export).
