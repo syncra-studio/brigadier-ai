@@ -5,7 +5,7 @@ const FIND_FRAMES = 60;
 
 /**
  * The setting Settings is bringing into view (a search result, or a page merged into another),
- * by its row's label: a closed Advanced that holds it opens for it.
+ * by its row's label.
  */
 export const useReveal = create<{ label: string | null }>(() => ({ label: null }));
 

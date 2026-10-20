@@ -108,7 +108,6 @@ function Fixture() {
         }));
         seen.firstCardHeading = first?.closest("section") !== null;
         seen.sections = all("main section h2").map(text);
-        seen.advanced = all('[data-slot="settings-advanced"]').length > 0;
         seen.buttons = all("main button").map(text).filter((name) => name === "Use automatic");
         seen.levelRow = all("[data-setting]").some((row) => text(row).endsWith("Default"));
         seen.triggers = Object.values(MENUS).map((label) => text(trigger(label)));

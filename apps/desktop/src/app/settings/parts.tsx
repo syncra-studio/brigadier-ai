@@ -2,22 +2,15 @@ import {
   Check,
   ChevronDown,
   ChevronLeft,
-  ChevronRight,
   MagnifyingGlassSearch,
   XCircleFilled,
 } from "@openai/apps-sdk-ui/components/Icon";
 import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui";
-import { useId, useState, type ComponentProps, type ReactNode } from "react";
+import { useId, type ComponentProps, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
-import { useReveal } from "@/app/settings/reveal";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -157,41 +150,6 @@ export function SettingsSection({
       )}
       <div className="flex flex-col gap-1.5">{children}</div>
     </section>
-  );
-}
-
-/**
- * A page's power features, closed until asked for: "Advanced" and a line on what is inside,
- * then its sections. It opens by itself when Settings brings one of its rows (`labels`) into
- * view.
- */
-export function SettingsAdvanced({
-  description,
-  labels = [],
-  children,
-}: {
-  description: string;
-  labels?: readonly string[];
-  children: ReactNode;
-}) {
-  const revealing = useReveal((s) => s.label);
-  const [open, setOpen] = useState(false);
-  const holds = revealing !== null && labels.includes(revealing);
-  if (holds && !open) setOpen(true);
-  return (
-    <Collapsible data-slot="settings-advanced" open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="group flex w-full items-start gap-2 rounded-xs text-start">
-        <ChevronRight
-          aria-hidden
-          className="text-muted-foreground size-icon-sm mt-0.5 shrink-0 transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
-        />
-        <span className="flex min-w-0 flex-col gap-0.5">
-          <span className="text-sm font-medium">Advanced</span>
-          <span className="text-foreground/65 text-label">{description}</span>
-        </span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="flex flex-col gap-10 pt-6">{children}</CollapsibleContent>
-    </Collapsible>
   );
 }
 

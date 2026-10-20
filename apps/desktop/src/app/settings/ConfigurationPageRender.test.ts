@@ -70,9 +70,8 @@ test("Configuration shows its defaults in one card and explains the choices in i
     },
   ]);
   assert.equal(seen.firstCardHeading, false, "the first card has no heading");
-  // Every section shows, with no Advanced accordion holding some back.
+  // Every section shows.
   assert.deepEqual(seen.sections, ["Composer", "Brain"]);
-  assert.equal(seen.advanced, false, "no Advanced accordion");
   assert.deepEqual(seen.buttons, [], "no Use automatic button");
   assert.equal(seen.levelRow, false, "no read-only row for the chosen level");
   assert.deepEqual(seen.triggers, ["Automatic (Opus 5.5)", "Automatic (Opus 5.5)", "Approve for me"]);
