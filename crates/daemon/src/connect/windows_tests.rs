@@ -1,5 +1,5 @@
 //! Windows Connect without a real install, account, network request or browser. The real
-//! PowerShell installer runner and both provider adapters talk to local command-file fakes.
+//! PowerShell installer runner and both provider adapters talk to local native fakes.
 use std::path::Path;
 
 use brigadier_providers::Provider;
@@ -18,11 +18,36 @@ impl Home {
             "20261020-1537-issues-sweep-w10-connect space-{}",
             uuid::Uuid::new_v4()
         ));
+        let home = Self(dir);
+        let dir = &home.0;
         std::fs::create_dir_all(dir.join("bin")).unwrap();
-        std::fs::write(dir.join("agent.ps1"), AGENT).unwrap();
-        std::fs::write(dir.join("agent.cmd"), AGENT_COMMAND).unwrap();
+        let source = dir.join("fake-agent.rs");
+        std::fs::write(&source, include_str!("fake_agent.rs")).unwrap();
+        let output = std::process::Command::new("rustc")
+            .arg("--edition=2024")
+            .arg("--crate-name=brigadier_connect_fake")
+            .arg(&source)
+            .arg("-o")
+            .arg(dir.join("fake-agent.exe"))
+            .output()
+            .expect("the Rust toolchain that runs these tests");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         std::fs::write(dir.join("install.ps1"), INSTALLER).unwrap();
-        Self(dir)
+        home
+    }
+
+    fn install(&self, provider: ProviderKind) {
+        let bin = self.0.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::copy(
+            self.0.join("fake-agent.exe"),
+            bin.join(format!("{}.exe", provider.binary())),
+        )
+        .unwrap();
     }
 
     fn mode(&self, stage: &str, mode: &str) {
@@ -40,32 +65,6 @@ impl Drop for Home {
     }
 }
 
-// Status checks must stay cheap while the separate PowerShell sign-in is running. Starting
-// another PowerShell host for every poll makes the fixture measure shell startup instead.
-const AGENT_COMMAND: &str = r#"@echo off
-if "%~1"=="--version" (
-  echo 2.1.302
-  exit /b 0
-)
-if "%~1 %~2"=="auth status" (
-  if exist "%BRIGADIER_CONNECT_TEST_HOME%\signed-in" (
-    echo {"loggedIn":true,"authMethod":"oauth"}
-  ) else (
-    echo {"loggedIn":false}
-  )
-  exit /b 0
-)
-if "%~1 %~2"=="login status" (
-  if exist "%BRIGADIER_CONNECT_TEST_HOME%\signed-in" (
-    echo Logged in using a browser
-    exit /b 0
-  )
-  exit /b 1
-)
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%BRIGADIER_CONNECT_TEST_HOME%\agent.ps1" %*
-exit /b %errorlevel%
-"#;
-
 const INSTALLER: &str = r#"
 $root = $env:BRIGADIER_CONNECT_TEST_HOME
 Add-Content (Join-Path $root 'tries') 'try'
@@ -82,32 +81,7 @@ switch ($mode) {
 }
 $bin = Join-Path $root '.local\bin'
 New-Item -ItemType Directory -Force $bin | Out-Null
-Copy-Item (Join-Path $root 'agent.cmd') (Join-Path $bin ($env:BRIGADIER_CONNECT_TEST_PROVIDER + '.cmd'))
-"#;
-
-const AGENT: &str = r#"
-$root = $env:BRIGADIER_CONNECT_TEST_HOME
-$expected = if ($env:BRIGADIER_CONNECT_TEST_PROVIDER -eq 'claude') { 'auth login' } else { 'login' }
-if (($args -join ' ') -ne $expected) { throw 'wrong sign-in command' }
-Add-Content (Join-Path $root 'pids') $PID
-Set-Content (Join-Path $root 'login-started') 'yes'
-if (-not $env:BROWSER) { throw 'the sign-in must hand its link back' }
-& $env:BROWSER $env:BRIGADIER_CONNECT_TEST_LINK
-$until = [DateTime]::UtcNow.AddSeconds(10)
-while (-not (Test-Path (Join-Path $root 'opened'))) {
-    if ([DateTime]::UtcNow -gt $until) { throw 'Brigadier did not open the sign-in link' }
-    Start-Sleep -Milliseconds 20
-}
-$mode = Get-Content (Join-Path $root 'login-mode') -ErrorAction SilentlyContinue
-switch ($mode) {
-    quit { exit 1 }
-    wait { Start-Sleep 60; exit 1 }
-}
-Set-Content (Join-Path $root 'signed-in') 'yes'
-if ($env:BRIGADIER_CONNECT_TEST_PROVIDER -eq 'codex') {
-    [Console]::Error.WriteLine('Successfully logged in')
-} else { Write-Output 'Login successful.' }
-if ($mode -eq 'stay') { Start-Sleep 60 }
+Copy-Item (Join-Path $root 'fake-agent.exe') (Join-Path $bin ($env:BRIGADIER_CONNECT_TEST_PROVIDER + '.exe'))
 "#;
 
 fn ops(home: &Home, provider: ProviderKind) -> Ops {
@@ -243,7 +217,7 @@ async fn both_agents_install_then_sign_in_and_hand_the_link_back() {
             Some(
                 home.0
                     .join(".local/bin")
-                    .join(format!("{}.cmd", provider.binary()))
+                    .join(format!("{}.exe", provider.binary()))
             )
         );
         assert!(status.logged_in);
@@ -316,13 +290,15 @@ async fn an_installer_that_hangs_times_out() {
     home.mode("install", "hang");
     let mut ops = ops(&home, ProviderKind::Codex);
     ops.install_timeout = Duration::from_secs(5);
-    assert!(matches!(
+    assert_eq!(
         run(&ops, ProviderKind::Codex).await.0,
         Some(ConnectProgress::Failed {
             step: ConnectStep::Install,
-            ..
+            error:
+                "Installing Codex took too long. Check your internet connection, then try again."
+                    .into(),
         })
-    ));
+    );
     stopped(&home, &ops).await;
 }
 
@@ -330,20 +306,24 @@ async fn an_installer_that_hangs_times_out() {
 async fn sign_in_failure_retry_and_connected_before_exit() {
     for provider in ProviderKind::ALL {
         let home = Home::new();
+        home.install(provider);
         home.mode("login", "quit");
         let ops = ops(&home, provider);
-        assert!(matches!(
+        assert_eq!(
             run(&ops, provider).await.0,
             Some(ConnectProgress::Failed {
                 step: ConnectStep::SignIn,
-                ..
+                error: format!(
+                    "Signing in to {} didn't finish. Try again.",
+                    provider.label()
+                ),
             })
-        ));
+        );
         home.mode("login", "stay");
         let (outcome, seen) = run(&ops, provider).await;
         assert_eq!(outcome, Some(ConnectProgress::Connected));
         assert_eq!(seen, [ConnectProgress::SigningIn]);
-        assert_eq!(home.text("tries").lines().count(), 1);
+        assert_eq!(home.text("tries").lines().count(), 0);
         stopped(&home, &ops).await;
     }
 }
@@ -353,15 +333,16 @@ async fn a_sign_in_that_hangs_times_out_or_can_be_cancelled() {
     let home = Home::new();
     home.mode("login", "wait");
     let provider = ProviderKind::Codex;
+    home.install(provider);
     let mut ops = ops(&home, provider);
     ops.sign_in_timeout = Duration::from_secs(5);
-    assert!(matches!(
+    assert_eq!(
         run(&ops, provider).await.0,
         Some(ConnectProgress::Failed {
             step: ConnectStep::SignIn,
-            ..
+            error: "Signing in to Codex took too long. Try again.".into(),
         })
-    ));
+    );
     stopped(&home, &ops).await;
     std::fs::remove_file(home.0.join("login-started")).unwrap();
     ops.sign_in_timeout = Duration::from_secs(20);
