@@ -8,7 +8,12 @@
 //   - @openai/apps-sdk-ui and Radix are imported only inside the wrappers in components/controls,
 //     overlays and layout (the kit's icons only in components/icons/kit.ts);
 //   - icons live in components/icons: no <svg> markup anywhere else (charts and rings drawn from
-//     live values are listed in check-styles.allow as `<svg`).
+//     live values are listed in check-styles.allow as `<svg`);
+//   - the libraries that draw (the chat kit, the lexical editor, xterm, sigma/graphology, the diff
+//     view) are imported only inside src/components, which wraps them;
+//   - a .tsx file outside src/components takes components from a folder's index.ts
+//     (`@/components/controls`, `@/components/views/terminal`…), not from a file in it. Type-only
+//     and import() loads may name the file; .ts helpers may too, so node tests stay light.
 // What can't follow yet is listed in check-styles.allow, one file per line with the exact values
 // it may keep and why: `<path from src> <value> [<value>…]  # reason`. An entry no longer needed
 // fails the check too, so the list only shrinks.
@@ -30,6 +35,9 @@ const KIT_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']((?:@openai\/apps-sdk-ui|
 const KIT_ICONS = "@openai/apps-sdk-ui/components/Icon";
 const KIT_WRAPPERS = /^components\/(controls|overlays|layout)\//;
 const SVG = /<svg\b/g;
+const UI_LIBRARY = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']((?:@assistant-ui\/|@lexical\/|lexical(?=["'/])|@xterm\/|sigma(?=["'/])|graphology|@pierre\/diffs)[^"']*)["']/g;
+const COMPONENT_IMPORT = /\b(?:import|export)(\s+type\b)?[^;]*?\bfrom\s*["'](@\/components\/[^"']+)["']/g;
+const FOLDER_INDEX = /^@\/components\/(?:controls|overlays|layout|shared|conversation|icons|views\/[\w-]+)$/;
 const STATIC_STYLE = /(?:^|[{,])\s*([\w$]+|"[^"]+")\s*:\s*(?:"[^"$`]*"|'[^']*'|-?\d*\.?\d+)\s*(?=[,}]|$)/g;
 
 /** Every source file under `dir`, without fixtures and tests. */
@@ -74,6 +82,14 @@ export function problems(path, text) {
     for (const [, name] of text.matchAll(KIT_IMPORT)) {
       if (name.startsWith(KIT_ICONS)) found.push([name, "a kit import: icons come from components/icons"]);
       else if (!KIT_WRAPPERS.test(path)) found.push([name, "a kit import: use the wrapper in components/controls, overlays or layout"]);
+    }
+  }
+  if (!path.startsWith("components/")) {
+    for (const [, name] of text.matchAll(UI_LIBRARY)) found.push([name, "a UI library import: use its wrapper in src/components"]);
+  }
+  if (path.endsWith(".tsx") && !path.startsWith("components/")) {
+    for (const [, typeOnly, name] of text.matchAll(COMPONENT_IMPORT)) {
+      if (!typeOnly && !FOLDER_INDEX.test(name)) found.push([name, "a component file import: take it from its folder's index"]);
     }
   }
   if (!path.startsWith("components/icons/")) {

@@ -82,3 +82,25 @@ test("icons live in components/icons: svg markup and the kit's icons anywhere el
   ]);
   assert.equal(check({ "app/b.tsx": "export const B = () => <svg />;" }, "app/b.tsx <svg  # a chart").ok, true);
 });
+
+test("the libraries that draw stay inside src/components, and screens take components from a folder's index", () => {
+  const good = check({
+    "components/views/terminal/TerminalView.tsx": 'import "@xterm/xterm/css/xterm.css";\nimport { Terminal } from "@xterm/xterm";',
+    "components/conversation/kit.ts": 'export { useAui } from "@assistant-ui/react";',
+    "app/a.tsx": 'import { Button } from "@/components/controls";\nimport { useAui } from "@/components/conversation";\nimport type { P } from "@/components/conversation/ComposerEditor";\nconst T = () => import("@/components/views/terminal");',
+    "app/b.ts": 'import { useAui } from "@/components/conversation/kit";\nimport { codeKind } from "@/components/conversation/code-paths";',
+  });
+  assert.deepEqual(good, { ok: true, errors: [] });
+
+  const bad = check({
+    "app/a.tsx": 'import { useAui } from "@assistant-ui/react";\nimport type { LexicalEditor } from "lexical";\nimport Sigma from "sigma";\nimport { Button } from "@/components/controls/button";',
+    "lib/b.ts": 'import { FileDiff } from "@pierre/diffs/react";',
+  });
+  assert.deepEqual(bad.errors.map((error) => error.split(" is ")[0]), [
+    'src/app/a.tsx: "@assistant-ui/react"',
+    'src/app/a.tsx: "lexical"',
+    'src/app/a.tsx: "sigma"',
+    'src/app/a.tsx: "@/components/controls/button"',
+    'src/lib/b.ts: "@pierre/diffs/react"',
+  ]);
+});

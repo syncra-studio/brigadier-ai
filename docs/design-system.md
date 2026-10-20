@@ -58,10 +58,38 @@ one level deep, so a part both `app.pen` and `settings.pen` use must live in `fo
   send button is a circle. There is one checkbox: blue (`--toggle-on`) with a white tick.
 - Plain words. No names or marks of other chat apps or of the UI kit's vendor.
 - In the code every colour, length, radius, font and shadow comes from
-  `apps/desktop/src/styles/tokens.css`, and the UI kit and Radix are used only inside
-  the wrappers in `src/components/controls`, `overlays` and `layout`. `pnpm lint` checks it (the oxlint rule `no-raw-design-values` for ts/tsx,
-  `scripts/check-styles.mjs` for CSS files, fixed inline styles and kit imports), and so does CI.
-  A value that can't follow yet goes in `scripts/check-styles.allow` with its reason.
+  `apps/desktop/src/styles/tokens.css`, and the UI kit and Radix are used only inside the
+  wrappers in `src/components/controls`, `overlays` and `layout`. `pnpm lint` checks it (the
+  oxlint rule `no-raw-design-values` for ts/tsx, `scripts/check-styles.mjs` for CSS files, fixed
+  inline styles, kit and library imports and component imports), and so does CI. A value that
+  can't follow yet goes in `scripts/check-styles.allow` with its reason.
+
+## Code layout
+
+`apps/desktop/src/components/` holds every reusable part, one folder per foundations board, each
+with one `index.ts`. Screens import a part from its folder's index (`@/components/controls`),
+never from a file inside it; the style check fails that in `.tsx` files outside
+`src/components`. Type-only imports, `import()` of a view that loads on demand, and `.ts` helpers
+that draw nothing may name the file.
+
+| Folder | foundations.pen board | What it holds |
+|---|---|---|
+| `icons/` | Icons | every icon, one folder per section (see Icons below) |
+| `controls/` | Primitives · Controls | button, icon button, badge, input, checkbox, switch, segmented, tabs, toggle, toggle group, key chip |
+| `overlays/` | Primitives · Menus, popovers & dialogs | dialog, confirm dialog, popover, dropdown and context menus, tooltip, toast |
+| `layout/` | ScrollFade (Menus board), Skeleton (Controls board) | sidebar, sidebar layout, collapsible, scroll fade, skeleton |
+| `shared/` | Shared app parts | settings card and search, state dot, usage bar, banner, empty state, titlebar button, copy button, model selector, progress line, labeled divider |
+| `conversation/` | (app.pen Conversation boards) | the conversation kit: thread, message rail, markdown, code blocks, composer parts, transcript; `kit.ts` is the one door to the chat library |
+| `views/<view>/` | (on their surface's boards) | views built on a drawing library, each its own folder so it loads on demand: `terminal` (xterm), `diff` (@pierre/diffs), `brain-graph` (sigma), `page-editor` (lexical) |
+
+The libraries that draw (the chat library, lexical, xterm, sigma/graphology, @pierre/diffs) are
+imported only inside `src/components`; the style check fails them anywhere else.
+
+`apps/desktop/src/app/` holds the screens, one folder per surface as the boards group them:
+`shell/` (App shell: window, sidebar, top bar and session tabs, app dialogs), `conversation/`,
+`side-panel/`, `setup/` (onboarding, computer-use setup) in `app.pen`; `settings/` (its pages,
+Providers and Routing among them) and `inspector/` in `settings.pen`. App-wide wiring (`App.tsx`,
+shortcuts, smoke) stays at the top of `app/`.
 
 ## Icons
 
