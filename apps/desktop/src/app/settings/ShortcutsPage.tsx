@@ -58,7 +58,7 @@ export function ShortcutsPage() {
               </span>
             ) : search.type === "press" ? (
               <span className="flex min-w-0 flex-1 items-center gap-2 text-sm">
-                <KeyChip keys={formatKeys(search.press, mac)} />
+                <Kbd variant="chip" className="text-foreground/65">{formatKeys(search.press, mac)}</Kbd>
               </span>
             ) : undefined
           }
@@ -109,17 +109,11 @@ function ShortcutRow({ shortcut, mac }: { shortcut: Shortcut; mac: boolean }) {
       </div>
       <div className="flex flex-col items-start gap-1.5">
         {shortcut.keys.map((keys) => (
-          <KeyChip key={keys} keys={formatKeys(keys, mac)} />
+          <Kbd key={keys} variant="chip" className="text-foreground/65">
+            {formatKeys(keys, mac)}
+          </Kbd>
         ))}
       </div>
     </div>
-  );
-}
-
-function KeyChip({ keys }: { keys: string }) {
-  return (
-    <Kbd className="text-foreground/65 bg-foreground/6 h-auto rounded-full border-transparent px-2 py-0.5 font-sans text-xs">
-      {keys}
-    </Kbd>
   );
 }

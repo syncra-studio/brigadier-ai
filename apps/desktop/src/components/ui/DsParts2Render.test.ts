@@ -43,4 +43,16 @@ test("the merged small parts (11–14) draw as one look each", { timeout: 90000 
     assert.equal(arrow.background, pager.look.none);
     assert.equal(arrow.icon, pager.look.icon);
   }
+
+  // One key hint: the grey mono key, or the chip (a capsule tinted with its own text colour, in sans 12),
+  // which is also how a key on a button draws.
+  const { keys } = seen;
+  assert.notEqual(keys.key.radius, keys.look.capsule);
+  assert.equal(keys.chip.radius, keys.look.capsule);
+  assert.equal(keys.chip.background, keys.look.tint);
+  assert.equal(keys.chip.color, keys.look.grey);
+  assert.equal(keys.chip.font, keys.look.sans);
+  assert.equal(keys.chip.size, colours.xs);
+  assert.equal(keys.onButton.radius, keys.look.capsule);
+  assert.equal(keys.onButton.font, keys.look.sans);
 });

@@ -9,6 +9,8 @@ import { createRoot } from "react-dom/client";
 import { Counts } from "@/app/conversation/Counts";
 import { StepCounter } from "@/app/conversation/StepCounter";
 import { CopyButton } from "@/components/assistant-ui/copy-button";
+import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { colourOf } from "@/fixtures/look";
 
@@ -76,8 +78,27 @@ function widthOf(className: string): number {
   return width;
 }
 
+/** A key hint's corners, fill, colour, face and size. */
+function key(slot: string) {
+  const element = one(`[data-probe="${slot}"]`);
+  if (!element) return null;
+  const css = getComputedStyle(element);
+  return { radius: css.borderTopLeftRadius, background: css.backgroundColor, color: css.color, font: css.fontFamily, size: css.fontSize };
+}
+
 function read() {
   return {
+    keys: {
+      key: key("kbd"),
+      chip: key("kbd-chip"),
+      onButton: key("kbd-button"),
+      look: {
+        capsule: getComputedStyle(one('[data-probe="capsule"]')!).borderTopLeftRadius,
+        tint: getComputedStyle(one('[data-probe="tint"]')!).backgroundColor,
+        grey: colourOf("text-foreground/65", "color"),
+        sans: fontOf("font-sans"),
+      },
+    },
     pager: {
       round: pager("pager"),
       files: pager("pager-files"),
@@ -126,6 +147,19 @@ function Fixture() {
           <StepCounter data-probe="pager-files" noun="file" at={1} count={4} unit="Files" onStep={() => {}} />
           <StepCounter data-probe="pager-bare" noun="conflict" vertical onStep={() => {}} />
           <span data-probe="control" className="rounded-control" />
+        </section>
+        <section data-group="keys" className="flex items-center gap-4">
+          <Kbd data-probe="kbd">⌘K</Kbd>
+          <Kbd data-probe="kbd-chip" variant="chip" className="text-foreground/65">
+            ⌘⇧K
+          </Kbd>
+          <span data-probe="capsule" className="rounded-capsule" />
+          <span className="text-foreground/65">
+            <span data-probe="tint" className="bg-current/12" />
+          </span>
+          <Button size="sm">
+            Allow once <Kbd data-probe="kbd-button">⏎</Kbd>
+          </Button>
         </section>
         <section data-group="copy" className="flex items-center gap-4">
           <CopyButton data-probe="copy" text="npm test" tooltip="Copy command" size="icon-xs" />

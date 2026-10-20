@@ -10,9 +10,6 @@ import { cn } from "@/lib/utils";
 
 /* Approval and question content on the composer rail; each section pads itself. */
 
-/** Squircle corners where the engine draws them; each radius grows a quarter to match. */
-const SQUIRCLE = "supports-[corner-shape:superellipse(1.5)]:[corner-shape:superellipse(1.5)]";
-
 /**
  * The card itself; its content decides the keys (digits, arrows) through `onKeyDown`.
  * `container` names the container query its narrow layout keys off.
@@ -104,22 +101,6 @@ export function actionButton(variant: "primary" | "outline", className?: string)
       ? "bg-foreground text-composer enabled:hover:bg-foreground/80 data-[state=open]:bg-foreground/80"
       : "bg-foreground/3 text-foreground enabled:hover:bg-foreground/8 data-[state=open]:bg-foreground/8",
     className,
-  );
-}
-
-/** A key hint on a card's button ("⏎", "Esc"), hidden once the card is narrow. */
-export function ActionKbd({ children, variant }: { children: ReactNode; variant: "primary" | "outline" }) {
-  return (
-    <kbd
-      aria-hidden
-      className={cn(
-        "inline-flex h-4 min-w-4 items-center justify-center rounded-md bg-current/10 px-1.5 font-sans text-xs leading-4 text-current supports-[corner-shape:superellipse(1.5)]:rounded-lg @max-md/approval-card:hidden",
-        SQUIRCLE,
-        variant === "outline" && "group-hover/action:bg-current/15",
-      )}
-    >
-      {children}
-    </kbd>
   );
 }
 

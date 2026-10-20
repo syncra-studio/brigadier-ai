@@ -29,7 +29,6 @@ import {
   ActionCardTitle,
   ActionFileList,
   ActionFreeText,
-  ActionKbd,
   ActionOption,
   actionButton,
   staggered,
@@ -64,6 +63,7 @@ import {
   useDictation,
 } from "@/state/dictation";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Kbd } from "@/components/ui/kbd";
 
 /* Pending decisions sit on the rail above the full composer. Their shortcuts leave
  * text fields, focused controls and open overlays to handle their own keys. */
@@ -606,7 +606,9 @@ export function ApprovalAction({
           onClick={deny}
         >
           {shown.deny ?? "Deny"}
-          <ActionKbd variant="outline">Esc</ActionKbd>
+          <Kbd variant="chip" aria-hidden className="group-hover/action:bg-current/15 @max-md/approval-card:hidden">
+            Esc
+          </Kbd>
         </button>
         {grant && (
           <Tooltip>
@@ -637,7 +639,9 @@ export function ApprovalAction({
           <span className="truncate">{shown.allow ?? "Allow once"}</span>
           {peer && (
             <span className="hidden group-focus-within/approval:contents">
-              <ActionKbd variant="primary">⏎</ActionKbd>
+              <Kbd variant="chip" aria-hidden className="@max-md/approval-card:hidden">
+                ⏎
+              </Kbd>
             </span>
           )}
         </button>
