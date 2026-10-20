@@ -1,11 +1,11 @@
 import { type ComponentProps, type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { CopyButton } from "@/components/assistant-ui/copy-button";
 import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Check, Copy, ExpandSm, Lightbulb } from "@/components/icons";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { ExpandSm, Lightbulb } from "@/components/icons";
 import { useAction } from "@/app/conversation/useAction";
 import type { Rating } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -46,24 +46,7 @@ export function PlanText({ markdown }: { markdown: string }) {
     >
       <MarkdownBlock text={markdown} />
     </div>
-  );
-}
 
-/** Copies the plan's text, then says so for a moment. */
-export function CopyPlan({ markdown }: { markdown: string }) {
-  const { isCopied, copyToClipboard } = useCopyToClipboard();
-  return (
-    <TooltipIconButton
-      tooltip={isCopied ? "Copied" : "Copy plan"}
-      side="top"
-      className="text-foreground/50 hover:text-foreground [&_svg]:size-icon-sm"
-      onClick={(event) => {
-        event.stopPropagation();
-        copyToClipboard(markdown);
-      }}
-    >
-      {isCopied ? <Check /> : <Copy />}
-    </TooltipIconButton>
   );
 }
 
@@ -160,7 +143,7 @@ export function PlanDocCard({ docRef }: { docRef: PlanDocRef }) {
       actions={
         <>
           {conversationId && docRef.type === "plan" && <PlanRating conversationId={conversationId} planId={docRef.id} />}
-          <CopyPlan markdown={doc.markdown} />
+          <CopyButton text={doc.markdown} tooltip="Copy plan" side="top" className="text-foreground/50 hover:text-foreground [&_svg]:size-icon-sm" onClick={(event) => event.stopPropagation()} />
           {opens && <TooltipIconButton
             tooltip="Open full screen"
             side="top"

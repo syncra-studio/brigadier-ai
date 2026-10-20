@@ -1,4 +1,5 @@
-import { CopyPlan, PlanText, usePlanDoc } from "@/app/conversation/cards/PlanDocument";
+import { PlanText, usePlanDoc } from "@/app/conversation/cards/PlanDocument";
+import { CopyButton } from "@/components/assistant-ui/copy-button";
 import type { PlanDocRef } from "@/state/planDoc";
 
 /** A plan's own tab: the whole plan the user opened from its card, full screen, to read and copy. */
@@ -11,7 +12,7 @@ export function PlanTab({ plan }: { plan: PlanDocRef }) {
     <div data-slot="plan-tab" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="max-w-thread relative mx-auto w-full px-5 pt-6 pb-10">
         <div className="absolute end-3 top-5">
-          <CopyPlan markdown={doc.markdown} />
+          <CopyButton text={doc.markdown} tooltip="Copy plan" side="top" className="text-foreground/50 hover:text-foreground [&_svg]:size-icon-sm" onClick={(event) => event.stopPropagation()} />
         </div>
         <PlanText markdown={doc.markdown} />
       </div>

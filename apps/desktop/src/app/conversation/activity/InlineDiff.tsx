@@ -1,9 +1,7 @@
 import { useMemo } from "react";
 
 import { DiffView } from "@/app/conversation/diffView";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Check, Copy } from "@/components/icons";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { CopyButton } from "@/components/assistant-ui/copy-button";
 import { deletesFile, diffCounts, parseDiff, singleFilePatch } from "@/lib/patch";
 import { cn } from "@/lib/utils";
 
@@ -36,7 +34,7 @@ export function InlineDiff({ path, diff, tall = false }: { path: string; diff: s
               <span className="text-success">+{added}</span> <span className="text-destructive">−{removed}</span>
             </span>
           )}
-          {diff && <CopyDiff text={diff} />}
+          {diff && <CopyButton text={diff} tooltip="Copy diff" size="xs" className="text-muted-foreground ms-auto" />}
         </div>
       </div>
       {tooLarge ? (
@@ -73,11 +71,3 @@ function DiffBody({ path, diff, numbered, tall }: { path: string; diff: string; 
   );
 }
 
-function CopyDiff({ text }: { text: string }) {
-  const { isCopied, copyToClipboard } = useCopyToClipboard();
-  return (
-    <TooltipIconButton tooltip={isCopied ? "Copied" : "Copy diff"} size="xs" className="text-muted-foreground ms-auto" onClick={() => copyToClipboard(text)}>
-      {isCopied ? <Check /> : <Copy />}
-    </TooltipIconButton>
-  );
-}

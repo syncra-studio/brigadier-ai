@@ -1,6 +1,7 @@
 import type { SyntaxHighlighterProps } from "@assistant-ui/react-markdown";
 import { type FC, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { CopyButton } from "@/components/assistant-ui/copy-button";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -9,15 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  ArrowRight,
-  Check,
-  Code,
-  Copy,
-  DotsHorizontal,
-  ExpandLg,
-} from "@/components/icons";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { ArrowRight, Code, DotsHorizontal, ExpandLg } from "@/components/icons";
 import type { Token } from "@/lib/languages";
 import { cn } from "@/lib/utils";
 
@@ -126,23 +119,6 @@ const Body: FC<{ code: string; language: string }> = ({ code, language }) => {
   );
 };
 
-const CopyButton: FC<{ text: string; tooltip?: string }> = ({ text, tooltip = "Copy" }) => {
-  const { isCopied, copyToClipboard } = useCopyToClipboard();
-  return (
-    <TooltipIconButton
-      tooltip={isCopied ? "Copied" : tooltip}
-      size="icon-xs"
-      onClick={() => !isCopied && copyToClipboard(text)}
-    >
-      {isCopied ? (
-        <Check className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
-      ) : (
-        <Copy className="animate-in zoom-in-75 fade-in duration-150" />
-      )}
-    </TooltipIconButton>
-  );
-};
-
 type Edges = { start: boolean; end: boolean };
 const NO_EDGES: Edges = { start: false, end: false };
 /** How far a side with more code fades out. */
@@ -212,7 +188,7 @@ export const CodeBlock: FC<SyntaxHighlighterProps> = ({ code, language }) => {
           >
             <ArrowRight />
           </TooltipIconButton>
-          <CopyButton text={code} />
+          <CopyButton text={code} size="icon-xs" />
         </>
       }
     >

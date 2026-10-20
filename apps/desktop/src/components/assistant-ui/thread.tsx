@@ -27,6 +27,7 @@ import {
 } from "react";
 
 import { useFileDrops } from "@/app/conversation/fileDrops";
+import { CopyButton } from "@/components/assistant-ui/copy-button";
 import { LinkTimeContext } from "@/components/assistant-ui/file-links";
 import { MessageRail } from "@/components/assistant-ui/message-rail";
 import { ThreadScroller } from "@/components/assistant-ui/thread-scroll";
@@ -35,17 +36,14 @@ import { TurnBoundary } from "@/components/assistant-ui/turn-boundary";
 import { Button } from "@/components/ui/button";
 import {
   ArrowDown,
-  Check,
   ChevronLeft,
   ChevronRight,
   ChevronRightAlt,
-  Copy,
   EditPencil,
   Paperclip,
 } from "@/components/icons";
 import { ScrollFade } from "@/components/ui/scroll-fade";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
 import { formatDaySeparator, formatSentAt, separatesTurn } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -544,17 +542,6 @@ const UserAttachments: FC = () => {
   return Attachments ? <Attachments /> : null;
 };
 
-const CopyIcon: FC = () => (
-  <>
-    <AuiIf condition={(s) => s.message.isCopied}>
-      <Check className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
-    </AuiIf>
-    <AuiIf condition={(s) => !s.message.isCopied}>
-      <Copy className="animate-in zoom-in-75 fade-in duration-150" />
-    </AuiIf>
-  </>
-);
-
 const UserMessage: FC = () => {
   const id = useAuiState((s) => s.message.id);
   const { PeerMessage } = useThreadComponents();
@@ -709,27 +696,17 @@ const UserMessageText: FC = () => {
   );
 };
 
-/** Copies the user's message; "Copied" with a check for a moment after. */
-const CopyMessage: FC = () => {
-  const text = useAuiState((s) => s.message.parts.map((part) => (part.type === "text" ? part.text : "")).join(""));
-  const { isCopied, copyToClipboard } = useCopyToClipboard({ copiedDuration: 1500 });
-  return (
-    <TooltipIconButton tooltip={isCopied ? "Copied" : "Copy message"} className="aui-user-action-copy" onClick={() => copyToClipboard(text)}>
-      {isCopied ? <Check /> : <CopyIcon />}
-    </TooltipIconButton>
-  );
-};
-
 /** Whether the message may be edited or answered again now (the view decides, per message). */
 const canRework = (s: AssistantState) => s.message.metadata.custom["rework"] === true;
 
 const UserActionBar: FC = () => {
+  const text = useAuiState((s) => s.message.parts.map((part) => (part.type === "text" ? part.text : "")).join(""));
   const sentAt = useAuiState((s) => s.message.createdAt.getTime());
   const now = useNow(60_000);
   return (
     <ActionBarPrimitive.Root className="aui-user-action-bar-root text-muted-foreground flex items-center gap-1">
       <span className="pe-1 text-xs tabular-nums">{formatSentAt(sentAt, now)}</span>
-      <CopyMessage />
+      <CopyButton text={text} tooltip="Copy message" copiedDuration={1500} className="aui-user-action-copy" />
       <AuiIf condition={canRework}>
         <ActionBarPrimitive.Edit asChild>
           <TooltipIconButton tooltip="Edit message" className="aui-user-action-edit">

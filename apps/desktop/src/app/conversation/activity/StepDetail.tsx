@@ -5,14 +5,13 @@ import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { cliRunOutput, OWN_RUNS, ownRunOutput } from "@/app/conversation/activity/ownRun";
 import { StoppedBy } from "@/app/conversation/activity/stopped";
 import { type ActionItem, editHunks, fileDiffs, hunkDiff, parsedInput, toolName, type ToolStep, unwrapCommand } from "@/app/conversation/activity/words";
+import { CopyButton } from "@/components/assistant-ui/copy-button";
 import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { searchResults, WebSearch } from "@/components/assistant-ui/elements/web-search";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Check, Copy } from "@/components/icons";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { Check } from "@/components/icons";
 import type { TranscriptItem } from "@/components/transcript/transcript";
 import type { ItemStatus, ThreadItem } from "@/ipc/generated";
 import { ansiRuns, stripAnsi } from "@/lib/ansi";
@@ -131,7 +130,7 @@ export function ShellBox({ command, output, status, exit, stopped = false, notes
   return (
     <div data-slot="shell-card" className={cn(SHELL, "group/shell relative")}>
       <span className="text-foreground/70 text-label px-3 py-1">Shell</span>
-      <CopyButton text={shown} label="Copy command" className="end-1 top-1" />
+      <CopyButton text={shown} tooltip="Copy command" size="xs" className="text-muted-foreground absolute end-1 top-1 opacity-0 group-hover/shell:opacity-100 focus-visible:opacity-100" />
       {/* Two lines, then all of it on a click. */}
       <pre
         data-slot="shell-command"
@@ -159,7 +158,7 @@ export function ShellBox({ command, output, status, exit, stopped = false, notes
             <pre className={cn(SHELL_TEXT, "text-foreground/70 font-medium")}>{printed ? <Colored text={printed} /> : "No output"}</pre>
           </div>
         )}
-        {printed && <CopyButton text={stripAnsi(printed)} label="Copy output" className="end-1 top-1" />}
+        {printed && <CopyButton text={stripAnsi(printed)} tooltip="Copy output" size="xs" className="text-muted-foreground absolute end-1 top-1 opacity-0 group-hover/shell:opacity-100 focus-visible:opacity-100" />}
       </div>
       {notes.map((note) => (
         <p key={note} data-slot="shell-note" className="text-muted-foreground px-3 pt-1.5 text-sm wrap-anywhere last:pb-2">
@@ -178,24 +177,6 @@ export function ShellBox({ command, output, status, exit, stopped = false, notes
         </div>
       )}
     </div>
-  );
-}
-
-/** Copies a command or its output; shown on hover of the box. */
-function CopyButton({ text, label, className }: { text: string; label: string; className: string }) {
-  const { isCopied, copyToClipboard } = useCopyToClipboard();
-  return (
-    <TooltipIconButton
-      tooltip={isCopied ? "Copied" : label}
-      size="xs"
-      className={cn(
-        "text-muted-foreground absolute opacity-0 group-hover/shell:opacity-100 focus-visible:opacity-100",
-        className,
-      )}
-      onClick={() => copyToClipboard(text)}
-    >
-      {isCopied ? <Check /> : <Copy />}
-    </TooltipIconButton>
   );
 }
 

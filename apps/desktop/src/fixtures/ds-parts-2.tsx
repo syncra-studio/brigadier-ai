@@ -7,10 +7,33 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { Counts } from "@/app/conversation/Counts";
+import { CopyButton } from "@/components/assistant-ui/copy-button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { colourOf } from "@/fixtures/look";
 
 const one = (selector: string) => document.querySelector(selector);
+
+/** What the copy buttons wrote, the headless browser's clipboard being out of reach. */
+const copied: string[] = [];
+Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text: string) => void copied.push(text) } });
+
+/** Clicks that reached the card around the second copy button. */
+let cardClicks = 0;
+
+/** Clicks each copy button, then reads its name and icon once the copy has landed. */
+async function copyButtons() {
+  const buttons = ["copy", "copy-in-card"].map((slot) => one(`[data-probe="${slot}"]`) as HTMLButtonElement | null);
+  const before = buttons.map((button) => button?.textContent);
+  for (const button of buttons) button?.click();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  return {
+    before,
+    after: buttons.map((button) => button?.textContent),
+    checked: buttons.map((button) => button?.querySelector("svg")?.classList.contains("zoom-in-50") ?? null),
+    copied,
+    cardClicks,
+  };
+}
 
 /** A diff stat's face and its two numbers' colours. */
 function counts(slot: string) {
@@ -50,9 +73,11 @@ function read() {
 function Fixture() {
   useEffect(() => {
     const result = document.createElement("pre");
-    result.id = "parts2-result";
-    result.textContent = JSON.stringify(read());
-    document.body.append(result);
+    void copyButtons().then((copy) => {
+      result.id = "parts2-result";
+      result.textContent = JSON.stringify({ ...read(), copy });
+      document.body.append(result);
+    });
     return () => result.remove();
   }, []);
   return (
@@ -65,6 +90,12 @@ function Fixture() {
           <span className="group">
             <Counts data-probe="counts-quiet" quiet insertions={7} deletions={2} />
           </span>
+        </section>
+        <section data-group="copy" className="flex items-center gap-4">
+          <CopyButton data-probe="copy" text="npm test" tooltip="Copy command" size="icon-xs" />
+          <div role="presentation" onClick={() => cardClicks++}>
+            <CopyButton data-probe="copy-in-card" text="# Plan" tooltip="Copy plan" copiedDuration={1500} onClick={(event) => event.stopPropagation()} />
+          </div>
         </section>
       </div>
     </TooltipProvider>
