@@ -1,31 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 
-import { CheckboxRow, ErrorLine, errorText } from "@/app/dialogs/fields";
+import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { Spinner } from "@/components/glyphs/spinner";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import type {
-  Project,
-  ProjectRemoval,
-  RemovalBranch,
-  RemoveProjectReport,
-} from "@/ipc/generated";
-import { formatBytes } from "@/lib/format";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Branch, Chats, Folder, X } from "@/components/ui/icon";
+import type { Project, ProjectRemoval, RemovalBranch, RemoveProjectReport } from "@/ipc/generated";
+import { formatBytes, shortPath } from "@/lib/format";
 import { previewRemoveProject, removeProject } from "@/state/actions";
 
 /**
  * Removes a project from Brigadier. The daemon's preview says what goes: its conversations
- * (archived ones too), their worktrees, the branches Brigadier made for them (merged ones
- * checked; unmerged ones unchecked, with what deleting them loses) and its Brain. The
- * repository's files never go. Nothing can be removed while one of its conversations works.
+ * (archived ones too), their worktrees, the merged branches Brigadier made for them (unmerged
+ * ones stay) and, if the user leaves it checked, its Brain. The repository's files never go.
+ * Nothing can be removed while one of its conversations works.
  */
 export function RemoveProjectDialog({
   project,
@@ -37,7 +26,15 @@ export function RemoveProjectDialog({
 }) {
   return (
     <Dialog open={project !== null} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-full overflow-y-auto">
+      <DialogContent
+        showCloseButton={false}
+        className="max-w-project-dialog max-h-full gap-7 overflow-y-auto p-6"
+        // The card takes focus, not the close button or an answer.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          (event.currentTarget as HTMLElement).focus();
+        }}
+      >
         {project && <RemoveFlow key={project.id} project={project} onOpenChange={onOpenChange} />}
       </DialogContent>
     </Dialog>
@@ -69,26 +66,59 @@ function RemoveFlow({
   if (report) return <Removed name={project.name} report={report} onOpenChange={onOpenChange} />;
   if (!preview) {
     return (
-      <div className="grid gap-4">
-        <DialogHeader>
-          <DialogTitle>Remove project?</DialogTitle>
-          <DialogDescription>Looking at what “{project.name}” has…</DialogDescription>
-        </DialogHeader>
-        {!error && <Spinner className="size-icon-sm animate-spin" />}
-        <ErrorLine error={error} />
-        <DialogFooter>
+      <>
+        <Head title={`Remove “${project.name}”?`}>Looking at what “{project.name}” has…</Head>
+        {error ? <ErrorLine error={error} /> : <Spinner className="size-icon-sm animate-spin" />}
+        <Actions>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-        </DialogFooter>
-      </div>
+        </Actions>
+      </>
     );
   }
   return <RemoveForm preview={preview} onRemoved={setReport} onOpenChange={onOpenChange} />;
 }
 
-function branchKey(branch: RemovalBranch): string {
-  return `${branch.repo}\n${branch.name}`;
+/** The title with the close button, and the line under it. */
+function Head({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-3">
+        <DialogTitle className="min-w-0 flex-1">{title}</DialogTitle>
+        <DialogClose asChild>
+          <Button type="button" variant="ghost" size="icon-sm" aria-label="Close">
+            <X />
+          </Button>
+        </DialogClose>
+      </div>
+      <DialogDescription>{children}</DialogDescription>
+    </div>
+  );
+}
+
+function Actions({ children }: { children: ReactNode }) {
+  return <div className="flex justify-end gap-2">{children}</div>;
+}
+
+/** One row of what goes: its icon, what it is, and a quiet note on the right. */
+function SummaryRow({ icon, label, detail }: { icon: ReactNode; label: string; detail: string }) {
+  return (
+    <li className="flex h-11 items-center gap-3 px-3.5 [&>svg]:size-icon-md [&>svg]:shrink-0 [&>svg]:text-muted-foreground">
+      {icon}
+      <span className="text-foreground min-w-0 flex-1 truncate">{label}</span>
+      <span className="text-muted-foreground text-label shrink-0">{detail}</span>
+    </li>
+  );
+}
+
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/** The merged branches Brigadier made that go with the project (not one checked out elsewhere). */
+function mergedBranches(preview: ProjectRemoval): RemovalBranch[] {
+  return preview.branches.filter((branch) => branch.merged && !branch.checkedOut);
 }
 
 function RemoveForm({
@@ -100,34 +130,21 @@ function RemoveForm({
   onRemoved: (report: RemoveProjectReport) => void;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [picked, setPicked] = useState(
-    () =>
-      new Set(
-        preview.branches.filter((b) => b.merged && !b.checkedOut).map((b) => branchKey(b)),
-      ),
-  );
+  const id = useId();
   const [trashBrain, setTrashBrain] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const archived = preview.conversations.filter((c) => c.archived).length;
+  const conversations = preview.conversations;
   const worktreeBytes = preview.worktrees.reduce((sum, w) => sum + w.bytes, 0);
-
-  const pick = (branch: RemovalBranch, on: boolean) =>
-    setPicked((set) => {
-      const next = new Set(set);
-      if (on) next.add(branchKey(branch));
-      else next.delete(branchKey(branch));
-      return next;
-    });
+  const merged = mergedBranches(preview);
+  const anything = conversations.length > 0 || preview.worktrees.length > 0 || merged.length > 0;
 
   const confirm = async () => {
     setBusy(true);
     setError(null);
     try {
-      const choices = preview.branches
-        .filter((b) => picked.has(branchKey(b)))
-        .map((b) => ({ repo: b.repo, name: b.name, tip: b.tip }));
+      const choices = merged.map((b) => ({ repo: b.repo, name: b.name, tip: b.tip }));
       const report = await removeProject(preview.projectId, choices, !trashBrain);
       if (report.failures.length === 0 && report.keptBranches.every((b) => b.merged)) {
         onOpenChange(false);
@@ -142,116 +159,66 @@ function RemoveForm({
   };
 
   return (
-    <div className="grid gap-4">
-      <DialogHeader>
-        <DialogTitle>Remove project?</DialogTitle>
-        <DialogDescription>
-          “{preview.name}” leaves Brigadier.{" "}
-          {preview.repo ? (
-            <>
-              Its repository at <span className="text-foreground break-all">{preview.repo}</span>{" "}
-              is not touched: its files, its commits and your own branches stay exactly as they
-              are.
-            </>
-          ) : (
-            "Its files are not touched."
-          )}
-        </DialogDescription>
-      </DialogHeader>
-
-      <section aria-labelledby="remove-conversations" className="grid gap-1.5">
-        <h3 id="remove-conversations" className="text-muted-foreground text-xs">
-          Sessions and chats
-        </h3>
-        {preview.conversations.length === 0 ? (
-          <p className="text-muted-foreground text-sm">None.</p>
-        ) : (
-          <>
-            <p className="text-muted-foreground text-xs">
-              {preview.conversations.length === 1
-                ? "It is deleted with its transcript"
-                : `All ${preview.conversations.length} are deleted with their transcripts`}
-              {archived > 0 && ` (${archived} archived)`}. This can't be undone.
-            </p>
-            <ul className="grid max-h-40 gap-1 overflow-y-auto text-sm">
-              {preview.conversations.map((conversation) => (
-                <li key={conversation.id} className="flex items-center gap-2">
-                  <span className="truncate">{conversation.title}</span>
-                  {conversation.archived && <Badge variant="secondary">Archived</Badge>}
-                  {conversation.running && <Badge variant="warning">Working</Badge>}
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-      </section>
-
-      {preview.worktrees.length > 0 && (
-        <section aria-labelledby="remove-worktrees" className="grid gap-1.5">
-          <h3 id="remove-worktrees" className="text-muted-foreground text-xs">
-            Worktrees · {formatBytes(worktreeBytes)}
-          </h3>
-          <p className="text-muted-foreground text-xs">
-            Removed through git. Uncommitted changes are kept first, as a WIP commit on the
-            worktree's branch.
-          </p>
-          <ul className="grid max-h-40 gap-1 overflow-y-auto text-sm">
-            {preview.worktrees.map((worktree) => (
-              <li key={worktree.path} className="flex items-center gap-2">
-                <span className="min-w-0 flex-1 truncate" title={worktree.path}>
-                  {worktree.path.split("/").pop()}
-                </span>
-                {worktree.hasChanges && <Badge variant="warning">Has changes</Badge>}
-                <span className="text-muted-foreground ms-auto shrink-0 text-xs tabular-nums">
-                  {formatBytes(worktree.bytes)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {preview.branches.length > 0 && (
-        <section aria-labelledby="remove-branches" className="grid gap-2">
-          <h3 id="remove-branches" className="text-muted-foreground text-xs">
-            Branches Brigadier made
-          </h3>
-          <p className="text-muted-foreground text-xs">
-            Checked ones are deleted. Merged ones hold nothing their target lacks; unchecked ones
-            stay in the repository.
-          </p>
-          <div className="grid gap-2">
-            {preview.branches.map((branch) => (
-              <CheckboxRow
-                key={branchKey(branch)}
-                label={branch.name}
-                checked={picked.has(branchKey(branch))}
-                disabled={branch.checkedOut}
-                onCheckedChange={(on) => pick(branch, on)}
-                note={
-                  branch.checkedOut
-                    ? "Checked out in another worktree, so it stays."
-                    : branch.merged
-                      ? `Merged into ${branch.target}.`
-                      : `Not merged: ${branch.ahead} ${branch.ahead === 1 ? "commit" : "commits"} ${branch.target} doesn't have. Deleting it loses them.`
+    <>
+      <div className="flex flex-col gap-5">
+        <Head title={`Remove “${preview.name}”?`}>
+          {preview.repo
+            ? `The repository at ${shortPath(preview.repo)} stays exactly as it is.`
+            : "Brigadier forgets this project. Its folder and files stay exactly as they are."}
+          {anything && " Only what Brigadier made for this project is deleted:"}
+        </Head>
+        {anything && (
+          <ul aria-label="What is deleted" className="bg-foreground/4 rounded-dialog divide-divider flex flex-col divide-y">
+            {conversations.length > 0 && (
+              <SummaryRow
+                icon={<Chats />}
+                label={
+                  conversations.length === 1
+                    ? `1 ${conversations[0]!.kind === "chat" ? "chat" : "session"}`
+                    : `${conversations.length} sessions and chats`
                 }
+                detail="Can't be undone"
               />
-            ))}
+            )}
+            {preview.worktrees.length > 0 && (
+              <SummaryRow
+                icon={<Folder />}
+                label={plural(preview.worktrees.length, "worktree", "worktrees")}
+                detail={formatBytes(worktreeBytes)}
+              />
+            )}
+            {merged.length > 0 && (
+              <SummaryRow
+                icon={<Branch />}
+                label={plural(merged.length, "merged branch", "merged branches")}
+                detail="Unmerged ones stay"
+              />
+            )}
+          </ul>
+        )}
+        {preview.worktrees.length > 0 && (
+          <p className="text-muted-foreground text-xs">
+            Uncommitted changes in a worktree are saved as a commit on its branch first.
+          </p>
+        )}
+        {preview.brainBytes > 0 && (
+          <div className="flex items-center gap-2.5">
+            <Checkbox
+              id={`${id}-brain`}
+              checked={trashBrain}
+              onCheckedChange={(state) => setTrashBrain(state === true)}
+            />
+            <label htmlFor={`${id}-brain`} className="text-foreground text-label min-w-0 flex-1">
+              Also move its Brain and code index to the Trash
+            </label>
+            <span className="text-muted-foreground text-label shrink-0">{formatBytes(preview.brainBytes)}</span>
           </div>
-        </section>
-      )}
-
-      <CheckboxRow
-        label={`Move its Brain and code index to the Trash (${formatBytes(preview.brainBytes)})`}
-        note="Unchecked, they stay in Brigadier's data folder, and Settings → Storage offers them later. Rebuilding them takes a while."
-        checked={trashBrain}
-        onCheckedChange={setTrashBrain}
-      />
-
-      {preview.blocked && <ErrorLine error={preview.blocked} />}
-      <ErrorLine error={error} />
-      <DialogFooter>
-        <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+        )}
+        {preview.blocked && <ErrorLine error={preview.blocked} />}
+        <ErrorLine error={error} />
+      </div>
+      <Actions>
+        <Button type="button" variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
           Cancel
         </Button>
         <Button
@@ -262,9 +229,13 @@ function RemoveForm({
         >
           {busy ? "Removing…" : "Remove"}
         </Button>
-      </DialogFooter>
-    </div>
+      </Actions>
+    </>
   );
+}
+
+function branchKey(branch: RemovalBranch): string {
+  return `${branch.repo}\n${branch.name}`;
 }
 
 /** What stayed behind: unmerged branches (with the command that deletes each) and failures. */
@@ -279,49 +250,46 @@ function Removed({
 }) {
   const kept = report.keptBranches.filter((branch) => !branch.merged);
   return (
-    <div className="grid gap-4">
-      <DialogHeader>
-        <DialogTitle>“{name}” was removed</DialogTitle>
-        <DialogDescription>
+    <>
+      <div className="flex flex-col gap-5">
+        <Head title={`“${name}” was removed`}>
           {report.brainTrashedBytes > 0
             ? `Its Brain (${formatBytes(report.brainTrashedBytes)}) is in the Trash.`
             : "Its repository was not touched."}
-        </DialogDescription>
-      </DialogHeader>
-      {kept.length > 0 && (
-        <section aria-labelledby="removed-kept" className="grid gap-1.5">
-          <h3 id="removed-kept" className="text-muted-foreground text-xs">
-            Branches kept with unmerged work
-          </h3>
-          <ul className="grid gap-2 text-sm">
-            {kept.map((branch) => (
-              <li key={branchKey(branch)} className="grid gap-0.5">
-                <span>{branch.name}</span>
-                <code className="text-muted-foreground text-xs break-all select-text">
-                  {branch.command}
-                </code>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-      {report.failures.length > 0 && (
-        <section aria-labelledby="removed-failures" className="grid gap-1.5">
-          <h3 id="removed-failures" className="text-muted-foreground text-xs">
-            Not done
-          </h3>
-          <ul className="text-destructive grid gap-1 text-sm">
-            {report.failures.map((failure) => (
-              <li key={failure}>{failure}</li>
-            ))}
-          </ul>
-        </section>
-      )}
-      <DialogFooter>
+        </Head>
+        {kept.length > 0 && (
+          <section aria-labelledby="removed-kept" className="flex flex-col gap-1.5">
+            <h3 id="removed-kept" className="text-foreground text-label font-medium">
+              Branches kept with unmerged work
+            </h3>
+            <ul className="flex flex-col gap-2 text-sm">
+              {kept.map((branch) => (
+                <li key={branchKey(branch)} className="flex flex-col gap-0.5">
+                  <span>{branch.name}</span>
+                  <code className="text-muted-foreground text-xs break-all select-text">{branch.command}</code>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+        {report.failures.length > 0 && (
+          <section aria-labelledby="removed-failures" className="flex flex-col gap-1.5">
+            <h3 id="removed-failures" className="text-foreground text-label font-medium">
+              Not done
+            </h3>
+            <ul className="text-destructive flex flex-col gap-1 text-sm">
+              {report.failures.map((failure) => (
+                <li key={failure}>{failure}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </div>
+      <Actions>
         <Button type="button" onClick={() => onOpenChange(false)}>
           Done
         </Button>
-      </DialogFooter>
-    </div>
+      </Actions>
+    </>
   );
 }
