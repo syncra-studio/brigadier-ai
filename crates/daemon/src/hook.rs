@@ -836,7 +836,14 @@ mod tests {
         })
         .expect("the rules");
         let ws = workspace.display().to_string();
-        let page = workspace.join("apps/web/page.tsx").display().to_string();
+        // A command's paths come out with the platform's separator (`\` on Windows).
+        let under = |dir: &Path, path: &str| {
+            path.split('/')
+                .fold(dir.to_path_buf(), |dir, part| dir.join(part))
+                .display()
+                .to_string()
+        };
+        let page = under(&workspace, "apps/web/page.tsx");
         let docs = workspace.join("docs").display().to_string();
         assert_eq!(
             *asked.borrow(),
@@ -864,10 +871,7 @@ mod tests {
             None
         });
         assert_eq!(printed, None, "nothing new to give");
-        assert_eq!(
-            *asked.borrow(),
-            [page.clone(), own.join("notes/new.md").display().to_string()]
-        );
+        assert_eq!(*asked.borrow(), [page.clone(), under(&own, "notes/new.md")]);
         // A `..` leads out of the folder it follows: `docs` is asked about, not `apps/docs`.
         asked.borrow_mut().clear();
         let up = format!(
@@ -896,8 +900,11 @@ mod tests {
             asked.borrow_mut().push(path.to_owned());
             rules(path)
         });
-        let web = workspace.join("apps/web").display().to_string();
-        assert!(printed.is_some_and(|printed| printed.contains(&format!("rules for {web}"))));
+        let web = under(&workspace, "apps/web");
+        // Read from the JSON, which escapes a Windows path's `\`.
+        let printed: Value = serde_json::from_str(&printed.expect("the rules")).unwrap();
+        let context = printed["hookSpecificOutput"]["additionalContext"].as_str();
+        assert!(context.is_some_and(|context| context.contains(&format!("rules for {web}"))));
         assert_eq!(*asked.borrow(), [web]);
         // A command naming nothing there asks about its own folder only; another tool or
         // another event asks nothing.
