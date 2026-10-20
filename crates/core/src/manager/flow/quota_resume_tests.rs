@@ -124,6 +124,59 @@ async fn a_reset_behind_a_second_window_still_shows() {
     flow.stop().await;
 }
 
+/// The five-hour window reset while the weekly one still holds the account that hit the
+/// limit, and another Claude account leads now: the turn goes on there, which isn't the limit
+/// resetting, so no divider (#277).
+#[tokio::test]
+async fn another_account_taking_over_is_no_reset() {
+    let (flow, turns) = waiting_flow("quota-resume-other-account").await;
+    let own = crate::accounts::AccountRef::new(ProviderKind::Claude, None);
+    assert_eq!(
+        flow.core
+            .conversation(&flow.conversation)
+            .unwrap()
+            .quota_wait
+            .unwrap()
+            .account
+            .as_ref(),
+        Some(&own),
+        "the wait names the account that hit the limit"
+    );
+    flow.until("the five-hour window to reset", |_| {
+        crate::now_ms() > waiting_reset(&flow)
+    })
+    .await;
+    flow.manager.runtime.monitor().note(
+        &own,
+        &brigadier_providers::QuotaSnapshot {
+            provider: ProviderKind::Claude,
+            windows: Vec::new(),
+            limit: Some(brigadier_providers::LimitHit {
+                kind: brigadier_providers::LimitKind::UsageWindow,
+                window: Some("seven_day".into()),
+                resets_at_ms: Some(crate::now_ms() + 3_600_000),
+            }),
+            observed_at_ms: crate::now_ms(),
+            source: brigadier_providers::QuotaSource::Read,
+        },
+        crate::now_ms(),
+    );
+    flow.add_accounts(&[(ProviderKind::Claude, "acct-b")], true)
+        .await;
+    flow.manager.retry_waiting_conversations().await;
+    let board = flow
+        .until("the request done", |board| {
+            board
+                .requests
+                .values()
+                .any(|request| request.state == RequestState::Done)
+        })
+        .await;
+    assert_eq!(resumed(&board), []);
+    assert_eq!(turns.load(Ordering::SeqCst), 2);
+    flow.stop().await;
+}
+
 /// A flow whose first turn hits a limit that resets in a moment; Codex is off, so nothing
 /// stands in and the thread waits. Also counts the turns.
 async fn waiting_flow(name: &str) -> (Flow, Arc<AtomicUsize>) {

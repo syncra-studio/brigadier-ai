@@ -218,6 +218,12 @@ pub struct QuotaWait {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(skip)]
     pub first_reset_ms: Option<i64>,
+    /// The account that hit the limit a conversation's wait is for: its reset counts only
+    /// once that account is free again, not when another one leads (#277). A task's wait has
+    /// none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub account: Option<crate::accounts::AccountRef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

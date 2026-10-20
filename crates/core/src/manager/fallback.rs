@@ -451,6 +451,7 @@ impl SessionManager {
             model: None,
             request: None,
             first_reset_ms: None,
+            account: None,
         };
         // Waiting as before for the same reason: nothing to record again.
         let unchanged = task.state == TaskState::Paused

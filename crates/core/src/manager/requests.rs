@@ -1022,6 +1022,7 @@ mod tests {
                     model: None,
                     request: None,
                     first_reset_ms: None,
+                    account: None,
                 })
             });
             board.tasks.insert(task.id.clone(), task);

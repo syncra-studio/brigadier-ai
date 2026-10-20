@@ -1219,6 +1219,7 @@ impl SessionManager {
                     model: None,
                     request: None,
                     first_reset_ms: None,
+                    account: None,
                 };
                 (route, Some(wait))
             }

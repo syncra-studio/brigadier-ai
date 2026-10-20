@@ -169,11 +169,45 @@ impl SessionManager {
         if !self.provider_ready(choice.provider) {
             return false;
         }
+        self.model_free(choice, None).await
+    }
+
+    /// Whether `account` itself could run `choice` now by its own quota, whichever account
+    /// leads its provider: no limit, and no window that limits that model used up (#277).
+    pub(crate) async fn account_frees_choice(
+        &self,
+        choice: &ModelChoice,
+        account: &crate::accounts::AccountRef,
+    ) -> bool {
+        let now = crate::now_ms();
+        let limited = self
+            .runtime
+            .monitor()
+            .current_for(account, now)
+            .is_some_and(|quota| quota.limit.is_some());
+        !limited && self.model_free(choice, Some(account)).await
+    }
+
+    /// Whether no window that limits `choice`'s model is used up: its provider's lead
+    /// account's, or `account`'s when given. A model routing doesn't list is free.
+    async fn model_free(
+        &self,
+        choice: &ModelChoice,
+        account: Option<&crate::accounts::AccountRef>,
+    ) -> bool {
         let Some(id) = choice.model.as_deref() else {
             return true;
         };
         let now = crate::now_ms();
-        let inputs = self.routing_inputs(None, now).await;
+        let mut inputs = self.routing_inputs(None, now).await;
+        if let Some(account) = account
+            && let Some(state) = inputs
+                .providers
+                .iter_mut()
+                .find(|state| state.provider == account.provider)
+        {
+            state.quota = self.runtime.account_usage(account, now);
+        }
         inputs
             .models
             .iter()
