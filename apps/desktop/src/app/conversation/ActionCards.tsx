@@ -17,6 +17,7 @@ import { pendingActionKeys, type PendingAction } from "@/app/conversation/pendin
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
 import { questionRound, uncommittedCard } from "@/app/conversation/cards/questionRound";
+import { StepCounter } from "@/app/conversation/StepCounter";
 import { revealOvernight } from "@/app/conversation/summaryState";
 import { useAction } from "@/app/conversation/useAction";
 import { ViewContext } from "@/app/conversation/viewContext";
@@ -36,20 +37,7 @@ import {
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
 import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
 import { Button } from "@/components/ui/button";
-import {
-  ChevronLeft,
-  ChevronRight,
-  Commit,
-  Dock,
-  Globe,
-  Key,
-  Mic,
-  PencilSquare,
-  QuestionMarkCircle,
-  Reply,
-  Sparkle,
-  Spinner,
-} from "@/components/icons";
+import { Commit, Dock, Globe, Key, Mic, PencilSquare, QuestionMarkCircle, Reply, Sparkle, Spinner } from "@/components/icons";
 import {
   Tooltip,
   TooltipContent,
@@ -567,7 +555,18 @@ export function ApprovalAction({
           {shown.icon}
           <span className="shrink-0">{shown.kind}</span>
           {actorId !== null && <WorkerChip taskId={actorId} className="min-w-0" />}
-          {step && step.total > 1 && <StepCounter step={step} />}
+          {step && step.total > 1 && (
+            <StepCounter
+              data-slot="approval-step"
+              noun="request"
+              at={step.index}
+              count={step.total}
+              canBack={step.index > 0}
+              canForward={step.index < step.total - 1}
+              onStep={(by) => step.onStep(step.index + by)}
+              className="ms-auto"
+            />
+          )}
         </div>
         <div role="alert" aria-atomic="true">
           <ActionCardTitle>{shown.title}</ActionCardTitle>
@@ -645,26 +644,6 @@ export function ApprovalAction({
       </ActionCardActions>
       {footer}
     </ActionCard>
-  );
-}
-
-/** "‹ 1 of 3 ›" at the end of an approval's header. */
-function StepCounter({ step }: { step: ApprovalStep }) {
-  const { index, total, onStep } = step;
-  const arrow =
-    "text-foreground/50 hover:text-foreground hover:bg-foreground/8 rounded-capsule size-control-xs flex items-center justify-center transition-colors disabled:opacity-30 [&_svg]:size-icon-xs";
-  return (
-    <span data-slot="approval-step" className="ms-auto flex shrink-0 items-center gap-0.5 tabular-nums">
-      <button type="button" aria-label="Previous request" className={arrow} disabled={index === 0} onClick={() => onStep(index - 1)}>
-        <ChevronLeft />
-      </button>
-      <span>
-        {index + 1} of {total}
-      </span>
-      <button type="button" aria-label="Next request" className={arrow} disabled={index >= total - 1} onClick={() => onStep(index + 1)}>
-        <ChevronRight />
-      </button>
-    </span>
   );
 }
 
@@ -1098,12 +1077,15 @@ function QuestionAction({
   const picked = given === null ? -1 : item.options.findIndex((option) => option.label === given);
   const pager =
     round.length > 1 ? (
-      <RoundPager
+      <StepCounter
+        data-slot="round-pager"
+        noun="question"
         at={at}
         count={round.length}
         canBack={reachable(at - 1)}
         canForward={reachable(at + 1)}
-        onPage={(step) => setPage(at + step)}
+        onStep={(step) => setPage(at + step)}
+        className="-mt-0.5 h-icon-button-sm"
       />
     ) : undefined;
   return (
@@ -1181,37 +1163,6 @@ function QuestionAction({
       footer={footer}
       stagger={stagger && at === 0}
     />
-  );
-}
-
-/** A round's "‹ 1 of 3 ›": back to a question answered, on to the next one open. */
-function RoundPager({
-  at,
-  count,
-  canBack,
-  canForward,
-  onPage,
-}: {
-  at: number;
-  count: number;
-  canBack: boolean;
-  canForward: boolean;
-  onPage: (step: -1 | 1) => void;
-}) {
-  const button =
-    "text-foreground/50 hover:bg-foreground/8 rounded-capsule size-icon-button-sm [&_svg]:size-icon-sm flex shrink-0 items-center justify-center transition-colors disabled:opacity-40";
-  return (
-    <div data-slot="round-pager" className="text-foreground/50 -mt-0.5 flex shrink-0 items-center gap-1 text-xs tabular-nums">
-      <button type="button" aria-label="Previous question" className={button} disabled={!canBack} onClick={() => onPage(-1)}>
-        <ChevronLeft />
-      </button>
-      <span>
-        {at + 1} of {count}
-      </span>
-      <button type="button" aria-label="Next question" className={button} disabled={!canForward} onClick={() => onPage(1)}>
-        <ChevronRight />
-      </button>
-    </div>
   );
 }
 

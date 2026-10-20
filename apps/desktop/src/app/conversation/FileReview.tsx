@@ -1,9 +1,10 @@
 import { type FC, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { DiffView, type DiffNote } from "@/app/conversation/diffView";
+import { StepCounter } from "@/app/conversation/StepCounter";
 import { shortcutKeys } from "@/app/shortcutCatalog";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "@/components/icons";
+import { ChevronRight } from "@/components/icons";
 import { Kbd } from "@/components/ui/kbd";
 import type { PendingFile } from "@/ipc/generated";
 import { request } from "@/ipc/client";
@@ -130,28 +131,6 @@ export function useFileReview(conversationId: string, path: string, again: numbe
   return { conversationId, path, paths, file, shown, current: at, setCurrent, step, box, busy, act, keepAll, move };
 }
 
-/** Up and down (or back and forth) around "1 of 2". */
-const Steps: FC<{ label: string; words: string; onStep: (step: 1 | -1) => void; across?: boolean; slot: string }> = ({
-  label,
-  words,
-  onStep,
-  across = false,
-  slot,
-}) => {
-  const [Back, On] = across ? [ChevronLeft, ChevronRight] : [ChevronUp, ChevronDown];
-  return (
-    <span data-slot={slot} className="text-muted-foreground flex items-center gap-0.5 text-xs tabular-nums">
-      <button type="button" aria-label={`Previous ${label}`} className="hover:text-foreground rounded-control p-0.5" onClick={() => onStep(-1)}>
-        <Back className="size-icon-xs" />
-      </button>
-      <span className="whitespace-nowrap">{words}</span>
-      <button type="button" aria-label={`Next ${label}`} className="hover:text-foreground rounded-control p-0.5" onClick={() => onStep(1)}>
-        <On className="size-icon-xs" />
-      </button>
-    </span>
-  );
-};
-
 /** A change's own bar in this tab's diff. */
 function changeBar(box: HTMLElement | null, index: number): HTMLElement | null {
   return box?.querySelector<HTMLElement>(`[data-slot="review-change"][data-index="${index}"]`) ?? null;
@@ -203,13 +182,14 @@ export const FileReviewBar: FC<{ review: FileReviewState }> = ({ review }) => {
   const count = file.hunks.length;
   return (
     <span data-slot="review-bar" className="flex shrink-0 items-center gap-2">
-      {count > 0 && <Steps slot="review-changes" label="change" words={`${current + 1} of ${count}`} onStep={(by) => review.step(by)} />}
+      {count > 0 && <StepCounter data-slot="review-changes" noun="change" vertical at={current} count={count} onStep={(by) => review.step(by)} />}
       <span className="bg-border h-3 w-px" />
-      <Steps
-        slot="review-files"
-        label="file"
-        across
-        words={`${paths.indexOf(path) + 1} of ${paths.length} ${paths.length === 1 ? "File" : "Files"}`}
+      <StepCounter
+        data-slot="review-files"
+        noun="file"
+        at={paths.indexOf(path)}
+        count={paths.length}
+        unit={paths.length === 1 ? "File" : "Files"}
         onStep={review.move}
       />
       <Button
@@ -237,7 +217,7 @@ const ChangeBar: FC<{ review: FileReviewState; index: number }> = ({ review, ind
     <div data-slot="review-change" data-index={index} data-current={now || undefined} className="relative h-0 font-sans">
       <div className="absolute -top-(--text-diff--line-height) end-3 flex gap-1">
         <span className="bg-muted rounded-control flex h-control-xs items-center px-1">
-          <Steps slot="review-change-steps" label="change" words={`${index + 1} of ${file.hunks.length}`} onStep={(by) => review.step(by, index)} />
+          <StepCounter data-slot="review-change-steps" noun="change" vertical at={index} count={file.hunks.length} onStep={(by) => review.step(by, index)} />
         </span>
         <Button
           size="xs"

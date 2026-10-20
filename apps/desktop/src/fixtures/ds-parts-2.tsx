@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { Counts } from "@/app/conversation/Counts";
+import { StepCounter } from "@/app/conversation/StepCounter";
 import { CopyButton } from "@/components/assistant-ui/copy-button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { colourOf } from "@/fixtures/look";
@@ -52,8 +53,37 @@ function fontOf(className: string, property: "fontFamily" | "fontSize" = "fontFa
   return font;
 }
 
+/** A pager's words, face, arrows (name, off, icon, corners, fill) and their colour. */
+function pager(slot: string) {
+  const element = one(`[data-probe="${slot}"]`);
+  if (!element) return null;
+  const css = getComputedStyle(element);
+  const arrows = Array.from(element.querySelectorAll("button")).map((button) => ({
+    label: button.getAttribute("aria-label"),
+    disabled: button.disabled,
+    icon: button.querySelector("svg")?.getBoundingClientRect().width,
+    radius: getComputedStyle(button).borderTopLeftRadius,
+    background: getComputedStyle(button).backgroundColor,
+  }));
+  return { text: element.textContent, size: css.fontSize, color: css.color, arrows };
+}
+
+/** The width `className` gives, read off a probe. */
+function widthOf(className: string): number {
+  const probe = document.body.appendChild(Object.assign(document.createElement("div"), { className }));
+  const width = probe.getBoundingClientRect().width;
+  probe.remove();
+  return width;
+}
+
 function read() {
   return {
+    pager: {
+      round: pager("pager"),
+      files: pager("pager-files"),
+      bare: pager("pager-bare"),
+      look: { muted: colourOf("text-muted-foreground", "color"), none: colourOf("bg-transparent"), control: getComputedStyle(one('[data-probe="control"]')!).borderTopLeftRadius, icon: widthOf("size-icon-xs") },
+    },
     counts: {
       plain: counts("counts"),
       zero: counts("counts-zero"),
@@ -90,6 +120,12 @@ function Fixture() {
           <span className="group">
             <Counts data-probe="counts-quiet" quiet insertions={7} deletions={2} />
           </span>
+        </section>
+        <section data-group="pager" className="flex items-center gap-4">
+          <StepCounter data-probe="pager" noun="question" at={0} count={3} canBack={false} onStep={() => {}} />
+          <StepCounter data-probe="pager-files" noun="file" at={1} count={4} unit="Files" onStep={() => {}} />
+          <StepCounter data-probe="pager-bare" noun="conflict" vertical onStep={() => {}} />
+          <span data-probe="control" className="rounded-control" />
         </section>
         <section data-group="copy" className="flex items-center gap-4">
           <CopyButton data-probe="copy" text="npm test" tooltip="Copy command" size="icon-xs" />

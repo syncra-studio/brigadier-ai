@@ -25,4 +25,22 @@ test("the merged small parts (11–14) draw as one look each", { timeout: 90000 
   assert.deepEqual(copy.checked, [true, true]);
   assert.deepEqual(copy.copied, ["npm test", "# Plan"]);
   assert.equal(copy.cardClicks, 0);
+
+  // One pager: bare arrows (control corners, no fill) around grey 12px "n of m"; an end's arrow is off.
+  const { pager } = seen;
+  assert.equal(pager.round.text, "1 of 3");
+  assert.equal(pager.files.text, "2 of 4 Files");
+  assert.equal(pager.bare.text, "");
+  assert.equal(pager.round.size, colours.xs);
+  assert.equal(pager.round.color, pager.look.muted);
+  assert.deepEqual(
+    pager.round.arrows.map((arrow: { label: string; disabled: boolean }) => [arrow.label, arrow.disabled]),
+    [["Previous question", true], ["Next question", false]],
+  );
+  assert.deepEqual(pager.bare.arrows.map((arrow: { label: string }) => arrow.label), ["Previous conflict", "Next conflict"]);
+  for (const arrow of [...pager.round.arrows, ...pager.bare.arrows]) {
+    assert.equal(arrow.radius, pager.look.control);
+    assert.equal(arrow.background, pager.look.none);
+    assert.equal(arrow.icon, pager.look.icon);
+  }
 });

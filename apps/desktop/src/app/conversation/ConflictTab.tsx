@@ -16,10 +16,9 @@ import {
   UNTOUCHED,
 } from "@/app/conversation/conflicts";
 import { DiffView } from "@/app/conversation/diffView";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { StepCounter } from "@/app/conversation/StepCounter";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { ArrowDown, ArrowUp } from "@/components/icons";
 import { request } from "@/ipc/client";
 import type { ConflictFile, SourceState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -193,17 +192,6 @@ function useConflictSteps(root: RefObject<HTMLDivElement | null>, count: number)
   };
 }
 
-const Steps: FC<{ onStep: (step: 1 | -1) => void; disabled: boolean }> = ({ onStep, disabled }) => (
-  <>
-    <TooltipIconButton tooltip="Previous Conflict" size="icon-xs" disabled={disabled} onClick={() => onStep(-1)}>
-      <ArrowUp />
-    </TooltipIconButton>
-    <TooltipIconButton tooltip="Next Conflict" size="icon-xs" disabled={disabled} onClick={() => onStep(1)}>
-      <ArrowDown />
-    </TooltipIconButton>
-  </>
-);
-
 /* ---------- conflicts in place ---------- */
 
 const ConflictView: FC<{
@@ -257,7 +245,7 @@ const ConflictView: FC<{
     <div ref={root} data-slot="conflict-tab" className="relative flex min-h-0 flex-1 flex-col">
       <div className="border-border flex h-control-lg shrink-0 items-center gap-1 border-b px-2">
         <span className="text-muted-foreground flex-1 truncate px-1.5 text-sm">{path}</span>
-        <Steps onStep={step} disabled={count === 0} />
+        <StepCounter noun="conflict" vertical onStep={step} canBack={count > 0} canForward={count > 0} />
       </div>
       <RebaseStep file={file} />
       {file.text === null ? (
@@ -392,7 +380,7 @@ const MergeEditor: FC<{
     <div ref={root} data-slot="merge-editor" className="relative flex min-h-0 flex-1 flex-col">
       <div className="border-border flex h-control-lg shrink-0 items-center gap-1 border-b px-2">
         <span className="text-muted-foreground flex-1 truncate px-1.5 text-sm">{tab.path}</span>
-        <Steps onStep={step} disabled={count === 0} />
+        <StepCounter noun="conflict" vertical onStep={step} canBack={count > 0} canForward={count > 0} />
       </div>
       <RebaseStep file={opened} />
       <div className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2">
