@@ -91,4 +91,11 @@ byId<HTMLInputElement>("code").value = "123456";
 seen.filled = (agent({ kind: "read", max: 20000 }) as { text: string }).text.split("\n")
   .filter((line) => /assword|Card number|Code|PIN/.test(line));
 
+// A display: contents wrapper has no box of its own, but what it holds shows (#362).
+const wrapper = document.createElement("div");
+wrapper.style.display = "contents";
+wrapper.innerHTML = '<p>Inside a wrapper</p><button>Wrapped</button><span style="visibility: hidden">Hidden inside</span>';
+document.body.append(wrapper);
+seen.contents = (agent({ kind: "read", max: 20000 }) as { text: string }).text.split("\n").slice(-2);
+
 byId("agent-browser-result").textContent = JSON.stringify(seen);

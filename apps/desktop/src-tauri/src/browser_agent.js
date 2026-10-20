@@ -17,11 +17,13 @@
   const cut = (text, most = 80) => (text.length > most ? `${text.slice(0, most - 1)}…` : text);
   const quoted = (text) => JSON.stringify(cut(clean(text)));
 
-  const shown = (element) => {
+  const boxed = (element) => {
     if (element.checkVisibility) return element.checkVisibility({ visibilityProperty: true });
     const rect = element.getBoundingClientRect();
     return rect.width > 0 || rect.height > 0;
   };
+  // A display: contents wrapper has no box of its own: what it holds shows or not by itself.
+  const shown = (element) => boxed(element) || getComputedStyle(element).display === "contents";
 
   const INPUT_ROLES = {
     button: "button", submit: "button", reset: "button", image: "button",
