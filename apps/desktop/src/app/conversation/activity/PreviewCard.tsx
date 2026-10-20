@@ -417,23 +417,24 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
   );
 }
 
-/** A web page's preview: a local server with an address. */
-const isPage = (preview: Preview) => preview.url !== null && !isOtherPreview(preview);
+/** A web page's preview: a local server with an address (one that ended before it gave one is none, #450). */
+const isPage = (preview: Preview) => !!preview.url && !isOtherPreview(preview);
 
 /**
  * A finished turn's previews, each a card with the proofs taken of it: its page, then its other
- * previews. The page is one the turn started or took proofs of, or one still running on the local
- * address its answer names (`answered`, read as that address, route and all). An address in the
- * answer with no preview behind it is no card (#438).
+ * previews. The page is the one on the local address its answer names (`answered`, read as that
+ * address, route and all), when the turn started it or it is still running (#451); else the
+ * latest the turn started or took proofs of. An address in the answer with no preview behind it
+ * is no card (#438).
  */
 export function TurnPreviews({ requestIds, steps, answered, session }: { requestIds: readonly string[]; steps: readonly BlockOrchestratorStep[]; answered: string | null; session: boolean }) {
-  const own = useTurnPreviews(requestIds, steps, isPage)
-    .toSorted((a, b) => a.startedAtMs - b.startedAtMs)
-    .at(-1);
+  const pages = useTurnPreviews(requestIds, steps, isPage);
+  const own = pages.toSorted((a, b) => a.startedAtMs - b.startedAtMs).at(-1);
+  const said = answered !== null && pages.some((each) => samePage(each, answered));
   const serving = useBoard(
     (s) => answered !== null && Object.values(s.board?.previews ?? {}).some((each) => isPage(each) && !["stopped", "exited"].includes(each.state.type) && samePage(each, answered)),
   );
-  const url = own ? (answered && samePage(own, answered) ? answered : (own.url ?? null)) : serving ? answered : null;
+  const url = said || serving ? answered : (own?.url ?? null);
   const others = useTurnPreviews(requestIds, steps, isOtherPreview);
   const ofPreview = (id: string | null) =>
     steps.filter((step) =>

@@ -25,6 +25,11 @@
  * - `turn-said`: a turn that started nothing, its answer naming an address no preview serves: no
  *   card (#438). `turn-said-stopped`: the address of an older preview, stopped: no card either.
  *   `turn-running`: the address of an older preview still running: its card, route and all.
+ * - `turn-later-no-url`: a turn's server still running, then a server that ended before it gave an
+ *   address and an app: the running server's card (#450).
+ * - `turn-two-servers`: the app's server, then a smoke-test server, the answer naming the app's:
+ *   the app's card (#451).
+ * - `turn-stopped`: the turn's server stopped, its answer naming it: Stopped, Start again, no Open (#407).
  *
  * `?case=<id>` shows one case alone (for a screenshot); `?drive=1` writes what each case shows,
  * then clicks through it, to `<pre id="preview-card-result">` (PreviewCardRender.test.ts).
@@ -102,6 +107,26 @@ const OTHERS = [
   { ...other("preview-again", "test", "npm run lint", { type: "exited", code: 0, status: "exit 0" }, 7000, "npm run lint"), requestId: "turn-1" },
 ];
 
+// Later turns' pages. turn-3: a server still running, then a second one that ended before it gave
+// an address, and an app (#450). turn-4: the app's server, then a smoke-test server on another
+// port, both running, its answer naming the app's (#451). turn-5: a server that stopped, its answer
+// naming it (#407).
+const noUrl = (each: Preview): Preview => {
+  const { url: _, ...rest } = each;
+  return rest;
+};
+const LATER_TURNS: Preview[] = [
+  { ...preview("preview-t3", 4100, { type: "running" }), startedAtMs: 10100, requestId: "turn-3" },
+  { ...noUrl(preview("preview-t3-failed", 4101, { type: "exited", code: 1, status: "exit 1" })), startedAtMs: 10500, requestId: "turn-3" },
+  { ...noUrl(preview("preview-t3-app", 0, { type: "starting" })), kind: "app", startedAtMs: 10800, requestId: "turn-3" },
+  { ...preview("preview-t4-app", 4200, { type: "running" }), startedAtMs: 13100, requestId: "turn-4" },
+  { ...preview("preview-t4-smoke", 4300, { type: "running" }), startedAtMs: 13500, requestId: "turn-4" },
+  { ...preview("preview-t5", 4400, { type: "stopped", reason: "stopped" }), startedAtMs: 16100, requestId: "turn-5" },
+];
+const turnRequest = (id: string, startedAtMs: number, endedAtMs: number) => ({
+  id, conversationId: CHAT, preview: "", state: { type: "done" }, startedAtMs, endedAtMs, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false,
+});
+
 useBoard.setState({
   board: {
     ...emptyBoard(CHAT),
@@ -114,12 +139,16 @@ useBoard.setState({
         // Started while the turn's request ran: its page.
         { ...preview("preview-own", 4000, { type: "running" }), startedAtMs: 1500 },
         ...OTHERS,
+        ...LATER_TURNS,
       ].map((each) => [each.id, each]),
     ),
     requests: {
       "turn-1": { id: "turn-1", conversationId: CHAT, preview: "", state: { type: "done" }, startedAtMs: 1000, endedAtMs: 5000, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false },
       // A later turn that started nothing.
       "turn-2": { id: "turn-2", conversationId: CHAT, preview: "", state: { type: "done" }, startedAtMs: 6000, endedAtMs: 8000, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false },
+      "turn-3": turnRequest("turn-3", 10000, 12000),
+      "turn-4": turnRequest("turn-4", 13000, 15000),
+      "turn-5": turnRequest("turn-5", 16000, 18000),
     } as unknown as ReturnType<typeof emptyBoard>["requests"],
   },
 });
@@ -175,6 +204,9 @@ const CASES: { id: string; node: ReactNode }[] = [
   { id: "turn-said", node: <Turn request="turn-2" answer="Run `npm run dev`; it starts on http://localhost:5173." /> },
   { id: "turn-said-stopped", node: <Turn request="turn-2" answer="It was on http://localhost:3003/ earlier." /> },
   { id: "turn-running", node: <Turn request="turn-2" answer="Still running at http://localhost:3000/#/todos." /> },
+  { id: "turn-later-no-url", node: <Turn request="turn-3" /> },
+  { id: "turn-two-servers", node: <Turn request="turn-4" answer="The app is up at http://localhost:4200/." /> },
+  { id: "turn-stopped", node: <Turn request="turn-5" answer="It ran at http://localhost:4400/." /> },
 ];
 
 const only = query.get("case");
@@ -267,6 +299,11 @@ async function drive() {
   out.turn = cards("turn");
   // Only a preview really started makes a page's card, never an address in the answer (#438).
   out.said = [cards("turn-said"), cards("turn-said-stopped"), cards("turn-running")];
+  // A later preview with no address leaves the page's card (#450); the page the answer names is
+  // the card's, not the turn's latest server (#451); a page that stopped is no Open (#407).
+  out.later = [cards("turn-later-no-url"), cards("turn-two-servers")];
+  const stopped = look("turn-stopped");
+  out.turnStopped = [stopped.title, stopped.standing, stopped.target, stopped.buttons];
   out.noRecord = !!at("no-record")?.querySelector("[data-slot=preview-card]");
   out.calls = calls;
   return out;

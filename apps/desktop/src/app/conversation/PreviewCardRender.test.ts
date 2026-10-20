@@ -24,6 +24,8 @@ type Seen = {
   cases: Record<"running" | "collapsed" | "paused" | "stopped" | "no-proofs" | "no-record" | "proofs-only" | "test-output" | "simulator" | "pdf" | "pdf-uncounted" | "test-run" | "test-failed" | "test-uncounted", Look>;
   turn: [string | null, string | null][];
   said: [string | null, string | null][][];
+  later: [string | null, string | null][][];
+  turnStopped: [string | null, string | null, string | null, string[]];
   noRecord: boolean;
   opened: string | null;
   browserTabs: number;
@@ -95,6 +97,11 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   // older preview still running on it is the page, route and all.
   assert.equal(seen.noRecord, false);
   assert.deepEqual(seen.said, [[], [], [["Web preview", "localhost:3000/#/todos"]]]);
+  // A later preview that ended before it gave an address, or an app, leaves the running page's
+  // card (#450); the page the answer names is the card's, not the turn's latest server (#451).
+  assert.deepEqual(seen.later, [[["Web preview", "localhost:4100"]], [["Web preview", "localhost:4200"]]]);
+  // The turn's page stopped: the card says so and offers Start again, never Open (#407).
+  assert.deepEqual(seen.turnStopped, ["Web preview", "Stopped", "localhost:4400", ["Start again"]]);
   // Proofs with no page left running: their card alone.
   const alone = cases["proofs-only"];
   assert.deepEqual([alone.title, alone.count, alone.buttons], ["Screenshots and recordings", "1 screenshot, 1 recording", ["Fold the proofs"]]);
