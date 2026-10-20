@@ -1,11 +1,11 @@
-import { Check, Globe } from "@openai/apps-sdk-ui/components/Icon";
-import { Checkbox as CheckboxPrimitive } from "radix-ui";
+import { Globe } from "@openai/apps-sdk-ui/components/Icon";
 import { useCallback, useEffect, useId, useState } from "react";
 
 import { CheckboxRow, errorText } from "@/app/dialogs/fields";
 import { SettingsButton, SettingsCard, SettingsPage, SettingsSection } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { ImportFailure, ImportProgress, ImportSource } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -504,16 +504,12 @@ function ProfilePick({
       data-slot="import-profile"
       className="not-last:border-divider flex items-start gap-3 px-4 py-3 not-last:border-b"
     >
-      <CheckboxPrimitive.Root
+      <Checkbox
         id={id}
         checked={checked}
         onCheckedChange={(state) => onCheckedChange(state === true)}
-        className="border-input data-[state=checked]:bg-primary data-[state=checked]:border-primary data-[state=checked]:text-primary-foreground mt-0.5 flex size-icon-md shrink-0 items-center justify-center rounded-xs border"
-      >
-        <CheckboxPrimitive.Indicator>
-          <Check className="size-icon-xs" />
-        </CheckboxPrimitive.Indicator>
-      </CheckboxPrimitive.Root>
+        className="mt-0.5"
+      />
       <label htmlFor={id} className="grid min-w-0 flex-1 gap-0.5">
         <span className="text-label break-words">{name}</span>
         {cookies !== null && <span className="text-foreground/65 text-xs">{counted(cookies, "cookie", "cookies")}</span>}

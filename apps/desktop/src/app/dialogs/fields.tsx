@@ -1,8 +1,8 @@
-import { Check, FolderOpen } from "@openai/apps-sdk-ui/components/Icon";
-import { Checkbox as CheckboxPrimitive } from "radix-ui";
+import { FolderOpen } from "@openai/apps-sdk-ui/components/Icon";
 import { useId, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { pickFolder } from "@/ipc/client";
 import { cn } from "@/lib/utils";
@@ -114,17 +114,13 @@ export function CheckboxRow({
   const id = useId();
   return (
     <div className={cn("flex items-start gap-2.5", disabled && "opacity-60")}>
-      <CheckboxPrimitive.Root
+      <Checkbox
         id={id}
         checked={checked}
         disabled={disabled}
         onCheckedChange={(state) => onCheckedChange(state === true)}
-        className="border-input data-[state=checked]:bg-primary data-[state=checked]:border-primary data-[state=checked]:text-primary-foreground rounded-xs mt-0.5 flex size-icon-md shrink-0 items-center justify-center border disabled:cursor-not-allowed"
-      >
-        <CheckboxPrimitive.Indicator>
-          <Check className="size-icon-xs" />
-        </CheckboxPrimitive.Indicator>
-      </CheckboxPrimitive.Root>
+        className="mt-0.5"
+      />
       <label htmlFor={id} className="grid gap-0.5">
         <span className="text-sm">{label}</span>
         {note && <span className="text-muted-foreground text-xs">{note}</span>}
