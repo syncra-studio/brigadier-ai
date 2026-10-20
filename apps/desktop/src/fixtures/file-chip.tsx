@@ -211,6 +211,8 @@ async function closeReader() {
 const seen: Record<string, unknown> = {};
 try {
   await until("the chips", () => Object.keys(links).every((id) => chip(id)));
+  // The list's second tile shows on its own and moves the early link down: clicked only once it did.
+  await until("the second tile", () => !!document.querySelector("[data-fixture=list] [data-slot=file-chip-picture]"));
   // A picture clicked before its read ends opens in the image viewer once it ends, never elsewhere.
   await fixtureClick(document.querySelector<HTMLElement>("[data-fixture=early] [data-slot=file-chip]")!);
   await sleep(100);

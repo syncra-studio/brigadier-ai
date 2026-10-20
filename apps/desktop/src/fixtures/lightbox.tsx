@@ -112,6 +112,9 @@ async function measure() {
   out.expectedBytes = Array.from(new Uint8Array(await (await fetch(url)).arrayBuffer()));
   out.toastsAfterCancel = useToasts.getState().toasts.map((entry) => entry.text);
   await key("ArrowRight");
+  // Its fit is known once the large picture has loaded.
+  while (!one<HTMLImageElement>("[data-slot=image-preview] img").complete) await wait(16);
+  await wait();
   const fitted = scale();
   button("Zoom in image").click(); await wait(); const above = scale();
   button("Zoom out image").click(); await wait();
