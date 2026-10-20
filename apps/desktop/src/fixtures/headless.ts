@@ -15,7 +15,6 @@ function chromium(): string {
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
     "/usr/bin/google-chrome",
-    "C:/Program Files/Google/Chrome/Application/chrome.exe",
   ];
   for (const cache of [
     join(homedir(), "Library/Caches/ms-playwright"),
@@ -35,10 +34,12 @@ function chromium(): string {
         "chrome-headless-shell-linux64/chrome-headless-shell",
         "chrome-linux/chrome",
         "chrome-headless-shell-win64/chrome-headless-shell.exe",
-        "chrome-win64/chrome.exe",
       ]) candidates.push(join(cache, entry, binary));
     }
   }
+  // Windows Chrome last: its headless mode keeps the scrollbars --hide-scrollbars hides in the
+  // headless shell, and they take room there.
+  candidates.push("C:/Program Files/Google/Chrome/Application/chrome.exe");
   for (const candidate of candidates) {
     if (!candidate) continue;
     try {
