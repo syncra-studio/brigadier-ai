@@ -267,6 +267,22 @@ export function requestSpans(request: UserRequest): WorkSpan[] {
   return spans.map((span) => (span.toMs === null && over && request.endedAtMs !== null ? { ...span, toMs: request.endedAtMs } : span));
 }
 
+/**
+ * When a turn worked, as its work header times it: its newest request and each request that one
+ * was steered into. A follow-up that joined the running turn has a request of its own, started
+ * as it joined, and the turn's time still runs from its first message (#446).
+ */
+export function turnSpans(requests: Readonly<Record<string, UserRequest>>, newest: string): WorkSpan[] {
+  const spans: WorkSpan[] = [];
+  const seen = new Set<string>();
+  for (let id: string | null = newest; id !== null && !seen.has(id); id = requests[id]?.steeredInto ?? null) {
+    seen.add(id);
+    const request = requests[id];
+    if (request) spans.push(...requestSpans(request));
+  }
+  return spans;
+}
+
 /** When a request waited for the answer to its question cards; a span still open on a request that is over ends with it. */
 export function requestWaits(request: UserRequest): WorkSpan[] {
   const over = !isLive(request.state.type);

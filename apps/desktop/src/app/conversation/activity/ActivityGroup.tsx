@@ -191,13 +191,13 @@ function useStepNames(described: Described | undefined, live: boolean): boolean 
  * also while it runs. A group of one step is that step's own row, except while it says the live
  * line or sums up work a follow-up cut short; opened, that row stays as it is, live line or not.
  */
-export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, liveLabel = null, summary = false }: {
+export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, liveLabel = null, summary: steeredAfter = false }: {
   items: readonly GroupItem<S>[];
   /** It is the live turn's last group: it says what happens now. */
   live: boolean;
   /** The turn's live line, said by this row unless its step runs (what waits on the user wins even then). */
   liveLabel?: StatusHead | null | undefined;
-  /** The user steered a message in after it: it sums its steps up at once ("Ran a command"), still or not. */
+  /** The user steered a message in after it: it sums its steps up at once ("Ran a command"), once none still runs. */
   summary?: boolean | undefined;
   describe: (step: S) => Described;
   renderStep: (step: S, key: string) => ReactNode;
@@ -217,6 +217,8 @@ export function ActivityGroup<S>({ items, live, describe, renderStep, reveal, li
     if (holds) setOpen(true);
   }
   const described = items.map((item) => describe(item.step));
+  // A follow-up that joined is read once the command ends (#437): a step still running keeps its words (#445).
+  const summary = steeredAfter && described.every((step) => step.status !== "inProgress");
   const current = described.at(-1);
   const first = described[0];
   const stepNames = useStepNames(current, !summary && live);

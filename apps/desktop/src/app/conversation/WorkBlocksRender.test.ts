@@ -174,13 +174,15 @@ test("a message steered in before the turn did anything sits under the first, ab
   assert.equal(seen.stillAbove, true);
 });
 
-test("a message steered in while a command runs sums the work above it up at once", { timeout: 120000 }, async (t) => {
+test("a message steered in while a command runs leaves the command's row saying it runs, and sums the work above it up once it ends (issue 445)", { timeout: 120000 }, async (t) => {
   const seen = await drive<{
-    before: Seen; after: Seen; bubble: string | null; deciding: { note: string | null; shimmer: string | null };
+    before: Seen; after: Seen; stillRuns: string | null; ended: string | null; bubble: string | null; deciding: { note: string | null; shimmer: string | null };
     steerHeld: string | null; steerRead: string | null;
   }>(t, "drive=steer");
   assert.deepEqual([seen.before.newest, seen.before.newestShimmers], ["Running sleep 30", true]);
-  assert.deepEqual([seen.after.groupRow, seen.after.shimmer], ["Ran a command", false]);
+  // #445: never "Ran a command" while it still runs.
+  assert.match(seen.stillRuns ?? "", /^Running sleep 30/);
+  assert.equal(seen.ended, "Ran a command");
   // The live line moves under the bubble, though the command still runs.
   assert.deepEqual([seen.after.status, seen.after.statusInWork], ["Thinking", true]);
   assert.match(seen.bubble ?? "", /^Use banker's rounding instead/);

@@ -448,6 +448,9 @@ async function driveSteer(): Promise<object> {
   change((board) => ({ requests: { ...board.requests, r2: daemon.requests.r2! }, head: "r2" }));
   await settle();
   const after = seen();
+  // #445: the command above the bubble still runs, and its row says so.
+  const commandRow = () => text(all("[data-slot=request-work]", turn() ?? document)[0]?.lastElementChild ?? null);
+  const stillRuns = commandRow();
   const bubble = text(one("[data-slot=request-steer]"));
   // Not read yet: the thread is inside the command.
   request("r2", { heldBy: held });
@@ -459,7 +462,11 @@ async function driveSteer(): Promise<object> {
   daemon.requests.r2 = read;
   change((board) => ({ requests: { ...board.requests, r2: read } }));
   await settle();
-  return { before, after, bubble, deciding, steerHeld, steerRead: text(one("[data-slot=request-steer] [data-slot=held-note]")) };
+  const steerRead = text(one("[data-slot=request-steer] [data-slot=held-note]"));
+  // Once it ends, the work above the bubble sums up.
+  steps([tool("sleep", 1.1, "shell", "sleep 30", "completed")]);
+  await settle();
+  return { before, after, stillRuns, ended: commandRow(), bubble, deciding, steerHeld, steerRead };
 }
 
 /** A message steered in before the turn did anything: its bubble sits under the first, above the header. */

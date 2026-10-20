@@ -276,6 +276,21 @@ async function workingCase(seen: Record<string, unknown>) {
     board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, startedAtMs: at, worked: [{ fromMs: at, toMs: null }] } } } } : {},
   );
   await until("the timer", () => placeholder()?.startsWith("Working for 2m") ?? false, 3000).catch(() => {});
+  // #446: a follow-up joins the running turn as a request of its own, started now: the turn's
+  // time still runs from its first message, as its work header says.
+  const joinedAt = Date.now();
+  useBoard.setState(({ board }) =>
+    board
+      ? { board: { ...board, requests: { ...board.requests, r2: { ...board.requests["r1"]!, id: "r2", startedAtMs: joinedAt, worked: [{ fromMs: joinedAt, toMs: null }], steeredInto: "r1" } } } }
+      : {},
+  );
+  await sleep(1100);
+  seen.joined = placeholder();
+  useBoard.setState(({ board }) => {
+    if (!board) return {};
+    const { r2: _joined, ...requests } = board.requests;
+    return { board: { ...board, requests } };
+  });
   useBoard.setState(({ board }) =>
     board ? { board: { ...board, requests: { ...board.requests, r1: { ...board.requests["r1"]!, state: { type: "waiting" }, worked: [{ fromMs: at, toMs: at + 60_000 }], waited: [{ fromMs: at + 60_000, toMs: null }] } } } } : {},
   );
