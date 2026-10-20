@@ -1,11 +1,3 @@
-import {
-  Check,
-  Commit,
-  Dock,
-  Globe,
-  Sparkle,
-  X,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { memo, type ReactNode } from "react";
 
 import { DiffStatView } from "@/app/conversation/cards/common";
@@ -17,6 +9,14 @@ import {
 } from "@/components/assistant-ui/elements/approval-card";
 import { DECIDERS } from "@/components/transcript/TranscriptRow";
 import { Badge } from "@/components/ui/badge";
+import {
+  Check,
+  Commit,
+  Dock,
+  Globe,
+  Sparkle,
+  X,
+} from "@/components/ui/icon";
 import type { CardState } from "@/ipc/generated";
 import { NEVER_PUSHES_NOTE } from "@/lib/setup";
 import { type ShownApproval, useBoard } from "@/state/board";

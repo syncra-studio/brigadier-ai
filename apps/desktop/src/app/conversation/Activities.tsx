@@ -1,4 +1,3 @@
-import { Check, Pause, Terminal, X } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -10,6 +9,7 @@ import { SummaryRowButton, SummarySection } from "@/components/assistant-ui/elem
 import { Spinner } from "@/components/glyphs/spinner";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { Check, Pause, Terminal, X } from "@/components/ui/icon";
 import { request } from "@/ipc/client";
 import type { Preview } from "@/ipc/generated";
 import { dismissBackground, previewLogTail, restartBackgroundRun, restartPreview, stopBackgroundRun, stopPreview } from "@/state/actions";

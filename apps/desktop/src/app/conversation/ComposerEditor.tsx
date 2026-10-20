@@ -9,7 +9,6 @@ import {
 import { $createDirectiveNodeWithFormatter, $isDirectiveNode } from "@assistant-ui/react-lexical";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { $dfs, mergeRegister } from "@lexical/utils";
-import { Chat, Folder } from "@openai/apps-sdk-ui/components/Icon";
 import {
   $getRoot,
   $getSelection,
@@ -40,6 +39,7 @@ import { WorkerGlyph, useWorkerName } from "@/app/conversation/WorkerChip";
 import { type BlobAttachmentAdapter, FILES_UPLOADING, readingFiles, uploading } from "@/app/conversation/attachments";
 import { usePromptHistory } from "@/app/conversation/composerDraft";
 import { enterAction } from "@/app/conversation/composerKeys";
+import { Chat, Folder } from "@/components/ui/icon";
 import { clearBackgroundSend, markBackgroundSend } from "@/state/backgroundSend";
 import { isTaskTab } from "@/state/tabStates";
 import { ComposerTargetContext } from "@/app/conversation/composerTarget";

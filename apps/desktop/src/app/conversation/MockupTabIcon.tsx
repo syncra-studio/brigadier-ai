@@ -1,7 +1,7 @@
-import { ImageSquare } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useMemo } from "react";
 
 import { Spinner } from "@/components/glyphs/spinner";
+import { ImageSquare } from "@/components/ui/icon";
 import { useBoard } from "@/state/board";
 import { type Mockup, mockupOf } from "@/state/mockup";
 import { closeMockupTab, showMockupTab } from "@/state/sessionTabs";

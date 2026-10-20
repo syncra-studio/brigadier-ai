@@ -1,4 +1,3 @@
-import { CheckCircle, Chat, Commit, StopCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useContext } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -7,6 +6,7 @@ import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversati
 import { workerDone, workerPreview, workerState, workerWorking } from "@/app/conversation/workerPresentation";
 import { ROW, ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
+import { CheckCircle, Chat, Commit, StopCircle } from "@/components/ui/icon";
 import type { OrchestratorStepKind, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { formatDuration } from "@/lib/format";

@@ -1,9 +1,9 @@
-import { ChevronDown, ChevronRight, Search } from "@openai/apps-sdk-ui/components/Icon";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { type ChangeMarks, changeMarks, LETTERS } from "@/app/conversation/sourceStatus";
 import { fuzzyMatch } from "@/components/assistant-ui/elements/menuMatch";
 import { FileIcon } from "@/components/glyphs/fileIcons";
+import { ChevronDown, ChevronRight, Search } from "@/components/ui/icon";
 import type { SourceState, SourceStatus, WorkspaceFolder } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { listFiles, listProjectFiles } from "@/state/actions";

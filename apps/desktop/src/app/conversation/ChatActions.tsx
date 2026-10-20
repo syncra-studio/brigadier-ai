@@ -1,17 +1,4 @@
 import { useAui } from "@assistant-ui/react";
-import {
-  Archive,
-  BranchAlt,
-  Copy,
-  Dock,
-  DotsHorizontal,
-  Folder,
-  Pencil,
-  Pin,
-  Plus,
-  Trash,
-  Unpin,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useEffect, useState } from "react";
 
 import { FORK_PLACES } from "@/app/conversation/ForkMenu";
@@ -40,6 +27,19 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Archive,
+  BranchAlt,
+  Copy,
+  Dock,
+  DotsHorizontal,
+  Folder,
+  Pencil,
+  Pin,
+  Plus,
+  Trash,
+  Unpin,
+} from "@/components/ui/icon";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, ForkPlace } from "@/ipc/generated";
 import {

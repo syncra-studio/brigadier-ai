@@ -1,4 +1,3 @@
-import { ChevronRight, StopCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, memo, useContext, useMemo, useState } from "react";
 
 import { lastReplies, type StripView, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
@@ -9,6 +8,7 @@ import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversati
 import { workerDone, workerState } from "@/app/conversation/workerPresentation";
 import { Changes, workerStat } from "@/app/conversation/WorkerSummary";
 import { Button } from "@/components/ui/button";
+import { ChevronRight, StopCircle } from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import { formatDuration } from "@/lib/format";

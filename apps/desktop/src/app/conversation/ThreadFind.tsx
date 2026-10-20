@@ -1,9 +1,9 @@
-import { ChevronLeft, ChevronRight, Search, X } from "@openai/apps-sdk-ui/components/Icon";
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type FC, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { ThreadHistoryContext } from "@/components/assistant-ui/message-rail";
 import type { ThreadOverlayProps } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { ChevronLeft, ChevronRight, Search, X } from "@/components/ui/icon";
 import type { MessageMatch } from "@/ipc/generated";
 import { showHighlight } from "@/lib/highlightRules";
 import { useApp } from "@/state/store";

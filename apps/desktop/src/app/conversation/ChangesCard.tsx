@@ -1,15 +1,3 @@
-import {
-  ArrowRotateCcw,
-  ArrowRotateCw,
-  Branch,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  FileCode,
-  PullRequestMerged,
-  TriangleExclamationErrorWarning,
-  Trash,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -25,6 +13,18 @@ import { useViewConversation } from "@/app/conversation/viewContext";
 import { LinkButton, Pill, PrimaryPill, QuietPill, RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
+import {
+  ArrowRotateCcw,
+  ArrowRotateCw,
+  Branch,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  FileCode,
+  PullRequestMerged,
+  TriangleExclamationErrorWarning,
+  Trash,
+} from "@/components/ui/icon";
 import type { DiffStat, FileReview, FileStat, HeldPath, MergeUndo, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { formatTime } from "@/lib/format";

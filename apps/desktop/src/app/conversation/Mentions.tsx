@@ -1,5 +1,4 @@
 import { useAuiState, type TextMessagePartProps, type Unstable_TriggerItem } from "@assistant-ui/react";
-import { Chat, File, Folder, Globe } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -13,6 +12,7 @@ import { MessageInlineImage } from "@/components/assistant-ui/elements/inline-im
 import { InlineImageContext, InlinePasteContext, TaskMentionContext } from "@/components/assistant-ui/file-links";
 import { MessagePastedText } from "@/components/assistant-ui/elements/pasted-text";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
+import { Chat, File, Folder, Globe } from "@/components/ui/icon";
 import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
 import { normalizedImages } from "@/lib/inlineImages";
 import { foldersOf, mentionSections, type MentionRow, type MentionTab, type MentionTarget } from "@/app/conversation/mentionSearch";

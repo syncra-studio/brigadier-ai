@@ -1,7 +1,7 @@
-import { Globe } from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
 import { Spinner } from "@/components/glyphs/spinner";
+import { Globe } from "@/components/ui/icon";
 import { useBrowsers } from "@/state/browsers";
 
 import "./BrowserTabIcon.css";

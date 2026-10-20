@@ -1,7 +1,6 @@
-import { FileDocument, X } from "@openai/apps-sdk-ui/components/Icon";
-
 import { pastedTextLabel } from "@/components/assistant-ui/elements/chipText";
 import { PastedTextView } from "@/components/assistant-ui/elements/pasted-text";
+import { FileDocument, X } from "@/components/ui/icon";
 import type { AttachmentRef } from "@/ipc/generated";
 
 /**

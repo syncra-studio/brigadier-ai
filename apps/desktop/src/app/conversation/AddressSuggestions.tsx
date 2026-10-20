@@ -1,8 +1,8 @@
-import { Globe, Search, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type RefObject, useEffect, useMemo, useState } from "react";
 
 import { addressSuggestions, type OpenTab, type Suggestion } from "./browserSuggestions";
 
+import { Globe, Search, X } from "@/components/ui/icon";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import type { BrowserVisit } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

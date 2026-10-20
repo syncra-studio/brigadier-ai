@@ -1,21 +1,3 @@
-import {
-  ArrowLeft,
-  ArrowRight,
-  ArrowUpRight,
-  CameraPhoto,
-  ChevronDown,
-  ChevronUp,
-  DotsHorizontal,
-  Globe,
-  Info,
-  Lock,
-  Minus,
-  Plus,
-  Reload,
-  Search,
-  Warning,
-  X,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, type RefObject, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { AddressSuggestions, useAddressSuggestions } from "./AddressSuggestions";
@@ -33,6 +15,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ArrowLeft,
+  ArrowRight,
+  ArrowUpRight,
+  CameraPhoto,
+  ChevronDown,
+  ChevronUp,
+  DotsHorizontal,
+  Globe,
+  Info,
+  Lock,
+  Minus,
+  Plus,
+  Reload,
+  Search,
+  Warning,
+  X,
+} from "@/components/ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { browserFocus, browserGo, browserPlace, browserPrint, browserSnapshot, openUrl } from "@/ipc/client";

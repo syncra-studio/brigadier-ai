@@ -1,12 +1,6 @@
 import { useWorkerText, WorkerLine } from "@/app/conversation/WorkerChip";
 import { ThinkingLine } from "@/app/conversation/ThinkingLine";
 import {
-  Check,
-  ChevronRight,
-  Copy,
-  ShieldCheck,
-} from "@openai/apps-sdk-ui/components/Icon";
-import {
   type ReactNode,
   useEffect,
   useLayoutEffect,
@@ -39,6 +33,12 @@ import { type TranscriptItem, TranscriptFolder } from "@/components/transcript/t
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Check,
+  ChevronRight,
+  Copy,
+  ShieldCheck,
+} from "@/components/ui/icon";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
 import type { ArtifactRef, ErrorKind, Rating, RawEntry, Task } from "@/ipc/generated";

@@ -1,4 +1,3 @@
-import { BranchAlt } from "@openai/apps-sdk-ui/components/Icon";
 import type { FC } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -11,6 +10,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { BranchAlt } from "@/components/ui/icon";
 import type { ConversationKind, ForkPlace } from "@/ipc/generated";
 import { forkConversation } from "@/state/actions";
 

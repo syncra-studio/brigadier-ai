@@ -1,10 +1,10 @@
-import { Check, Copy, ExpandSm, Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Check, Copy, ExpandSm, Lightbulb } from "@/components/ui/icon";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useAction } from "@/app/conversation/useAction";
 import type { Rating } from "@/ipc/generated";

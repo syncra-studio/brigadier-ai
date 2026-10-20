@@ -1,4 +1,3 @@
-import { Check, Clock, StopCircle, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useContext, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -15,6 +14,7 @@ import {
 } from "@/app/conversation/planProgress";
 import { mono } from "@/components/assistant-ui/elements/surfaces";
 import { Spinner } from "@/components/glyphs/spinner";
+import { Check, Clock, StopCircle, X } from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { DiffStat, FileStat } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

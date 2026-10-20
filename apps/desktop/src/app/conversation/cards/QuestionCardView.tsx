@@ -1,4 +1,3 @@
-import { ChevronRightAlt, QuestionMarkCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { memo } from "react";
 
 import { CodeSpans } from "@/app/conversation/cards/codeSpans";
@@ -13,6 +12,7 @@ import {
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { CHEVRON, OPENS, ROW, ROW_TOGGLE } from "@/components/assistant-ui/elements/activity-row";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ChevronRightAlt, QuestionMarkCircle } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
 

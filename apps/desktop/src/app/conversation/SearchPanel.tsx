@@ -1,4 +1,3 @@
-import { ChevronDown, ChevronRight, X } from "@openai/apps-sdk-ui/components/Icon";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import {
   type FC, type KeyboardEvent, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
@@ -11,6 +10,7 @@ import {
 import { FileIcon } from "@/components/glyphs/fileIcons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ChevronDown, ChevronRight, X } from "@/components/ui/icon";
 import type { ReplaceOutcome, ReplaceSkip, SearchFile, SearchLine, SearchQuery } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { useApp } from "@/state/store";

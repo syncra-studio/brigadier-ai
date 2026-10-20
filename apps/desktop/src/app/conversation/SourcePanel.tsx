@@ -1,17 +1,3 @@
-import {
-  ArrowUp,
-  Branch,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  DotsHorizontal,
-  FileDocument,
-  Minus,
-  Plus,
-  Reload,
-  Sparkles,
-  Undo,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BranchNameBox, BranchPicker } from "@/app/conversation/BranchPicker";
@@ -39,6 +25,20 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ArrowUp,
+  Branch,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  DotsHorizontal,
+  FileDocument,
+  Minus,
+  Plus,
+  Reload,
+  Sparkles,
+  Undo,
+} from "@/components/ui/icon";
 import { request } from "@/ipc/client";
 import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import type { CommitOutcome, SourceAction, SourceBranch, SourceChange, SourceFile, SourceGitRun, SourceScope, SourceState } from "@/ipc/generated";

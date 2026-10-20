@@ -1,11 +1,11 @@
 import { useAuiState } from "@assistant-ui/react";
-import { Chat, Check, Copy } from "@openai/apps-sdk-ui/components/Icon";
 import type { FC } from "react";
 
 import { sentByCaption, UNKNOWN_SESSION } from "@/app/conversation/activity/peerWords";
 import type { PeerOf } from "@/app/conversation/blocks";
 import { FoldedMarkdown, usePeerName } from "@/app/conversation/peerParts";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Chat, Check, Copy } from "@/components/ui/icon";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
 import { formatSentAt } from "@/lib/format";

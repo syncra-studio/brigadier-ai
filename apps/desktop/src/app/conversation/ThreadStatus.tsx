@@ -1,9 +1,9 @@
-import { Tasks } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useMemo } from "react";
 
 import { answeredHead, elapsedWords, type StatusHead, type StatusInput, type ThreadStatusView, threadStatus } from "@/app/conversation/liveStatus";
 import { useWorkerText } from "@/app/conversation/WorkerChip";
 import type { BlockState } from "@/app/conversation/blocks";
+import { Tasks } from "@/components/ui/icon";
 import { useNow } from "@/hooks/use-now";
 import type { QuotaWait } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

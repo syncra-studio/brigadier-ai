@@ -1,9 +1,9 @@
-import { Chat, ChatCompose, MinimizeRight, X } from "@openai/apps-sdk-ui/components/Icon";
 import { createContext, type ReactNode, type RefObject, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { ConversationView } from "@/app/ConversationView";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Chat, ChatCompose, MinimizeRight, X } from "@/components/ui/icon";
 import { browserRead, request } from "@/ipc/client";
 import { cn } from "@/lib/utils";
 import { loadConversation } from "@/state/actions";

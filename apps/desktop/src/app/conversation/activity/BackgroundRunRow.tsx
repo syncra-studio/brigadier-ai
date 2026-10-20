@@ -1,10 +1,10 @@
-import { Stop, Terminal } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { unwrapCommand } from "@/app/conversation/activity/words";
 import { ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
+import { Stop, Terminal } from "@/components/ui/icon";
 import type { BackgroundRun, ItemStatus } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { cn } from "@/lib/utils";

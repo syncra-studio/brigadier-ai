@@ -1,19 +1,4 @@
 import { useAui, useAuiState } from "@assistant-ui/react";
-import {
-  Archive,
-  ArrowUpRight,
-  Bolt,
-  BranchAlt,
-  ChatCompose,
-  Document,
-  InfoCircle,
-  Lightbulb,
-  Moon,
-  Pencil,
-  Pin,
-  SettingsSlider,
-  Unpin,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useContext, useMemo, useState } from "react";
 
 import { ForkPlaces } from "@/app/conversation/ForkMenu";
@@ -29,6 +14,21 @@ import {
 import { DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { findModel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { PERMISSION_ICONS } from "@/app/conversation/SetupPickers";
+import {
+  Archive,
+  ArrowUpRight,
+  Bolt,
+  BranchAlt,
+  ChatCompose,
+  Document,
+  InfoCircle,
+  Lightbulb,
+  Moon,
+  Pencil,
+  Pin,
+  SettingsSlider,
+  Unpin,
+} from "@/components/ui/icon";
 import type { Conversation, PermissionLevel } from "@/ipc/generated";
 import { PERMISSION_LABELS, useCanCompact } from "@/lib/setup";
 import {

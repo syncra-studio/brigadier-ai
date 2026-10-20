@@ -1,16 +1,4 @@
 import {
-  Branch,
-  BranchAlt,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Folder,
-  MagnifyingGlassSearch,
-  Plus,
-  SpeedometerLatencySpeed,
-  X,
-} from "@openai/apps-sdk-ui/components/Icon";
-import {
   forwardRef,
   type KeyboardEvent,
   type ReactNode,
@@ -23,6 +11,18 @@ import {
 import { type ResolvedDraft, updateDraft } from "@/app/conversation/draftSetup";
 import { resetsAt, windowName } from "@/app/conversation/StatusCard";
 import { composerPill } from "@/components/assistant-ui/elements/surfaces";
+import {
+  Branch,
+  BranchAlt,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Folder,
+  MagnifyingGlassSearch,
+  Plus,
+  SpeedometerLatencySpeed,
+  X,
+} from "@/components/ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { Project, QuotaWindow } from "@/ipc/generated";
 import { usageTone } from "@/lib/quota";

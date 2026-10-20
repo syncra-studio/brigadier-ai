@@ -1,4 +1,3 @@
-import { Moon } from "@openai/apps-sdk-ui/components/Icon";
 import { useContext, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -32,6 +31,7 @@ import { disclosureRow } from "@/components/assistant-ui/elements/surfaces";
 import { Timeline, type TimelineEvent } from "@/components/assistant-ui/elements/timeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Moon } from "@/components/ui/icon";
 import type { OvernightPhase, OvernightRun } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";

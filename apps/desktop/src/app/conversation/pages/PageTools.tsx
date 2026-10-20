@@ -3,7 +3,6 @@ import { $isLinkNode, TOGGLE_LINK_COMMAND } from "@lexical/link";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { LexicalTypeaheadMenuPlugin, MenuOption, type MenuRenderFn, useBasicTypeaheadTriggerMatch } from "@lexical/react/LexicalTypeaheadMenuPlugin";
 import { $findMatchingParent, mergeRegister } from "@lexical/utils";
-import { ChevronDown, Code, Link } from "@openai/apps-sdk-ui/components/Icon";
 import {
   $getNearestNodeFromDOMNode,
   $getNodeByKey,
@@ -23,6 +22,7 @@ import { createPortal } from "react-dom";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ChevronDown, Code, Link } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 import { $currentBlock, applyBlock, type Block, BLOCKS, blockMatches, type BlockKind, TURN_INTO } from "./pageBlocks";

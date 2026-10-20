@@ -1,4 +1,3 @@
-import { Archive, Chat, ChatCompose, Dock, FileDocument, Globe, Lightbulb, Plus, Document, ShieldCheck, Terminal, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -16,6 +15,7 @@ import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TitlebarButton } from "@/components/titlebar-button";
 import { SidebarActivityMark, SidebarError, statusWords } from "@/app/SessionStatus";
 import { UNTITLED } from "@/app/TopBar";
+import { Archive, Chat, ChatCompose, Dock, FileDocument, Globe, Lightbulb, Plus, Document, ShieldCheck, Terminal, X } from "@/components/ui/icon";
 import { sessionTabKey } from "@/state/sessionTabKeys";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { takePaneClose } from "@/state/closedPanes";

@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Dock } from "@openai/apps-sdk-ui/components/Icon";
 import { BarItem } from "@/app/BarItem";
 import { useWorkspacePane } from "@/app/conversation/WorkspacePane";
 import { useRightSidebar } from "@/app/conversation/RightSidebar";
 import type { AgentsPanelState } from "@/app/conversation/WorkerChip";
 import { TitlebarButton } from "@/components/titlebar-button";
+import { Dock } from "@/components/ui/icon";
 import { tokenPx } from "@/lib/tokens";
 import { takePaneClose } from "@/state/closedPanes";
 import { HOME_PLACE, placeOf, terminalWorksHere, toggleTerminal, undoTabClose, useTerminalPlaces } from "@/state/terminalPlaces";

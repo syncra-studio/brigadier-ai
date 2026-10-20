@@ -1,4 +1,3 @@
-import { ArrowDown, ArrowUp } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, Fragment, type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -27,6 +26,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ArrowDown, ArrowUp } from "@/components/ui/icon";
 import { request } from "@/ipc/client";
 import type { ConflictFile, SourceState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

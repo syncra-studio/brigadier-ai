@@ -1,4 +1,3 @@
-import { Chat, Clock } from "@openai/apps-sdk-ui/components/Icon";
 import type { FC, ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -18,6 +17,7 @@ import { type BlockOrchestratorStep, heldForWait, type PeerSentStep } from "@/ap
 import { usePeerName } from "@/app/conversation/peerParts";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
+import { Chat, Clock } from "@/components/ui/icon";
 import type { Conversation, OrchestratorStepKind, PeerMessage, Project } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { openConversation } from "@/state/actions";

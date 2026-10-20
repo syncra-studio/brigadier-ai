@@ -1,4 +1,3 @@
-import { ChatCompose, ChevronDown, Dock, Document, DotsHorizontal, Globe, Grid, Search, X } from "@openai/apps-sdk-ui/components/Icon";
 import { useContext, useEffect, useState } from "react";
 
 import { WorkspacePaneContext } from "@/app/conversation/WorkspacePane";
@@ -6,6 +5,7 @@ import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ChatCompose, ChevronDown, Dock, Document, DotsHorizontal, Globe, Grid, Search, X } from "@/components/ui/icon";
 import { Kbd } from "@/components/ui/kbd";
 import { pageList } from "@/ipc/client";
 import type { BrowserVisit, PageSummary } from "@/ipc/generated";

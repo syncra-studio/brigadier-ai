@@ -1,4 +1,3 @@
-import { Branch, Check, ChevronRight, X } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -22,6 +21,7 @@ import { useAction } from "@/app/conversation/useAction";
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
+import { Branch, Check, ChevronRight, X } from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { openUrl } from "@/ipc/client";
 import { cn } from "@/lib/utils";

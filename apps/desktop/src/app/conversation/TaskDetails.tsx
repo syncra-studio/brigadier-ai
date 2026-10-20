@@ -1,4 +1,3 @@
-import { Branch, BranchAlt } from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
 import { MarkdownBlock } from "@/components/assistant-ui/thread";
@@ -11,6 +10,7 @@ import { useWorkerText, WorkerChip } from "@/app/conversation/WorkerChip";
 import { mono } from "@/components/assistant-ui/elements/surfaces";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Branch, BranchAlt } from "@/components/ui/icon";
 import type { ArtifactRef, KeptWork, RestoreOutcome, Task } from "@/ipc/generated";
 import { useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";

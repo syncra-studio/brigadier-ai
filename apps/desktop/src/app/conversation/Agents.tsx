@@ -1,4 +1,3 @@
-import { ArrowLeft } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, memo, useContext, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -15,6 +14,7 @@ import {
 import { WorkerThread } from "@/app/conversation/WorkerThread";
 import { effortLabel } from "@/components/assistant-ui/elements/model-selector";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { ArrowLeft } from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import type { Task } from "@/ipc/generated";

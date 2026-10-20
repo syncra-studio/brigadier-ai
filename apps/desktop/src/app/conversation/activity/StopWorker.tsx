@@ -1,8 +1,7 @@
-import { StopCircle } from "@openai/apps-sdk-ui/components/Icon";
-
 import { useAction } from "@/app/conversation/useAction";
 import { workerStoppable } from "@/app/conversation/workerPresentation";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { StopCircle } from "@/components/ui/icon";
 import { stopTask } from "@/state/actions";
 import { useBoard } from "@/state/board";
 

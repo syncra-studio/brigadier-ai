@@ -1,10 +1,10 @@
 import { useAui, useAuiState } from "@assistant-ui/react";
-import { ChatCompose, Plus } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
 import { ViewContext } from "@/app/conversation/viewContext";
+import { ChatCompose, Plus } from "@/components/ui/icon";
 import { request } from "@/ipc/client";
 import { saveDraft } from "@/state/drafts";
 import { openSideChatTab } from "@/state/sessionTabs";

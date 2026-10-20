@@ -1,19 +1,5 @@
 import { useAui } from "@assistant-ui/react";
 import {
-  Check,
-  ChevronDown,
-  ChevronDownUp,
-  ChevronRight,
-  ChevronUpDown,
-  Compare,
-  Copy,
-  ExternalLink,
-  FolderOpen,
-  Folders,
-  Reload,
-  Text,
-} from "@openai/apps-sdk-ui/components/Icon";
-import {
   createContext,
   type FC,
   type ReactNode,
@@ -34,6 +20,20 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Check,
+  ChevronDown,
+  ChevronDownUp,
+  ChevronRight,
+  ChevronUpDown,
+  Compare,
+  Copy,
+  ExternalLink,
+  FolderOpen,
+  Folders,
+  Reload,
+  Text,
+} from "@/components/ui/icon";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { openFolder, request, revealPath } from "@/ipc/client";
 import type { ReviewDiff, ReviewFile, ReviewScope } from "@/ipc/generated";

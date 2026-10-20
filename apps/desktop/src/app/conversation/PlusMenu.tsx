@@ -1,5 +1,4 @@
 import { ComposerPrimitive, useAui } from "@assistant-ui/react";
-import { ArrowUpRight, Chat, Folder, Lightbulb, Paperclip, Plus } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useCallback, useContext, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -23,6 +22,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ArrowUpRight, Chat, Folder, Lightbulb, Paperclip, Plus } from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Mention } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";

@@ -1,5 +1,3 @@
-import { ImageSquare } from "@openai/apps-sdk-ui/components/Icon";
-
 import type { LeadStep } from "@/app/conversation/activity/group";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { type BlockOrchestratorStep, madeImage } from "@/app/conversation/blocks";
@@ -7,6 +5,7 @@ import { ImageGeneration } from "@/components/assistant-ui/elements/image-genera
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { ThreadActivity } from "@/components/assistant-ui/elements/thread-activity";
 import { ROW_DETAIL } from "@/components/assistant-ui/elements/activity-row";
+import { ImageSquare } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { useThreadImages } from "@/state/threadImages";
 

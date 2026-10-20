@@ -1,8 +1,8 @@
-import { Check, Copy } from "@openai/apps-sdk-ui/components/Icon";
 import { useMemo } from "react";
 
 import { DiffView } from "@/app/conversation/diffView";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Check, Copy } from "@/components/ui/icon";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { deletesFile, diffCounts, parseDiff, singleFilePatch } from "@/lib/patch";
 import { cn } from "@/lib/utils";

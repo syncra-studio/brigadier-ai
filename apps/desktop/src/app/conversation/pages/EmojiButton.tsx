@@ -1,8 +1,8 @@
-import { SimpleSmile } from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { SimpleSmile } from "@/components/ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 const EMOJI = [

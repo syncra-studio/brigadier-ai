@@ -1,10 +1,4 @@
 import {
-  ChevronDown,
-  Dock,
-  Plus,
-  X,
-} from "@openai/apps-sdk-ui/components/Icon";
-import {
   lazy,
   type RefObject,
   Suspense,
@@ -16,6 +10,12 @@ import {
 
 import { useReveal } from "@/app/conversation/SidePanel";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
+import {
+  ChevronDown,
+  Dock,
+  Plus,
+  X,
+} from "@/components/ui/icon";
 import { request } from "@/ipc/client";
 import type { ProviderKind, TerminalInfo } from "@/ipc/generated";
 import { whenRevealed } from "@/lib/splash";

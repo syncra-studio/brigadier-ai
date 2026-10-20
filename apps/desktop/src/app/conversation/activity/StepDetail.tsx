@@ -1,4 +1,3 @@
-import { Check, Copy } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useContext, useEffect, useState } from "react";
 
 import type { LeadStep } from "@/app/conversation/activity/group";
@@ -11,6 +10,7 @@ import { MarkdownBlock } from "@/components/assistant-ui/thread";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { searchResults, WebSearch } from "@/components/assistant-ui/elements/web-search";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Check, Copy } from "@/components/ui/icon";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import type { TranscriptItem } from "@/components/transcript/transcript";
 import type { ItemStatus, ThreadItem } from "@/ipc/generated";

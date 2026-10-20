@@ -1,4 +1,3 @@
-import { ArrowRotateCw, ArrowUpRight, ChevronDown, ChevronUp, Document, Globe, ImageSquare, Mobile, Play, Terminal } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, type ReactNode, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -10,6 +9,7 @@ import { Pill, RoundBadge, RowText, StorageCard } from "@/app/settings/storage/p
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { buttonVariants } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ArrowRotateCw, ArrowUpRight, ChevronDown, ChevronUp, Document, Globe, ImageSquare, Mobile, Play, Terminal } from "@/components/ui/icon";
 import type { OrchestratorStepKind, Preview, PreviewKind, ProofKind } from "@/ipc/generated";
 import { openPdf, openSimulator, openUrl } from "@/ipc/client";
 import { formatTime } from "@/lib/format";

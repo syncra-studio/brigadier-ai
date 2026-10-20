@@ -6,17 +6,6 @@ import {
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
-import {
-  Branch,
-  Check,
-  ChevronRightAlt,
-  Copy,
-  Info,
-  Regenerate,
-  SoundOnReadOutLoudSpeaker,
-  Stop,
-  TextShorterConcise,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, type ComponentType, createContext, type FC, Fragment, lazy, type MouseEvent, Suspense, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -87,6 +76,17 @@ import {
 import { RateItem, RateMenu } from "@/components/assistant-ui/rate-menu";
 import { jumpInThread } from "@/components/assistant-ui/thread-scroll";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import {
+  Branch,
+  Check,
+  ChevronRightAlt,
+  Copy,
+  Info,
+  Regenerate,
+  SoundOnReadOutLoudSpeaker,
+  Stop,
+  TextShorterConcise,
+} from "@/components/ui/icon";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useNow } from "@/hooks/use-now";
 import type { AttachmentRef, ModelChoice, Rating, ThinkingSegment, WorkSpan } from "@/ipc/generated";

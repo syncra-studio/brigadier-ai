@@ -1,6 +1,3 @@
-import { normalizedImages } from "@/lib/inlineImages";
-import { namedImages } from "@/app/conversation/inlineImages";
-import { useAui, useAuiState } from "@assistant-ui/react";
 import {
   ArrowCurvedRight,
   ChatCompose,
@@ -10,7 +7,10 @@ import {
   Stack,
   Trash,
   X,
-} from "@openai/apps-sdk-ui/components/Icon";
+} from "@/components/ui/icon";
+import { normalizedImages } from "@/lib/inlineImages";
+import { namedImages } from "@/app/conversation/inlineImages";
+import { useAui, useAuiState } from "@assistant-ui/react";
 import { useCallback, useContext } from "react";
 
 import { InlineImageText } from "@/app/conversation/InlineImage";

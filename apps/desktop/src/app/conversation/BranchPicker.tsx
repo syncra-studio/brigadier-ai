@@ -1,6 +1,6 @@
-import { Branch } from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useEffect, useMemo, useRef, useState } from "react";
 
+import { Branch } from "@/components/ui/icon";
 import type { SourceBranch } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 

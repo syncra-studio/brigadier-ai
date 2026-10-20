@@ -1,14 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  ArrowDown,
-  ArrowUp,
-  Check,
-  Copy,
-  FolderOpen,
-  Search,
-  X,
-} from "@openai/apps-sdk-ui/components/Icon";
-import {
   type FC,
   type ReactNode,
   useEffect,
@@ -22,6 +13,15 @@ import { FileReviewBar, FileReviewBody, useFileReview } from "@/app/conversation
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  Copy,
+  FolderOpen,
+  Search,
+  X,
+} from "@/components/ui/icon";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { request, RequestError, revealPath } from "@/ipc/client";
 import type { CheckoutFile } from "@/ipc/generated";

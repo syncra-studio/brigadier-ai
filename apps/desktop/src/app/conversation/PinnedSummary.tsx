@@ -1,19 +1,5 @@
 import { useAui } from "@assistant-ui/react";
 import {
-  Branch,
-  Globe,
-  HandRaised,
-  Link,
-  Paperclip,
-  Plugin,
-  Plus,
-  PullRequestClosed,
-  PullRequestDraft,
-  PullRequestMerged,
-  PullRequestOpen,
-  Tasks,
-} from "@openai/apps-sdk-ui/components/Icon";
-import {
   type ReactNode,
   type UIEvent,
   useContext,
@@ -43,6 +29,20 @@ import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { workerName } from "@/app/conversation/rowWords";
 import { keptScroll, openSummaryByItself, useSummary } from "@/app/conversation/summaryState";
 import { RightSidebarContext } from "@/app/conversation/RightSidebar";
+import {
+  Branch,
+  Globe,
+  HandRaised,
+  Link,
+  Paperclip,
+  Plugin,
+  Plus,
+  PullRequestClosed,
+  PullRequestDraft,
+  PullRequestMerged,
+  PullRequestOpen,
+  Tasks,
+} from "@/components/ui/icon";
 import { CHAT_TAB, openPanelTab, useSessionTabsOf } from "@/state/sessionTabs";
 import { AgentsPanelContext, WorkerLine } from "@/app/conversation/WorkerChip";
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";

@@ -1,17 +1,4 @@
 import {
-  ChevronLeft,
-  ChevronRight,
-  Commit,
-  Dock,
-  Globe,
-  Key,
-  Mic,
-  PencilSquare,
-  QuestionMarkCircle,
-  Reply,
-  Sparkle,
-} from "@openai/apps-sdk-ui/components/Icon";
-import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -49,6 +36,19 @@ import {
 } from "@/components/assistant-ui/elements/action-card";
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
 import { Button } from "@/components/ui/button";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Commit,
+  Dock,
+  Globe,
+  Key,
+  Mic,
+  PencilSquare,
+  QuestionMarkCircle,
+  Reply,
+  Sparkle,
+} from "@/components/ui/icon";
 import {
   Tooltip,
   TooltipContent,

@@ -1,4 +1,3 @@
-import { ChevronDown, Copy, Document, Download, EditPencil, SquarePlus, Trash } from "@openai/apps-sdk-ui/components/Icon";
 import type { LexicalEditor } from "lexical";
 import { useEffect, useRef, useState } from "react";
 
@@ -7,6 +6,7 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ChevronDown, Copy, Document, Download, EditPencil, SquarePlus, Trash } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { pageDelete, pageList, saveCopy } from "@/ipc/client";
 import type { PageContent, PageSummary } from "@/ipc/generated";

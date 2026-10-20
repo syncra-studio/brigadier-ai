@@ -1,14 +1,3 @@
-import {
-  Check,
-  Clock,
-  Dock,
-  Folder,
-  Globe,
-  HandRaised,
-  Settings as SettingsIcon,
-  Shuffle,
-  Warning,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { type FC, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -35,6 +24,17 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Check,
+  Clock,
+  Dock,
+  Folder,
+  Globe,
+  HandRaised,
+  Settings as SettingsIcon,
+  Shuffle,
+  Warning,
+} from "@/components/ui/icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import type {
