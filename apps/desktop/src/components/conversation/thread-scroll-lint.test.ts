@@ -18,13 +18,13 @@ async function reported(files: Record<string, string>): Promise<Record<string, n
       rules: { "brigadier/thread-scroll-helper": "error" },
     }));
     for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
-    const { stdout } = await run(resolve("node_modules/.bin/oxlint"), ["-c", join(dir, ".oxlintrc.json"), "-f", "json", dir]).catch(
+    const { stdout } = await run(process.execPath, [resolve("node_modules/oxlint/bin/oxlint"), "-c", join(dir, ".oxlintrc.json"), "-f", "json", dir]).catch(
       (failed: { stdout: string }) => failed,
     );
     const seen: Record<string, number[]> = Object.fromEntries(Object.keys(files).map((name) => [name, []]));
     for (const each of (JSON.parse(stdout) as { diagnostics: { code: string; filename: string; labels: { span: { line: number } }[] }[] }).diagnostics) {
       if (each.code !== "brigadier(thread-scroll-helper)") continue;
-      seen[each.filename.split("/").pop()!]!.push(each.labels[0]!.span.line);
+      seen[each.filename.split(/[\\/]/).pop()!]!.push(each.labels[0]!.span.line);
     }
     return seen;
   } finally {
