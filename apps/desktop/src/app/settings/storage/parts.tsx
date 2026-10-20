@@ -3,7 +3,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { SettingsButton, settingsCard, SettingsSection } from "@/app/settings/parts";
 import type { Part } from "@/app/settings/storage/model";
 import { Button } from "@/components/ui/button";
-import { Check, ChevronRight, Minus } from "@/components/icons";
+import { ChevronRight } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /*
@@ -132,35 +132,6 @@ export function RoundBadge({ tone = "plain", children }: { tone?: "plain" | "don
     >
       {children}
     </span>
-  );
-}
-
-/** A tick box: ticked, partly ticked (a group), or not. */
-export function TickBox({
-  state,
-  label,
-  onToggle,
-}: {
-  state: "all" | "some" | "none";
-  label: string;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={state === "all" ? true : state === "some" ? "mixed" : false}
-      aria-label={label}
-      onClick={onToggle}
-      className={cn(
-        // Clear browsing data's tick box.
-        "border-border flex size-4 shrink-0 items-center justify-center rounded-xs border",
-        state !== "none" && "bg-foreground/10",
-      )}
-    >
-      {state === "all" && <Check aria-hidden className="size-icon-xs" />}
-      {state === "some" && <Minus aria-hidden className="size-icon-xs" />}
-    </button>
   );
 }
 

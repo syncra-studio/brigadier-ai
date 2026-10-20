@@ -1,10 +1,11 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useId, useMemo, useState } from "react";
 
 import { KINDS, NODE_KINDS } from "@/app/inspector/brain/kinds";
 import { NodeDetail } from "@/app/inspector/brain/NodeDetail";
 import { Picker } from "@/app/inspector/providers/Picker";
 import { ChevronDown, Spinner } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -78,6 +79,7 @@ export function BrainGraphPanel({ brainKey, overview }: { brainKey: string; over
   const [typed, setTyped] = useState("");
   const [text, setText] = useState("");
   const [currentOnly, setCurrentOnly] = useState(false);
+  const currentOnlyId = useId();
   const [limit, setLimit] = useState(300);
   /** The last read, and the filter it answered. */
   const [read, setRead] = useState<{
@@ -165,15 +167,14 @@ export function BrainGraphPanel({ brainKey, overview }: { brainKey: string; over
           spellCheck={false}
           className="h-control-xs w-auto min-w-0 flex-1 text-xs"
         />
-        <label className="flex items-center gap-1.5">
-          <input
-            type="checkbox"
+        <span className="flex items-center gap-1.5">
+          <Checkbox
+            id={currentOnlyId}
             checked={currentOnly}
-            onChange={(event) => setCurrentOnly(event.target.checked)}
-            className="accent-primary"
+            onCheckedChange={(checked) => setCurrentOnly(checked === true)}
           />
-          Hide superseded
-        </label>
+          <label htmlFor={currentOnlyId}>Hide superseded</label>
+        </span>
         <Picker
           label="At most"
           value={String(limit)}

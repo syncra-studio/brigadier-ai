@@ -191,7 +191,8 @@
   border-radius: var(--radius-checkbox);
   cursor: pointer;
 }
-.page-li-checked::before { border-color: var(--foreground); background: var(--foreground); }
+/* Checked: the checkbox's look (components/ui/checkbox), the switch's blue with a white tick. */
+.page-li-checked::before { border-color: var(--toggle-on); background: var(--toggle-on); }
 .page-li-checked::after {
   content: "";
   position: absolute;
@@ -199,7 +200,7 @@
   top: calc(var(--spacing) * 1.5);
   width: calc(var(--spacing) * 1.25);
   height: calc(var(--spacing) * 2.25);
-  border: solid var(--background);
+  border: solid var(--foreground);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
   pointer-events: none;

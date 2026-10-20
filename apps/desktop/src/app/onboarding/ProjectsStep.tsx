@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { PILL_BUTTON, RAISED_BUTTON, StepFooter, StepHeader, TickMark } from "@/app/onboarding/parts";
+import { PILL_BUTTON, RAISED_BUTTON, StepFooter, StepHeader } from "@/app/onboarding/parts";
 import { FolderOpen, ProviderGlyph, Spinner } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { CheckboxMark } from "@/components/ui/checkbox";
 import { pickFolder, warmFolderPicker } from "@/ipc/client";
 import type { ProjectCandidate } from "@/ipc/generated";
 import { formatAgo, shortPath } from "@/lib/format";
@@ -262,7 +263,7 @@ function ProjectCard({
       >
         <span className="flex w-full min-w-0 items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{candidate.name}</span>
-          <TickMark checked={on} />
+          <CheckboxMark checked={on} />
         </span>
         <span className="text-muted-foreground/70 w-full truncate font-mono text-xs">{shortPath(candidate.path)}</span>
         <span className="text-muted-foreground/70 flex min-w-0 items-center gap-1.5 pt-2.5 text-xs">

@@ -1,6 +1,6 @@
 import { type ReactNode, type RefObject, useEffect, useRef } from "react";
 
-import { ArrowLeft, Check, Spinner } from "@/components/icons";
+import { ArrowLeft, Spinner } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { DialogTitle } from "@/components/ui/dialog";
@@ -146,21 +146,5 @@ export function StepFooter({
         )}
       </div>
     </footer>
-  );
-}
-
-/** A tick box's look (Radix's in dialogs/fields.tsx), for a control that is a whole card; ticked, it
- * takes the links' blue, as the design has it. */
-export function TickMark({ checked }: { checked: boolean }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "border-input rounded-xs flex size-icon-md shrink-0 items-center justify-center border",
-        checked && "bg-link border-link text-foreground",
-      )}
-    >
-      {checked && <Check className="size-icon-xs" />}
-    </span>
   );
 }

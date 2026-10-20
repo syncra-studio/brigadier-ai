@@ -111,9 +111,9 @@ const pickMenu = (name: string) =>
   )?.click();
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
 const boxes = () =>
-  all<HTMLInputElement>('input[type="checkbox"]', dialog() ?? document.createElement("div")).map((box) => ({
+  all<HTMLButtonElement>('[role="checkbox"]', dialog() ?? document.createElement("div")).map((box) => ({
     label: text(box.closest("label")?.querySelector(".text-label")),
-    checked: box.checked,
+    checked: box.getAttribute("aria-checked") === "true",
     disabled: box.disabled,
   }));
 const page = () => ({
@@ -162,7 +162,7 @@ function Fixture() {
         seen.clearNotes = all(".text-xs", dialog() ?? document).map(text);
         // All time, and the cache kept.
         button("All time")?.click();
-        all<HTMLInputElement>('input[type="checkbox"]', dialog() ?? document)[2]?.click();
+        all<HTMLButtonElement>('[role="checkbox"]', dialog() ?? document)[2]?.click();
       },
       () => button("Delete data")?.click(),
       () => {

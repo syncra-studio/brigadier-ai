@@ -11,7 +11,8 @@
   border-radius: var(--radius-checkbox);
   cursor: pointer;
 }
-.composer-check-on::before { border-color: var(--foreground); background: var(--foreground); }
+/* Checked: the checkbox's look (components/ui/checkbox), the switch's blue with a white tick. */
+.composer-check-on::before { border-color: var(--toggle-on); background: var(--toggle-on); }
 .composer-check-on::after {
   content: "";
   position: absolute;
@@ -19,7 +20,7 @@
   top: calc(var(--spacing) * 1.25);
   width: var(--spacing);
   height: calc(var(--spacing) * 2);
-  border: solid var(--background);
+  border: solid var(--foreground);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
   pointer-events: none;

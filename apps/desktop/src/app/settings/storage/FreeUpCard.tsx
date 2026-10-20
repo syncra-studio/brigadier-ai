@@ -22,9 +22,9 @@ import {
   RoundBadge,
   RowText,
   StorageCard,
-  TickBox,
 } from "@/app/settings/storage/parts";
 import { Check, ChevronDown, ChevronRight, ChevronUp, FolderOpen, Lock, Sparkles, Spinner } from "@/components/icons";
+import { Checkbox } from "@/components/ui/checkbox";
 import { revealPath } from "@/ipc/client";
 import type { CleanItem, CleanReport, StorageReport } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -189,7 +189,11 @@ function GroupRows({
   return (
     <div data-group={group.category}>
       <div className="border-divider flex h-11.5 items-center gap-3 border-t">
-        <TickBox state={state} label={group.title} onToggle={() => onTick(ids, state !== "all")} />
+        <Checkbox
+          checked={state === "all" ? true : state === "some" ? "indeterminate" : false}
+          aria-label={group.title}
+          onCheckedChange={() => onTick(ids, state !== "all")}
+        />
         <OpenButton open={open} label={group.title} onToggle={() => setOpen(!open)} />
         <span className="text-foreground min-w-0 flex-1 truncate text-label font-medium">{group.title}</span>
         <span className="text-muted-foreground shrink-0 text-xs">
@@ -234,7 +238,7 @@ function ItemRow({ item, on, onToggle }: { item: CleanItem; on: boolean; onToggl
   return (
     <div data-item={item.id} className="flex gap-3 py-2.5">
       <div className="pt-0.5">
-        <TickBox state={on ? "all" : "none"} label={item.label} onToggle={onToggle} />
+        <Checkbox checked={on} aria-label={item.label} onCheckedChange={onToggle} />
       </div>
       <div className={cn("flex min-w-0 flex-1 flex-col gap-0.75", !on && "opacity-55")}>
         <span className="text-foreground text-xs font-medium">{item.label}</span>

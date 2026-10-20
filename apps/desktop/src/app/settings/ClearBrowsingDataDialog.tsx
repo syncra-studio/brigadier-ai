@@ -11,7 +11,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Check, Download, Globe, Images, SettingsCog, Trash } from "@/components/icons";
+import { Download, Globe, Images, SettingsCog, Trash } from "@/components/icons";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Segmented } from "@/components/ui/segmented";
 import type { BrowserClear } from "@/ipc/generated";
 import { clearBrowsingData, type ClearRange, rangeStart, siteDataCount } from "@/state/browserData";
@@ -148,18 +149,10 @@ function ClearForm({
               <span className="text-label">{label}</span>
               <span className="text-foreground/65 text-xs">{detail}</span>
             </span>
-            <input
-              type="checkbox"
+            <Checkbox
               checked={picked[kind]}
-              onChange={(event) => setPicked((shown) => ({ ...shown, [kind]: event.target.checked }))}
-              className="peer sr-only"
+              onCheckedChange={(checked) => setPicked((shown) => ({ ...shown, [kind]: checked === true }))}
             />
-            <span
-              aria-hidden
-              className="border-border peer-checked:bg-foreground/10 peer-focus-visible:ring-ring/50 flex size-4 shrink-0 items-center justify-center rounded-xs border peer-focus-visible:ring-1"
-            >
-              {picked[kind] && <Check className="size-icon-xs" />}
-            </span>
           </label>
         ))}
       </SettingsCard>
