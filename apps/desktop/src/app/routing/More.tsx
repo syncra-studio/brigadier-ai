@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 
 import { refreshRunning } from "@/app/routing/rankings";
-import { Badge, Card, HAIRLINE_BOTTOM, HAIRLINE_TOP, LinkButton, OpenChevron, PillSelect, RowText, Section, StepNumber } from "@/app/routing/parts";
+import { Badge, Card, HAIRLINE_BOTTOM, HAIRLINE_TOP, OpenChevron, PillSelect, RowText, Section, StepNumber } from "@/app/routing/parts";
 import { faded, reviewers, reviewsWords, ROUTED_KINDS, strengthFor, tierFor } from "@/app/routing/words";
 import { ArrowRotateCw, ListOrderedIcon, ProviderGlyph, SpeedometerLatencySpeed } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import type { RoutePreview, TaskCategory } from "@/ipc/generated";
 import { PLAIN_KIND_NAMES, TIER_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
@@ -180,7 +181,9 @@ export function More({
                 {registry ? `Ratings updated ${day(registry.updated)}` : "Ratings"}
                 {registry?.checkedAtMs != null && ` · checked ${since(registry.checkedAtMs, now)}`}
               </span>
-              <LinkButton
+              <Button
+                variant="link-blue"
+                size="inline"
                 data-setting={MORE_ROWS.refresh.label}
                 className="text-xs gap-1.5 font-medium"
                 disabled={running || starting.busy || refresh === null}
@@ -191,7 +194,7 @@ export function More({
                   className={cn("size-3", (running || starting.busy) && "animate-spin motion-reduce:animate-none")}
                 />
                 {running ? "Refreshing…" : MORE_ROWS.refresh.label}
-              </LinkButton>
+              </Button>
             </div>
             {failure && (
               <p role="alert" className="text-destructive text-xs pb-3">

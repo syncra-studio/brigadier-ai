@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useState } from "react";
 
 import { CheckboxRow, errorText } from "@/app/dialogs/fields";
-import { SettingsButton, SettingsCard, SettingsPage, SettingsSection } from "@/app/settings/parts";
+import { SettingsCard, SettingsPage, SettingsSection } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -295,9 +295,9 @@ function BrowserRow({
         </div>
       </div>
       {view.label && (
-        <SettingsButton disabled={disabled || view.action === "none"} onClick={onAction}>
+        <Button variant="soft" size="sm" disabled={disabled || view.action === "none"} onClick={onAction}>
           {view.label}
-        </SettingsButton>
+        </Button>
       )}
     </div>
   );

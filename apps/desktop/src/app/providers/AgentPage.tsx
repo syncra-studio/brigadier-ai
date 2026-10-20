@@ -8,7 +8,8 @@ import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows
 import { CLI_NAMES, OVERVIEW_ROWS } from "@/app/providers/AgentsOverview";
 import { CheckAgainButton, PlanChip, ProvidersSection, ROW_LINE, ROW_TITLE, StateDot } from "@/app/providers/parts";
 import { bestFor } from "@/app/routing/models";
-import { SettingsButton, SettingsCard, SettingsPage, SettingsRow, settingsRows, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsCard, SettingsPage, SettingsRow, settingsRows, SettingsSwitch } from "@/app/settings/parts";
+import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronRight, InfoCircle, ProviderGlyph } from "@/components/icons";
 import { pickFile, request } from "@/ipc/client";
@@ -195,9 +196,9 @@ function Installation({
   else if (state === "install") {
     version = "Not installed";
     action = (
-      <SettingsButton disabled={settingUp} onClick={() => void connectAgent(provider)}>
+      <Button variant="soft" size="sm" disabled={settingUp} onClick={() => void connectAgent(provider)}>
         Install
-      </SettingsButton>
+      </Button>
     );
   } else {
     const current = status?.version ? `v${status.version}` : "Version unknown";
@@ -207,16 +208,18 @@ function Installation({
     else version = `${current} · up to date`;
     if (state === "signIn") {
       action = (
-        <SettingsButton disabled={settingUp} onClick={() => void connectAgent(provider)}>
+        <Button variant="soft" size="sm" disabled={settingUp} onClick={() => void connectAgent(provider)}>
           Sign in
-        </SettingsButton>
+        </Button>
       );
     } else {
       // Always there, as drawn; it runs only an update Brigadier can run itself.
       const runnable = update?.action.type === "run" && update.progress.type !== "updated";
       const updating = update?.progress.type === "updating";
       action = (
-        <SettingsButton
+        <Button
+          variant="soft"
+          size="sm"
           disabled={!runnable || updating}
           title={
             update?.action.type === "manual"
@@ -228,7 +231,7 @@ function Installation({
           onClick={() => update && void startUpdate(update)}
         >
           {updating ? "Updating…" : "Update"}
-        </SettingsButton>
+        </Button>
       );
     }
   }
@@ -270,9 +273,9 @@ function Installation({
             </span>
             <ErrorLine error={location.error} />
           </div>
-          <SettingsButton disabled={location.busy} onClick={change}>
+          <Button variant="soft" size="sm" disabled={location.busy} onClick={change}>
             Change
-          </SettingsButton>
+          </Button>
         </div>
       )}
     </SettingsCard>

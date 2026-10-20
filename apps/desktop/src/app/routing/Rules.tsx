@@ -1,23 +1,12 @@
 import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import {
-  BanIcon,
-  Badge,
-  Card,
-  GhostButton,
-  LightButton,
-  Note,
-  OutlineButton,
-  PillSelect,
-  PillTrigger,
-  PreferIcon,
-  Section,
-} from "@/app/routing/parts";
+import { BanIcon, Badge, Card, Note, PillSelect, PillTrigger, PreferIcon, Section } from "@/app/routing/parts";
 import { TargetItems } from "@/app/routing/pickers";
 import { type Draft, type DraftEffect, draftRule, type Names, previewDraft, ruleLine, ruleTitle } from "@/app/routing/ruleWords";
 import { ROUTED_KINDS, shortModelName, shortPlaceName } from "@/app/routing/words";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -83,10 +72,10 @@ export function Rules({ routes, groups }: { routes: RoutePreview[] | null; group
       title={RULES.label}
       description={RULES.description}
       actions={
-        <OutlineButton data-slot="add-rule" disabled={adding} onClick={() => setAdding(true)}>
+        <Button variant="soft" size="sm" data-slot="add-rule" disabled={adding} onClick={() => setAdding(true)}>
           <Plus aria-hidden />
           Add rule
-        </OutlineButton>
+        </Button>
       }
     >
       {(shown.length > 0 || adding) && (
@@ -192,10 +181,10 @@ function DraftRow({
           for
           <PillSelect label="The kind of work the rule is about" value={draft.kind} options={KINDS} onChange={(kind) => set({ kind })} />
         </div>
-        <GhostButton onClick={onCancel}>Cancel</GhostButton>
-        <LightButton disabled={!target || add.busy} onClick={submit}>
+        <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+        <Button size="sm" disabled={!target || add.busy} onClick={submit}>
           Add rule
-        </LightButton>
+        </Button>
       </div>
       {preview && (
         <Note tone={preview.tone} icon={preview.tone === "info" ? <Info aria-hidden /> : <Warning aria-hidden />}>

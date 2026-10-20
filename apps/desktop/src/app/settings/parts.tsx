@@ -1,8 +1,7 @@
-import { useId, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
+import { useId, type KeyboardEvent, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
-import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -329,27 +328,6 @@ export function SettingsSelect<T extends string>({
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-/** A row's action button; `destructive` for an action that deletes or removes. */
-export function SettingsButton({
-  destructive,
-  className,
-  ...props
-}: ComponentProps<typeof Button> & { destructive?: boolean }) {
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className={cn(
-        "rounded-nav bg-foreground/5 hover:bg-foreground/10 text-label font-normal",
-        destructive && "text-destructive",
-        className,
-      )}
-      {...props}
-    />
   );
 }
 

@@ -1,9 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
 
-import { SettingsButton, settingsCard, SettingsSection } from "@/app/settings/parts";
+import { settingsCard, SettingsSection } from "@/app/settings/parts";
 import type { Part } from "@/app/settings/storage/model";
-import { Button } from "@/components/ui/button";
-import { ChevronRight } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 /*
@@ -70,53 +68,7 @@ export function RowText({ title, line, className }: { title: ReactNode; line?: R
       <span className="text-label font-medium">{title}</span>
       {line && <span className="text-foreground/65 text-xs">{line}</span>}
     </div>
-  );
-}
 
-/** A row's button: Refresh, Review, Manage, Reveal in Finder, Free up. */
-export function Pill(props: ComponentProps<"button">) {
-  return <SettingsButton {...props} />;
-}
-
-/** The button that confirms: Free up 39.7 MB. */
-export function PrimaryPill({ className, ...props }: ComponentProps<"button">) {
-  return <Button type="button" size="sm" className={className} {...props} />;
-}
-
-/** The quiet button beside it: Cancel. */
-export function QuietPill({ className, ...props }: ComponentProps<"button">) {
-  return <Button type="button" variant="ghost" size="sm" className={className} {...props} />;
-}
-
-/** The red button: Uninstall…, as Archived chats' delete. */
-export function DangerPill({ className, ...props }: ComponentProps<"button">) {
-  return (
-    <SettingsButton
-      {...props}
-      className={cn("bg-destructive/10 hover:bg-destructive/20 text-destructive border-transparent", className)}
-    />
-  );
-}
-
-/** A blue link with its chevron: Show all, Show 9 more, What was removed. */
-export function LinkButton({
-  icon: Icon = ChevronRight,
-  className,
-  children,
-  ...props
-}: { icon?: typeof ChevronRight } & ComponentProps<"button">) {
-  return (
-    <button
-      type="button"
-      {...props}
-      className={cn(
-        "text-link flex shrink-0 items-center gap-1 text-xs font-medium hover:underline",
-        className,
-      )}
-    >
-      {children}
-      <Icon aria-hidden className="size-icon-xs" />
-    </button>
   );
 }
 

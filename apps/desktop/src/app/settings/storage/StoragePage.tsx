@@ -5,17 +5,10 @@ import { errorText } from "@/app/dialogs/fields";
 import { SettingsPage } from "@/app/settings/parts";
 import { FreeUpCard, type FreeUp } from "@/app/settings/storage/FreeUpCard";
 import { checkedWords, count, size, startTicked, usageParts } from "@/app/settings/storage/model";
-import {
-  DangerPill,
-  Dot,
-  Pill,
-  RowText,
-  StorageCard,
-  StorageSection,
-  UsageBar,
-} from "@/app/settings/storage/parts";
+import { Dot, RowText, StorageCard, StorageSection, UsageBar } from "@/app/settings/storage/parts";
 import { ProjectsCard, type UnusedFreeUp } from "@/app/settings/storage/ProjectsCard";
 import { FolderOpen, Reload } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { revealPath } from "@/ipc/client";
 import type { StorageReport } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
@@ -188,10 +181,10 @@ export function StoragePage() {
               {scanning ? "Checking…" : checkedWords(checkedAtMs, now)}
             </span>
           )}
-          <Pill onClick={refresh} disabled={scanning || busy}>
+          <Button variant="soft" size="sm" onClick={refresh} disabled={scanning || busy}>
             <Reload aria-hidden className={cn(scanning && "animate-spin motion-reduce:animate-none")} />
             Refresh
-          </Pill>
+          </Button>
         </>
       }
     >
@@ -229,7 +222,7 @@ export function StoragePage() {
         <StorageCard>
           <div className="flex items-center gap-4 py-4">
             <RowText title={STORAGE_ROWS.archived.label} line={STORAGE_ROWS.archived.description} />
-            <Pill onClick={() => openSettings("archived")}>Manage</Pill>
+            <Button variant="soft" size="sm" onClick={() => openSettings("archived")}>Manage</Button>
           </div>
         </StorageCard>
       </StorageSection>
@@ -237,7 +230,7 @@ export function StoragePage() {
         <StorageCard>
           <div className="flex items-center gap-4 py-4">
             <RowText title={STORAGE_ROWS.uninstall.label} line={STORAGE_ROWS.uninstall.description} />
-            <DangerPill onClick={() => openUninstall()}>Uninstall…</DangerPill>
+            <Button variant="soft-destructive" size="sm" onClick={() => openUninstall()}>Uninstall…</Button>
           </div>
         </StorageCard>
       </StorageSection>

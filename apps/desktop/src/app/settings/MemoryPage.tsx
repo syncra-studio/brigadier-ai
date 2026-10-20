@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
-import { SettingsButton, SettingsCard, SettingsPage, SettingsRow } from "@/app/settings/parts";
+import { SettingsCard, SettingsPage, SettingsRow } from "@/app/settings/parts";
 import { Brain } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useNow } from "@/hooks/use-now";
 import type { Node, Origin } from "@/ipc/generated";
@@ -168,7 +169,9 @@ function MemoryRow({
         setting={setting ?? memory.title}
         error={error}
       >
-        <SettingsButton
+        <Button
+          variant="soft"
+          size="sm"
           disabled={busy}
           onClick={() => {
             setDraft(null);
@@ -176,10 +179,10 @@ function MemoryRow({
           }}
         >
           Cancel
-        </SettingsButton>
-        <SettingsButton disabled={busy || draft.trim() === ""} onClick={save}>
+        </Button>
+        <Button variant="soft" size="sm" disabled={busy || draft.trim() === ""} onClick={save}>
           Save
-        </SettingsButton>
+        </Button>
       </SettingsRow>
     );
   }
@@ -194,11 +197,12 @@ function MemoryRow({
       }
       error={error}
     >
-      <SettingsButton aria-label={`Edit “${memory.title}”`} disabled={busy} onClick={() => setDraft(memory.title)}>
+      <Button variant="soft" size="sm" aria-label={`Edit “${memory.title}”`} disabled={busy} onClick={() => setDraft(memory.title)}>
         Edit
-      </SettingsButton>
-      <SettingsButton
-        destructive
+      </Button>
+      <Button
+        variant="soft-destructive"
+        size="sm"
         aria-label={`Delete “${memory.title}”`}
         disabled={busy}
         onClick={() =>
@@ -209,7 +213,7 @@ function MemoryRow({
         }
       >
         Delete
-      </SettingsButton>
+      </Button>
     </SettingsRow>
   );
 }

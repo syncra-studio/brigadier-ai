@@ -12,7 +12,7 @@ import {
   StateDot,
   UsageMeter,
 } from "@/app/providers/parts";
-import { SettingsButton, SettingsCard, SettingsRow, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsCard, SettingsRow, SettingsSwitch } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -281,14 +281,16 @@ function AgentRow({
         ) : (
           on &&
           state === "signIn" && (
-            <SettingsButton
+            <Button
+              variant="soft"
+              size="sm"
               onClick={(event) => {
                 event.stopPropagation();
                 onOpen(provider, true);
               }}
             >
               Sign in
-            </SettingsButton>
+            </Button>
           )
         )}
       </div>

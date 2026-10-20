@@ -1,17 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import {
-  SettingsButton,
-  SettingsCard,
-  SettingsPage,
-  SettingsRow,
-  SettingsSection,
-  SettingsSelect,
-} from "@/app/settings/parts";
+import { SettingsCard, SettingsPage, SettingsRow, SettingsSection, SettingsSelect } from "@/app/settings/parts";
 import { cleanWords, languageChoices, microphoneChoices } from "@/app/settings/voice";
 import { ProgressLine } from "@/components/assistant-ui/elements/progress-line";
 import { Plus, Trash } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import {
   cancelSpeechModelDownload,
@@ -143,7 +137,9 @@ function WordList() {
   return (
     <SettingsCard>
       <SettingsRow label={VOICE_ROWS.words.label} description={VOICE_ROWS.words.description} error={save.error}>
-        <SettingsButton
+        <Button
+          variant="soft"
+          size="sm"
           onClick={() => {
             focusNew.current = true;
             setWords((list) => [...list, ""]);
@@ -151,7 +147,7 @@ function WordList() {
         >
           <Plus aria-hidden className="size-icon-sm" />
           Add word
-        </SettingsButton>
+        </Button>
       </SettingsRow>
       {words.length > 0 && (
         <ul data-slot="word-list" className="flex flex-col gap-2 px-4 pt-1 pb-3">
@@ -220,13 +216,14 @@ function SpeechModelRow() {
         : `Not downloaded yet, ${size}; it downloads when you first dictate, or now`;
   return (
     <SettingsRow label={VOICE_ROWS.model.label} description={line} error={remove.error ?? (model ? null : modelError)}>
-      {status && model && <SettingsButton onClick={cancelSpeechModelDownload}>Cancel</SettingsButton>}
+      {status && model && <Button variant="soft" size="sm" onClick={cancelSpeechModelDownload}>Cancel</Button>}
       {status && !model && !status.installed && (
-        <SettingsButton onClick={() => void downloadSpeechModel()}>Download</SettingsButton>
+        <Button variant="soft" size="sm" onClick={() => void downloadSpeechModel()}>Download</Button>
       )}
       {status && !model && status.installed && (
-        <SettingsButton
-          destructive
+        <Button
+          variant="soft-destructive"
+          size="sm"
           disabled={remove.busy || dictating}
           onClick={() =>
             remove.run(async () => {
@@ -239,7 +236,7 @@ function SpeechModelRow() {
           }
         >
           {remove.busy ? "Removing…" : "Remove"}
-        </SettingsButton>
+        </Button>
       )}
     </SettingsRow>
   );

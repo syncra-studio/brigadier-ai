@@ -5,9 +5,9 @@ import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { Pill, RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
+import { RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ArrowRotateCw, ArrowUpRight, ChevronDown, ChevronUp, Document, Globe, ImageSquare, Mobile, Play, Terminal } from "@/components/icons";
 import type { OrchestratorStepKind, Preview, PreviewKind, ProofKind } from "@/ipc/generated";
@@ -285,38 +285,38 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
   let action: ReactNode = null;
   if (record && record.state.type === "paused" && viewed) {
     action = (
-      <Pill data-slot="preview-start" onClick={() => void resumePreview(viewed, record.id).catch(failed)}>
+      <Button variant="soft" size="sm" data-slot="preview-start" onClick={() => void resumePreview(viewed, record.id).catch(failed)}>
         <Play aria-hidden className="size-icon-sm" />
         Start again
-      </Pill>
+      </Button>
     );
   } else if (record && ended && viewed && (url || preview)) {
     // Its own command again, from its record.
     const again = record.kind === "test";
     action = (
-      <Pill data-slot="preview-start" onClick={() => void restartPreview(viewed, record.id).catch(failed)}>
+      <Button variant="soft" size="sm" data-slot="preview-start" onClick={() => void restartPreview(viewed, record.id).catch(failed)}>
         {again ? <ArrowRotateCw aria-hidden className="size-icon-sm" /> : <Play aria-hidden className="size-icon-sm" />}
         {again ? "Run again" : "Start again"}
-      </Pill>
+      </Button>
     );
   } else if (preview && rendered(preview)) {
     const file = pdfPath(preview);
     if (file) {
       action = (
-        <Pill data-slot="preview-open" title={file} onClick={() => void openPdf(file).catch(failed)}>
+        <Button variant="soft" size="sm" data-slot="preview-open" title={file} onClick={() => void openPdf(file).catch(failed)}>
           <ArrowUpRight aria-hidden className="size-icon-sm" />
           Open
-        </Pill>
+        </Button>
       );
     }
   } else if (preview?.kind === "simulator" && preview.state.type === "running") {
     // Simulator to the front, on the preview's device (none named: any booted one).
     const device = preview.target && preview.target !== KINDS.simulator.title ? preview.target : null;
     action = (
-      <Pill data-slot="preview-open" title={device ?? KINDS.simulator.title} onClick={() => void openSimulator(device).catch(failed)}>
+      <Button variant="soft" size="sm" data-slot="preview-open" title={device ?? KINDS.simulator.title} onClick={() => void openSimulator(device).catch(failed)}>
         <ArrowUpRight aria-hidden className="size-icon-sm" />
         Open
-      </Pill>
+      </Button>
     );
   } else if (url && !preview && !stopped) {
     action = <OpenPill url={url} conversationId={conversationId} />;

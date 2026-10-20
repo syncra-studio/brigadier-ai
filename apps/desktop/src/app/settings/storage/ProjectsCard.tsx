@@ -17,16 +17,7 @@ import {
   type Part,
   type ProjectSort,
 } from "@/app/settings/storage/model";
-import {
-  Dot,
-  LinkButton,
-  Pill,
-  PrimaryPill,
-  QuietPill,
-  RoundBadge,
-  ShareBar,
-  StorageCard,
-} from "@/app/settings/storage/parts";
+import { Dot, RoundBadge, ShareBar, StorageCard } from "@/app/settings/storage/parts";
 import { selectTrigger } from "@/app/settings/parts";
 import {
   Check,
@@ -42,6 +33,7 @@ import {
   Spinner,
   Stack,
 } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -118,8 +110,9 @@ export function ProjectsCard({
           </label>
           <SortSelect value={sort} onChange={setSort} />
           <div className="ps-1">
-            <LinkButton
-              icon={ChevronUp}
+            <Button
+              variant="link-blue"
+              size="inline"
               onClick={() => {
                 setAll(false);
                 setQuery("");
@@ -127,7 +120,8 @@ export function ProjectsCard({
               }}
             >
               Show fewer
-            </LinkButton>
+                <ChevronUp aria-hidden />
+            </Button>
           </div>
         </div>
         {(stale.projects.length > 0 || unused.phase === "done" || unused.phase === "failed") && (
@@ -158,9 +152,10 @@ export function ProjectsCard({
             {found.length === 0 ? "No project matches" : `Showing ${Math.min(shown, found.length)} of ${found.length}`}
           </span>
           {found.length > shown && (
-            <LinkButton icon={ChevronDown} onClick={() => setShown(shown + PROJECTS_PAGE)}>
+            <Button variant="link-blue" size="inline" onClick={() => setShown(shown + PROJECTS_PAGE)}>
               Show {Math.min(PROJECTS_PAGE, found.length - shown)} more
-            </LinkButton>
+              <ChevronDown aria-hidden />
+            </Button>
           )}
         </div>
       </StorageCard>
@@ -203,7 +198,10 @@ export function ProjectsCard({
           </div>
           <ShareBar parts={restParts} total={total} />
           <Size bytes={sumBytes(restParts)} />
-          <LinkButton onClick={() => setAll(true)}>Show all</LinkButton>
+          <Button variant="link-blue" size="inline" onClick={() => setAll(true)}>
+            Show all
+            <ChevronRight aria-hidden />
+          </Button>
         </div>
       )}
       <ExpandableRow
@@ -306,16 +304,16 @@ function ProjectRows({
               : `${count(items, "small leftover", "small leftovers")} of this project's can go`}
         </span>
         {project.path && (
-          <Pill onClick={() => void revealPath(project.path!)}>
+          <Button variant="soft" size="sm" onClick={() => void revealPath(project.path!)}>
             <FolderOpen aria-hidden />
             {reveal}
-          </Pill>
+          </Button>
         )}
         {items > 0 && (
-          <Pill disabled={cleaning} onClick={() => onFreeUp(project.projectId)}>
+          <Button variant="soft" size="sm" disabled={cleaning} onClick={() => onFreeUp(project.projectId)}>
             <Sparkles aria-hidden />
             {canGo > 0 ? `Free up ${size(canGo)}` : "Tidy up"}
-          </Pill>
+          </Button>
         )}
       </div>
     </ExpandableRow>
@@ -442,19 +440,19 @@ function UnusedRow({
       </div>
       {state.phase === "confirm" ? (
         <>
-          <QuietPill onClick={() => onState({ phase: "idle" })}>Cancel</QuietPill>
-          <PrimaryPill onClick={onFreeUp}>Free up {size(bytes)}</PrimaryPill>
+          <Button variant="ghost" size="sm" onClick={() => onState({ phase: "idle" })}>Cancel</Button>
+          <Button size="sm" onClick={onFreeUp}>Free up {size(bytes)}</Button>
         </>
       ) : state.phase === "done" || n === 0 ? null : state.phase === "freeing" ? (
-        <Pill disabled>
+        <Button variant="soft" size="sm" disabled>
           <Spinner className="animate-spin motion-reduce:animate-none" />
           Freeing up…
-        </Pill>
+        </Button>
       ) : (
-        <Pill onClick={() => onState({ phase: "confirm" })}>
+        <Button variant="soft" size="sm" onClick={() => onState({ phase: "confirm" })}>
           <Sparkles aria-hidden />
           Free up {size(bytes)}
-        </Pill>
+        </Button>
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import { type ComponentProps, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import {
@@ -13,7 +13,7 @@ import {
   shownIds,
   SORT_CHOICES,
 } from "@/app/settings/archived";
-import { SettingsButton, SettingsCard, SettingsPage, SettingsSearch, selectTrigger } from "@/app/settings/parts";
+import { SettingsCard, SettingsPage, SettingsSearch, selectTrigger } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -134,13 +134,13 @@ export function ArchivedPage() {
                 <span className="text-foreground/65 text-label flex-1">
                   {picked.length} picked
                 </span>
-                <SettingsButton onClick={() => clearPicked()}>Clear</SettingsButton>
-                <SettingsButton onClick={() => unarchive(picked)}>
+                <Button variant="soft" size="sm" onClick={() => clearPicked()}>Clear</Button>
+                <Button variant="soft" size="sm" onClick={() => unarchive(picked)}>
                   Unarchive ({picked.length})
-                </SettingsButton>
-                <DeleteButton onClick={() => askDelete(picked)}>
+                </Button>
+                <Button variant="soft-destructive" size="sm" onClick={() => askDelete(picked)}>
                   Delete ({picked.length})…
-                </DeleteButton>
+                </Button>
               </div>
             )}
           </div>
@@ -232,15 +232,17 @@ function ArchivedRow({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <SettingsButton onClick={() => unarchive([conversation.id])}>
+            <Button variant="soft" size="sm" onClick={() => unarchive([conversation.id])}>
               Unarchive
-            </SettingsButton>
-            <DeleteButton
+            </Button>
+            <Button
+              variant="soft-destructive"
+              size="sm"
               aria-label={`Delete “${conversation.title}”…`}
               onClick={() => askDelete([conversation.id])}
             >
               Delete
-            </DeleteButton>
+            </Button>
           </div>
         </div>
       </ContextMenuTrigger>
@@ -256,16 +258,7 @@ function ArchivedRow({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
-  );
-}
 
-/** A red pill: a delete that asks first. */
-function DeleteButton(props: ComponentProps<typeof Button>) {
-  return (
-    <SettingsButton
-      {...props}
-      className="bg-destructive/10 hover:bg-destructive/20 text-destructive border-transparent"
-    />
   );
 }
 

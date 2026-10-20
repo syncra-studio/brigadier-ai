@@ -2,7 +2,6 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import {
-  SettingsButton,
   SettingsCard,
   SettingsPage,
   SettingsRow,
@@ -13,6 +12,7 @@ import {
 } from "@/app/settings/parts";
 import { findModel, ModelSelector } from "@/components/assistant-ui/elements/model-selector";
 import { Check } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Choice } from "@/components/ui/segmented";
 import type { GitStyle, ModelChoice } from "@/ipc/generated";
@@ -260,9 +260,9 @@ function InstructionsBox({
           </p>
         )}
         {(now === "dirty" || now === "saving") && (
-          <SettingsButton disabled={now === "saving"} onClick={saveNow}>
+          <Button variant="soft" size="sm" disabled={now === "saving"} onClick={saveNow}>
             Save
-          </SettingsButton>
+          </Button>
         )}
         {now === "saved" && (
           <span aria-live="polite" className="text-muted-foreground flex items-center gap-1.5 text-xs">

@@ -3,7 +3,6 @@ import { useCallback, useEffect, useId, useState } from "react";
 import { useAction } from "@/app/conversation/useAction";
 import { LicensesDialog } from "@/app/settings/LicensesDialog";
 import {
-  SettingsButton,
   SettingsCard,
   SettingsPage,
   SettingsRow,
@@ -13,6 +12,7 @@ import {
   SwitchSetting,
 } from "@/app/settings/parts";
 import { SidebarClosedChoice } from "@/app/settings/SidebarClosedChoice";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -259,9 +259,9 @@ function NotificationsSection() {
             description="Turn them on in System Settings to use the options below"
             error={statusAction.error}
           >
-            <SettingsButton onClick={() => statusAction.run(() => openNotificationSettings())}>
+            <Button variant="soft" size="sm" onClick={() => statusAction.run(() => openNotificationSettings())}>
               Open System Settings
-            </SettingsButton>
+            </Button>
           </SettingsRow>
         )}
         {permission === "notAsked" && (
@@ -270,9 +270,9 @@ function NotificationsSection() {
             description="Allow them to hear when work is done or needs you"
             error={statusAction.error}
           >
-            <SettingsButton onClick={() => statusAction.run(() => askNotifications())}>
+            <Button variant="soft" size="sm" onClick={() => statusAction.run(() => askNotifications())}>
               Allow
-            </SettingsButton>
+            </Button>
           </SettingsRow>
         )}
         <SettingsRow
@@ -391,9 +391,9 @@ function OpenAtLoginRow() {
       error={save.error}
     >
       {state === "needsApproval" && (
-        <SettingsButton onClick={() => save.run(() => openLoginItems())}>
+        <Button variant="soft" size="sm" onClick={() => save.run(() => openLoginItems())}>
           Open System Settings
-        </SettingsButton>
+        </Button>
       )}
       <SettingsSwitch
         label={GENERAL_ROWS.openAtLogin.label}
@@ -424,10 +424,10 @@ function AboutSection() {
           </span>
         </SettingsRow>
         <SettingsRow label={GENERAL_ROWS.licenses.label} description={GENERAL_ROWS.licenses.description}>
-          <SettingsButton onClick={() => setLicenses(true)}>View</SettingsButton>
+          <Button variant="soft" size="sm" onClick={() => setLicenses(true)}>View</Button>
         </SettingsRow>
         <SettingsRow label={GENERAL_ROWS.setup.label} description={GENERAL_ROWS.setup.description}>
-          <SettingsButton onClick={() => reopenOnboarding()}>Run setup</SettingsButton>
+          <Button variant="soft" size="sm" onClick={() => reopenOnboarding()}>Run setup</Button>
         </SettingsRow>
       </SettingsCard>
       <LicensesDialog open={licenses} onOpenChange={setLicenses} />

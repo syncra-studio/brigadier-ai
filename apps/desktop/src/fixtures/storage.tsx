@@ -267,7 +267,7 @@ function Look() {
       await pause(600);
       seen.general = {
         card: surface(q('[data-slot="settings-card"]')),
-        button: surface(q('[data-slot="settings-card"] button[data-variant="outline"]')),
+        button: surface(q('[data-slot="settings-card"] button[data-variant="soft"]')),
       };
       openSettings("storage");
       await pause(800);

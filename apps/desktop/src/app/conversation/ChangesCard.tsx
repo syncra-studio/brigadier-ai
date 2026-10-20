@@ -10,7 +10,7 @@ import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
 import { mergeStats } from "@/app/conversation/ComposerCapsule";
 import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { LinkButton, Pill, PrimaryPill, QuietPill, RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
+import { RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
 import {
   ArrowRotateCcw,
   ArrowRotateCw,
@@ -380,9 +380,9 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   if (waits) {
     actions = (
       <>
-        <QuietPill className={QUIET} disabled={busy} aria-busy={busy || undefined} onClick={() => each("undo", waiting)}>Undo All</QuietPill>
-        <PrimaryPill className={PRIMARY} disabled={busy} onClick={() => each("keep", waiting)}>Keep All</PrimaryPill>
-        <Pill onClick={() => openFileTab(conversationId, waiting[0]!)}>Review Changes</Pill>
+        <Button variant="ghost" size="sm" className={QUIET} disabled={busy} aria-busy={busy || undefined} onClick={() => each("undo", waiting)}>Undo All</Button>
+        <Button size="sm" className={PRIMARY} disabled={busy} onClick={() => each("keep", waiting)}>Keep All</Button>
+        <Button variant="soft" size="sm" onClick={() => openFileTab(conversationId, waiting[0]!)}>Review Changes</Button>
       </>
     );
   } else if (merged && reverted) {
@@ -394,16 +394,18 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
           Redoing…
         </span>
       ) : redoText ? (
-        <QuietPill className={QUIET} data-slot="merge-redo" title={redoText} disabled={redo.asked} onClick={redo.ask}>
+        <Button variant="ghost" size="sm" className={QUIET} data-slot="merge-redo" title={redoText} disabled={redo.asked} onClick={redo.ask}>
           <ArrowRotateCw aria-hidden className="size-icon-sm" />
           Redo
-        </QuietPill>
+        </Button>
       ) : null;
   } else if (merged) {
     actions = (
       <>
         {revertText && !confirming && !reverting && (
-          <QuietPill
+          <Button
+            variant="ghost"
+            size="sm"
             className={QUIET}
             data-slot="merge-revert"
             title={revertText}
@@ -415,12 +417,12 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
           >
             <ArrowRotateCcw aria-hidden className="size-icon-sm" />
             Revert
-          </QuietPill>
+          </Button>
         )}
         {merged.mergeCommit && (
-          <Pill data-slot="merge-view-changes" onClick={() => openReviewTab(conversationId, mergeViewTarget(merged))}>
+          <Button variant="soft" size="sm" data-slot="merge-view-changes" onClick={() => openReviewTab(conversationId, mergeViewTarget(merged))}>
             View changes
-          </Pill>
+          </Button>
         )}
       </>
     );
@@ -428,7 +430,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
     actions = (
       <>
         {undoable && !reviewing && (
-          <QuietPill className={QUIET}
+          <Button variant="ghost" size="sm" className={QUIET}
             data-slot="turn-diff-undo"
             data-held={held.length || undefined}
             title={held.length === 0 ? undefined : held.length === 1 ? held[0]?.reason : `Discard leaves ${held.length} files as they are: ${HELD_WHY}`}
@@ -438,12 +440,12 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
           >
             {busy ? <Spinner className="size-icon-sm animate-spin" /> : discarded ? <ArrowRotateCw aria-hidden className="size-icon-sm" /> : <Trash aria-hidden className="size-icon-sm" />}
             {discarded ? "Reapply" : "Discard"}
-          </QuietPill>
+          </Button>
         )}
         {mergeText && !discarded && (
-          <PrimaryPill className={PRIMARY} data-slot="turn-diff-merge" title={mergeText} disabled={mergeAsk.asked || working} onClick={mergeAsk.ask}>
+          <Button size="sm" className={PRIMARY} data-slot="turn-diff-merge" title={mergeText} disabled={mergeAsk.asked || working} onClick={mergeAsk.ask}>
             Merge into {environment?.type === "newWorktree" ? environment.base : "main"}
-          </PrimaryPill>
+          </Button>
         )}
       </>
     );
@@ -516,9 +518,10 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
             ))}
             {more > 0 && (
               <li className="border-divider border-t pt-2.5 pb-3">
-                <LinkButton data-slot="turn-diff-more" icon={all ? ChevronUp : ChevronDown} className="text-label" onClick={() => setAll((now) => !now)}>
+                <Button variant="link-blue" size="inline" data-slot="turn-diff-more" className="text-label" onClick={() => setAll((now) => !now)}>
                   {all ? "Show less" : `Show ${more} more ${more === 1 ? "file" : "files"}`}
-                </LinkButton>
+                  {all ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}
+                </Button>
               </li>
             )}
           </ul>
@@ -534,9 +537,9 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
                 </span>
               )}
             </div>
-            <QuietPill className={QUIET} data-slot="merge-warning-open" onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")}>
+            <Button variant="ghost" size="sm" className={QUIET} data-slot="merge-warning-open" onClick={() => openPanelTab(conversationId, { type: "reviews" }, "Progress")}>
               {openFindings > 0 ? "Open finding" : "Open Progress"}
-            </QuietPill>
+            </Button>
           </div>
         )}
         {merged && (confirming || reverting) && (
@@ -556,8 +559,8 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
               </span>
             ) : (
               <>
-                <QuietPill className={QUIET} onClick={() => setConfirming(false)}>Cancel</QuietPill>
-                <PrimaryPill className={PRIMARY}
+                <Button variant="ghost" size="sm" className={QUIET} onClick={() => setConfirming(false)}>Cancel</Button>
+                <Button size="sm" className={PRIMARY}
                   data-slot="merge-revert-go"
                   onClick={() => {
                     revert.ask();
@@ -566,7 +569,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
                   }}
                 >
                   {files.length === 0 ? "Revert" : files.length === 1 ? "Revert 1 file" : `Revert ${files.length} files`}
-                </PrimaryPill>
+                </Button>
               </>
             )}
           </div>

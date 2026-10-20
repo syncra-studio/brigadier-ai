@@ -1,9 +1,8 @@
 import type { ComponentProps, ReactNode } from "react";
 
-import { selectTrigger, SettingsButton, settingsCard, SettingsSection } from "@/app/settings/parts";
+import { selectTrigger, settingsCard, SettingsSection } from "@/app/settings/parts";
 import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/icons";
 import { Badge as ChipBadge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -167,32 +166,6 @@ export function PillChoice<T extends string>(props: {
   disabled?: boolean;
 }) {
   return <Segmented {...props} />;
-}
-
-/** A section's action: an outlined pill (Add rule). */
-export function OutlineButton(props: ComponentProps<"button">) {
-  return <SettingsButton {...props} />;
-}
-
-/** The button that confirms (Add rule in the form). */
-export function LightButton({ className, ...props }: ComponentProps<"button">) {
-  return <Button type="button" size="sm" className={className} {...props} />;
-}
-
-/** A quiet button with no fill (Cancel). */
-export function GhostButton({ className, ...props }: ComponentProps<"button">) {
-  return <Button type="button" variant="ghost" size="sm" className={className} {...props} />;
-}
-
-/** Blue words that act (Add model, See strengths, Refresh ratings). */
-export function LinkButton({ className, ...props }: ComponentProps<"button">) {
-  return (
-    <button
-      type="button"
-      className={cn("text-link inline-flex items-center hover:underline disabled:opacity-50", className)}
-      {...props}
-    />
-  );
 }
 
 /** A note inset in a card: what a change would do, or (warning) why it would do nothing. */

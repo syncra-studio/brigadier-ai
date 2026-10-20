@@ -1,14 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import {
-  SettingsButton,
-  SettingsCard,
-  SettingsPage,
-  SettingsSearch,
-  SettingsSection,
-  selectTrigger,
-} from "@/app/settings/parts";
+import { SettingsCard, SettingsPage, SettingsSearch, SettingsSection, selectTrigger } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -124,7 +117,7 @@ export function BrowserHistory({
       </div>
       <SettingsSection
         title={HEADINGS[filter]}
-        actions={onClear && <SettingsButton onClick={onClear}>Clear browsing data</SettingsButton>}
+        actions={onClear && <Button variant="soft" size="sm" onClick={onClear}>Clear browsing data</Button>}
       >
         <ErrorLine error={error} />
         {visits && days.length === 0 && (
@@ -153,9 +146,9 @@ export function BrowserHistory({
           </SettingsCard>
         ))}
         {more && (
-          <SettingsButton className="self-center" onClick={loadMore}>
+          <Button variant="soft" size="sm" className="self-center" onClick={loadMore}>
             Show more
-          </SettingsButton>
+          </Button>
         )}
       </SettingsSection>
     </SettingsPage>

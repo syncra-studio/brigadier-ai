@@ -1,13 +1,7 @@
 import { useAction } from "@/app/conversation/useAction";
-import {
-  SettingsButton,
-  SettingsCard,
-  SettingsPage,
-  SettingsRow,
-  SettingsSection,
-  SettingsSwitch,
-} from "@/app/settings/parts";
+import { SettingsCard, SettingsPage, SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import type { ComputerPermission, ComputerUseStatus, PermissionState } from "@/ipc/generated";
 import {
   grantComputerPermission,
@@ -127,16 +121,18 @@ function PermissionRow({ permission, status }: { permission: ComputerPermission;
         {STATE_LABEL[state]}
       </Badge>
       {state !== "granted" && (
-        <SettingsButton disabled={!enabled || grant.busy} onClick={() => grant.run(() => grantComputerPermission(permission))}>
+        <Button variant="soft" size="sm" disabled={!enabled || grant.busy} onClick={() => grant.run(() => grantComputerPermission(permission))}>
           Grant…
-        </SettingsButton>
+        </Button>
       )}
-      <SettingsButton
+      <Button
+        variant="soft"
+        size="sm"
         aria-label={`Open System Settings for ${permissionName(permission)}`}
         onClick={() => open.run(() => openPrivacySettings(permission))}
       >
         Open System Settings
-      </SettingsButton>
+      </Button>
     </SettingsRow>
   );
 }
@@ -148,7 +144,7 @@ function SetupRow({ status }: { status: ComputerUseStatus | null }) {
   return (
     <SettingsRow label={COMPUTER_USE_ROWS.setup.label} setting="Setup" description={<span data-slot="setup-line">{line}</span>} error={open.error}>
       {status && enabled && setupUnfinished(status) && (
-        <SettingsButton onClick={() => open.run(() => openComputerSetup())}>Finish setup…</SettingsButton>
+        <Button variant="soft" size="sm" onClick={() => open.run(() => openComputerSetup())}>Finish setup…</Button>
       )}
     </SettingsRow>
   );

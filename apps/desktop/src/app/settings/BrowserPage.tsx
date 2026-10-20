@@ -6,7 +6,6 @@ import { BrowserHistory } from "@/app/settings/BrowserHistory";
 import { BrowserSiteSettings } from "@/app/settings/BrowserSiteSettings";
 import { ClearBrowsingDataDialog } from "@/app/settings/ClearBrowsingDataDialog";
 import {
-  SettingsButton,
   SettingsCard,
   SettingsPage,
   SettingsRow,
@@ -16,6 +15,7 @@ import {
   SwitchSetting,
 } from "@/app/settings/parts";
 import { Globe } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { pickFolder } from "@/ipc/client";
 import type { LinkTarget } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
@@ -125,10 +125,10 @@ export function BrowserPage() {
             <LinkRow setting="localLinksIn" row={BROWSER_ROWS.localLinks} />
             <SwitchSetting setting="browserFullUrl" row={BROWSER_ROWS.fullUrl} />
             <SettingsRow label={BROWSER_ROWS.data.label} description={BROWSER_ROWS.data.description}>
-              <SettingsButton onClick={() => setClearing(true)}>Clear browsing data</SettingsButton>
+              <Button variant="soft" size="sm" onClick={() => setClearing(true)}>Clear browsing data</Button>
             </SettingsRow>
             <SettingsRow label={BROWSER_ROWS.history.label} description={BROWSER_ROWS.history.description}>
-              <SettingsButton onClick={() => setView("history")}>Manage</SettingsButton>
+              <Button variant="soft" size="sm" onClick={() => setView("history")}>Manage</Button>
             </SettingsRow>
           </SettingsCard>
         </SettingsSection>
@@ -139,7 +139,7 @@ export function BrowserPage() {
             <LocationRow />
             {mac && <SwitchSetting setting="browserAskDownloads" row={BROWSER_ROWS.askDownloads} />}
             <SettingsRow label={BROWSER_ROWS.downloads.label} description={BROWSER_ROWS.downloads.description}>
-              <SettingsButton onClick={() => setView("downloads")}>Manage</SettingsButton>
+              <Button variant="soft" size="sm" onClick={() => setView("downloads")}>Manage</Button>
             </SettingsRow>
           </SettingsCard>
         </SettingsSection>
@@ -148,7 +148,7 @@ export function BrowserPage() {
         <SettingsSection title="Browser permissions">
           <SettingsCard>
             <SettingsRow label={BROWSER_ROWS.sites.label} description={BROWSER_ROWS.sites.description}>
-              <SettingsButton onClick={() => setView("sites")}>Manage</SettingsButton>
+              <Button variant="soft" size="sm" onClick={() => setView("sites")}>Manage</Button>
             </SettingsRow>
           </SettingsCard>
         </SettingsSection>
@@ -175,11 +175,11 @@ function LocationRow() {
     >
       <div className="flex items-center gap-2">
         {dir && (
-          <SettingsButton onClick={() => save.run(() => setSetting("browserDownloadsDir", ""))}>
+          <Button variant="soft" size="sm" onClick={() => save.run(() => setSetting("browserDownloadsDir", ""))}>
             Use Downloads
-          </SettingsButton>
+          </Button>
         )}
-        <SettingsButton onClick={change}>Change…</SettingsButton>
+        <Button variant="soft" size="sm" onClick={change}>Change…</Button>
       </div>
     </SettingsRow>
   );

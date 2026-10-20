@@ -5,7 +5,7 @@ import { ErrorLine } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { SetupTerminal } from "@/app/onboarding/SetupTerminal";
 import { ROW_LINE, UsageMeter } from "@/app/providers/parts";
-import { SettingsButton, SettingsCard, SettingsRow } from "@/app/settings/parts";
+import { SettingsCard, SettingsRow } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -349,21 +349,23 @@ function AccountRow({
   );
   const use =
     !signedIn && !own && status?.path ? (
-      <SettingsButton disabled={busy} onClick={() => id && onSignIn(id)}>
+      <Button variant="soft" size="sm" disabled={busy} onClick={() => id && onSignIn(id)}>
         Sign in
-      </SettingsButton>
+      </Button>
     ) : view.inUse ? (
       <Badge variant="secondary" title="New chats start on this account">
         In use
       </Badge>
     ) : (
-      <SettingsButton
+      <Button
+        variant="soft"
+        size="sm"
         disabled={action.busy || !signedIn}
         title="Start new chats on this account"
         onClick={() => action.run(() => makeDefaultAccount(provider, id))}
       >
         Use
-      </SettingsButton>
+      </Button>
     );
   const menu = own ? (
     <span aria-hidden className="size-6 shrink-0" />
@@ -440,18 +442,20 @@ function AccountRow({
         </div>
         <div className="flex w-24 shrink-0 items-center justify-end gap-1.5">
           {!signedIn && !own && status?.path ? (
-            <SettingsButton disabled={busy} onClick={() => id && onSignIn(id)}>
+            <Button variant="soft" size="sm" disabled={busy} onClick={() => id && onSignIn(id)}>
               Sign in
-            </SettingsButton>
+            </Button>
           ) : (
             !view.inUse && (
-              <SettingsButton
+              <Button
+                variant="soft"
+                size="sm"
                 disabled={action.busy || !signedIn}
                 title="Start new chats on this account"
                 onClick={() => action.run(() => makeDefaultAccount(provider, id))}
               >
                 Use
-              </SettingsButton>
+              </Button>
             )
           )}
           {menu}

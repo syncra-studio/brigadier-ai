@@ -14,16 +14,9 @@ import {
   type Group,
   type Kept,
 } from "@/app/settings/storage/model";
-import {
-  LinkButton,
-  Pill,
-  PrimaryPill,
-  QuietPill,
-  RoundBadge,
-  RowText,
-  StorageCard,
-} from "@/app/settings/storage/parts";
+import { RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
 import { Check, ChevronDown, ChevronRight, ChevronUp, FolderOpen, Lock, Sparkles, Spinner } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { revealPath } from "@/ipc/client";
 import type { CleanItem, CleanReport, StorageReport } from "@/ipc/generated";
@@ -83,12 +76,14 @@ export function FreeUpCard({
             )
           }
         />
-        <Pill
+        <Button
+          variant="soft"
+          size="sm"
           disabled={!report || !pickable}
           onClick={() => report && onState({ phase: "review", scanId: report.scanId, ticked: startTicked(report) })}
         >
           Review
-        </Pill>
+        </Button>
       </div>
     </StorageCard>
   );
@@ -152,8 +147,9 @@ function Review({
             {state.error ?? `${picked.picked} of ${count(picked.of, "item", "items")} · nothing else is touched`}
           </span>
         </div>
-        <QuietPill onClick={cancel}>Cancel</QuietPill>
-        <PrimaryPill
+        <Button variant="ghost" size="sm" onClick={cancel}>Cancel</Button>
+        <Button
+          size="sm"
           disabled={picked.picked === 0}
           onClick={() =>
             onRemove(
@@ -164,7 +160,7 @@ function Review({
           }
         >
           {picked.bytes > 0 ? `Free up ${size(picked.bytes)}` : `Tidy up ${count(picked.picked, "item", "items")}`}
-        </PrimaryPill>
+        </Button>
       </div>
     </StorageCard>
   );
@@ -208,9 +204,10 @@ function GroupRows({
           ))}
           {group.items.length > shown && (
             <div className="pt-2 pb-1 ps-7">
-              <LinkButton icon={ChevronDown} onClick={() => setShown(group.items.length)}>
+              <Button variant="link-blue" size="inline" onClick={() => setShown(group.items.length)}>
                 Show {group.items.length - shown} more
-              </LinkButton>
+                <ChevronDown aria-hidden />
+              </Button>
             </div>
           )}
         </div>
@@ -355,13 +352,15 @@ function Done({
           title={cleaned.removed > 0 ? `${size(freed)} freed` : "Nothing was removed"}
           line={doneLine(cleaned, totalBytes)}
         />
-        <LinkButton
-          icon={open ? ChevronDown : ChevronRight}
+        <Button
+          variant="link-blue"
+          size="inline"
           aria-expanded={open}
           onClick={() => setOpen(!open)}
         >
           What was removed
-        </LinkButton>
+        {open ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
+        </Button>
       </div>
       {open && (
         <div data-removed className="border-divider flex flex-col border-t py-2 ps-13">

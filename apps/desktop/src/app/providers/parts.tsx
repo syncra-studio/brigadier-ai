@@ -1,8 +1,9 @@
 import type { ComponentProps, ReactNode } from "react";
 
-import { SettingsButton, SettingsSection } from "@/app/settings/parts";
+import { SettingsSection } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Reload } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import type { QuotaWindow } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
 import { usageTone, used, windowTitle } from "@/lib/quota";
@@ -46,10 +47,10 @@ export const ROW_LINE = "text-foreground/65 text-xs";
 /** Check again, at the top of the page and of an agent's page. */
 export function CheckAgainButton({ busy, ...props }: ComponentProps<"button"> & { busy: boolean }) {
   return (
-    <SettingsButton disabled={busy} {...props}>
+    <Button variant="soft" size="sm" disabled={busy} {...props}>
       <Reload aria-hidden className={busy ? "animate-spin motion-reduce:animate-none" : undefined} />
       Check again
-    </SettingsButton>
+    </Button>
   );
 }
 

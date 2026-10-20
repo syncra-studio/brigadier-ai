@@ -1,17 +1,7 @@
 import { type ComponentType, type SVGProps, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import {
-  Badge,
-  Card,
-  HAIRLINE_TOP,
-  LinkButton,
-  OpenChevron,
-  PillChoice,
-  PillTrigger,
-  RowText,
-  Section,
-} from "@/app/routing/parts";
+import { Badge, Card, HAIRLINE_TOP, OpenChevron, PillChoice, PillTrigger, RowText, Section } from "@/app/routing/parts";
 import { TargetItems } from "@/app/routing/pickers";
 import {
   decides,
@@ -24,6 +14,7 @@ import {
   shortPlaceName,
 } from "@/app/routing/words";
 import { effortLabel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -356,7 +347,7 @@ function AutoPicks({
         <p className="text-xs text-muted-foreground pt-1">
           Skipped: {joinWords(skipped.map((candidate) => name(candidate.provider, candidate.model)))}{" "}
           {skipped.length === 1 ? "is" : "are"} below the {TIER_LABELS[floor]} tier this work needs.{" "}
-          <LinkButton onClick={onSeeStrengths}>See strengths</LinkButton>
+          <Button variant="link-blue" size="inline" className="inline-flex" onClick={onSeeStrengths}>See strengths</Button>
         </p>
       )}
     </div>
@@ -417,10 +408,10 @@ function OrderList({
       </ol>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
-          <LinkButton className="text-xs h-9 w-fit gap-2 ps-6.5 font-medium">
+          <Button variant="link-blue" size="inline" className="text-xs h-9 w-fit gap-2 ps-6.5 font-medium">
             <Plus aria-hidden className="size-3.5" />
             Add model
-          </LinkButton>
+          </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="max-h-96 w-xs overflow-y-auto">
           <TargetItems

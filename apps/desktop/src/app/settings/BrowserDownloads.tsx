@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { SettingsButton, SettingsCard, SettingsPage, SettingsSearch, SettingsSection } from "@/app/settings/parts";
+import { SettingsCard, SettingsPage, SettingsSearch, SettingsSection } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -61,9 +61,9 @@ export function BrowserDownloads({ onBack }: { onBack: () => void }) {
       <SettingsSection
         title="All-time history"
         actions={
-          <SettingsButton disabled={!shown.some((d) => d.state !== "running")} onClick={() => remove(null)}>
+          <Button variant="soft" size="sm" disabled={!shown.some((d) => d.state !== "running")} onClick={() => remove(null)}>
             Clear all
-          </SettingsButton>
+          </Button>
         }
       >
         <ErrorLine error={error} />
