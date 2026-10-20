@@ -6,9 +6,9 @@ import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
 import { agentState } from "@/app/onboarding/SetupTerminal";
 import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows";
 import { CLI_NAMES, OVERVIEW_ROWS } from "@/app/providers/AgentsOverview";
-import { CheckAgainButton, PlanChip, ProvidersSection, ROW_LINE, ROW_TITLE, StateDot } from "@/app/providers/parts";
+import { CheckAgainButton, PlanChip, ROW_LINE, ROW_TITLE, StateDot } from "@/app/providers/parts";
 import { bestFor } from "@/app/routing/models";
-import { SettingsPage, SettingsRow, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsPage, SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronRight, InfoCircle, ProviderGlyph } from "@/components/icons";
@@ -136,13 +136,14 @@ export function AgentPage({
   const checkedAtMs = overview?.checkedAtMs ?? null;
   return (
     <div data-slot="agent-page" className="flex flex-col gap-10">
-      <ProvidersSection
+      <SettingsSection
         title="Installation"
+        setting="Installation"
         aside={checkedAtMs !== null ? `Checked ${formatAgo(checkedAtMs, now)}` : undefined}
       >
         <Installation provider={provider} overview={overview} signIn={signIn} />
-      </ProvidersSection>
-      <ProvidersSection title="Accounts" aside="Usage refreshes every few minutes">
+      </SettingsSection>
+      <SettingsSection title="Accounts" setting="Accounts" aside="Usage refreshes every few minutes">
         <SettingsCard>
           <SettingsRow
             label={OVERVIEW_ROWS.switchAccounts.label}
@@ -158,7 +159,7 @@ export function AgentPage({
           </SettingsRow>
           <ProviderAccounts page provider={provider} views={accounts} now={now} revealed={revealed} />
         </SettingsCard>
-      </ProvidersSection>
+      </SettingsSection>
       {on && <AgentModels provider={provider} overview={overview} merged={merged} />}
     </div>
   );
@@ -312,7 +313,7 @@ function AgentModels({
     <AgentModelRow key={model.id} provider={provider} model={model} merged={merged} />
   );
   return (
-    <ProvidersSection title="Models" aside={aside}>
+    <SettingsSection title="Models" setting="Models" aside={aside}>
       <SettingsCard>
         {models.length === 0 ? (
           <p className="text-foreground/65 px-4 py-3 text-sm">
@@ -344,7 +345,7 @@ function AgentModels({
           </Collapsible>
         )}
       </SettingsCard>
-    </ProvidersSection>
+    </SettingsSection>
   );
 }
 

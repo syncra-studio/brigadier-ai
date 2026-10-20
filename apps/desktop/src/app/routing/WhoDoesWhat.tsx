@@ -1,7 +1,7 @@
 import { type ComponentType, type SVGProps, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { Badge, HAIRLINE_TOP, OpenChevron, PillChoice, PillTrigger, RowText, Section } from "@/app/routing/parts";
+import { Badge, HAIRLINE_TOP, OpenChevron, PillChoice, PillTrigger, RowText } from "@/app/routing/parts";
 import { TargetItems } from "@/app/routing/pickers";
 import {
   decides,
@@ -13,6 +13,7 @@ import {
   shortModelName,
   shortPlaceName,
 } from "@/app/routing/words";
+import { SettingsSection } from "@/app/settings/parts";
 import { effortLabel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { Button } from "@/components/ui/button";
 import {
@@ -109,7 +110,7 @@ export function WhoDoesWhat({
 }) {
   const [open, setOpen] = useState<TaskCategory | null>(null);
   return (
-    <Section title={WHO_DOES_WHAT.label} description={WHO_DOES_WHAT.description}>
+    <SettingsSection title={WHO_DOES_WHAT.label} description={WHO_DOES_WHAT.description}>
       <SettingsCard inset data-slot="who-does-what">
         {ROUTED_KINDS.map((category) => (
           <KindRow
@@ -124,7 +125,7 @@ export function WhoDoesWhat({
           />
         ))}
       </SettingsCard>
-    </Section>
+    </SettingsSection>
   );
 }
 

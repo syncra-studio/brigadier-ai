@@ -1,6 +1,5 @@
 import type { ComponentProps, ReactNode } from "react";
 
-import { SettingsSection } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Reload } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -14,31 +13,6 @@ import { cn } from "@/lib/utils";
  * with every Settings page's parts: a section (its title and a note on the right over a card),
  * cards, plan chips, an agent's mark and a usage meter.
  */
-
-/** A section: its title and an optional note on the right, over its card. */
-export function ProvidersSection({
-  title,
-  aside,
-  setting,
-  children,
-}: {
-  title: string;
-  aside?: ReactNode;
-  /** The name Settings search finds the section by, when not its title. */
-  setting?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div data-setting={setting ?? title}>
-      <SettingsSection
-        title={title}
-        actions={aside && <div className="text-foreground/65 text-label flex items-center gap-1">{aside}</div>}
-      >
-        {children}
-      </SettingsSection>
-    </div>
-  );
-}
 
 /** A row's text: its title over its line, each in the Settings rows' type. */
 export const ROW_TITLE = "text-label font-medium";

@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { create } from "zustand";
 
 import { errorText } from "@/app/dialogs/fields";
-import { SettingsPage } from "@/app/settings/parts";
+import { SettingsPage, SettingsSection } from "@/app/settings/parts";
 import { FreeUpCard, type FreeUp } from "@/app/settings/storage/FreeUpCard";
 import { checkedWords, count, size, startTicked, usageParts } from "@/app/settings/storage/model";
-import { Dot, RowText, StorageSection, UsageBar } from "@/app/settings/storage/parts";
+import { Dot, RowText, UsageBar } from "@/app/settings/storage/parts";
 import { ProjectsCard, type UnusedFreeUp } from "@/app/settings/storage/ProjectsCard";
 import { FolderOpen, Reload } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -189,10 +189,10 @@ export function StoragePage() {
         </>
       }
     >
-      <StorageSection title={STORAGE_ROWS.computer.label}>
+      <SettingsSection title={STORAGE_ROWS.computer.label} setting={STORAGE_ROWS.computer.label}>
         <UsageCard report={report} error={scanError} />
-      </StorageSection>
-      <StorageSection title={STORAGE_ROWS.storage.label}>
+      </SettingsSection>
+      <SettingsSection title={STORAGE_ROWS.storage.label} setting={STORAGE_ROWS.storage.label}>
         <FreeUpCard
           report={freeUp.phase === "removing" || freeUp.phase === "done" ? cleanScan : report}
           scanned={report}
@@ -200,10 +200,11 @@ export function StoragePage() {
           onState={(next) => useStorage.setState({ freeUp: next })}
           onRemove={remove}
         />
-      </StorageSection>
+      </SettingsSection>
       {report && report.projects.length > 0 && (
-        <StorageSection
+        <SettingsSection
           title={STORAGE_ROWS.projects.label}
+          setting={STORAGE_ROWS.projects.label}
           description={STORAGE_ROWS.projects.description}
           aside="Largest first · shared items count once"
         >
@@ -217,24 +218,24 @@ export function StoragePage() {
             onFreeUpProject={freeUpProject}
             cleaning={freeUp.phase === "removing"}
           />
-        </StorageSection>
+        </SettingsSection>
       )}
-      <StorageSection title={STORAGE_ROWS.archived.label}>
+      <SettingsSection title={STORAGE_ROWS.archived.label} setting={STORAGE_ROWS.archived.label}>
         <SettingsCard inset split={false}>
           <div className="flex items-center gap-4 py-4">
             <RowText title={STORAGE_ROWS.archived.label} line={STORAGE_ROWS.archived.description} />
             <Button variant="soft" size="sm" onClick={() => openSettings("archived")}>Manage</Button>
           </div>
         </SettingsCard>
-      </StorageSection>
-      <StorageSection title="Uninstall" setting={STORAGE_ROWS.uninstall.label}>
+      </SettingsSection>
+      <SettingsSection title="Uninstall" setting={STORAGE_ROWS.uninstall.label}>
         <SettingsCard inset split={false}>
           <div className="flex items-center gap-4 py-4">
             <RowText title={STORAGE_ROWS.uninstall.label} line={STORAGE_ROWS.uninstall.description} />
             <Button variant="soft-destructive" size="sm" onClick={() => openUninstall()}>Uninstall…</Button>
           </div>
         </SettingsCard>
-      </StorageSection>
+      </SettingsSection>
     </SettingsPage>
   );
 }

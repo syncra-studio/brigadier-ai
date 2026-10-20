@@ -1,10 +1,11 @@
 import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { BanIcon, Badge, Note, PillSelect, PillTrigger, PreferIcon, Section } from "@/app/routing/parts";
+import { BanIcon, Badge, Note, PillSelect, PillTrigger, PreferIcon } from "@/app/routing/parts";
 import { TargetItems } from "@/app/routing/pickers";
 import { type Draft, type DraftEffect, draftRule, type Names, previewDraft, ruleLine, ruleTitle } from "@/app/routing/ruleWords";
 import { ROUTED_KINDS, shortModelName, shortPlaceName } from "@/app/routing/words";
+import { SettingsSection } from "@/app/settings/parts";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { Button } from "@/components/ui/button";
 import {
@@ -69,7 +70,7 @@ export function Rules({ routes, groups }: { routes: RoutePreview[] | null; group
     toast("Rule added", { actions: [{ label: "Undo", run: () => void removeOverride(rule.id) }] });
   };
   return (
-    <Section
+    <SettingsSection
       title={RULES.label}
       description={RULES.description}
       actions={
@@ -124,7 +125,7 @@ export function Rules({ routes, groups }: { routes: RoutePreview[] | null; group
           {remove.error}
         </p>
       )}
-    </Section>
+    </SettingsSection>
   );
 }
 

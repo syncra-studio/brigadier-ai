@@ -4,15 +4,8 @@ import { useAction } from "@/app/conversation/useAction";
 import { ErrorLine } from "@/app/dialogs/fields";
 import { ConnectStatus } from "@/app/onboarding/ConnectStatus";
 import { agentState } from "@/app/onboarding/SetupTerminal";
-import {
-  PlanChip,
-  ProvidersSection,
-  ROW_LINE,
-  ROW_TITLE,
-  StateDot,
-  UsageMeter,
-} from "@/app/providers/parts";
-import { SettingsRow, SettingsSwitch } from "@/app/settings/parts";
+import { PlanChip, ROW_LINE, ROW_TITLE, StateDot, UsageMeter } from "@/app/providers/parts";
+import { SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -82,7 +75,7 @@ export function AgentsOverview({
 
   return (
     <div data-slot="agents-overview" className="flex flex-col gap-10">
-      <ProvidersSection title="Fallback">
+      <SettingsSection title="Fallback" setting="Fallback">
         <SettingsCard>
           <SettingsRow
             label={OVERVIEW_ROWS.switch.label}
@@ -97,10 +90,11 @@ export function AgentsOverview({
             />
           </SettingsRow>
         </SettingsCard>
-      </ProvidersSection>
+      </SettingsSection>
 
-      <ProvidersSection
+      <SettingsSection
         title="Agents"
+        setting="Agents"
         aside={
           <button
             type="button"
@@ -131,9 +125,9 @@ export function AgentsOverview({
             ))
           )}
         </SettingsCard>
-      </ProvidersSection>
+      </SettingsSection>
 
-      <ProvidersSection title="Not set up" aside={OVERVIEW_ROWS.notSetUp}>
+      <SettingsSection title="Not set up" setting="Not set up" aside={OVERVIEW_ROWS.notSetUp}>
         <SettingsCard>
           {missing.map((provider) => (
             <div key={provider} data-slot="agent-not-set-up" className="flex flex-col">
@@ -180,7 +174,7 @@ export function AgentsOverview({
             </DropdownMenuContent>
           </DropdownMenu>
         </SettingsCard>
-      </ProvidersSection>
+      </SettingsSection>
     </div>
   );
 }

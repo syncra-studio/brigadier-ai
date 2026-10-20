@@ -5,6 +5,7 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
+import { SettingsSection } from "@/app/settings/parts";
 import { ChevronRight, Plus } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { SettingsCard } from "@/components/ui/settings-card";
@@ -40,7 +41,15 @@ function hairlineInset(slot: string) {
 
 function read() {
   const button = probe;
+  const section = one('[data-probe="section"]')?.closest("section");
+  const aside = one('[data-probe="section-aside"]')?.parentElement;
   return {
+    section: {
+      setting: section?.getAttribute("data-setting"),
+      aside: aside && getComputedStyle(aside).color,
+      grey: colourOf("text-foreground/65", "color"),
+      heading: section?.querySelector("h2")?.textContent,
+    },
     cards: {
       rows: hairlineInset("card-rows"),
       inset: hairlineInset("card-inset"),
@@ -74,6 +83,14 @@ function Fixture() {
   return (
     <TooltipProvider>
       <div className="bg-card flex flex-col gap-6 p-6">
+        <SettingsSection
+          title="Disk use by project"
+          setting="Disk use"
+          aside={<span data-probe="section-aside">Largest first</span>}
+          actions={<Button variant="soft" size="sm">Refresh</Button>}
+        >
+          <span data-probe="section">placeholder</span>
+        </SettingsSection>
         <section data-group="cards" className="grid grid-cols-4 gap-4">
           <SettingsCard data-probe="card-rows">
             <div className="px-4 py-3">A row padding itself</div>

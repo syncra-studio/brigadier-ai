@@ -116,7 +116,9 @@ export function SettingsSection({
   title,
   icon,
   description,
+  aside,
   actions,
+  setting,
   children,
   className,
 }: {
@@ -124,16 +126,22 @@ export function SettingsSection({
   /** Shown before the title (an archived group's folder). */
   icon?: ReactNode;
   description?: ReactNode;
-  /** Beside the title and its line, before them (an agent's logo). */
-  mark?: ReactNode;
+  /** A grey note at the end ("Largest first", "Checked 3m ago"), before any actions. */
+  aside?: ReactNode;
   actions?: ReactNode;
+  /** The name Settings search finds the section by. */
+  setting?: string;
   children: ReactNode;
   className?: string;
 }) {
   const id = useId();
   return (
-    <section aria-labelledby={title ? id : undefined} className={cn("flex flex-col", className)}>
-      {(title || actions) && (
+    <section
+      aria-labelledby={title ? id : undefined}
+      data-setting={setting}
+      className={cn("flex flex-col", className)}
+    >
+      {(title || aside || actions) && (
         <div className="flex min-h-11.5 items-center justify-between gap-4 pb-1.5">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             {title && (
@@ -144,6 +152,7 @@ export function SettingsSection({
             )}
             {description && <p className="text-foreground/65 text-label">{description}</p>}
           </div>
+          {aside && <div className="text-foreground/65 text-label flex items-center gap-1">{aside}</div>}
           {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
         </div>
       )}

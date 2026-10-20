@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 
-import { SettingsSection } from "@/app/settings/parts";
 import type { Part } from "@/app/settings/storage/model";
 import { cn } from "@/lib/utils";
 
@@ -10,35 +9,6 @@ import { cn } from "@/lib/utils";
  * over its card), a card, buttons, a blue link, a round badge, a tick box, the usage bar and a
  * project's share bar.
  */
-
-/** A section: its title (and a line under it), an optional note on the right, its card. */
-export function StorageSection({
-  title,
-  description,
-  aside,
-  setting,
-  children,
-}: {
-  title: string;
-  description?: string;
-  aside?: ReactNode;
-  /** The name Settings search finds the section by, when not its title. */
-  setting?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div data-setting={setting ?? title}>
-      <SettingsSection
-        title={title}
-        description={description}
-        actions={aside && <div className="text-foreground/65 text-label">{aside}</div>}
-      >
-        {children}
-      </SettingsSection>
-
-    </div>
-  );
-}
 
 /** A row's title and the line under it. */
 export function RowText({ title, line, className }: { title: ReactNode; line?: ReactNode; className?: string }) {

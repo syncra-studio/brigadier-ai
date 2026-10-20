@@ -1,17 +1,9 @@
 import type { ReactNode } from "react";
 
 import { refreshRunning } from "@/app/routing/rankings";
-import {
-  Badge,
-  HAIRLINE_BOTTOM,
-  HAIRLINE_TOP,
-  OpenChevron,
-  PillSelect,
-  RowText,
-  Section,
-  StepNumber,
-} from "@/app/routing/parts";
+import { Badge, HAIRLINE_BOTTOM, HAIRLINE_TOP, OpenChevron, PillSelect, RowText, StepNumber } from "@/app/routing/parts";
 import { faded, reviewers, reviewsWords, ROUTED_KINDS, strengthFor, tierFor } from "@/app/routing/words";
+import { SettingsSection } from "@/app/settings/parts";
 import { ArrowRotateCw, ListOrderedIcon, ProviderGlyph, SpeedometerLatencySpeed } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { SettingsCard } from "@/components/ui/settings-card";
@@ -118,7 +110,7 @@ export function More({
   const failure = starting.error ?? error ?? failed;
   const toggle = (row: Exclude<MoreRow, null>) => onOpen(open === row ? null : row);
   return (
-    <Section title="More">
+    <SettingsSection title="More">
       <SettingsCard inset data-slot="routing-more">
         <MoreRowHead
           row={MORE_ROWS.strength}
@@ -234,7 +226,7 @@ export function More({
           </div>
         </MoreRowHead>
       </SettingsCard>
-    </Section>
+    </SettingsSection>
   );
 }
 

@@ -1,6 +1,6 @@
 import type { ComponentProps, ReactNode } from "react";
 
-import { selectTrigger, SettingsSection } from "@/app/settings/parts";
+import { selectTrigger } from "@/app/settings/parts";
 import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/icons";
 import { Badge as ChipBadge } from "@/components/ui/badge";
 import {
@@ -18,25 +18,6 @@ import { cn } from "@/lib/utils";
  * every Settings page's parts: a section (a heading over a card), a card of rows split by
  * hairlines, a row's words, selects and choices, badges, the page's buttons and notes.
  */
-
-/** A section: its title and line, an action at its end, then its card. */
-export function Section({
-  title,
-  description,
-  actions,
-  children,
-}: {
-  title: string;
-  description?: ReactNode;
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <SettingsSection title={title} description={description} actions={actions}>
-      {children}
-    </SettingsSection>
-  );
-}
 
 /** A divider line drawn inside the top or bottom edge, as the design's strokes are: it adds no height. */
 export const HAIRLINE_TOP = "before:bg-divider relative before:absolute before:inset-x-0 before:top-0 before:h-px";
