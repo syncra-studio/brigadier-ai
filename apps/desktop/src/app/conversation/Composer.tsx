@@ -387,7 +387,9 @@ export function ComposerStandIn({ placeholder, autoFocus }: { placeholder?: stri
       spellCheck={false}
       autoCorrect="off"
       autoCapitalize="off"
-      className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 min-h-composer max-h-composer-max w-full resize-none bg-transparent px-2 py-2.5 text-base outline-none"
+      // A block, as the editor is: an inline field would sit on a line box a few pixels taller,
+      // and the composer would drop as the editor takes its place (#469).
+      className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 min-h-composer max-h-composer-max block w-full resize-none bg-transparent px-2 py-2.5 text-base outline-none"
     />
   );
 }

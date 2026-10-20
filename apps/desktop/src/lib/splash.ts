@@ -111,6 +111,11 @@ export function whenRevealed(): Promise<void> {
   return document.documentElement.hasAttribute("data-splash") ? startupDone : Promise.resolve();
 }
 
+/** Whether the startup screen has gone (or there is none: the pane fixtures, a server render). */
+export function startupScreenGone(): boolean {
+  return typeof document === "undefined" || !document.documentElement.hasAttribute("data-splash");
+}
+
 /** Whether the splash has gone: dialogs that open on their own wait for it. */
 export function useRevealed(): boolean {
   return useSyncExternalStore(subscribe, () => revealed);
