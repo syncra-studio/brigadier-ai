@@ -756,6 +756,8 @@ mod tests {
         drop(store);
         let store = Store::open(&path).unwrap();
         let listed = store.downloads("").unwrap();
+        // Closed first: Windows removes no file that is still open.
+        drop(store);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(
             (listed[0].id, listed[0].state),
