@@ -1164,13 +1164,10 @@ impl Provider for Claude {
             // The project's own setup, where Claude looks for it: before its staging folders
             // are recorded, so the `.claude` folder holding the links is never taken for one.
             // Without a project (its folder's trust taken back), an earlier start's links go.
-            let mut linked_project = None;
+            let linked_project = linked_project(&spec, &cwd);
             if spec.tools.user_setup() && spec.owned_cwd {
                 let linked = match &spec.project {
-                    Some(project) if project.canonicalize().ok().as_ref() != Some(&cwd) => {
-                        linked_project = Some(project.clone());
-                        files::link_project(&cwd, project)
-                    }
+                    Some(project) if linked_project.is_some() => files::link_project(&cwd, project),
                     Some(_) => Ok(()),
                     None => files::unlink_project(&cwd),
                 };
@@ -1920,6 +1917,18 @@ fn approval_response(input: Value, decision: &ApprovalDecision) -> Value {
             json!({ "behavior": "deny", "message": message })
         }
     }
+}
+
+/// The project a session's linked setup comes from, when it runs in a folder of its own: the
+/// one its hooks run in. A fork reusing a folder it doesn't own still loads the links there,
+/// so it has one too.
+fn linked_project(spec: &SessionSpec, cwd: &Path) -> Option<PathBuf> {
+    spec.project
+        .as_ref()
+        .filter(|project| {
+            spec.tools.user_setup() && project.canonicalize().ok().as_deref() != Some(cwd)
+        })
+        .cloned()
 }
 
 #[cfg(test)]
@@ -3610,6 +3619,26 @@ for line in sys.stdin:
             ..worker
         };
         assert_ne!(sub_agents(&unlinked, cwd.path(), None), SubAgents::Off);
+    }
+
+    /// A note fork reusing its parent's folder runs the linked hooks in the project too.
+    #[test]
+    fn a_fork_in_a_folder_it_does_not_own_runs_hooks_in_the_project() {
+        let cwd = Temp::new();
+        let project = cwd.path().parent().unwrap().join("checkout");
+        let fork = SessionSpec {
+            tools: ToolSet::Thread,
+            owned_cwd: false,
+            project: Some(project.clone()),
+            ..spec(cwd.path(), &[])
+        };
+        assert_eq!(linked_project(&fork, cwd.path()), Some(project));
+        let at_home = SessionSpec {
+            project: Some(cwd.path().canonicalize().unwrap()),
+            ..fork
+        };
+        let cwd_canon = cwd.path().canonicalize().unwrap();
+        assert_eq!(linked_project(&at_home, &cwd_canon), None);
     }
 
     /// The user's `disableAllHooks` can't switch Brigadier's own hooks off in a session that

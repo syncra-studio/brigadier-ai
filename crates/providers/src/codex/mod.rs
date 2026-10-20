@@ -2241,7 +2241,10 @@ async fn read_loop(
         if shared.compact_asked.swap(false, Ordering::AcqRel) {
             parser.compact_requested();
         }
-        for output in parser.feed(&line) {
+        let outputs = parser.feed(&line);
+        // Before its events go: whoever hears a turn start can interrupt it.
+        *lock(&shared.turn_id) = parser.turn_id().map(str::to_owned);
+        for output in outputs {
             match output {
                 Output::Event(event) => {
                     // A server that came up or gave up: its tools and state, as Codex lists
@@ -2317,7 +2320,6 @@ async fn read_loop(
                 }
             }
         }
-        *lock(&shared.turn_id) = parser.turn_id().map(str::to_owned);
     }
 
     let exit = rpc.process.exited().await;
