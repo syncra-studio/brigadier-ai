@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 
 import { ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/icons";
 import { Badge as ChipBadge } from "@/components/ui/badge";
-import { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
 
 /*
@@ -39,17 +38,6 @@ export function Badge({ tone, children }: { tone: "success" | "link"; children: 
     </ChipBadge>
 
   );
-}
-
-/** Two or three choices side by side; the chosen one is a filled pill. */
-export function PillChoice<T extends string>(props: {
-  label: string;
-  value: T;
-  options: readonly { value: T; label: string }[];
-  onChange: (value: T) => void;
-  disabled?: boolean;
-}) {
-  return <Segmented {...props} />;
 }
 
 /** A note inset in a card: what a change would do, or (warning) why it would do nothing. */

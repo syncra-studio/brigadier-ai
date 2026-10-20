@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ArrowUp, Check, ChevronDown, Comment, Grid, ImageSquare, SquareImage, Trash, X } from "@/components/icons";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { type Choice, Segmented } from "@/components/ui/segmented";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ArtifactRef } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
@@ -159,17 +160,15 @@ function Tip({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+const VIEWS: readonly Choice<View>[] = [
+  { value: "focused", label: <SquareImage className="size-icon-sm" />, tip: "Focused view" },
+  { value: "canvas", label: <Grid className="size-icon-sm" />, tip: "Canvas view" },
+];
+
 function ViewToggle({ view, onChange }: { view: View; onChange: (view: View) => void }) {
   return (
-    <div role="radiogroup" aria-label="Image view" className={cn(CAPSULE, "gap-0.5 p-0.5")}>
-      {([["focused", "Focused view", SquareImage], ["canvas", "Canvas view", Grid]] as const).map(([id, label, Icon]) => (
-        <Tip key={id} label={label}>
-          <button type="button" role="radio" aria-checked={view === id} aria-label={label} onClick={() => onChange(id)}
-            className="text-muted-foreground hover:text-foreground aria-checked:bg-foreground/10 aria-checked:text-foreground rounded-capsule flex h-full items-center px-2 transition-colors">
-            <Icon className="size-icon-sm" />
-          </button>
-        </Tip>
-      ))}
+    <div className={cn(CAPSULE, "p-0.5")}>
+      <Segmented label="Image view" value={view} options={VIEWS} onChange={onChange} />
     </div>
   );
 }

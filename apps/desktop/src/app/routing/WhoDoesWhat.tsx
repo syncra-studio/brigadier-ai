@@ -1,7 +1,7 @@
 import { type ComponentType, type SVGProps, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { Badge, HAIRLINE_TOP, OpenChevron, PillChoice } from "@/app/routing/parts";
+import { Badge, HAIRLINE_TOP, OpenChevron } from "@/app/routing/parts";
 import { TargetItems } from "@/app/routing/pickers";
 import {
   decides,
@@ -46,6 +46,7 @@ import {
   PullRequestOpen,
   Telescope,
 } from "@/components/icons";
+import { Segmented } from "@/components/ui/segmented";
 import { RowText, SettingsCard } from "@/components/ui/settings-card";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { OverrideTarget, RankedEntry, Ranking, RoutePreview, TaskCategory } from "@/ipc/generated";
@@ -270,7 +271,7 @@ function WhoPicks({
           title="Who picks"
           line={ordering ? "Brigadier, or the order you set" : "The strongest model that can run right now"}
         />
-        <PillChoice
+        <Segmented
           label={`How ${name} picks a model`}
           value={ordering ? "order" : "automatic"}
           options={[

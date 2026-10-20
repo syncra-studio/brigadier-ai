@@ -6,7 +6,10 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { Picker } from "@/app/inspector/providers/Picker";
+import { Grid, SquareImage } from "@/components/icons";
+import { Segmented } from "@/components/ui/segmented";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { colourOf } from "@/fixtures/look";
 
 const one = (selector: string) => document.querySelector(selector);
 
@@ -22,8 +25,20 @@ function picker(label: string) {
   );
 }
 
+/** Each choice of the segmented control `label`: its name, whether it is chosen, fill and height. */
+function segments(label: string) {
+  return Array.from(document.querySelectorAll(`[aria-label="${label}"] > button`)).map((item) => ({
+    name: item.getAttribute("aria-label") ?? item.textContent,
+    role: item.getAttribute("role"),
+    on: item.getAttribute("data-state") === "on",
+    fill: getComputedStyle(item).backgroundColor,
+    height: item.getBoundingClientRect().height,
+  }));
+}
+
 function read() {
   return {
+    segmented: { words: segments("How it picks"), icons: segments("Image view"), chosen: colourOf("bg-foreground/5") },
     picker: {
       chosen: picker("Session"),
       unpicked: picker("Window"),
@@ -48,6 +63,26 @@ function Fixture() {
   return (
     <TooltipProvider>
       <div className="bg-card flex flex-col gap-6 p-6">
+        <section data-group="segmented" className="flex items-center gap-4">
+          <Segmented
+            label="How it picks"
+            value="automatic"
+            options={[
+              { value: "automatic", label: "Automatic" },
+              { value: "order", label: "My order" },
+            ]}
+            onChange={() => {}}
+          />
+          <Segmented
+            label="Image view"
+            value="canvas"
+            options={[
+              { value: "focused", label: <SquareImage className="size-icon-sm" />, tip: "Focused view" },
+              { value: "canvas", label: <Grid className="size-icon-sm" />, tip: "Canvas view" },
+            ]}
+            onChange={() => {}}
+          />
+        </section>
         <section data-group="picker" className="grid w-80 grid-cols-[auto_1fr] gap-2">
           <Picker label="Session" value="seven_day" options={WINDOWS} onChange={() => {}} />
           <Picker
