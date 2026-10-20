@@ -2,6 +2,7 @@ import { type FC, memo, useContext, useMemo, useState } from "react";
 
 import { lastReplies, type StripView, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
 import { StopWorker } from "@/app/conversation/activity/StopWorker";
+import { RowTime } from "@/app/conversation/RowTime";
 import { useAction } from "@/app/conversation/useAction";
 import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
@@ -10,23 +11,10 @@ import { Changes, workerStat } from "@/app/conversation/WorkerSummary";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, StopCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useNow } from "@/hooks/use-now";
-import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { stopWorkers } from "@/state/actions";
 import { useBoard } from "@/state/board";
 import { useApp } from "@/state/store";
-
-/** How long a worker has been at it, ticking each second; nothing once it is done. */
-function Elapsed({ taskId }: { taskId: string }) {
-  const start = useBoard((s) => {
-    const task = s.board?.tasks[taskId];
-    return task && !workerDone(task) ? (task.attempts.at(-1)?.startedAtMs ?? task.createdAtMs) : null;
-  });
-  const now = useNow(start === null ? null : 1000);
-  if (start === null) return null;
-  return <span className="text-foreground/50 shrink-0 tabular-nums">{formatDuration(Math.max(0, now - start))}</span>;
-}
 
 /** One worker: `[g] Name · what it is at · 1m 2s · +12 −3`, and its Stop while it runs. Opens its thread. */
 const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
@@ -56,7 +44,7 @@ const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
         <span className={cn("min-w-0 flex-1 truncate", done ? "text-foreground/50" : firstWorking ? "shimmer" : "text-foreground/60")}>
           {done ?? first}
         </span>
-        <Elapsed taskId={taskId} />
+        <RowTime taskId={taskId} />
         {stat && <Changes insertions={stat.insertions} deletions={stat.deletions} />}
       </button>
       <StopWorker taskId={taskId} name={name ?? "this worker"} />

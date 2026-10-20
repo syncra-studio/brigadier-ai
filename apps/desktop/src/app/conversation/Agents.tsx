@@ -11,14 +11,13 @@ import {
   useWorkerText,
   WorkerGlyph,
 } from "@/app/conversation/WorkerChip";
+import { RowTime } from "@/app/conversation/RowTime";
 import { WorkerThread } from "@/app/conversation/WorkerThread";
 import { effortLabel } from "@/components/assistant-ui/elements/model-selector";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ArrowLeft } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useNow } from "@/hooks/use-now";
 import type { Task } from "@/ipc/generated";
-import { formatAgo, formatDuration } from "@/lib/format";
 import { modelName, useModelGroups } from "@/lib/setup";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";
@@ -27,16 +26,6 @@ import { useBoard } from "@/state/board";
 export const WORKERS_LABEL = "Workers";
 
 /** The session's flat worker list and read-only worker threads. */
-
-/** Live elapsed time; done rows show recency and remain openable. */
-function RowTime({ task }: { task: Task }) {
-  const done = workerDone(task);
-  const now = useNow(done ? 60_000 : 1000);
-  const start = task.attempts.at(-1)?.startedAtMs ?? task.createdAtMs;
-  return <span className="text-foreground/50 shrink-0 text-xs tabular-nums">
-    {done ? formatAgo(task.updatedAtMs, now) : formatDuration(Math.max(0, now - start))}
-  </span>;
-}
 
 /**
  * One worker on one line: its glyph, its name (a soft "working" while it works), and how long it
@@ -65,7 +54,7 @@ const AgentRow = memo(function AgentRow({ taskId }: { taskId: string }) {
           {working && <span className="text-muted-foreground shimmer"> working</span>}
         </span>
         <span className={cn(stoppable && "group-hover/row:invisible group-focus-within/row:invisible")}>
-          <RowTime task={task} />
+          <RowTime taskId={task.id} ago className="text-xs" />
         </span>
       </button>
       {/* Its Stop on the row, without opening the worker first. */}
