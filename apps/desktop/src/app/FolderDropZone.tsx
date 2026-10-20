@@ -1,8 +1,8 @@
-import { FolderPlus } from "@openai/apps-sdk-ui/components/Icon";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useEffect, useState } from "react";
 
 import { type DropTarget, dragShift, dropTargetAt, lastDrop } from "@/app/nativeDrop";
+import { FolderPlus } from "@/components/ui/icon";
 import { openFolders } from "@/state/addProject";
 
 /**

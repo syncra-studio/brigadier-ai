@@ -9,11 +9,11 @@
  * either the page stays as it opens, for screenshots.
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { Folder } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { TrustDialog } from "@/app/dialogs/TrustDialog";
+import { Folder } from "@/components/ui/icon";
 import { Canon, canon, look, type LookPairs } from "@/fixtures/dialogLook";
 import type { Conversation, Project, Request } from "@/ipc/generated";
 import { revealApp } from "@/lib/splash";

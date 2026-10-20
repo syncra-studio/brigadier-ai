@@ -1,4 +1,3 @@
-import { Check } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -13,6 +12,7 @@ import {
   SwitchSetting,
 } from "@/app/settings/parts";
 import { findModel, ModelSelector } from "@/components/assistant-ui/elements/model-selector";
+import { Check } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import type { Choice } from "@/components/ui/segmented";
 import type { GitStyle, ModelChoice } from "@/ipc/generated";

@@ -1,4 +1,3 @@
-import { ChevronRight, Clock, Reload } from "@openai/apps-sdk-ui/components/Icon";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { ExplanationView } from "@/app/conversation/cards/RouteDetails";
@@ -19,6 +18,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ChevronRight, Clock, Reload } from "@/components/ui/icon";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useNow } from "@/hooks/use-now";
 import { request } from "@/ipc/client";

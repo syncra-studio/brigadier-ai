@@ -1,8 +1,8 @@
-import { Brain } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
 import { SettingsButton, SettingsCard, SettingsPage, SettingsRow } from "@/app/settings/parts";
+import { Brain } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { useNow } from "@/hooks/use-now";
 import type { Node, Origin } from "@/ipc/generated";

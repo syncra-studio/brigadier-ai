@@ -1,14 +1,4 @@
 import {
-  ArrowLeft,
-  Check,
-  Folder,
-  FolderOpen,
-  Link,
-  Plus,
-  Search,
-  X,
-} from "@openai/apps-sdk-ui/components/Icon";
-import {
   useEffect,
   useEffectEvent,
   useId,
@@ -26,6 +16,16 @@ import { Spinner } from "@/components/glyphs/spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import {
+  ArrowLeft,
+  Check,
+  Folder,
+  FolderOpen,
+  Link,
+  Plus,
+  Search,
+  X,
+} from "@/components/ui/icon";
 import { useNow } from "@/hooks/use-now";
 import { pickFolder } from "@/ipc/client";
 import type { FolderCheck, RepoSuggestion } from "@/ipc/generated";

@@ -1,8 +1,8 @@
-import { Folder } from "@openai/apps-sdk-ui/components/Icon";
 import type { ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { Badge } from "@/components/ui/badge";
+import { Folder } from "@/components/ui/icon";
 import type { Lifecycle } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 

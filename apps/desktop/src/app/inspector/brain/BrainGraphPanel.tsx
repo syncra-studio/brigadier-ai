@@ -1,4 +1,3 @@
-import { ChevronDown } from "@openai/apps-sdk-ui/components/Icon";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
 import { KINDS, NODE_KINDS } from "@/app/inspector/brain/kinds";
@@ -14,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ChevronDown } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import type { BrainGraph, BrainOverview, NodeFilter, NodeKind } from "@/ipc/generated";
 import { getBrainGraph, projectOf } from "@/state/brain";

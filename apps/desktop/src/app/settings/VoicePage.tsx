@@ -1,4 +1,3 @@
-import { Plus, Trash } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -12,6 +11,7 @@ import {
 } from "@/app/settings/parts";
 import { cleanWords, languageChoices, microphoneChoices } from "@/app/settings/voice";
 import { ProgressLine } from "@/components/assistant-ui/elements/progress-line";
+import { Plus, Trash } from "@/components/ui/icon";
 import { formatBytes } from "@/lib/format";
 import {
   cancelSpeechModelDownload,

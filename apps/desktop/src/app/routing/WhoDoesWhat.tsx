@@ -1,17 +1,3 @@
-import {
-  BookOpen,
-  Chat,
-  Check,
-  CheckCircle,
-  Code,
-  DotsHorizontal,
-  Grid,
-  Nodes,
-  Plus,
-  PullRequestMerged,
-  PullRequestOpen,
-  Telescope,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentType, type SVGProps, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -54,6 +40,20 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  BookOpen,
+  Chat,
+  Check,
+  CheckCircle,
+  Code,
+  DotsHorizontal,
+  Grid,
+  Nodes,
+  Plus,
+  PullRequestMerged,
+  PullRequestOpen,
+  Telescope,
+} from "@/components/ui/icon";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { OverrideTarget, RankedEntry, Ranking, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";

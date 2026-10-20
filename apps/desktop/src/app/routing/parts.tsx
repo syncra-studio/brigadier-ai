@@ -1,4 +1,3 @@
-import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentProps, ReactNode, SVGProps } from "react";
 
 import { selectTrigger, SettingsButton, settingsCard, SettingsSection } from "@/app/settings/parts";
@@ -12,6 +11,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/ui/icon";
 import { Segmented } from "@/components/ui/segmented";
 import type { ProviderKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

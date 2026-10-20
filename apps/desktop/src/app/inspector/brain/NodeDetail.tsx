@@ -1,9 +1,9 @@
-import { X } from "@openai/apps-sdk-ui/components/Icon";
 import type { ReactNode } from "react";
 
 import { KINDS, ORIGIN_LABELS, stateLabel } from "@/app/inspector/brain/kinds";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { X } from "@/components/ui/icon";
 import type { Edge, EdgeKind, Node, Provenance } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
 import { useApp } from "@/state/store";

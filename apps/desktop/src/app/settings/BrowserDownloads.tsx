@@ -1,4 +1,3 @@
-import { DotsHorizontal, Download, Folder, Trash } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
@@ -10,6 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { DotsHorizontal, Download, Folder, Trash } from "@/components/ui/icon";
 import { useNow } from "@/hooks/use-now";
 import { revealPath } from "@/ipc/client";
 import type { BrowserDownload } from "@/ipc/generated";

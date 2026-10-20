@@ -1,4 +1,3 @@
-import { ArrowUpRight, Check } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
@@ -9,6 +8,7 @@ import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ArrowUpRight, Check } from "@/components/ui/icon";
 import { openUrl } from "@/ipc/client";
 import type { ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

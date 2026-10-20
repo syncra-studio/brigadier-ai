@@ -1,4 +1,3 @@
-import { ChevronRight, Reload } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useEffect, useState } from "react";
 
 import { Picker } from "@/app/inspector/providers/Picker";
@@ -15,6 +14,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { ChevronRight, Reload } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { pickFolder } from "@/ipc/client";

@@ -1,4 +1,3 @@
-import { X } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useRef, useState } from "react";
 
 import { AgentsStep } from "@/app/onboarding/AgentsStep";
@@ -7,6 +6,7 @@ import { Welcome } from "@/app/onboarding/Welcome";
 import { preloadWelcomeSound } from "@/app/onboarding/welcomeSound";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { X } from "@/components/ui/icon";
 import {
   Tooltip,
   TooltipContent,

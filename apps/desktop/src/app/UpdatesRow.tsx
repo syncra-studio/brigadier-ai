@@ -1,4 +1,3 @@
-import { Check, Copy, DownloadSimple, X } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { BarItem, ITEM_MS } from "@/app/BarItem";
@@ -8,6 +7,7 @@ import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
+import { Check, Copy, DownloadSimple, X } from "@/components/ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";

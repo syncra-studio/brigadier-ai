@@ -1,9 +1,9 @@
-import { KeyboardShortcut, MagnifyingGlassSearch, X } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useRef, useState } from "react";
 
 import { recordKeyPress } from "@/app/keyCapture";
 import { SettingsCard, SettingsPage } from "@/app/settings/parts";
 import { SHORTCUTS, formatKeys, searchShortcuts, shortcutsFor, type Shortcut } from "@/app/shortcutCatalog";
+import { KeyboardShortcut, MagnifyingGlassSearch, X } from "@/components/ui/icon";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";

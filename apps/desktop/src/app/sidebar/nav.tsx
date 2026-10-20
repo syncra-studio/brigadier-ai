@@ -1,6 +1,6 @@
-import { ChevronDown } from "@openai/apps-sdk-ui/components/Icon";
 import { useId, type ComponentProps, type ReactNode } from "react";
 
+import { ChevronDown } from "@/components/ui/icon";
 import { Kbd } from "@/components/ui/kbd";
 import { useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";

@@ -1,12 +1,3 @@
-import {
-  Check,
-  ChevronDown,
-  DotsHorizontal,
-  ExternalLink,
-  Filter,
-  Globe,
-  Trash,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
@@ -32,6 +23,15 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Check,
+  ChevronDown,
+  DotsHorizontal,
+  ExternalLink,
+  Filter,
+  Globe,
+  Trash,
+} from "@/components/ui/icon";
 import { useNow } from "@/hooks/use-now";
 import type { BrowserVisit, HistoryFilter } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";

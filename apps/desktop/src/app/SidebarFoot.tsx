@@ -1,4 +1,3 @@
-import { Comment, Keyboard, Settings } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useRef } from "react";
 
 import { AppUpdatePill } from "@/app/AppUpdatePill";
@@ -14,6 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Comment, Keyboard, Settings } from "@/components/ui/icon";
 import { useSidebar } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import { openSettings, toggleSettings } from "@/state/actions";

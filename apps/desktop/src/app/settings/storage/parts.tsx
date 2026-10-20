@@ -1,9 +1,9 @@
-import { Check, ChevronRight, Minus } from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentProps, ReactNode } from "react";
 
 import { SettingsButton, settingsCard, SettingsSection } from "@/app/settings/parts";
 import type { Part } from "@/app/settings/storage/model";
 import { Button } from "@/components/ui/button";
+import { Check, ChevronRight, Minus } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 /*

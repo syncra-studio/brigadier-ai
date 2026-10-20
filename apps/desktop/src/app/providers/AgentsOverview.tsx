@@ -1,4 +1,3 @@
-import { ArrowUpRight, ChevronRight, Plus } from "@openai/apps-sdk-ui/components/Icon";
 import type { KeyboardEvent, MouseEvent } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -22,6 +21,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ArrowUpRight, ChevronRight, Plus } from "@/components/ui/icon";
 import type { AccountView, ProviderKind, ProviderOverview, QuotaWindow } from "@/ipc/generated";
 import { used, windowTitle } from "@/lib/quota";
 import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";

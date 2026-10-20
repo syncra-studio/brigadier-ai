@@ -1,19 +1,3 @@
-import {
-  Archive,
-  Brain,
-  Branch,
-  Cursor,
-  Dock,
-  Download,
-  Globe,
-  KeyboardShortcut,
-  Mic,
-  Robot,
-  SettingsCog,
-  SettingsSlider,
-  Shuffle,
-  Storage,
-} from "@openai/apps-sdk-ui/components/Icon";
 import type { ComponentType, SVGProps } from "react";
 
 import { ARCHIVED_ROWS, ArchivedPage } from "@/app/settings/ArchivedPage";
@@ -29,6 +13,22 @@ import { VOICE_ROWS, VoicePage } from "@/app/settings/VoicePage";
 import { SHORTCUTS_ROWS, ShortcutsPage } from "@/app/settings/ShortcutsPage";
 import { PROVIDERS_ROWS, ProvidersPage } from "@/app/providers/ProvidersPage";
 import { ROUTING_PAGE_ROWS, RoutingPage } from "@/app/routing/RoutingPage";
+import {
+  Archive,
+  Brain,
+  Branch,
+  Cursor,
+  Dock,
+  Download,
+  Globe,
+  KeyboardShortcut,
+  Mic,
+  Robot,
+  SettingsCog,
+  SettingsSlider,
+  Shuffle,
+  Storage,
+} from "@/components/ui/icon";
 import { preloadable } from "@/lib/preloadable";
 import { prefetchImportSources } from "@/state/browserImport";
 import { type SettingsPageId, useApp } from "@/state/store";

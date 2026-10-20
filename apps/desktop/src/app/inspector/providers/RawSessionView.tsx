@@ -1,4 +1,3 @@
-import { ArrowLeft } from "@openai/apps-sdk-ui/components/Icon";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -14,6 +13,7 @@ import {
 import { TranscriptRow } from "@/components/transcript/TranscriptRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ArrowLeft } from "@/components/ui/icon";
 import type { ApprovalRequest, RawSession } from "@/ipc/generated";
 import {
   answerApproval,

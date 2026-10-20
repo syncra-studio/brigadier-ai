@@ -1,4 +1,3 @@
-import { FolderOpen, Reload } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 
@@ -16,6 +15,7 @@ import {
   UsageBar,
 } from "@/app/settings/storage/parts";
 import { ProjectsCard, type UnusedFreeUp } from "@/app/settings/storage/ProjectsCard";
+import { FolderOpen, Reload } from "@/components/ui/icon";
 import { revealPath } from "@/ipc/client";
 import type { StorageReport } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";

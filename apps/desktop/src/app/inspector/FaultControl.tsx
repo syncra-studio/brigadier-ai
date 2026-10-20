@@ -1,4 +1,3 @@
-import { ChevronDown } from "@openai/apps-sdk-ui/components/Icon";
 import { useId, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -10,6 +9,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ChevronDown } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { request } from "@/ipc/client";

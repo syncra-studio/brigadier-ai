@@ -1,23 +1,3 @@
-import {
-  Archive,
-  ArrowLeft,
-  Chats,
-  ComposeEditSquare,
-  DotsHorizontal,
-  Download,
-  Folder,
-  FolderOpen,
-  Folders,
-  MagnifyingGlassSearch,
-  Pencil,
-  Pin,
-  Plus,
-  SettingsCog,
-  Sidebar,
-  Trash,
-  Unpin,
-  X,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { memo, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
@@ -55,6 +35,26 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Archive,
+  ArrowLeft,
+  Chats,
+  ComposeEditSquare,
+  DotsHorizontal,
+  Download,
+  Folder,
+  FolderOpen,
+  Folders,
+  MagnifyingGlassSearch,
+  Pencil,
+  Pin,
+  Plus,
+  SettingsCog,
+  Sidebar,
+  Trash,
+  Unpin,
+  X,
+} from "@/components/ui/icon";
 import { Kbd } from "@/components/ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSidebar } from "@/components/ui/sidebar";

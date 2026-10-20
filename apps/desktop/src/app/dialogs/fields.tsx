@@ -1,8 +1,8 @@
-import { FolderOpen } from "@openai/apps-sdk-ui/components/Icon";
 import { useId, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { FolderOpen } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { pickFolder } from "@/ipc/client";
 import { cn } from "@/lib/utils";

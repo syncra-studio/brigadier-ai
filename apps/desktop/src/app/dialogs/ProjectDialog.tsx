@@ -1,4 +1,3 @@
-import { Plus, Trash } from "@openai/apps-sdk-ui/components/Icon";
 import { useId, useState, type FormEvent } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -12,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Plus, Trash } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import type { Project } from "@/ipc/generated";

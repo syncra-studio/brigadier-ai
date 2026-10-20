@@ -11,7 +11,6 @@ import {
   useAuiState,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { Info, Unarchive, Warning, X } from "@openai/apps-sdk-ui/components/Icon";
 import {
   type FC,
   useCallback,
@@ -39,6 +38,7 @@ import { interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/co
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import { foldedEntries } from "@/app/conversation/railHistory";
 import { useSidePanel } from "@/app/conversation/SidePanel";
+import { Info, Unarchive, Warning, X } from "@/components/ui/icon";
 import { queuedImageRefs, reconcileImages } from "@/lib/inlineImages";
 import { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { sendLane } from "@/app/conversation/composerKeys";

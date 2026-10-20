@@ -1,10 +1,10 @@
-import { ChevronRight } from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
 import { formatTokens, type RebirthRow } from "@/app/inspector/orchestratorLog";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ChevronRight } from "@/components/ui/icon";
 import { request } from "@/ipc/client";
 import type { RebirthRecord } from "@/ipc/generated";
 import { formatClock, formatDuration } from "@/lib/format";

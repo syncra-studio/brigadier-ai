@@ -1,4 +1,3 @@
-import { FolderOpen } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
@@ -7,6 +6,7 @@ import { PILL_BUTTON, RAISED_BUTTON, StepFooter, StepHeader, TickMark } from "@/
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
+import { FolderOpen } from "@/components/ui/icon";
 import { pickFolder, warmFolderPicker } from "@/ipc/client";
 import type { ProjectCandidate } from "@/ipc/generated";
 import { formatAgo, shortPath } from "@/lib/format";

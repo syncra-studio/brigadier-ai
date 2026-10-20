@@ -1,4 +1,3 @@
-import { DotsHorizontal, Info, Plus, Warning } from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -25,6 +24,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { DotsHorizontal, Info, Plus, Warning } from "@/components/ui/icon";
 import type { OverrideRule, OverrideTarget, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { newRuleId, PLAIN_KIND_NAMES, ruleSentence } from "@/lib/routing";
 import { isNewModelRule } from "@/state/providers";

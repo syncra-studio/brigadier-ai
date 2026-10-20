@@ -1,4 +1,3 @@
-import { BarChart, ChevronRight, Lightbulb } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
@@ -8,6 +7,7 @@ import { StateDot } from "@/app/providers/parts";
 import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
 import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
 import { Button } from "@/components/ui/button";
+import { BarChart, ChevronRight, Lightbulb } from "@/components/ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Segmented } from "@/components/ui/segmented";
 import { useSidebar } from "@/components/ui/sidebar";

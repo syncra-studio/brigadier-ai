@@ -1,12 +1,3 @@
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  FolderOpen,
-  Lock,
-  Sparkles,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
 import {
@@ -34,6 +25,15 @@ import {
   TickBox,
 } from "@/app/settings/storage/parts";
 import { Spinner } from "@/components/glyphs/spinner";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  FolderOpen,
+  Lock,
+  Sparkles,
+} from "@/components/ui/icon";
 import { revealPath } from "@/ipc/client";
 import type { CleanItem, CleanReport, StorageReport } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

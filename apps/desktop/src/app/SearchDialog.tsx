@@ -1,4 +1,3 @@
-import { Chat, Comment, Folder, Search, Terminal } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { create } from "zustand";
 
@@ -8,6 +7,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Chat, Comment, Folder, Search, Terminal } from "@/components/ui/icon";
 import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { openConversation, select, setProjectExpanded } from "@/state/actions";

@@ -1,10 +1,3 @@
-import {
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  MagnifyingGlassSearch,
-  XCircleFilled,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { useId, type ComponentProps, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -17,6 +10,13 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  MagnifyingGlassSearch,
+  XCircleFilled,
+} from "@/components/ui/icon";
 import { ScrollFade } from "@/components/ui/scroll-fade";
 import type { Choice } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";

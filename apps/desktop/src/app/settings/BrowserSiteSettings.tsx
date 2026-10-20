@@ -1,8 +1,8 @@
-import { Camera, Mic } from "@openai/apps-sdk-ui/components/Icon";
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { SettingsCard, SettingsPage, SettingsSection, SettingsSelect } from "@/app/settings/parts";
+import { Camera, Mic } from "@/components/ui/icon";
 import type { BrowserSite, SitePermission } from "@/ipc/generated";
 import { browserSites, setSite } from "@/state/browserData";
 

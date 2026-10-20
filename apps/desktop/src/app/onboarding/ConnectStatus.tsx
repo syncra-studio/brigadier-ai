@@ -1,10 +1,10 @@
-import { ExclamationMarkCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { type FormEvent, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
+import { ExclamationMarkCircle } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { openUrl } from "@/ipc/client";
 import type { ProviderKind } from "@/ipc/generated";

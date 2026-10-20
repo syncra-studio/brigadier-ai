@@ -1,5 +1,3 @@
-import { Globe } from "@openai/apps-sdk-ui/components/Icon";
-
 import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
@@ -17,6 +15,7 @@ import {
   SettingsSwitch,
   SwitchSetting,
 } from "@/app/settings/parts";
+import { Globe } from "@/components/ui/icon";
 import { pickFolder } from "@/ipc/client";
 import type { LinkTarget } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";

@@ -1,16 +1,3 @@
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  Folder,
-  FolderOpen,
-  Folders,
-  History,
-  Search,
-  Sparkles,
-  Stack,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { useState, type ReactNode } from "react";
 
 import {
@@ -49,6 +36,19 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Folder,
+  FolderOpen,
+  Folders,
+  History,
+  Search,
+  Sparkles,
+  Stack,
+} from "@/components/ui/icon";
 import { revealPath } from "@/ipc/client";
 import type { ProjectUsage, StorageReport } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";

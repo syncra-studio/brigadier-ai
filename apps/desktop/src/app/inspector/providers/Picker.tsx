@@ -1,5 +1,3 @@
-import { ChevronDown } from "@openai/apps-sdk-ui/components/Icon";
-
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -8,6 +6,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ChevronDown } from "@/components/ui/icon";
 
 export type PickerOption = { value: string; label: string; hint?: string };
 

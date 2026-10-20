@@ -1,4 +1,3 @@
-import { Check, Download, Globe, Images, SettingsCog, Trash } from "@openai/apps-sdk-ui/components/Icon";
 import { type ReactNode, useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
@@ -12,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Check, Download, Globe, Images, SettingsCog, Trash } from "@/components/ui/icon";
 import { Segmented } from "@/components/ui/segmented";
 import type { BrowserClear } from "@/ipc/generated";
 import { clearBrowsingData, type ClearRange, rangeStart, siteDataCount } from "@/state/browserData";

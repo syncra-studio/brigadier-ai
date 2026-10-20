@@ -1,7 +1,3 @@
-import {
-  MagnifyingGlassSearch,
-  XCircleFilled,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { useState } from "react";
 
 import {
@@ -13,6 +9,10 @@ import {
 } from "@/app/settings/pages";
 import { revealSetting } from "@/app/settings/reveal";
 import { navRow, NavHeader, NavList, NavSection } from "@/app/sidebar/nav";
+import {
+  MagnifyingGlassSearch,
+  XCircleFilled,
+} from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";

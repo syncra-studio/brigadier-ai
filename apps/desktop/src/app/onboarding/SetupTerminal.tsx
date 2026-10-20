@@ -1,9 +1,9 @@
-import { ExclamationMarkCircle } from "@openai/apps-sdk-ui/components/Icon";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
+import { ExclamationMarkCircle } from "@/components/ui/icon";
 import type { ProviderKind, ProviderOverview, TerminalInfo } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { loadProviders, refreshProviders } from "@/state/actions";

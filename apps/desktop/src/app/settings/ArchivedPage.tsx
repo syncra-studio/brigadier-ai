@@ -1,14 +1,3 @@
-import {
-  Branch,
-  Chats,
-  Check,
-  ChevronDown,
-  DotsHorizontal,
-  Filter,
-  Folder,
-  Trash,
-  Unarchive,
-} from "@openai/apps-sdk-ui/components/Icon";
 import { type ComponentProps, type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -43,6 +32,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Branch,
+  Chats,
+  Check,
+  ChevronDown,
+  DotsHorizontal,
+  Filter,
+  Folder,
+  Trash,
+  Unarchive,
+} from "@/components/ui/icon";
 import type { Conversation } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
