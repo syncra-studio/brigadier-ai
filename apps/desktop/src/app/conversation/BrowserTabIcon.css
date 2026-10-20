@@ -1,5 +1,5 @@
 /* Hallmark · component scope · tone: quiet utility · anchor hue: inherited neutral */
-.browser-tab-icon { --favicon-duration: 250ms; position: relative; display: inline-flex; flex-shrink: 0; width: 1rem; height: 1rem; }
+.browser-tab-icon { --favicon-duration: 250ms; position: relative; display: inline-flex; flex-shrink: 0; width: calc(var(--spacing) * 4); height: calc(var(--spacing) * 4); }
 .browser-tab-favicon { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; transform: scale(1); transition: transform var(--favicon-duration) cubic-bezier(.16, 1, .3, 1); }
 .browser-tab-favicon[data-visible="false"] { visibility: hidden; }
 .browser-tab-favicon > img, .browser-tab-favicon > svg { width: 100%; height: 100%; object-fit: contain; }

@@ -752,6 +752,10 @@
   /* The page surface's hairline edge over the chrome (as its shadow-page ring draws it). */
   --page-edge: color-mix(in oklab, oklch(1 0 0) 6%, var(--chrome));
   --divider: oklch(0.985 0.002 var(--tint) / 8%);
+  /* Faint washes of the foreground: the New tab page's cards (3%), a page's code and table
+     headers (5%). */
+  --wash-3: color-mix(in oklab, var(--foreground) 3%, transparent);
+  --wash-5: color-mix(in oklab, var(--foreground) 5%, transparent);
   /* An activity row's chevron: always there, quieter than the row's words; white with them on
      hover. The rule under a turn's work header. */
   --row-chevron: color-mix(in oklab, var(--foreground) 25%, transparent);
