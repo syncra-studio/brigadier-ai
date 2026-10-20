@@ -519,16 +519,16 @@ mod tests {
             Temp(std::env::temp_dir().join(format!("brigadier-cli-env-{}", std::process::id())));
         let bin = home.join(".cargo/bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let mut env = vars(&[
-            ("HOME", home.as_os_str()),
-            ("PATH", OsStr::new("/usr/bin:/bin")),
-        ]);
+        // Joined as the platform joins PATH (`;` on Windows).
+        let path = |dirs: &[&OsStr]| std::env::join_paths(dirs).unwrap();
+        let login = path(&[OsStr::new("/usr/bin"), OsStr::new("/bin")]);
+        let mut env = vars(&[("HOME", home.as_os_str()), ("PATH", &login)]);
         add_toolchain_bins(&mut env);
-        let expected = format!("/usr/bin:/bin:{}", bin.display());
-        assert_eq!(env[OsStr::new("PATH")], OsString::from(&expected));
+        let expected = path(&[OsStr::new("/usr/bin"), OsStr::new("/bin"), bin.as_os_str()]);
+        assert_eq!(env[OsStr::new("PATH")], expected);
         // Already there: nothing changes.
         add_toolchain_bins(&mut env);
-        assert_eq!(env[OsStr::new("PATH")], OsString::from(&expected));
+        assert_eq!(env[OsStr::new("PATH")], expected);
         // `CARGO_HOME` moves it; one that doesn't exist adds nothing.
         let mut moved = vars(&[
             ("HOME", home.as_os_str()),
