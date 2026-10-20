@@ -1672,12 +1672,13 @@ exit "$code"
         const BRANCH: &str = "main";
         const REPO: &str = "o/n";
 
-        /// Fast polls. The first-run window is generous: a script just written can take a
-        /// while to start the first time, and only the no-runs test waits it out.
+        /// Fast polls. The first-run window is the tests' whole patience: a run the fake
+        /// lists is found however slowly a loaded machine starts gh, or however long it stops
+        /// the test (#383); only the no-runs tests wait a window out, with their own.
         fn timing() -> Timing {
             Timing {
                 poll: Duration::from_millis(10),
-                first_run: Duration::from_secs(5),
+                first_run: crate::test_patience(),
                 settle: Duration::from_millis(60),
             }
         }
