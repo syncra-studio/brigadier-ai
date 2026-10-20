@@ -180,14 +180,16 @@ fn reviewer(delay: std::time::Duration) -> Script {
 
 /// A review that ends within the call's foreground minute comes in the passing check's reply,
 /// and no message of it follows: the thread fixes or answers in the same turn, with no
-/// `[quiet]` turn to wait for it (#193).
+/// `[quiet]` turn to wait for it (#193). The test's call never goes to the background, so it
+/// waits for the review however late a loaded machine starts it: here one that takes the
+/// whole test-sized foreground window (#442).
 #[tokio::test]
 async fn a_review_that_ends_within_the_minute_comes_in_the_checks_reply() {
     let seen: Log = Arc::default();
     let flow = Flow::start(
         "review-on-pass-held",
         Options {
-            reviews: Some(reviewer(std::time::Duration::from_millis(100))),
+            reviews: Some(reviewer(crate::manager::background_runs::FOREGROUND)),
             ..Options::default()
         },
         thread(&["true"], seen.clone()),

@@ -37,11 +37,17 @@ const REVIEW_MARGIN: Duration = FOREGROUND.checked_div(10).expect("not zero");
 /// Until when a `run_check` call of session `id` starting now may wait for a review of the
 /// thread's change in the foreground: the rest of its [`FOREGROUND`] minute, less a margin
 /// (#193). In tests only when the test waits (`wait_for_reviews`): their reviewers answer at
-/// once, and the rest hear of a review in a message, as most do in the app.
+/// once, and the rest hear of a review in a message, as most do in the app. A test whose
+/// commands never go to the background ([`let_background`]) holds its call to the review's
+/// end, however loaded the machine (#442).
 pub(crate) fn review_hold(id: &ConversationId) -> Option<tokio::time::Instant> {
     #[cfg(test)]
     if !REVIEW_WAITS.lock().unwrap().contains(id) {
         return None;
+    }
+    #[cfg(all(test, unix))]
+    if !BACKGROUNDED.lock().unwrap().contains(id) {
+        return Some(tokio::time::Instant::now() + Duration::from_secs(600));
     }
     #[cfg(not(test))]
     let _ = id;
