@@ -2,12 +2,13 @@ import { type FC, memo, useContext, useMemo, useState } from "react";
 
 import { lastReplies, type StripView, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
 import { StopWorker } from "@/app/conversation/activity/StopWorker";
+import { Counts } from "@/app/conversation/Counts";
 import { RowTime } from "@/app/conversation/RowTime";
 import { useAction } from "@/app/conversation/useAction";
 import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
 import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
 import { workerDone, workerState } from "@/app/conversation/workerPresentation";
-import { Changes, workerStat } from "@/app/conversation/WorkerSummary";
+import { workerStat } from "@/app/conversation/WorkerSummary";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, StopCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -45,7 +46,7 @@ const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
           {done ?? first}
         </span>
         <RowTime taskId={taskId} />
-        {stat && <Changes insertions={stat.insertions} deletions={stat.deletions} />}
+        {stat && stat.insertions + stat.deletions > 0 && <Counts insertions={stat.insertions} deletions={stat.deletions} />}
       </button>
       <StopWorker taskId={taskId} name={name ?? "this worker"} />
       </div>

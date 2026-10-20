@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
+import { Counts } from "@/app/conversation/Counts";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -51,17 +52,6 @@ import { toast } from "@/state/toasts";
  * file's under a sticky header, or one file's staged or unstaged diff. It only reads; a line's
  * "+" adds it to the chat.
  */
-
-const Counts: FC<{ insertions: number; deletions: number; className?: string }> = ({
-  insertions,
-  deletions,
-  className,
-}) => (
-  <span className={cn("tabular-nums", className)}>
-    <span className="text-success">+{insertions}</span>{" "}
-    <span className="text-destructive">−{deletions}</span>
-  </span>
-);
 
 /** Something about the board that changes the diff: a landing, an Undo or Reapply. */
 function useChangeKey(conversationId: string): string {
@@ -195,7 +185,7 @@ export function ReviewTab({
           {commit ? `Merge ${commit.slice(0, 7)}` : target.type === "lastTurn" ? "Last turn" : target.type === "uncommitted" ? "Uncommitted changes" : staged ? "Staged Changes" : "Changes"}
         </span>
         {review && review.files.length > 0 && (
-          <Counts insertions={review.insertions} deletions={review.deletions} className="text-sm" />
+          <Counts insertions={review.insertions} deletions={review.deletions} />
         )}
         <div className="flex-1" />
         <TooltipIconButton tooltip="Refresh" size="icon-sm" onClick={() => setTick(tick + 1)}>

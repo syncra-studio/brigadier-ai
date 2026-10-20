@@ -8,6 +8,7 @@ import { type Merged, redoRequest, revertRequest } from "@/app/conversation/acti
 import { isFinal } from "@/app/conversation/blocks";
 import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
 import { mergeStats } from "@/app/conversation/ComposerCapsule";
+import { Counts } from "@/app/conversation/Counts";
 import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { RoundBadge } from "@/app/settings/storage/parts";
@@ -56,14 +57,6 @@ const PRIMARY = "text-label";
 
 /** The files listed before "Show {n} more files". */
 const FIRST_FILES = 3;
-
-/** "+88 −7" in the mono face: green and red, a zero dim; all dim once reverted. */
-const Counts: FC<{ insertions: number; deletions: number; dim?: boolean }> = ({ insertions, deletions, dim = false }) => (
-  <span data-slot="turn-diff-counts" className="flex shrink-0 items-center gap-2 font-mono text-xs tabular-nums">
-    <span className={dim || insertions === 0 ? "text-muted-foreground" : "text-success"}>+{insertions}</span>{" "}
-    <span className={dim || deletions === 0 ? "text-muted-foreground" : "text-destructive"}>−{deletions}</span>
-  </span>
-);
 
 /** A Review diff's files and counts, as a diff stat. */
 function statOf(review: ReviewDiff): DiffStat {
@@ -469,7 +462,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
           title={<span data-slot="turn-diff-title">{title}</span>}
           line={
             <span className="flex min-w-0 items-center gap-2">
-              {files.length > 0 && <Counts insertions={counts.insertions} deletions={counts.deletions} dim={reverted} />}
+              {files.length > 0 && <Counts data-slot="turn-diff-counts" insertions={counts.insertions} deletions={counts.deletions} dim={reverted} />}
               {files.length > 0 && status && <span aria-hidden className="text-muted-foreground">·</span>}
               {status && (
                 <span data-slot="turn-diff-status" className={cn("min-w-0 truncate", reverted && "text-muted-foreground")}>

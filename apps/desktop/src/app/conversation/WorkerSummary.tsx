@@ -2,6 +2,7 @@ import { type FC, useContext, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { WORKERS_LABEL } from "@/app/conversation/Agents";
+import { Counts } from "@/app/conversation/Counts";
 import { outcomeWords, workerDone, workerWorking } from "@/app/conversation/workerPresentation";
 import {
   AgentsPanelContext,
@@ -10,26 +11,12 @@ import {
 } from "@/app/conversation/WorkerChip";
 import { SummaryRowButton, SummarySection } from "@/components/assistant-ui/elements/summary-section";
 import type { DiffStat, Task } from "@/ipc/generated";
-import { cn } from "@/lib/utils";
 import { refreshWorkerDiffs } from "@/state/actions";
 import { useBoard } from "@/state/board";
 
 /**
  * The session's worker summary and background diff refresh.
  */
-
-/** "+12 −3", once there is a change; `monochrome` for a total, in the text's colour. */
-export const Changes: FC<{ insertions: number; deletions: number; monochrome?: boolean }> = ({
-  insertions,
-  deletions,
-  monochrome = false,
-}) =>
-  insertions + deletions > 0 ? (
-    <span className="shrink-0 font-mono text-xs tabular-nums">
-      <span className={cn(!monochrome && "text-success")}>+{insertions}</span>{" "}
-      <span className={cn(!monochrome && "text-destructive")}>−{deletions}</span>
-    </span>
-  ) : null;
 
 /**
  * States in which a write task's +N −N is read from its worktree: it still changes, or it
@@ -100,7 +87,7 @@ const WorkerLineRow: FC<{ task: Task }> = ({ task }) => {
       title={name ?? undefined}
       onClick={() => setPanel(task.id)}
       icon={<WorkerGlyph taskId={task.id} className="size-4" />}
-      meta={stat && <Changes insertions={stat.insertions} deletions={stat.deletions} />}
+      meta={stat && stat.insertions + stat.deletions > 0 && <Counts insertions={stat.insertions} deletions={stat.deletions} />}
     >
       {name}{workerWorking(task) && <span className="text-muted-foreground shimmer"> working</span>}
     </SummaryRowButton>

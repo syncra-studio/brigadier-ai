@@ -5,6 +5,7 @@ import type { LeadStep } from "@/app/conversation/activity/group";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { leadAction, useLeadItems } from "@/app/conversation/activity/StepDetail";
 import { basename, type StepWords, type ToolStep } from "@/app/conversation/activity/words";
+import { Counts } from "@/app/conversation/Counts";
 import { OpenFileContext } from "@/components/assistant-ui/file-links";
 import type { FileChange, FileChangeKind, FileStat, ItemStatus } from "@/ipc/generated";
 import { revealPath } from "@/ipc/client";
@@ -70,17 +71,14 @@ function FileLink({ path, name }: { path: string; name: string }) {
   );
 }
 
-/** "+7 −2", tabular and uncoloured until the row is hovered; a dot for a created or deleted file. */
+/** "+7 −2", uncoloured until the row is hovered; a dot for a created or deleted file. */
 function FileCounts({ file }: { file: FileStat }) {
   return (
     <span className="ms-1 flex shrink-0 items-center gap-1.5">
       {/* Read as words, the name and its counts stay apart. */}
       <span className="sr-only"> </span>
       {!file.binary && (
-        <span data-slot="edited-file-counts" className="text-muted-foreground text-label tabular-nums">
-          <span className="group-hover:text-success">+{file.insertions}</span>{" "}
-          <span className="group-hover:text-destructive">−{file.deletions}</span>
-        </span>
+        <Counts data-slot="edited-file-counts" quiet insertions={file.insertions} deletions={file.deletions} />
       )}
       {(file.change === "add" || file.change === "delete") && (
         <span
