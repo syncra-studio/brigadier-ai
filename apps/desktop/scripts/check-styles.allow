@@ -1,0 +1,8 @@
+# The style check's allowlist (scripts/check-styles.mjs): `<path from src> <value> [<value>…]  # reason`.
+# Each value is one with no token in tokens.css or foundations.pen yet; the design-system work's
+# phase 2 names them (or rounds them onto the scale) and takes the line off.
+styles/globals.css 0.5px 1.2px  # hairline columns and the page corner's anti-aliased ring (0.5px), the typing dots' dip (1.2px): no hairline or motion token yet
+styles/onboarding.css #fff  # the welcome's mark and title are pure white; the only white token is the terminal's active tab
+app/conversation/NewTabTools.css 1.160714rem 28rem  # the New tab page's line height has no text token; 28rem is a container query, where var() can't go
+app/conversation/pages/PageTab.css 2.1rem .5px 1.7875rem .9375rem 1.875rem 1rem 3px .21875rem .25rem .34375rem .15em .3125rem  # the page editor's own type (title line, heading sizes and lines), menu row and radii, quote rule, checkbox tick and hairline rings: off the text, radius and spacing scales
+components/assistant-ui/elements/rich-composer-input.css .25rem  # the composer's checklist box has a 4px corner; there is no 4px radius token
