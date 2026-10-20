@@ -28,7 +28,7 @@ import {
 } from "@/components/icons";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger } from "@/components/overlays";
 import { Banner } from "@/components/shared";
-import { TooltipIconButton } from "@/components/controls";
+import { Button, TooltipIconButton } from "@/components/controls";
 import { browserFocus, browserGo, browserPlace, browserPrint, browserSnapshot, openUrl } from "@/ipc/client";
 import type { BrowserBounds } from "@/ipc/generated";
 import { closeFind, findInPage, findLabel, NO_FIND, openFind, useBrowserFind } from "@/state/browserFind";
@@ -777,13 +777,9 @@ export function BrowserTab({
           data-slot="browser-paused"
           text={<>You're using this page, so <span className="font-medium">{driver}</span> is waiting.</>}
         >
-          <button
-            type="button"
-            onClick={() => handBack(conversationId)}
-            className="bg-foreground text-background hover:bg-foreground/90 rounded-control h-control-sm shrink-0 px-3 font-medium transition-colors"
-          >
+          <Button size="sm" onClick={() => handBack(conversationId)}>
             Continue
-          </button>
+          </Button>
         </Banner>
       )}
       {page?.blocked && (
@@ -792,13 +788,9 @@ export function BrowserTab({
           onDismiss={() => dismissBlocked(conversationId)}
         >
           {webAddress(page.blocked) && (
-            <button
-              type="button"
-              onClick={() => page.blocked && openOutside(page.blocked)}
-              className="hover:bg-foreground/5 rounded-control h-control-sm shrink-0 px-2 transition-colors"
-            >
+            <Button size="sm" variant="ghost" onClick={() => page.blocked && openOutside(page.blocked)}>
               Open in browser
-            </button>
+            </Button>
           )}
         </Banner>
       )}
