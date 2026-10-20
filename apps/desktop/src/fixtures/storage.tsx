@@ -249,6 +249,8 @@ const leaves = (root: Element | null) =>
   root
     ? all("span, h2, p, input, button", root)
         .filter((element) => element.children.length === 0 || element.tagName === "BUTTON")
+        // A button's only words (a select's value) are its own, read once.
+        .filter((element) => !(element.parentElement?.tagName === "BUTTON" && text(element.parentElement) === text(element)))
         .map((element) => (element instanceof HTMLInputElement ? element.placeholder : text(element)))
         .filter(Boolean)
     : [];

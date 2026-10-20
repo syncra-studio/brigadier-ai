@@ -1,11 +1,11 @@
 import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { BanIcon, Badge, Note, PillSelect, PillTrigger, PreferIcon } from "@/app/routing/parts";
+import { BanIcon, Badge, Note, PreferIcon } from "@/app/routing/parts";
 import { TargetItems } from "@/app/routing/pickers";
 import { type Draft, type DraftEffect, draftRule, type Names, previewDraft, ruleLine, ruleTitle } from "@/app/routing/ruleWords";
 import { ROUTED_KINDS, shortModelName, shortPlaceName } from "@/app/routing/words";
-import { SettingsSection } from "@/app/settings/parts";
+import { SettingsSection, SettingsSelect, SettingsSelectTrigger } from "@/app/settings/parts";
 import type { ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { Button } from "@/components/ui/button";
 import {
@@ -168,20 +168,20 @@ function DraftRow({
       <div className="flex items-center gap-3.5">
         {draft.effect === "never" ? <BanIcon /> : <PreferIcon />}
         <div className="text-label text-foreground/65 flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          <PillSelect label="What the rule does" value={draft.effect} options={EFFECTS} onChange={(effect) => set({ effect })} />
+          <SettingsSelect align="start" label="What the rule does" value={draft.effect} options={EFFECTS} onChange={(effect) => set({ effect })} />
           use
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
-              <PillTrigger label="The model the rule is about" placeholder={!target}>
+              <SettingsSelectTrigger label="The model the rule is about" placeholder={!target}>
                 {target ? names.target(target) : "Choose a model"}
-              </PillTrigger>
+              </SettingsSelectTrigger>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="max-h-96 w-xs overflow-y-auto">
               <TargetItems onPick={(picked: OverrideTarget) => set({ target: picked })} />
             </DropdownMenuContent>
           </DropdownMenu>
           for
-          <PillSelect label="The kind of work the rule is about" value={draft.kind} options={KINDS} onChange={(kind) => set({ kind })} />
+          <SettingsSelect align="start" label="The kind of work the rule is about" value={draft.kind} options={KINDS} onChange={(kind) => set({ kind })} />
         </div>
         <Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
         <Button size="sm" disabled={!target || add.busy} onClick={submit}>

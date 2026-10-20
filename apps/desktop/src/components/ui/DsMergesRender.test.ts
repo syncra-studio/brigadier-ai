@@ -6,6 +6,11 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("the merged design-system parts draw as one look each", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "ds-merges.html", "merges-result", 60000));
 
+  // A select is a capsule; a long value ends in "…".
+  assert.equal(seen.select.radius, seen.select.capsule);
+  assert.equal(seen.select.overflow, "ellipsis");
+  assert.equal(seen.select.cut, true);
+
   // A row's words: a medium title over a grey line; quiet drops the weight; truncate cuts with "…".
   const { rowText } = seen;
   assert.equal(rowText.plain.weight, "500");

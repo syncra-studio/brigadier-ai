@@ -1,15 +1,7 @@
-import type { ComponentProps, ReactNode } from "react";
+import type { ReactNode } from "react";
 
-import { selectTrigger } from "@/app/settings/parts";
-import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/icons";
+import { ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/icons";
 import { Badge as ChipBadge } from "@/components/ui/badge";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
 
@@ -45,60 +37,7 @@ export function Badge({ tone, children }: { tone: "success" | "link"; children: 
     <ChipBadge variant={tone === "success" ? "success" : "secondary"} className="shrink-0">
       {children}
     </ChipBadge>
-  );
-}
 
-/** The look of a pill that opens a menu. */
-export const pillTrigger = cn(selectTrigger, "inline-flex shrink-0 gap-1");
-
-/** A pill that opens a menu: its value (or a quiet placeholder) and a chevron. */
-export function PillTrigger({
-  label,
-  placeholder = false,
-  children,
-  className,
-  ...props
-}: { label: string; placeholder?: boolean; children: ReactNode } & Omit<ComponentProps<"button">, "children">) {
-  return (
-    <button type="button" aria-label={label} className={cn(pillTrigger, className)} {...props}>
-      <span className={cn("min-w-0 truncate", placeholder && "text-muted-foreground")}>{children}</span>
-      <ChevronDown aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
-    </button>
-  );
-}
-
-/** One of a few choices, as a pill with a menu. */
-export function PillSelect<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-  disabled,
-  align = "start",
-}: {
-  label: string;
-  value: T;
-  options: readonly { value: T; label: string; shown?: string }[];
-  onChange: (value: T) => void;
-  disabled?: boolean;
-  align?: "start" | "end";
-}) {
-  const chosen = options.find((option) => option.value === value);
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild disabled={disabled}>
-        <PillTrigger label={label}>{chosen?.shown ?? chosen?.label}</PillTrigger>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align={align} className="max-h-96 overflow-y-auto">
-        <DropdownMenuRadioGroup value={value} onValueChange={(next) => onChange(next as T)}>
-          {options.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value} indicator={<Check className="size-icon-md" />}>
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 

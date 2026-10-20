@@ -1,4 +1,4 @@
-import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import {
@@ -13,7 +13,7 @@ import {
   shownIds,
   SORT_CHOICES,
 } from "@/app/settings/archived";
-import { SettingsPage, SettingsSearch, selectTrigger } from "@/app/settings/parts";
+import { SettingsPage, SettingsSearch, SettingsSelect, SettingsSelectTrigger } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -32,21 +32,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Branch,
-  Chats,
-  Check,
-  ChevronDown,
-  DotsHorizontal,
-  Filter,
-  Folder,
-  Trash,
-  Unarchive,
-} from "@/components/icons";
+import { Branch, Chats, Check, DotsHorizontal, Filter, Folder, Trash, Unarchive } from "@/components/icons";
 import { SettingsCard } from "@/components/ui/settings-card";
 import type { Conversation } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
-import { cn } from "@/lib/utils";
 import { openConversation, restoreAll } from "@/state/actions";
 import { askDelete, clearPicked, pickClick, prunePicked, usePicked } from "@/state/picking";
 import { useApp } from "@/state/store";
@@ -263,19 +252,6 @@ function ArchivedRow({
   );
 }
 
-/** A toolbar menu's button: an icon, the chosen choice's words, a chevron. */
-function MenuTrigger({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
-  return (
-    <DropdownMenuTrigger asChild>
-      <button type="button" aria-label={label} className={cn(selectTrigger, "flex w-40 shrink-0 gap-2")}>
-        {icon}
-        <span className="min-w-0 flex-1 truncate text-start">{children}</span>
-        <ChevronDown aria-hidden className="text-foreground/65 size-icon-sm shrink-0" />
-      </button>
-    </DropdownMenuTrigger>
-  );
-}
-
 const check = <Check className="size-icon-md" />;
 
 /** Which kind shows (all, sessions, chats) and in what order. */
@@ -289,9 +265,15 @@ function KindMenu({
   const kind = KIND_CHOICES.find((choice) => choice.value === filter.kind)?.label;
   return (
     <DropdownMenu modal={false}>
-      <MenuTrigger label="Filter archived chats" icon={<Filter aria-hidden className="size-icon-sm shrink-0" />}>
-        {kind}
-      </MenuTrigger>
+      <DropdownMenuTrigger asChild>
+        <SettingsSelectTrigger
+          label="Filter archived chats"
+          icon={<Filter aria-hidden className="size-icon-sm shrink-0" />}
+          className="w-40"
+        >
+          {kind}
+        </SettingsSelectTrigger>
+      </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-(--radix-dropdown-menu-trigger-width)">
         <DropdownMenuLabel>Type</DropdownMenuLabel>
         <DropdownMenuRadioGroup
@@ -331,25 +313,15 @@ function ProjectMenu({
   choices: { value: string; label: string }[];
   onChange: (project: string) => void;
 }) {
-  const chosen = choices.find((choice) => choice.value === filter.project)?.label;
   return (
-    <DropdownMenu modal={false}>
-      <MenuTrigger
-        label="Filter archived chats by project"
-        icon={<Folder aria-hidden className="size-icon-sm shrink-0" />}
-      >
-        {chosen}
-      </MenuTrigger>
-      <DropdownMenuContent align="end" className="max-w-sm min-w-(--radix-dropdown-menu-trigger-width)">
-        <DropdownMenuRadioGroup value={filter.project} onValueChange={onChange}>
-          {choices.map((choice) => (
-            <DropdownMenuRadioItem key={choice.value} value={choice.value} indicator={check}>
-              <span className="truncate">{choice.label}</span>
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <SettingsSelect
+      label="Filter archived chats by project"
+      value={filter.project}
+      options={choices}
+      onChange={onChange}
+      icon={<Folder aria-hidden className="size-icon-sm shrink-0" />}
+      className="w-40"
+    />
   );
 }
 

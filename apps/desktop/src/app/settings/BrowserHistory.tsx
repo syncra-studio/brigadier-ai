@@ -1,35 +1,19 @@
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { SettingsPage, SettingsSearch, SettingsSection, selectTrigger } from "@/app/settings/parts";
+import { SettingsPage, SettingsSearch, SettingsSection, SettingsSelect } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Check,
-  ChevronDown,
-  DotsHorizontal,
-  ExternalLink,
-  Filter,
-  Globe,
-  Trash,
-} from "@/components/icons";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ChevronDown, DotsHorizontal, ExternalLink, Filter, Globe, Trash } from "@/components/icons";
 import { SettingsCard } from "@/components/ui/settings-card";
 import { useNow } from "@/hooks/use-now";
 import type { BrowserVisit, HistoryFilter } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
-import { cn } from "@/lib/utils";
 import { browserHistory, byDay, HISTORY_PAGE, removeHistory, siteOf } from "@/state/browserData";
 import { openLink } from "@/state/links";
 
@@ -199,33 +183,14 @@ function VisitRow({ visit, onRemove }: { visit: BrowserVisit; onRemove: () => vo
 }
 
 function FilterMenu({ value, onChange }: { value: HistoryFilter; onChange: (value: HistoryFilter) => void }) {
-  const chosen = FILTERS.find((choice) => choice.value === value)?.label;
   return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label="Filter browsing history"
-          className={cn(selectTrigger, "flex w-32 shrink-0 gap-2")}
-        >
-          <Filter aria-hidden className="size-icon-sm shrink-0" />
-          <span className="min-w-0 flex-1 truncate text-start">{chosen}</span>
-          <ChevronDown aria-hidden className="text-foreground/65 size-icon-sm shrink-0" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-(--radix-dropdown-menu-trigger-width)">
-        <DropdownMenuRadioGroup value={value} onValueChange={(next) => onChange(next as HistoryFilter)}>
-          {FILTERS.map((choice) => (
-            <DropdownMenuRadioItem
-              key={choice.value}
-              value={choice.value}
-              indicator={<Check className="size-icon-md" />}
-            >
-              {choice.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <SettingsSelect
+      label="Filter browsing history"
+      value={value}
+      options={FILTERS}
+      onChange={onChange}
+      icon={<Filter aria-hidden className="size-icon-sm shrink-0" />}
+      className="w-32"
+    />
   );
 }

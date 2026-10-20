@@ -5,8 +5,8 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { SettingsSection } from "@/app/settings/parts";
-import { ChevronRight, Plus } from "@/components/icons";
+import { SettingsSection, SettingsSelect } from "@/app/settings/parts";
+import { ChevronRight, Filter, Plus } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { RowText, SettingsCard } from "@/components/ui/settings-card";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -47,7 +47,14 @@ function read() {
     const [title, line] = Array.from(one(`[data-probe="${slot}"]`)?.firstElementChild?.children ?? []).map((part) => getComputedStyle(part));
     return { weight: title?.fontWeight, overflow: title?.textOverflow, line: line?.color };
   };
+  const pill = one('[aria-label="Default browser"]');
   return {
+    select: {
+      radius: pill && getComputedStyle(pill).borderTopLeftRadius,
+      overflow: pill?.querySelector("span") && getComputedStyle(pill.querySelector("span")!).textOverflow,
+      cut: pill?.querySelector("span") ? pill.querySelector("span")!.scrollWidth > pill.querySelector("span")!.clientWidth : null,
+      capsule: radiusOf("rounded-capsule"),
+    },
     rowText: { plain: words("row-text"), quiet: words("row-text-quiet"), grey: colourOf("text-foreground/65", "color") },
     section: {
       setting: section?.getAttribute("data-setting"),
@@ -96,6 +103,22 @@ function Fixture() {
         >
           <span data-probe="section">placeholder</span>
         </SettingsSection>
+        <section data-group="select" className="flex w-60 gap-2">
+          <SettingsSelect
+            label="Default browser"
+            value="brigadier"
+            options={[{ value: "brigadier", label: "Your default browser, as macOS has it" }, { value: "safari", label: "Safari" }]}
+            onChange={() => {}}
+            className="w-40"
+          />
+          <SettingsSelect
+            label="Filter browsing history"
+            value="all"
+            options={[{ value: "all", label: "All" }]}
+            onChange={() => {}}
+            icon={<Filter aria-hidden className="size-icon-sm shrink-0" />}
+          />
+        </section>
         <section data-group="row-text" className="flex w-80 gap-4">
           <div data-probe="row-text" className="flex min-w-0 flex-1">
             <RowText truncate title="Explore the code, every file of it" line="Automatic picks the strongest model" />

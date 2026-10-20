@@ -1,7 +1,7 @@
 import { type ComponentType, type SVGProps, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { Badge, HAIRLINE_TOP, OpenChevron, PillChoice, PillTrigger } from "@/app/routing/parts";
+import { Badge, HAIRLINE_TOP, OpenChevron, PillChoice } from "@/app/routing/parts";
 import { TargetItems } from "@/app/routing/pickers";
 import {
   decides,
@@ -13,7 +13,7 @@ import {
   shortModelName,
   shortPlaceName,
 } from "@/app/routing/words";
-import { SettingsSection } from "@/app/settings/parts";
+import { SettingsSection, SettingsSelectTrigger } from "@/app/settings/parts";
 import { effortLabel, type ModelGroup } from "@/components/assistant-ui/elements/model-selector";
 import { Button } from "@/components/ui/button";
 import {
@@ -480,7 +480,7 @@ function OrderPlace({
       </span>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
-          <PillTrigger label={`${name}: effort`}>{effort ? `${effortLabel(effort)} effort` : "Auto effort"}</PillTrigger>
+          <SettingsSelectTrigger label={`${name}: effort`}>{effort ? `${effortLabel(effort)} effort` : "Auto effort"}</SettingsSelectTrigger>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-2xs">
           <DropdownMenuRadioGroup value={entry.effort ?? "auto"} onValueChange={(value) => onEffort(value === "auto" ? null : value)}>

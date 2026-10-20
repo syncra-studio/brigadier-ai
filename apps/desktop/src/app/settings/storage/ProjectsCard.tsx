@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 
+import { SettingsSelect } from "@/app/settings/parts";
 import {
   PROJECTS_PAGE,
   PROJECT_SORTS,
@@ -18,9 +19,7 @@ import {
   type ProjectSort,
 } from "@/app/settings/storage/model";
 import { Dot, RoundBadge, ShareBar } from "@/app/settings/storage/parts";
-import { selectTrigger } from "@/app/settings/parts";
 import {
-  Check,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -34,13 +33,6 @@ import {
   Stack,
 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { SettingsCard } from "@/components/ui/settings-card";
 import { revealPath } from "@/ipc/client";
 import type { ProjectUsage, StorageReport } from "@/ipc/generated";
@@ -109,7 +101,7 @@ export function ProjectsCard({
               className="placeholder:text-foreground/50 min-w-0 flex-1 bg-transparent text-sm outline-none"
             />
           </label>
-          <SortSelect value={sort} onChange={setSort} />
+          <SettingsSelect label="Sort projects" value={sort} options={PROJECT_SORTS} onChange={setSort} />
           <div className="ps-1">
             <Button
               variant="link-blue"
@@ -456,34 +448,6 @@ function UnusedRow({
         </Button>
       )}
     </div>
-  );
-}
-
-/** The sort: a pill with its value and a chevron. */
-function SortSelect({ value, onChange }: { value: ProjectSort; onChange: (value: ProjectSort) => void }) {
-  const chosen = PROJECT_SORTS.find((option) => option.value === value);
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label="Sort projects"
-          className={cn(selectTrigger, "flex shrink-0 gap-1")}
-        >
-          {chosen?.label}
-          <ChevronDown aria-hidden className="text-muted-foreground size-icon-sm shrink-0" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuRadioGroup value={value} onValueChange={(next) => onChange(next as ProjectSort)}>
-          {PROJECT_SORTS.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value} indicator={<Check className="size-icon-md" />}>
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 

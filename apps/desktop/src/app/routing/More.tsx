@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 
 import { refreshRunning } from "@/app/routing/rankings";
-import { Badge, HAIRLINE_BOTTOM, HAIRLINE_TOP, OpenChevron, PillSelect, StepNumber } from "@/app/routing/parts";
+import { Badge, HAIRLINE_BOTTOM, HAIRLINE_TOP, OpenChevron, StepNumber } from "@/app/routing/parts";
 import { faded, reviewers, reviewsWords, ROUTED_KINDS, strengthFor, tierFor } from "@/app/routing/words";
-import { SettingsSection } from "@/app/settings/parts";
+import { SettingsSection, SettingsSelect } from "@/app/settings/parts";
 import { ArrowRotateCw, ListOrderedIcon, ProviderGlyph, SpeedometerLatencySpeed } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { RowText, SettingsCard } from "@/components/ui/settings-card";
@@ -122,7 +122,7 @@ export function More({
           <div data-slot="model-strength" className="flex flex-col ps-7.5">
             <div className="border-divider flex items-center gap-6 border-y py-3.5">
               <RowText truncate quiet title="Kind of work" line="Which work to rank the models for" />
-              <PillSelect
+              <SettingsSelect
                 label="The kind of work the models are ranked for"
                 value={category}
                 options={ROUTED_KINDS.map((kind) => ({ value: kind, label: PLAIN_KIND_NAMES[kind] }))}
