@@ -14,8 +14,13 @@ function chromium(): string {
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
     "/usr/bin/google-chrome",
+    "C:/Program Files/Google/Chrome/Application/chrome.exe",
   ];
-  for (const cache of [join(homedir(), "Library/Caches/ms-playwright"), join(homedir(), ".cache/ms-playwright")]) {
+  for (const cache of [
+    join(homedir(), "Library/Caches/ms-playwright"),
+    join(homedir(), ".cache/ms-playwright"),
+    join(process.env.LOCALAPPDATA ?? homedir(), "ms-playwright"),
+  ]) {
     let entries: string[];
     try {
       entries = readdirSync(cache);
@@ -28,6 +33,8 @@ function chromium(): string {
         "chrome-headless-shell-mac-x64/chrome-headless-shell",
         "chrome-headless-shell-linux64/chrome-headless-shell",
         "chrome-linux/chrome",
+        "chrome-headless-shell-win64/chrome-headless-shell.exe",
+        "chrome-win64/chrome.exe",
       ]) candidates.push(join(cache, entry, binary));
     }
   }
