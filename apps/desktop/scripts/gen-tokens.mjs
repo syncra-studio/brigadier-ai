@@ -110,8 +110,10 @@ function write({ type, value }) {
 function same({ type, value: want }, value, resolve) {
   if (typeof want === "string" && want.startsWith("$")) return value === `var(${want.slice(1)})`;
   if (type === "number") {
+    // A length needs its unit; only 0 may go without.
     const length = /^(-?[\d.]+)(rem|px)?$/.exec(value);
-    return !!length && Math.abs(Number(length[1]) * (length[2] === "rem" ? 16 : 1) - want) < 1e-6;
+    if (!length || (!length[2] && Number(length[1]) !== 0)) return false;
+    return Math.abs(Number(length[1]) * (length[2] === "rem" ? 16 : 1) - want) < 1e-6;
   }
   if (type === "color") {
     const have = toBytes(oklab(resolve(value)));

@@ -20,7 +20,7 @@
 //
 // node scripts/check-styles.mjs [src dir] [allowlist]
 import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, posix, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = (path) => fileURLToPath(new URL(path, import.meta.url));
@@ -36,7 +36,8 @@ const KIT_ICONS = "@openai/apps-sdk-ui/components/Icon";
 const KIT_WRAPPERS = /^components\/(controls|overlays|layout)\//;
 const SVG = /<svg\b/g;
 const UI_LIBRARY = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']((?:@assistant-ui\/|@lexical\/|lexical(?=["'/])|@xterm\/|sigma(?=["'/])|graphology|@pierre\/diffs)[^"']*)["']/g;
-const COMPONENT_IMPORT = /\b(?:import|export)(\s+type\b)?[^;]*?\bfrom\s*["'](@\/components\/[^"']+)["']/g;
+// One declaration at a time (it stops at the next import or export), its path as written or relative.
+const COMPONENT_IMPORT = /\b(?:import|export)(\s+type\b)?(?:(?!\b(?:import|export)\b)[^;])*?\bfrom\s*["'](@\/components\/[^"']+|\.\.?\/[^"']+)["']/g;
 const FOLDER_INDEX = /^@\/components\/(?:controls|overlays|layout|shared|conversation|icons|views\/[\w-]+)$/;
 const STATIC_STYLE = /(?:^|[{,])\s*([\w$]+|"[^"]+")\s*:\s*(?:"[^"$`]*"|'[^']*'|-?\d*\.?\d+)\s*(?=[,}]|$)/g;
 
@@ -88,7 +89,9 @@ export function problems(path, text) {
     for (const [, name] of text.matchAll(UI_LIBRARY)) found.push([name, "a UI library import: use its wrapper in src/components"]);
   }
   if (path.endsWith(".tsx") && !path.startsWith("components/")) {
-    for (const [, typeOnly, name] of text.matchAll(COMPONENT_IMPORT)) {
+    for (const [, typeOnly, written] of text.matchAll(COMPONENT_IMPORT)) {
+      const name = written.startsWith(".") ? `@/${posix.join(posix.dirname(path), written)}` : written;
+      if (!name.startsWith("@/components/")) continue;
       if (!typeOnly && !FOLDER_INDEX.test(name)) found.push([name, "a component file import: take it from its folder's index"]);
     }
   }

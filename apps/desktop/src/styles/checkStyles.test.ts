@@ -103,4 +103,15 @@ test("the libraries that draw stay inside src/components, and screens take compo
     'src/app/a.tsx: "@/components/controls/button"',
     'src/lib/b.ts: "@pierre/diffs/react"',
   ]);
+
+  // A relative path into a component folder counts too, and a type-only import before it
+  // (without semicolons) doesn't excuse the import after it.
+  const sneaky = check({
+    "app/settings/c.tsx": 'import { Button } from "../../components/controls/button";\nimport { Badge } from "../../components/controls";',
+    "app/d.tsx": 'import type { ReactNode } from "react"\nimport { Button } from "@/components/controls/button"\n',
+  });
+  assert.deepEqual(sneaky.errors.map((error) => error.split(" is ")[0]).toSorted(), [
+    'src/app/d.tsx: "@/components/controls/button"',
+    'src/app/settings/c.tsx: "@/components/controls/button"',
+  ]);
 });
