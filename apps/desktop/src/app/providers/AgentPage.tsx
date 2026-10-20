@@ -8,10 +8,11 @@ import { ProviderAccounts, useRevealedEmails } from "@/app/providers/AccountRows
 import { CLI_NAMES, OVERVIEW_ROWS } from "@/app/providers/AgentsOverview";
 import { CheckAgainButton, PlanChip, ProvidersSection, ROW_LINE, ROW_TITLE, StateDot } from "@/app/providers/parts";
 import { bestFor } from "@/app/routing/models";
-import { SettingsCard, SettingsPage, SettingsRow, settingsRows, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsPage, SettingsRow, SettingsSwitch } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronRight, InfoCircle, ProviderGlyph } from "@/components/icons";
+import { SettingsCard, settingsRows } from "@/components/ui/settings-card";
 import { pickFile, request } from "@/ipc/client";
 import type { AccountView, MergedModel, ModelInfo, ProviderKind, ProviderOverview } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";

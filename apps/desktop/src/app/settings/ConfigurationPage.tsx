@@ -1,19 +1,12 @@
 import { useAction } from "@/app/conversation/useAction";
-import {
-  SettingsCard,
-  SettingsPage,
-  SettingsRow,
-  SettingsSection,
-  SettingsSelect,
-  selectTrigger,
-  SwitchSetting,
-} from "@/app/settings/parts";
+import { SettingsPage, SettingsRow, SettingsSection, SettingsSelect, selectTrigger, SwitchSetting } from "@/app/settings/parts";
 import {
   findModel,
   ModelSelector,
   type ModelGroup,
 } from "@/components/assistant-ui/elements/model-selector";
 import { Badge } from "@/components/ui/badge";
+import { SettingsCard } from "@/components/ui/settings-card";
 import type { ModelChoice, PermissionLevel } from "@/ipc/generated";
 import {
   builtInDefault,

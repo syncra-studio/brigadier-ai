@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 
 import { errorText } from "@/app/dialogs/fields";
-import { SettingsCard, SettingsPage, SettingsRow } from "@/app/settings/parts";
+import { SettingsPage, SettingsRow } from "@/app/settings/parts";
 import { Brain } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SettingsCard } from "@/components/ui/settings-card";
 import { useNow } from "@/hooks/use-now";
 import type { Node, Origin } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";

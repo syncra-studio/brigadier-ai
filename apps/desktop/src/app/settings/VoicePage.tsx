@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { SettingsCard, SettingsPage, SettingsRow, SettingsSection, SettingsSelect } from "@/app/settings/parts";
+import { SettingsPage, SettingsRow, SettingsSection, SettingsSelect } from "@/app/settings/parts";
 import { cleanWords, languageChoices, microphoneChoices } from "@/app/settings/voice";
 import { ProgressLine } from "@/components/assistant-ui/elements/progress-line";
 import { Plus, Trash } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { SettingsCard } from "@/components/ui/settings-card";
 import { formatBytes } from "@/lib/format";
 import {
   cancelSpeechModelDownload,

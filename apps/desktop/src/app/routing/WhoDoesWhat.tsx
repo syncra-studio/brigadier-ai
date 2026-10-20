@@ -1,7 +1,7 @@
 import { type ComponentType, type SVGProps, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { Badge, Card, HAIRLINE_TOP, OpenChevron, PillChoice, PillTrigger, RowText, Section } from "@/app/routing/parts";
+import { Badge, HAIRLINE_TOP, OpenChevron, PillChoice, PillTrigger, RowText, Section } from "@/app/routing/parts";
 import { TargetItems } from "@/app/routing/pickers";
 import {
   decides,
@@ -45,6 +45,7 @@ import {
   PullRequestOpen,
   Telescope,
 } from "@/components/icons";
+import { SettingsCard } from "@/components/ui/settings-card";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { OverrideTarget, RankedEntry, Ranking, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
@@ -109,7 +110,7 @@ export function WhoDoesWhat({
   const [open, setOpen] = useState<TaskCategory | null>(null);
   return (
     <Section title={WHO_DOES_WHAT.label} description={WHO_DOES_WHAT.description}>
-      <Card data-slot="who-does-what">
+      <SettingsCard inset data-slot="who-does-what">
         {ROUTED_KINDS.map((category) => (
           <KindRow
             key={category}
@@ -122,7 +123,7 @@ export function WhoDoesWhat({
             onSeeStrengths={() => onSeeStrengths(category)}
           />
         ))}
-      </Card>
+      </SettingsCard>
     </Section>
   );
 }

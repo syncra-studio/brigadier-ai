@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { SettingsCard, SettingsPage, SettingsSearch, SettingsSection, selectTrigger } from "@/app/settings/parts";
+import { SettingsPage, SettingsSearch, SettingsSection, selectTrigger } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -25,6 +25,7 @@ import {
   Globe,
   Trash,
 } from "@/components/icons";
+import { SettingsCard } from "@/components/ui/settings-card";
 import { useNow } from "@/hooks/use-now";
 import type { BrowserVisit, HistoryFilter } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";

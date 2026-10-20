@@ -5,10 +5,11 @@ import { errorText } from "@/app/dialogs/fields";
 import { SettingsPage } from "@/app/settings/parts";
 import { FreeUpCard, type FreeUp } from "@/app/settings/storage/FreeUpCard";
 import { checkedWords, count, size, startTicked, usageParts } from "@/app/settings/storage/model";
-import { Dot, RowText, StorageCard, StorageSection, UsageBar } from "@/app/settings/storage/parts";
+import { Dot, RowText, StorageSection, UsageBar } from "@/app/settings/storage/parts";
 import { ProjectsCard, type UnusedFreeUp } from "@/app/settings/storage/ProjectsCard";
 import { FolderOpen, Reload } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { SettingsCard } from "@/components/ui/settings-card";
 import { revealPath } from "@/ipc/client";
 import type { StorageReport } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
@@ -219,20 +220,20 @@ export function StoragePage() {
         </StorageSection>
       )}
       <StorageSection title={STORAGE_ROWS.archived.label}>
-        <StorageCard>
+        <SettingsCard inset split={false}>
           <div className="flex items-center gap-4 py-4">
             <RowText title={STORAGE_ROWS.archived.label} line={STORAGE_ROWS.archived.description} />
             <Button variant="soft" size="sm" onClick={() => openSettings("archived")}>Manage</Button>
           </div>
-        </StorageCard>
+        </SettingsCard>
       </StorageSection>
       <StorageSection title="Uninstall" setting={STORAGE_ROWS.uninstall.label}>
-        <StorageCard>
+        <SettingsCard inset split={false}>
           <div className="flex items-center gap-4 py-4">
             <RowText title={STORAGE_ROWS.uninstall.label} line={STORAGE_ROWS.uninstall.description} />
             <Button variant="soft-destructive" size="sm" onClick={() => openUninstall()}>Uninstall…</Button>
           </div>
-        </StorageCard>
+        </SettingsCard>
       </StorageSection>
     </SettingsPage>
   );
@@ -242,7 +243,7 @@ export function StoragePage() {
 function UsageCard({ report, error }: { report: StorageReport | null; error: string | null }) {
   const parts = report ? usageParts(report) : [];
   return (
-    <StorageCard padded data-usage>
+    <SettingsCard padded data-usage>
       <div className="flex items-end gap-4">
         <div className="flex min-w-0 flex-1 items-end gap-2.5">
           <span className="text-page-title font-medium">
@@ -284,7 +285,7 @@ function UsageCard({ report, error }: { report: StorageReport | null; error: str
           </div>
         ))}
       </div>
-    </StorageCard>
+    </SettingsCard>
   );
 }
 

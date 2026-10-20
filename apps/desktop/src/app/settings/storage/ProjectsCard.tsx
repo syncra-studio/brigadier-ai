@@ -17,7 +17,7 @@ import {
   type Part,
   type ProjectSort,
 } from "@/app/settings/storage/model";
-import { Dot, RoundBadge, ShareBar, StorageCard } from "@/app/settings/storage/parts";
+import { Dot, RoundBadge, ShareBar } from "@/app/settings/storage/parts";
 import { selectTrigger } from "@/app/settings/parts";
 import {
   Check,
@@ -41,6 +41,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { SettingsCard } from "@/components/ui/settings-card";
 import { revealPath } from "@/ipc/client";
 import type { ProjectUsage, StorageReport } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
@@ -93,7 +94,7 @@ export function ProjectsCard({
     const found = listProjects(report.projects, sort, query);
     const stale = unusedProjects(report, nowMs);
     return (
-      <StorageCard data-projects="all">
+      <SettingsCard inset split={false} data-projects="all">
         <div className="border-divider flex items-center gap-3 border-b py-3.5">
           <label className="rounded-capsule border-foreground/16 bg-foreground/8 flex h-8 min-w-0 flex-1 items-center gap-2 border px-2.5">
             <Search aria-hidden className="text-foreground/65 size-icon-md shrink-0" />
@@ -158,7 +159,7 @@ export function ProjectsCard({
             </Button>
           )}
         </div>
-      </StorageCard>
+      </SettingsCard>
     );
   }
 
@@ -169,7 +170,7 @@ export function ProjectsCard({
   const restUnused = rest.filter((project) => isUnused(project, nowMs)).length;
   const shared = sharedParts(report);
   return (
-    <StorageCard data-projects="top" className="divide-divider divide-y">
+    <SettingsCard inset data-projects="top">
       {top.map((project) => (
         <ProjectRows
           key={project.projectId}
@@ -218,7 +219,7 @@ export function ProjectsCard({
         <DetailRow part={shared[1]!} line="What the app and its agents wrote down, and voice recordings" />
         <DetailRow part={shared[2]!} line="The database, settings and everything no project holds" />
       </ExpandableRow>
-    </StorageCard>
+    </SettingsCard>
   );
 }
 

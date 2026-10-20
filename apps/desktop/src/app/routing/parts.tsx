@@ -1,6 +1,6 @@
 import type { ComponentProps, ReactNode } from "react";
 
-import { selectTrigger, settingsCard, SettingsSection } from "@/app/settings/parts";
+import { selectTrigger, SettingsSection } from "@/app/settings/parts";
 import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/icons";
 import { Badge as ChipBadge } from "@/components/ui/badge";
 import {
@@ -38,27 +38,9 @@ export function Section({
   );
 }
 
-/** A card of rows; each of its children but the last has a hairline under it. */
 /** A divider line drawn inside the top or bottom edge, as the design's strokes are: it adds no height. */
 export const HAIRLINE_TOP = "before:bg-divider relative before:absolute before:inset-x-0 before:top-0 before:h-px";
 export const HAIRLINE_BOTTOM = "after:bg-divider relative after:absolute after:inset-x-0 after:bottom-0 after:h-px";
-
-export function Card({ children, className, ...props }: ComponentProps<"div">) {
-  return (
-    <div
-      className={cn(
-        // Every Settings page's card; its rows keep their text 16 in, its hairlines inset as far.
-        settingsCard,
-        "px-4",
-        "*:not-last:after:bg-divider *:not-last:relative *:not-last:after:absolute *:not-last:after:inset-x-0 *:not-last:after:bottom-0 *:not-last:after:h-px",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </div>
-  );
-}
 
 /** A row's title and line under it. `quiet`: a sub-row's title, not bold. */
 export function RowText({

@@ -5,7 +5,7 @@ import { ErrorLine } from "@/app/dialogs/fields";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { SetupTerminal } from "@/app/onboarding/SetupTerminal";
 import { ROW_LINE, UsageMeter } from "@/app/providers/parts";
-import { SettingsCard, SettingsRow } from "@/app/settings/parts";
+import { SettingsRow } from "@/app/settings/parts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { CheckMd, DotsHorizontal, Eye, EyeOff, Plus } from "@/components/icons";
 import { Input } from "@/components/ui/input";
+import { SettingsCard } from "@/components/ui/settings-card";
 import type { AccountView, ProviderKind, QuotaWindow } from "@/ipc/generated";
 import { hasEmail, maskEmailsIn } from "@/lib/email";
 import { VENDOR_LABELS } from "@/lib/routing";

@@ -12,7 +12,7 @@ import {
   StateDot,
   UsageMeter,
 } from "@/app/providers/parts";
-import { SettingsCard, SettingsRow, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsRow, SettingsSwitch } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ArrowUpRight, ChevronRight, Plus, ProviderGlyph } from "@/components/icons";
+import { SettingsCard } from "@/components/ui/settings-card";
 import type { AccountView, ProviderKind, ProviderOverview, QuotaWindow } from "@/ipc/generated";
 import { used, windowTitle } from "@/lib/quota";
 import { PROVIDERS, VENDOR_LABELS } from "@/lib/routing";

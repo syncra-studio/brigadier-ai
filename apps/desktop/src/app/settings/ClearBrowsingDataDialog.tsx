@@ -1,7 +1,6 @@
 import { type ReactNode, useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { SettingsCard } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,6 +13,7 @@ import {
 import { Download, Globe, Images, SettingsCog, Trash } from "@/components/icons";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Segmented } from "@/components/ui/segmented";
+import { SettingsCard } from "@/components/ui/settings-card";
 import type { BrowserClear } from "@/ipc/generated";
 import { clearBrowsingData, type ClearRange, rangeStart, siteDataCount } from "@/state/browserData";
 

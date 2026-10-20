@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { BanIcon, Badge, Card, Note, PillSelect, PillTrigger, PreferIcon, Section } from "@/app/routing/parts";
+import { BanIcon, Badge, Note, PillSelect, PillTrigger, PreferIcon, Section } from "@/app/routing/parts";
 import { TargetItems } from "@/app/routing/pickers";
 import { type Draft, type DraftEffect, draftRule, type Names, previewDraft, ruleLine, ruleTitle } from "@/app/routing/ruleWords";
 import { ROUTED_KINDS, shortModelName, shortPlaceName } from "@/app/routing/words";
@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { DotsHorizontal, Info, Plus, Warning } from "@/components/icons";
+import { SettingsCard } from "@/components/ui/settings-card";
 import type { OverrideRule, OverrideTarget, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { newRuleId, PLAIN_KIND_NAMES, ruleSentence } from "@/lib/routing";
 import { isNewModelRule } from "@/state/providers";
@@ -79,7 +80,7 @@ export function Rules({ routes, groups }: { routes: RoutePreview[] | null; group
       }
     >
       {(shown.length > 0 || adding) && (
-        <Card data-slot="routing-rules">
+        <SettingsCard inset data-slot="routing-rules">
           {adding && <DraftRow routes={routes} names={names} onCancel={() => setAdding(false)} onAdded={onAdded} />}
           {shown.map((rule) => (
             <div
@@ -116,7 +117,7 @@ export function Rules({ routes, groups }: { routes: RoutePreview[] | null; group
               </DropdownMenu>
             </div>
           ))}
-        </Card>
+        </SettingsCard>
       )}
       {remove.error && (
         <p role="alert" className="text-destructive text-xs">

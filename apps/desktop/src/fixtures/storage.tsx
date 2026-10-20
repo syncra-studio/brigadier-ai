@@ -271,7 +271,7 @@ function Look() {
       };
       openSettings("storage");
       await pause(800);
-      seen.storage = { cards: all('[data-slot="storage-card"]').map(surface), button: surface(button("Review")) };
+      seen.storage = { cards: all('[data-slot="settings-card"]').map(surface), button: surface(button("Review")) };
       setResult(JSON.stringify(seen));
     })();
   }, []);

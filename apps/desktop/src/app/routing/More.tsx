@@ -1,10 +1,20 @@
 import type { ReactNode } from "react";
 
 import { refreshRunning } from "@/app/routing/rankings";
-import { Badge, Card, HAIRLINE_BOTTOM, HAIRLINE_TOP, OpenChevron, PillSelect, RowText, Section, StepNumber } from "@/app/routing/parts";
+import {
+  Badge,
+  HAIRLINE_BOTTOM,
+  HAIRLINE_TOP,
+  OpenChevron,
+  PillSelect,
+  RowText,
+  Section,
+  StepNumber,
+} from "@/app/routing/parts";
 import { faded, reviewers, reviewsWords, ROUTED_KINDS, strengthFor, tierFor } from "@/app/routing/words";
 import { ArrowRotateCw, ListOrderedIcon, ProviderGlyph, SpeedometerLatencySpeed } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { SettingsCard } from "@/components/ui/settings-card";
 import type { RoutePreview, TaskCategory } from "@/ipc/generated";
 import { PLAIN_KIND_NAMES, TIER_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
@@ -109,7 +119,7 @@ export function More({
   const toggle = (row: Exclude<MoreRow, null>) => onOpen(open === row ? null : row);
   return (
     <Section title="More">
-      <Card data-slot="routing-more">
+      <SettingsCard inset data-slot="routing-more">
         <MoreRowHead
           row={MORE_ROWS.strength}
           icon={<SpeedometerLatencySpeed aria-hidden />}
@@ -223,7 +233,7 @@ export function More({
             </ol>
           </div>
         </MoreRowHead>
-      </Card>
+      </SettingsCard>
     </Section>
   );
 }

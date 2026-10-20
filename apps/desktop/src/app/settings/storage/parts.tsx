@@ -1,6 +1,6 @@
-import type { ComponentProps, ReactNode } from "react";
+import type { ReactNode } from "react";
 
-import { settingsCard, SettingsSection } from "@/app/settings/parts";
+import { SettingsSection } from "@/app/settings/parts";
 import type { Part } from "@/app/settings/storage/model";
 import { cn } from "@/lib/utils";
 
@@ -35,28 +35,7 @@ export function StorageSection({
       >
         {children}
       </SettingsSection>
-    </div>
-  );
-}
 
-/** A card: rows 16 in from its edges (`padded` pads the whole card, the usage card). */
-export function StorageCard({
-  padded = false,
-  className,
-  children,
-  ...props
-}: { padded?: boolean } & ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="storage-card"
-      {...props}
-      className={cn(
-        settingsCard,
-        padded ? "gap-4.5 p-4" : "px-4",
-        className,
-      )}
-    >
-      {children}
     </div>
   );
 }

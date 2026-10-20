@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { SettingsCard, SettingsPage, SettingsSearch, SettingsSection } from "@/app/settings/parts";
+import { SettingsPage, SettingsSearch, SettingsSection } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { DotsHorizontal, Download, Folder, Trash } from "@/components/icons";
+import { SettingsCard } from "@/components/ui/settings-card";
 import { useNow } from "@/hooks/use-now";
 import { revealPath } from "@/ipc/client";
 import type { BrowserDownload } from "@/ipc/generated";

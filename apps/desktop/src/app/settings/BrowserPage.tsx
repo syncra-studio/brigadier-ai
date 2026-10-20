@@ -5,17 +5,10 @@ import { BrowserDownloads } from "@/app/settings/BrowserDownloads";
 import { BrowserHistory } from "@/app/settings/BrowserHistory";
 import { BrowserSiteSettings } from "@/app/settings/BrowserSiteSettings";
 import { ClearBrowsingDataDialog } from "@/app/settings/ClearBrowsingDataDialog";
-import {
-  SettingsCard,
-  SettingsPage,
-  SettingsRow,
-  SettingsSection,
-  SettingsSelect,
-  SettingsSwitch,
-  SwitchSetting,
-} from "@/app/settings/parts";
+import { SettingsPage, SettingsRow, SettingsSection, SettingsSelect, SettingsSwitch, SwitchSetting } from "@/app/settings/parts";
 import { Globe } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { SettingsCard } from "@/components/ui/settings-card";
 import { pickFolder } from "@/ipc/client";
 import type { LinkTarget } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";

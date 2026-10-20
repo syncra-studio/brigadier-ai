@@ -13,7 +13,7 @@ import {
   shownIds,
   SORT_CHOICES,
 } from "@/app/settings/archived";
-import { SettingsCard, SettingsPage, SettingsSearch, selectTrigger } from "@/app/settings/parts";
+import { SettingsPage, SettingsSearch, selectTrigger } from "@/app/settings/parts";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -43,6 +43,7 @@ import {
   Trash,
   Unarchive,
 } from "@/components/icons";
+import { SettingsCard } from "@/components/ui/settings-card";
 import type { Conversation } from "@/ipc/generated";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";

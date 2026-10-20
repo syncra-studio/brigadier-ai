@@ -5,11 +5,12 @@ import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
+import { RoundBadge, RowText } from "@/app/settings/storage/parts";
 import { ImagePreview } from "@/components/assistant-ui/elements/image-viewer";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ArrowRotateCw, ArrowUpRight, ChevronDown, ChevronUp, Document, Globe, ImageSquare, Mobile, Play, Terminal } from "@/components/icons";
+import { SettingsCard } from "@/components/ui/settings-card";
 import type { OrchestratorStepKind, Preview, PreviewKind, ProofKind } from "@/ipc/generated";
 import { openPdf, openSimulator, openUrl } from "@/ipc/client";
 import { formatTime } from "@/lib/format";
@@ -357,7 +358,7 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
   const Badge = kind?.Icon ?? (url ? Globe : logsOnly ? Terminal : ImageSquare);
 
   return (
-    <StorageCard
+    <SettingsCard inset split={false}
       data-slot="preview-card"
       data-kind={preview?.kind ?? (url ? "web" : undefined)}
       data-state={state ? (stopped ? "stopped" : "running") : undefined}
@@ -413,7 +414,7 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
           </div>
         </FoldBody>
       )}
-    </StorageCard>
+    </SettingsCard>
   );
 }
 

@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 
 import { ChevronRight, Plus } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { SettingsCard } from "@/components/ui/settings-card";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { colourOf, surface } from "@/fixtures/look";
 
@@ -27,9 +28,25 @@ function radiusOf(className: string): string {
   return radius;
 }
 
+/** How far the hairline under a card's first child starts in from the card's own edge. */
+function hairlineInset(slot: string) {
+  const card = one(`[data-probe="${slot}"]`);
+  const row = card?.firstElementChild;
+  if (!card || !row) return null;
+  const after = getComputedStyle(row, "::after");
+  if (after.content === "none") return "none";
+  return row.getBoundingClientRect().left + parseFloat(after.left) - card.getBoundingClientRect().left;
+}
+
 function read() {
   const button = probe;
   return {
+    cards: {
+      rows: hairlineInset("card-rows"),
+      inset: hairlineInset("card-inset"),
+      plain: hairlineInset("card-plain"),
+      surfaces: ["card-rows", "card-inset", "card-plain", "card-padded"].map((slot) => surface(one(`[data-probe="${slot}"]`))),
+    },
     buttons: {
       default: button("button-default"),
       soft: button("button-soft"),
@@ -57,6 +74,24 @@ function Fixture() {
   return (
     <TooltipProvider>
       <div className="bg-card flex flex-col gap-6 p-6">
+        <section data-group="cards" className="grid grid-cols-4 gap-4">
+          <SettingsCard data-probe="card-rows">
+            <div className="px-4 py-3">A row padding itself</div>
+            <div className="px-4 py-3">Another</div>
+          </SettingsCard>
+          <SettingsCard inset data-probe="card-inset">
+            <div className="py-3">A row in an inset card</div>
+            <div className="py-3">Another</div>
+          </SettingsCard>
+          <SettingsCard inset split={false} data-probe="card-plain">
+            <div className="py-3">Content drawing its own lines</div>
+            <div className="py-3">Another</div>
+          </SettingsCard>
+          <SettingsCard padded data-probe="card-padded">
+            <div>Usage</div>
+            <div>Legend</div>
+          </SettingsCard>
+        </section>
         <section data-group="buttons" className="flex items-center gap-2">
           <Button size="sm" data-probe="button-default">Add rule</Button>
           <Button variant="ghost" size="sm">Cancel</Button>

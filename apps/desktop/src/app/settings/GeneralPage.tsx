@@ -2,19 +2,12 @@ import { useCallback, useEffect, useId, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { LicensesDialog } from "@/app/settings/LicensesDialog";
-import {
-  SettingsCard,
-  SettingsPage,
-  SettingsRow,
-  SettingsSection,
-  SettingsSelect,
-  SettingsSwitch,
-  SwitchSetting,
-} from "@/app/settings/parts";
+import { SettingsPage, SettingsRow, SettingsSection, SettingsSelect, SettingsSwitch, SwitchSetting } from "@/app/settings/parts";
 import { SidebarClosedChoice } from "@/app/settings/SidebarClosedChoice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
+import { SettingsCard } from "@/components/ui/settings-card";
 import { useSidebar } from "@/components/ui/sidebar";
 import {
   type LoginItem,

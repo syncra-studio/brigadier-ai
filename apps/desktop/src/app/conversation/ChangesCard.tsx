@@ -10,7 +10,7 @@ import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
 import { mergeStats } from "@/app/conversation/ComposerCapsule";
 import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
+import { RoundBadge, RowText } from "@/app/settings/storage/parts";
 import {
   ArrowRotateCcw,
   ArrowRotateCw,
@@ -25,6 +25,7 @@ import {
   TriangleExclamationErrorWarning,
 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { SettingsCard } from "@/components/ui/settings-card";
 import type { DiffStat, FileReview, FileStat, HeldPath, MergeUndo, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { formatTime } from "@/lib/format";
@@ -453,7 +454,7 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   const foldable = files.length > 0 || !!problem || confirming || reverting;
 
   return (
-    <StorageCard data-slot="turn-diff" data-state={reverted ? "reverted" : merged ? "merged" : "branch"} data-open={open || undefined}>
+    <SettingsCard inset split={false} data-slot="turn-diff" data-state={reverted ? "reverted" : merged ? "merged" : "branch"} data-open={open || undefined}>
       <FoldHeader foldable={foldable} onToggle={() => setFold({ reverted, open: !open })} className="flex items-center gap-4 py-4">
         <RoundBadge>
           {reverted ? (
@@ -575,6 +576,6 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
           </div>
         )}
       </FoldBody>
-    </StorageCard>
+    </SettingsCard>
   );
 };

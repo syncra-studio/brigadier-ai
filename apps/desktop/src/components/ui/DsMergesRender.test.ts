@@ -6,6 +6,13 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("the merged design-system parts draw as one look each", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "ds-merges.html", "merges-result", 60000));
 
+  // One card surface; its hairlines sit 16 in, whether its rows or the card pad the content.
+  const { cards } = seen;
+  for (const look of cards.surfaces) assert.deepEqual(look, cards.surfaces[0]);
+  assert.equal(cards.rows, 17, "16 in, past the card's edge");
+  assert.equal(cards.inset, cards.rows);
+  assert.equal(cards.plain, "none");
+
   // Buttons with words are capsules; icon buttons keep the control corner.
   const { buttons } = seen;
   assert.equal(buttons.default.radius, buttons.radii.capsule);

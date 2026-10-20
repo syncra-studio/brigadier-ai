@@ -14,10 +14,11 @@ import {
   type Group,
   type Kept,
 } from "@/app/settings/storage/model";
-import { RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
+import { RoundBadge, RowText } from "@/app/settings/storage/parts";
 import { Check, ChevronDown, ChevronRight, ChevronUp, FolderOpen, Lock, Sparkles, Spinner } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { SettingsCard } from "@/components/ui/settings-card";
 import { revealPath } from "@/ipc/client";
 import type { CleanItem, CleanReport, StorageReport } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -59,7 +60,7 @@ export function FreeUpCard({
   const canGo = report ? selection(report, startTicked(report)).bytes : 0;
   const pickable = report?.items.some((item) => item.selectable) ?? false;
   return (
-    <StorageCard data-free-up="rest">
+    <SettingsCard inset split={false} data-free-up="rest">
       <div className="flex items-center gap-4 py-4">
         <RoundBadge>
           <Sparkles />
@@ -85,7 +86,7 @@ export function FreeUpCard({
           Review
         </Button>
       </div>
-    </StorageCard>
+    </SettingsCard>
   );
 }
 
@@ -107,7 +108,7 @@ function Review({
   const set = (next: Set<string>) => onState({ phase: "review", scanId: state.scanId, ticked: next });
   const cancel = () => onState({ phase: "rest" });
   return (
-    <StorageCard data-free-up="review">
+    <SettingsCard inset split={false} data-free-up="review">
       <div className="flex items-center gap-4 py-4">
         <RoundBadge>
           <Sparkles />
@@ -162,7 +163,7 @@ function Review({
           {picked.bytes > 0 ? `Free up ${size(picked.bytes)}` : `Tidy up ${count(picked.picked, "item", "items")}`}
         </Button>
       </div>
-    </StorageCard>
+    </SettingsCard>
   );
 }
 
@@ -307,7 +308,7 @@ function KeptRows({ kept, bytes }: { kept: Kept[]; bytes: number }) {
 function Removing({ state }: { state: Extract<FreeUp, { phase: "removing" }> }) {
   const share = state.total > 0 ? Math.min(1, state.done / state.total) : 0;
   return (
-    <StorageCard data-free-up="removing">
+    <SettingsCard inset split={false} data-free-up="removing">
       <div role="status" className="flex items-center gap-4 py-4">
         <RoundBadge>
           <Spinner className="animate-spin motion-reduce:animate-none" />
@@ -324,7 +325,7 @@ function Removing({ state }: { state: Extract<FreeUp, { phase: "removing" }> }) 
           </div>
         </div>
       </div>
-    </StorageCard>
+    </SettingsCard>
   );
 }
 
@@ -343,7 +344,7 @@ function Done({
   // What went to the Trash takes its room until the Trash is emptied: the line says it.
   const freed = cleaned.reclaimedBytes;
   return (
-    <StorageCard data-free-up="done">
+    <SettingsCard inset split={false} data-free-up="done">
       <div className="flex items-center gap-4 py-4">
         <RoundBadge tone="done">
           <Check />
@@ -381,6 +382,6 @@ function Done({
           )}
         </div>
       )}
-    </StorageCard>
+    </SettingsCard>
   );
 }
