@@ -18,7 +18,7 @@ import {
   type Part,
   type ProjectSort,
 } from "@/app/settings/storage/model";
-import { Dot, RoundBadge, ShareBar } from "@/app/settings/storage/parts";
+import { Dot, RoundBadge } from "@/app/settings/storage/parts";
 import {
   ChevronDown,
   ChevronRight,
@@ -34,10 +34,18 @@ import {
 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { SettingsCard } from "@/components/ui/settings-card";
+import { UsageBar } from "@/components/ui/usage-bar";
 import { revealPath } from "@/ipc/client";
 import type { ProjectUsage, StorageReport } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+/** Each part's share of everything Brigadier uses, for a project's 200-wide bar. */
+function shares(parts: readonly Part[], total: number) {
+  return parts
+    .filter((part) => part.bytes > 0)
+    .map((part) => ({ key: part.key, value: total > 0 ? (part.bytes / total) * 100 : 0, className: part.color }));
+}
 
 /** How freeing up the projects not in use goes. */
 export type UnusedFreeUp =
@@ -189,7 +197,7 @@ export function ProjectsCard({
               </span>
             )}
           </div>
-          <ShareBar parts={restParts} total={total} />
+          <UsageBar parts={shares(restParts, total)} size="md" className="w-50" />
           <Size bytes={sumBytes(restParts)} />
           <Button variant="link-blue" size="inline" onClick={() => setAll(true)}>
             Show all
@@ -350,7 +358,7 @@ function ExpandableRow({
           {title}
           {line && <span className="text-muted-foreground truncate text-xs">{line}</span>}
         </span>
-        <ShareBar parts={parts} total={total} />
+        <UsageBar parts={shares(parts, total)} size="md" className="w-50" />
         <Size bytes={sumBytes(parts)} />
         {open ? (
           <ChevronDown aria-hidden className="text-muted-foreground size-3.75 shrink-0" />

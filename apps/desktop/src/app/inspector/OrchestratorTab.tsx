@@ -19,6 +19,7 @@ import { RebirthLog } from "@/app/inspector/RebirthLog";
 import { ThreadMetricsPanel } from "@/app/inspector/ThreadMetricsPanel";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { UsageBar } from "@/components/ui/usage-bar";
 import type { RebirthThresholds } from "@/ipc/generated";
 import { formatBytes, formatClock } from "@/lib/format";
 import { tokenPx } from "@/lib/tokens";
@@ -223,21 +224,16 @@ function ContextMeter({
               }`}
         </span>
       </div>
-      <div
+      <UsageBar
         role="meter"
         aria-label="Orchestrator context used"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={share === null ? undefined : Math.round(share)}
-        className="bg-muted h-1.5 overflow-hidden rounded-full"
-      >
-        {share !== null && (
-          <div
-            className={cn("h-full", share >= 90 ? "bg-destructive" : "bg-primary")}
-            style={{ width: `${share}%` }}
-          />
-        )}
-      </div>
+        value={share}
+        fill={share !== null && share >= 90 ? "bg-destructive" : "bg-primary"}
+        size="md"
+      />
       <span className="text-muted-foreground tabular-nums">
         Brigadier injected about {formatTokens(injected)} tokens into this CLI (≈ 4 bytes per
         token)

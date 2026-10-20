@@ -1,12 +1,17 @@
 import { createContext, type FC, type ReactNode, useEffect, useState } from "react";
 
 import type { ContextUsage, ConversationStatus, QuotaWindow } from "@/ipc/generated";
+
 import { usageTone } from "@/lib/quota";
-import { cn } from "@/lib/utils";
+
 import { getConversationStatus } from "@/state/actions";
+
 import { useBoard } from "@/state/board";
+
 import { useApp } from "@/state/store";
+
 import { ComposerRailItem } from "@/components/assistant-ui/elements/composer-rail";
+import { UsageBar } from "@/components/ui/usage-bar";
 
 /** Whether the open conversation shows the `/status` card above its composer. */
 export const StatusCardContext = createContext<{ open: boolean; setOpen: (open: boolean) => void }>({
@@ -53,12 +58,12 @@ const Row: FC<{ label: string; children: ReactNode }> = ({ label, children }) =>
 /** A usage window's bar: the share left, filled; the share used, faint. */
 /** What is left of a window, coloured by how much is used (from 80% and from 90%). */
 const LimitBar: FC<{ left: number }> = ({ left }) => (
-  <span aria-hidden className="bg-foreground/15 flex h-2 w-28 shrink-0 overflow-hidden rounded-xs">
-    <span
-      className={cn("h-full", usageTone(100 - left, { normal: { fill: "bg-foreground" } }).fill)}
-      style={{ width: `${left}%` }}
-    />
-  </span>
+  <UsageBar
+    value={left}
+    fill={usageTone(100 - left, { normal: { fill: "bg-foreground" } }).fill}
+    size="md"
+    className="w-28"
+  />
 );
 
 /**

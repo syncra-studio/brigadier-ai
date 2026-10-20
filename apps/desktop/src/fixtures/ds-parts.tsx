@@ -10,6 +10,7 @@ import { Grid, SquareImage } from "@/components/icons";
 import { Segmented } from "@/components/ui/segmented";
 import { SettingsSearch } from "@/components/ui/settings-search";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { UsageBar } from "@/components/ui/usage-bar";
 import { colourOf, wait } from "@/fixtures/look";
 
 const one = (selector: string) => document.querySelector(selector);
@@ -86,8 +87,34 @@ async function escapes() {
   return { before, after: { pill: field("Search archived chats"), picker: field("Search projects") }, heard };
 }
 
+/** A bar by its probe: track height, corners and fill; each fill's width and corners. */
+function bar(slot: string) {
+  const track = one(`[data-probe="${slot}"]`);
+  if (!track) return null;
+  const css = getComputedStyle(track);
+  return {
+    height: track.getBoundingClientRect().height,
+    radius: css.borderTopLeftRadius,
+    background: css.backgroundColor,
+    hidden: track.getAttribute("aria-hidden"),
+    role: track.getAttribute("role"),
+    fills: Array.from(track.children).map((fill) => ({
+      width: fill.getBoundingClientRect().width,
+      radius: getComputedStyle(fill).borderTopLeftRadius,
+    })),
+  };
+}
+
 function read() {
   return {
+    bars: {
+      sm: bar("bar-sm"),
+      md: bar("bar-md"),
+      parts: bar("bar-parts"),
+      waiting: bar("bar-waiting"),
+      empty: bar("bar-empty"),
+      track: colourOf("bg-muted"),
+    },
     segmented: {
       words: segments("How it picks"),
       icons: segments("Image view"),
@@ -154,7 +181,11 @@ function Fixture() {
       result.textContent = JSON.stringify({
         ...seen,
         search,
-        radii: { capsule: radiusOf("rounded-capsule"), control: radiusOf("rounded-control") },
+        radii: {
+          capsule: radiusOf("rounded-capsule"),
+          control: radiusOf("rounded-control"),
+          square: radiusOf("rounded-none"),
+        },
       });
       document.body.append(result);
     });
@@ -184,6 +215,27 @@ function Fixture() {
           />
         </section>
         <Searches />
+        <section data-group="bars" className="flex w-50 flex-col gap-2">
+          <UsageBar data-probe="bar-sm" value={40} fill="bg-warning" className="w-25" />
+          <UsageBar
+            data-probe="bar-md"
+            role="meter"
+            aria-label="Context used"
+            aria-valuenow={60}
+            value={60}
+            size="md"
+          />
+          <UsageBar
+            data-probe="bar-parts"
+            size="md"
+            parts={[
+              { key: "a", value: 50, className: "bg-primary" },
+              { key: "b", value: 0.1, className: "bg-warning" },
+            ]}
+          />
+          <UsageBar data-probe="bar-waiting" role="progressbar" indeterminate size="md" />
+          <UsageBar data-probe="bar-empty" value={null} />
+        </section>
         <section data-group="picker" className="grid w-80 grid-cols-[auto_1fr] gap-2">
           <Picker label="Session" value="seven_day" options={WINDOWS} onChange={() => {}} />
           <Picker

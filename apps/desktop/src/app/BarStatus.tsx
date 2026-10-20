@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Segmented } from "@/components/ui/segmented";
 import { useSidebar } from "@/components/ui/sidebar";
 import { Switch } from "@/components/ui/switch";
+import { UsageBar } from "@/components/ui/usage-bar";
 import type { AccountView, ProviderKind, ProviderOverview, QuotaSnapshot, QuotaWindow } from "@/ipc/generated";
 import { maskEmailsIn } from "@/lib/email";
 import { formatCountdown } from "@/lib/format";
@@ -259,9 +260,7 @@ function Share({ percent, limitReached = false }: { percent: number; limitReache
   const look = levelTone(level, percent === 0 ? { text: "text-muted-foreground" } : {});
   return (
     <>
-      <span aria-hidden className="bg-muted rounded-capsule h-1 w-11 shrink-0 overflow-hidden">
-        <span className={cn("rounded-capsule block h-full", look.fill)} style={{ width: `${percent}%` }} />
-      </span>
+      <UsageBar value={percent} fill={look.fill} className="w-11" />
       <span
         data-slot="usage-value"
         data-level={level}

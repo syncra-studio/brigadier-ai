@@ -3,6 +3,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Reload } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { UsageBar } from "@/components/ui/usage-bar";
 import type { QuotaWindow } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
 import { usageTone, used, windowTitle } from "@/lib/quota";
@@ -93,9 +94,7 @@ export function UsageMeter({
           {percent}%
         </span>
       </span>
-      <span aria-hidden className="bg-muted rounded-capsule h-1 overflow-hidden">
-        <span className={cn("rounded-capsule block h-full", colors.fill)} style={{ width: `${percent}%` }} />
-      </span>
+      <UsageBar value={percent} fill={colors.fill} />
       {!compact && resets && (
         <span className="text-muted-foreground text-2xs">Resets in {resets}</span>
       )}

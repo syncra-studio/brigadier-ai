@@ -50,21 +50,3 @@ export function UsageBar({ parts, pending = false }: { parts: readonly Part[]; p
     </div>
   );
 }
-
-/** A project's share of everything Brigadier uses: its parts on a 200-wide track. */
-export function ShareBar({ parts, total }: { parts: readonly Part[]; total: number }) {
-  return (
-    <div aria-hidden className="bg-muted flex h-1.5 w-50 shrink-0 overflow-hidden rounded-full">
-      {parts
-        .filter((part) => part.bytes > 0)
-        .map((part) => (
-          <span
-            key={part.key}
-            data-part={part.key}
-            className={cn("h-full min-w-0.5 shrink-0", part.color)}
-            style={{ width: `${total > 0 ? (part.bytes / total) * 100 : 0}%` }}
-          />
-        ))}
-    </div>
-  );
-}

@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Globe } from "@/components/icons";
 import { SettingsCard } from "@/components/ui/settings-card";
+import { UsageBar } from "@/components/ui/usage-bar";
 import type { ImportFailure, ImportProgress, ImportSource } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
@@ -405,18 +406,16 @@ function ImportDialog({
 function ImportBar({ progress }: { progress: ImportProgress | null }) {
   const share = progress?.type === "cookies" && progress.total > 0 ? progress.done / progress.total : progress?.type === "history" ? 1 : null;
   return (
-    <div
+    <UsageBar
       role="progressbar"
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={share === null ? undefined : Math.round(share * 100)}
-      className="bg-foreground/8 h-1.5 overflow-hidden rounded-full"
-    >
-      <div
-        className={cn("bg-foreground/60 h-full rounded-full transition-[width] motion-reduce:transition-none", share === null && "w-1/3 animate-pulse")}
-        style={share === null ? undefined : { width: `${share * 100}%` }}
-      />
-    </div>
+      value={share === null ? null : share * 100}
+      indeterminate={share === null}
+      fill="bg-foreground/60"
+      size="md"
+    />
   );
 }
 

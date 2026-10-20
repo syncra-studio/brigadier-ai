@@ -6,6 +6,27 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("the merged small parts draw as one look each", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "ds-parts.html", "parts-result", 60000));
 
+  // One meter bar: a muted capsule track 4 or 6 high, a rounded fill to its share; stacked parts
+  // have square ends and a sliver still shows; waiting pulses a third; hidden unless it has a role.
+  const { bars, radii } = seen;
+  for (const look of [bars.sm, bars.md, bars.parts, bars.waiting, bars.empty]) {
+    assert.equal(look.background, bars.track);
+    assert.equal(look.radius, radii.capsule);
+  }
+  assert.deepEqual([bars.sm.height, bars.md.height], [4, 6]);
+  assert.deepEqual(bars.sm.fills, [{ width: 40, radius: radii.capsule }]);
+  assert.deepEqual([bars.sm.hidden, bars.md.hidden, bars.md.role], ["true", null, "meter"]);
+  assert.equal(bars.md.fills[0].width, 120);
+  assert.deepEqual(
+    bars.parts.fills.map((fill: { width: number; radius: string }) => [fill.width, fill.radius]),
+    [
+      [100, radii.square],
+      [2, radii.square],
+    ],
+  );
+  assert.ok(Math.abs(bars.waiting.fills[0].width - 200 / 3) < 0.5, "a third of the track");
+  assert.deepEqual(bars.empty.fills, []);
+
   // One segmented control: words or tipped icons, each a named radio; the chosen one filled, 24px high.
   const { segmented } = seen;
   assert.deepEqual(
@@ -21,7 +42,7 @@ test("the merged small parts draw as one look each", { timeout: 90000 }, async (
   // One search field. Settings' pill: a label box, a search input with a clear button, Esc empties
   // it and stops there. A picker's bordered field keeps Esc for the picker. With buttons after the
   // input the box is a plain div and the input keeps its own name.
-  const { search, radii } = seen;
+  const { search } = seen;
   assert.deepEqual(
     [search.before.pill.box, search.before.pill.type, search.before.pill.radius, search.before.pill.clear],
     ["label", "search", radii.capsule, true],

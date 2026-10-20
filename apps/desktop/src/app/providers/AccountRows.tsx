@@ -17,6 +17,7 @@ import {
 import { CheckMd, DotsHorizontal, Eye, EyeOff, Plus } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import { SettingsCard } from "@/components/ui/settings-card";
+import { UsageBar } from "@/components/ui/usage-bar";
 import type { AccountView, ProviderKind, QuotaWindow } from "@/ipc/generated";
 import { hasEmail, maskEmailsIn } from "@/lib/email";
 import { VENDOR_LABELS } from "@/lib/routing";
@@ -493,7 +494,7 @@ function AccountRow({
         {windows.length > 0 && (
           <span className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
             {windows.map((window) => (
-              <UsageBar key={window.id} window={window} now={now} />
+              <WindowUsage key={window.id} window={window} now={now} />
             ))}
           </span>
         )}
@@ -507,7 +508,7 @@ function AccountRow({
 }
 
 /** A usage window: its short name, a bar of how much is used, and the share. */
-function UsageBar({ window, now }: { window: QuotaWindow; now: number }) {
+function WindowUsage({ window, now }: { window: QuotaWindow; now: number }) {
   const percent = used(window);
   const usage = usageTone(percent, { normal: { text: "text-foreground/65" } });
   const resets = window.resetsAtMs !== null ? `, resets in ${formatCountdown(window.resetsAtMs, now)}` : "";
@@ -518,9 +519,7 @@ function UsageBar({ window, now }: { window: QuotaWindow; now: number }) {
       title={`${window.label}: ${percent}% used${resets}`}
     >
       <span className="text-foreground/65">{SHORT_WINDOW[window.label] ?? window.label}</span>
-      <span aria-hidden className="bg-foreground/10 h-1 w-16 overflow-hidden rounded-full">
-        <span className={`block h-full rounded-full ${usage.fill}`} style={{ width: `${percent}%` }} />
-      </span>
+      <UsageBar value={percent} fill={usage.fill} className="w-16" />
       <span className={usage.text}>{percent}%</span>
     </span>
   );
