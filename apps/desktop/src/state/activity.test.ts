@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import type { EventEnvelope, Plan, PlanState } from "@/ipc/generated";
 import { applyActivityEvents, fromSnapshot, rowActivity, useActivity } from "@/state/activity";
+import { sessionStatus } from "@/state/tabStates";
 
 const plan = (state: PlanState): EventEnvelope => ({
   stream: "conversation:c1",
@@ -95,4 +96,16 @@ test("a stopped request is named through reconnect and clears when another turn 
   assert.equal(useActivity.getState().byConversation.stopped?.stopped, true);
   applyActivityEvents([on("stopped", { type: "requestUpdated", request: { conversationId: "stopped", state: { type: "working" } } })]);
   assert.equal(useActivity.getState().byConversation.stopped?.stopped, false);
+});
+
+test("a thread that fails while its worker runs reads Needs you · failed, not Working (issue 363)", () => {
+  applyActivityEvents([
+    on("c5", { type: "runStateChanged", conversationId: "c5", state: "running" }),
+    on("c5", { type: "taskUpdated", task: { id: "t1", conversationId: "c5", state: "running", kind: "write", title: "Add a test" } }),
+    on("c5", { type: "runStateChanged", conversationId: "c5", state: "failed" }),
+  ]);
+  const row = rowActivity(useActivity.getState().byConversation.c5);
+  assert.equal(row.running, true);
+  assert.equal(row.awaiting, "failed");
+  assert.deepEqual(sessionStatus(row, null, undefined), { state: "failed", reason: null });
 });
