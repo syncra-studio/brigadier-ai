@@ -10,7 +10,7 @@ import { FoldBody, FoldHeader } from "@/app/conversation/cardFold";
 import { mergeStats } from "@/app/conversation/ComposerCapsule";
 import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { RoundBadge, RowText } from "@/app/settings/storage/parts";
+import { RoundBadge } from "@/app/settings/storage/parts";
 import {
   ArrowRotateCcw,
   ArrowRotateCw,
@@ -25,7 +25,7 @@ import {
   TriangleExclamationErrorWarning,
 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { SettingsCard } from "@/components/ui/settings-card";
+import { RowText, SettingsCard } from "@/components/ui/settings-card";
 import type { DiffStat, FileReview, FileStat, HeldPath, MergeUndo, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { formatTime } from "@/lib/format";

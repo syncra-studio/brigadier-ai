@@ -10,17 +10,6 @@ import { cn } from "@/lib/utils";
  * project's share bar.
  */
 
-/** A row's title and the line under it. */
-export function RowText({ title, line, className }: { title: ReactNode; line?: ReactNode; className?: string }) {
-  return (
-    <div className={cn("flex min-w-0 flex-1 flex-col gap-1", className)}>
-      <span className="text-label font-medium">{title}</span>
-      {line && <span className="text-foreground/65 text-xs">{line}</span>}
-    </div>
-
-  );
-}
-
 /** The round badge at a summary's start. */
 export function RoundBadge({ tone = "plain", children }: { tone?: "plain" | "done"; children: ReactNode }) {
   return (

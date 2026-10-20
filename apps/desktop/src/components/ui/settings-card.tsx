@@ -34,4 +34,29 @@ function SettingsCard({
   );
 }
 
-export { SettingsCard, settingsRows };
+/**
+ * A row's words: its title over a grey line. `quiet` drops the title's weight (a sub-row's);
+ * `truncate` keeps each to one line, cut with "…".
+ */
+function RowText({
+  title,
+  line,
+  quiet = false,
+  truncate = false,
+  className,
+}: {
+  title: React.ReactNode;
+  line?: React.ReactNode;
+  quiet?: boolean;
+  truncate?: boolean;
+  className?: string;
+}) {
+  return (
+    <span className={cn("flex min-w-0 flex-1 flex-col gap-1", className)}>
+      <span className={cn("text-label", !quiet && "font-medium", truncate && "truncate")}>{title}</span>
+      {line && <span className={cn("text-foreground/65 text-xs", truncate && "truncate")}>{line}</span>}
+    </span>
+  );
+}
+
+export { RowText, SettingsCard, settingsRows };

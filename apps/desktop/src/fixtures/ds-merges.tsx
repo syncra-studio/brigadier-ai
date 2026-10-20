@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 import { SettingsSection } from "@/app/settings/parts";
 import { ChevronRight, Plus } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { SettingsCard } from "@/components/ui/settings-card";
+import { RowText, SettingsCard } from "@/components/ui/settings-card";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { colourOf, surface } from "@/fixtures/look";
 
@@ -43,7 +43,12 @@ function read() {
   const button = probe;
   const section = one('[data-probe="section"]')?.closest("section");
   const aside = one('[data-probe="section-aside"]')?.parentElement;
+  const words = (slot: string) => {
+    const [title, line] = Array.from(one(`[data-probe="${slot}"]`)?.firstElementChild?.children ?? []).map((part) => getComputedStyle(part));
+    return { weight: title?.fontWeight, overflow: title?.textOverflow, line: line?.color };
+  };
   return {
+    rowText: { plain: words("row-text"), quiet: words("row-text-quiet"), grey: colourOf("text-foreground/65", "color") },
     section: {
       setting: section?.getAttribute("data-setting"),
       aside: aside && getComputedStyle(aside).color,
@@ -91,6 +96,14 @@ function Fixture() {
         >
           <span data-probe="section">placeholder</span>
         </SettingsSection>
+        <section data-group="row-text" className="flex w-80 gap-4">
+          <div data-probe="row-text" className="flex min-w-0 flex-1">
+            <RowText truncate title="Explore the code, every file of it" line="Automatic picks the strongest model" />
+          </div>
+          <div data-probe="row-text-quiet" className="flex min-w-0 flex-1">
+            <RowText quiet title="Who picks" line="Brigadier" />
+          </div>
+        </section>
         <section data-group="cards" className="grid grid-cols-4 gap-4">
           <SettingsCard data-probe="card-rows">
             <div className="px-4 py-3">A row padding itself</div>

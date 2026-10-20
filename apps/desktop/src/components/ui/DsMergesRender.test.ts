@@ -6,6 +6,13 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("the merged design-system parts draw as one look each", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "ds-merges.html", "merges-result", 60000));
 
+  // A row's words: a medium title over a grey line; quiet drops the weight; truncate cuts with "…".
+  const { rowText } = seen;
+  assert.equal(rowText.plain.weight, "500");
+  assert.equal(rowText.quiet.weight, "400");
+  assert.equal(rowText.plain.overflow, "ellipsis");
+  assert.equal(rowText.plain.line, rowText.grey);
+
   // A section heading carries its search name and a grey note beside its actions.
   assert.equal(seen.section.setting, "Disk use");
   assert.equal(seen.section.heading, "Disk use by project");

@@ -1,12 +1,12 @@
 import type { ReactNode } from "react";
 
 import { refreshRunning } from "@/app/routing/rankings";
-import { Badge, HAIRLINE_BOTTOM, HAIRLINE_TOP, OpenChevron, PillSelect, RowText, StepNumber } from "@/app/routing/parts";
+import { Badge, HAIRLINE_BOTTOM, HAIRLINE_TOP, OpenChevron, PillSelect, StepNumber } from "@/app/routing/parts";
 import { faded, reviewers, reviewsWords, ROUTED_KINDS, strengthFor, tierFor } from "@/app/routing/words";
 import { SettingsSection } from "@/app/settings/parts";
 import { ArrowRotateCw, ListOrderedIcon, ProviderGlyph, SpeedometerLatencySpeed } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { SettingsCard } from "@/components/ui/settings-card";
+import { RowText, SettingsCard } from "@/components/ui/settings-card";
 import type { RoutePreview, TaskCategory } from "@/ipc/generated";
 import { PLAIN_KIND_NAMES, TIER_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";
@@ -121,7 +121,7 @@ export function More({
         >
           <div data-slot="model-strength" className="flex flex-col ps-7.5">
             <div className="border-divider flex items-center gap-6 border-y py-3.5">
-              <RowText quiet title="Kind of work" description="Which work to rank the models for" />
+              <RowText truncate quiet title="Kind of work" line="Which work to rank the models for" />
               <PillSelect
                 label="The kind of work the models are ranked for"
                 value={category}
@@ -255,7 +255,7 @@ function MoreRowHead({
         className="flex w-full items-center gap-3.5 py-3.5 text-start [&>svg:first-child]:text-foreground/65 [&>svg:first-child]:size-4 [&>svg:first-child]:shrink-0"
       >
         {icon}
-        <RowText title={row.label} description={row.description} />
+        <RowText truncate title={row.label} line={row.description} />
         {summary && !open && <span className="text-xs text-muted-foreground shrink-0">{summary}</span>}
         <OpenChevron open={open} />
       </button>

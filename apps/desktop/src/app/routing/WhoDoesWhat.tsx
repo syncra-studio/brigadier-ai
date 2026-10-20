@@ -1,7 +1,7 @@
 import { type ComponentType, type SVGProps, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { Badge, HAIRLINE_TOP, OpenChevron, PillChoice, PillTrigger, RowText } from "@/app/routing/parts";
+import { Badge, HAIRLINE_TOP, OpenChevron, PillChoice, PillTrigger } from "@/app/routing/parts";
 import { TargetItems } from "@/app/routing/pickers";
 import {
   decides,
@@ -46,7 +46,7 @@ import {
   PullRequestOpen,
   Telescope,
 } from "@/components/icons";
-import { SettingsCard } from "@/components/ui/settings-card";
+import { RowText, SettingsCard } from "@/components/ui/settings-card";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { OverrideTarget, RankedEntry, Ranking, RoutePreview, TaskCategory } from "@/ipc/generated";
 import { formatCountdown } from "@/lib/format";
@@ -159,7 +159,7 @@ function KindRow({
     <div data-slot="routing-kind" data-open={open || undefined} className="flex flex-col">
       <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full items-center gap-3.5 py-3.5 text-start">
         <Icon aria-hidden className="text-foreground/65 size-4 shrink-0" />
-        <RowText title={PLAIN_KIND_NAMES[category]} description={line} />
+        <RowText truncate title={PLAIN_KIND_NAMES[category]} line={line} />
         <NowPick category={category} route={route} groups={groups} now={now} />
         <OpenChevron open={open} />
       </button>
@@ -265,9 +265,10 @@ function WhoPicks({
     <div data-slot="who-picks" className="flex flex-col ps-7.5 pb-1">
       <div className={cn(HAIRLINE_TOP, "flex items-center gap-6 py-3.5")}>
         <RowText
+          truncate
           quiet
           title="Who picks"
-          description={ordering ? "Brigadier, or the order you set" : "The strongest model that can run right now"}
+          line={ordering ? "Brigadier, or the order you set" : "The strongest model that can run right now"}
         />
         <PillChoice
           label={`How ${name} picks a model`}

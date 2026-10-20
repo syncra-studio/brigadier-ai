@@ -23,24 +23,6 @@ import { cn } from "@/lib/utils";
 export const HAIRLINE_TOP = "before:bg-divider relative before:absolute before:inset-x-0 before:top-0 before:h-px";
 export const HAIRLINE_BOTTOM = "after:bg-divider relative after:absolute after:inset-x-0 after:bottom-0 after:h-px";
 
-/** A row's title and line under it. `quiet`: a sub-row's title, not bold. */
-export function RowText({
-  title,
-  description,
-  quiet = false,
-}: {
-  title: ReactNode;
-  description?: ReactNode;
-  quiet?: boolean;
-}) {
-  return (
-    <span className="flex min-w-0 flex-1 flex-col gap-1">
-      <span className={cn("text-label truncate", !quiet && "font-medium")}>{title}</span>
-      {description && <span className="text-foreground/65 truncate text-xs">{description}</span>}
-    </span>
-  );
-}
-
 /** A row that opens in place: right when closed, up when open. */
 export function OpenChevron({ open }: { open: boolean }) {
   const Icon = open ? ChevronUp : ChevronRight;
