@@ -204,6 +204,9 @@ if (stress && !query.has("manual")) {
     find('[data-slot="worker-header"] button')!.click();
     await ready('[role="tablist"][aria-label="Right panel"]');
     await wait(300);
+    // The panel's opening slide is over: on a loaded machine the page's timers run well ahead of
+    // its frames, and a column still sliding in is narrower than its contents.
+    for (let i = 0; i < 100 && sidebar.getAnimations({ subtree: true }).some((animation) => animation instanceof CSSTransition); i++) await wait(50);
     const listButton = button("Close right panel")!;
     const listRect = sidebar.getBoundingClientRect();
     const listCloseRect = listButton.getBoundingClientRect();
