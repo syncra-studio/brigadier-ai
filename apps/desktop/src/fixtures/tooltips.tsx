@@ -38,10 +38,11 @@ function Fixture() {
       await wait(100);
       await pointer(second.x + 2, tip.y + tip.height / 2);
       await wait(100);
-      // Down onto the second control, near the first, and a little further in.
-      await pointer(second.x + 1, second.y + 1);
+      // Down onto the second control, near the first, and a little further in: at mid-height,
+      // since a capsule's box corners are outside it and the pointer there is on nothing.
+      await pointer(second.x + 1, second.y + second.height / 2);
       await wait(100);
-      await pointer(second.x + 2, second.y + 2);
+      await pointer(second.x + 2, second.y + second.height / 2);
       await wait(300);
       setResult(JSON.stringify({ onFirst, onSecond: showing() }));
     })();
