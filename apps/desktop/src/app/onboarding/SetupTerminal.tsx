@@ -1,9 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { Spinner } from "@/components/glyphs/spinner";
+import { ExclamationMarkCircle, Spinner } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { ExclamationMarkCircle } from "@/components/icons";
 import type { ProviderKind, ProviderOverview, TerminalInfo } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 import { loadProviders, refreshProviders } from "@/state/actions";

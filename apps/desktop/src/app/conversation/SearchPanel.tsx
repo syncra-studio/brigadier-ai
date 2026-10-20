@@ -5,12 +5,19 @@ import {
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import {
-  CollapseAllGlyph, MatchCaseGlyph, MoreGlyph, RegexGlyph, ReplaceAllGlyph, WholeWordGlyph,
-} from "@/components/glyphs/codicons";
-import { FileIcon } from "@/components/glyphs/fileIcons";
+  ChevronDown,
+  ChevronRight,
+  CollapseAllGlyph,
+  FileIcon,
+  MatchCaseGlyph,
+  MoreGlyph,
+  RegexGlyph,
+  ReplaceAllGlyph,
+  WholeWordGlyph,
+  X,
+} from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ChevronDown, ChevronRight, X } from "@/components/icons";
 import type { ReplaceOutcome, ReplaceSkip, SearchFile, SearchLine, SearchQuery } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { useApp } from "@/state/store";

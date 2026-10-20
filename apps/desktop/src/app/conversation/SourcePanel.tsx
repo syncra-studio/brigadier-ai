@@ -3,9 +3,23 @@ import { type FC, type ReactNode, type RefObject, useCallback, useEffect, useMem
 import { BranchNameBox, BranchPicker } from "@/app/conversation/BranchPicker";
 import { conflictCount, parseConflicts } from "@/app/conversation/conflicts";
 import { LETTERS } from "@/app/conversation/sourceStatus";
-import { FileIcon } from "@/components/glyphs/fileIcons";
+import {
+  ArrowUp,
+  Branch,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  DotsHorizontal,
+  FileDocument,
+  FileIcon,
+  Minus,
+  Plus,
+  Reload,
+  Sparkles,
+  Spinner,
+  Undo,
+} from "@/components/icons";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Spinner } from "@/components/glyphs/spinner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,20 +39,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  ArrowUp,
-  Branch,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  DotsHorizontal,
-  FileDocument,
-  Minus,
-  Plus,
-  Reload,
-  Sparkles,
-  Undo,
-} from "@/components/icons";
 import { request } from "@/ipc/client";
 import { emitWorkspaceChanged, keepSource, onWorkspaceChanged, readSource, useCachedEntry, useCheckoutKey, workspaceKey, type WorkspaceTarget } from "@/state/workspaceCache";
 import type { CommitOutcome, SourceAction, SourceBranch, SourceChange, SourceFile, SourceGitRun, SourceScope, SourceState } from "@/ipc/generated";

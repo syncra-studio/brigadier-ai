@@ -1,7 +1,7 @@
-import type { ComponentProps, ReactNode, SVGProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 
 import { selectTrigger, SettingsButton, settingsCard, SettingsSection } from "@/app/settings/parts";
-import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
+import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, ProviderGlyph, Upgrade } from "@/components/icons";
 import { Badge as ChipBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,7 +11,6 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Check, ChevronDown, ChevronRight, ChevronUp, MinusCircle, Upgrade } from "@/components/icons";
 import { Segmented } from "@/components/ui/segmented";
 import type { ProviderKind } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -95,51 +94,6 @@ export function BanIcon({ className }: { className?: string }) {
 /** "Prefer" in a rule: an arrow up, in blue. */
 export function PreferIcon({ className }: { className?: string }) {
   return <Upgrade aria-hidden className={cn("text-link size-icon-sm shrink-0", className)} />;
-}
-
-/** The handle a row is dragged by: two columns of three dots. */
-/** A stroked 24px line icon, for the design's glyphs the app's icon set lacks. */
-function LineIcon({ paths, className, ...rest }: SVGProps<SVGSVGElement> & { paths: string[] }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={cn("stroke-2", className)}
-      {...rest}
-    >
-      {paths.map((path) => (
-        <path key={path} d={path} />
-      ))}
-    </svg>
-  );
-}
-
-/** A commit on a line: Write commit messages. */
-export function CommitIcon(props: SVGProps<SVGSVGElement>) {
-  return <LineIcon paths={["M15 12a3 3 0 1 1-6 0a3 3 0 1 1 6 0", "M3 12h6", "M15 12h6"]} {...props} />;
-}
-
-/** A numbered list: How a model is picked. */
-export function ListOrderedIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <LineIcon paths={["M10 6h11", "M10 12h11", "M10 18h11", "M4 6h1v4", "M4 10h2", "M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"]} {...props} />
-  );
-}
-
-export function GripIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden className={cn("size-3.5 shrink-0", className)}>
-      {[5, 12, 19].map((y) => (
-        <g key={y}>
-          <circle cx="9" cy={y} r="1.6" />
-          <circle cx="15" cy={y} r="1.6" />
-        </g>
-      ))}
-    </svg>
-  );
 }
 
 /** A model's agent mark, Codex's in the page's light grey. */

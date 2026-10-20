@@ -6,14 +6,13 @@ import { useShortcuts } from "@/app/shortcuts";
 import { preloadSettings } from "@/app/settings/lazy";
 import { FootButton, footMenuPlacement } from "@/app/sidebar/nav";
 import { UpdatesRow } from "@/app/UpdatesRow";
-import { HelpIcon } from "@/components/glyphs/help-icon";
+import { Comment, HelpIcon, Keyboard, Settings } from "@/components/icons";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Comment, Keyboard, Settings } from "@/components/icons";
 import { useSidebar } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import { openSettings, toggleSettings } from "@/state/actions";

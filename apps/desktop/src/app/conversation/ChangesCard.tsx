@@ -11,8 +11,6 @@ import { mergeStats } from "@/app/conversation/ComposerCapsule";
 import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { LinkButton, Pill, PrimaryPill, QuietPill, RoundBadge, RowText, StorageCard } from "@/app/settings/storage/parts";
-import { Spinner } from "@/components/glyphs/spinner";
-import { Button } from "@/components/ui/button";
 import {
   ArrowRotateCcw,
   ArrowRotateCw,
@@ -22,9 +20,11 @@ import {
   ChevronUp,
   FileCode,
   PullRequestMerged,
-  TriangleExclamationErrorWarning,
+  Spinner,
   Trash,
+  TriangleExclamationErrorWarning,
 } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import type { DiffStat, FileReview, FileStat, HeldPath, MergeUndo, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";
 import { formatTime } from "@/lib/format";

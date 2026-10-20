@@ -2,8 +2,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { field } from "@/components/assistant-ui/elements/surfaces";
-import { FeedbackGlyph } from "@/components/glyphs/feedback-glyph";
-import { ArrowUpRight, Check } from "@/components/icons";
+import { ArrowUpRight, Check, FeedbackGlyph } from "@/components/icons";
 import { detailsLine, type FeedbackKind } from "@/lib/feedbackUrl";
 import { cn } from "@/lib/utils";
 import { answerFeedbackOffer } from "@/state/actions";

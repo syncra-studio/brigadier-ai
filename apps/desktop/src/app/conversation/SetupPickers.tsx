@@ -7,7 +7,19 @@ import {
   type ModelGroup,
 } from "@/components/assistant-ui/elements/model-selector";
 import { composerPill } from "@/components/assistant-ui/elements/surfaces";
-import { ShieldExclamation, ShieldTerminal } from "@/components/glyphs/permission-glyphs";
+import {
+  Check,
+  Clock,
+  Dock,
+  Folder,
+  Globe,
+  HandRaised,
+  Settings as SettingsIcon,
+  ShieldExclamation,
+  ShieldTerminal,
+  Shuffle,
+  Warning,
+} from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,17 +36,6 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Check,
-  Clock,
-  Dock,
-  Folder,
-  Globe,
-  HandRaised,
-  Settings as SettingsIcon,
-  Shuffle,
-  Warning,
-} from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import type {

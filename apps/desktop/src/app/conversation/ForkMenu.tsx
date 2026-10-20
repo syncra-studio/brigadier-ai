@@ -1,7 +1,7 @@
 import type { FC } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { Spinner } from "@/components/glyphs/spinner";
+import { BranchAlt, Spinner } from "@/components/icons";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import {
   DropdownMenu,
@@ -10,7 +10,6 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { BranchAlt } from "@/components/icons";
 import type { ConversationKind, ForkPlace } from "@/ipc/generated";
 import { forkConversation } from "@/state/actions";
 

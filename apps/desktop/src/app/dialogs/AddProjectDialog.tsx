@@ -13,19 +13,10 @@ import {
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { SettingsSearch } from "@/app/settings/parts";
-import { Spinner } from "@/components/glyphs/spinner";
+import { ArrowLeft, Check, Folder, FolderOpen, Link, Plus, Spinner, X } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import {
-  ArrowLeft,
-  Check,
-  Folder,
-  FolderOpen,
-  Link,
-  Plus,
-  X,
-} from "@/components/icons";
 import { useNow } from "@/hooks/use-now";
 import { pickFolder } from "@/ipc/client";
 import type { FolderCheck, RepoSuggestion } from "@/ipc/generated";

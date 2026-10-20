@@ -28,14 +28,6 @@ import {
   StorageCard,
 } from "@/app/settings/storage/parts";
 import { selectTrigger } from "@/app/settings/parts";
-import { Spinner } from "@/components/glyphs/spinner";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Check,
   ChevronDown,
@@ -47,8 +39,16 @@ import {
   History,
   Search,
   Sparkles,
+  Spinner,
   Stack,
 } from "@/components/icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { revealPath } from "@/ipc/client";
 import type { ProjectUsage, StorageReport } from "@/ipc/generated";
 import { shortPath } from "@/lib/format";

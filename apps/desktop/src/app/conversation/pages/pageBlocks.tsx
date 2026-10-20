@@ -17,6 +17,8 @@ import {
 } from "lexical";
 import type { ReactNode } from "react";
 
+import { BLOCK_ICONS } from "@/components/icons";
+
 /** Every kind of block a page offers, as the Insert menu, `/` and the Text picker list them. */
 export type BlockKind = "paragraph" | "h1" | "h2" | "h3" | "bullet" | "number" | "check" | "quote" | "code" | "table" | "divider";
 
@@ -30,23 +32,18 @@ export type Block = {
   words: string;
 };
 
-const svg = (children: ReactNode) => (
-  <svg aria-hidden viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" className="page-block-icon size-icon-sm shrink-0">{children}</svg>
-);
-const letters = (text: string) => svg(<text x="8" y="11.5" textAnchor="middle" fill="currentColor" stroke="none" fontSize="8.5" fontWeight="600">{text}</text>);
-
 export const BLOCKS: Block[] = [
-  { kind: "paragraph", label: "Text", markdown: null, words: "paragraph plain", icon: letters("Aa") },
-  { kind: "h1", label: "Heading 1", markdown: "#", words: "title big", icon: letters("H1") },
-  { kind: "h2", label: "Heading 2", markdown: "##", words: "subtitle", icon: letters("H2") },
-  { kind: "h3", label: "Heading 3", markdown: "###", words: "small", icon: letters("H3") },
-  { kind: "bullet", label: "Bulleted list", markdown: "-", words: "unordered bullets", icon: svg(<><circle cx="3" cy="4.5" r=".9" fill="currentColor" /><circle cx="3" cy="11.5" r=".9" fill="currentColor" /><path d="M6.5 4.5h7M6.5 11.5h7" /></>) },
-  { kind: "number", label: "Numbered list", markdown: "1.", words: "ordered numbers", icon: svg(<><path d="M2.5 3.2l1-.7v4M2.3 13.5h2.2l-2.2-2.4c.6-1 2.2-.8 2.2.3" /><path d="M7 4.5h6.5M7 11.5h6.5" /></>) },
-  { kind: "check", label: "Checklist", markdown: "[]", words: "todo tasks checkbox", icon: svg(<><path d="M4.5 2.5h6A2.5 2.5 0 0 1 13 5v6a2.5 2.5 0 0 1-2.5 2.5h-6A2.5 2.5 0 0 1 2 11V5a2.5 2.5 0 0 1 2.5-2.5z" /><path d="M5 8l2 2 3.5-4" /></>) },
-  { kind: "quote", label: "Quote", markdown: ">", words: "blockquote", icon: svg(<><path d="M3 3.5v9" /><path d="M6.5 5h7M6.5 8h7M6.5 11h4.5" /></>) },
-  { kind: "code", label: "Code", markdown: "```", words: "snippet monospace", icon: svg(<path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" />) },
-  { kind: "table", label: "Table", markdown: null, words: "grid rows columns", icon: svg(<><path d="M4 2.5h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z" /><path d="M2 6.5h12M6.5 6.5v7" /></>) },
-  { kind: "divider", label: "Divider", markdown: "---", words: "rule separator line hr", icon: svg(<path d="M2 8h12" />) },
+  { kind: "paragraph", label: "Text", markdown: null, words: "paragraph plain", icon: BLOCK_ICONS.paragraph },
+  { kind: "h1", label: "Heading 1", markdown: "#", words: "title big", icon: BLOCK_ICONS.h1 },
+  { kind: "h2", label: "Heading 2", markdown: "##", words: "subtitle", icon: BLOCK_ICONS.h2 },
+  { kind: "h3", label: "Heading 3", markdown: "###", words: "small", icon: BLOCK_ICONS.h3 },
+  { kind: "bullet", label: "Bulleted list", markdown: "-", words: "unordered bullets", icon: BLOCK_ICONS.bullet },
+  { kind: "number", label: "Numbered list", markdown: "1.", words: "ordered numbers", icon: BLOCK_ICONS.number },
+  { kind: "check", label: "Checklist", markdown: "[]", words: "todo tasks checkbox", icon: BLOCK_ICONS.check },
+  { kind: "quote", label: "Quote", markdown: ">", words: "blockquote", icon: BLOCK_ICONS.quote },
+  { kind: "code", label: "Code", markdown: "```", words: "snippet monospace", icon: BLOCK_ICONS.code },
+  { kind: "table", label: "Table", markdown: null, words: "grid rows columns", icon: BLOCK_ICONS.table },
+  { kind: "divider", label: "Divider", markdown: "---", words: "rule separator line hr", icon: BLOCK_ICONS.divider },
 ];
 
 /** The kinds the Text picker turns a block into; tables and dividers are inserted, not converted. */

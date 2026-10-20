@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 
 import { KINDS, NODE_KINDS } from "@/app/inspector/brain/kinds";
-import { Spinner } from "@/components/glyphs/spinner";
+import { Spinner } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/use-now";

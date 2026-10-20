@@ -38,7 +38,7 @@ import { interruptedByQuit, newestFailedError, withoutTurnError } from "@/app/co
 import { ProjectCombobox } from "@/app/conversation/RailPickers";
 import { foldedEntries } from "@/app/conversation/railHistory";
 import { useSidePanel } from "@/app/conversation/SidePanel";
-import { Info, Unarchive, Warning, X } from "@/components/icons";
+import { BrigadierGlyph, Info, Spinner, Unarchive, Warning, X } from "@/components/icons";
 import { queuedImageRefs, reconcileImages } from "@/lib/inlineImages";
 import { BlobAttachmentAdapter } from "@/app/conversation/attachments";
 import { sendLane } from "@/app/conversation/composerKeys";
@@ -84,8 +84,6 @@ import {
 import { LinkConversationContext, OpenFileContext } from "@/components/assistant-ui/file-links";
 import { ThreadHistoryContext, type RailEntry, type ThreadHistory } from "@/components/assistant-ui/message-rail";
 import { Thread, type ThreadComponents } from "@/components/assistant-ui/thread";
-import { Spinner } from "@/components/glyphs/spinner";
-import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
 import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/use-now";
 import type {

@@ -18,26 +18,10 @@ import {
   StripButton,
   besideStrip,
 } from "@/app/sidebar/nav";
-import { BrigadierGlyph } from "@/components/glyphs/brand-glyph";
-import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
-import { Button } from "@/components/ui/button";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Archive,
   ArrowLeft,
+  BrigadierGlyph,
   Chats,
   ComposeEditSquare,
   DotsHorizontal,
@@ -55,6 +39,22 @@ import {
   Unpin,
   X,
 } from "@/components/icons";
+import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
+import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSidebar } from "@/components/ui/sidebar";

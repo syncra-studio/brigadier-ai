@@ -7,14 +7,6 @@ import { showPage } from "./browserLayer";
 import { type BrowserKey, browserKey, stepZoom, ZOOM_LEAST, ZOOM_MOST, zoomLabel } from "./browserKeys";
 import { DownloadsButton, PermissionPrompt } from "./BrowserToolbarPopovers";
 
-import { Spinner } from "@/components/glyphs/spinner";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   ArrowLeft,
   ArrowRight,
@@ -30,9 +22,17 @@ import {
   Plus,
   Reload,
   Search,
+  Spinner,
   Warning,
   X,
 } from "@/components/icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { browserFocus, browserGo, browserPlace, browserPrint, browserSnapshot, openUrl } from "@/ipc/client";

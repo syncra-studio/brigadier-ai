@@ -24,16 +24,7 @@ import {
   StorageCard,
   TickBox,
 } from "@/app/settings/storage/parts";
-import { Spinner } from "@/components/glyphs/spinner";
-import {
-  Check,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  FolderOpen,
-  Lock,
-  Sparkles,
-} from "@/components/icons";
+import { Check, ChevronDown, ChevronRight, ChevronUp, FolderOpen, Lock, Sparkles, Spinner } from "@/components/icons";
 import { revealPath } from "@/ipc/client";
 import type { CleanItem, CleanReport, StorageReport } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

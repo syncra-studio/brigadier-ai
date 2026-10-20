@@ -1,8 +1,7 @@
 import { type ComponentProps, type ReactNode, useId, useState } from "react";
 
 import { disclosureRow, paper } from "@/components/assistant-ui/elements/surfaces";
-import { Spinner } from "@/components/glyphs/spinner";
-import { Check, ChevronRight, Minus, StopCircle, X } from "@/components/icons";
+import { Check, ChevronRight, Minus, PlanPartial, Spinner, StopCircle, X } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 export type AgentPlanStepStatus = "pending" | "active" | "done" | "partial" | "failed" | "skipped" | "stopped";
@@ -182,10 +181,7 @@ export function StepMark({ status, className }: { status: AgentPlanStepStatus; c
       ) : status === "skipped" ? (
         <Minus className="text-muted-foreground size-icon-sm" />
       ) : status === "partial" ? (
-        <svg aria-hidden viewBox="0 0 16 16" className="text-muted-foreground size-icon-sm">
-          <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" />
-          <path d="M8 2.5a5.5 5.5 0 0 0 0 11z" fill="currentColor" />
-        </svg>
+        <PlanPartial aria-hidden className="text-muted-foreground size-icon-sm" />
       ) : (
         <span aria-hidden className="border-foreground/35 size-icon-xs rounded-full border" />
       )}

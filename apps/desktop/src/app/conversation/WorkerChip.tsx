@@ -1,7 +1,7 @@
 import { createContext, memo, useContext, useState } from "react";
 
 import { namedTasks, plainLine, workerName } from "@/app/conversation/rowWords";
-import { IdGlyph } from "@/components/glyphs/worker-glyphs";
+import { IdGlyph } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Task, TaskState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";

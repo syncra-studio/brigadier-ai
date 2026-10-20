@@ -15,7 +15,21 @@ import { useCheckoutRoot } from "@/components/assistant-ui/file-links";
 import { TitlebarButton } from "@/components/titlebar-button";
 import { SidebarActivityMark, SidebarError, statusWords } from "@/app/SessionStatus";
 import { UNTITLED } from "@/app/TopBar";
-import { Archive, Chat, ChatCompose, Dock, FileDocument, Globe, Lightbulb, Plus, Document, ShieldCheck, Terminal, X } from "@/components/icons";
+import {
+  Archive,
+  Chat,
+  ChatCompose,
+  DiffGlyph,
+  Dock,
+  Document,
+  FileDocument,
+  Globe,
+  Lightbulb,
+  Plus,
+  ShieldCheck,
+  Terminal,
+  X,
+} from "@/components/icons";
 import { sessionTabKey } from "@/state/sessionTabKeys";
 import { shortcutLabel } from "@/app/conversation/SidePanel";
 import { takePaneClose } from "@/state/closedPanes";
@@ -23,7 +37,6 @@ import { undoTabClose } from "@/state/terminalPlaces";
 import { ChatActions } from "@/app/conversation/ChatActions";
 import { OutputTab } from "@/app/conversation/OutputTab";
 import { MockupTabIcon, MockupTabStatus, useMockupTab } from "@/app/conversation/MockupTabIcon";
-import { DiffGlyph } from "@/components/assistant-ui/elements/diff-glyph";
 import { FileTypeIcon } from "@/components/assistant-ui/elements/file-type-icon";
 import { Badge } from "@/components/ui/badge";
 import {

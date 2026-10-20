@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 
 import { refreshRunning } from "@/app/routing/rankings";
-import { Badge, Card, Glyph, HAIRLINE_BOTTOM, HAIRLINE_TOP, LinkButton, ListOrderedIcon, OpenChevron, PillSelect, RowText, Section, StepNumber } from "@/app/routing/parts";
+import { Badge, Card, Glyph, HAIRLINE_BOTTOM, HAIRLINE_TOP, LinkButton, OpenChevron, PillSelect, RowText, Section, StepNumber } from "@/app/routing/parts";
 import { faded, reviewers, reviewsWords, ROUTED_KINDS, strengthFor, tierFor } from "@/app/routing/words";
-import { ArrowRotateCw, SpeedometerLatencySpeed } from "@/components/icons";
+import { ArrowRotateCw, ListOrderedIcon, SpeedometerLatencySpeed } from "@/components/icons";
 import type { RoutePreview, TaskCategory } from "@/ipc/generated";
 import { PLAIN_KIND_NAMES, TIER_LABELS } from "@/lib/routing";
 import { cn } from "@/lib/utils";

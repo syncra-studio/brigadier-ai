@@ -1,11 +1,10 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 
 import { ErrorLine, errorText } from "@/app/dialogs/fields";
-import { Spinner } from "@/components/glyphs/spinner";
+import { Branch, Chats, Folder, Spinner, X } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { Branch, Chats, Folder, X } from "@/components/icons";
 import type { Project, ProjectRemoval, RemovalBranch, RemoveProjectReport } from "@/ipc/generated";
 import { formatBytes, shortPath } from "@/lib/format";
 import { previewRemoveProject, removeProject } from "@/state/actions";

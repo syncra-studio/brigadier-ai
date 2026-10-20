@@ -1,7 +1,6 @@
 import { useState } from "react";
 
-import { Spinner } from "@/components/glyphs/spinner";
-import { Globe } from "@/components/icons";
+import { Globe, Spinner } from "@/components/icons";
 import { useBrowsers } from "@/state/browsers";
 
 import "./BrowserTabIcon.css";

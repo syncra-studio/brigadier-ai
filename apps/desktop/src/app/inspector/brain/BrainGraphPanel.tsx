@@ -3,7 +3,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { KINDS, NODE_KINDS } from "@/app/inspector/brain/kinds";
 import { NodeDetail } from "@/app/inspector/brain/NodeDetail";
 import { Picker } from "@/app/inspector/providers/Picker";
-import { Spinner } from "@/components/glyphs/spinner";
+import { ChevronDown, Spinner } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,7 +13,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ChevronDown } from "@/components/icons";
 import { Input } from "@/components/ui/input";
 import type { BrainGraph, BrainOverview, NodeFilter, NodeKind } from "@/ipc/generated";
 import { getBrainGraph, projectOf } from "@/state/brain";

@@ -62,18 +62,18 @@ import { ComposerRail, ComposerRailItem } from "@/components/assistant-ui/elemen
 import { ComposerAttachments } from "@/components/assistant-ui/elements/attachment";
 import { ModelSelector } from "@/components/assistant-ui/elements/model-selector";
 import { ContextRing } from "@/components/assistant-ui/context-ring";
-import { ShieldExclamation } from "@/components/glyphs/permission-glyphs";
-import { Spinner } from "@/components/glyphs/spinner";
-import { Button } from "@/components/ui/button";
 import {
   ArrowUp,
   ArrowUpRight,
   Mic,
   PlayTriangle,
+  ShieldExclamation,
+  Spinner,
   Stop,
   Warning,
   X,
 } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import type { Conversation, RunState } from "@/ipc/generated";
 import type { ComposerProps } from "@/components/assistant-ui/thread";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";

@@ -22,7 +22,7 @@ import { createPortal } from "react-dom";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ChevronDown, Code, Link } from "@/components/icons";
+import { ChevronDown, Code, Link, PageDragHandle } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 import { $currentBlock, applyBlock, type Block, BLOCKS, blockMatches, type BlockKind, TURN_INTO } from "./pageBlocks";
@@ -328,9 +328,7 @@ export function DragHandles({ anchor }: { anchor: HTMLElement | null }) {
   return createPortal(
     <>
       <div ref={handle} data-slot="page-drag-handle" aria-hidden className="page-drag-handle" onPointerDown={start}>
-        <svg viewBox="0 0 10 16" fill="currentColor" className="page-drag-dots">
-          {[3, 8, 13].flatMap((y) => [2.5, 7.5].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.25" />))}
-        </svg>
+        <PageDragHandle className="page-drag-dots" />
       </div>
       <div ref={line} className="page-drop-line" />
     </>,

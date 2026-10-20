@@ -1,7 +1,7 @@
 import { type FC, type ReactNode, useState } from "react";
 
 import { composerPill } from "@/components/assistant-ui/elements/surfaces";
-import { ProviderGlyph } from "@/components/glyphs/provider-glyphs";
+import { Bolt, Check, ChevronDown, ProviderGlyph } from "@/components/icons";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -15,7 +15,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Bolt, Check, ChevronDown } from "@/components/icons";
 import type { ModelChoice, ModelInfo, ProviderKind } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
 import { cn } from "@/lib/utils";

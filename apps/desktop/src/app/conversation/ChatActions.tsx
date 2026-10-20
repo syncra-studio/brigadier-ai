@@ -6,7 +6,20 @@ import { useLatestAnswer } from "@/app/conversation/SlashCommands";
 import { NameDialog } from "@/app/NameDialog";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { TitlebarButton } from "@/components/titlebar-button";
-import { Spinner } from "@/components/glyphs/spinner";
+import {
+  Archive,
+  BranchAlt,
+  Copy,
+  Dock,
+  DotsHorizontal,
+  Folder,
+  Pencil,
+  Pin,
+  Plus,
+  Spinner,
+  Trash,
+  Unpin,
+} from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,19 +40,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Archive,
-  BranchAlt,
-  Copy,
-  Dock,
-  DotsHorizontal,
-  Folder,
-  Pencil,
-  Pin,
-  Plus,
-  Trash,
-  Unpin,
-} from "@/components/icons";
 import { openFolder } from "@/ipc/client";
 import type { Conversation, ForkPlace } from "@/ipc/generated";
 import {

@@ -6,7 +6,7 @@ import { SearchPanel } from "@/app/conversation/SearchPanel";
 import { SourcePanel } from "@/app/conversation/SourcePanel";
 import { shortcutKeys } from "@/app/shortcutCatalog";
 import { SidebarGlyph } from "@/app/SidebarToggle";
-import { FilesGlyph, SearchGlyph, SourceControlGlyph } from "@/components/glyphs/codicons";
+import { FilesGlyph, SearchGlyph, SourceControlGlyph } from "@/components/icons";
 import { TitlebarButton, TitlebarTips } from "@/components/titlebar-button";
 import { SidebarResizeHandle, SidebarReveal, useSidebarWidth } from "@/components/ui/sidebar-layout";
 import { cn } from "@/lib/utils";

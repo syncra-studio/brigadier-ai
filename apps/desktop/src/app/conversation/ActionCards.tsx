@@ -48,6 +48,7 @@ import {
   QuestionMarkCircle,
   Reply,
   Sparkle,
+  Spinner,
 } from "@/components/icons";
 import {
   Tooltip,
@@ -75,7 +76,6 @@ import {
   useDictation,
 } from "@/state/dictation";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Spinner } from "@/components/glyphs/spinner";
 
 /* Pending decisions sit on the rail above the full composer. Their shortcuts leave
  * text fields, focused controls and open overlays to handle their own keys. */
