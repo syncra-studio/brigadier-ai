@@ -78,7 +78,6 @@
 .page-menu-item { display: flex; align-items: center; gap: calc(var(--spacing) * 2); min-height: 1.7875rem; padding: calc(var(--spacing) * 1.25) calc(var(--spacing) * 2); border-radius: .9375rem; font-size: var(--text-label); cursor: default; }
 .page-menu-item[aria-selected="true"], .page-menu-item[data-highlighted] { background: var(--toolbar-hover); }
 .page-menu-item[data-current] { font-weight: 600; }
-.page-menu-hint { margin-inline-start: auto; color: var(--muted-foreground); font-family: var(--font-mono); font-size: var(--text-xs); }
 .page-block-icon { stroke-width: 1.3; color: var(--muted-foreground); }
 .page-slash-menu {
   position: absolute;

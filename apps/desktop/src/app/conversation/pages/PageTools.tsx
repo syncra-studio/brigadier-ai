@@ -21,7 +21,7 @@ import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, us
 import { createPortal } from "react-dom";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, MenuRow } from "@/components/ui/dropdown-menu";
 import { ChevronDown, Code, Link, PageDragHandle } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
@@ -31,9 +31,7 @@ import { $currentBlock, applyBlock, type Block, BLOCKS, blockMatches, type Block
 export function BlockRow({ block }: { block: Block }) {
   return (
     <>
-      {block.icon}
-      <span className="flex-1">{block.label}</span>
-      {block.markdown && <span className="page-menu-hint">{block.markdown}</span>}
+      <MenuRow icon={block.icon} title={block.label} hint={block.markdown} mono />
     </>
   );
 }

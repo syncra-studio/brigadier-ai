@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Chat, Comment, Folder, Search, Terminal } from "@/components/icons";
+import { MenuRow } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { openConversation, select, setProjectExpanded } from "@/state/actions";
@@ -217,23 +218,20 @@ function SearchBody({ onDone }: { onDone: (after?: () => void) => void }) {
                       selected && "bg-accent text-accent-foreground",
                     )}
                   >
-                    <Icon
-                      className={cn(
-                        "size-icon-md shrink-0",
-                        selected ? "text-accent-foreground" : "text-muted-foreground",
-                      )}
+                    <MenuRow
+                      icon={<Icon />}
+                      title={result.title}
+                      hint={
+                        selected ? (
+                          <>
+                            Open
+                            <Kbd>↵</Kbd>
+                          </>
+                        ) : (
+                          result.detail
+                        )
+                      }
                     />
-                    <span className="min-w-0 flex-1 truncate">{result.title}</span>
-                    {selected ? (
-                      <span className="text-muted-foreground flex shrink-0 items-center gap-2 text-xs">
-                        Open
-                        <Kbd>↵</Kbd>
-                      </span>
-                    ) : (
-                      result.detail && (
-                        <span className="text-muted-foreground shrink-0 text-xs">{result.detail}</span>
-                      )
-                    )}
                   </div>
                 );
               })}

@@ -1,5 +1,5 @@
 import { ComposerPrimitive, useAui } from "@assistant-ui/react";
-import { type FC, type ReactNode, useCallback, useContext, useRef, useState } from "react";
+import { type FC, useCallback, useContext, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { WorkerGlyph } from "@/app/conversation/WorkerChip";
@@ -21,6 +21,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
+  MenuRow,
 } from "@/components/ui/dropdown-menu";
 import { ArrowUpRight, Chat, Folder, Lightbulb, Paperclip, Plus } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -66,21 +67,6 @@ export function usePlanMode(target: ComposerTarget | null): {
     set: async (on) => updateDraft(resolved.project?.id ?? null, { planMode: on }),
   };
 }
-
-/** A row of the menu: icon, title, then grey detail. */
-const Row: FC<{ icon: ReactNode; title: string; detail?: string | undefined }> = ({
-  icon,
-  title,
-  detail,
-}) => (
-  <>
-    <span className="text-muted-foreground flex size-icon-md shrink-0 items-center justify-center [&_svg]:size-icon-sm">
-      {icon}
-    </span>
-    <span className="shrink-0">{title}</span>
-    {detail && <span className="text-muted-foreground min-w-0 flex-1 truncate">{detail}</span>}
-  </>
-);
 
 /** Where the menu goes: as wide as the composer card, just above it (over the rail). */
 type Placement = { width: number; alignOffset: number; sideOffset: number };
@@ -184,12 +170,12 @@ export const PlusMenu: FC = () => {
           <DropdownMenuLabel variant="heading">Add</DropdownMenuLabel>
           <ComposerPrimitive.AddAttachment asChild>
             <DropdownMenuItem>
-              <Row icon={<Paperclip />} title="Files" />
+              <MenuRow icon={<Paperclip />} title="Files" />
             </DropdownMenuItem>
           </ComposerPrimitive.AddAttachment>
           {plan.available && (
             <DropdownMenuItem onSelect={() => action.run(() => plan.set(!plan.on))}>
-              <Row
+              <MenuRow
                 icon={<Lightbulb />}
                 title="Plan mode"
                 detail={plan.on ? "Turn plan mode off" : "Turn plan mode on"}
@@ -199,7 +185,7 @@ export const PlusMenu: FC = () => {
           {draftChat && projects.length > 0 && (
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
-                <Row icon={<Folder />} title="Work in a project" />
+                <MenuRow icon={<Folder />} title="Work in a project" />
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className={floatingMenu}>
                 {projects.map((project) => (
@@ -207,7 +193,7 @@ export const PlusMenu: FC = () => {
                     key={project.id}
                     onSelect={() => select({ type: "draft", kind: "session", projectId: project.id })}
                   >
-                    <Row icon={<Folder />} title={project.name} />
+                    <MenuRow icon={<Folder />} title={project.name} />
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuSubContent>
@@ -219,7 +205,7 @@ export const PlusMenu: FC = () => {
               key={worker.id}
               onSelect={() => mention({ type: "task", id: worker.id }, `task-${worker.number}`)}
             >
-              <Row icon={<WorkerGlyph taskId={worker.id} />} title={worker.title} />
+              <MenuRow icon={<WorkerGlyph taskId={worker.id} />} title={worker.title} />
             </DropdownMenuItem>
           ))}
           {chats.length > 0 && <DropdownMenuLabel variant="heading">Chats</DropdownMenuLabel>}
@@ -228,7 +214,7 @@ export const PlusMenu: FC = () => {
               key={chat.id}
               onSelect={() => mention({ type: "chat", id: chat.id, title: chat.title }, chat.title)}
             >
-              <Row icon={<Chat />} title={chat.title} />
+              <MenuRow icon={<Chat />} title={chat.title} />
             </DropdownMenuItem>
           ))}
         </DropdownMenuContent>

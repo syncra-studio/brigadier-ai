@@ -263,7 +263,65 @@ function DropdownMenuSubContent({
   );
 }
 
+/**
+ * What a row of a menu or a picker list shows: a 16px icon (its box kept when it has none), its title, a grey detail
+ * after it (or under it with `twoLine`), and a hint at the end (a shortcut, a date; `mono`
+ * for code). Put it inside the row's own item, which keeps its keys and highlight.
+ */
+function MenuRow({
+  icon,
+  title,
+  detail,
+  hint,
+  mono = false,
+  twoLine = false,
+}: {
+  icon?: React.ReactNode;
+  title: React.ReactNode;
+  detail?: React.ReactNode;
+  hint?: React.ReactNode;
+  mono?: boolean;
+  twoLine?: boolean;
+}) {
+  const end = hint !== undefined && hint !== null && hint !== false && (
+    <span
+      data-slot="menu-row-hint"
+      className={cn("text-muted-foreground flex shrink-0 items-center gap-2", !twoLine && "ms-auto text-xs", mono && "font-mono")}
+    >
+      {hint}
+    </span>
+  );
+  return (
+    <>
+      {icon !== undefined && (
+        <span
+          data-slot="menu-row-icon"
+          className="text-muted-foreground flex size-icon-md shrink-0 items-center justify-center [&_svg]:size-icon-md"
+        >
+          {icon}
+        </span>
+      )}
+      {twoLine ? (
+        <span className="flex min-w-0 flex-1 flex-col py-1">
+          <span className="flex min-w-0 gap-2">
+            <span className="truncate">{title}</span>
+            {end}
+          </span>
+          {detail && <span className="text-muted-foreground truncate text-xs">{detail}</span>}
+        </span>
+      ) : (
+        <>
+          <span className={detail ? "shrink-0" : "min-w-0 flex-1 truncate"}>{title}</span>
+          {detail && <span className="text-muted-foreground min-w-0 flex-1 truncate">{detail}</span>}
+          {end}
+        </>
+      )}
+    </>
+  );
+}
+
 export {
+  MenuRow,
   DropdownMenu,
   DropdownMenuPortal,
   DropdownMenuTrigger,

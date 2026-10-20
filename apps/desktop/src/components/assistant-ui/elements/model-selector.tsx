@@ -1,4 +1,4 @@
-import { type FC, useState } from "react";
+import { useState } from "react";
 
 import { composerPill } from "@/components/assistant-ui/elements/surfaces";
 import { Bolt, Check, ChevronDown, ProviderGlyph } from "@/components/icons";
@@ -14,6 +14,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
+  MenuRow,
 } from "@/components/ui/dropdown-menu";
 import type { ModelChoice, ModelInfo, ProviderKind } from "@/ipc/generated";
 import { tokenPx } from "@/lib/tokens";
@@ -83,19 +84,6 @@ export function effortFor(model: ModelInfo | null, effort: string | null): strin
 /** A two-line row (a model and what it's for): rounded, not a pill. */
 const TALL_ROW = "h-auto rounded-xl";
 
-/** A model row: its name (marked when it's the default), then what it's for in grey. */
-const ModelRow: FC<{ model: ModelInfo; isDefault: boolean }> = ({ model, isDefault }) => (
-  <span className="flex min-w-0 flex-col py-1">
-    <span className="flex min-w-0 gap-2">
-      <span className="truncate">{model.displayName}</span>
-      {isDefault && <span className="text-muted-foreground shrink-0">Default</span>}
-    </span>
-    {model.description && (
-      <span className="text-muted-foreground truncate text-xs">{model.description}</span>
-    )}
-  </span>
-);
-
 /** A model as a radio row of its provider's list, marked when it's `defaultModel`. */
 const modelItem = (defaultModel: ModelInfo | null) => (model: ModelInfo) => (
   <DropdownMenuRadioItem
@@ -105,7 +93,8 @@ const modelItem = (defaultModel: ModelInfo | null) => (model: ModelInfo) => (
     indicator={<Check className="size-icon-md" />}
     className={TALL_ROW}
   >
-    <ModelRow model={model} isDefault={model === defaultModel} />
+    {/* Its name (marked when it's the default), then what it's for in grey. */}
+    <MenuRow twoLine title={model.displayName} hint={model === defaultModel && "Default"} detail={model.description} />
   </DropdownMenuRadioItem>
 );
 

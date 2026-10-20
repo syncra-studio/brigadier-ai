@@ -14,7 +14,8 @@ import {
 } from "react";
 
 import { MatchedText } from "@/components/assistant-ui/elements/fuzzy-match";
-import { floatingMenu, mono } from "@/components/assistant-ui/elements/surfaces";
+import { floatingMenu } from "@/components/assistant-ui/elements/surfaces";
+import { itemBase, MenuRow } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 /** One row of the `@` menu. `item.label` is what the mention leaves in the text, after `@`. */
@@ -101,22 +102,15 @@ export const ComposerMentions: FC<{
                           key={item.id}
                           item={item}
                           index={index.get(item.id) ?? 0}
-                          className="data-highlighted:bg-accent hover:bg-accent rounded-control flex h-row-sm w-full shrink-0 items-center gap-2 px-2 text-start text-sm outline-none"
+                          className={cn(itemBase, "data-highlighted:bg-foreground/8 hover:bg-foreground/8 w-full shrink-0 text-start")}
                         >
-                          <span className="text-muted-foreground flex size-icon-md shrink-0 items-center justify-center [&_svg]:size-icon-sm">
-                            {option?.icon}
-                          </span>
-                          <span className="shrink-0">
-                            <MatchedText text={option?.name ?? item.label} />
-                          </span>
-                          <span className="text-muted-foreground min-w-0 flex-1 truncate">
-                            {option?.detail}
-                          </span>
-                          {option?.trailing && (
-                            <span className={cn(mono, "text-muted-foreground shrink-0")}>
-                              {option.trailing}
-                            </span>
-                          )}
+                          <MenuRow
+                            icon={option?.icon ?? null}
+                            title={<MatchedText text={option?.name ?? item.label} />}
+                            detail={option?.detail}
+                            hint={option?.trailing}
+                            mono
+                          />
                         </ComposerPrimitive.Unstable_TriggerPopoverItem>
                       );
                     })}

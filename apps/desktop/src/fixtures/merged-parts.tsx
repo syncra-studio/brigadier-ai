@@ -4,8 +4,9 @@ import { createRoot } from "react-dom/client";
 import { LabeledDivider } from "@/components/assistant-ui/elements/labeled-divider";
 import { OfferBody, OfferCard } from "@/app/conversation/OfferCard";
 import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
-import { Branch, Globe, Info } from "@/components/icons";
-import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
+import { Branch, Folder, Globe, Info } from "@/components/icons";
+import { DropdownMenuLabel, itemBase, MenuRow } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 
 /** A node's box and colours. */
 function box(node: Element | null) {
@@ -58,7 +59,14 @@ function measure() {
     case: getComputedStyle(node).textTransform,
     mono: getComputedStyle(node).fontFamily === probe("font-family: var(--font-mono)").fontFamily,
   }));
+  const rows = [...document.querySelectorAll('[data-group="row"] > *')].map((node) => ({
+    height: node.getBoundingClientRect().height,
+    icon: node.querySelector('[data-slot="menu-row-icon"] svg')?.getBoundingClientRect().width ?? null,
+    hint: node.querySelector('[data-slot="menu-row-hint"]')?.textContent ?? null,
+    lines: node.querySelectorAll(".truncate").length,
+  }));
   return {
+    row: { rows, iconMd: parseFloat(probe("width: var(--spacing-icon-md)").width) },
     label: { labels, muted: probe("color: var(--muted-foreground)").color, textSm: probe("font-size: var(--text-sm)").fontSize },
     offer: {
       offers,
@@ -111,6 +119,17 @@ function Fixture() {
             Continued from chat
           </span>
         </LabeledDivider>
+      </section>
+      <section data-group="row" className="flex w-80 flex-col">
+        <div className={itemBase}>
+          <MenuRow icon={<Folder />} title="Work in a project" detail="Its own worktree" />
+        </div>
+        <div className={cn(itemBase, "[&_svg]:size-icon-md")}>
+          <MenuRow icon={<Folder />} title="brigadier-ai" hint="⌘1" mono />
+        </div>
+        <div className={cn(itemBase, "h-auto rounded-xl")}>
+          <MenuRow twoLine title="Opus 5.5" hint="Default" detail="For most work" />
+        </div>
       </section>
       <section data-group="label" className="flex flex-col">
         <DropdownMenuLabel>Model</DropdownMenuLabel>

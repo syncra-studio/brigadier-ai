@@ -15,6 +15,7 @@ import {
 import { MatchedText } from "@/components/assistant-ui/elements/fuzzy-match";
 import { fuzzyMatch, slashTrigger } from "@/components/assistant-ui/elements/menuMatch";
 import { floatingMenu } from "@/components/assistant-ui/elements/surfaces";
+import { itemBase, MenuRow } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 /** A command of the composer's `/` menu. */
@@ -93,19 +94,13 @@ export const ComposerCommands: FC<{ commands: readonly ComposerCommand[] }> = ({
                   <ComposerPrimitive.Unstable_TriggerPopoverItem
                     item={item}
                     index={index}
-                    className="data-highlighted:bg-accent hover:bg-accent rounded-control flex h-row-sm w-full shrink-0 items-center gap-2 px-2 text-start text-sm outline-none"
+                    className={cn(itemBase, "data-highlighted:bg-foreground/8 hover:bg-foreground/8 w-full shrink-0 text-start")}
                   >
-                    <span className="text-muted-foreground flex size-icon-md shrink-0 items-center justify-center [&_svg]:size-icon-sm">
-                      {command?.icon}
-                    </span>
-                    <span className="shrink-0">
-                      <MatchedText text={item.label} />
-                    </span>
-                    {item.description && (
-                      <span className="text-muted-foreground min-w-0 flex-1 truncate">
-                        {item.description}
-                      </span>
-                    )}
+                    <MenuRow
+                      icon={command?.icon ?? null}
+                      title={<MatchedText text={item.label} />}
+                      detail={item.description}
+                    />
                   </ComposerPrimitive.Unstable_TriggerPopoverItem>
                 </div>
               );

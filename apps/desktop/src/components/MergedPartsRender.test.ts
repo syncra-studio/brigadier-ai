@@ -7,6 +7,15 @@ import { renderFixtureLive } from "@/fixtures/headless";
 test("merged parts draw one look per group", { timeout: 60000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "merged-parts.html", "merged-parts-result", 30000));
 
+  // Menu row: a 16px icon, a hint at the end, and a second line under the title when two-line.
+  const [plain, hinted, twoLine] = seen.row.rows;
+  assert.equal(plain.icon, seen.row.iconMd);
+  assert.equal(hinted.icon, seen.row.iconMd);
+  assert.equal(hinted.hint, "⌘1");
+  assert.equal(twoLine.icon, null);
+  assert.equal(twoLine.lines, 2);
+  assert.ok(twoLine.height > plain.height);
+
   // Menu section label: mono capitals, or plain grey words in or out of a menu (a flyout's h2).
   const [caps, ...headings] = seen.label.labels;
   assert.deepEqual([caps.case, caps.mono], ["uppercase", true]);

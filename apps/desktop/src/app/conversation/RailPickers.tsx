@@ -11,6 +11,7 @@ import {
 import { type ResolvedDraft, updateDraft } from "@/app/conversation/draftSetup";
 import { resetsAt, windowName } from "@/app/conversation/StatusCard";
 import { composerPill } from "@/components/assistant-ui/elements/surfaces";
+import { MenuRow } from "@/components/ui/dropdown-menu";
 import {
   Branch,
   BranchAlt,
@@ -230,8 +231,7 @@ export function ProjectCombobox({
                 onClick={() => choose(entry.id)}
                 className={cn(ROW, highlighted === entry.id && ROW_ACTIVE)}
               >
-                <Folder className="text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                <MenuRow icon={<Folder />} title={entry.name} />
                 {entry.id === project?.id && <Check />}
               </button>
             ))}
