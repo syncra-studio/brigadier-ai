@@ -17,8 +17,10 @@
 //! - **A `Bash` call's start and end** (`PreToolUse`, from the same settings, and both of the
 //!   above): the call goes to the daemon, which reads the files its command names before it
 //!   runs and once it ended, so Undo can tell what the call changed (#87). Nothing is printed
-//!   for it, and the call runs as it would without the hook. A call sent to the background is
-//!   left out: it ends after its hook.
+//!   for it, and the call runs as it would without the hook, unless the daemon refuses a call
+//!   about to run (git while the user's rebase is in progress in the session's checkout, #342):
+//!   then it is denied with the daemon's reason. A call sent to the background is left out: it
+//!   ends after its hook.
 //! - **A file tool's success** (`Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, run by
 //!   a second `PostToolUse` entry): the touched file's path goes to the daemon, which answers
 //!   with the rules of its folders the thread hasn't had yet (a subfolder's `CLAUDE.md` or
@@ -105,6 +107,7 @@ fn handle(
 ) -> Option<String> {
     let event: Value = serde_json::from_str(stdin).ok()?;
     if let Some(shell) = shell_call(&event) {
+        let starting = !shell.ended;
         let header = HookOutput {
             excerpt: false,
             status: String::new(),
@@ -112,7 +115,21 @@ fn handle(
             touched: None,
             shell: Some(shell),
         };
-        send(&header, &[]);
+        // A call the daemon refuses doesn't run, and the model hears why (#342).
+        if let Some(reason) = send(&header, &[]).and_then(|reply| reply.deny)
+            && starting
+        {
+            return Some(
+                json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": reason,
+                    }
+                })
+                .to_string(),
+            );
+        }
     }
     match plan(&event)? {
         Plan::Trim {
@@ -445,6 +462,7 @@ mod tests {
             Some(HookReply {
                 replacement: Some("exit 0 [full output: read_artifact out-1, …]".into()),
                 context: None,
+                deny: None,
             })
         }
     }
@@ -577,6 +595,41 @@ mod tests {
         );
     }
 
+    /// A `Bash` call the daemon refuses before it runs is denied, with the daemon's reason for
+    /// the model (#342).
+    #[test]
+    fn a_call_the_daemon_refuses_is_denied_before_it_runs() {
+        let event = json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_use_id": "toolu_1",
+            "tool_input": { "command": "git commit -am x" },
+        })
+        .to_string();
+        let printed = handle(&event, |header, _| {
+            assert!(header.shell.as_ref().is_some_and(|shell| !shell.ended));
+            Some(HookReply {
+                replacement: None,
+                context: None,
+                deny: Some("Not run: the user is rebasing.".into()),
+            })
+        })
+        .expect("denied");
+        let printed: Value = serde_json::from_str(&printed).unwrap();
+        assert_eq!(
+            printed,
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Not run: the user is rebasing.",
+                }
+            })
+        );
+        // Not refused: the call runs as it would without the hook.
+        assert_eq!(handle(&event, |_, _| None), None);
+    }
+
     #[test]
     fn a_short_success_is_left_alone_without_reaching_the_daemon() {
         let printed = handle(
@@ -617,6 +670,7 @@ mod tests {
                 Some(HookReply {
                     replacement: None,
                     context: None,
+                    deny: None,
                 })
             }),
             None
@@ -662,6 +716,7 @@ mod tests {
                 Some(HookReply {
                     replacement: None,
                     context: Some("### apps/web/CLAUDE.md\nUse pnpm.".into()),
+                    deny: None,
                 })
             },
         )
@@ -687,6 +742,7 @@ mod tests {
                 Some(HookReply {
                     replacement: None,
                     context: None,
+                    deny: None,
                 })
             },
         );

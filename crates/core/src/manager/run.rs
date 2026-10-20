@@ -167,6 +167,10 @@ impl SessionManager {
         if command.trim().is_empty() {
             return Err(Error::Invalid("`command` is empty".into()));
         }
+        // No git into the user's rebase in progress (#342).
+        if let Some(refused) = self.user_rebase_refusal(id, command).await {
+            return Err(Error::Invalid(refused));
+        }
         let cli = self
             .conv(id)?
             .live_cli()

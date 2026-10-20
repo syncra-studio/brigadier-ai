@@ -672,6 +672,10 @@ pub(crate) struct ConvLive {
     /// The thread was told the user closed the session's workspace, and that the next change
     /// makes a fresh one in the same folder: that fresh one is no news to it (#39).
     pub(super) workspace_closed: std::sync::atomic::AtomicBool,
+    /// The user's Source panel rebase in the session's checkout the thread was last told of
+    /// (#342), and whether the disk was looked at for one since Brigadier started.
+    pub(super) user_rebase: std::sync::Mutex<Option<super::user_rebase::UserRebase>>,
+    pub(super) user_rebase_looked: std::sync::atomic::AtomicBool,
     /// A turn ran since the thread's scratch was last swept: the next time its requests are
     /// all over, it is swept ([`super::thread_scratch`]).
     pub(super) scratch_used: std::sync::atomic::AtomicBool,
@@ -740,6 +744,8 @@ impl ConvLive {
             merge_told: std::sync::Mutex::new(None),
             reviews_due: std::sync::atomic::AtomicUsize::new(0),
             workspace_closed: std::sync::atomic::AtomicBool::new(false),
+            user_rebase: std::sync::Mutex::new(None),
+            user_rebase_looked: std::sync::atomic::AtomicBool::new(false),
             reviews_telling: std::sync::atomic::AtomicUsize::new(0),
             scratch_used: std::sync::atomic::AtomicBool::new(false),
             held_moves: tokio::sync::Mutex::new(HashMap::new()),
@@ -2997,6 +3003,10 @@ impl SessionManager {
             self.rebirth_if_cache_expired(&conv).await;
         }
         let session = conv.kind == ConversationKind::Session;
+        // The thread hears of the user's rebase in its checkout ending in a terminal.
+        if session {
+            self.look_at_user_rebase(&conv.id).await;
+        }
         // A session's queued message goes once the requests have settled (no answer works).
         let mut sent_queued = false;
         // `origin`: the request the envelopes belong to, which their notes speak of.

@@ -157,7 +157,7 @@ impl Repo {
 
     /// The folder of the rebase in progress, if any, as git keeps it: `rebase-merge`, or
     /// `rebase-apply` for one `git am` style.
-    fn rebase_dir(&self) -> Result<Option<std::path::PathBuf>> {
+    pub fn rebase_dir(&self) -> Result<Option<std::path::PathBuf>> {
         let dir = self.git_dir()?;
         for name in ["rebase-merge", "rebase-apply"] {
             let at = dir.join(name);

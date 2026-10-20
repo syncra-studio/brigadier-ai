@@ -173,6 +173,13 @@ impl SessionManager {
         } else {
             Vec::new()
         };
+        let aborted = matches!(action, SourceAction::AbortRebase);
+        // A rebase of the session's branch stopped on conflicts is marked the user's (#342).
+        let marks = matches!(target, WorkspaceTarget::Conversation { .. })
+            && matches!(
+                action,
+                SourceAction::Rebase { .. } | SourceAction::ContinueRebase
+            );
         let (git, log) = self.logged_git();
         let records = self.ref_records.clone();
         let dir = path.clone();
@@ -237,10 +244,21 @@ impl SessionManager {
                 }
                 other => git_error(other),
             })?;
+            if marks {
+                super::user_rebase::mark_users_rebase(&repo).map_err(git_error)?;
+            }
             source_state_of(&repo)
         })
         .await;
         self.file_output(&path, &log);
+        // The thread hears of the user's rebase stopping in its checkout, and of its end.
+        if let (WorkspaceTarget::Conversation { conversation_id }, Ok(state)) = (target, &done) {
+            let now = state
+                .rebasing
+                .as_ref()
+                .map(|rebase| (rebase.branch.clone(), rebase.onto.clone()));
+            self.tell_user_rebase(conversation_id, now, aborted).await;
+        }
         done
     }
 

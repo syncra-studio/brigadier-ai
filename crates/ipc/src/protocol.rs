@@ -181,6 +181,11 @@ pub struct HookReply {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub context: Option<String>,
+    /// Why a `Bash` call about to run is refused (it doesn't run, and the model gets this);
+    /// none: it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub deny: Option<String>,
 }
 
 /// Commands and queries.

@@ -124,6 +124,7 @@ mod uninstall;
 mod unreviewed;
 mod usage;
 mod usage_view;
+mod user_rebase;
 pub mod warm;
 mod watchdog;
 mod worker_handoff;

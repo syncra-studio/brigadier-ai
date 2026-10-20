@@ -110,7 +110,7 @@ pub async fn serve_hook(
     }
     // A `Bash` call's start or end: its named files are read before the answer lets it go on.
     if let Some(shell) = output.shell {
-        daemon
+        let deny = daemon
             .sessions
             .hook_shell(
                 &grant,
@@ -125,6 +125,7 @@ pub async fn serve_hook(
             &HookReply {
                 replacement: None,
                 context: None,
+                deny,
             },
         )
         .await;
@@ -138,6 +139,7 @@ pub async fn serve_hook(
             &HookReply {
                 replacement: None,
                 context,
+                deny: None,
             },
         )
         .await;
@@ -187,6 +189,7 @@ pub async fn serve_hook(
         &HookReply {
             replacement,
             context: None,
+            deny: None,
         },
     )
     .await;

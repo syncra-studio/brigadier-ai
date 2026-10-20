@@ -329,7 +329,8 @@ impl SessionManager {
     /// What a Claude thread's tool hook sends for a `Bash` call (`brigadierd hook
     /// post-tool-use`): before it runs (`ended` false) and once it ended. The files its command
     /// names are read before the hook's answer lets the call go on. A grant that isn't a live
-    /// hook grant reads nothing.
+    /// hook grant reads nothing. Returns why a call about to run is refused: it runs git while
+    /// the user's rebase is in progress in the session's checkout (#342).
     pub async fn hook_shell(
         &self,
         grant: &str,
@@ -337,10 +338,13 @@ impl SessionManager {
         call: &str,
         command: &str,
         cwd: Option<&str>,
-    ) {
+    ) -> Option<String> {
         let Some(Role::OutputHook { conversation_id }) = self.grants.resolve(grant) else {
-            return;
+            return None;
         };
+        if !ended && let Some(refused) = self.user_rebase_refusal(&conversation_id, command).await {
+            return Some(refused);
+        }
         self.capture_shell(
             &conversation_id,
             ShellKey::Call(call.to_owned()),
@@ -349,6 +353,7 @@ impl SessionManager {
             ended.then_some(None),
         )
         .await;
+        None
     }
 
     /// Reads the files the command of `key` names in its session's checkout: at its start,
