@@ -287,7 +287,9 @@ async fn watchdog_dead_worker_cli_is_still_replaced() {
     let (cli, _) = live.detach_stalled(|_| true, false).await.unwrap();
     crate::manager::workers::TaskLive::end_cli(cli).await;
     live.allow_revival().await;
-    let gone = live.watch(crate::now_ms() - Timing::current().grace).await;
+    // Seen gone now, as the watchdog's own round may see it first on a loaded machine; the
+    // round a grace later replaces it (#443).
+    let gone = live.watch(crate::now_ms()).await;
     assert!(!gone.alive);
     let now = gone.orphaned_at_ms.unwrap() + Timing::current().grace;
     tick_worker(&flow, &task, &live, now).await;

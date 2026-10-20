@@ -433,7 +433,7 @@ impl SessionManager {
             }
             StallVerdict::ReplaceExited => {
                 let _handing = live.reroute.lock().await;
-                let Some(cutoff) = self.take_exited(live, verdict, seen, timing).await else {
+                let Some(cutoff) = self.take_exited(live, verdict, seen, timing, now).await else {
                     return;
                 };
                 let end = AttemptEnd::Error {
@@ -451,7 +451,7 @@ impl SessionManager {
     }
 
     /// Detaches an exited CLI for a hand-off, if `verdict`
-    /// (decided on the worker as `seen`) still holds now, with its task as the board has it:
+    /// (decided at `now` on the worker as `seen`) still holds, with its task as the board has it:
     /// still starting or running, no card or quota it waits for, nothing reported meanwhile
     /// (the report lock is held for the check). The caller holds `reroute`, so no other
     /// hand-on or hand-over runs meanwhile. Answers a pending cut-off (for another model);
@@ -462,12 +462,15 @@ impl SessionManager {
         verdict: StallVerdict,
         seen: &WorkerWatch,
         timing: &Timing,
+        now: i64,
     ) -> Option<Option<AttemptEnd>> {
         let settled = live.settle.lock().await;
         let (state, quota_wait, card) = self.task_now(live).await?;
         let due = |current: &WorkerWatch| {
             let current = &self.unheld(&live.id, current);
-            let verdict_now = stall_verdict(state, quota_wait, card, current, timing, now_ms());
+            // Judged at the round's time, as a report is: a CLI seen gone first by an earlier
+            // look is as long gone as the round found it (#443).
+            let verdict_now = stall_verdict(state, quota_wait, card, current, timing, now);
             still_due(verdict, seen, current, verdict_now)
         };
         let (cli, cutoff) = live.detach_stalled(due, false).await?;
