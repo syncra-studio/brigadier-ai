@@ -62,3 +62,23 @@ test("a feedback offer is written up, then sends, edits or dismisses", { timeout
   ]);
   assert.equal(seen.dialogOpen, false);
 });
+
+// When only some reports were filed, the card lists them with Try again, which files the rest
+// alone; the offer is answered once.
+test("a feedback offer that sent only some files the rest on Try again", { timeout: 60000 }, async (t) => {
+  const seen = JSON.parse(await renderFixturePage(t, "feedback-offer.html?drive=1&done=1&partial=1", "feedback-offer-result", 15000)) as Record<string, unknown>;
+  assert.deepEqual(seen.partial, [
+    "Not all of it was sent",
+    "One report couldn’t be sent.",
+    ["Usage popover doesn't refresh when a session ends#482", `Stop doesn't stop a running workerAdded to #${417}`, "Pin a chat to the top of the sidebarNot sent"],
+    ["Try again"],
+  ]);
+  assert.deepEqual(seen.sent, [
+    "Sent. Thank you",
+    "You can follow them on GitHub.",
+    ["Usage popover doesn't refresh when a session ends#482", `Stop doesn't stop a running workerAdded to #${417}`, "Pin a chat to the top of the sidebar#482"],
+    [],
+  ]);
+  assert.deepEqual(seen.filed, [3, 1]);
+  assert.equal(seen.answers, 1);
+});

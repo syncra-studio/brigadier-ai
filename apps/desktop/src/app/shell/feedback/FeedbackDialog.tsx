@@ -1,5 +1,5 @@
 import { ErrorLine } from "@/app/shell/dialogs/fields";
-import { FeedbackResults, sentLine, stepProgress, useSystemWord } from "@/app/shell/feedback/FeedbackResults";
+import { FeedbackResults, sentLine, stepProgress, unsentLine, useSystemWord } from "@/app/shell/feedback/FeedbackResults";
 import { Button } from "@/components/controls";
 import { ArrowUpRight, X } from "@/components/icons";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "@/components/overlays";
@@ -52,7 +52,7 @@ function Feedback() {
             {!done
               ? "Say what’s wrong or what you’d like. Brigadier writes it up for its developers."
               : unsent
-                ? `${unsent === 1 ? "One report" : `${unsent} reports`} couldn’t be sent.`
+                ? unsentLine(unsent)
                 : sentLine(done)}
           </DialogDescription>
         </div>

@@ -72,6 +72,11 @@ export function sentLine(results: readonly FeedbackResult[]): string {
   return one ? "Your report, filed on GitHub." : `${results.length} reports, filed on GitHub.`;
 }
 
+/** What a send that filed only some says under its title (with Try again for the rest). */
+export function unsentLine(unsent: number): string {
+  return `${unsent === 1 ? "One report" : `${unsent} reports`} couldn’t be sent.`;
+}
+
 /** What a step says, and how far along its bar is (writing up, then filing, of three). */
 export function stepProgress(
   step: FeedbackStep,

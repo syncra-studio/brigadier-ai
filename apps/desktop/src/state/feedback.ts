@@ -49,10 +49,14 @@ export const useFeedbackUi = create<{
   account: FeedbackAccount | null;
 }>(() => ({ open: false, draft: null, text: "", sending: { phase: "write" }, account: null }));
 
-/** Opens Send feedback, empty or with `draft` filled in (a send at work or done keeps showing). */
+/**
+ * Opens Send feedback, empty or with `draft` filled in. A send it was closed on keeps showing:
+ * at work, done, or failed with the note still there to send again.
+ */
 export function openFeedback(draft: FeedbackDraft | null = null): void {
   const { sending } = useFeedbackUi.getState();
-  const busy = sending.phase === "working" || sending.phase === "done";
+  // Closing resets the rest; only a send that went on after the dialog closed is here.
+  const busy = sending.phase !== "write";
   useFeedbackUi.setState(
     busy ? { open: true } : { open: true, draft, text: draft?.text ?? "", sending: { phase: "write" } },
   );
@@ -66,8 +70,12 @@ export function closeFeedback(): void {
   else useFeedbackUi.setState({ open: false, draft: null, text: "", sending: { phase: "write" } });
 }
 
+/** The note as typed; once it changes, a failed send's reports are written up from it anew. */
 export function setFeedbackText(text: string): void {
-  useFeedbackUi.setState({ text });
+  const { sending } = useFeedbackUi.getState();
+  useFeedbackUi.setState(
+    sending.phase === "failed" && sending.results ? { text, sending: { ...sending, results: null } } : { text },
+  );
 }
 
 /** Asks the daemon who it posts as (each time it opens: a sign-in may have changed). */
@@ -101,7 +109,8 @@ export function sendFromDialog(): void {
   sent.then(
     (results) => {
       set(outcomeOf(results));
-      if (!failed && results.some((result) => result.outcome !== "failed")) draft?.onSent?.(results);
+      // A Try again that filed some counts too; the caller tells a first send from a later one.
+      if (results.some((result) => result.outcome !== "failed")) draft?.onSent?.(results);
     },
     (cause: unknown) => {
       console.warn("feedback: sending failed", cause);
@@ -130,17 +139,21 @@ export function draftOffer(id: string, text: string): void {
   void writeUp(text).then((written) => setOffer(id, { written, sending: { phase: "write" } }));
 }
 
-/** Sends what the offer `id` shows (or files again what failed); `onSent` once any was filed. */
+/**
+ * Sends what the offer `id` shows (or files again what failed); `onSent` once the first was
+ * filed, not again when a Try again files the rest.
+ */
 export function sendOffer(id: string, text: string, kind: FeedbackKind, onSent: () => void): void {
   const offer = useFeedbackOffers.getState()[id];
   const written = offer?.written ?? null;
+  const filedBefore = offer?.sending.phase === "done";
   const failed = offer?.sending.phase === "done" || offer?.sending.phase === "failed" ? offer.sending.results : null;
   setOffer(id, { sending: { phase: "working", step: { step: "filing", count: written?.reports.length || 1 } } });
   (failed ? retryFeedback(failed) : fileFeedback(text, kind, written)).then(
     (results) => {
       const next = outcomeOf(results);
       setOffer(id, { sending: next });
-      if (next.phase === "done") onSent();
+      if (next.phase === "done" && !filedBefore) onSent();
     },
     (cause: unknown) => {
       console.warn("feedback: sending the thread's reports failed", cause);

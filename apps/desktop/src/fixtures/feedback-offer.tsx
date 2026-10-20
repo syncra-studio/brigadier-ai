@@ -6,7 +6,8 @@
  * files them as @stephen-golban. ?drive=1 then reads the cards while they're written and after,
  * opens a report, opens Edit, sends the second (failing once, then Try again), dismisses the
  * first and writes what it saw to #feedback-offer-result (FeedbackOfferRender.test.ts reads
- * it). ?state=drafted|open|working|done|failed shows the second card in the design's state,
+ * it). With ?partial=1 too it sends the second with its last report failing, then files
+ * that one on Try again. ?state=drafted|open|working|done|failed shows the second card in the design's state,
  * for screenshots.
  */
 import { createRoot } from "react-dom/client";
@@ -24,6 +25,8 @@ await import("@/fixtures/flow");
 // The flow fixture's daemon answers requests; the app's own commands are answered here.
 const opened: string[] = [];
 const wrote: string[] = [];
+/** How many reports each filing sent. */
+const filed: number[] = [];
 const REPO = "https://github.com/syncra-studio/brigadier-ai/issues";
 const report = (kind: "bug" | "idea", title: string, fields: Partial<FeedbackReport>): FeedbackReport => ({
   kind,
@@ -59,8 +62,8 @@ const reports = [
     today: "it moves down the list as other chats get newer.",
   }),
 ];
-/** The faked daemon: writes held until released, and every filing failing. */
-const daemon = { hold: null as Promise<void> | null, failing: false };
+/** The faked daemon: writes held until released, and every filing failing (or only the last). */
+const daemon = { hold: null as Promise<void> | null, failing: false, failingLast: false };
 let release = () => {};
 const state = params.get("state");
 if (params.has("drive") || state === "working") daemon.hold = new Promise((resolve) => (release = resolve));
@@ -83,11 +86,12 @@ internals.invoke = async (command, args, options) => {
     return { method: request.method, writeUp: { reports, searched: true } };
   }
   if (command === "ipc_request" && request?.method === "fileFeedback") {
+    filed.push((request.items ?? []).length);
     return {
       method: request.method,
       signedIn: true,
       results: (request.items ?? []).map((item, index) =>
-        daemon.failing
+        daemon.failing || (daemon.failingLast && index === (request.items ?? []).length - 1)
           ? { outcome: "failed", reason: "HTTP 502: Bad gateway" }
           : item.commentOn === null
             ? { outcome: "filed", number: 482 + index, url: `${REPO}/${482 + index}` }
@@ -174,8 +178,22 @@ async function drive() {
   await wait(300);
   // Each card's reports, in the thread's order.
   seen.cards = cards().map((each) => rows(each, "Reports"));
-  if (!params.has("done")) return seen;
   const second = () => cards()[1];
+  const actions = () => [...(second()?.querySelectorAll("button") ?? [])].filter((each) => !each.closest("li")).map(text);
+  if (params.has("partial")) {
+    daemon.failingLast = true;
+    button(second(), "Send")?.click();
+    await wait(400);
+    seen.partial = [...head(second()), rows(second(), "Sent"), actions()];
+    daemon.failingLast = false;
+    button(second(), "Try again")?.click();
+    await wait(400);
+    seen.sent = [...head(second()), rows(second(), "Sent"), actions()];
+    seen.filed = filed;
+    seen.answers = calls.filter((call) => call.method === "answerFeedbackOffer").length;
+    return seen;
+  }
+  if (!params.has("done")) return seen;
   seen.head = head(second());
   seen.buttons = [...(second()?.querySelectorAll("button") ?? [])].filter((each) => !each.closest("li")).map(text);
   second()?.querySelector<HTMLElement>('[aria-label="Reports"] li button')?.click();

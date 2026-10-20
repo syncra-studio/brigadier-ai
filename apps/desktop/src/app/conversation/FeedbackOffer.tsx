@@ -2,7 +2,15 @@ import { createContext, useContext, useEffect, useState } from "react";
 
 import { OfferCard, OfferError } from "@/app/conversation/OfferCard";
 import { useAction } from "@/app/conversation/useAction";
-import { FeedbackResults, KindIcon, sentLine, sentToBrowser, stepProgress, useSystemWord } from "@/app/shell/feedback/FeedbackResults";
+import {
+  FeedbackResults,
+  KindIcon,
+  sentLine,
+  sentToBrowser,
+  stepProgress,
+  unsentLine,
+  useSystemWord,
+} from "@/app/shell/feedback/FeedbackResults";
 import { OPENS } from "@/components/conversation";
 import { Button } from "@/components/controls";
 import { Check, ChevronRightAlt, FeedbackGlyph } from "@/components/icons";
@@ -57,6 +65,27 @@ export function FeedbackCard({
 }) {
   if (sent || sending.phase === "done") {
     const results = sending.phase === "done" ? sending.results : null;
+    const unsent = results?.filter((result) => result.outcome === "failed").length ?? 0;
+    if (results && unsent) {
+      // Some were filed: Try again sends only the rest, as the dialog's does.
+      return (
+        <OfferCard
+          label="Not all of it was sent"
+          kind="feedbackOffered"
+          icon={<FeedbackGlyph />}
+          title="Not all of it was sent"
+          line={unsentLine(unsent)}
+          actions={
+            <Button size="sm" onClick={onSend}>
+              Try again
+            </Button>
+          }
+        >
+          <FeedbackResults results={results} />
+          {error && <OfferError>{error}</OfferError>}
+        </OfferCard>
+      );
+    }
     return (
       <OfferCard
         label="Sent to Brigadier’s developers"
@@ -223,8 +252,10 @@ export function FeedbackOffer({ id, kind, title, body }: { id: string; kind: Fee
           kind,
           text,
           onSent: (results) => {
+            // A Try again in the dialog that files the rest only updates what the card lists.
+            const first = useFeedbackOffers.getState()[id]?.sending.phase !== "done";
             offerSent(id, results);
-            void action.run(() => answerWith(true));
+            if (first) void action.run(() => answerWith(true));
           },
         })
       }
