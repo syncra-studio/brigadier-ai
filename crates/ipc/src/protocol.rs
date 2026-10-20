@@ -1225,12 +1225,8 @@ pub enum Request {
         path: String,
     },
     /// The Usage page: quota windows with their estimates and history, Brigadier's own use,
-    /// routing activity, the merged model list and what outcomes taught routing (in
-    /// `projectId`, or in every project).
-    GetUsage {
-        #[serde(default)]
-        project_id: Option<ProjectId>,
-    },
+    /// routing activity, the merged model list and what outcomes taught routing in every project.
+    GetUsage {},
     /// The Usage page's Activity: each account's windows over the last `days` (at most 31), and
     /// Brigadier's own use of it then.
     GetUsageActivity {

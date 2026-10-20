@@ -2546,8 +2546,8 @@ async fn handle_request(daemon: &Arc<Daemon>, request: Request) -> Result<Respon
                 version: checked.map_err(invalid)?,
             }
         }
-        Request::GetUsage { project_id } => Response::GetUsage {
-            usage: Box::new(heap(|| daemon.sessions.usage_view(project_id)).await?),
+        Request::GetUsage {} => Response::GetUsage {
+            usage: Box::new(heap(|| daemon.sessions.usage_view(None)).await?),
         },
         Request::GetUsageActivity { days } => Response::GetUsageActivity {
             activity: daemon.sessions.usage_activity(days).await,

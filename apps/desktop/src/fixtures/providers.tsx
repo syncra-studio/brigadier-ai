@@ -140,7 +140,7 @@ mockIPC((command, payload) => {
     case "getRankingsRefresh":
       return { method: req.method, refresh: null };
     case "getUsage":
-      return { method: req.method, usage: usageView(req.projectId) };
+      return { method: req.method, usage: usageView(null) };
     case "previewRoutes":
       return { method: req.method, routes: previewRoutes(req.areas, req.author) };
     case "checkAgentPath":

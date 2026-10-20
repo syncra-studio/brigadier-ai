@@ -5,7 +5,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { account } from "@/fixtures/agents";
 import type { AccountView, EventEnvelope, Request } from "@/ipc/generated";
 import { applyEvents, useApp } from "@/state/store";
-import { checkedFor, refreshUsage, useUsage } from "@/state/usage";
+import { checkedFor, loadUsage, refreshUsage, useUsage } from "@/state/usage";
 
 let calls: string[];
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -42,6 +42,19 @@ function checked(views: AccountView[]) {
   ]);
 }
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+test("usage reads all projects without a project filter", async () => {
+  const requests: Request[] = [];
+  mockIPC((command, payload) => {
+    if (command !== "ipc_request") return null;
+    const req = (payload as { request: Request }).request;
+    requests.push(req);
+    return { method: req.method, usage: { providers: [] } };
+  });
+  await loadUsage();
+  assert.deepEqual(requests, [{ method: "getUsage" }]);
+  assert.deepEqual(useUsage.getState().view, { providers: [] });
+});
 
 test("an account counts as checked for a refresh once a check that began in it finished", () => {
   assert.equal(checkedFor(accounts(2), 3), false);

@@ -13,8 +13,6 @@ import { useApp } from "@/state/store";
  */
 export type UsageState = {
   view: UsageView | null;
-  /** The project the models' learned adjustments are for; `null`: every project. */
-  projectId: string | null;
   loading: boolean;
   error: string | null;
   /** A page showing it is mounted: provider checks read the view again. */
@@ -35,7 +33,6 @@ export type ActivityDays = 7 | 30;
 
 export const useUsage = create<UsageState>()(() => ({
   view: null,
-  projectId: null,
   loading: false,
   error: null,
   shown: false,
@@ -49,7 +46,7 @@ export const useUsage = create<UsageState>()(() => ({
 let inFlight: Promise<void> | null = null;
 let again = false;
 
-/** Reads the view for the chosen project; a read asked for meanwhile runs once after it. */
+/** Reads the view; a read asked for meanwhile runs once after it. */
 export function loadUsage(): Promise<void> {
   if (inFlight) {
     again = true;
@@ -60,13 +57,9 @@ export function loadUsage(): Promise<void> {
     try {
       do {
         again = false;
-        const projectId = useUsage.getState().projectId;
         try {
-          const { usage } = await request({ method: "getUsage", projectId });
-          // A project picked while reading is read next; keep this one only if it still applies.
-          if (useUsage.getState().projectId === projectId) {
-            useUsage.setState({ view: usage, error: null });
-          }
+          const { usage } = await request({ method: "getUsage" });
+          useUsage.setState({ view: usage, error: null });
         } catch (error) {
           useUsage.setState({ error: errorText(error) });
         }

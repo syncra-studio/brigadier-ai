@@ -93,7 +93,7 @@ mockIPC((command, payload) => {
     case "updateSettings":
       return { method: req.method, settings: req.settings };
     case "getUsage":
-      return { method: req.method, usage: usageView(req.projectId) };
+      return { method: req.method, usage: usageView(null) };
     case "getRankingsRefresh":
       return { method: req.method, refresh: edge ? FAILED_REFRESH : null };
     case "previewRoutes": {
