@@ -127,7 +127,7 @@ async function looks(): Promise<string> {
     title: [look(card?.querySelector("h2"), "text"), canon("title", "text")],
     line: [look(card?.querySelector("p"), "text"), canon("line", "text")],
     trust: [look(labelled("Trust folder"), "button"), canon("primary", "button")],
-    dontTrust: [look(labelled("Don't trust"), "button"), canon("ghost", "button")],
+    dontTrust: [look(labelled("Don't trust"), "button"), canon("outline", "button")],
     tooltip: [look(card?.querySelector("[data-slot=trust-path-tooltip]"), "surface"), canon("tooltip", "surface")],
   };
   return JSON.stringify(pairs);

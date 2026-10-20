@@ -182,7 +182,7 @@ export function TrustForm({ project, folder }: { project: Project; folder: strin
         <ErrorLine error={action.error} />
       </div>
       <div className="flex items-center justify-end gap-2 px-6 pt-6 pb-5">
-        <Button variant="ghost" size="sm" disabled={action.busy} onClick={() => answer(false)}>
+        <Button variant="outline" size="sm" disabled={action.busy} onClick={() => answer(false)}>
           Don't trust
         </Button>
         <Button size="sm" disabled={action.busy} onClick={() => answer(true)}>
