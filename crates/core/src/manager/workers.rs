@@ -1271,12 +1271,17 @@ impl SessionManager {
             .values()
             .map(|task| task.title.clone())
             .collect::<Vec<_>>();
-        let title = job_name(
-            &title,
-            kind,
-            subject.as_ref().map(|task| task.title.as_str()),
-            &names,
-        );
+        // A rerun one tier up is the same worker retried, not a numbered second one (#368).
+        let title = if extra.rerun.is_some() {
+            format!("{} retried", title.trim())
+        } else {
+            job_name(
+                &title,
+                kind,
+                subject.as_ref().map(|task| task.title.as_str()),
+                &names,
+            )
+        };
         let task = Task {
             id: extra.id.clone().unwrap_or_else(TaskId::generate),
             conversation_id: conversation_id.clone(),

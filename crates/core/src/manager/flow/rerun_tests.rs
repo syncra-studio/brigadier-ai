@@ -133,6 +133,8 @@ async fn a_scout_whose_check_fails_reruns_once_one_tier_up() {
         of.reason
     );
     assert_eq!((rerun.kind, &rerun.spec), (first.kind, &first.spec));
+    // The same worker retried, not a numbered second one (#368).
+    assert_eq!(rerun.title, format!("{} retried", first.title));
     let (cheap, stronger) = (tier(&flow, first).await, tier(&flow, rerun).await);
     assert_eq!(cheap, of.tier);
     assert!(stronger > cheap, "{stronger:?} after {cheap:?}");
