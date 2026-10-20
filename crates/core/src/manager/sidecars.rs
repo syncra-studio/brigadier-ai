@@ -151,12 +151,18 @@ mod tests {
 
     #[test]
     fn a_new_worktree_gets_an_empty_stand_in_for_each_ignored_sidecar() {
-        let dir = std::fs::canonicalize(std::env::temp_dir())
-            .unwrap()
-            .join(format!(
-                "brigadier-sidecars-{}",
-                uuid::Uuid::new_v4().simple()
-            ));
+        // Canonical (macOS's /var is /private/var), but not on Windows, where that is a \\?\
+        // path git reads no config from.
+        let temp = std::env::temp_dir();
+        let temp = if cfg!(windows) {
+            temp
+        } else {
+            std::fs::canonicalize(temp).unwrap()
+        };
+        let dir = temp.join(format!(
+            "brigadier-sidecars-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let config = dir.join("gitconfig");
         std::fs::write(&config, "").unwrap();
