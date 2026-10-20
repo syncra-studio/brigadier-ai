@@ -308,16 +308,18 @@ mod tests {
 
     #[test]
     fn expands_the_home_folder_and_rejects_relative_paths() {
-        let home = Path::new("/home/me");
-        assert_eq!(expand("~", Some(home)), Some(PathBuf::from("/home/me")));
+        // Absolute where the tests run: a drive's on Windows.
+        let (home, srv) = if cfg!(windows) {
+            (Path::new(r"C:\Users\me"), r"C:\srv\app")
+        } else {
+            (Path::new("/home/me"), "/srv/app")
+        };
+        assert_eq!(expand("~", Some(home)), Some(home.to_path_buf()));
         assert_eq!(
             expand(" ~/code/app ", Some(home)),
-            Some(PathBuf::from("/home/me/code/app"))
+            Some(home.join("code/app"))
         );
-        assert_eq!(
-            expand("/srv/app", Some(home)),
-            Some(PathBuf::from("/srv/app"))
-        );
+        assert_eq!(expand(srv, Some(home)), Some(PathBuf::from(srv)));
         assert_eq!(expand("~other/app", Some(home)), None);
         assert_eq!(expand("code/app", Some(home)), None);
         assert_eq!(expand("~/app", None), None);
