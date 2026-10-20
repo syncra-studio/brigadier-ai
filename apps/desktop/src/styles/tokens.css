@@ -586,9 +586,10 @@
   --tracking-tooltip: -0.01em;
   --tracking-eyebrow: 0.16em;
 
-  /* Trust this folder? and Add project: their widths. */
+  /* Trust this folder?, Add project, and Project settings and Remove project: their widths. */
   --container-trust: 26.25rem;
   --container-add-project: 47.5rem;
+  --container-project-dialog: 35rem;
   /* Add project: its list's height (five rows). */
   --spacing-add-project-list: 18.625rem;
   /* Its top edge: where the 549px list view sits centred, kept for every view and while the list

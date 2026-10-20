@@ -1,20 +1,15 @@
-import { useId, useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
-import { ErrorLine, errorText, Field, FolderField } from "@/app/dialogs/fields";
+import { ErrorLine, errorText } from "@/app/dialogs/fields";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Plus, Trash } from "@/components/ui/icon";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Plus, Trash, X } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { pickFolder } from "@/ipc/client";
 import type { Project } from "@/ipc/generated";
+import { shortPath } from "@/lib/format";
 import { updateProject } from "@/state/actions";
 import { useApp } from "@/state/store";
 import { folderTrust, setFolderTrust } from "@/state/trust";
@@ -29,13 +24,28 @@ export type ProjectDialogProps = {
 export function ProjectDialog(props: ProjectDialogProps) {
   return (
     <Dialog open={props.open && props.project !== null} onOpenChange={props.onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent showCloseButton={false} className="max-w-project-dialog gap-7 p-6">
         {/* Remounted per opening so the fields start from the project. */}
         {props.open && props.project && (
           <SettingsForm project={props.project} onOpenChange={props.onOpenChange} />
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A labelled field: its label (and a note on the right), then the control. */
+function Field({ label, aside, htmlFor, children }: { label: string; aside?: string; htmlFor?: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-4">
+        <label htmlFor={htmlFor} className="text-foreground text-label font-medium">
+          {label}
+        </label>
+        {aside && <span className="text-muted-foreground text-xs">{aside}</span>}
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -48,11 +58,14 @@ function TrustRow({ projectId, folder }: { projectId: string; folder: string }) 
   const trusted = useApp((s) => folderTrust(s.projects[projectId], folder) === true);
   const save = useAction();
   return (
-    <div className="grid gap-1.5">
-      <div className="flex items-center justify-between gap-4">
-        <label htmlFor={`${id}-trusted`} className="text-muted-foreground text-xs">
-          Trusted folder
-        </label>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-4">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.75">
+          <label htmlFor={`${id}-trusted`} className="text-foreground text-label font-medium">
+            Trust this folder
+          </label>
+          <p className="text-muted-foreground text-xs">Agents run commands here without asking first.</p>
+        </div>
         <Switch
           id={`${id}-trusted`}
           checked={trusted}
@@ -60,12 +73,40 @@ function TrustRow({ projectId, folder }: { projectId: string; folder: string }) 
           onCheckedChange={(on) => save.run(() => setFolderTrust(projectId, folder, on))}
         />
       </div>
-      <p className="text-muted-foreground text-xs">
-        Agents read files and run commands here. Off: every session here asks before doing
-        anything.
-      </p>
       <ErrorLine error={save.error} />
     </div>
+  );
+}
+
+/**
+ * The repository: its path in a field, with Change… to pick another folder (Choose… when the
+ * project has none).
+ */
+function RepositoryField({ id, value, onChange }: { id: string; value: string; onChange: (path: string) => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const choose = () => {
+    setError(null);
+    pickFolder(value || undefined)
+      .then((picked) => {
+        if (picked) onChange(picked);
+      })
+      .catch((cause: unknown) => setError(errorText(cause)));
+  };
+  return (
+    <>
+      <div className="bg-muted/60 rounded-control h-control-md flex items-center gap-2 pr-1 pl-3">
+        <span
+          id={id}
+          className={value ? "text-foreground min-w-0 flex-1 truncate font-mono text-xs" : "text-muted-foreground min-w-0 flex-1 truncate"}
+        >
+          {value ? shortPath(value) : "No repository chosen"}
+        </span>
+        <Button type="button" variant="ghost" size="sm" aria-describedby={id} onClick={choose}>
+          {value ? "Change" : "Choose…"}
+        </Button>
+      </div>
+      <ErrorLine error={error} />
+    </>
   );
 }
 
@@ -91,6 +132,8 @@ function SettingsForm({
   const [name, setName] = useState(project.name);
   const [repo, setRepo] = useState(initialRepo);
   const [secrets, setSecrets] = useState<string[]>(project.prefs.secretFiles);
+  // The secret file row the error is about, outlined in red.
+  const [badRow, setBadRow] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -101,22 +144,24 @@ function SettingsForm({
       setError("Name can't be empty.");
       return;
     }
-    const path = repo.trim();
     const files = secrets.map((file) => file.trim());
-    const problem = files.map(secretFileProblem).find((entry) => entry !== null);
-    if (problem) {
-      setError(problem);
+    const problems = files.map(secretFileProblem);
+    const bad = problems.findIndex((entry) => entry !== null);
+    if (bad >= 0) {
+      setBadRow(bad);
+      setError(problems[bad]!);
       return;
     }
     const secretsChanged =
       files.length !== project.prefs.secretFiles.length ||
       files.some((file, index) => file !== project.prefs.secretFiles[index]);
     setBusy(true);
+    setBadRow(null);
     setError(null);
     try {
       await updateProject(project.id, {
         name: trimmedName === project.name ? null : trimmedName,
-        repos: path === initialRepo ? null : path ? [path] : [],
+        repos: repo === initialRepo ? null : [repo],
         prefs: secretsChanged ? { ...project.prefs, secretFiles: files } : null,
       });
       onOpenChange(false);
@@ -128,79 +173,85 @@ function SettingsForm({
   };
 
   return (
-    <form onSubmit={(event) => void submit(event)} className="grid gap-4">
-      <DialogHeader>
-        <DialogTitle>Project settings</DialogTitle>
-        <DialogDescription>{project.name}</DialogDescription>
-      </DialogHeader>
-      <Field label="Name" htmlFor={`${id}-name`}>
-        <Input
-          id={`${id}-name`}
-          value={name}
-          maxLength={200}
-          onChange={(event) => setName(event.target.value)}
-        />
-      </Field>
-      <Field
-        label="Repository"
-        htmlFor={`${id}-repo`}
-        hint="New sessions work here. Existing sessions keep the repository they started in."
-      >
-        <FolderField id={`${id}-repo`} value={repo} onChange={setRepo} />
-      </Field>
-      {initialRepo && <TrustRow projectId={project.id} folder={initialRepo} />}
-      <Field
-        label="Secret env files"
-        hint="Gitignored files (paths relative to the repository root) copied into every worker worktree. Their values are redacted in the UI, logs and the Brain."
-      >
-        <ul className="grid gap-1.5" aria-label="Secret env files">
-          {secrets.map((file, index) => (
-            <li key={index} className="flex gap-2">
-              <Input
-                value={file}
-                spellCheck={false}
-                autoComplete="off"
-                placeholder=".env.local"
-                aria-label={`Secret file ${index + 1}`}
-                className="font-mono text-xs"
-                onChange={(event) =>
-                  setSecrets((current) =>
-                    current.map((entry, at) => (at === index ? event.target.value : entry)),
-                  )
-                }
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-md"
-                aria-label={`Remove ${file || "this file"}`}
-                onClick={() => setSecrets((current) => current.filter((_, at) => at !== index))}
-              >
-                <Trash />
-              </Button>
-            </li>
-          ))}
-        </ul>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="justify-self-start"
-          onClick={() => setSecrets((current) => [...current, ""])}
-        >
-          <Plus />
-          Add file
-        </Button>
-      </Field>
-      <ErrorLine error={error} />
-      <DialogFooter>
+    <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-7">
+      <div className="flex flex-col gap-5.5">
+        <div className="flex items-center gap-3">
+          <DialogTitle className="min-w-0 flex-1">Project settings</DialogTitle>
+          <DialogClose asChild>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="Close">
+              <X />
+            </Button>
+          </DialogClose>
+        </div>
+        <Field label="Name" htmlFor={`${id}-name`}>
+          <Input
+            id={`${id}-name`}
+            value={name}
+            autoFocus
+            maxLength={200}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </Field>
+        <Field label="Repository">
+          <RepositoryField id={`${id}-repo`} value={repo} onChange={setRepo} />
+        </Field>
+        {initialRepo && <TrustRow projectId={project.id} folder={initialRepo} />}
+        <Field label="Secret files" aside="Copied into every worktree, never shown">
+          <ul className="flex flex-col gap-1.5" aria-label="Secret files">
+            {secrets.map((file, index) => (
+              <li key={index} className="flex items-center gap-1">
+                <Input
+                  value={file}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder=".env.local"
+                  aria-label={`Secret file ${index + 1}`}
+                  aria-invalid={badRow === index || undefined}
+                  className="font-mono text-xs"
+                  onChange={(event) => {
+                    if (badRow === index) setBadRow(null);
+                    setSecrets((current) =>
+                      current.map((entry, at) => (at === index ? event.target.value : entry)),
+                    );
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-md"
+                  className="text-muted-foreground"
+                  aria-label={`Remove ${file || "this file"}`}
+                  onClick={() => {
+                    setBadRow(null);
+                    setSecrets((current) => current.filter((_, at) => at !== index));
+                  }}
+                >
+                  <Trash />
+                </Button>
+              </li>
+            ))}
+          </ul>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="self-start"
+            onClick={() => setSecrets((current) => [...current, ""])}
+          >
+            <Plus />
+            Add file
+          </Button>
+        </Field>
+        <ErrorLine error={error} />
+      </div>
+      <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
           Cancel
         </Button>
         <Button type="submit" disabled={busy}>
-          Save
+          {busy ? "Saving…" : "Save"}
         </Button>
-      </DialogFooter>
+      </div>
     </form>
   );
 }
