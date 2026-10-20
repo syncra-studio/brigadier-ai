@@ -33,7 +33,7 @@ beforeEach(() => {
 const open = (url: string, request: string | null = null, keep = false): BrowserOp => ({ op: "open", url, keep, request });
 
 /** The shell and daemon, faked: pages load at once, the script answers as `answer` says. */
-function fakeShell(answer: (op: Record<string, unknown>) => unknown) {
+function fakeShell(answer: (op: Record<string, unknown>) => unknown, opening?: (id: string) => void) {
   const channels = new Map<string, Channel<BrowserEvent>>();
   const opened: { id: string; url: string; agent: boolean }[] = [];
   const shown: string[] = [];
@@ -52,6 +52,7 @@ function fakeShell(answer: (op: Record<string, unknown>) => unknown) {
       case "browser_open":
         channels.set(args.id, args.events!);
         opened.push({ id: args.id, url: args.url, agent: args.agent ?? false });
+        opening?.(args.id);
         setTimeout(() => load(args.id, args.url), 1);
         return null;
       case "browser_place":
@@ -200,6 +201,21 @@ test("the user's input in an agent's tab pauses it until Continue, and closing t
   closeTab(SESSION, tab);
   assert.equal(isPaused(tab), false);
   assert.deepEqual(shell.paused.slice(-2), [{ tab, paused: true }, { tab, paused: false }]);
+});
+
+test("a takeover while a restarted tab's page opens again stops the agent's click (issue 360)", async () => {
+  useApp.setState((state) => ({ settings: { ...state.settings, browserEnabled: true } }));
+  let takeOver = "";
+  const shell = fakeShell(reads, (id) => { if (id === takeOver) userUsed(id); });
+  const tab = tabOf(await answered(shell, open("http://127.0.0.1:4000/")));
+  // A restart: the tab stays, its page is gone; the user takes it over while it opens again.
+  const { closePage } = await import("./browsers");
+  closePage(tab);
+  takeOver = tab;
+  const before = shell.scripts.length;
+  assert.deepEqual(await answered(shell, { op: "click", tab, target: "e1", guard: { declared: null, approved: null } }), { result: "paused", tab });
+  assert.equal(shell.scripts.length, before, "nothing was clicked on the page");
+  handBack(tab);
 });
 
 test("the user's own Browser tabs never pause anything", async () => {

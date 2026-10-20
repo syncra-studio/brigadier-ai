@@ -150,10 +150,11 @@ async function perform(call: BrowserCall, hands: PageHands): Promise<BrowserResu
       : `Tab ${tab.id} is the user's: you may read it, not click, type, navigate or close it. Open your own with browser_open.`);
   // The user took it over: nothing is done until they press Continue.
   if (!users && isPaused(tab.id)) return { result: "paused", tab: tab.id };
-  // Its page goes with a restart: it loads again where it was.
+  // Its page goes with a restart: it loads again where it was. The user may take it over meanwhile.
   if (!useBrowsers.getState().pages[tab.id]) {
     await hands.open(tab.id, tab.url || "about:blank", backgroundBounds());
     await loaded(tab.id);
+    if (!users && isPaused(tab.id)) return { result: "paused", tab: tab.id };
   }
   const result = await act(tab.id, op, conversationId, hands);
   return users && result.result === "page" ? { ...result, user: true } : result;
