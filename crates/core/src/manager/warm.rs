@@ -1319,6 +1319,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "Unix path spellings, not absolute paths on Windows")]
     fn only_whole_paths_are_rewritten() {
         let p = paths("/Users/me/app", "/data/worktrees/task-1");
         assert_eq!(
@@ -1357,6 +1358,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "Unix path spellings, not absolute paths on Windows")]
     fn paths_are_rewritten_in_each_formats_own_spelling() {
         let p = paths(
             "/Users/me/my app",
@@ -1395,6 +1397,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "Unix path spellings, not absolute paths on Windows")]
     fn longer_spellings_are_rewritten_first() {
         let forms = source_forms(
             Path::new("/private/var/me/app"),

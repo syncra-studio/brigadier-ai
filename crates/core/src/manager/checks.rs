@@ -3684,6 +3684,10 @@ mod tests {
     /// A commit's line says what it holds and, from git status after it, what it left: an
     /// ignored file is named nowhere, a change `git add -A` couldn't take is named.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "checks run their commit through /bin/sh (run::SHELL), which Windows has no shell for yet"
+    )]
     fn a_commit_says_what_it_holds_and_what_git_status_still_shows() {
         let temp = Temp::new("commit-record");
         let tree = temp.0.as_path();
@@ -3718,6 +3722,10 @@ mod tests {
     /// A commit that fixes review findings carries both trailers, so it gets no review of its
     /// own (BUILD-PLAN O4); one that fixes none carries only the thread's.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "checks run their commit through /bin/sh (run::SHELL), which Windows has no shell for yet"
+    )]
     fn a_commit_that_fixes_findings_names_them_in_its_trailer() {
         let temp = Temp::new("commit-fixes");
         let tree = temp.0.as_path();
