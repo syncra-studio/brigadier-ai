@@ -177,10 +177,14 @@
       return text;
     };
     // A label's own text is its control's name, read with the control.
+    // A display: contents wrapper passes `shown` with no box: its own text shows only while it's
+    // visible (its elements check their own).
     const walk = (node, labelling = false) => {
+      const quiet = labelling || (node.nodeType === Node.ELEMENT_NODE &&
+        getComputedStyle(node).display === "contents" && getComputedStyle(node).visibility !== "visible");
       for (const child of node.childNodes) {
         if (child.nodeType === Node.TEXT_NODE) {
-          if (!labelling) line += ` ${child.textContent}`;
+          if (!quiet) line += ` ${child.textContent}`;
           continue;
         }
         if (child.nodeType !== Node.ELEMENT_NODE) continue;

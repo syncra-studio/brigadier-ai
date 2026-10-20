@@ -97,5 +97,11 @@ wrapper.style.display = "contents";
 wrapper.innerHTML = '<p>Inside a wrapper</p><button>Wrapped</button><span style="visibility: hidden">Hidden inside</span>';
 document.body.append(wrapper);
 seen.contents = (agent({ kind: "read", max: 20000 }) as { text: string }).text.split("\n").slice(-2);
+// A hidden one's own text stays out; a child that shows itself again is read.
+const hiddenWrapper = document.createElement("div");
+hiddenWrapper.style.cssText = "display: contents; visibility: hidden";
+hiddenWrapper.innerHTML = 'Hidden wrapper text<p style="visibility: visible">Shown again</p>';
+document.body.append(hiddenWrapper);
+seen.hiddenContents = (agent({ kind: "read", max: 20000 }) as { text: string }).text.split("\n").slice(-2);
 
 byId("agent-browser-result").textContent = JSON.stringify(seen);

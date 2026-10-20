@@ -80,4 +80,5 @@ test("browser tool: the page script reads, clicks, types and asks first", { time
     '[e17] textbox "Shown password" (filled) (password field)',
   ], "no secret's value is read out");
   assert.deepEqual(seen.contents, ["Inside a wrapper", '[e18] button "Wrapped"'], "a display: contents wrapper's children are read, its hidden ones left out");
+  assert.deepEqual(seen.hiddenContents, ['[e18] button "Wrapped"', "Shown again"], "a hidden display: contents wrapper's own text is left out");
 });
