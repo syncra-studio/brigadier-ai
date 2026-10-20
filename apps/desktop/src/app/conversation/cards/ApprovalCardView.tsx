@@ -3,10 +3,9 @@ import { memo, type ReactNode } from "react";
 import { DiffStatView } from "@/app/conversation/cards/common";
 import { WaitingRow } from "@/app/conversation/cards/common";
 import { WorkerChip } from "@/app/conversation/WorkerChip";
-import {
-  ApprovalCard,
-  ApprovalCardCode,
-} from "@/components/assistant-ui/elements/approval-card";
+import { ActionCard, ActionCardTitle } from "@/components/assistant-ui/elements/action-card";
+import { paper } from "@/components/assistant-ui/elements/surfaces";
+import { ToolBox } from "@/components/assistant-ui/elements/tool-box";
 import { DECIDERS } from "@/components/transcript/TranscriptRow";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -19,6 +18,7 @@ import {
 } from "@/components/icons";
 import type { CardState } from "@/ipc/generated";
 import { NEVER_PUSHES_NOTE } from "@/lib/setup";
+import { cn } from "@/lib/utils";
 import { type ShownApproval, useBoard } from "@/state/board";
 
 /** Shell-quotes an argument only where needed, so the exact argv reads unambiguously. */
@@ -88,15 +88,15 @@ function describe(
                 Outside the sandbox
               </Badge>
             )}
-            {request.command && <ApprovalCardCode>{request.command}</ApprovalCardCode>}
+            {request.command && <ToolBox>{request.command}</ToolBox>}
             {request.paths.length > 0 && (
-              <ApprovalCardCode>{request.paths.join("\n")}</ApprovalCardCode>
+              <ToolBox>{request.paths.join("\n")}</ToolBox>
             )}
             {!request.command && request.input && (
-              <ApprovalCardCode>{request.input}</ApprovalCardCode>
+              <ToolBox>{request.input}</ToolBox>
             )}
             {request.cwd && (
-              <p className="text-muted-foreground font-mono text-xs">in {request.cwd}</p>
+              <p className="text-muted-foreground px-1 font-mono text-xs">in {request.cwd}</p>
             )}
           </>
         ),
@@ -109,8 +109,8 @@ function describe(
         subtitle: byline(by, NEVER_PUSHES_NOTE),
         body: (
           <>
-            <ApprovalCardCode>{subject.argv.map(quote).join(" ")}</ApprovalCardCode>
-            <p className="text-muted-foreground font-mono text-xs">in {subject.cwd}</p>
+            <ToolBox>{subject.argv.map(quote).join(" ")}</ToolBox>
+            <p className="text-muted-foreground px-1 font-mono text-xs">in {subject.cwd}</p>
           </>
         ),
       };
@@ -131,28 +131,28 @@ function describe(
         icon: <Sparkle />,
         title: subject.action,
         subtitle: by,
-        body: <p className="text-sm whitespace-pre-wrap">{subject.details}</p>,
+        body: <ToolBox prose>{subject.details}</ToolBox>,
       };
     case "outline":
       return {
         icon: <Sparkle />,
         title: "Start this plan?",
         subtitle: byline(by, subject.title),
-        body: <p className="text-sm whitespace-pre-wrap">{subject.outline}</p>,
+        body: <ToolBox prose>{subject.outline}</ToolBox>,
       };
     case "peerMessage":
       return {
         icon: <Sparkle />,
         title: `Send a message to ${subject.title} in ${subject.project}?`,
         subtitle: by,
-        body: <p className="text-sm whitespace-pre-wrap">{subject.text}</p>,
+        body: <ToolBox prose>{subject.text}</ToolBox>,
       };
     case "browser":
       return {
         icon: <Globe />,
         title: subject.question,
         subtitle: by,
-        body: <p className="text-sm whitespace-pre-wrap">{subject.details}</p>,
+        body: <ToolBox prose>{subject.details}</ToolBox>,
       };
   }
 }
@@ -174,16 +174,17 @@ export const ApprovalCardView = memo(function ApprovalCardView({ cardId }: { car
   if (approval.state.type === "pending") {
     return <WaitingRow icon={shown.icon} quiet>Awaiting approval</WaitingRow>;
   }
+  // The rail's approval card as it was answered: what it asked, then who decided.
   return (
-    <ApprovalCard
-      data-card="approval"
-      icon={shown.icon}
-      title={shown.title}
-      subtitle={shown.subtitle}
-      pending={false}
-      resolution={<Resolution state={approval.state} />}
-    >
-      {shown.body}
-    </ApprovalCard>
+    <ActionCard data-card="approval" aria-label="Approval" className={cn(paper, "rounded-thread")}>
+      <div className="flex min-w-0 items-start gap-2 px-4 pt-3.5 pb-2.5">
+        <span className="text-foreground/65 flex h-5 shrink-0 items-center [&_svg]:size-4.5">{shown.icon}</span>
+        <ActionCardTitle detail={shown.subtitle}>{shown.title}</ActionCardTitle>
+      </div>
+      <div className="flex flex-col gap-2 px-3">{shown.body}</div>
+      <div className="fade-in animate-in text-muted-foreground flex items-center justify-end gap-2 px-4 pt-2 pb-4 text-xs duration-300">
+        <Resolution state={approval.state} />
+      </div>
+    </ActionCard>
   );
 });
