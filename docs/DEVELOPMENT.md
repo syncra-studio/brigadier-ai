@@ -157,6 +157,13 @@ stays small; keep new ones lazy too.
   cargo run -p brigadier-providers --features codegen --bin gen-codex -- "$(command -v codex)"
   ```
 
+To try Connect's sign-in in a test run whose `HOME` is a scratch folder, start the default
+browser first. Codex (0.163.0) ignores `BROWSER` on macOS and opens its sign-in page itself, with
+the sign-in's environment: a browser that isn't running yet then starts with the scratch `HOME`
+and can't find its keychain. In the app that environment is the user's own, so it doesn't matter
+there. Claude Code's page opens through Brigadier, with the account's real home.
+`tools/sign-in-timing.py` changes only the agent's config folder, not `HOME`.
+
 The Inspector's **Providers** tab (Settings › Inspector) shows each CLI's login state, version,
 live model list and remaining quota. From it you can start, resume, fork, steer, interrupt,
 stop and close raw sessions, answer their approval requests, simulate a usage-limit event and

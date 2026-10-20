@@ -24,7 +24,10 @@
 //!   Whatever opens the browser hands it its own environment, home included (`open` and
 //!   LaunchServices alike). So the sign-in gets a `BROWSER` that only passes the link back,
 //!   and Brigadier opens it with the account's own home. Claude Code uses it; Codex ignores
-//!   it on macOS and opens the page itself.
+//!   it on macOS and opens the page itself (codex-cli 0.163.0, 2026-10-20: `codex login` has
+//!   no option to skip the browser and keep the localhost callback; `--device-auth` drops the
+//!   callback). That is harmless in the app, but a test run with a scratch `HOME` signs Codex
+//!   in only with the browser already running (docs/DEVELOPMENT.md, Providers).
 //! - `curl … | sh` runs with `pipefail`, so a download that fails fails the install instead of
 //!   piping an empty script into a shell that succeeds. Either installer offline exits non-zero
 //!   with curl's error on stderr (7: can't connect).
