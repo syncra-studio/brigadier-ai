@@ -45,6 +45,16 @@ function DialogOverlay({
   );
 }
 
+/** An overlay with no look of its own, for a dialog that draws its own (the image viewer). */
+function DialogPlainOverlay(props: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
+  return <DialogPrimitive.Overlay {...props} />;
+}
+
+/** Dialog content with no look and no close button of its own. */
+function DialogPlainContent(props: React.ComponentProps<typeof DialogPrimitive.Content>) {
+  return <DialogPrimitive.Content {...props} />;
+}
+
 function DialogContent({
   className,
   children,
@@ -147,6 +157,8 @@ export {
   DialogFooter,
   DialogHeader,
   DialogOverlay,
+  DialogPlainContent,
+  DialogPlainOverlay,
   DialogPortal,
   DialogTitle,
   DialogTrigger,

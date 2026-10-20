@@ -1,10 +1,10 @@
 import { ChevronLeft, ChevronRight, Download, Minus, Plus, X } from "@openai/apps-sdk-ui/components/Icon";
-import { Dialog as DialogPrimitive } from "radix-ui";
 import { type ComponentProps, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref, useEffect, useEffectEvent, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import { type AttachmentSource, useAttachmentUrl } from "@/components/assistant-ui/elements/attachment-url";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { Dialog, DialogClose, DialogPlainContent, DialogPlainOverlay, DialogPortal, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { saveCopy } from "@/ipc/client";
 import { toast } from "@/state/toasts";
 import { cn } from "@/lib/utils";
@@ -180,8 +180,8 @@ export function ImagePreview({
   // read of the attachment comes.
   const current = at === first ? { ...listed, url: listed.url ?? url } : listed;
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={(next) => (next ? undefined : hide())}>
-      <DialogPrimitive.Trigger
+    <Dialog open={open} onOpenChange={(next) => (next ? undefined : hide())}>
+      <DialogTrigger
         asChild
         onClick={(event: MouseEvent<HTMLElement>) => {
           event.preventDefault();
@@ -189,16 +189,16 @@ export function ImagePreview({
         }}
       >
         {children}
-      </DialogPrimitive.Trigger>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
+      </DialogTrigger>
+      <DialogPortal>
+        <DialogPlainOverlay
           className={cn(
             "bg-image-viewer fixed inset-0 z-50",
             !morph && !grown && "data-[state=open]:animate-in data-[state=open]:fade-in-0",
             !morph && "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 duration-150 motion-reduce:animate-none motion-reduce:duration-0",
           )}
         />
-        <DialogPrimitive.Content
+        <DialogPlainContent
           aria-describedby={undefined}
           data-slot="image-preview"
           onKeyDown={(event: KeyboardEvent) => {
@@ -217,15 +217,15 @@ export function ImagePreview({
             !morph && "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 duration-150 motion-reduce:animate-none motion-reduce:duration-0",
           )}
         >
-          <DialogPrimitive.Title className="sr-only">Image preview</DialogPrimitive.Title>
+          <DialogTitle className="sr-only">Image preview</DialogTitle>
           <ShownImage key={at} image={current} size={at === first ? size : null} morph={morph && at === first} imageRef={shown} zoomKeys={zoomKeys} onBackdrop={hide} count={images.length > 1 ? `${at + 1} of ${images.length}` : null} />
           {images.length > 1 && <>
             <StepButton side="start" disabled={at === 0} onClick={() => step(-1)} />
             <StepButton side="end" disabled={at >= images.length - 1} onClick={() => step(1)} />
           </>}
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        </DialogPlainContent>
+      </DialogPortal>
+    </Dialog>
   );
 }
 
@@ -332,7 +332,7 @@ function ShownImage({ image, size, morph, imageRef, zoomKeys, onBackdrop, count 
   return <>
     <div className="absolute top-3 right-3 z-10 flex gap-2">
       <button type="button" aria-label="Download image" title="Download image" className={roundButton} disabled={!url} onClick={() => { void downloadImage(image, url); }}><Download aria-hidden className="size-icon-md" /></button>
-      <DialogPrimitive.Close aria-label="Close image preview" title="Close image preview" className={roundButton}><X aria-hidden className="size-icon-md" /></DialogPrimitive.Close>
+      <DialogClose aria-label="Close image preview" title="Close image preview" className={roundButton}><X aria-hidden className="size-icon-md" /></DialogClose>
     </div>
     {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- Esc and the close button provide keyboard dismissal */}
     <div ref={frame} data-slot="image-preview-frame" tabIndex={-1}
