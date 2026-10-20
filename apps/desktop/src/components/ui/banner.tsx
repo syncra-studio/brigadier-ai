@@ -25,13 +25,16 @@ export function Banner({ tone = "info", text, children, onDismiss, className, ..
       role={tone === "error" ? "alert" : "status"}
       data-tone={tone}
       className={cn(
-        "flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2 text-sm",
+        "flex shrink-0 items-center gap-2 border-b px-4 py-2 text-sm",
         tone === "error" ? "bg-destructive/10 text-destructive border-destructive/20" : "bg-foreground/5 border-border",
         className,
       )}
     >
-      <span className="min-w-48 flex-1 wrap-break-word">{text}</span>
-      {children}
+      {/* Words and buttons wrap as one; the × keeps to the first line's end. */}
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+        <span data-slot="banner-text" className="min-w-0 flex-1 basis-48 wrap-break-word">{text}</span>
+        {children}
+      </div>
       {onDismiss && (
         <TooltipIconButton tooltip="Dismiss" size="icon-xs" onClick={onDismiss}>
           <X />

@@ -174,7 +174,7 @@ async function steps(seen: Record<string, unknown>): Promise<void> {
   emitPageChanged({ id: FIRST, revision: theirs.revision });
   await until(() => one('[data-slot="banner"][data-tone="warning"]') !== null);
   const banner = one('[data-slot="banner"][data-tone="warning"]');
-  seen.conflict = banner ? [banner.querySelector(":scope > span")?.textContent, ...[...banner.querySelectorAll("button")].map((button) => button.textContent)] : null;
+  seen.conflict = banner ? [banner.querySelector('[data-slot="banner-text"]')?.textContent, ...[...banner.querySelectorAll("button")].map((button) => button.textContent)] : null;
   [...(banner?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Keep both")?.click();
   await until(() => sessionTabs(ID).tabs.length === 2);
   const copy = sessionTabs(ID).tabs.find((tab) => tab.kind === "page" && tab.pageId !== FIRST);

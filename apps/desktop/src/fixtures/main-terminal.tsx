@@ -32,7 +32,7 @@ const tabId = newSessionTab(conversationId, "terminal");
 const tab = sessionTabs(conversationId).tabs.find((entry) => entry.id === tabId) as TerminalTabState;
 
 const pause = (ms = 300) => new Promise((resolve) => setTimeout(resolve, ms));
-const notice = () => document.querySelector('[role="status"] > span')?.textContent ?? null;
+const notice = () => document.querySelector('[role="status"] [data-slot="banner-text"]')?.textContent ?? null;
 const restart = () => [...document.querySelectorAll("button")].find((button) => button.textContent === "Restart");
 function exit(): void {
   const id = current!;
