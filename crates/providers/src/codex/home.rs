@@ -114,6 +114,7 @@ impl ThreadHome {
             }
         }
         let config = std::fs::read_to_string(base.join("config.toml")).unwrap_or_default();
+        let config = with_base_paths(&config, &base);
         // Switched off since the thread's instructions were written: told to read them itself.
         if !hooks_on(&config) {
             return Err(io::Error::other("the user switched Codex's hooks off"));
@@ -242,6 +243,30 @@ fn with_kept_trust(config: &str, kept: &str, own: &str) -> String {
     } else {
         config.to_owned()
     }
+}
+
+/// The user's `config` for a copy in another home: a relative `sqlite_home` (Codex takes it
+/// from the config file's folder, and over [`SQLITE_HOME`]) named from `base`, where the
+/// databases are. Anything else, and a `config` that doesn't parse, as it is.
+fn with_base_paths(config: &str, base: &Path) -> String {
+    let Ok(document) = config.parse::<toml_edit::Document<String>>() else {
+        return config.to_owned();
+    };
+    let Some(value) = document
+        .get("sqlite_home")
+        .and_then(toml_edit::Item::as_value)
+    else {
+        return config.to_owned();
+    };
+    let (Some(dir), Some(span)) = (value.as_str(), value.span()) else {
+        return config.to_owned();
+    };
+    if dir.is_empty() || dir.starts_with('~') || Path::new(dir).is_absolute() {
+        return config.to_owned();
+    }
+    // A JSON string is a valid TOML basic string.
+    let named = Value::from(base.join(dir).display().to_string()).to_string();
+    format!("{}{named}{}", &config[..span.start], &config[span.end..])
 }
 
 /// `config`'s `hooks.state` entries for hooks of `base` (its `hooks.json` and `config.toml`),
@@ -463,6 +488,38 @@ mod tests {
         assert_eq!(with_kept_trust("a = 1\n", "not = [toml", &own), "a = 1\n");
         assert!(hooks_on("") && hooks_on("[features]\nhooks = true\n"));
         assert!(!hooks_on("features.hooks = false\n"));
+    }
+
+    /// A relative `sqlite_home` in the user's config names a folder of the account's home: the
+    /// copy names it from there, or Codex would take it from the thread's home, where the
+    /// databases aren't (it wins over `CODEX_SQLITE_HOME`).
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_sqlite_home_stays_in_the_accounts_home() {
+        let root = scratch();
+        let base = root.0.join("base");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(
+            base.join("config.toml"),
+            "model = \"m\"\nsqlite_home = \"sqlite\" # mine\n",
+        )
+        .unwrap();
+        let home = ThreadHome::prepare(&base, &root.0.join("homes"), &hook()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.dir.join("config.toml")).unwrap(),
+            format!(
+                "model = \"m\"\nsqlite_home = \"{}\" # mine\n",
+                base.join("sqlite").display()
+            )
+        );
+        for kept in [
+            "sqlite_home = \"/data/codex\"\n",
+            "sqlite_home = \"~/codex\"\n",
+            "a = 1\n",
+            "not = [toml",
+        ] {
+            assert_eq!(with_base_paths(kept, &base), kept);
+        }
     }
 
     /// With no hooks of the user's, or a file that isn't hooks, Brigadier's is the only group.
