@@ -19,8 +19,8 @@
 //!   runs and once it ended, so Undo can tell what the call changed (#87). Nothing is printed
 //!   for it, and the call runs as it would without the hook, unless the daemon refuses a call
 //!   about to run (git while the user's rebase is in progress in the session's checkout, #342):
-//!   then it is denied with the daemon's reason. A call sent to the background is left out: it
-//!   ends after its hook.
+//!   then it is denied with the daemon's reason. A call sent to the background goes only before
+//!   it runs, for that: it ends after its hook, so its files are never read.
 //! - **A file tool's success** (`Read`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, run by
 //!   a second `PostToolUse` entry): the touched file's path goes to the daemon, which answers
 //!   with the rules of its folders the thread hasn't had yet (a subfolder's `CLAUDE.md` or
@@ -194,7 +194,7 @@ fn handle(
 }
 
 /// A `Bash` call about to run (`PreToolUse`) or just ended, as the daemon reads its files for
-/// it; `None` for any other event, and for a call sent to the background.
+/// it; `None` for any other event, and for the end of a call sent to the background.
 fn shell_call(event: &Value) -> Option<ShellCall> {
     if event.get("tool_name").and_then(Value::as_str)? != "Bash" {
         return None;
@@ -205,7 +205,8 @@ fn shell_call(event: &Value) -> Option<ShellCall> {
         _ => return None,
     };
     let input = event.get("tool_input")?;
-    if input.get("run_in_background").and_then(Value::as_bool) == Some(true) {
+    let background = input.get("run_in_background").and_then(Value::as_bool) == Some(true);
+    if background && ended {
         return None;
     }
     Some(ShellCall {
@@ -213,6 +214,7 @@ fn shell_call(event: &Value) -> Option<ShellCall> {
         tool_use_id: event.get("tool_use_id")?.as_str()?.to_owned(),
         command: input.get("command")?.as_str()?.to_owned(),
         cwd: event.get("cwd").and_then(Value::as_str).map(str::to_owned),
+        background,
     })
 }
 
@@ -544,7 +546,7 @@ mod tests {
 
     /// A `Bash` call goes to the daemon before it runs and once it ended (a failure too), with
     /// its command and folder, and the hook prints nothing for it; a call sent to the
-    /// background, or another tool, sends nothing (#87).
+    /// background only before it runs, marked so, and another tool nothing (#87).
     #[test]
     fn a_bash_calls_start_and_end_go_to_the_daemon_for_its_files() {
         let event = |name: &str, input: Value| {
@@ -583,16 +585,33 @@ mod tests {
                     tool_use_id: "toolu_1".into(),
                     command: "echo x >> notes.md".into(),
                     cwd: Some("/repo".into()),
+                    background: false,
                 }
             );
         }
         let background = json!({ "command": "sleep 9", "run_in_background": true });
-        assert_eq!(
-            handle(&event("PreToolUse", background), |_, _| panic!(
-                "a background call's changes stay unowned"
-            )),
+        let sent = std::cell::RefCell::new(Vec::new());
+        let printed = handle(&event("PreToolUse", background.clone()), |header, _| {
+            sent.borrow_mut().push(header.shell.clone());
             None
+        });
+        assert_eq!(printed, None);
+        assert!(
+            matches!(&sent.borrow()[..], [Some(shell)] if shell.background && !shell.ended),
+            "{sent:?}"
         );
+        for name in ["PostToolUse", "PostToolUseFailure"] {
+            assert_eq!(
+                handle(&event(name, background.clone()), |header, _| {
+                    assert!(
+                        header.shell.is_none(),
+                        "a background call's changes stay unowned"
+                    );
+                    None
+                }),
+                None
+            );
+        }
     }
 
     /// A `Bash` call the daemon refuses before it runs is denied, with the daemon's reason for

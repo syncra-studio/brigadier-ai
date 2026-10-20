@@ -118,6 +118,7 @@ pub async fn serve_hook(
                 &shell.tool_use_id,
                 &shell.command,
                 shell.cwd.as_deref(),
+                shell.background,
             )
             .await;
         answer_hook(

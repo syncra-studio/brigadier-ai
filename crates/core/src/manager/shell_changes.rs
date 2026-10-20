@@ -330,7 +330,8 @@ impl SessionManager {
     /// post-tool-use`): before it runs (`ended` false) and once it ended. The files its command
     /// names are read before the hook's answer lets the call go on. A grant that isn't a live
     /// hook grant reads nothing. Returns why a call about to run is refused: it runs git while
-    /// the user's rebase is in progress in the session's checkout (#342).
+    /// the user's rebase is in progress in the session's checkout (#342). A call sent to the
+    /// `background` is only looked at for that: it ends after its hook.
     pub async fn hook_shell(
         &self,
         grant: &str,
@@ -338,12 +339,16 @@ impl SessionManager {
         call: &str,
         command: &str,
         cwd: Option<&str>,
+        background: bool,
     ) -> Option<String> {
         let Some(Role::OutputHook { conversation_id }) = self.grants.resolve(grant) else {
             return None;
         };
         if !ended && let Some(refused) = self.user_rebase_refusal(&conversation_id, command).await {
             return Some(refused);
+        }
+        if background {
+            return None;
         }
         self.capture_shell(
             &conversation_id,

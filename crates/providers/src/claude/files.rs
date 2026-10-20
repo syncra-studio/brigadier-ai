@@ -105,7 +105,7 @@ pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             if !UNLINKED.iter().any(|unlinked| name == *unlinked) {
-                let target = settings_target(cwd, project, &name.to_string_lossy(), entry.path())?;
+                let target = settings_target(cwd, &name.to_string_lossy(), entry.path())?;
                 wanted.push((dot_claude.join(&name), target));
             }
         }
@@ -117,7 +117,6 @@ pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
     {
         let target = settings_target(
             cwd,
-            project,
             "settings.local.json",
             main.join(".claude/settings.local.json"),
         )?;
@@ -127,16 +126,16 @@ pub(super) fn link_project(cwd: &Path, project: &Path) -> io::Result<()> {
 }
 
 /// What a link to the project's `.claude` entry `name` at `path` points to: a settings file
-/// whose hooks run commands, a copy of it where they run in `project` ([`hooks_in_project`]);
-/// anything else, itself.
+/// whose hooks run commands, a copy of it where they run in the CLI's project
+/// ([`hooks_in_project`]); anything else, itself.
 #[cfg(unix)]
-fn settings_target(cwd: &Path, project: &Path, name: &str, path: PathBuf) -> io::Result<PathBuf> {
+fn settings_target(cwd: &Path, name: &str, path: PathBuf) -> io::Result<PathBuf> {
     let Some((_, copy)) = SETTINGS_COPIES.iter().find(|(file, _)| *file == name) else {
         return Ok(path);
     };
     match std::fs::read_to_string(&path)
         .ok()
-        .and_then(|text| hooks_in_project(&text, project))
+        .and_then(|text| hooks_in_project(&text))
     {
         Some(text) => write_copy(cwd, copy, &text),
         None => Ok(path),
@@ -178,15 +177,19 @@ const SETTINGS_COPIES: &[(&str, &str)] = &[
     ),
 ];
 
-/// `text`, a project's Claude settings, with each command hook run in `project`: Claude runs
+/// Where a CLI's linked project is, for its hooks ([`hooks_in_project`]): each CLI has its own,
+/// and workers sharing a folder have different ones.
+pub(super) const PROJECT_DIR_ENV: &str = "BRIGADIER_PROJECT_DIR";
+
+/// `text`, a project's Claude settings, with each command hook run in the project: Claude runs
 /// hooks in the session's folder with `CLAUDE_PROJECT_DIR` set to it, so a hook that runs
 /// `npm`, `git` or a script relative to the project would fail there (#315). Each command
-/// first goes to `project`, with `CLAUDE_PROJECT_DIR` set to it, as in the user's own
-/// checkout. None when it has no command hooks (or isn't JSON).
+/// first goes to the CLI's project ([`PROJECT_DIR_ENV`]), with `CLAUDE_PROJECT_DIR` set to it,
+/// as in the user's own checkout; the copy names no project, so workers sharing a folder share
+/// it. None when it has no command hooks (or isn't JSON).
 #[cfg(unix)]
-fn hooks_in_project(text: &str, project: &Path) -> Option<String> {
+fn hooks_in_project(text: &str) -> Option<String> {
     let mut settings: serde_json::Value = serde_json::from_str(text).ok()?;
-    let quoted = shell_quoted(&project.display().to_string());
     let mut changed = false;
     let events = settings.get_mut("hooks")?.as_object_mut()?;
     for hook in events
@@ -205,17 +208,14 @@ fn hooks_in_project(text: &str, project: &Path) -> Option<String> {
         };
         hook.insert(
             "command".into(),
-            format!("cd {quoted} || exit 1\nexport CLAUDE_PROJECT_DIR={quoted}\n{command}").into(),
+            format!(
+                "cd \"${PROJECT_DIR_ENV}\" || exit 1\nexport CLAUDE_PROJECT_DIR=\"$PWD\"\n{command}"
+            )
+            .into(),
         );
         changed = true;
     }
     changed.then(|| serde_json::to_string_pretty(&settings).ok())?
-}
-
-/// `text` quoted for a POSIX shell.
-#[cfg(unix)]
-fn shell_quoted(text: &str) -> String {
-    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 /// [`link_project`]'s copy of a project's `.mcp.json` whose local servers have paths in the
@@ -1269,6 +1269,11 @@ mod link_tests {
         let copied: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&link).unwrap()).unwrap();
         assert_eq!(copied["permissions"], settings["permissions"]);
+        let text = std::fs::read_to_string(&link).unwrap();
+        assert!(
+            !text.contains("it's a project"),
+            "workers share the copy: {text}"
+        );
         let hooks = &copied["hooks"]["PostToolUse"][0]["hooks"];
         assert_eq!(hooks[1], settings["hooks"]["PostToolUse"][0]["hooks"][1]);
         // Run from the session's folder, as Claude runs it, it runs in the project.
@@ -1276,6 +1281,7 @@ mod link_tests {
             .args(["-c", hooks[0]["command"].as_str().unwrap()])
             .current_dir(&cwd)
             .env("CLAUDE_PROJECT_DIR", &cwd)
+            .env(PROJECT_DIR_ENV, &project)
             .status()
             .unwrap();
         assert!(ran.success());

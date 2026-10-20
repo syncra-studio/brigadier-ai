@@ -160,6 +160,10 @@ pub struct ShellCall {
     pub command: String,
     /// Where it runs.
     pub cwd: Option<String>,
+    /// Sent to the background: it ends after its hook, so only its start is looked at (whether
+    /// it may run), never its files.
+    #[serde(default)]
+    pub background: bool,
 }
 
 /// The daemon's answer to a worker's `Stop` hook.

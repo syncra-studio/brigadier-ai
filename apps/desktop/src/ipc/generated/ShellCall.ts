@@ -11,4 +11,9 @@ ended: boolean, toolUseId: string, command: string,
 /**
  * Where it runs.
  */
-cwd: string | null, };
+cwd: string | null, 
+/**
+ * Sent to the background: it ends after its hook, so only its start is looked at (whether
+ * it may run), never its files.
+ */
+background: boolean, };

@@ -3304,13 +3304,6 @@ impl SessionManager {
             self.fail_turn(&conv, users, envelopes, &message).await;
             return;
         }
-        // The user's Stop came while the turn was starting (its CLI, or a new worktree's setup
-        // script, #326), with no CLI turn to stop yet: it stops this one now.
-        if conv.state.lock().await.interrupted
-            && let Err(err) = cli.session.interrupt().await
-        {
-            tracing::warn!(conversation = %conv.id, error = %err, "could not stop a turn the user stopped as it started");
-        }
         #[cfg(test)]
         if envelopes
             .iter()
@@ -5061,6 +5054,12 @@ impl SessionManager {
             }
             ProviderEvent::TurnStarted { .. } => {
                 cli.meter.turn_started(now_ms());
+                // The user's Stop came while the turn was starting (its CLI, a new worktree's
+                // setup script, #326), with no CLI turn to stop yet: it stops this one now.
+                let stopped_as_it_started = {
+                    let state = conv.state.lock().await;
+                    state.awaiting_start && state.interrupted
+                };
                 let started = {
                     let mut state = conv.state.lock().await;
                     state.landed = true;
@@ -5098,6 +5097,9 @@ impl SessionManager {
                 if let Some(request) = started {
                     self.set_run_for(&conv.id, RunState::Running, None, request)
                         .await;
+                }
+                if stopped_as_it_started && let Err(err) = cli.session.interrupt().await {
+                    tracing::warn!(conversation = %conv.id, error = %err, "could not stop a turn the user stopped as it started");
                 }
             }
             ProviderEvent::Usage { total, last, calls } => {

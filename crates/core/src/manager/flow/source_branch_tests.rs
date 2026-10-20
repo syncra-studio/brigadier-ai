@@ -669,11 +669,19 @@ async fn the_thread_runs_no_git_into_the_users_rebase() {
         let hook = hook.clone();
         async move {
             manager
-                .hook_shell(&hook, false, "toolu_1", command, None)
+                .hook_shell(&hook, false, "toolu_1", command, None, false)
                 .await
         }
     };
     let refused = shell("git commit -am x").await.expect("refused");
+    // Sent to the background, it is refused all the same.
+    assert_eq!(
+        manager
+            .hook_shell(&hook, false, "toolu_2", "git add -A", None, true)
+            .await
+            .as_deref(),
+        Some(refused.as_str())
+    );
     assert!(
         refused.starts_with("Not run: the user is rebasing"),
         "{refused}"

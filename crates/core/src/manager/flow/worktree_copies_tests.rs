@@ -239,7 +239,13 @@ async fn the_users_stop_ends_a_setup_script_still_running() {
     let flow = Flow::start(
         "worktree-copies-stopped",
         options,
-        Arc::new(|_turn| Box::pin(async { Reply::text("Done.") })),
+        // A real turn takes a while: the Stop replayed at its start reaches it.
+        Arc::new(|turn| {
+            Box::pin(async move {
+                assert!(turn.stopped().await, "the turn the user stopped is stopped");
+                Reply::text("Done.")
+            })
+        }),
     )
     .await;
     let conversation = flow.core.conversation(&flow.conversation).unwrap();

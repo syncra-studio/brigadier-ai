@@ -1164,9 +1164,11 @@ impl Provider for Claude {
             // The project's own setup, where Claude looks for it: before its staging folders
             // are recorded, so the `.claude` folder holding the links is never taken for one.
             // Without a project (its folder's trust taken back), an earlier start's links go.
+            let mut linked_project = None;
             if spec.tools.user_setup() && spec.owned_cwd {
                 let linked = match &spec.project {
                     Some(project) if project.canonicalize().ok().as_ref() != Some(&cwd) => {
+                        linked_project = Some(project.clone());
                         files::link_project(&cwd, project)
                     }
                     Some(_) => Ok(()),
@@ -1252,6 +1254,11 @@ impl Provider for Claude {
                     None => tmp.clone(),
                 };
                 env.push(("CLAUDE_CODE_TMPDIR".into(), dir));
+            }
+            // Where the linked settings' hooks run: this CLI's project, which workers sharing
+            // the folder each have their own of.
+            if let Some(project) = linked_project {
+                env.push((files::PROJECT_DIR_ENV.into(), project.display().to_string()));
             }
             crate::cli::apply_session_env(&mut process_spec, &env, &spec.unset_env);
             process_spec.low_priority = spec.low_priority;
@@ -1815,7 +1822,12 @@ async fn read_loop(
                 ParserCommand::WriteFailed => parser.write_failed(),
             }
         }
-        for output in parser.feed(&line) {
+        let outputs = parser.feed(&line);
+        // Before its events go: whoever hears a turn start can interrupt it.
+        shared
+            .turn_active
+            .store(parser.turn_active(), Ordering::Release);
+        for output in outputs {
             match output {
                 Output::Event(event) => {
                     // When nobody listens any more, keep draining so the CLI never blocks.
