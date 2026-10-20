@@ -68,14 +68,14 @@
     from {
       grid-template-rows: 0fr;
       opacity: 0;
-      transform: translateY(-8px);
+      transform: translateY(calc(var(--spacing) * -2));
     }
   }
   @keyframes fold-close {
     to {
       grid-template-rows: 0fr;
       opacity: 0;
-      transform: translateY(-8px);
+      transform: translateY(calc(var(--spacing) * -2));
     }
   }
   @keyframes fold-fade-in {
@@ -96,7 +96,7 @@
   @keyframes glyph-in {
     from {
       opacity: 0;
-      transform: translate(-8px, 4px) scale(0.92);
+      transform: translate(calc(var(--spacing) * -2), var(--spacing)) scale(0.92);
     }
   }
   --animate-glyph-in: glyph-in 280ms cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -142,7 +142,7 @@
 
 /* 1rem above the floating footer's column: its composer, and what sits above it. */
 @utility above-composer {
-  bottom: calc(100% + 1rem);
+  bottom: calc(100% + var(--spacing) * 4);
 }
 
 /* The sidebar panel's width: where the user dragged it (--sidebar-width, set by the sidebar)
@@ -301,8 +301,8 @@
     pointer-events: none;
   }
   &::before {
-    top: calc((var(--spacing-titlebar) - 1.25rem) / 2);
-    height: 1.25rem;
+    top: calc((var(--spacing-titlebar) - var(--spacing) * 5) / 2);
+    height: calc(var(--spacing) * 5);
   }
   &::after {
     top: var(--spacing-titlebar);
@@ -465,7 +465,7 @@
     transform: translateY(1.2px);
   }
   55% {
-    transform: translateY(-2px);
+    transform: translateY(calc(var(--spacing) * -0.5));
   }
   70% {
     transform: translateY(0);
@@ -584,13 +584,13 @@
 /* Fade the older edge of a live summary while keeping its newest two lines visible. */
 /* A settled thought taller than its box fades out at the bottom edge (THREAD-UX-PLAN.md §3.3). */
 @utility thinking-fade {
-  mask-image: linear-gradient(to bottom, black calc(100% - 1.5rem), transparent);
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--spacing) * 6), transparent);
 }
 
 /* Cuts off whatever paints past the start edge (a shadow over the strip beside it), keeping
    the other sides' shadow. */
 @utility clip-start {
-  clip-path: inset(-3rem -3rem -3rem 0);
+  clip-path: inset(calc(var(--spacing) * -12) calc(var(--spacing) * -12) calc(var(--spacing) * -12) 0);
 }
 
 /* The collapsed sidebar peeking: its card floats in from the start, and fades back out
