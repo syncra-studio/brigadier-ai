@@ -42,7 +42,7 @@ test("Configuration saves the default, and the sandbox notice switches the sessi
   assert.deepEqual(rendering.calls, ["default approveForMe", "session fullAccess"]);
 });
 
-test("a finished reply keeps the sandbox notice outside its collapsed work", { timeout: 60000 }, async (t) => {
+test("a finished reply keeps the sandbox notice outside its collapsed work, rounded like an offer card", { timeout: 60000 }, async (t) => {
   const dump = await renderFixturePage(t, "access-thread.html", "access-thread-result", 8000);
   const rendering = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&"));
   assert.deepEqual(rendering, {
@@ -50,6 +50,8 @@ test("a finished reply keeps the sandbox notice outside its collapsed work", { t
     outsideWork: true,
     buttons: ["Switch this session to Full access", "Open Settings > Configuration"],
     count: 1,
+    // The notice and the offer above it both round to --radius-question.
+    corners: [true, true],
   });
 });
 
