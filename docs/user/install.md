@@ -56,6 +56,10 @@ When Brigadier installs Claude Code for you on Windows, it also adds Claude Code
 (`%USERPROFILE%\.local\bin`) to your user Path, which Claude Code's own installer leaves to you,
 so `claude` works in any new terminal. Codex's installer adds its own folder.
 
+On Linux, Brigadier downloads an agent's installer with curl, or with wget when curl is missing.
+With neither, the card says so: install one (for example `sudo apt install curl`) and try again,
+or install the agent yourself from the install guide the card links.
+
 ## Updates
 
 Brigadier checks for new versions by itself, but it asks before it updates. When a newer

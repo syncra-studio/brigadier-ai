@@ -1,5 +1,5 @@
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
-import { ConnectCode } from "@/app/setup/onboarding/ConnectStatus";
+import { ConnectCode, ConnectGuide, useNeedsGuide } from "@/app/setup/onboarding/ConnectStatus";
 import { PILL_BUTTON, RAISED_BUTTON } from "@/app/setup/onboarding/parts";
 import type { AgentState } from "@/app/setup/onboarding/SetupTerminal";
 import { Check, ProviderGlyph, Spinner } from "@/components/icons";
@@ -32,6 +32,9 @@ export function AgentCard({
   // Asking to connect failed (the daemon was away): said like a failed Connect.
   const askError = useConnect((s) => s.errors[provider]);
   const error = askError ?? (progress?.type === "failed" ? progress.error : null);
+  // Connect couldn't install it at all: the card says what is missing in full, and links the
+  // vendor's install guide.
+  const guide = useNeedsGuide(provider) && !askError;
   const ready = state === "ready";
   // Signing in, or Connected said and the agent's check on its way: the card waits.
   const waiting = !ready && (connecting(progress) || progress?.type === "connected");
@@ -67,13 +70,15 @@ export function AgentCard({
             data-slot="agent-line"
             role={error ? "alert" : undefined}
             className={cn(
-              "truncate text-xs",
+              guide ? "text-balance" : "truncate",
+              "text-xs",
               error ? "text-destructive" : ready ? "text-muted-foreground" : "text-muted-foreground/70",
             )}
             title={error ?? undefined}
           >
             {line}
           </p>
+          {guide && <ConnectGuide provider={provider} />}
         </div>
         {ready ? (
           <Badge variant="success" className="bg-success/10 h-7 gap-1.5 px-2.5">

@@ -156,6 +156,22 @@ test("Providers sets up a missing agent with Connect", { timeout: 60000 }, async
   assert.deepEqual(seen.asked, ["connectAgent codex", "connectAgent codex"]);
 });
 
+// On a Linux with neither curl nor wget, the row's Connect line names them and links the
+// vendor's install guide, which opens; Try again still asks Connect.
+test("Providers names a missing curl or wget and links the install guide", { timeout: 60000 }, async (t) => {
+  const dump = await renderFixtureLive(t, "providers.html?drive=missing&nodownloader=1", "providers-result", 30000);
+  const seen = JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
+  assert.deepEqual(seen.failed, [
+    {
+      text: "CodexCodex CLI · not installed",
+      status:
+        "Installing Codex needs curl or wget, and neither is installed. Install one (for example `sudo apt install curl`) and try again, or install Codex yourself.",
+      buttons: ["Set up", "Try again", "Codex's install guide"],
+    },
+  ]);
+  assert.deepEqual(seen.asked, ["connectAgent codex", "openUrl https://github.com/openai/codex", "connectAgent codex"]);
+});
+
 // Drawn with every Settings page's parts (#385): its cards are Settings › General's (fill,
 // corners, edge), an agent row under the pointer is washed edge to edge with the shared row
 // wash, and its switches are General's.

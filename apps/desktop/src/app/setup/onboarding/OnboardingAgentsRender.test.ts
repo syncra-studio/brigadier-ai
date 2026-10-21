@@ -69,6 +69,28 @@ for (const platform of ["macos", "linux", "windows"]) {
   });
 }
 
+// On a Linux with neither curl nor wget, Connect can't download the installer: the card says
+// what is missing in full (not cut to one line), offers Install again, and links the vendor's
+// install guide, which opens.
+test("onboarding: with neither curl nor wget the card names them and links the guide", { timeout: 60000 }, async (t) => {
+  const seen = parse(
+    await renderFixtureLive(
+      t,
+      "onboarding-agents.html?drive=1&nodownloader=1&platform=linux",
+      "onboarding-agents-result",
+      30000,
+    ),
+  );
+  assert.equal(seen.error, undefined);
+  assert.deepEqual(seen.noDownloader, {
+    line: "Installing Claude Code needs curl or wget, and neither is installed. Install one (for example `sudo apt install curl`) and try again, or install Claude Code yourself.",
+    wraps: true,
+    guide: "Claude Code's install guide",
+    buttons: ["Claude Code's install guide", "Install"],
+  });
+  assert.deepEqual(seen.asked, ["connectAgent claude", "openUrl https://code.claude.com/docs/en/setup"]);
+});
+
 // With no agent connected, the one found on this computer comes first and Continue waits, on
 // Enter too.
 test("onboarding: no agent connected holds Continue", { timeout: 60000 }, async (t) => {

@@ -11,7 +11,9 @@
  * only when the drive says, so every point is read as it stands. With ?code=1 the drive instead
  * has Claude Code's sign-in offer its code page, opens it, pastes a code and presses Enter.
  * With ?install=1 it only presses Install and follows the card through the install and the
- * sign-in to Connected. ?platform= names the platform (macos, linux or windows; none unless given).
+ * sign-in to Connected. With ?nodownloader=1 the install fails as it does on a Linux with
+ * neither curl nor wget, and the drive opens the install guide the card links.
+ * ?platform= names the platform (macos, linux or windows; none unless given).
  */
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { useEffect, useState } from "react";
@@ -69,6 +71,8 @@ function publish(agents: AgentConnect[]) {
 const claudeAt = (progress: AgentConnect["progress"], codePage?: string) =>
   publish([{ provider: "claude", progress, ...(codePage === undefined ? {} : { codePage }) }]);
 const CODE_PAGE = "https://claude.com/cai/oauth/authorize?code=true";
+const NO_DOWNLOADER =
+  "Installing Claude Code needs curl or wget, and neither is installed. Install one (for example `sudo apt install curl`) and try again, or install Claude Code yourself.";
 
 const asked: string[] = [];
 mockIPC((command, payload) => {
@@ -204,6 +208,32 @@ function Fixture() {
         await fixtureInput({ type: "pointer", x: 0, y: 0 });
         await until(() => claudeCard().line === "Installing Claude Code…", "installing");
         seen.installing = claudeCard();
+
+        if (params.has("nodownloader")) {
+          // Neither curl nor wget to download the installer: the card says so and links the guide.
+          claudeAt({
+            type: "failed",
+            step: "install",
+            error: NO_DOWNLOADER,
+            reason: "noDownloader",
+          });
+          await until(() => claudeCard().line === NO_DOWNLOADER, "the missing downloader");
+          const element = cards().find((each) => text(each.querySelector("p")) === "Claude Code")!;
+          const line = element.querySelector('[data-slot="agent-line"]')!;
+          const guide = element.querySelector('[data-slot="connect-guide"] button');
+          seen.noDownloader = {
+            line: text(line),
+            wraps: getComputedStyle(line).whiteSpace !== "nowrap",
+            guide: text(guide),
+            buttons: [...element.querySelectorAll("button")].map((each) => text(each)),
+          };
+          await fixtureClick(guide!);
+          await until(() => asked.some((what) => what.startsWith("openUrl")), "the guide opened");
+          seen.asked = asked;
+          setResult(JSON.stringify(seen));
+          return;
+        }
+
         const path = platform === "windows" ? String.raw`C:\Users\me\.local\bin\claude.exe` : "/home/me/.local/bin/claude";
         // Installed: a check finds it, signed out, as its sign-in starts.
         claudeStatus = { ...claudeStatus, path, version: "2.1.306" };
