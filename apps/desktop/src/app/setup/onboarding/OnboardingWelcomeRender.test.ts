@@ -33,3 +33,15 @@ test("onboarding: the name's Continue", { timeout: 60000 }, async (t) => {
     named: ["Alex"],
   });
 });
+
+// The intro fills the window's shape to its very edges: macOS rounds the window's corners, so
+// the canvas is clear in them; Windows' window is square, so it reaches every corner, under the
+// title bar too, with no strip along an edge on either.
+for (const [platform, corner] of [["macos", 0], ["windows", 255]] as const) {
+  test(`onboarding: the intro's corners on ${platform}`, { timeout: 60000 }, async (t) => {
+    const seen = JSON.parse(
+      await renderFixtureLive(t, `onboarding-welcome.html?corners=1&platform=${platform}`, "onboarding-corners-result", 20000),
+    ) as Record<string, unknown>;
+    assert.deepEqual(seen, { corners: [corner, corner, corner, corner], edges: [255, 255, 255, 255], centre: 255 });
+  });
+}

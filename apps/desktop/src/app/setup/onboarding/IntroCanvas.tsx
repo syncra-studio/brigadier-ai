@@ -42,8 +42,9 @@ const ORB_IDLE = 0.122;
 const ORB_SEED = 0.25;
 /** The orb sits this share of the window's height above its centre. */
 const ORB_RISE = 0.03;
-/** The window's corner radius, in points, that the orb opens into. */
-const WINDOW_RADIUS = 12;
+/** The window's corner radius, in points, that the orb opens into, if it can't be read from the
+ *  page (tokens.css --radius-window: macOS's rounded corners; square on Windows). */
+const FALLBACK_RADIUS = 12;
 /** The most device pixels drawn per point. */
 const MAX_DENSITY = 2;
 /** The shell's dark, if it can't be read from the page (tokens.css --background). */
@@ -275,6 +276,15 @@ function frame(t: number | null, settled: boolean, width: number, height: number
   };
 }
 
+/** The page's --radius-window, in points. */
+function windowRadius(): number {
+  const root = document.documentElement;
+  const value = getComputedStyle(root).getPropertyValue("--radius-window").trim();
+  const size = Number.parseFloat(value);
+  if (!Number.isFinite(size)) return FALLBACK_RADIUS;
+  return value.endsWith("rem") ? size * Number.parseFloat(getComputedStyle(root).fontSize) : size;
+}
+
 /** The page's --background, as 0–1 sRGB (read through a 2D canvas, which resolves any colour). */
 function shellDark(): [number, number, number] {
   const value = getComputedStyle(document.documentElement).getPropertyValue("--background").trim();
@@ -343,6 +353,7 @@ export function IntroCanvas({
       dark: uniform("uDark"),
     };
     gl.uniform3fv(u.dark, shellDark());
+    const corner = windowRadius();
     // The orb and the waves keep moving from wherever the noise is, settled or not.
     const epoch = performance.now();
     let raf = 0;
@@ -378,7 +389,7 @@ export function IntroCanvas({
       gl.uniform1f(u.even, state.even);
       gl.uniform1f(u.settle, state.settle);
       gl.uniform1f(u.waves, state.waves);
-      gl.uniform1f(u.corner, WINDOW_RADIUS);
+      gl.uniform1f(u.corner, corner);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
     raf = requestAnimationFrame(draw);
