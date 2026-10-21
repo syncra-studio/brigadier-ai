@@ -1,39 +1,49 @@
 /**
  * The access notice in a finished production ConversationView, outside its collapsed work, under
- * an offer to start a session (the two cards share their corners).
+ * an offer to start a session and a suggested setting (the three cards share their corners; the
+ * setting is the offer card, its icon in a tile and its buttons not indented).
  */
+import type { OrchestratorStepKind } from "@/ipc/generated";
 import { useBoard } from "@/state/board";
+import { useApp } from "@/state/store";
 
 history.replaceState(null, "", `${location.pathname}?view=done&summary=0&approvals=0`);
 await import("@/fixtures/flow");
+useApp.setState((state) => ({ settings: { ...state.settings, browserEnabled: false } }));
+const step = (position: number, kind: OrchestratorStepKind) => ({ requestId: "r2", atMs: Date.now(), position, kind });
 useBoard.setState(({ board }) => board ? {
   board: {
     ...board,
-    orchestratorSteps: [...board.orchestratorSteps, {
-      requestId: "r2",
-      atMs: Date.now(),
-      position: 19,
-      kind: { type: "sessionOffered", id: "offer-1", title: "Fix uploads", task: "Find why uploads stall at 99%." },
-    }, {
-      requestId: "r2",
-      atMs: Date.now(),
-      position: 20,
-      kind: { type: "fullAccessSuggested", reason: "Installing the tool writes outside the project." },
-    }],
+    orchestratorSteps: [
+      ...board.orchestratorSteps,
+      step(18, { type: "sessionOffered", id: "offer-1", title: "Fix uploads", task: "Find why uploads stall at 99%." }),
+      step(19, { type: "settingSuggested", change: { setting: "browser", on: true }, reason: "Checking the page needs the built-in browser, which is off." }),
+      step(20, { type: "fullAccessSuggested", reason: "Installing the tool writes outside the project." }),
+    ],
   },
 } : {});
+
+/** What a CSS declaration resolves to, on a probe. */
+function probe(css: string) {
+  const node = document.createElement("span");
+  node.style.cssText = `display: block; ${css}`;
+  document.body.append(node);
+  const style = getComputedStyle(node);
+  const value = { radius: style.borderTopLeftRadius, width: style.width };
+  node.remove();
+  return value;
+}
 
 const observer = new MutationObserver(() => {
   const notice = document.querySelector<HTMLElement>('[data-kind="fullAccessSuggested"]');
   const reply = notice?.closest('[data-slot="aui_assistant-message-root"]');
   const offer = reply?.querySelector<HTMLElement>('[data-kind="sessionOffered"]');
-  if (!notice || !reply || !offer) return;
+  const setting = reply?.querySelector<HTMLElement>('[data-kind="settingSuggested"]');
+  if (!notice || !reply || !offer || !setting) return;
   observer.disconnect();
-  const probe = document.createElement("span");
-  probe.style.borderRadius = "var(--radius-question)";
-  document.body.append(probe);
-  const question = getComputedStyle(probe).borderTopLeftRadius;
-  probe.remove();
+  const question = probe("border-radius: var(--radius-question)").radius;
+  const tile = setting.querySelector(":scope > div > span");
+  const actions = setting.querySelector<HTMLElement>(":scope > div:last-child");
   const result = document.createElement("pre");
   result.id = "access-thread-result";
   result.textContent = JSON.stringify({
@@ -41,7 +51,12 @@ const observer = new MutationObserver(() => {
     outsideWork: notice.closest('[data-slot="request-work"]') === null,
     buttons: [...notice.querySelectorAll("button")].map((button) => button.textContent?.trim()),
     count: reply.querySelectorAll('[data-kind="fullAccessSuggested"]').length,
-    corners: [notice, offer].map((card) => getComputedStyle(card).borderTopLeftRadius === question),
+    corners: [notice, offer, setting].map((card) => getComputedStyle(card).borderTopLeftRadius === question),
+    setting: {
+      buttons: [...setting.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+      tiled: !!tile && getComputedStyle(tile).width === probe("width: var(--spacing-icon-button-md)").width,
+      indented: !!actions && parseFloat(getComputedStyle(actions).paddingInlineStart) > 0,
+    },
   });
   document.body.append(result);
 });
