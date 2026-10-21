@@ -193,9 +193,10 @@ async fn writing(held: &Held) {
                 == 2
         })
         .await;
+    // The thread's call hears it just after the board shows it.
     held.flow
-        .until("the merge to be held", |board| {
-            pending_merge(board).is_some()
+        .until("the merge to be held and the thread to hear it", |board| {
+            pending_merge(board).is_some() && held.logged("finish_session: [merge held]") > 0
         })
         .await;
 }
