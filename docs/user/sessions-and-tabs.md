@@ -42,7 +42,7 @@ says so; its row in the sidebar opens it again.
 
 ## Agents in the browser
 
-On macOS the thread and its workers can use the built-in browser themselves: open a page, read
+On macOS and Windows the thread and its workers can use the built-in browser themselves: open a page, read
 it, click, type and take a screenshot. Their page is a normal browser tab of the session, with
 your sign-ins, and it opens in the background. Switch to it to watch.
 
@@ -53,7 +53,7 @@ your sign-ins, and it opens in the background. Switch to it to watch.
 - **Merging on its own** proves a change to a web page by opening the preview in such a tab,
   using the change and attaching the screenshot to the merge.
 
-Windows doesn't have this yet, and Linux has no built-in browser.
+Linux has no built-in browser, so it doesn't have this.
 
 ## Chats
 

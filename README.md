@@ -98,8 +98,9 @@ rough edges.
 
 - **macOS** is the main platform, and every feature here works on it.
 - **Windows and Linux** build and pass a launch check in CI (Linux on every push, Windows
-  nightly), but are not ready for real use. The worker sandbox, computer use, agents in the browser and browser data import are
-  macOS-only for now, and Linux has no built-in browser.
+  nightly), but are not ready for real use. The worker sandbox, computer use and browser data
+  import are macOS-only for now. Agents in the browser work on macOS and Windows; Linux has no
+  built-in browser.
 - **Agents:** Claude Code and Codex today. Next: the Cursor, opencode and Grok CLIs, and local
   models.
 
