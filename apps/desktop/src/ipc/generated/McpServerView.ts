@@ -16,13 +16,22 @@ id: string,
  */
 name: string, 
 /**
- * Where it is configured: "Claude Code (user)", "Codex (project)", "Claude Desktop".
+ * Where it is configured: "Claude Code (user)", "Codex (project)", "Claude Desktop",
+ * "Claude Code (plugin)".
  */
 source: string, 
 /**
  * The project whose config holds it.
  */
-project: string | null, transport: TransportView, 
+project: string | null, 
+/**
+ * The plugin it comes with, as its agent's switch names it (`<plugin>@<marketplace>`).
+ */
+plugin: string | null, 
+/**
+ * The file it is configured in, for a plugin's.
+ */
+file: string | null, transport: TransportView, 
 /**
  * A remote server that signs in with OAuth: how each agent's workers in the project are
  * signed in to it. `None`: it doesn't sign in.

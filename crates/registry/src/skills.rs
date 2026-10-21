@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{Agent, Roots, Session};
+use crate::{Agent, Plugin, Roots, Session};
 
 /// A skill folder, wherever it is found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +25,17 @@ impl Skill {
     pub fn skill_md(&self) -> PathBuf {
         self.dir.join("SKILL.md")
     }
+
+    /// The plugin it comes with when it is found in plugins only (its first), whose agent
+    /// shows it as `<plugin>:<name>`.
+    pub fn plugin(&self) -> Option<&Plugin> {
+        let mut plugins = self.roots.iter().map(|root| match root {
+            SkillRoot::Plugin(plugin) => Some(plugin),
+            _ => None,
+        });
+        let first = plugins.next()??;
+        plugins.all(|plugin| plugin.is_some()).then_some(first)
+    }
 }
 
 /// A folder an agent finds skills in by itself.
@@ -43,6 +54,8 @@ pub enum SkillRoot {
     ClaudeProject(PathBuf),
     /// A project's `.agents/skills` (Codex, in a checkout of the project).
     AgentsProject(PathBuf),
+    /// A plugin its agent loads, which shows the skill as `<plugin>:<name>`.
+    Plugin(Plugin),
 }
 
 impl SkillRoot {
@@ -57,6 +70,9 @@ impl SkillRoot {
             (Self::AgentsProject(project), Agent::Codex) => {
                 Some(project.as_path()) == session.project && session.in_checkout
             }
+            (Self::Plugin(plugin), agent) => {
+                plugin.agent == agent && plugin.counts_in(session.project)
+            }
             _ => false,
         }
     }
@@ -69,6 +85,7 @@ impl SkillRoot {
             Self::ClaudeSynced(account) => format!("claude:synced:{account}"),
             Self::ClaudeProject(project) => format!("claude:project:{}", project.display()),
             Self::AgentsProject(project) => format!("agents:project:{}", project.display()),
+            Self::Plugin(plugin) => plugin.prefix(),
         }
     }
 }
@@ -113,6 +130,23 @@ pub(crate) fn add_project(skills: &mut Vec<Skill>, project: &Path) {
     );
 }
 
+/// The skills of `plugin`, each with its folder's path in the plugin in its id.
+pub(crate) fn add_plugin(skills: &mut Vec<Skill>, plugin: &Plugin) {
+    let root = SkillRoot::Plugin(plugin.clone());
+    for dir in plugin.skill_dirs() {
+        let folder_name = dir.strip_prefix(&plugin.root).map_or_else(
+            |_| dir.display().to_string(),
+            |relative| relative.to_string_lossy().into_owned(),
+        );
+        let folder_name = if folder_name.is_empty() {
+            plugin.name.clone()
+        } else {
+            folder_name
+        };
+        add(skills, &dir, &folder_name, &root);
+    }
+}
+
 /// Every skill folder directly in `folder` (hidden ones, such as Codex's `.system`, left out).
 fn scan(skills: &mut Vec<Skill>, folder: &Path, root: SkillRoot) {
     let Ok(entries) = std::fs::read_dir(folder) else {
@@ -122,44 +156,58 @@ fn scan(skills: &mut Vec<Skill>, folder: &Path, root: SkillRoot) {
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         let folder_name = entry.file_name().to_string_lossy().into_owned();
-        if folder_name.starts_with('.') {
-            continue;
+        if !folder_name.starts_with('.') {
+            add(skills, &entry.path(), &folder_name, &root);
         }
-        let Ok(dir) = std::fs::canonicalize(entry.path()) else {
-            continue;
-        };
-        if let Some(known) = skills.iter_mut().find(|skill| skill.dir == dir) {
-            if !known.roots.contains(&root) {
-                known.roots.push(root.clone());
-            }
-            known.entries.push((root.clone(), entry.path()));
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) else {
-            continue;
-        };
-        let (name, description) = frontmatter(&text);
-        let name = name.unwrap_or_else(|| folder_name.clone());
-        // A copy (not a link) of a skill already found, file for file: the same skill.
-        if let Some(known) = skills
-            .iter_mut()
-            .find(|skill| skill.name == name && same_contents(&skill.dir, &dir))
-        {
-            if !known.roots.contains(&root) {
-                known.roots.push(root.clone());
-            }
-            known.entries.push((root.clone(), entry.path()));
-            continue;
-        }
-        skills.push(Skill {
-            id: format!("{}:{folder_name}", root.prefix()),
-            name,
-            description: description.unwrap_or_default(),
-            dir,
-            roots: vec![root.clone()],
-            entries: vec![(root.clone(), entry.path())],
-        });
     }
+}
+
+/// The skill at `path` (found in `root` as `folder_name`), if it is one.
+fn add(skills: &mut Vec<Skill>, path: &Path, folder_name: &str, root: &SkillRoot) {
+    let Ok(dir) = std::fs::canonicalize(path) else {
+        return;
+    };
+    if let Some(known) = skills.iter_mut().find(|skill| skill.dir == dir) {
+        if !known.roots.contains(root) {
+            known.roots.push(root.clone());
+        }
+        known.entries.push((root.clone(), path.to_owned()));
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) else {
+        return;
+    };
+    let (name, description) = frontmatter(&text);
+    let name = name.unwrap_or_else(|| folder_name.to_owned());
+    // A copy (not a link) of a skill already found, file for file: the same skill.
+    if let Some(known) = skills
+        .iter_mut()
+        .find(|skill| skill.name == name && same_contents(&skill.dir, &dir))
+    {
+        if !known.roots.contains(root) {
+            known.roots.push(root.clone());
+        }
+        known.entries.push((root.clone(), path.to_owned()));
+        return;
+    }
+    skills.push(Skill {
+        id: format!("{}:{folder_name}", root.prefix()),
+        name,
+        description: description.unwrap_or_default(),
+        dir,
+        roots: vec![root.clone()],
+        entries: vec![(root.clone(), path.to_owned())],
+    });
+}
+
+/// Takes `plugin`'s skills out of `skills`: a skill found nowhere else goes.
+pub(crate) fn remove_plugin(skills: &mut Vec<Skill>, plugin: &Plugin) {
+    let root = SkillRoot::Plugin(plugin.clone());
+    for skill in skills.iter_mut() {
+        skill.roots.retain(|other| *other != root);
+        skill.entries.retain(|(other, _)| *other != root);
+    }
+    skills.retain(|skill| !skill.roots.is_empty());
 }
 
 /// Whether two folders hold the same files with the same bytes (hidden ones included).

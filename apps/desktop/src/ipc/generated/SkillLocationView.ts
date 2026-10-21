@@ -10,6 +10,10 @@ export type SkillLocationView = { path: string,
  */
 linkedTo: string | null, 
 /**
+ * The plugin this folder comes with, as its agent's switch names it.
+ */
+plugin: string | null, 
+/**
  * The agents whose workers in the project find it here by themselves.
  */
 nativeTo: Array<ProviderKind>, };

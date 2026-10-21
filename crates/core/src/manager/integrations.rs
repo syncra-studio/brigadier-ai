@@ -20,7 +20,8 @@ use std::sync::Arc;
 
 use brigadier_providers::{McpServer, McpTransport, ProviderKind, SwitchedOff};
 use brigadier_registry::{
-    Agent, Catalog, FindError, Registry, Roots, Server, Session, SignIn, Transport,
+    Agent, Catalog, FindError, Registry, Roots, Server, Session, SignIn, SkillRoot, Source,
+    Transport,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -74,10 +75,15 @@ pub struct McpServerView {
     pub id: String,
     /// The name its tools are called by, which `delegate_task` takes.
     pub name: String,
-    /// Where it is configured: "Claude Code (user)", "Codex (project)", "Claude Desktop".
+    /// Where it is configured: "Claude Code (user)", "Codex (project)", "Claude Desktop",
+    /// "Claude Code (plugin)".
     pub source: String,
     /// The project whose config holds it.
     pub project: Option<String>,
+    /// The plugin it comes with, as its agent's switch names it (`<plugin>@<marketplace>`).
+    pub plugin: Option<String>,
+    /// The file it is configured in, for a plugin's.
+    pub file: Option<String>,
     pub transport: TransportView,
     /// A remote server that signs in with OAuth: how each agent's workers in the project are
     /// signed in to it. `None`: it doesn't sign in.
@@ -164,13 +170,17 @@ pub struct SkillView {
     pub path: String,
     /// Each folder it is found at, as found.
     pub locations: Vec<SkillLocationView>,
+    /// The plugin it comes with when it comes only with plugins: its agent shows it as
+    /// `<plugin>:<name>`.
+    pub plugin: Option<String>,
     /// The agents whose workers in the project find it by themselves; every other worker gets
     /// it from Brigadier.
     pub native_to: Vec<ProviderKind>,
     /// Switched off for Brigadier: no thread or worker gets it.
     pub off: bool,
     /// Claude Code switches its own skills off by name: switching this one off hides every
-    /// skill Claude finds by itself under the same name.
+    /// skill Claude finds by itself under the same name (a plugin's skill only goes by its
+    /// `<plugin>:<name>`).
     pub claude_off_by_name: bool,
 }
 
@@ -181,6 +191,8 @@ pub struct SkillLocationView {
     pub path: String,
     /// The skill's own folder, when this one is a link to it.
     pub linked_to: Option<String>,
+    /// The plugin this folder comes with, as its agent's switch names it.
+    pub plugin: Option<String>,
     /// The agents whose workers in the project find it here by themselves.
     pub native_to: Vec<ProviderKind>,
 }
@@ -248,6 +260,8 @@ pub(crate) fn view(
             name: server.name.clone(),
             source: server.source.label().to_owned(),
             project: server.project.as_ref().map(|p| p.display().to_string()),
+            plugin: server.plugin.as_ref().map(|plugin| plugin.id.clone()),
+            file: server.file.as_ref().map(|file| file.display().to_string()),
             transport: match &server.transport {
                 Transport::Stdio {
                     command, args, env, ..
@@ -300,13 +314,21 @@ pub(crate) fn view(
                         linked_to: std::fs::symlink_metadata(path)
                             .is_ok_and(|meta| meta.file_type().is_symlink())
                             .then(|| skill.dir.display().to_string()),
+                        plugin: match root {
+                            SkillRoot::Plugin(plugin) => Some(plugin.id.clone()),
+                            _ => None,
+                        },
                         native_to: [ProviderKind::Claude, ProviderKind::Codex]
                             .into_iter()
                             .filter(|provider| root.native(&worker_session(*provider, project)))
                             .collect(),
                     })
                     .collect(),
-                claude_off_by_name: native_to.contains(&ProviderKind::Claude),
+                plugin: skill.plugin().map(|plugin| plugin.name.clone()),
+                claude_off_by_name: skill.roots.iter().any(|root| {
+                    !matches!(root, SkillRoot::Plugin(_))
+                        && root.native(&worker_session(ProviderKind::Claude, project))
+                }),
                 native_to,
                 off: settings.skills_off.contains(&skill.id),
             }
@@ -415,12 +437,25 @@ pub(crate) fn switched_off(
     for server in &catalog.servers {
         // A user's server under Brigadier's own name isn't one Brigadier gives: switching it
         // off must not take Brigadier's own away.
-        if settings.mcp_servers_off.contains(&server.id)
-            && !RESERVED.contains(&server.name.as_str())
-            && catalog.server_native(server, session)
-            && !off.servers.contains(&server.name)
+        if !settings.mcp_servers_off.contains(&server.id)
+            || RESERVED.contains(&server.name.as_str())
+            || !catalog.server_native(server, session)
         {
-            off.servers.push(server.name.clone());
+            continue;
+        }
+        match (&server.plugin, server.source) {
+            (Some(plugin), Source::CodexPlugin) => {
+                let entry = (plugin.id.clone(), server.name.clone());
+                if !off.plugin_servers.contains(&entry) {
+                    off.plugin_servers.push(entry);
+                }
+            }
+            _ => {
+                let name = server.native_name();
+                if !off.servers.contains(&name) {
+                    off.servers.push(name);
+                }
+            }
         }
     }
     for skill in &catalog.skills {
@@ -428,9 +463,18 @@ pub(crate) fn switched_off(
             continue;
         }
         match session.agent {
+            // Claude's own skills go by name, its plugins' by `<plugin>:<name>`.
             Agent::Claude => {
-                if !off.skill_names.contains(&skill.name) {
-                    off.skill_names.push(skill.name.clone());
+                for root in skill.roots.iter().filter(|root| root.native(session)) {
+                    let (list, name) = match root {
+                        SkillRoot::Plugin(plugin) => {
+                            (&mut off.plugin_skills, plugin.skill_name(&skill.name))
+                        }
+                        _ => (&mut off.skill_names, skill.name.clone()),
+                    };
+                    if !list.contains(&name) {
+                        list.push(name);
+                    }
                 }
             }
             // Codex knows a skill by the path it found it at; both forms are given. In a
@@ -473,7 +517,7 @@ fn named_servers(
         .filter(|server| catalog.server_native(server, session))
         .collect();
     let mut taken: HashSet<String> = RESERVED.iter().map(|name| (*name).to_owned()).collect();
-    taken.extend(native.iter().map(|server| server.name.clone()));
+    taken.extend(native.iter().map(|server| server.native_name()));
     // A switched-off copy of its own is no copy it has: its name stays taken all the same.
     native.retain(|server| !settings.mcp_servers_off.contains(&server.id));
     for id in ids {
@@ -900,5 +944,127 @@ impl SessionManager {
         })
         .await
         .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn skill(dir: &Path, name: &str) {
+        write(
+            &dir.join("SKILL.md"),
+            &format!("---\nname: {name}\ndescription: d\n---\n"),
+        );
+    }
+
+    /// A Claude plugin and a Codex plugin, each with a skill and a server, switched off for
+    /// Brigadier: each agent's own switch takes them away; the view names the plugins.
+    #[test]
+    fn plugin_skills_and_servers_switch_off_by_their_agents_names() {
+        let home = std::env::temp_dir().join(format!("brigadier-plugins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let home = {
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::canonicalize(&home).unwrap()
+        };
+        let claude = home.join(".claude/plugins/cache/market/docs/1.0.0");
+        write(
+            &claude.join(".claude-plugin/plugin.json"),
+            r#"{"name": "docs"}"#,
+        );
+        skill(&claude.join("skills/write"), "write");
+        write(
+            &claude.join(".mcp.json"),
+            r#"{"mcpServers": {"server": {"command": "s"}}}"#,
+        );
+        write(
+            &home.join(".claude/plugins/installed_plugins.json"),
+            &format!(
+                r#"{{"plugins": {{"docs@market": [{{"scope": "user", "installPath": "{}"}}]}}}}"#,
+                claude.display()
+            ),
+        );
+        let codex = home.join(".codex/plugins/cache/openai/sheets/2.0.0");
+        write(
+            &codex.join(".codex-plugin/plugin.json"),
+            r#"{"name": "sheets"}"#,
+        );
+        skill(&codex.join("skills/chart"), "chart");
+        write(
+            &codex.join(".mcp.json"),
+            r#"{"mcpServers": {"calc": {"command": "c"}}}"#,
+        );
+        write(
+            &home.join(".codex/config.toml"),
+            "[plugins.\"sheets@openai\"]\nenabled = true\n",
+        );
+        let roots = Roots::from_vars([("HOME".to_owned(), home.display().to_string())]).unwrap();
+        let catalog = Catalog::read(&roots, None);
+        let settings = Settings {
+            skills_off: catalog
+                .skills
+                .iter()
+                .map(|skill| skill.id.clone())
+                .collect(),
+            mcp_servers_off: catalog
+                .servers
+                .iter()
+                .map(|server| server.id.clone())
+                .collect(),
+            ..Settings::default()
+        };
+        assert_eq!(settings.skills_off.len(), 2, "{settings:?}");
+        assert_eq!(settings.mcp_servers_off.len(), 2, "{settings:?}");
+        let session = |agent| Session {
+            agent,
+            cwd: &home,
+            project: None,
+            in_checkout: false,
+        };
+        let off = switched_off(&catalog, &session(Agent::Claude), &settings);
+        assert_eq!(off.plugin_skills, ["docs:write"]);
+        assert!(off.skill_names.is_empty());
+        assert_eq!(off.servers, ["plugin_docs_server"]);
+        let off = switched_off(&catalog, &session(Agent::Codex), &settings);
+        assert_eq!(
+            off.plugin_servers,
+            [("sheets@openai".to_owned(), "calc".to_owned())]
+        );
+        assert!(off.servers.is_empty());
+        assert_eq!(off.skill_files, [codex.join("skills/chart/SKILL.md")]);
+
+        let view = view(&catalog, None, &Settings::default());
+        let chart = view
+            .skills
+            .iter()
+            .find(|skill| skill.name == "chart")
+            .unwrap();
+        assert_eq!(chart.plugin.as_deref(), Some("sheets"));
+        assert_eq!(chart.native_to, [ProviderKind::Codex]);
+        assert_eq!(chart.locations[0].plugin.as_deref(), Some("sheets@openai"));
+        let write = view
+            .skills
+            .iter()
+            .find(|skill| skill.name == "write")
+            .unwrap();
+        assert!(!write.claude_off_by_name);
+        let server = view
+            .servers
+            .iter()
+            .find(|server| server.name == "server")
+            .unwrap();
+        assert_eq!(server.source, "Claude Code (plugin)");
+        assert_eq!(server.plugin.as_deref(), Some("docs@market"));
+        assert_eq!(
+            server.file.as_deref(),
+            Some(claude.join(".mcp.json").display().to_string().as_str())
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::{Problem, Roots, Secret, Server, Source, Transport, server_id};
+use crate::{Agent, Plugin, Problem, Roots, Secret, Server, Source, Transport, plugins, server_id};
 
 /// How a source writes variables in its values.
 #[derive(Clone, Copy)]
@@ -27,6 +27,8 @@ struct Origin<'a> {
     variables: Variables,
     /// The config file.
     file: &'a Path,
+    /// A Claude plugin's folder, which `${CLAUDE_PLUGIN_ROOT}` names.
+    plugin_root: Option<&'a Path>,
 }
 
 /// The user's servers: Claude Code's user and local scopes, Codex's, Claude Desktop's and
@@ -47,6 +49,7 @@ pub(crate) fn user(
                     base: None,
                     variables: Variables::Claude,
                     file: &roots.claude_json,
+                    plugin_root: None,
                 },
                 roots,
                 problems,
@@ -70,6 +73,7 @@ pub(crate) fn user(
                     base: Some(path),
                     variables: Variables::Claude,
                     file: &roots.claude_json,
+                    plugin_root: None,
                 },
                 roots,
                 problems,
@@ -99,6 +103,7 @@ pub(crate) fn user(
                 base: None,
                 variables: Variables::None,
                 file,
+                plugin_root: None,
             },
             roots,
             problems,
@@ -116,6 +121,7 @@ pub(crate) fn user(
                 base: None,
                 variables: Variables::Cursor,
                 file: &file,
+                plugin_root: None,
             },
             roots,
             problems,
@@ -139,6 +145,7 @@ pub(crate) fn project(roots: &Roots, project: &Path, problems: &mut Vec<Problem>
                 base: Some(project),
                 variables: Variables::Claude,
                 file: &file,
+                plugin_root: None,
             },
             roots,
             problems,
@@ -157,6 +164,7 @@ pub(crate) fn project(roots: &Roots, project: &Path, problems: &mut Vec<Problem>
                 base: Some(project),
                 variables: Variables::Cursor,
                 file: &file,
+                plugin_root: None,
             },
             roots,
             problems,
@@ -241,7 +249,7 @@ fn json_servers(
     roots: &Roots,
     problems: &mut Vec<Problem>,
 ) -> Vec<Server> {
-    let expand = |text: &str| expand(text, origin.variables, roots, origin.project);
+    let expand = |text: &str| expand(text, origin, roots);
     let mut problem = |name: &str, read: Option<String>, error: String| {
         problems.push(entry_problem(
             name,
@@ -445,7 +453,79 @@ fn server(name: &str, source: Source, project: Option<&Path>, transport: Transpo
         project: project.map(Path::to_owned),
         transport,
         signs_in,
+        plugin: None,
+        file: None,
     }
+}
+
+/// The MCP servers of `plugin`, as its agent reads them: Claude's with its variables and
+/// `${CLAUDE_PLUGIN_ROOT}`, Codex's in its own keys, less those its `config.toml` switches off.
+/// A relative command or folder is in the plugin's.
+pub(crate) fn plugin(
+    roots: &Roots,
+    plugin: &Plugin,
+    codex: Option<&toml::Table>,
+    problems: &mut Vec<Problem>,
+) -> Vec<Server> {
+    let Some((file, own)) = plugin.server_file() else {
+        return Vec::new();
+    };
+    let (source, start) = match plugin.agent {
+        Agent::Claude => (Source::ClaudePlugin, problems.len()),
+        Agent::Codex => (Source::CodexPlugin, problems.len()),
+    };
+    let mut servers = match (own, plugin.agent) {
+        (None, _) => {
+            problems.push(file_problem(&file, source, None, None));
+            Vec::new()
+        }
+        (Some(Value::Object(own)), Agent::Claude) => json_servers(
+            &own,
+            &Origin {
+                source,
+                project: None,
+                base: Some(&plugin.root),
+                variables: Variables::Claude,
+                file: &file,
+                plugin_root: Some(&plugin.root),
+            },
+            roots,
+            problems,
+        ),
+        (Some(own @ Value::Object(_)), Agent::Codex) => {
+            match serde_json::from_value::<toml::Table>(serde_json::json!({ "mcp_servers": own })) {
+                Ok(config) => {
+                    let off = plugins::codex_servers_off(codex, &plugin.id);
+                    let mut servers = toml_servers(
+                        &config,
+                        source,
+                        Some((&plugin.root, &plugin.root)),
+                        &file,
+                        roots,
+                        problems,
+                    );
+                    servers.retain(|server| !off.contains(&server.name));
+                    servers
+                }
+                Err(_) => {
+                    problems.push(file_problem(&file, source, None, None));
+                    Vec::new()
+                }
+            }
+        }
+        (Some(_), _) => Vec::new(),
+    };
+    for server in &mut servers {
+        server.id = format!("{}:{}", plugin.prefix(), server.name);
+        server.project.clone_from(&plugin.project);
+        server.plugin = Some(plugin.clone());
+        server.file = Some(file.clone());
+    }
+    for problem in &mut problems[start..] {
+        problem.id = format!("{}:{}", plugin.prefix(), problem.name);
+        problem.project.clone_from(&plugin.project);
+    }
+    servers
 }
 
 /// A JSON object's string values.
@@ -477,7 +557,8 @@ fn absolute(path: &str, base: Option<&Path>) -> PathBuf {
 
 /// `text` with the source's variables expanded from the CLIs' environment. An unset variable
 /// without a default expands to nothing.
-fn expand(text: &str, variables: Variables, roots: &Roots, project: Option<&Path>) -> String {
+fn expand(text: &str, origin: &Origin<'_>, roots: &Roots) -> String {
+    let (variables, project) = (origin.variables, origin.project);
     if matches!(variables, Variables::None) || !text.contains("${") {
         return text.to_owned();
     }
@@ -491,7 +572,10 @@ fn expand(text: &str, variables: Variables, roots: &Roots, project: Option<&Path
             return out;
         };
         let inner = &after[..end];
-        let var = |name: &str| roots.vars.get(name).cloned();
+        let var = |name: &str| match origin.plugin_root {
+            Some(root) if name == "CLAUDE_PLUGIN_ROOT" => Some(root.display().to_string()),
+            _ => roots.vars.get(name).cloned(),
+        };
         let value = match variables {
             Variables::Claude => match inner.split_once(":-") {
                 Some((name, default)) => var(name)

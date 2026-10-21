@@ -238,9 +238,10 @@ in `crates/providers/fixtures/` ship with the app.
 `crates/registry` reads every MCP server and skill on the machine into one catalog: Claude
 Code's, Codex's (a trusted project's layers included), Claude Desktop's and Cursor's servers,
 and the skills in `~/.agents/skills`, `~/.claude/skills`, `$CODEX_HOME/skills` and a trusted
-project's `.claude/skills` and `.agents/skills`. It only reads those configs, and a watcher
-refreshes it. Ids are source-qualified (`claude:user:railway`, `codex:project:<path>:x`,
-`desktop:pencil`). Whether an agent has a server or skill by itself is decided per session
+project's `.claude/skills` and `.agents/skills`, and the skills and `.mcp.json` servers of the
+Claude Code and Codex plugins that are on (`crates/registry/src/plugins.rs`). It only reads those
+configs, and a watcher refreshes it. Ids are source-qualified (`claude:user:railway`,
+`codex:project:<path>:x`, `desktop:pencil`, `codex:plugin:<plugin>@<marketplace>:skills/x`). Whether an agent has a server or skill by itself is decided per session
 (agent, project) by `Catalog::server_native` and `Catalog::skill_native`.
 
 `crates/core/src/manager/integrations.rs` uses it: a worker keeps its agent's own servers and

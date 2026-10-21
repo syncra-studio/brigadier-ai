@@ -30,16 +30,20 @@ const SOURCES: Record<string, IntegrationSource> = {
   "Claude Desktop": "Desktop",
   "Cursor (user)": "CursorUser",
   "Cursor (project)": "CursorProject",
+  "Claude Code (plugin)": "ClaudePlugin",
+  "Codex (plugin)": "CodexPlugin",
 };
 
 function source(label: string): IntegrationSource {
   return SOURCES[label] ?? "ClaudeUser";
 }
 
-/** The config file a source reads, with the project's real folder. */
-function sourceFile(kind: IntegrationSource, project: string | null): string {
+/** The config file a source reads, with the project's real folder; a plugin's own file. */
+function sourceFile(kind: IntegrationSource, project: string | null, file: string | null): string {
   const root = project ? shortPath(project) : "";
   switch (kind) {
+    case "ClaudePlugin":
+    case "CodexPlugin": return file ? shortPath(file) : "";
     case "ClaudeUser":
     case "ClaudeLocal": return "~/.claude.json";
     case "ClaudeProjectFile": return `${root}/.mcp.json`;
@@ -104,7 +108,7 @@ function server(members: McpServerView[], projects: Project[]): IntegrationServe
     signIn: states,
     nativeAgents: agents,
     canSwitchOff: true,
-    sourceFiles: members.map((member) => ({ source: source(member.source), path: sourceFile(source(member.source), member.project) })),
+    sourceFiles: members.map((member) => ({ source: source(member.source), path: sourceFile(source(member.source), member.project, member.file), ...(member.plugin ? { plugin: member.plugin } : {}) })),
   };
 }
 
@@ -132,15 +136,17 @@ function skill(view: SkillView, projects: Project[]): IntegrationSkill {
     const root = item.repos[0]?.path;
     return root && view.locations.some((location) => location.path.startsWith(`${root}/`));
   });
-  const locations = view.locations.length ? view.locations : [{ path: view.path, linkedTo: null, nativeTo: view.nativeTo }];
+  const locations = view.locations.length ? view.locations : [{ path: view.path, linkedTo: null, plugin: null, nativeTo: view.nativeTo }];
   return {
     id: view.id,
-    name: view.name,
+    // A plugin's skill, as its agent shows it.
+    name: view.plugin ? `${view.plugin}:${view.name}` : view.name,
     description: view.description,
     locations: locations.map((location) => shortPath(location.path)),
     locationDetails: locations.map((location) => ({
       path: shortPath(location.path),
       ...(location.linkedTo ? { linkedTo: shortPath(location.linkedTo) } : {}),
+      ...(location.plugin ? { plugin: location.plugin } : {}),
       agents: location.nativeTo.map(agentOf),
     })),
     nativeAgents: view.nativeTo.map(agentOf),
@@ -196,6 +202,7 @@ function pathsOf(view: IntegrationsView): Map<string, string> {
     for (const location of item.locations) add(location.path);
   }
   for (const item of view.problems) add(item.file);
+  for (const item of view.servers) if (item.file) add(item.file);
   return paths;
 }
 

@@ -1,4 +1,4 @@
-/** All fifteen screen states on settings.pen's Plugins board. No sample data enters the app. */
+/** All fifteen screen states on settings.pen's Plugins board, and a plugin's skill. No sample data enters the app. */
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { mockIPC } from "@tauri-apps/api/mocks";
@@ -431,11 +431,30 @@ const skills: IntegrationSkill[] = [
     ],
     "canSwitchOff": true,
     "project": "~/Code/brigadier-ai"
+  },
+  {
+    "id": "codex:plugin:spreadsheets@openai-primary-runtime:skills/chart",
+    "name": "spreadsheets:chart",
+    "description": "Build charts from a spreadsheet's data",
+    "locations": [
+      "~/.codex/plugins/cache/openai-primary-runtime/spreadsheets/26.1017.22135/skills/chart"
+    ],
+    "locationDetails": [
+      {
+        "path": "~/.codex/plugins/cache/openai-primary-runtime/spreadsheets/26.1017.22135/skills/chart",
+        "plugin": "spreadsheets@openai-primary-runtime",
+        "agents": ["codex"]
+      }
+    ],
+    "nativeAgents": [
+      "codex"
+    ],
+    "canSwitchOff": true
   }
 ];
 
 const SERVER_STATES = ["servers", "search", "linear", "pencil", "unreadable", "empty-servers", "long-servers", "narrow-servers"];
-const SKILL_STATES = ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "empty-skills", "narrow-skills"];
+const SKILL_STATES = ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "plugin-skill", "empty-skills", "narrow-skills"];
 
 function snapshotFor(state: string): IntegrationSnapshot {
   const snapshot: IntegrationSnapshot = {
@@ -466,7 +485,7 @@ function snapshotFor(state: string): IntegrationSnapshot {
 }
 function viewFor(state: string) {
   const tab = SKILL_STATES.includes(state) ? "skills" as const : "servers" as const;
-  const name = state === "claude-skill" ? "higgsfield-websites" : state === "unreadable" ? "figma-dev" : state;
+  const name = state === "claude-skill" ? "higgsfield-websites" : state === "plugin-skill" ? "spreadsheets:chart" : state === "unreadable" ? "figma-dev" : state;
   const item = (tab === "skills" ? skills : servers).find((entry) => entry.name === name);
   return { initialTab: tab, ...(item ? { initialId: item.id } : {}) };
 }

@@ -10,6 +10,8 @@
 //!   `$CODEX_HOME/skills`, `~/.agents/skills` and a project's `.agents/skills`.
 //! - Claude Desktop's `claude_desktop_config.json` and Cursor's `~/.cursor/mcp.json` and a
 //!   project's `.cursor/mcp.json`.
+//! - The skills and MCP servers of the Claude Code and Codex plugins the user switched on
+//!   ([`plugins`]), which are their agent's own.
 //!
 //! A [`Catalog`] holds the user's entries and, asked for a project, that project's. Each server
 //! has a stable, source-qualified id (`claude:user:railway`, `codex:project:<path>:x`,
@@ -22,6 +24,7 @@
 //! asked for. Variables (`${VAR}` in Claude's configs, `${env:VAR}` in Cursor's) expand from
 //! [`Roots::vars`], the environment the CLIs themselves run with.
 
+mod plugins;
 mod servers;
 mod skills;
 mod watch;
@@ -31,6 +34,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
+pub use plugins::Plugin;
 pub use skills::{Skill, SkillRoot};
 
 /// The agents that can be given what another has.
@@ -146,6 +150,10 @@ pub enum Source {
     CursorUser,
     /// A project's `.cursor/mcp.json`.
     CursorProject,
+    /// A Claude Code plugin's servers ([`Server::plugin`]).
+    ClaudePlugin,
+    /// A Codex plugin's servers ([`Server::plugin`]).
+    CodexPlugin,
 }
 
 impl Source {
@@ -160,6 +168,8 @@ impl Source {
             Self::Desktop => "Claude Desktop",
             Self::CursorUser => "Cursor (user)",
             Self::CursorProject => "Cursor (project)",
+            Self::ClaudePlugin => "Claude Code (plugin)",
+            Self::CodexPlugin => "Codex (plugin)",
         }
     }
 
@@ -174,6 +184,8 @@ impl Source {
             Self::Desktop => "desktop",
             Self::CursorUser => "cursor:user",
             Self::CursorProject => "cursor:project",
+            Self::ClaudePlugin => "claude:plugin",
+            Self::CodexPlugin => "codex:plugin",
         }
     }
 }
@@ -225,6 +237,21 @@ pub struct Server {
     /// which each agent does by itself (Codex: `codex mcp login`), so another agent's sign-in
     /// doesn't serve it as such (docs/research/phase7-probes.md (f)): [`Catalog::sign_in`].
     pub signs_in: bool,
+    /// The plugin it comes with ([`Source::ClaudePlugin`], [`Source::CodexPlugin`]).
+    pub plugin: Option<Plugin>,
+    /// The file it is configured in, for a plugin's (its `.mcp.json` or manifest).
+    pub file: Option<PathBuf>,
+}
+
+impl Server {
+    /// The name its source's agent knows it by: Claude's `plugin_<plugin>_<name>` for one of
+    /// its plugins' (what its tools are prefixed with after `mcp__`), else its own.
+    pub fn native_name(&self) -> String {
+        match &self.plugin {
+            Some(plugin) => plugin.server_name(&self.name),
+            None => self.name.clone(),
+        }
+    }
 }
 
 /// A server, or a whole config file, that couldn't be read: no session gets it.
@@ -293,6 +320,9 @@ pub struct Catalog {
     pub codex_skill_config: Vec<serde_json::Value>,
     /// The projects the user trusts in Codex, whose `.codex` layers Codex loads.
     pub codex_trusted: Vec<PathBuf>,
+    /// The plugins of Claude Code and Codex that are on: the user's and, read for a project,
+    /// the project's.
+    pub plugins: Vec<Plugin>,
 }
 
 impl Catalog {
@@ -320,8 +350,14 @@ impl Catalog {
                 .as_ref()
                 .map(servers::codex_trusted)
                 .unwrap_or_default(),
+            plugins: Vec::new(),
         };
         skills::add_user(&mut catalog.skills, roots);
+        let mut plugins = plugins::claude(roots, None);
+        plugins.extend(plugins::codex(roots, codex.as_ref()));
+        for plugin in plugins {
+            catalog.add_plugin(roots, plugin, codex.as_ref());
+        }
         catalog
     }
 
@@ -329,6 +365,40 @@ impl Catalog {
         self.servers
             .extend(servers::project(roots, project, &mut self.problems));
         skills::add_project(&mut self.skills, project);
+        // A project's settings switch Claude's plugins on and off for its sessions, and its
+        // installs count there.
+        let here = plugins::claude(roots, Some(project));
+        let gone: Vec<Plugin> = self
+            .plugins
+            .iter()
+            .filter(|plugin| {
+                plugin.agent == Agent::Claude
+                    && !here
+                        .iter()
+                        .any(|other| other.id == plugin.id && other.root == plugin.root)
+            })
+            .cloned()
+            .collect();
+        for plugin in &gone {
+            skills::remove_plugin(&mut self.skills, plugin);
+            self.servers
+                .retain(|server| server.plugin.as_ref() != Some(plugin));
+            self.problems
+                .retain(|problem| !problem.id.starts_with(&format!("{}:", plugin.prefix())));
+            self.plugins.retain(|known| known != plugin);
+        }
+        for plugin in here {
+            if plugin.project.is_some() {
+                self.add_plugin(roots, plugin, None);
+            }
+        }
+    }
+
+    fn add_plugin(&mut self, roots: &Roots, plugin: Plugin, codex: Option<&toml::Table>) {
+        skills::add_plugin(&mut self.skills, &plugin);
+        self.servers
+            .extend(servers::plugin(roots, &plugin, codex, &mut self.problems));
+        self.plugins.push(plugin);
     }
 
     /// Whether `session`'s agent has `server` by itself: it loads it, and no entry of the same
@@ -336,11 +406,13 @@ impl Catalog {
     /// project's layer over the user's config).
     pub fn server_native(&self, server: &Server, session: &Session<'_>) -> bool {
         self.loads(server, session)
-            && !self.servers.iter().any(|other| {
-                other.name == server.name
-                    && precedence(other.source) > precedence(server.source)
-                    && self.loads(other, session)
-            })
+            && (server.source == Source::ClaudePlugin
+                || !self.servers.iter().any(|other| {
+                    other.name == server.name
+                        && other.source != Source::ClaudePlugin
+                        && precedence(other.source) > precedence(server.source)
+                        && self.loads(other, session)
+                }))
     }
 
     /// Whether `session`'s agent loads `server`'s entry, overridden or not.
@@ -357,6 +429,10 @@ impl Catalog {
                     && project
                         .is_some_and(|project| self.codex_trusted.iter().any(|p| p == project))
             }
+            (Source::ClaudePlugin, Agent::Claude) | (Source::CodexPlugin, Agent::Codex) => server
+                .plugin
+                .as_ref()
+                .is_some_and(|plugin| plugin.counts_in(session.project)),
             _ => false,
         }
     }
@@ -427,7 +503,11 @@ fn precedence(source: Source) -> u8 {
         Source::ClaudeLocal => 3,
         Source::ClaudeProject | Source::CodexProject => 2,
         Source::ClaudeUser | Source::CodexUser => 1,
-        Source::Desktop | Source::CursorUser | Source::CursorProject => 0,
+        Source::Desktop
+        | Source::CursorUser
+        | Source::CursorProject
+        | Source::ClaudePlugin
+        | Source::CodexPlugin => 0,
     }
 }
 
@@ -513,6 +593,11 @@ impl Registry {
             roots.claude_json.clone(),
             roots.codex_home.join("config.toml"),
             roots.cursor_dir.join("mcp.json"),
+            roots
+                .claude_dir
+                .join("plugins")
+                .join("installed_plugins.json"),
+            roots.claude_dir.join("settings.json"),
         ];
         files.extend(roots.desktop_config.clone());
         let mut trees = vec![
@@ -520,13 +605,27 @@ impl Registry {
             roots.agents_skills.clone(),
             roots.codex_home.join("skills"),
         ];
+        // A plugin's manifest, servers and skills folder; a Codex plugin's versions, of which
+        // the newest is read.
+        let mut dirs = Vec::new();
+        for plugin in &user.plugins {
+            for folder in [".claude-plugin", ".codex-plugin"] {
+                files.push(plugin.root.join(folder).join("plugin.json"));
+            }
+            files.push(plugin.root.join(".mcp.json"));
+            trees.push(plugin.root.join("skills"));
+            if plugin.agent == Agent::Codex {
+                dirs.extend(plugin.root.parent().map(Path::to_owned));
+            }
+        }
+        files.extend(user.servers.iter().filter_map(|server| server.file.clone()));
         // A skill reached through a symlink: its own folder, wherever it is.
         for skill in &user.skills {
             if !trees.iter().any(|tree| skill.dir.starts_with(tree)) {
                 trees.push(skill.dir.clone());
             }
         }
-        watch::Watched { files, trees }
+        watch::Watched { files, trees, dirs }
     }
 }
 

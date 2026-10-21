@@ -12,6 +12,7 @@ export const OFF_NOTE = `Turning it off stops Brigadier giving it to any worker 
 export const SOURCE_NAMES: Record<IntegrationSource, string> = {
   ClaudeUser: "Claude Code", ClaudeLocal: "Claude Code", ClaudeProjectFile: "Claude Code",
   CodexUser: "Codex", CodexProject: "Codex", Desktop: "Claude Desktop", CursorUser: "Cursor", CursorProject: "Cursor",
+  ClaudePlugin: "Claude Code plugin", CodexPlugin: "Codex plugin",
 };
 export function sourcePath(source: IntegrationSource, project?: string): string {
   switch (source) {
@@ -23,6 +24,8 @@ export function sourcePath(source: IntegrationSource, project?: string): string 
     case "Desktop": return "~/Library/Application Support/Claude/claude_desktop_config.json";
     case "CursorUser": return "~/.cursor/mcp.json";
     case "CursorProject": return `${project ?? ""}/.cursor/mcp.json`;
+    case "ClaudePlugin":
+    case "CodexPlugin": return ".mcp.json";
   }
 }
 export function AgentMarks({ agents }: { agents: IntegrationAgent[] }) {

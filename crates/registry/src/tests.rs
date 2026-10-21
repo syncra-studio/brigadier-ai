@@ -1009,3 +1009,326 @@ fn watcher_refreshes_on_config_and_skill_edits_through_symlinks() {
         "a config in a folder made later wasn't seen"
     );
 }
+
+/// A Claude Code plugin installed at `root` with `manifest`, and one skill in its `skills/`.
+fn claude_plugin(root: &Path, manifest: &str, skill_name: &str) {
+    write(&root.join(".claude-plugin/plugin.json"), manifest);
+    skill(
+        &root.join("skills").join(skill_name),
+        skill_name,
+        "From a plugin.",
+    );
+}
+
+/// The names of the skills `session` finds by itself, with the plugin they come with.
+fn native_skills(catalog: &Catalog, session: &Session<'_>) -> Vec<String> {
+    let mut names: Vec<String> = catalog
+        .skills
+        .iter()
+        .filter(|skill| catalog.skill_native(skill, session))
+        .map(|skill| match skill.plugin() {
+            Some(plugin) => plugin.skill_name(&skill.name),
+            None => skill.name.clone(),
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn claude_plugins_enabled_disabled_and_project_scoped() {
+    let home = fixture("claude-plugins");
+    let project = home.join("work/app");
+    let other = home.join("work/other");
+    let cache = home.join(".claude/plugins/cache/market");
+    let install = |name: &str, scope: &str, project: Option<&Path>| {
+        let at = project.map_or_else(String::new, |project| {
+            format!(r#", "projectPath": "{}""#, project.display())
+        });
+        format!(
+            r#""{name}@market": [{{"scope": "{scope}", "installPath": "{}", "version": "1.0.0"{at}}}]"#,
+            cache.join(name).join("1.0.0").display()
+        )
+    };
+    for (name, manifest) in [
+        ("on", r#"{"name": "on"}"#),
+        ("off", r#"{"name": "off"}"#),
+        ("dormant", r#"{"name": "dormant", "defaultEnabled": false}"#),
+        ("unlisted", r#"{"name": "unlisted"}"#),
+        ("here", r#"{"name": "here"}"#),
+        ("mine", r#"{"name": "mine"}"#),
+        ("theirs", r#"{"name": "theirs"}"#),
+        ("hushed", r#"{"name": "hushed"}"#),
+    ] {
+        claude_plugin(
+            &cache.join(name).join("1.0.0"),
+            manifest,
+            &format!("{name}-skill"),
+        );
+    }
+    write(
+        &home.join(".claude/plugins/installed_plugins.json"),
+        &format!(
+            r#"{{"version": 2, "plugins": {{{}}}}}"#,
+            [
+                install("on", "user", None),
+                install("off", "user", None),
+                install("dormant", "user", None),
+                install("unlisted", "user", None),
+                install("here", "user", None),
+                install("hushed", "user", None),
+                install("mine", "project", Some(&project)),
+                install("theirs", "local", Some(&other)),
+            ]
+            .join(", ")
+        ),
+    );
+    write(
+        &home.join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"on@market": true, "off@market": false, "here@market": false,
+                               "hushed@market": true}}"#,
+    );
+    // The project's settings switch one on, the user's own local settings one off.
+    write(
+        &project.join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"here@market": true, "mine@market": true}}"#,
+    );
+    write(
+        &project.join(".claude/settings.local.json"),
+        r#"{"enabledPlugins": {"hushed@market": false}}"#,
+    );
+    write(
+        &other.join(".claude/settings.local.json"),
+        r#"{"enabledPlugins": {"theirs@market": true}}"#,
+    );
+    // A plugin folder placed in the user's skills folder, switched as `<name>@skills-dir`.
+    claude_plugin(
+        &home.join(".claude/skills/dropped"),
+        r#"{"name": "dropped-in"}"#,
+        "dropped-skill",
+    );
+    let roots = roots(&home, &[]);
+    let anywhere = Session {
+        agent: Agent::Claude,
+        cwd: &home,
+        project: None,
+        in_checkout: false,
+    };
+    let user = Catalog::read(&roots, None);
+    assert_eq!(
+        native_skills(&user, &anywhere),
+        [
+            "dropped-in:dropped-skill",
+            "hushed:hushed-skill",
+            "on:on-skill",
+            "unlisted:unlisted-skill"
+        ]
+    );
+    let in_project = Session {
+        cwd: &project,
+        project: Some(&project),
+        ..anywhere
+    };
+    let catalog = Catalog::read(&roots, Some(&project));
+    assert_eq!(
+        native_skills(&catalog, &in_project),
+        [
+            "dropped-in:dropped-skill",
+            "here:here-skill",
+            "mine:mine-skill",
+            "on:on-skill",
+            "unlisted:unlisted-skill"
+        ]
+    );
+    // Codex finds none of them by itself: Brigadier gives them to its workers.
+    let codex = Session {
+        agent: Agent::Codex,
+        ..in_project
+    };
+    assert!(native_skills(&catalog, &codex).is_empty());
+    // What only the project switches on, and its installs, count only there.
+    let mine = catalog
+        .skills
+        .iter()
+        .find(|skill| skill.name == "mine-skill")
+        .unwrap();
+    assert_eq!(
+        mine.id,
+        format!(
+            "claude:plugin:{}:mine@market:skills/mine-skill",
+            project.display()
+        )
+    );
+    assert!(!catalog.skill_native(mine, &anywhere));
+    assert!(
+        catalog
+            .skills
+            .iter()
+            .all(|skill| !skill.name.starts_with("theirs") && !skill.name.starts_with("off"))
+    );
+    let on = user
+        .skill("claude:plugin:on@market:skills/on-skill")
+        .unwrap();
+    assert_eq!(on.dir, cache.join("on/1.0.0/skills/on-skill"));
+}
+
+#[test]
+fn claude_plugin_layout_and_servers() {
+    let home = fixture("claude-plugin-layout");
+    let cache = home.join(".claude/plugins/cache/market");
+    let full = cache.join("full/abc123");
+    // `skills/` and the manifest's entries, one level deep; the root SKILL.md isn't read then.
+    write(
+        &full.join(".claude-plugin/plugin.json"),
+        r#"{"name": "full", "skills": ["./extra", "./one", "../outside"]}"#,
+    );
+    skill(&full.join("skills/conv"), "conv", "Conventional.");
+    skill(
+        &full.join("skills/group/deep"),
+        "deep",
+        "Too deep for Claude.",
+    );
+    skill(&full.join("extra/ex"), "ex", "From an entry.");
+    skill(&full.join("one"), "one", "An entry that is one skill.");
+    skill(&full, "full-root", "Not read.");
+    write(
+        &full.join(".mcp.json"),
+        r#"{"mcpServers": {"tool": {"command": "${CLAUDE_PLUGIN_ROOT}/bin/tool",
+                                    "args": ["--team", "${TEAM}"]},
+                           "remote": {"type": "http", "url": "https://mcp.example.com/mcp"}}}"#,
+    );
+    // Only a root SKILL.md: the plugin is that one skill. Its install's folder is gone, so the
+    // cache folder of its commit is read.
+    let root_only = cache.join("solo/def456");
+    write(&root_only.join(".claude-plugin/plugin.json"), "{}");
+    skill(&root_only, "solo-root", "The plugin's own.");
+    write(
+        &home.join(".claude/plugins/installed_plugins.json"),
+        &format!(
+            r#"{{"plugins": {{"full@market": [{{"scope": "user", "installPath": "{}"}}],
+                             "solo@market": [{{"scope": "user", "installPath": "{}",
+                                               "gitCommitSha": "def456aaaa"}}]}}}}"#,
+            full.display(),
+            cache.join("solo/gone").display()
+        ),
+    );
+    let roots = roots(&home, &[("TEAM", "blue")]);
+    let catalog = Catalog::read(&roots, None);
+    let mut names: Vec<String> = catalog
+        .skills
+        .iter()
+        .map(|skill| skill.plugin().unwrap().skill_name(&skill.name))
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["full:conv", "full:ex", "full:one", "solo:solo-root"]
+    );
+    let tool = catalog.server("claude:plugin:full@market:tool").unwrap();
+    assert_eq!(tool.source, Source::ClaudePlugin);
+    assert_eq!(tool.native_name(), "plugin_full_tool");
+    assert_eq!(tool.file.as_deref(), Some(full.join(".mcp.json").as_path()));
+    let (command, args, ..) = stdio(tool);
+    assert_eq!(command, full.join("bin/tool").display().to_string());
+    assert_eq!(args, ["--team", "blue"]);
+    let remote = catalog.server("claude:plugin:full@market:remote").unwrap();
+    assert!(remote.signs_in);
+    let claude = Session {
+        agent: Agent::Claude,
+        cwd: &home,
+        project: None,
+        in_checkout: false,
+    };
+    assert!(catalog.server_native(tool, &claude));
+    assert!(!catalog.server_native(
+        tool,
+        &Session {
+            agent: Agent::Codex,
+            ..claude
+        }
+    ));
+}
+
+#[test]
+fn codex_plugins_enabled_disabled_and_versions() {
+    let home = fixture("codex-plugins");
+    let codex_home = home.join("codex-home");
+    let cache = codex_home.join("plugins/cache/market");
+    let plugin = |name: &str, version: &str, manifest: &str| {
+        let root = cache.join(name).join(version);
+        write(&root.join(".codex-plugin/plugin.json"), manifest);
+        root
+    };
+    // On: the newest version by semver, its skills to any depth, its servers in its folder.
+    let old = plugin("docs", "1.9.0", r#"{"name": "docs"}"#);
+    skill(&old.join("skills/old"), "old", "An older version's.");
+    let docs = plugin("docs", "1.10.0", r#"{"name": "documents"}"#);
+    skill(&docs.join("skills/write"), "write", "Writes documents.");
+    skill(&docs.join("skills/group/inner"), "inner", "A nested skill.");
+    write(
+        &docs.join(".mcp.json"),
+        r#"{"mcpServers": {"docs-server": {"command": "./bin/server", "cwd": "."},
+                           "hushed": {"command": "h"},
+                           "dormant": {"command": "d", "enabled": false}}}"#,
+    );
+    // Its manifest's entries instead of `skills/`.
+    let listed = plugin(
+        "listed",
+        "local",
+        r#"{"name": "listed", "skills": ["./a"]}"#,
+    );
+    skill(&listed.join("a/first"), "first", "Listed.");
+    skill(&listed.join("skills/unread"), "unread", "Not listed.");
+    plugin("listed", "9.9.9", r#"{"name": "listed"}"#);
+    // Off, and not switched at all.
+    let off = plugin("off", "1.0.0", r#"{"name": "off"}"#);
+    skill(&off.join("skills/no"), "no", "Switched off.");
+    let unlisted = plugin("unlisted", "1.0.0", r#"{"name": "unlisted"}"#);
+    skill(&unlisted.join("skills/no"), "no", "Never switched on.");
+    write(
+        &codex_home.join("config.toml"),
+        "[plugins.\"docs@market\"]\nenabled = true\n\n\
+         [plugins.\"docs@market\".mcp_servers.hushed]\nenabled = false\n\n\
+         [plugins.\"listed@market\"]\n\n\
+         [plugins.\"off@market\"]\nenabled = false\n",
+    );
+    let roots = roots(&home, &[("CODEX_HOME", &codex_home.display().to_string())]);
+    let catalog = Catalog::read(&roots, None);
+    let codex = Session {
+        agent: Agent::Codex,
+        cwd: &home,
+        project: None,
+        in_checkout: false,
+    };
+    assert_eq!(
+        native_skills(&catalog, &codex),
+        ["documents:inner", "documents:write", "listed:first"]
+    );
+    let claude = Session {
+        agent: Agent::Claude,
+        ..codex
+    };
+    assert!(native_skills(&catalog, &claude).is_empty());
+    let inner = catalog
+        .skill("codex:plugin:docs@market:skills/group/inner")
+        .unwrap();
+    assert_eq!(
+        inner.entries[0].1,
+        docs.join("skills/group/inner"),
+        "Codex knows it by this path"
+    );
+    let plugin_servers: Vec<&str> = catalog
+        .servers
+        .iter()
+        .filter(|server| server.source == Source::CodexPlugin)
+        .map(|server| server.id.as_str())
+        .collect();
+    assert_eq!(plugin_servers, ["codex:plugin:docs@market:docs-server"]);
+    let server = catalog.find("docs-server").unwrap();
+    assert_eq!(server.native_name(), "docs-server");
+    let (command, _, _, cwd, _) = stdio(server);
+    assert_eq!(command, docs.join("./bin/server").display().to_string());
+    assert_eq!(cwd, Some(docs.join(".").as_path()));
+    assert!(catalog.server_native(server, &codex));
+    assert!(!catalog.server_native(server, &claude));
+}

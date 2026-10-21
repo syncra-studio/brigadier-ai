@@ -9,7 +9,9 @@ export type IntegrationSource =
   | "CodexProject"
   | "Desktop"
   | "CursorUser"
-  | "CursorProject";
+  | "CursorProject"
+  | "ClaudePlugin"
+  | "CodexPlugin";
 
 export type IntegrationSignIn =
   | { kind: "native" }
@@ -28,7 +30,7 @@ export type IntegrationServer = {
   nativeAgents: IntegrationAgent[];
   canSwitchOff: boolean;
   error?: string;
-  sourceFiles?: { source: IntegrationSource; path: string; line?: number }[];
+  sourceFiles?: { source: IntegrationSource; path: string; line?: number; plugin?: string }[];
 };
 
 export type IntegrationSkill = {
@@ -36,7 +38,7 @@ export type IntegrationSkill = {
   name: string;
   description: string;
   locations: string[];
-  locationDetails?: { path: string; linkedTo?: string; agents: IntegrationAgent[] }[];
+  locationDetails?: { path: string; linkedTo?: string; plugin?: string; agents: IntegrationAgent[] }[];
   nativeAgents: IntegrationAgent[];
   project?: string;
   canSwitchOff: boolean;

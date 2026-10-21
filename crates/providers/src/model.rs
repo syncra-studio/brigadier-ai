@@ -1237,15 +1237,22 @@ pub struct McpServer {
 }
 
 /// The MCP servers and skills of the user's own setup a session goes without
-/// (docs/research/phase7-probes.md): Claude denies a server's tools (`mcp__<name>`) and turns a
-/// skill off by name (`skillOverrides`); Codex disables a server
-/// (`mcp_servers.<name>.enabled=false`) and a skill by its file (`skills.config`).
+/// (docs/research/phase7-probes.md): Claude denies a server's tools (`mcp__<name>`), turns a
+/// skill off by name (`skillOverrides`) and denies a plugin's skill (`Skill(<plugin>:<name>)`,
+/// which `skillOverrides` doesn't reach); Codex disables a server
+/// (`mcp_servers.<name>.enabled=false`), a plugin's server
+/// (`plugins.<id>.mcp_servers.<name>.enabled=false`) and a skill by its file (`skills.config`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SwitchedOff {
-    /// Names of servers the agent loads by itself.
+    /// Names of servers the agent loads by itself (Claude's plugin servers as
+    /// `plugin_<plugin>_<name>`, as their tools are prefixed).
     pub servers: Vec<String>,
     /// Claude: names of skills it finds by itself.
     pub skill_names: Vec<String>,
+    /// Claude: its plugins' skills, as `<plugin>:<name>`.
+    pub plugin_skills: Vec<String>,
+    /// Codex: its plugins' servers, by plugin id (`<plugin>@<marketplace>`) and server name.
+    pub plugin_servers: Vec<(String, String)>,
     /// Codex: the `SKILL.md` of each skill it finds by itself.
     pub skill_files: Vec<PathBuf>,
     /// Codex: the user's own `skills.config` entries, kept beside [`Self::skill_files`]: the
@@ -1256,7 +1263,11 @@ pub struct SwitchedOff {
 impl SwitchedOff {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.servers.is_empty() && self.skill_names.is_empty() && self.skill_files.is_empty()
+        self.servers.is_empty()
+            && self.skill_names.is_empty()
+            && self.plugin_skills.is_empty()
+            && self.plugin_servers.is_empty()
+            && self.skill_files.is_empty()
     }
 }
 
