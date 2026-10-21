@@ -33,7 +33,7 @@ struct State {
     codes: HashMap<String, String>,
     /// Every token handed out.
     issued: Vec<String>,
-    /// The `Authorization` of each request to the MCP server.
+    /// The `Authorization` of each request to the MCP server that sent one.
     seen: Vec<String>,
     refreshes: u32,
 }
@@ -86,7 +86,10 @@ async fn fake(
     match (parts.method.as_str(), parts.uri.path()) {
         ("POST", "/mcp") => {
             let auth = header(AUTHORIZATION).unwrap_or_default();
-            state.seen.push(auth.clone());
+            // A sign-in's or a renewal's discovery asks without a token.
+            if !auth.is_empty() {
+                state.seen.push(auth.clone());
+            }
             if auth
                 .strip_prefix("Bearer ")
                 .is_some_and(|token| state.valid.contains(token))
@@ -152,7 +155,11 @@ async fn fake(
             }
             let form = form(&body);
             match form["grant_type"].as_str() {
-                "refresh_token" if state.refresh.remove(&form["refresh_token"]) => {
+                // A refresh names the resource its tokens are for (RFC 8707), as the sign-in does.
+                "refresh_token"
+                    if form.get("resource") == Some(&format!("{base}/mcp"))
+                        && state.refresh.remove(&form["refresh_token"]) =>
+                {
                     state.refreshes += 1;
                     reply(StatusCode::OK, &issue(&mut state))
                 }
@@ -227,7 +234,10 @@ impl Fake {
         let basic = self.state().basic.clone();
         let mut request = reqwest::Client::new()
             .post(format!("{}/token", self.base))
-            .body(format!("grant_type=refresh_token&refresh_token={refresh}"));
+            .body(format!(
+                "grant_type=refresh_token&refresh_token={refresh}&resource={}/mcp",
+                self.base
+            ));
         if let Some(basic) = basic {
             request = request.header("authorization", basic);
         }
@@ -1019,6 +1029,89 @@ async fn without_a_keychain_sign_ins_are_unsupported() {
         (sign_in.claude, sign_in.codex),
         (SignInState::Native, SignInState::Unsupported)
     );
+}
+
+#[tokio::test]
+async fn a_sign_out_or_a_refusal_stops_a_route_and_any_spelling_finds_brigadier_s_own() {
+    let home = home();
+    write(
+        &home.join(".claude.json"),
+        &json!({"mcpServers": {
+            "one": {"type": "http", "url": "https://mcp.example.com/mcp"},
+            "two": {"type": "http", "url": "https://MCP.example.com:443/mcp/"}}})
+        .to_string(),
+    );
+    let roots = roots(&home);
+    let catalog = Catalog::read(&roots, None);
+    let memory = Arc::new(Memory::default());
+    let auth = auth(memory.clone(), "worker");
+    let stores = auth.stores(Homes::new(&roots));
+    let place = |owner, id| Place::of(owner, server(&catalog, id), CodexStore::Auto).unwrap();
+    let (one, two) = (
+        place(Owner::Brigadier, "claude:user:one"),
+        place(Owner::Brigadier, "claude:user:two"),
+    );
+    let Place::Brigadier { identity, url } = &one else {
+        panic!("Brigadier's place");
+    };
+    let credential = Credential {
+        access_token: Secret::new("own-access"),
+        refresh_token: Some(Secret::new("own-refresh")),
+        expires_at: Some(now_ms() + 3_600_000),
+        client_id: Some("registered".into()),
+        client_secret: None,
+        token_endpoint: None,
+        since: Some(1_000),
+        found: Found::Own,
+    };
+    stores.save_own(identity, url, &credential).unwrap();
+
+    // Another spelling of the address is the same server: Brigadier's sign-in serves it.
+    let read = stores.read(&two, true).unwrap().expect("its sign-in");
+    assert!(read.access_token == credential.access_token);
+    // Signed out while a renewal ran: the renewal puts nothing back.
+    auth.sign_out(&one, Homes::new(&roots)).await.unwrap();
+    let renewed = Credential {
+        access_token: Secret::new("renewed-access"),
+        ..read.clone()
+    };
+    assert!(stores.write_back(&two, &read, &renewed).is_err());
+    assert!(stores.read(&one, true).unwrap().is_none());
+
+    // A refused read of Claude's item isn't tried again by a worker's route until the user
+    // asks again.
+    let Some((service, _)) = Homes::new(&roots).claude_item else {
+        return;
+    };
+    let linear = server(&catalog, "claude:user:one");
+    let entry = json!({"serverName": "one", "serverUrl": "https://mcp.example.com/mcp",
+                       "accessToken": "claude-access", "expiresAt": now_ms() + 3_600_000});
+    put_claude(
+        &memory,
+        &roots,
+        &json!({"mcpOAuth": {claude_key(linear).unwrap(): entry}}),
+    );
+    let claude = place(Owner::Claude, "claude:user:one");
+    let route = Route {
+        grant: "worker".into(),
+        place: claude.clone(),
+        url: "https://mcp.example.com/mcp".into(),
+        headers: Vec::new(),
+        client: None,
+        homes: Homes::new(&roots),
+    };
+    let claude_reads = || {
+        let reads = memory.reads.lock().unwrap();
+        reads.iter().filter(|(read, _)| *read == service).count()
+    };
+    memory.deny.store(true, Ordering::SeqCst);
+    assert!(auth.token(&route, None).await.is_err());
+    let reads = claude_reads();
+    memory.deny.store(false, Ordering::SeqCst);
+    assert!(auth.token(&route, None).await.is_err());
+    assert_eq!(claude_reads(), reads);
+    auth.ask_again(std::slice::from_ref(&claude));
+    assert!(auth.token(&route, None).await.unwrap().expose() == "claude-access");
 }
 
 mod in_brigadier {

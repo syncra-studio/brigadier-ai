@@ -589,16 +589,22 @@ pub(crate) fn switched_off(
 }
 
 /// Where the sign-in that serves `server` to `session`'s agent is kept when it isn't the
-/// agent's own: another agent's stored sign-in, or Brigadier's.
+/// agent's own (another agent's stored sign-in, or Brigadier's), with the configured client
+/// of the entry it was made for, which its renewals need.
 fn reused_sign_in(
     catalog: &Catalog,
     server: &Server,
     session: &Session<'_>,
     stores: &Prober<'_>,
-) -> Option<Place> {
+) -> Option<(Place, Option<OAuthClient>)> {
     match catalog.sign_in_from(server, session, stores)? {
-        (SignIn::ReusableFrom(agent), Some(entry)) => stores.place(agent.into(), entry),
-        (SignIn::InBrigadier, _) => stores.place(Owner::Brigadier, server),
+        (SignIn::ReusableFrom(agent), Some(entry)) => {
+            Some((stores.place(agent.into(), entry)?, entry.oauth.clone()))
+        }
+        (SignIn::InBrigadier, _) => Some((
+            stores.place(Owner::Brigadier, server)?,
+            server.oauth.clone(),
+        )),
         _ => None,
     }
 }
@@ -617,8 +623,13 @@ fn may_reuse(catalog: &Catalog, server: &Server, quiet: &Prober<'_>) -> bool {
 }
 
 /// `server` as a worker gets it under `name`; through the sign-in proxy with the sign-in at
-/// `place`, once its route is made.
-fn give(shared: &mut Shared, name: String, server: &Server, place: Option<(Place, &Homes)>) {
+/// `reused`'s place and its client, once its route is made.
+fn give(
+    shared: &mut Shared,
+    name: String,
+    server: &Server,
+    reused: Option<(Place, Option<OAuthClient>, &Homes)>,
+) {
     let (transport, env) = match &server.transport {
         Transport::Stdio {
             command, args, env, ..
@@ -631,7 +642,7 @@ fn give(shared: &mut Shared, name: String, server: &Server, place: Option<(Place
             env,
         ),
         Transport::Http { url, headers } => {
-            if let Some((place, homes)) = place {
+            if let Some((place, client, homes)) = reused {
                 shared.proxied.push(Proxied {
                     index: shared.servers.len(),
                     place,
@@ -641,7 +652,7 @@ fn give(shared: &mut Shared, name: String, server: &Server, place: Option<(Place
                         .filter(|(name, _)| !name.eq_ignore_ascii_case("authorization"))
                         .cloned()
                         .collect(),
-                    client: server.oauth.clone(),
+                    client,
                     homes: homes.clone(),
                 });
             }
@@ -724,7 +735,7 @@ fn named_servers(
             continue;
         }
         let name = free_name(&mut taken, &server.name);
-        let place = server
+        let reused = server
             .signs_in
             .then(|| reused_sign_in(catalog, server, session, asking))
             .flatten();
@@ -732,7 +743,7 @@ fn named_servers(
             shared,
             name,
             server,
-            place.map(|place| (place, asking.homes())),
+            reused.map(|(place, client)| (place, client, asking.homes())),
         );
     }
     let mut seen = HashSet::new();
@@ -744,7 +755,7 @@ fn named_servers(
         {
             continue;
         }
-        let Some(place) = reused_sign_in(catalog, server, session, asking) else {
+        let Some((place, client)) = reused_sign_in(catalog, server, session, asking) else {
             continue;
         };
         let name = match session.agent {
@@ -756,7 +767,7 @@ fn named_servers(
                 free_name(&mut taken, &server.name)
             }
         };
-        give(shared, name, server, Some((place, asking.homes())));
+        give(shared, name, server, Some((place, client, asking.homes())));
     }
 }
 
@@ -1422,6 +1433,48 @@ mod tests {
         assert_eq!(given(false), ["db"]);
         // In a checkout its CLI loads it by itself.
         assert!(given(true).is_empty());
+    }
+
+    #[test]
+    fn a_reused_sign_in_renews_with_the_client_of_the_entry_it_was_made_for() {
+        let home = home();
+        let url = "https://mcp.example.com/mcp";
+        write(
+            &home.join(".claude.json"),
+            &format!(r#"{{"mcpServers": {{"linear": {{"type": "http", "url": "{url}"}}}}}}"#),
+        );
+        write(
+            &home.join(".codex/config.toml"),
+            &format!(
+                "mcp_oauth_credentials_store = \"file\"\n\n[mcp_servers.linear]\nurl = \"{url}\"\n\n[mcp_servers.linear.oauth]\nclient_id = \"codex-client\"\nclient_secret = \"codex-secret\"\n"
+            ),
+        );
+        let roots = roots(&home);
+        let catalog = Catalog::read(&roots, None);
+        let codex = catalog.server("codex:user:linear").unwrap();
+        let key = brigadier_registry::codex_keys(codex)[0].clone();
+        write(
+            &home.join(".codex/.credentials.json"),
+            &format!(
+                r#"{{"{key}": {{"server_name": "linear", "server_url": "{url}", "client_id": "codex-client",
+                    "access_token": "codex-access", "expires_at": 32503680000000, "refresh_token": "codex-refresh"}}}}"#
+            ),
+        );
+        let auth = McpAuth::new(Arc::new(Memory::default()), Arc::new(|_: &str| false));
+        let asking = auth.prober(&roots, catalog.codex_store, false);
+        let session = Session {
+            agent: Agent::Claude,
+            cwd: &home,
+            project: None,
+            in_checkout: false,
+        };
+        let claude = catalog.server("claude:user:linear").unwrap();
+        let (place, client) = reused_sign_in(&catalog, claude, &session, &asking).unwrap();
+        assert!(matches!(place, Place::Codex { .. }));
+        // Codex keeps its configured client secret in its config, not with its tokens.
+        let client = client.expect("Codex's configured client");
+        assert_eq!(client.client_id.as_deref(), Some("codex-client"));
+        assert_eq!(client.client_secret.unwrap().expose(), "codex-secret");
     }
 
     #[test]

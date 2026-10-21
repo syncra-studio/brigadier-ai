@@ -1063,6 +1063,16 @@ fn the_clis_keys_match_their_recipes() {
         &[("X-Tenant", "a"), ("X-B", "é")],
     );
     assert_eq!(claude_key(&tenant).unwrap(), "t|2a07e50c2321bb58");
+    // Read from Claude's config, the headers keep the order they are written in.
+    let home = fixture("claude-key");
+    write(
+        &home.join(".claude.json"),
+        r#"{"mcpServers": {"t": {"type": "http", "url": "https://x.example.com/mcp",
+                                 "headers": {"X-Tenant": "a", "X-B": "é"}}}}"#,
+    );
+    let catalog = Catalog::read(&roots(&home, &[]), None);
+    let read = catalog.server("claude:user:t").expect("the server");
+    assert_eq!(claude_key(read).unwrap(), "t|2a07e50c2321bb58");
     assert_eq!(
         claude_lock_name("linear|638130d5ab3558f4"),
         "mcp-refresh-linear_638130d5ab3558f4.lock"

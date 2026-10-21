@@ -264,6 +264,17 @@ impl McpAuth {
         }
     }
 
+    /// Fails when the user refused reading `place`: nothing reads it until they ask again.
+    fn not_refused(&self, place: &Place) -> Result<(), String> {
+        if lock(&self.refused).contains(&Refusal::of(place)) {
+            return Err(format!(
+                "the system wasn't allowed to let Brigadier read {}'s sign-in",
+                place.owner()
+            ));
+        }
+        Ok(())
+    }
+
     /// What `place` holds: refused until the user asks again, known within [`KNOWN_FOR`], a
     /// sign-in in use, else read now.
     fn probe(&self, stores: &Stores, place: &Place, quiet: bool) -> Probe {
@@ -332,6 +343,7 @@ impl McpAuth {
         let slot = self.slot(&route.place);
         let mut held = slot.lock().await;
         if held.is_none() {
+            self.not_refused(&route.place)?;
             let (stores, place) = (self.stores(route.homes.clone()), route.place.clone());
             match off(move || stores.read(&place, false)).await {
                 Ok(Some(credential))
@@ -377,6 +389,7 @@ impl McpAuth {
     /// meanwhile, else refreshed and written back to the store.
     async fn renew(&self, route: &Route, ours: Option<Credential>) -> Result<Credential, String> {
         let place = &route.place;
+        self.not_refused(place)?;
         let stores = Arc::new(self.stores(route.homes.clone()));
         let taken = {
             let (stores, place) = (stores.clone(), place.clone());
@@ -405,17 +418,20 @@ impl McpAuth {
             return Ok(now);
         }
         let now = now.with_client(route.client.as_ref());
-        let endpoint = match &now.token_endpoint {
-            Some(endpoint) => endpoint.clone(),
-            None => {
-                oauth::discover(&self.http, &route.url, &route.headers)
-                    .await
-                    .map_err(|err| err.to_string())?
-                    .auth
-                    .token_endpoint
-            }
+        // The resource the tokens are for goes with the refresh (RFC 8707), as with the
+        // sign-in; the stores don't keep it.
+        let (endpoint, resource) = match (
+            oauth::discover(&self.http, &route.url, &route.headers).await,
+            &now.token_endpoint,
+        ) {
+            (Ok(found), stored) => (
+                stored.clone().unwrap_or(found.auth.token_endpoint),
+                Some(found.resource),
+            ),
+            (Err(_), Some(stored)) => (stored.clone(), None),
+            (Err(err), None) => return Err(err.to_string()),
         };
-        let renewed = match oauth::refresh(&self.http, &endpoint, &now, None).await {
+        let renewed = match oauth::refresh(&self.http, &endpoint, &now, resource.as_deref()).await {
             Ok(renewed) => renewed,
             Err(err) => {
                 if err == oauth::OAuthError::Refused {

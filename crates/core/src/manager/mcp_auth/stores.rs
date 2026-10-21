@@ -11,7 +11,7 @@
 use std::fmt;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use brigadier_providers::cli::CliEnv;
@@ -225,6 +225,10 @@ fn failed(what: &str, err: impl fmt::Display) -> StoreError {
     StoreError::Failed(format!("{what}: {err}"))
 }
 
+/// Held while Brigadier's own sign-ins are written or deleted, so a renewal can't put back
+/// one signed out of meanwhile.
+static OWN_WRITES: Mutex<()> = Mutex::new(());
+
 /// A store's bytes as read, and where they were found.
 type ReadItem = (Zeroizing<Vec<u8>>, Found);
 
@@ -435,7 +439,8 @@ impl Stores {
                 keys,
                 store,
             } => self.read_codex(name, url, keys, *store, quiet),
-            Place::Brigadier { identity, url } => {
+            // Its account is the server's identity: any spelling of its address matches.
+            Place::Brigadier { identity, .. } => {
                 let Some(bytes) = self
                     .keychain
                     .get(OWN_SERVICE, &sha256_hex(identity), quiet)?
@@ -444,7 +449,7 @@ impl Stores {
                 };
                 let own: Own = serde_json::from_slice(&bytes)
                     .map_err(|err| failed("Brigadier's sign-in", err))?;
-                Ok((own.url == *url).then(|| Credential {
+                Ok(Some(Credential {
                     access_token: Secret::new(own.access_token),
                     refresh_token: secret(own.refresh_token),
                     expires_at: own.expires_at,
@@ -759,7 +764,14 @@ impl Stores {
                 write_file(&self.homes.codex_file(), &bytes)?;
             }
             (Place::Brigadier { identity, url }, Found::Own) => {
-                self.save_own(identity, url, renewed)?;
+                let _writing = OWN_WRITES.lock().unwrap_or_else(PoisonError::into_inner);
+                match self.read(place, false)? {
+                    Some(now)
+                        if now.access_token == old.access_token
+                            && now.refresh_token == old.refresh_token => {}
+                    _ => return Err(gone()),
+                }
+                self.put_own(identity, url, renewed)?;
             }
             _ => return Err(gone()),
         }
@@ -774,6 +786,16 @@ impl Stores {
 
     /// Stores Brigadier's own sign-in to the server `identity` names.
     pub(crate) fn save_own(
+        &self,
+        identity: &str,
+        url: &str,
+        credential: &Credential,
+    ) -> Result<(), StoreError> {
+        let _writing = OWN_WRITES.lock().unwrap_or_else(PoisonError::into_inner);
+        self.put_own(identity, url, credential)
+    }
+
+    fn put_own(
         &self,
         identity: &str,
         url: &str,
@@ -804,6 +826,7 @@ impl Stores {
 
     /// Deletes Brigadier's own sign-in to the server `identity` names, if it has one.
     pub(crate) fn remove_own(&self, identity: &str) -> Result<(), StoreError> {
+        let _writing = OWN_WRITES.lock().unwrap_or_else(PoisonError::into_inner);
         self.keychain.remove_own(&sha256_hex(identity))
     }
 }
