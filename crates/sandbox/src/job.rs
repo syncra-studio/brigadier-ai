@@ -59,22 +59,27 @@ impl Drop for ProcessJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::process::{Command, Stdio};
 
     /// A child's own child, left running after the child is gone, goes with the job.
     #[test]
     fn terminating_the_job_ends_what_the_child_left_running() {
-        // cmd starts a ping that outlives it, holding cmd's output pipe (an inherited handle),
-        // a second after it starts: by then it is in the job.
+        // cmd waits for a line, then starts a sort that outlives it: the sort starts once cmd is
+        // in the job. It holds cmd's output pipe (an inherited handle) and waits for the end of
+        // its input, which the test keeps open.
         let mut child = Command::new("cmd")
             .args([
                 "/C",
-                "ping -n 2 127.0.0.1 >NUL & start /B ping -n 30 127.0.0.1 >NUL",
+                r"set /p go= & start /B %SystemRoot%\System32\sort.exe",
             ])
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
         let job = ProcessJob::around(&child).unwrap();
+        let mut input = child.stdin.take().unwrap();
+        input.write_all(b"go\r\n").unwrap();
         let mut out = child.stdout.take().unwrap();
         child.wait().unwrap();
         let (send, got) = std::sync::mpsc::channel();
@@ -82,7 +87,7 @@ mod tests {
             let _ = io::copy(&mut out, &mut io::sink());
             let _ = send.send(());
         });
-        // The ping still holds the pipe.
+        // The sort still holds the pipe.
         assert!(
             got.recv_timeout(std::time::Duration::from_millis(500))
                 .is_err()
@@ -90,5 +95,6 @@ mod tests {
         job.terminate();
         got.recv_timeout(std::time::Duration::from_secs(5))
             .expect("the pipe closes once the job is terminated");
+        drop(input);
     }
 }
