@@ -38,34 +38,28 @@ test("Background lists what still runs, one line each with its state and Stop on
   assert.deepEqual(seen.left, ["run-2", "preview-2"], "what the user stopped left the card");
 });
 
-type Ended = { state: string; icon: string | null; red: boolean; shimmer: boolean; muted: boolean; lastLine: string | null; elapsed: string; actions: string[]; actionsVisibleAtRest: boolean | null };
+type Ended = { state: string; icon: string | null; red: boolean; shimmer: boolean; muted: boolean; lastLine: string | null; elapsed: string; actions: string[]; actionsVisibleAtRest: boolean | null; clear?: boolean | null };
 
-test("Background rows stay while they need the user (Q94): a failed one red with its last line, Restart and ×; a finished one muted until the next message; a stopped one gone", { timeout: 90000 }, async (t) => {
+test("Background rows stay while they need the user (Q94): a failed one red with its last line, Restart and × clear of its words; a finished or stopped one gone", { timeout: 90000 }, async (t) => {
   const seen = JSON.parse(await renderFixtureLive(t, "activities.html?ended=1", "activities-result", 60000)) as {
-    order: string[]; rows: Record<string, Ended>; calls: string[]; restarted: string; afterActions: string[]; startedAgain: string[]; afterMessage: string[];
+    order: string[]; rows: Record<string, Ended>; calls: string[]; restarted: string; afterActions: string[]; startedAgain: string[];
   };
-  // Newest first; the storybook the user stopped is not there.
-  assert.deepEqual(seen.order, ["preview-13", "preview-12", "preview-11", "run-13", "run-14", "run-15"]);
+  // Newest first; the docs build and lint that finished and the storybook the user stopped are not there.
+  assert.deepEqual(seen.order, ["preview-12", "preview-11", "run-13", "run-15"]);
   assert.deepEqual(seen.rows["preview-11"], { state: "failed", icon: "failed", red: true, shimmer: false, muted: false,
-    lastLine: "· Error: listen EADDRINUSE: address already in use :::5199", elapsed: "1m", actions: ["Restart Demo pages", "Dismiss Demo pages"], actionsVisibleAtRest: true });
+    lastLine: "· Error: listen EADDRINUSE: address already in use :::5199", elapsed: "1m", actions: ["Restart Demo pages", "Dismiss Demo pages"], actionsVisibleAtRest: true, clear: true });
   // A crash is a failure too, and so is a run with a non-zero exit or one cut off.
   assert.equal(seen.rows["preview-12"]?.state, "failed");
   assert.deepEqual([seen.rows["run-13"]?.state, seen.rows["run-13"]?.lastLine, seen.rows["run-13"]?.actions, seen.rows["run-13"]?.actionsVisibleAtRest],
     ["failed", "· test result: FAILED. 9 passed; 3 failed", ["Restart Core tests", "Dismiss Core tests"], true]);
   assert.equal(seen.rows["run-15"]?.state, "failed");
   assert.equal(seen.rows["run-15"]?.actionsVisibleAtRest, true, "a failed row's Restart and × show without hover");
-  // Finished on its own: muted, still, no controls.
-  for (const finished of ["preview-13", "run-14"]) {
-    assert.deepEqual(seen.rows[finished], { state: "finished", icon: "finished", red: false, shimmer: false, muted: true, lastLine: null, elapsed: "1m", actions: [], actionsVisibleAtRest: null }, finished);
-  }
   assert.deepEqual(seen.calls, ["dismissBackground run-15", "restartBackgroundRun run-13", "restartPreview preview-11"]);
   // Restarted under its id, the page is its running row again; the run restarted and the one dismissed left.
   assert.equal(seen.restarted, "starting");
-  assert.deepEqual(seen.afterActions, ["preview-11", "preview-13", "preview-12", "run-14"]);
+  assert.deepEqual(seen.afterActions, ["preview-11", "preview-12"]);
   // The thread starts the api server again: the new one replaces the failed row.
-  assert.deepEqual(seen.startedAgain, ["preview-15", "preview-11", "preview-13", "run-14"]);
-  // The next message takes the finished rows off.
-  assert.deepEqual(seen.afterMessage, ["preview-15", "preview-11"]);
+  assert.deepEqual(seen.startedAgain, ["preview-15", "preview-11"]);
 });
 
 type Look = { icon: string | null; moving: boolean; green: boolean; shimmer: boolean; sweeping: boolean };

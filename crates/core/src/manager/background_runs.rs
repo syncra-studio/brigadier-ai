@@ -339,9 +339,12 @@ impl SessionManager {
         };
         if let Some(joined) = joined {
             handoff.handle = None;
-            return joined
-                .map_err(|err| crate::Error::Invalid(err.to_string()))?
-                .map(|(_, reply)| reply);
+            let (status, reply) =
+                joined.map_err(|err| crate::Error::Invalid(err.to_string()))??;
+            if status == "exit 0" {
+                self.clear_failed_runs_of(id, command).await;
+            }
+            return Ok(reply);
         }
         let run = {
             let _numbering = self.background_runs.numbering.lock().await;
@@ -391,6 +394,30 @@ impl SessionManager {
         let handle = handoff.handle.take().expect("held until handed off");
         self.watch_background_run(handle, run, cancel);
         Ok(reply)
+    }
+
+    /// Takes the Background rows of the thread's failed runs of `command` off the card once it
+    /// ran again and passed within its tool call (Q94): no later run of it is there to take
+    /// their place, and a red row would say it still fails.
+    async fn clear_failed_runs_of(&self, id: &ConversationId, command: &str) {
+        let Ok(board) = self.core.board(id).await else {
+            return;
+        };
+        let ids = failed_runs_of(
+            board.background_runs.values(),
+            &board.background_cleared,
+            command,
+        );
+        if ids.is_empty() {
+            return;
+        }
+        let cleared = DomainEvent::BackgroundCleared {
+            conversation_id: id.clone(),
+            ids,
+        };
+        if let Err(err) = self.core.record_conversation(id, vec![cleared]).await {
+            tracing::warn!(command, error = %err, "could not clear failed background runs");
+        }
     }
 
     /// Waits for a background run's work and records how it ended.
@@ -912,9 +939,70 @@ impl SessionManager {
     }
 }
 
+/// The failed runs of `command` whose rows are still on the card, by id.
+fn failed_runs_of<'a>(
+    runs: impl IntoIterator<Item = &'a BackgroundRun>,
+    cleared: &HashSet<String>,
+    command: &str,
+) -> Vec<String> {
+    let mut ids: Vec<String> = runs
+        .into_iter()
+        .filter(|run| run.command == command && !cleared.contains(&run.id))
+        .filter(|run| match &run.state {
+            BackgroundRunState::Finished { status } => status != "exit 0",
+            BackgroundRunState::Interrupted { .. } => true,
+            _ => false,
+        })
+        .map(|run| run.id.clone())
+        .collect();
+    ids.sort();
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q94: a failed run's row leaves once its command passes again within a tool call; other
+    /// commands, runs that passed or were stopped, and rows already taken off stay as they are.
+    #[test]
+    fn a_pass_takes_the_failed_runs_of_its_command_off() {
+        let run = |id: &str, command: &str, state: BackgroundRunState| BackgroundRun {
+            id: id.into(),
+            conversation_id: ConversationId("c".into()),
+            request_id: None,
+            tool: "run_check".into(),
+            name: None,
+            command: command.into(),
+            started_at_ms: 1,
+            ended_at_ms: Some(2),
+            state,
+            item_id: None,
+        };
+        let failed = |status: &str| BackgroundRunState::Finished {
+            status: status.into(),
+        };
+        let runs = [
+            run("run-1", "cargo test", failed("exit 101")),
+            run("run-2", "cargo test", failed("exit 0")),
+            run("run-3", "cargo test", BackgroundRunState::Stopped),
+            run(
+                "run-4",
+                "cargo test",
+                BackgroundRunState::Interrupted {
+                    reason: "Brigadier quit".into(),
+                },
+            ),
+            run("run-5", "pnpm test", failed("exit 1")),
+            run("run-6", "cargo test", failed("exit 1")),
+        ];
+        let cleared = HashSet::from(["run-6".to_owned()]);
+        assert_eq!(
+            failed_runs_of(&runs, &cleared, "cargo test"),
+            ["run-1", "run-4"]
+        );
+        assert!(failed_runs_of(&runs, &cleared, "cargo build").is_empty());
+    }
 
     #[test]
     fn a_runs_number_is_read_from_its_id() {
