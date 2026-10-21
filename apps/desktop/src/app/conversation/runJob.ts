@@ -186,6 +186,6 @@ export function runInSlot(models: readonly OvernightCardModel[], job: BoardJob |
   const { run } = model;
   if (!runOver(run)) return model;
   if (run.merged) return null;
-  if (job && run.finishedAtMs !== null && job.atMs > run.finishedAtMs) return null;
+  if (job && run.finishedAtMs !== null && job.latestStartedAtMs > run.finishedAtMs) return null;
   return model;
 }

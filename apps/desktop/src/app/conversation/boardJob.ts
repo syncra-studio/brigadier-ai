@@ -26,7 +26,12 @@ export type JobFacts = {
   merge: { commit: string | null; base: string; pr: boolean; record: MergeRecord | null } | null;
 };
 
-export type BoardJob = Job & { atMs: number; facts: JobFacts };
+export type BoardJob = Job & {
+  atMs: number;
+  /** The newest work start, even when several workers share one step's earliest start. */
+  latestStartedAtMs: number;
+  facts: JobFacts;
+};
 
 /** What a job is read from: the board's parts and the two settings that add steps to come. */
 export type JobInput = Pick<Board, "tasks" | "reviews" | "integratedChecks" | "orchestratorSteps" | "plans" | "requests" | "overnight"> & {
@@ -255,6 +260,13 @@ function windowJob(
   return {
     steps: result,
     atMs: Number.isFinite(atMs) ? atMs : since,
+    latestStartedAtMs: Math.max(
+      Number.isFinite(atMs) ? atMs : since,
+      ...tasks.map((task) => task.createdAtMs),
+      ...reviews.map((item) => item.startedAtMs),
+      ...checks.map((item) => item.startedAtMs ?? item.dueAtMs),
+      ...result.flatMap((step) => (step.startedAtMs == null ? [] : [step.startedAtMs])),
+    ),
     facts: {
       findings,
       merge: merged ? { commit: merged.kind.mergeCommit ?? null, base: merged.kind.base, pr: merged.kind.pr !== undefined, record: merged.kind.record ?? null } : null,
