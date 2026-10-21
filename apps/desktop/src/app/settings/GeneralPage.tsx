@@ -2,10 +2,10 @@ import { useCallback, useEffect, useId, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { LicensesDialog } from "@/app/settings/LicensesDialog";
-import { SettingsPage, SettingsRow, SettingsSection, SettingsSelect, SettingsSwitch, SwitchSetting } from "@/app/settings/parts";
+import { SettingsPage, SettingsSection, SettingsSwitch, SwitchSetting } from "@/app/settings/parts";
 import { SidebarClosedChoice } from "@/app/settings/SidebarClosedChoice";
-import { Button, Input, Segmented } from "@/components/controls";
-import { SettingsCard } from "@/components/shared";
+import { Button, Input, Segmented, SettingsSelect } from "@/components/controls";
+import { SettingsCard, SettingsRow } from "@/components/shared";
 import { useSidebar } from "@/components/layout";
 import {
   type LoginItem,

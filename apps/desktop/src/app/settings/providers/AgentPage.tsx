@@ -15,7 +15,7 @@ import { CLI_NAMES, OVERVIEW_ROWS } from "@/app/settings/providers/AgentsOvervie
 import { CheckAgainButton, PlanChip, ROW_LINE, ROW_TITLE } from "@/app/settings/providers/parts";
 import { bestFor } from "@/app/settings/routing/models";
 
-import { SettingsPage, SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsPage, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 
 import { Button } from "@/components/controls";
 
@@ -23,7 +23,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 
 import { ChevronRight, InfoCircle, ProviderGlyph } from "@/components/icons";
 
-import { SettingsCard, settingsRows, StateDot } from "@/components/shared";
+import { SettingsCard, settingsRows, StateDot, SettingsRow } from "@/components/shared";
 
 import { pickFile, request } from "@/ipc/client";
 

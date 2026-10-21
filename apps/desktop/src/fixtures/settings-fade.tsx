@@ -13,8 +13,8 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { SettingsPage, SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
-import { SettingsCard } from "@/components/shared";
+import { SettingsPage, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsCard, SettingsRow } from "@/components/shared";
 
 const params = new URLSearchParams(location.search);
 /** The page frame's height: the short page fits it with 220px to spare, the long one scrolls. */

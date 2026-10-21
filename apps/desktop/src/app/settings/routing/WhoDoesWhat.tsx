@@ -13,9 +13,9 @@ import {
   shortModelName,
   shortPlaceName,
 } from "@/app/settings/routing/words";
-import { SettingsSection, SettingsSelectTrigger } from "@/app/settings/parts";
+import { SettingsSection } from "@/app/settings/parts";
 import { effortLabel, type ModelGroup, RowText, SettingsCard } from "@/components/shared";
-import { Button, Segmented } from "@/components/controls";
+import { Button, Segmented, SettingsSelectTrigger } from "@/components/controls";
 import {
   DropdownMenu,
   DropdownMenuContent,

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/shell/dialogs/fields";
-import { SettingsPage, SettingsSection, SettingsSelect } from "@/app/settings/parts";
-import { Button } from "@/components/controls";
+import { SettingsPage, SettingsSection } from "@/app/settings/parts";
+import { Button, SettingsSelect } from "@/components/controls";
 import {
   Collapsible,
   CollapsibleContent,

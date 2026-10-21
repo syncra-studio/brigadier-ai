@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from "react";
 
-import { SettingsSelect } from "@/app/settings/parts";
 
 import {
   PROJECTS_PAGE,
@@ -20,7 +19,6 @@ import {
   type ProjectSort,
 } from "@/app/settings/storage/model";
 
-import { RoundBadge } from "@/app/settings/storage/parts";
 
 import {
   ChevronDown,
@@ -36,7 +34,7 @@ import {
   Stack,
 } from "@/components/icons";
 
-import { Button } from "@/components/controls";
+import { Button, SettingsSelect, RoundBadge } from "@/components/controls";
 
 import { SettingsCard, StateDot, UsageBar } from "@/components/shared";
 

@@ -1,7 +1,7 @@
 import { useAction } from "@/app/conversation/useAction";
-import { SettingsPage, SettingsRow, SettingsSection, SettingsSelect, selectTrigger, SwitchSetting } from "@/app/settings/parts";
-import { findModel, ModelSelector, type ModelGroup, SettingsCard } from "@/components/shared";
-import { Badge } from "@/components/controls";
+import { SettingsPage, SettingsSection, SwitchSetting } from "@/app/settings/parts";
+import { findModel, ModelSelector, type ModelGroup, SettingsCard, SettingsRow } from "@/components/shared";
+import { Badge, SettingsSelect, selectTrigger } from "@/components/controls";
 import type { ModelChoice, PermissionLevel } from "@/ipc/generated";
 import {
   builtInDefault,

@@ -9,7 +9,7 @@ import { ConnectStatus } from "@/app/setup/onboarding/ConnectStatus";
 import { agentState } from "@/app/setup/onboarding/SetupTerminal";
 
 import { PlanChip, ROW_LINE, ROW_TITLE, UsageMeter } from "@/app/settings/providers/parts";
-import { SettingsRow, SettingsSection, SettingsSwitch } from "@/app/settings/parts";
+import { SettingsSection, SettingsSwitch } from "@/app/settings/parts";
 
 import { Button } from "@/components/controls";
 
@@ -22,7 +22,7 @@ import {
 
 import { ArrowUpRight, ChevronRight, Plus, ProviderGlyph } from "@/components/icons";
 
-import { SettingsCard, StateDot } from "@/components/shared";
+import { SettingsCard, StateDot, SettingsRow } from "@/components/shared";
 
 import type { AccountView, ProviderKind, ProviderOverview, QuotaWindow } from "@/ipc/generated";
 

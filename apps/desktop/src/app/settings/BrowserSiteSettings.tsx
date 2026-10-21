@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { ErrorLine, errorText } from "@/app/shell/dialogs/fields";
-import { SettingsPage, SettingsSection, SettingsSelect } from "@/app/settings/parts";
+import { SettingsPage, SettingsSection } from "@/app/settings/parts";
+import { SettingsSelect } from "@/components/controls";
 import { Camera, Mic } from "@/components/icons";
 import { EmptyState, SettingsCard } from "@/components/shared";
 import type { BrowserSite, SitePermission } from "@/ipc/generated";

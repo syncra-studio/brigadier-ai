@@ -11,7 +11,6 @@ import { mergeStats } from "@/app/conversation/ComposerCapsule";
 import { Counts } from "@/app/conversation/Counts";
 import { HELD_WHY, undoToast } from "@/app/conversation/undoWords";
 import { useViewConversation } from "@/app/conversation/viewContext";
-import { RoundBadge } from "@/app/settings/storage/parts";
 import {
   ArrowRotateCcw,
   ArrowRotateCw,
@@ -25,7 +24,7 @@ import {
   Trash,
   TriangleExclamationErrorWarning,
 } from "@/components/icons";
-import { Button } from "@/components/controls";
+import { Button, RoundBadge } from "@/components/controls";
 import { RowText, SettingsCard } from "@/components/shared";
 import type { DiffStat, FileReview, FileStat, HeldPath, MergeUndo, ReviewDiff } from "@/ipc/generated";
 import { request } from "@/ipc/client";

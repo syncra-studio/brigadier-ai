@@ -5,9 +5,9 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
-import { SettingsSection, SettingsSelect } from "@/app/settings/parts";
+import { SettingsSection } from "@/app/settings/parts";
 import { ChevronRight, Filter, Plus } from "@/components/icons";
-import { Button } from "@/components/controls";
+import { Button, SettingsSelect } from "@/components/controls";
 import { RowText, SettingsCard } from "@/components/shared";
 import { TooltipProvider } from "@/components/overlays";
 import { colourOf, surface } from "@/fixtures/look";

@@ -13,8 +13,8 @@ import {
   shownIds,
   SORT_CHOICES,
 } from "@/app/settings/archived";
-import { SettingsPage, SettingsSelect, SettingsSelectTrigger } from "@/app/settings/parts";
-import { Button } from "@/components/controls";
+import { SettingsPage } from "@/app/settings/parts";
+import { Button, SettingsSelect, SettingsSelectTrigger } from "@/components/controls";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/overlays";
 import { Branch, Chats, Check, DotsHorizontal, Filter, Folder, Trash, Unarchive } from "@/components/icons";
 import { EmptyState, SettingsCard, SettingsSearch } from "@/components/shared";

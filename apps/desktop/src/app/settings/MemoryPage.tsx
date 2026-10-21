@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 
 import { errorText } from "@/app/shell/dialogs/fields";
-import { SettingsPage, SettingsRow } from "@/app/settings/parts";
+import { SettingsPage } from "@/app/settings/parts";
 import { Brain } from "@/components/icons";
 import { Button, Input } from "@/components/controls";
-import { EmptyState, SettingsCard } from "@/components/shared";
+import { EmptyState, SettingsCard, SettingsRow } from "@/components/shared";
 import { useNow } from "@/hooks/use-now";
 import type { Node, Origin } from "@/ipc/generated";
 import { formatAgo } from "@/lib/format";

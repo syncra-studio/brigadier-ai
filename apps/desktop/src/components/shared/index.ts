@@ -8,6 +8,7 @@ export * from "./labeled-divider";
 export * from "./model-selector";
 export * from "./progress-line";
 export * from "./settings-card";
+export * from "./settings-row";
 export * from "./settings-search";
 export * from "./state-dot";
 export * from "./titlebar-button";

@@ -117,7 +117,7 @@ table is the current one.
 | Primitives · Controls | `Icon Button`, `Icon Button/xs`, `/sm`, `/lg` | `components/controls/tooltip-icon-button.tsx` | `TooltipIconButton` (`size`, `look` ghost/toolbar/strip, `pressed`, `dot`) | sizes come from `Button` `icon-*` |
 | Primitives · Controls | `Send Button` | `app/conversation/Composer.tsx` | `SendControls` (file-local) | in app |
 | Primitives · Controls | `Input` | `components/controls/input.tsx` | `Input` | |
-| Primitives · Controls | `Settings Select` | `app/settings/parts.tsx` | `SettingsSelect`, `SettingsSelectTrigger` | in app |
+| Primitives · Controls | `Settings Select` | `components/controls/settings-select.tsx` | `SettingsSelect`, `SettingsSelectTrigger`, `selectTrigger` (class string) | |
 | Primitives · Controls | `Switch/On`, `Switch/Off` | `components/controls/switch.tsx` | `Switch` | |
 | Primitives · Controls | `Checkbox/Off`, `Checkbox/On`, `Checkbox/Mixed` | `components/controls/checkbox.tsx` | `Checkbox`, `CheckboxMark` | |
 | Primitives · Controls | `Checkbox Row` | `app/shell/dialogs/fields.tsx` | `CheckboxRow` | in app |
@@ -130,7 +130,7 @@ table is the current one.
 | Primitives · Controls | — | `components/controls/slot.tsx` | `Slot` | code only (no look) |
 | Primitives · Controls | `Skeleton` | `components/layout/skeleton.tsx` | `Skeleton` | |
 | Primitives · Controls | `Separator/Horizontal`, `Separator/Vertical` | — | — | Pen only: the code draws rules with border classes (`separator.tsx` was removed) |
-| Primitives · Controls | `RoundBadge/Plain`, `RoundBadge/Done` | `app/settings/storage/parts.tsx` | `RoundBadge` (`tone`) | in app |
+| Primitives · Controls | `RoundBadge/Plain`, `RoundBadge/Done` | `components/controls/round-badge.tsx` | `RoundBadge` (`tone`) | |
 | Primitives · Controls | `Dot` | `components/shared/state-dot.tsx` | `StateDot` (`color`) | |
 | Primitives · Controls | `ErrorLine` | `app/shell/dialogs/fields.tsx` | `ErrorLine` | in app |
 | Primitives · Controls | `Nav Row` | `app/shell/sidebar/nav.tsx` | `navRow` (class string) | in app |
@@ -172,7 +172,7 @@ table is the current one.
 | Shared app parts | `Section` | `app/conversation/cards/common.tsx` | `Section` | in app |
 | Shared app parts | `SettingsButton` | `components/controls/button.tsx` | `Button variant="soft" size="sm"` | |
 | Shared app parts | `SettingsSearch` | `components/shared/settings-search.tsx` | `SettingsSearch` | |
-| Shared app parts | `Settings Card`, `Settings Row` | `components/shared/settings-card.tsx`, `app/settings/parts.tsx` | `SettingsCard`, `RowText`, `settingsRows`; `SettingsRow` | Settings Row in app |
+| Shared app parts | `Settings Card`, `Settings Row` | `components/shared/settings-card.tsx`, `settings-row.tsx` | `SettingsCard`, `RowText`, `settingsRows`; `SettingsRow` | |
 | Shared app parts | `SettingsTitlebarStrip` | `app/App.tsx` | — (inline strip holding `TerminalButton`) | in app |
 | Shared app parts | `LabeledDivider` | `components/shared/labeled-divider.tsx` | `LabeledDivider` | |
 | Shared app parts | `MD/Paragraph`, `MD/Bullet item` | `components/conversation/markdown-text.tsx` | `MarkdownText` | |
@@ -198,6 +198,7 @@ table is the current one.
 | Conversation (app.pen) | `#284 PlanAction` | `app/conversation/PlanAction.tsx` | `PlanAction` | |
 | Conversation (app.pen) | `#285 PhasePlanAction` | `app/conversation/PhasePlanAction.tsx` | `PhasePlanAction` | |
 | Conversation (app.pen) | `#286 OvernightAction` | `app/conversation/OvernightAction.tsx` | `OvernightAction` | |
+| Settings (settings.pen) | `#684 SettingsPage › back link` | `app/settings/BackLink.tsx` | `BackLink` | |
 
 ## Icons
 

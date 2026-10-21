@@ -5,9 +5,9 @@ import { BanIcon, Badge, Note, PreferIcon } from "@/app/settings/routing/parts";
 import { TargetItems } from "@/app/settings/routing/pickers";
 import { type Draft, type DraftEffect, draftRule, type Names, previewDraft, ruleLine, ruleTitle } from "@/app/settings/routing/ruleWords";
 import { ROUTED_KINDS, shortModelName, shortPlaceName } from "@/app/settings/routing/words";
-import { SettingsSection, SettingsSelect, SettingsSelectTrigger } from "@/app/settings/parts";
+import { SettingsSection } from "@/app/settings/parts";
 import { type ModelGroup, SettingsCard } from "@/components/shared";
-import { Button } from "@/components/controls";
+import { Button, SettingsSelect, SettingsSelectTrigger } from "@/components/controls";
 import {
   DropdownMenu,
   DropdownMenuContent,
