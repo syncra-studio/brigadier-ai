@@ -62,7 +62,7 @@ const plan = {
 } as unknown as Plan;
 
 /** Each moment: the board's events, and the thread's headline where it set one. */
-const MOMENTS: Record<string, Partial<Board> & { headline?: { text: string; detail?: string; atMs: number } }> = {
+const MOMENTS: Record<string, Partial<Board>> = {
   // First: the page doesn't scroll (the app's root clips), and their buttons are clicked.
   heldMerge: { ...working, tasks: byId([task("t1", "running")]), orchestratorSteps: [held] },
   ciFailed: { ...ended, orchestratorSteps: [ci(T0 + 3 * MIN, [ciRun("test", "completed", "failure", 5, 5)], "failed")] },
@@ -119,8 +119,7 @@ function Column({ id, children }: { id: string; children: ReactNode }) {
 
 function Session({ id, parts }: { id: string; parts: (typeof MOMENTS)[string] }) {
   const store = useMemo(() => {
-    const { headline, ...rest } = parts;
-    const board = { ...emptyBoard(`session-${id}`), loaded: true, ...rest, ...(headline ? { headline } : {}) } as Board;
+    const board: Board = { ...emptyBoard(`session-${id}`), loaded: true, ...parts };
     return createStore(() => ({ board, orchestrator: null }));
   }, [id, parts]);
   return (

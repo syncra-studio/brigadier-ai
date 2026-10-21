@@ -35,13 +35,12 @@ export type LiveJob = {
   plain?: true | undefined;
 };
 
-/** The thread's headline for the session now (`set_headline`), cleared by the user's next message. */
-export type SessionHeadline = { text: string; detail?: string | null | undefined; atMs: number };
-
+/** The board's parts it reads; `headline` is the thread's (`set_headline`), cleared by the user's next message. */
 export type LiveInput = Pick<
   Board,
   "tasks" | "approvals" | "questions" | "reviews" | "previews" | "integratedChecks" | "orchestratorSteps" | "requests"
-> & { headline?: SessionHeadline | null | undefined };
+> &
+  Partial<Pick<Board, "headline">>;
 
 type Kind = "waiting" | "failed" | "running" | "done";
 

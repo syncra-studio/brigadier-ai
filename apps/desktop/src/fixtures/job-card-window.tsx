@@ -2,7 +2,7 @@
  * A standalone Vite entry, excluded from the app entry and production build: a session's whole
  * window while a worker builds, CI checks a push, a merge waits for the worker, and the thread
  * asks the user something (IPC mocked). The question card stays above the composer and the Job
- * card only points at it (R3); the rail above the composer holds the Workers strip alone, CI and
+ * card only points at it (R3), over the thread's older headline; the rail above the composer holds the Workers strip alone, CI and
  * the held merge being the Job card's (R2). What it saw goes as JSON into
  * `<pre id="job-card-window-result">`.
  */
@@ -57,6 +57,8 @@ mockIPC((command, payload) => {
           compactions: [], decisions: [], waiting: [], queue: { items: [], paused: false }, run: "idle",
           runRequest: null, head: null, ratings: {}, streaming: null, notices: [], memories: [], overnight: [],
           reviews: [], previews: [], integratedChecks: [], backgroundRuns: [],
+          // The thread's headline, set before it asked: the question after it is what the card says.
+          headline: { text: "Building the registry", detail: "Next: the Plugins and Skills page", atMs: start + 4 * 60_000 },
         } as unknown as View,
       };
     case "listFiles":

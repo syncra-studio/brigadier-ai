@@ -167,6 +167,6 @@ test("the thread's headline wins until something that needs the user, or a failu
   // A question after it: the card points at it.
   assert.equal(words({ ...working, headline, questions: byId([question("q1", 60)]) })![1], "Waiting for your answer below");
   // Its outcome words once nothing runs: a tick, until the next message.
-  assert.deepEqual(words({ ...idle, headline: { text: "The dev server is up again", atMs: 45 } }), ["done", "The dev server is up again", null]);
-  assert.equal(liveJob(input({ ...idle, headline: { text: "Old", atMs: 5 } })), null);
+  assert.deepEqual(words({ ...idle, headline: { text: "The dev server is up again", detail: null, atMs: 45 } }), ["done", "The dev server is up again", null]);
+  assert.equal(liveJob(input({ ...idle, headline: { text: "Old", detail: null, atMs: 5 } })), null);
 });
