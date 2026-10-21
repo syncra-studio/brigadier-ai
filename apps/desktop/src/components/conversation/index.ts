@@ -36,6 +36,7 @@ export * from "./elements/pasted-text";
 export * from "./elements/rich-composer-input";
 export * from "./elements/schedule-card";
 export * from "./elements/step-glyph";
+export * from "./elements/step-icon";
 export * from "./elements/summary-section";
 export * from "./elements/surfaces";
 export * from "./elements/thread-activity";

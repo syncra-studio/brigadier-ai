@@ -1,16 +1,14 @@
-import { type ReactNode, useContext } from "react";
+import { type ReactNode } from "react";
 
 import { StepRow } from "@/app/conversation/activity/ActivityGroup";
 import type { LeadStep } from "@/app/conversation/activity/group";
+import { FileCounts } from "@/app/conversation/activity/FileCounts";
+import { FileLink } from "@/app/conversation/activity/FileLink";
 import { InlineDiff } from "@/app/conversation/activity/InlineDiff";
 import { leadAction, useLeadItems } from "@/app/conversation/activity/StepDetail";
 import { basename, type StepWords, type ToolStep } from "@/app/conversation/activity/words";
-import { Counts } from "@/app/conversation/Counts";
-import { OpenFileContext } from "@/components/conversation";
 import type { FileChange, FileChangeKind, FileStat, ItemStatus } from "@/ipc/generated";
-import { revealPath } from "@/ipc/client";
 import { diffCounts, parseDiff } from "@/lib/patch";
-import { cn } from "@/lib/utils";
 
 /**
  * A thread's own file change as rows, one per file: "Edited" with the file's name as a link that
@@ -48,48 +46,6 @@ export function editedFiles(step: LeadStep): FileStat[] | null {
   const { kind } = step;
   if (kind.type !== "tool" || kind.item !== "files" || !kind.files?.length) return null;
   return kind.files;
-}
-
-/** The file's name, underlined, opening the file: in its tab when it is the session's, else in Finder. */
-function FileLink({ path, name }: { path: string; name: string }) {
-  const openFile = useContext(OpenFileContext);
-  return (
-    <button
-      type="button"
-      data-slot="edited-file-link"
-      title={path}
-      onClick={(event) => {
-        // The name opens the file; the rest of the row opens its diff.
-        event.stopPropagation();
-        if (!openFile(path, null)) revealPath(path).catch(() => {});
-      }}
-      onKeyDown={(event) => event.stopPropagation()}
-      className="text-row-object hover:text-foreground focus-visible:text-foreground underline decoration-current/40 underline-offset-2"
-    >
-      {name}
-    </button>
-  );
-}
-
-/** "+7 −2", uncoloured until the row is hovered; a dot for a created or deleted file. */
-function FileCounts({ file }: { file: FileStat }) {
-  return (
-    <span className="ms-1 flex shrink-0 items-center gap-1.5">
-      {/* Read as words, the name and its counts stay apart. */}
-      <span className="sr-only"> </span>
-      {!file.binary && (
-        <Counts data-slot="edited-file-counts" quiet insertions={file.insertions} deletions={file.deletions} />
-      )}
-      {(file.change === "add" || file.change === "delete") && (
-        <span
-          aria-hidden
-          data-slot="edited-file-dot"
-          data-change={file.change}
-          className={cn("size-1.5 rounded-full", file.change === "add" ? "bg-link" : "bg-destructive")}
-        />
-      )}
-    </span>
-  );
 }
 
 /** One file's diff, read from its call: the change its CLI applied, with its lines numbered. */

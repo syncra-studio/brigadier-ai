@@ -2,7 +2,7 @@ import { type Described, StepRow } from "@/app/conversation/activity/ActivityGro
 import { BackgroundRunRow } from "@/app/conversation/activity/BackgroundRunRow";
 import { EditedFileRows, editedFiles } from "@/app/conversation/activity/EditedFiles";
 import type { LeadStep } from "@/app/conversation/activity/group";
-import { leadStepDetail } from "@/app/conversation/activity/StepDetail";
+import { leadStepDetail } from "@/app/conversation/activity/leadStepDetail";
 import { basename, type StepWords, toolStepWords, webSearchWords } from "@/app/conversation/activity/words";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import type { Task } from "@/ipc/generated";

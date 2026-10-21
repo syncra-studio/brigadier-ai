@@ -1,21 +1,15 @@
 import type { FC } from "react";
 
-import { isTeamStep, TeamStep, WorkerName } from "@/app/conversation/activity/TeamSentence";
-import type { BlockOrchestratorStep, DecidedStep, MachineWords } from "@/app/conversation/blocks";
+import { DecidedRow } from "@/app/conversation/activity/DecidedRow";
+import { MachineRow } from "@/app/conversation/activity/MachineRow";
+import { MergedRow } from "@/app/conversation/activity/MergedRow";
+import { QuotaResumed } from "@/app/conversation/activity/QuotaResumed";
+import { isTeamStep, TeamStep } from "@/app/conversation/activity/TeamSentence";
+import type { BlockOrchestratorStep } from "@/app/conversation/blocks";
 import { FeedbackOffer } from "@/app/conversation/FeedbackOffer";
-import { machineWords } from "@/app/conversation/rowWords";
 import { SandboxLimitNotice } from "@/app/conversation/SandboxLimitNotice";
 import { SettingSuggestedCard } from "@/app/conversation/SettingSuggestedCard";
 import { SessionOffer } from "@/app/conversation/SessionOffer";
-import { WorkerLine } from "@/app/conversation/WorkerChip";
-import { ROW, ROW_DETAIL, ThreadActivity } from "@/components/conversation";
-import { LabeledDivider } from "@/components/shared";
-import { Branch, CheckCircle, Clock, PauseCircle, PlayCircle } from "@/components/icons";
-import type { ProviderKind } from "@/ipc/generated";
-import { formatTime } from "@/lib/format";
-import { VENDOR_LABELS } from "@/lib/routing";
-import { cn } from "@/lib/utils";
-import { useApp } from "@/state/store";
 
 /**
  * The thread's notices among its work (THREAD-UX-PLAN.md §3.1): a judgement call the lead made,
@@ -23,70 +17,10 @@ import { useApp } from "@/state/store";
  * the user asked for. Each is one standalone row; the last has its own buttons.
  */
 
-const MACHINE_ICONS: Record<MachineWords["machine"], FC<{ className?: string }>> = {
-  waitingToCool: Clock,
-  waitingForBuild: Clock,
-  paused: PauseCircle,
-  resumed: PlayCircle,
-};
-
-/** A row about the machine; it names the worker when it is about one. */
-const MachineRow: FC<{ kind: MachineWords }> = ({ kind }) => {
-  const mac = useApp((s) => s.info?.platform === "macos");
-  const Icon = MACHINE_ICONS[kind.machine];
-  return (
-    <div data-slot="orchestrator-step" data-kind="machine" className={ROW}>
-      <Icon aria-hidden className="size-4 shrink-0" />
-      <span className="flex min-w-0 flex-1 items-center gap-1.5">
-        {kind.taskId && <WorkerName taskId={kind.taskId} />}
-        <span className="min-w-0 truncate">{machineWords(kind.machine, kind.command, mac ? "the Mac" : "the computer", kind.reason)}</span>
-      </span>
-    </div>
-  );
-};
-
-/** "Decided: …", opening to why. */
-const DecidedRow: FC<{ kind: DecidedStep }> = ({ kind }) => (
-  <ThreadActivity
-    data-slot="orchestrator-step"
-    data-kind="decided"
-    className={ROW}
-    detail={
-      kind.why ? (
-        <>
-          <span className="text-foreground/80">
-            <WorkerLine text={kind.what} />
-          </span>
-          <span>
-            <WorkerLine text={kind.why} />
-          </span>
-        </>
-      ) : undefined
-    }
-    detailClassName={cn(ROW_DETAIL, "wrap-break-word")}
-  >
-    <CheckCircle aria-hidden className="size-4 shrink-0" />
-    <span className="min-w-0 truncate">
-      Decided: <WorkerLine text={kind.what} />
-    </span>
-  </ThreadActivity>
-);
-
 /**
  * A step of the lead that isn't work of its own: a team row, or a notice. Plumbing and what a
  * team sentence already says (a worker created, a report read) show nothing.
  */
-/**
- * Where a usage limit the turn waited for reset and its work went on (#128): a hairline across
- * the column with "Claude usage limit reset · 9:39 PM" in the middle. It takes the place of the
- * "time passed" line there.
- */
-const QuotaResumed: FC<{ provider: ProviderKind; atMs: number | undefined }> = ({ provider, atMs }) => (
-  <LabeledDivider data-slot="quota-resumed">
-    {`${VENDOR_LABELS[provider]} usage limit reset${atMs === undefined ? "" : ` · ${formatTime(atMs)}`}`}
-  </LabeledDivider>
-);
-
 export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   const { kind } = step;
   if (kind.type === "machine") return <MachineRow kind={kind} />;
@@ -97,17 +31,6 @@ export const ThreadStep: FC<{ step: BlockOrchestratorStep }> = ({ step }) => {
   if (kind.type === "settingSuggested") return <SettingSuggestedCard change={kind.change} reason={kind.reason} />;
   if (kind.type === "feedbackOffered") return <FeedbackOffer id={kind.id} kind={kind.kind} title={kind.title} body={kind.body} />;
   if (kind.type === "sessionOffered") return <SessionOffer id={kind.id} title={kind.title} task={kind.task} />;
-  if (kind.type === "merged") {
-    return (
-      <div data-slot="orchestrator-step" data-kind="merged" className={ROW}>
-        <Branch aria-hidden className="size-4 shrink-0" />
-        <span className="min-w-0 truncate">
-          Merged {kind.branch} into {kind.base}
-          {kind.upstream && ` on this Mac, not pushed to ${kind.upstream.name}`}
-          {kind.upstream && kind.upstream.behind > 0 && ` · ${kind.upstream.name} had moved on`}
-        </span>
-      </div>
-    );
-  }
+  if (kind.type === "merged") return <MergedRow kind={kind} />;
   return null;
 };

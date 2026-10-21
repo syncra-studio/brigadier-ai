@@ -146,7 +146,7 @@ table is the current one.
 | Primitives · Menus, popovers & dialogs | `ScrollFade/Top`, `ScrollFade/Bottom` | `components/layout/scroll-fade.tsx` | `ScrollFade` | |
 | Primitives · Menus, popovers & dialogs | — | `components/layout/collapsible.tsx`, `sidebar.tsx`, `sidebar-layout.tsx` | `Collapsible*`, `SidebarPanel`, `SidebarProvider`, `SidebarReveal`, `SidebarResizeHandle` | code only (behaviour, no look of their own) |
 | Glyphs & indicators | `SidebarGlyph/Open`, `SidebarGlyph/Closed (floating)` | `components/shared/sidebar-toggle.tsx` | `SidebarGlyph` | |
-| Glyphs & indicators | `StepIcon/read` … `StepIcon/stop` | `app/conversation/activity/ActivityGroup.tsx` | `StepIcon` (file-local) | in app |
+| Glyphs & indicators | `StepIcon/read` … `StepIcon/stop` | `components/conversation/elements/step-icon.tsx` | `StepIcon`, `stepIconName` | |
 | Glyphs & indicators | `FileTypeIcon/Image`, `Document`, `Data`, `Code` | `components/conversation/elements/file-type-icon.tsx` | `FileTypeIcon` | |
 | Glyphs & indicators | `WorkerGlyph` | `app/conversation/WorkerChip.tsx` | `WorkerGlyph` | in app |
 | Glyphs & indicators | `SidebarActivityMark/Working`, `/Unread`, `SidebarError`, `SessionStatusLabel` | `components/shared/session-status.tsx` | `SidebarActivityMark`, `SidebarError`, `SessionStatusLabel` | |
@@ -396,6 +396,26 @@ table is the current one.
 | Conversation (app.pen) | `#189 CompactionBlock` | `app/conversation/CompactionBlock.tsx` | `CompactionBlock` | |
 | Conversation (app.pen) | `#190 ActivityItems` | `app/conversation/ActivityItems.tsx` | `ActivityItems` | |
 | Conversation (app.pen) | `#370 TurnEnd` | `app/conversation/TurnEnd.tsx` | `TurnEnd` | |
+| Conversation (app.pen) | `#198 RepeatsRow` | `app/conversation/activity/RepeatsRow.tsx` | `RepeatsRow` | |
+| Conversation (app.pen) | `#200 group step list (ActivityGroup)` | `app/conversation/activity/GroupStepList.tsx` | `GroupStepList` | |
+| Conversation (app.pen) | `#201 RunOutput` | `app/conversation/activity/RunOutput.tsx` | `RunOutput` | |
+| Conversation (app.pen) | `#203 FileLink` | `app/conversation/activity/FileLink.tsx` | `FileLink` | |
+| Conversation (app.pen) | `#204 FileCounts` | `app/conversation/activity/FileCounts.tsx` | `FileCounts` | |
+| Conversation (app.pen) | `#213 MachineRow` | `app/conversation/activity/MachineRow.tsx` | `MachineRow` | |
+| Conversation (app.pen) | `#214 DecidedRow` | `app/conversation/activity/DecidedRow.tsx` | `DecidedRow` | |
+| Conversation (app.pen) | `#215 QuotaResumed` | `app/conversation/activity/QuotaResumed.tsx` | `QuotaResumed` | |
+| Conversation (app.pen) | `#217 ThreadStep › merged row` | `app/conversation/activity/MergedRow.tsx` | `MergedRow` | |
+| Conversation (app.pen) | `#218 PeerLink` | `app/conversation/activity/PeerLink.tsx` | `PeerLink` | |
+| Conversation (app.pen) | `#375 PreviewCard › OpenPill` | `app/conversation/activity/OpenPill.tsx` | `OpenPill` | |
+| Conversation (app.pen) | `#376 PreviewCard › Proofs` | `app/conversation/activity/Proofs.tsx` | `Proofs` | |
+| Conversation (app.pen) | `#226 ToolResult › raw tool call dialog` | `app/conversation/activity/RawToolCallDialog.tsx` | `RawToolCallDialog` | |
+| Conversation (app.pen) | `#227 Diffs` | `app/conversation/activity/Diffs.tsx` | `Diffs` | |
+| Conversation (app.pen) | `#228 LeadToolDetail` | `app/conversation/activity/LeadToolDetail.tsx` | `LeadToolDetail` | |
+| Conversation (app.pen) | `#229 LeadItemDetail` | `app/conversation/activity/LeadItemDetail.tsx` | `LeadItemDetail` | |
+| Conversation (app.pen) | `#233 TeamSentence › Glyphs` | `app/conversation/activity/Glyphs.tsx` | `Glyphs` | |
+| Conversation (app.pen) | `#234 TeamSentence › Briefs` | `app/conversation/activity/Briefs.tsx` | `Briefs` | |
+| Conversation (app.pen) | `#236 TeamStep › Quiet` | `app/conversation/activity/QuietBrief.tsx` | `QuietBrief` | |
+| Conversation (app.pen) | `#334 WorkersStrip › StripRow` | `app/conversation/activity/StripRow.tsx` | `StripRow` | |
 
 ## Icons
 

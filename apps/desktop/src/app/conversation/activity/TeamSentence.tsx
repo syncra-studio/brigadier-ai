@@ -1,10 +1,14 @@
 import { type FC, type ReactNode, useContext } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { Briefs } from "@/app/conversation/activity/Briefs";
+import { Glyphs } from "@/app/conversation/activity/Glyphs";
+import { QuietBrief } from "@/app/conversation/activity/QuietBrief";
+import { WorkerName } from "@/app/conversation/activity/WorkerName";
 import { type BlockRow, lifecycleWord } from "@/app/conversation/blocks";
-import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
+import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import { workerDone, workerPreview, workerState, workerWorking } from "@/app/conversation/workerPresentation";
-import { ROW, ROW_DETAIL, ThreadActivity, ToolBox } from "@/components/conversation";
+import { ROW, ROW_DETAIL, ThreadActivity } from "@/components/conversation";
 import { CheckCircle, Chat, Commit, StopCircle } from "@/components/icons";
 import type { OrchestratorStepKind, Task } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -17,31 +21,6 @@ import { useBoard } from "@/state/board";
  * the lead did to them ("Messaged Thread rows", "Stopped Fix uploads"); every name opens its
  * worker.
  */
-
-/**
- * A worker's name as a button that opens its thread, with its glyph unless the sentence shows
- * the glyphs up front. The one way a worker is named in the thread, the live line and the strip.
- */
-export const WorkerName: FC<{ taskId: string; glyph?: boolean }> = ({ taskId, glyph = true }) => {
-  const { setPanel } = useContext(AgentsPanelContext);
-  const name = useWorkerName(taskId);
-  if (name === null) return <span className="shrink-0">a worker</span>;
-  return (
-    <button
-      type="button"
-      data-slot="worker-name"
-      onClick={(event) => {
-        event.stopPropagation();
-        setPanel(taskId);
-      }}
-      title={`Open ${name}`}
-      className="text-foreground/90 hover:text-foreground rounded-control inline-flex max-w-full min-w-0 items-center gap-1 align-bottom"
-    >
-      {glyph && <WorkerGlyph taskId={taskId} className="size-icon-xs shrink-0" />}
-      <span className="min-w-0 truncate">{name}</span>
-    </button>
-  );
-};
 
 /**
  * "A", "A and B", "A, B and C"; past three, "A, B and 4 more", the more opening the Workers list.
@@ -72,15 +51,6 @@ export const Names: FC<{ taskIds: readonly string[]; glyph?: boolean }> = ({ tas
   );
 };
 
-/** The glyphs of a sentence's workers, up front: one each, the first four. */
-const Glyphs: FC<{ taskIds: readonly string[] }> = ({ taskIds }) => (
-  <span aria-hidden className="inline-flex shrink-0 items-center gap-1.5">
-    {taskIds.slice(0, 4).map((id) => (
-      <WorkerGlyph key={id} taskId={id} className="size-4" />
-    ))}
-  </span>
-);
-
 /** A finished report that names a gap: its checks failed, or its review asked for changes. */
 function withProblems(task: Task | undefined): boolean {
   return task?.report?.checks === "failed" || task?.report?.verdict === "requestChanges";
@@ -107,18 +77,6 @@ function verb(word: ReturnType<typeof lifecycleWord>, tasks: readonly (Task | un
       return tasks.every(withProblems) ? "finished with problems" : "finished";
   }
 }
-
-/** A start's detail: each worker's brief, in a quiet box. */
-const Briefs: FC<{ tasks: readonly Task[] }> = ({ tasks }) => (
-  <div className="flex flex-col gap-2">
-    {tasks.map((task) => (
-      <div key={task.id} className="flex flex-col gap-1">
-        {tasks.length > 1 && <WorkerName taskId={task.id} />}
-        <ToolBox prose>{task.spec}</ToolBox>
-      </div>
-    ))}
-  </div>
-);
 
 /** What happened to workers, as one sentence: "Daemon storage, Thread rows and Thread phases started working". */
 export const TeamSentence: FC<{ row: BlockRow }> = ({ row }) => {
@@ -196,7 +154,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
     case "messaged":
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
       line = <>Messaged <WorkerName taskId={kind.taskId} /></>;
-      detail = kind.text ? <ToolBox prose>{kind.text}</ToolBox> : undefined;
+      detail = kind.text ? <QuietBrief>{kind.text}</QuietBrief> : undefined;
       break;
     case "answered":
       icon = <Chat aria-hidden className="size-4 shrink-0" />;
@@ -229,7 +187,7 @@ export const TeamStep: FC<{ kind: TeamStepKind; atMs?: number | undefined }> = (
       const byUser = kind.reason === USER_STOP_REASON;
       icon = <StopCircle aria-hidden className="size-4 shrink-0" />;
       line = <>{byUser ? "You stopped" : "Stopped"} <WorkerName taskId={kind.taskId} />{stoppedMs >= 1000 && ` after ${formatDuration(stoppedMs)}`}</>;
-      detail = kind.reason && !byUser ? <ToolBox prose>{kind.reason}</ToolBox> : undefined;
+      detail = kind.reason && !byUser ? <QuietBrief>{kind.reason}</QuietBrief> : undefined;
       break;
     }
     case "landed":
