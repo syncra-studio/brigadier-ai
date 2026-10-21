@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
 
 use super::*;
 
@@ -694,7 +693,10 @@ fn frontmatter_with_crlf_quotes_and_multiline() {
 }
 
 /// Waits up to ten seconds for `done`.
+#[cfg(unix)]
 fn eventually(mut done: impl FnMut() -> bool) -> bool {
+    use std::time::{Duration, Instant};
+
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(10) {
         if done() {
