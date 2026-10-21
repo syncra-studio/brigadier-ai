@@ -115,10 +115,18 @@ test("an overnight run is the session's one Job card in every state, with Start,
   assert.equal(steps.ask.question, "Stop the overnight run?");
   assert.deepEqual(steps.ask.methods, ["startOvernight"]);
   assert.equal(steps.ask.tab, null);
-  assert.deepEqual(steps.stop.methods, ["startOvernight", "stopOvernight"]);
+  // A failed Stop stays in the dialog, announces its error in red, and can be retried.
+  assert.deepEqual(steps.stopError, {
+    open: true,
+    error: "The daemon is unreachable. Try again.",
+    destructive: true,
+    visible: true,
+    retryEnabled: true,
+  });
+  assert.deepEqual(steps.stop.methods, ["startOvernight", "stopOvernight", "stopOvernight"]);
   assert.equal(steps.stop.tab, null);
   assert.equal(steps.stop.view.stop, false);
-  assert.deepEqual(steps.merge.methods, ["startOvernight", "stopOvernight", "mergeOvernight"]);
+  assert.deepEqual(steps.merge.methods, ["startOvernight", "stopOvernight", "stopOvernight", "mergeOvernight"]);
   assert.equal(steps.merge.verifiedCommit, "def5678abc");
   assert.equal(steps.merge.tab, null);
   // A click on the card itself, and Edit, open the job's tab.

@@ -237,6 +237,7 @@ const live = overnightRun("live");
 const LIVE = live.conversationId;
 
 const calls: Request[] = [];
+let failStop = true;
 mockIPC((command, payload) => {
   if (command === "notification_permission") return "granted";
   if (command !== "ipc_request") return null;
@@ -248,6 +249,10 @@ mockIPC((command, payload) => {
     case "startOvernight":
       return next({ state: "running", ...started });
     case "stopOvernight":
+      if (failStop) {
+        failStop = false;
+        throw new Error("The daemon is unreachable. Try again.");
+      }
       return next({ state: "windingDown" });
     case "mergeOvernight":
       return next({ merged: { verifiedCommit: "def5678abc", commit: "9876543", into: "main", atMs: NOW } });
@@ -356,6 +361,17 @@ async function act(steps: Record<string, unknown>) {
   const dialog = document.querySelector('[role="dialog"]')!;
   steps["ask"] = { question: dialog.querySelector("h2")?.textContent ?? null, methods: methods(), tab: tabOpen() };
   await fixtureClick([...dialog.querySelectorAll("button")].find((button) => button.textContent === "Stop")!);
+  await until(() => liveColumn().querySelector('[role="alert"]') !== null, "the stop failure");
+  const alert = dialog.querySelector<HTMLElement>('[role="alert"]');
+  const retry = [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Stop")!;
+  steps["stopError"] = {
+    open: dialog.isConnected,
+    error: alert?.textContent ?? null,
+    destructive: alert?.classList.contains("text-destructive") ?? false,
+    visible: (alert?.getClientRects().length ?? 0) > 0,
+    retryEnabled: !retry.disabled,
+  };
+  await fixtureClick(retry);
   await until(() => methods().includes("stopOvernight") && document.querySelector('[role="dialog"]') === null, "the stop");
   await frame();
   steps["stop"] = { methods: methods(), tab: tabOpen(), view: seen(liveColumn()) };

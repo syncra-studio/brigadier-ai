@@ -158,7 +158,13 @@ export function RunJobCard({
             setAsking(false);
           })
         }
-      />
+      >
+        {command.error && (
+          <p role="alert" className="text-destructive text-xs">
+            {command.error}
+          </p>
+        )}
+      </ConfirmDialog>
     </>
   );
 }
