@@ -185,7 +185,11 @@ function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[], since:
     });
   }
   const last = steps.findLast((step) => ["mergeRequested", "merged", "mergeCancelled", "mergeStopped"].includes(step.kind.type));
-  if (last?.kind.type === "mergeRequested") {
+  // A click with no outcome merges only while the work it set going runs: one the thread
+  // turned down, or a stop cut short, is over.
+  const live = liveRequest(input);
+  const clickLive = (step: OrchestratorStep) => live !== null && (step.atMs >= since || step.requestId === live.live.id || step.requestId === live.newest);
+  if (last?.kind.type === "mergeRequested" && clickLive(last)) {
     const latest = checks.at(-1);
     facts.push({
       kind: "running",

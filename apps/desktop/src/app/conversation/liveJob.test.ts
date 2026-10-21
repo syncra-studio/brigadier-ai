@@ -114,6 +114,13 @@ test("merge: merging, merged with checks passed only on the merged commit, never
   assert.equal(words({ ...idle, integratedChecks: unasked, orchestratorSteps: [merged("head111")] })![1], "Merged into main");
   const requested = step(60, { type: "mergeRequested", id: "m", branch: "s", base: "main", origin: {} } as unknown as OrchestratorStep["kind"]);
   assert.deepEqual(words({ ...working, integratedChecks: passed, orchestratorSteps: [requested] }), ["running", "Merging into main", "Checks passed on head111"]);
+  // A click with no outcome once its work is over (turned down, or stopped) merges nothing.
+  assert.equal(words({ ...idle, orchestratorSteps: [requested] }), null);
+  const stopped = { requests: byId([request("r1", 10, { type: "stopped" }, 70)]) };
+  assert.deepEqual(words({ ...stopped, orchestratorSteps: [requested] }), ["stopped", "Stopped", "You stopped it"]);
+  // Nor while the user's next message runs.
+  const next = { requests: byId([request("r1", 10, { type: "done" }, 70), request("r2", 100, { type: "working" })]) };
+  assert.equal(words({ ...next, orchestratorSteps: [requested] })![1], "Working");
   // Merged anyway: it says the checks were skipped, even with a pass on that commit from before.
   const skipped = step(80, { type: "merged", branch: "s", base: "main", commits: 3, askedIn: null, head: "head111", mergeCommit: "4e1c49e000", checksSkipped: true } as OrchestratorStep["kind"]);
   assert.equal(words({ ...idle, integratedChecks: passed, orchestratorSteps: [skipped] })![1], "Merged into main · checks skipped");
