@@ -132,6 +132,8 @@ export type Board = {
   activity: Record<string, string>;
   /** Each worker's latest reply, its first line, and when it came (from its live events). */
   summaries: Record<string, WorkerSummary>;
+  /** Each worker's latest progress note, where it is in its plan, by task id. */
+  notes?: Record<string, string>;
   /** How many times each worker changed files or ran a command (from its live events). */
   edits: Record<string, number>;
   /** What each worker at work on a change changed in its worktree so far, as last read. */

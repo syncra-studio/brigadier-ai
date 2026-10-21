@@ -20,6 +20,7 @@ export function useTaskActivityLine(taskId: string, withTime = true) {
         task,
         activity: board?.activity[id],
         diff: board?.diffs[id],
+        note: board?.notes?.[id],
         summary: summary && summary.atMs >= (task?.attempts.at(-1)?.startedAtMs ?? task?.createdAtMs ?? 0)
           ? summary.text
           : undefined,
