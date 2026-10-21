@@ -7,9 +7,13 @@ use std::rc::Rc;
 use brigadier_ipc::protocol::{ErrorCode, IpcError};
 use tokio::sync::oneshot::Sender;
 use webview2_com::CapturePreviewCompletedHandler;
-use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG;
+use webview2_com::Microsoft::Web::WebView2::Win32::{
+    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, ICoreWebView2Controller,
+};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
 use windows::Win32::System::Com::{IStream, STATFLAG_NONAME, STATSTG, STREAM_SEEK_SET};
+use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 use wry::WebViewExtWindows;
 
 fn failed(error: windows::core::Error) -> IpcError {
@@ -47,20 +51,55 @@ fn bytes(stream: &IStream) -> windows::core::Result<Vec<u8>> {
     }
 }
 
+/// A hidden tab's page draws nothing, so its capture would never complete: for the capture
+/// WebView2 is told the page shows, while the tab's window stays hidden, so nothing shows or
+/// moves on screen. Hidden again after, unless the tab was shown meanwhile.
+fn draw_while_hidden(
+    controller: &ICoreWebView2Controller,
+) -> windows::core::Result<Option<ICoreWebView2Controller>> {
+    // SAFETY: wry owns the live controller on this UI thread; IsVisible writes to a valid BOOL.
+    unsafe {
+        let mut drawn = windows::core::BOOL::default();
+        controller.IsVisible(&mut drawn)?;
+        if drawn.as_bool() {
+            return Ok(None);
+        }
+        controller.SetIsVisible(true)?;
+    }
+    Ok(Some(controller.clone()))
+}
+
+fn hide_again(controller: &ICoreWebView2Controller) {
+    // SAFETY: as above; ParentWindow writes the tab's own window, which wry shows and hides
+    // with the page.
+    unsafe {
+        let mut window = HWND::default();
+        if controller.ParentWindow(&mut window).is_ok() && !IsWindowVisible(window).as_bool() {
+            let _ = controller.SetIsVisible(false);
+        }
+    }
+}
+
 pub(super) fn capture(webview: &wry::WebView, sent: Sender<Result<Vec<u8>, IpcError>>) {
     let sent = Rc::new(RefCell::new(Some(sent)));
     let reply = sent.clone();
+    let hidden = Rc::new(RefCell::new(None));
+    let shown_for = hidden.clone();
     let start = || -> windows::core::Result<()> {
         // SAFETY: null asks COM to allocate the stream's storage; it is freed on release.
         let stream = unsafe { CreateStreamOnHGlobal(Default::default(), true)? };
         let captured = stream.clone();
         let handler = CapturePreviewCompletedHandler::create(Box::new(move |result| {
+            if let Some(controller) = shown_for.borrow_mut().take() {
+                hide_again(&controller);
+            }
             let png = result.and_then(|()| bytes(&captured)).map_err(failed);
             if let Some(sent) = reply.borrow_mut().take() {
                 let _ = sent.send(png);
             }
             Ok(())
         }));
+        *hidden.borrow_mut() = draw_while_hidden(&webview.controller())?;
         // SAFETY: wry owns this live WebView2 on the UI thread. WebView2 retains the stream
         // and callback through completion; the callback also retains its own stream reference.
         unsafe {
@@ -71,10 +110,13 @@ pub(super) fn capture(webview: &wry::WebView, sent: Sender<Result<Vec<u8>, IpcEr
             )
         }
     };
-    if let Err(error) = start()
-        && let Some(sent) = sent.borrow_mut().take()
-    {
-        let _ = sent.send(Err(failed(error)));
+    if let Err(error) = start() {
+        if let Some(controller) = hidden.borrow_mut().take() {
+            hide_again(&controller);
+        }
+        if let Some(sent) = sent.borrow_mut().take() {
+            let _ = sent.send(Err(failed(error)));
+        }
     }
 }
 

@@ -54,7 +54,7 @@ window-vibrancy = "0.6.0"
 # WebView2's CapturePreview uses the same COM bindings as wry.
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38.2"
-windows = { version = "0.61.3", features = ["Win32_System_Com_StructuredStorage"] }
+windows = { version = "0.61.3", features = ["Win32_System_Com_StructuredStorage", "Win32_UI_WindowsAndMessaging"] }
 
 [lints]
 workspace = true
