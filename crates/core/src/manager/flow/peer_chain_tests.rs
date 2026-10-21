@@ -226,6 +226,11 @@ async fn the_twenty_first_message_in_a_minute_is_refused() {
     peers.on(&flow.conversation, move |turn| {
         let (kept, to) = (kept.clone(), to.clone());
         async move {
+            // A reply only informs: sending from the turns replies wake would start the notes
+            // over each minute, a chain that never settles once the test takes a minute.
+            if is_reply(&turn.input) {
+                return Reply::text("Noted.");
+            }
             for n in 1..=21 {
                 let reply = send(&turn, &to, &format!("Note {n}."), None).await;
                 kept.lock().unwrap().push(reply);
