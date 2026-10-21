@@ -3069,6 +3069,7 @@ mod tests {
         board.orchestrator_steps.push(OrchestratorStep {
             request_id: None,
             kind: OrchestratorStepKind::Merged {
+                checks_skipped: false,
                 branch: "b".into(),
                 base: "main".into(),
                 commits: 1,

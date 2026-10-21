@@ -460,3 +460,248 @@ async fn an_open_thread_hears_once_that_request_review_replaces_the_old_review_t
         assert!(text.contains("request_review"), "{text}");
     }
 }
+
+/// What the thread's finish_session calls answered: an error, and its text.
+type Said = Arc<Mutex<Vec<(bool, String)>>>;
+
+/// The merges on a board, oldest first: whether each skipped the checks.
+fn merges(board: &crate::board::Board) -> Vec<bool> {
+    board
+        .orchestrator_steps
+        .iter()
+        .filter_map(|step| match &step.kind {
+            crate::work::OrchestratorStepKind::Merged { checks_skipped, .. } => {
+                Some(*checks_skipped)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The merge rule (thread-truth grill Q5): a merge into main goes through only once run_checks
+/// passed on its exact commit. Never run, or failed, it is refused with the reason in plain
+/// words, recorded for the user; the user's plain consent named as `anyway` doesn't skip it,
+/// their "merge it anyway" does, and so does their "Merge anyway" click. A pass merges with no
+/// waiver, and a merge that goes through ends the refusal.
+#[tokio::test]
+async fn a_merge_into_main_needs_run_checks_passed_on_its_commit_or_the_users_merge_anyway() {
+    let said: Said = Arc::default();
+    let log = said.clone();
+    let flow = Flow::start(
+        "merge-rule",
+        checks_options(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if !turn.is_orchestrator() {
+                    return Reply::text("Done.");
+                }
+                let finish = |args: serde_json::Value| async {
+                    let reply = turn.call("finish_session", args).await;
+                    log.lock().unwrap().push((reply.is_error, reply.text));
+                };
+                let input = turn.input.clone();
+                if input.contains("Add notes and merge it") {
+                    thread_commit(&turn, "notes.txt", "notes\n");
+                    finish(json!({ "consent": "merge it" })).await;
+                } else if input.contains("Break it, check it and merge it") {
+                    thread_commit(&turn, "broken.txt", "x\n");
+                    turn.call("run_checks", json!({})).await;
+                    finish(json!({ "consent": "merge it" })).await;
+                    // The user's consent isn't their word to skip the checks.
+                    finish(json!({ "consent": "merge it", "anyway": "merge it" })).await;
+                } else if input.contains("Merge it anyway") {
+                    finish(json!({ "consent": "Merge it anyway", "anyway": "Merge it anyway" }))
+                        .await;
+                } else if input.contains("Fix it, check it and merge it") {
+                    let workspace = &turn.add_dirs[0];
+                    git(workspace, &["rm", "-q", "broken.txt"]);
+                    git(workspace, &["commit", "-q", "-m", "Fix it"]);
+                    turn.call("run_checks", json!({})).await;
+                    finish(json!({ "consent": "merge it" })).await;
+                } else if input.contains("Add more") {
+                    thread_commit(&turn, "more.txt", "more\n");
+                    finish(json!({ "consent": "Add more" })).await;
+                } else if input.contains("[merge]") {
+                    finish(json!({})).await;
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+
+    // Never checked: refused, and the reason is recorded for the user.
+    flow.say("Add notes and merge it").await;
+    let board = flow.settled().await;
+    let (error, text) = said.lock().unwrap().remove(0);
+    assert!(error, "{text}");
+    assert!(
+        text.starts_with("[not merged] The checks haven't run on "),
+        "{text}"
+    );
+    assert!(text.contains("Call run_checks"), "{text}");
+    let refused = board
+        .merge_refused
+        .clone()
+        .expect("the refusal is recorded");
+    let branch = refused.branch.clone();
+    assert_eq!(refused.sha, git(&flow.repo, &["rev-parse", &branch]).trim());
+    assert!(refused.waivable);
+    assert!(refused.reason.starts_with("The checks haven't run on "));
+    assert!(merges(&board).is_empty());
+
+    // Failed: refused with the command that failed; plain consent as `anyway` changes nothing.
+    flow.say("Break it, check it and merge it").await;
+    let board = flow.settled().await;
+    let replies = std::mem::take(&mut *said.lock().unwrap());
+    assert!(replies.iter().all(|(error, _)| *error), "{replies:?}");
+    assert!(
+        replies[0].1.contains("The checks failed on ") && replies[0].1.contains("full-checks.sh"),
+        "{replies:?}"
+    );
+    assert!(
+        replies[1].1.contains("`anyway` doesn't skip them"),
+        "{replies:?}"
+    );
+    assert!(
+        board
+            .merge_refused
+            .as_ref()
+            .unwrap()
+            .reason
+            .starts_with("The checks failed on "),
+        "{:?}",
+        board.merge_refused
+    );
+    assert!(merges(&board).is_empty());
+
+    // The user's own "merge it anyway" merges, with the checks skipped, and ends the refusal.
+    flow.say("Merge it anyway").await;
+    let board = flow.settled().await;
+    let (error, text) = said.lock().unwrap().remove(0);
+    assert!(!error, "{text}");
+    assert!(text.starts_with("[finished]"), "{text}");
+    assert_eq!(merges(&board), [true]);
+    assert_eq!(board.merge_refused, None);
+
+    // A pass on the commit merges, with nothing skipped.
+    flow.say("Fix it, check it and merge it").await;
+    let board = flow.settled().await;
+    let (error, text) = said.lock().unwrap().remove(0);
+    assert!(!error, "{text}");
+    assert_eq!(merges(&board), [true, false]);
+
+    // The "Merge anyway" click skips them too, and ends the refusal at once.
+    flow.say("Add more").await;
+    let board = flow.settled().await;
+    assert!(said.lock().unwrap().remove(0).0);
+    assert!(board.merge_refused.is_some());
+    flow.manager
+        .merge_session(&flow.conversation, super::click(), true)
+        .await
+        .unwrap();
+    let board = flow
+        .until("the anyway click merged", |board| merges(board).len() == 3)
+        .await;
+    assert_eq!(merges(&board), [true, false, true]);
+    assert_eq!(board.merge_refused, None);
+    let events = flow.events().await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        crate::model::DomainEvent::MergeRefusalSet {
+            refusal: Some(_),
+            ..
+        }
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        crate::model::DomainEvent::OrchestratorStepped { step, .. }
+            if matches!(step.kind, crate::work::OrchestratorStepKind::MergeRequested { anyway: true, .. })
+    )));
+    flow.stop().await;
+}
+
+/// Only a run_checks pass counts: a pass Brigadier's own checks recorded on the same commit
+/// (a session from before the rule) never lets a merge through.
+#[tokio::test]
+async fn an_old_automatic_pass_never_satisfies_the_merge_rule() {
+    let said: Said = Arc::default();
+    let log = said.clone();
+    let flow = Flow::start(
+        "merge-rule-old-pass",
+        checks_options(),
+        script(move |turn| {
+            let log = log.clone();
+            async move {
+                if turn.is_orchestrator() && turn.input.contains("Merge it") {
+                    let reply = turn
+                        .call("finish_session", json!({ "consent": "Merge it" }))
+                        .await;
+                    log.lock().unwrap().push((reply.is_error, reply.text));
+                } else if turn.is_orchestrator() && turn.input.contains("Add notes") {
+                    thread_commit(&turn, "notes.txt", "notes\n");
+                }
+                Reply::text("Done.")
+            }
+        }),
+    )
+    .await;
+    flow.say("Add notes").await;
+    let board = flow.settled().await;
+    let branch = flow
+        .manager
+        .recorded_workspace(&flow.conversation)
+        .expect("the session's workspace")
+        .branch;
+    let tip = git(&flow.repo, &["rev-parse", &branch]);
+    let old = crate::work::IntegratedCheck {
+        id: crate::manager::integrated_checks::next_check_id(&board),
+        conversation_id: flow.conversation.clone(),
+        repo: flow.repo.to_string_lossy().into_owned(),
+        branch: branch.clone(),
+        tip: tip.trim().to_owned(),
+        state: crate::work::IntegratedCheckState::Passed {
+            commands: vec!["sh tools/full-checks.sh".into()],
+        },
+        due_at_ms: 0,
+        started_at_ms: Some(1),
+        ended_at_ms: Some(2),
+        requests: Vec::new(),
+        tasks: Vec::new(),
+        rerun: false,
+        asked: None,
+    };
+    flow.core
+        .record_conversation(
+            &flow.conversation,
+            vec![crate::model::DomainEvent::IntegratedCheckUpdated { check: old }],
+        )
+        .await
+        .unwrap();
+    flow.say("Merge it").await;
+    let board = flow.settled().await;
+    let (error, text) = said.lock().unwrap().remove(0);
+    assert!(error, "{text}");
+    assert!(text.contains("The checks haven't run on "), "{text}");
+    assert!(merges(&board).is_empty());
+    flow.stop().await;
+}
+
+/// The merge rule's rollout: an open thread hears once that a merge into main needs run_checks
+/// passed and that only the user can skip them; its workers hear nothing.
+#[tokio::test]
+async fn an_open_thread_hears_once_of_the_merge_rule() {
+    let (added, _) = an_open_thread_hears_once(
+        "merge-rule-revision",
+        crate::manager::prompts::MERGE_RULE_REVISION,
+    )
+    .await;
+    assert!(
+        added
+            .thread
+            .contains("finish_session refuses a merge into main")
+    );
+    assert!(added.thread.contains(crate::manager::prompts::MERGE_RULE));
+    assert!(added.worker.is_empty());
+}

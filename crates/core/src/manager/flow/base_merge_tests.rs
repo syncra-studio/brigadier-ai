@@ -249,6 +249,7 @@ fn session(flow: &Flow) -> (String, std::path::PathBuf) {
 
 async fn conflict(flow: &Flow, words: &str) {
     let before = git(&flow.repo, &["rev-parse", "main"]);
+    flow.checks_passed().await;
     let error = flow
         .manager
         .finish_session(&flow.conversation, words, None)
@@ -363,6 +364,7 @@ async fn review_ended(flow: &Flow, tip: &str) {
 }
 
 async fn finish(flow: &Flow, words: &str) {
+    flow.checks_passed().await;
     let reply = flow
         .manager
         .finish_session(&flow.conversation, words, None)
@@ -378,6 +380,7 @@ async fn finish(flow: &Flow, words: &str) {
             .count(),
         1
     );
+    flow.checks_passed().await;
     assert!(
         flow.manager
             .finish_session(&flow.conversation, words, None)
@@ -441,6 +444,7 @@ async fn a_wait_during_conflict_preparation_is_left_to_the_thread() {
     *conv.merge_pause.lock().unwrap() = Some((reached.clone(), release.clone()));
     let manager = flow.manager.clone();
     let id = flow.conversation.clone();
+    flow.checks_passed().await;
     let pending = tokio::spawn(async move { manager.finish_session(&id, "merge it", None).await });
     reached.notified().await;
     flow.say("wait!").await;
@@ -472,8 +476,9 @@ async fn an_unchanged_resolution_still_lands_two_parents() {
 #[tokio::test]
 async fn a_click_with_base_conflicts_resolves_and_finishes_on_the_click() {
     let flow = conflicting_session(Worker::Resolve, Sides::default()).await;
+    flow.checks_passed().await;
     flow.manager
-        .merge_session(&flow.conversation, super::click())
+        .merge_session(&flow.conversation, super::click(), false)
         .await
         .unwrap();
     flow.settled().await;
@@ -625,6 +630,7 @@ async fn an_unrelated_merge_parent_after_the_consent_is_no_refusal() {
             &session,
         ],
     );
+    flow.checks_passed().await;
     let error = flow
         .manager
         .finish_session(&flow.conversation, "merge it", None)
@@ -679,6 +685,7 @@ async fn a_merge_whose_target_moved_goes_back_to_the_same_worker_and_lands_both(
     review_ended(&flow, &landed).await;
     // The consent held over didn't cover the other work: the merge says it went in too, for
     // the thread to tell the user (#243).
+    flow.checks_passed().await;
     let merged = flow
         .manager
         .finish_session(&flow.conversation, "merge it", None)

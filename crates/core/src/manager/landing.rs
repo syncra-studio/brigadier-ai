@@ -1403,7 +1403,7 @@ impl SessionManager {
         named: &str,
         message: Option<String>,
     ) -> Result<String> {
-        self.finish_session_when(id, named, message, crate::tools::MergeWhen::Now)
+        self.finish_session_when(id, named, message, crate::tools::MergeWhen::Now, None)
             .await
     }
 
@@ -1411,13 +1411,16 @@ impl SessionManager {
     /// click on "Merge into main", their card answer, or their message (`consent`, its id or their words;
     /// [`merge_consent`]). `when`: now, what has landed, or held until the workers writing now
     /// land (#243). What the user wrote since, work that landed since their consent and work
-    /// still running are facts its result states, for the thread to judge.
+    /// still running are facts its result states, for the thread to judge. The merge rule: it
+    /// goes through only on a run_checks pass at the commit it merges, unless the user said to
+    /// merge anyway (`anyway`, [`Self::checks_waived`]).
     pub(crate) async fn finish_session_when(
         &self,
         id: &ConversationId,
         named: &str,
         message: Option<String>,
         when: crate::tools::MergeWhen,
+        anyway: Option<&str>,
     ) -> Result<String> {
         if self.overnight.active.get(id).is_some() {
             return Err(Error::Invalid(
@@ -1518,6 +1521,21 @@ impl SessionManager {
             self.stop_held_merge(id, &conv, held, &reason).await;
             return Err(Error::Invalid(stopped_text(&reason)));
         }
+        // The commit this merges, read once: the checks are judged on it, it is the one
+        // prepared, and the merge goes through only while the branch is still there.
+        let (git, repo_path, branch_name) =
+            (self.git.clone(), PathBuf::from(&repo), branch.clone());
+        let session_tip = blocking(move || {
+            git.open(&repo_path)
+                .map_err(git_error)?
+                .branch_tip(&branch_name)
+                .map_err(git_error)?
+                .ok_or_else(|| Error::Invalid("the session branch is gone".into()))
+        })
+        .await?;
+        let checks_skipped = self
+            .merge_rule(id, anyway, &consent, &branch, &base, &session_tip)
+            .await?;
         let message = self.commit_message(
             message
                 .filter(|m| !m.trim().is_empty())
@@ -1545,12 +1563,13 @@ impl SessionManager {
             Ready(Oid, Oid, Oid, u32, bool),
             Conflicts(Vec<String>, Oid),
         }
-        let (git, repo_path, base_name, branch_name, covered) = (
+        let (git, repo_path, base_name, branch_name, covered, tip) = (
             self.git.clone(),
             PathBuf::from(&repo),
             base.clone(),
             branch.clone(),
             pending.as_ref().map(|held| held.tip.clone()),
+            session_tip,
         );
         // A held consent covers the branch as it was then, moved on by the session's own
         // landings since; other work since is a fact the result states (#243).
@@ -1566,10 +1585,6 @@ impl SessionManager {
                     "[not merged] The user is rebasing `{branch_name}` in the Source panel and hasn't finished. Nothing was merged, and the user's consent still holds; call finish_session again once the rebase is continued to its end or aborted."
                 )));
             }
-            let tip = repo
-                .branch_tip(&branch_name)
-                .map_err(git_error)?
-                .ok_or_else(|| Error::Invalid("the session branch is gone".into()))?;
             let moved = covered.is_some_and(|covered| covered != tip.0);
             let outcome = repo
                 .prepare_merge_commit(&base_name, &tip, &message)
@@ -1734,9 +1749,13 @@ impl SessionManager {
                 auto,
                 requests,
                 record,
+                checks_skipped,
             },
         )
         .await;
+        if board.merge_refused.is_some() {
+            self.set_merge_refused(id, None).await;
+        }
         self.merged_pending(id, &reviewed, &session_tip.0).await;
         self.tell_merged(id, &base, &new_tip.0).await;
         *conv.merge_told.lock().unwrap() = None;
@@ -2065,7 +2084,13 @@ impl SessionManager {
     /// The user clicked "Merge into main" (BUILD-PLAN A4): the click is recorded with where it
     /// came from, and the thread is told to merge. Consent holds once, until the user writes
     /// again; behind running writers it waits as a held merge does.
-    pub async fn merge_session(&self, id: &ConversationId, origin: AnswerOrigin) -> Result<String> {
+    /// `anyway`: it was "Merge anyway", the user skipping the checks the merge rule asks for.
+    pub async fn merge_session(
+        &self,
+        id: &ConversationId,
+        origin: AnswerOrigin,
+        anyway: bool,
+    ) -> Result<String> {
         if self.overnight.active.get(id).is_some() {
             return Err(Error::Invalid(
                 "An overnight run is going in this session: its verified work merges by Merge on the run's card.".into(),
@@ -2112,9 +2137,18 @@ impl SessionManager {
                 branch: branch.clone(),
                 base: base.clone(),
                 origin,
+                anyway,
             },
         )
         .await;
+        if anyway {
+            self.set_merge_refused(id, None).await;
+        }
+        let clicked = if anyway {
+            "\"Merge anyway\", without the checks passed"
+        } else {
+            "\"Merge into main\""
+        };
         self.deliver(
             id,
             Envelope {
@@ -2122,12 +2156,181 @@ impl SessionManager {
                 label: "merge".into(),
                 task_id: None,
                 text: format!(
-                    "[merge] The user clicked \"Merge into main\" for `{branch}` into `{base}`. Call finish_session now, without consent."
+                    "[merge] The user clicked {clicked} for `{branch}` into `{base}`. Call finish_session now, without consent."
                 ),
             },
         )
         .await;
         Ok(format!("Merging `{branch}` into `{base}`."))
+    }
+
+    /// The merge rule (thread-truth grill Q5): a merge of `tip` into the base needs the thread's
+    /// run_checks passed on that exact commit, or the user's word to merge anyway. Refused, it
+    /// records why for the user ([`crate::work::MergeRefused`]) and says so to the thread. Ok: whether the
+    /// checks were skipped.
+    async fn merge_rule(
+        &self,
+        id: &ConversationId,
+        anyway: Option<&str>,
+        consent: &Consent,
+        branch: &str,
+        base: &str,
+        tip: &Oid,
+    ) -> Result<bool> {
+        use super::integrated_checks::{TipChecked, tip_checked_by_thread};
+        let board = self.core.board(id).await?;
+        let checked = tip_checked_by_thread(&board, branch, &tip.0);
+        if checked == TipChecked::Passed {
+            return Ok(false);
+        }
+        let waiver = match self.checks_waived(id, anyway, consent, branch, base).await {
+            Ok(true) => return Ok(true),
+            Ok(false) => String::new(),
+            Err(why) => format!(" {why}"),
+        };
+        let at = short(tip);
+        let reason = match checked {
+            TipChecked::Passed => unreachable!(),
+            TipChecked::Never => format!("The checks haven't run on {at}, the tip of {branch}."),
+            TipChecked::Pending => format!("The checks are still running on {at}."),
+            TipChecked::Failed { command, status } => {
+                format!("The checks failed on {at}: {command} ({status}).")
+            }
+            TipChecked::Couldnt { reason } => {
+                format!("The checks couldn't run on {at}: {reason}")
+            }
+        };
+        self.set_merge_refused(
+            id,
+            Some(crate::work::MergeRefused {
+                reason: reason.clone(),
+                sha: tip.0.clone(),
+                branch: branch.to_owned(),
+                base: base.to_owned(),
+                waivable: true,
+                at_ms: crate::now_ms(),
+            }),
+        )
+        .await;
+        Err(Error::Invalid(format!(
+            "[not merged] {reason} A merge into `{base}` needs run_checks passed on the exact commit it merges. Call run_checks, fix what fails, then call finish_session again on the same consent. Only the user can skip the checks: the session's card offers them \"Merge anyway\", and if they say so in words, pass those in `anyway`.{waiver}"
+        )))
+    }
+
+    /// Whether the user skipped the merge rule's checks for this merge: their "Merge anyway"
+    /// click it goes on (`consent`) or `anyway` names, or a card answer or message of theirs
+    /// `anyway` names (its id, or their words quoted) that says to merge without or despite the
+    /// checks ([`merge_consent::skips_checks`]). The thread saying so is never enough. Err: why
+    /// the one `anyway` names doesn't skip them.
+    async fn checks_waived(
+        &self,
+        id: &ConversationId,
+        anyway: Option<&str>,
+        consent: &Consent,
+        branch: &str,
+        base: &str,
+    ) -> std::result::Result<bool, String> {
+        let board = self.core.board(id).await.map_err(|err| err.to_string())?;
+        let clicked_anyway = |asked: &str| {
+            board.orchestrator_steps.iter().any(|step| {
+                matches!(&step.kind, OrchestratorStepKind::MergeRequested {
+                    id, branch: b, base: a, anyway: true, ..
+                } if id == asked && b == branch && a == base)
+            })
+        };
+        if clicked_anyway(&consent.asked_in) {
+            return Ok(true);
+        }
+        let Some(named) = anyway.map(str::trim).filter(|named| !named.is_empty()) else {
+            return Ok(false);
+        };
+        let not_it = |what: String| {
+            Err(format!(
+                "`anyway` doesn't skip them: {what}. Only the user's own word to merge without or despite the checks does."
+            ))
+        };
+        if used(&board, named) {
+            return not_it("a merge used it already".into());
+        }
+        if clicked_anyway(named) {
+            return Ok(true);
+        }
+        if let Some(card) = board
+            .questions
+            .values()
+            .find(|card| card.id.to_string() == named && card.answer.is_some())
+        {
+            let said = card.answer.iter().chain(&card.answers);
+            if said
+                .clone()
+                .any(|answer| merge_consent::skips_checks(answer))
+            {
+                return Ok(true);
+            }
+            let said: Vec<&String> = said.collect();
+            return not_it(format!("the user's answer {said:?} doesn't say so"));
+        }
+        let messages = match &board.head {
+            Some((head, _)) => self.core.branch(id, head).await,
+            None => self.core.all_messages(id).await,
+        }
+        .map_err(|err| err.to_string())?;
+        let merged = board
+            .orchestrator_steps
+            .iter()
+            .filter(|step| {
+                matches!(
+                    step.kind,
+                    OrchestratorStepKind::Merged { .. }
+                        | OrchestratorStepKind::MergeCancelled { .. }
+                )
+            })
+            .map(|step| step.at_ms)
+            .max();
+        let since = messages.iter().filter(|message| {
+            message.role == MessageRole::User
+                && merged.is_none_or(|merged| message.created_at_ms > merged)
+        });
+        for message in since.rev() {
+            if message.id == named {
+                return if merge_consent::skips_checks(&message.text) {
+                    Ok(true)
+                } else {
+                    not_it("that message of the user's doesn't say so".into())
+                };
+            }
+            if merge_consent::quotes(named, &message.text) {
+                return if merge_consent::skips_checks(named) {
+                    Ok(true)
+                } else {
+                    not_it(format!("\"{named}\" doesn't say so"))
+                };
+            }
+        }
+        not_it(format!(
+            "\"{named}\" is no message, card answer or click of the user's since the last merge"
+        ))
+    }
+
+    /// Records why the last merge was refused, or (none) that the refusal is over.
+    async fn set_merge_refused(
+        &self,
+        id: &ConversationId,
+        refusal: Option<crate::work::MergeRefused>,
+    ) {
+        let recorded = self
+            .core
+            .record_conversation(
+                id,
+                vec![crate::model::DomainEvent::MergeRefusalSet {
+                    conversation_id: id.clone(),
+                    refusal,
+                }],
+            )
+            .await;
+        if let Err(err) = recorded {
+            tracing::warn!(%err, "the merge refusal couldn't be recorded");
+        }
     }
 
     /// The user's consent to the session's merge: given now ([`Self::fresh_consent`]), or held

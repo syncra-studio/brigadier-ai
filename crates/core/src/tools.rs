@@ -1041,6 +1041,12 @@ pub struct FinishSession {
     /// holds it until they land.
     #[serde(default)]
     pub when: MergeWhen,
+    /// Only when the user said to merge without or despite the checks ("merge anyway"): the
+    /// id of that message or card answer, or their words quoted exactly. A merge into the base
+    /// needs run_checks passed on its commit; only the user can skip that, never your judgement.
+    /// Leave it out on [merge] after their "Merge anyway" click.
+    #[serde(default)]
+    pub anyway: Option<String>,
 }
 
 /// When `finish_session` merges (#243).

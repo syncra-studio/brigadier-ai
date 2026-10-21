@@ -235,6 +235,7 @@ export type { MergeCheck } from "./MergeCheck";
 export type { MergeCi } from "./MergeCi";
 export type { MergeCondition } from "./MergeCondition";
 export type { MergeRecord } from "./MergeRecord";
+export type { MergeRefused } from "./MergeRefused";
 export type { MergeReview } from "./MergeReview";
 export type { MergeUndo } from "./MergeUndo";
 export type { MergeVerifier } from "./MergeVerifier";

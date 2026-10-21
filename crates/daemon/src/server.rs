@@ -744,14 +744,17 @@ impl Session {
                     .map(|()| Response::AnswerQuestion)
                     .map_err(IpcError::from)
             }
-            Request::MergeSession { conversation_id } => {
+            Request::MergeSession {
+                conversation_id,
+                anyway,
+            } => {
                 let origin = brigadier_core::work::AnswerOrigin {
                     input: Some(brigadier_core::work::AnswerInput::Click),
                     client: self.client.name.clone(),
                     pid: self.client.pid,
                 };
                 let sessions = self.daemon.sessions.clone();
-                heap(|| sessions.merge_session(&conversation_id, origin))
+                heap(|| sessions.merge_session(&conversation_id, origin, anyway))
                     .await
                     .map(|text| Response::MergeSession { text })
                     .map_err(IpcError::from)

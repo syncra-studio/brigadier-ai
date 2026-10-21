@@ -1421,6 +1421,9 @@ pub struct ConversationView {
     /// What the session is doing now, in the thread's words; none once the user wrote since.
     #[serde(default)]
     pub headline: Option<crate::work::SessionHeadline>,
+    /// Why the last merge into the base was refused, while it stands.
+    #[serde(default)]
+    pub merge_refused: Option<crate::work::MergeRefused>,
     /// The ended previews and background runs the user dismissed or restarted from the
     /// Background rows (Q94), by id.
     #[serde(default)]
@@ -2478,6 +2481,12 @@ pub enum DomainEvent {
         conversation_id: ConversationId,
         headline: Option<crate::work::SessionHeadline>,
     },
+    /// A merge into the base was refused by the merge rule, or (none) the refusal is over: a
+    /// merge went through, or the user said to merge anyway.
+    MergeRefusalSet {
+        conversation_id: ConversationId,
+        refusal: Option<crate::work::MergeRefused>,
+    },
     /// A command of the thread's went to the background, or ended there (full snapshot).
     BackgroundRunUpdated {
         run: crate::work::BackgroundRun,
@@ -2778,6 +2787,7 @@ impl DomainEvent {
             Self::IntegratedCheckUpdated { .. } => "integrated_check.updated",
             Self::BackgroundRunUpdated { .. } => "background_run.updated",
             Self::HeadlineSet { .. } => "headline.set",
+            Self::MergeRefusalSet { .. } => "merge.refusal",
             Self::McpServersUpdated { .. } => "mcp_servers.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::UnreviewedChanged { .. } => "thread.unreviewed",

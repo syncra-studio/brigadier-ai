@@ -135,10 +135,29 @@ pub(crate) enum TipChecked {
 
 /// Where the full checks of `branch` stand at `tip`: the newest check of that tip decides.
 pub(crate) fn tip_checked(board: &crate::board::Board, branch: &str, tip: &str) -> TipChecked {
+    newest_at(board, branch, tip, |_| true)
+}
+
+/// Where the thread's own run_checks of `branch` stand at `tip`, the only runs the merge rule
+/// counts ([`full_by_thread`]): runs Brigadier started by itself before never do.
+pub(crate) fn tip_checked_by_thread(
+    board: &crate::board::Board,
+    branch: &str,
+    tip: &str,
+) -> TipChecked {
+    newest_at(board, branch, tip, full_by_thread)
+}
+
+fn newest_at(
+    board: &crate::board::Board,
+    branch: &str,
+    tip: &str,
+    counts: fn(&IntegratedCheck) -> bool,
+) -> TipChecked {
     let newest = board
         .integrated_checks
         .values()
-        .filter(|check| check.branch == branch && check.tip == tip)
+        .filter(|check| check.branch == branch && check.tip == tip && counts(check))
         .max_by_key(|check| integrated_check_number(&check.id));
     match newest.map(|check| &check.state) {
         None => TipChecked::Never,

@@ -86,6 +86,7 @@ async fn a_reviews_findings_are_items_the_thread_records_and_the_merge_lists_the
                     return Reply::text("Recorded.");
                 }
                 if turn.input.contains("Merge it.") {
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn
                         .call("finish_session", json!({"user_words": "Merge it."}))
                         .await;

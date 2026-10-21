@@ -538,6 +538,7 @@ async fn the_users_stop_a_workspace_change_and_a_merge_stop_previews() {
     std::fs::write(worktree.join("page.html"), "<h1>Hi</h1>\n").unwrap();
     super::git(&worktree, &["add", "page.html"]);
     super::git(&worktree, &["commit", "-q", "-m", "Add the page"]);
+    flow.checks_passed().await;
     flow.say("Please merge.").await;
     flow.until("the merge", |board| {
         board

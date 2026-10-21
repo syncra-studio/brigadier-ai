@@ -1224,6 +1224,7 @@ async fn a_review_still_running_at_the_merge_reports_its_findings_after_it() {
                             .await;
                         assert!(reply.text.contains("Landed"), "{}", reply.text);
                         // The user asked for the merge with the work: no card.
+                        turn.call("run_checks", json!({})).await;
                         let reply = turn
                             .call("finish_session", json!({"user_words": "merge it"}))
                             .await;

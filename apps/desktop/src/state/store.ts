@@ -689,6 +689,7 @@ function applyEvent(envelope: EventEnvelope, slice: Slice): Slice {
     case "integratedCheckUpdated":
     case "backgroundRunUpdated":
     case "headlineSet":
+    case "mergeRefusalSet":
     case "mcpServersUpdated":
     case "threadCommitsSeen":
     case "unreviewedChanged":

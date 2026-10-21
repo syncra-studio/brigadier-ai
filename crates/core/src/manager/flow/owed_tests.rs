@@ -115,6 +115,7 @@ async fn a_held_merge_is_due_while_the_review_runs_and_its_request_is_done_once(
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn
                         .call(
                             "finish_session",
@@ -136,6 +137,7 @@ async fn a_held_merge_is_due_while_the_review_runs_and_its_request_is_done_once(
                     return Reply::text("[quiet]");
                 }
                 if turn.input.contains("[merge due]") {
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn.call("finish_session", json!({})).await;
                     assert!(reply.text.contains("[finished]"), "{}", reply.text);
                     return Reply::text("Merged the note into main.");

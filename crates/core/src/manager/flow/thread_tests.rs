@@ -889,6 +889,7 @@ async fn a_merge_counts_the_review_of_the_threads_own_commit() {
                     &reviewed_notes(),
                     "Add notes\n\nBrigadier-Author: thread",
                 );
+                turn.call("run_checks", json!({})).await;
                 let reply = turn
                     .call("finish_session", json!({"user_words": "merge"}))
                     .await;
@@ -1065,6 +1066,7 @@ fn merging_thread(seen: Arc<Mutex<Vec<Seen>>>) -> Script {
                 return Reply::text("Notes added, ready to merge.");
             }
             if turn.input.contains("yes, merge it") {
+                turn.call("run_checks", json!({})).await;
                 let reply = turn
                     .call("finish_session", json!({"user_words": "yes, merge it"}))
                     .await;
@@ -1565,6 +1567,7 @@ async fn a_running_preview_leaves_the_answer_done_and_a_running_review_keeps_it_
 type MergeReplies = Arc<Mutex<Vec<(String, bool)>>>;
 
 async fn finish(turn: &Turn, words: &str, replies: &MergeReplies) -> bool {
+    turn.call("run_checks", json!({})).await;
     let reply = turn
         .call("finish_session", json!({ "user_words": words }))
         .await;

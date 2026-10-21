@@ -208,6 +208,7 @@ async fn held(name: &str, plan: Plan) -> Held {
                             .await;
                         assert!(!reply.is_error, "{}", reply.text);
                     }
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn
                         .call(
                             "finish_session",
@@ -246,6 +247,7 @@ async fn held(name: &str, plan: Plan) -> Held {
                     }
                 }
                 if turn.input.contains("[merge due]") {
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn.call("finish_session", json!({})).await;
                     log(&format!("finish_session: {}", reply.text));
                     return Reply::text("Merged.");
@@ -392,6 +394,7 @@ async fn a_wait_written_while_held_stops_the_merge() {
             .any(|line| line.starts_with("[merge stopped]")),
         "the thread stopped it itself"
     );
+    held.flow.checks_passed().await;
     let refused = held
         .flow
         .manager
@@ -481,6 +484,7 @@ async fn a_request_to_merge_with_a_not_elsewhere_merges() {
                 }
                 commit_in_workspace(&turn, "NOTES.md", "notes\n", "Add notes");
                 for _ in 0..2 {
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn
                         .call(
                             "finish_session",
@@ -643,6 +647,7 @@ async fn a_merge_now_while_a_worker_writes_merges_what_landed_and_names_it() {
                 if turn.input.contains("[report task-1") {
                     let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
                     assert!(!reply.is_error, "{}", reply.text);
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn
                         .call("finish_session", json!({"consent": "merge what you have"}))
                         .await;
@@ -715,6 +720,7 @@ async fn a_cancel_spends_the_consent_across_a_restart() {
     held.flow.settled().await;
     assert_eq!(held.logged("[merge due] The workers"), 0);
     // The old message no longer counts.
+    held.flow.checks_passed().await;
     let refused = held
         .flow
         .manager
@@ -979,6 +985,7 @@ async fn fixed_by_the_thread(
                         )
                         .await;
                     assert!(!reply.is_error, "{}", reply.text);
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn
                         .call(
                             "finish_session",
@@ -1028,6 +1035,7 @@ async fn fixed_by_the_thread(
                     if !due.load(Ordering::SeqCst) && !turn.input.contains("[merge due]") {
                         return Reply::text("[quiet]");
                     }
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn.call("finish_session", json!({})).await;
                     log(&format!("finish_session: {}", reply.text));
                     return Reply::text("Merged.");
@@ -1207,6 +1215,7 @@ async fn a_named_fix_of_a_review_that_ran_across_the_merge_gets_only_its_recheck
                 if turn.input.contains("[report task-1") {
                     let reply = turn.call("land_phase", json!({"task": "task-1"})).await;
                     assert!(!reply.is_error, "{}", reply.text);
+                    turn.call("run_checks", json!({})).await;
                     let reply = turn
                         .call("finish_session", json!({"user_words": "merge it"}))
                         .await;

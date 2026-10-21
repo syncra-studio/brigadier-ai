@@ -319,7 +319,7 @@ How to work:
 {MOCKUPS}
 - Run your change's checks (tests, lint, typecheck, build) with run_check, not your shell, before your final answer. {CHECK_PREFIXES} Never background a command yourself (`&`, nohup): one still going after a minute goes to the background by itself. Run dev servers and apps with start_preview.
 - {own_commits}
-- {RUN_CHECKS_RULE}
+- {RUN_CHECKS_RULE} {MERGE_RULE}
 - Reviews by the other vendor scale with risk: one per landing of a worker's; your own changes get one once, since the last review, they pass 150 lines or 5 files of code (not tests/docs), or you mark one risky (run_check's risky); a tiny edit gets none. While a review of your work runs, reply {quiet}; fix its valid findings before your final answer.
 - A big job (many parts, several workers, or hours of work): one plan reviewed with review_plan before building, and start_verifier at the end (fresh: true sees only request, constraints, done_when, commit; own work too).
 - Never answer "I can't" for what a shell can do: run builds, tests and the app, read logs, check files and open ports yourself.{commands}
@@ -441,6 +441,15 @@ macro_rules! run_checks_rule {
 
 /// When the thread runs the full checks (thread-truth grill Q5).
 pub(crate) const RUN_CHECKS_RULE: &str = run_checks_rule!();
+
+macro_rules! merge_rule {
+    () => {
+        "Only the user can skip that, by saying to merge anyway: pass their words in finish_session's anyway, never your own judgement."
+    };
+}
+
+/// Who may skip the checks a merge into main needs (thread-truth grill Q5).
+pub(crate) const MERGE_RULE: &str = merge_rule!();
 
 macro_rules! worker_run_checks_rule {
     () => {
@@ -1327,6 +1336,14 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, review_candidate is gone and request_review takes its place, with the same commit and wait_seconds: the other vendor reviews your commit and the findings come back in its reply.",
         worker: "From now on, review_code is gone and request_review takes its place: it starts the same review of your committed work, and its findings arrive as a message.",
     },
+    Revision {
+        number: MERGE_RULE_REVISION,
+        thread: concat!(
+            "From now on, finish_session refuses a merge into main until run_checks passed on the commit it merges. ",
+            merge_rule!()
+        ),
+        worker: "",
+    },
 ];
 
 /// The instructions' current revision.
@@ -1540,11 +1557,11 @@ const AUTO_MERGE_ON_LABEL: &str = "merging on its own on";
 const AUTO_MERGE_OFF_LABEL: &str = "merging on its own off";
 
 /// How the thread ships and merges while the user has "Merge on its own" on (WORKSPACES-PLAN.md
-/// phase 3, Q62, Q68): guidance it judges, never a list the engine checks. The engine doesn't
-/// gate a merge; the merge message shows what was verified.
+/// phase 3, Q62, Q68): guidance it judges, never a list the engine checks. The engine gates
+/// a merge only by the merge rule (run_checks passed); the merge message shows what was verified.
 pub(crate) const AUTO_MERGE: &str = "Merging on its own is on (the user's setting): when the work is ready, ship it and merge it yourself, with no consent asked; this replaces what your instructions say about waiting for the user's yes to merge. With a GitHub remote and `gh` signed in: push the branch, open a pull request, babysit its CI and reviews, fix, and merge it with `gh pr merge`; Brigadier records the merge and brings the base up to date when your request ends. When the base needs a merge queue or auto-merge (the merge is refused, or the pull request only joins the queue), use `gh pr merge --auto` with the same method instead of failing or waiting yourself: say it is queued, not merged; Brigadier watches it and records the merge when GitHub lands it. Otherwise finish_session merges it into the base here.
 Ship it the way a careful engineer would; you judge how much a change needs, and a change the user can see always comes with its proof. What usually makes a merge safe:
-- tests and type checks run on the final commit, after your last change;
+- run_checks passed on the final commit, after your last change (finish_session merges nothing without it);
 - the other vendor's review of the final commit (request_review reuses a review that covers it), each finding fixed or answered in one line; a running review is usually worth waiting for;
 - with a pull request, green CI on it (ci_status reads its checks);
 - for a change the user can see (a page, a screen, a control, its words or its look), however small: the app run in the background (start_preview), the change used the way the user would, and a screenshot or short recording attached to the merge message (attach_proof), with a short caption of what it shows. Reading the code, a grep or a passing test isn't that proof: it shows the change is there, not that it works for the user;
@@ -1913,6 +1930,9 @@ pub(crate) const RUN_CHECKS_REVISION: u32 = 125;
 /// request_review replaces review_candidate (the thread) and review_code (workers): one name
 /// for asking the other vendor for a review (thread-truth grill Q6).
 pub(crate) const REQUEST_REVIEW_REVISION: u32 = 126;
+/// finish_session enforces the merge rule: run_checks passed on the commit, or the user's
+/// word to merge anyway (thread-truth grill Q5).
+pub(crate) const MERGE_RULE_REVISION: u32 = 127;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
@@ -4484,8 +4504,9 @@ mod environment_tests {
         // research question, judged blind (Q77), and to 16,000 for the interview on cards: a
         // decision tree, facts looked up first, numbered rounds and a confirm card (Q78), and to
         // 16,300 for each file named once, inline, never listed at the end (Q84), and to 18,300
-        // for the answer's optional parts and a fused answer without its two lines (Q86).
-        assert!(codex.len() < 18_300, "{}", codex.len());
+        // for the answer's optional parts and a fused answer without its two lines (Q86), and
+        // to 18,500 for who may skip the checks a merge needs (thread-truth grill Q5).
+        assert!(codex.len() < 18_500, "{}", codex.len());
     }
 
     /// #229: the thread flags a request that clashes with its setup, splits a two-layer job
@@ -4986,7 +5007,7 @@ mod environment_tests {
             "with no consent asked",
             "you judge how much a change needs",
             "What usually makes a merge safe",
-            "tests and type checks run on the final commit",
+            "run_checks passed on the final commit",
             "request_review",
             "each finding fixed or answered in one line",
             "green CI",

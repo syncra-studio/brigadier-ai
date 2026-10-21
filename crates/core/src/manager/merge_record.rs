@@ -254,6 +254,7 @@ mod tests {
             ci("c0", 1),
             step(
                 OrchestratorStepKind::Merged {
+                    checks_skipped: false,
                     branch: "work".into(),
                     base: "main".into(),
                     commits: 1,
@@ -340,6 +341,7 @@ mod tests {
         let record = record_of(&board, "work", "c2", Some("t2"));
         assert_eq!(record.reviews[0].open, 1);
         let merged = |record| OrchestratorStepKind::Merged {
+            checks_skipped: false,
             branch: "work".into(),
             base: "main".into(),
             commits: 1,
