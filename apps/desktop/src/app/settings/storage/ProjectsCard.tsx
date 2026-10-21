@@ -1,66 +1,27 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 
-
+import { DetailRow } from "@/app/settings/storage/DetailRow";
+import { ExpandableRow, shares, sumBytes } from "@/app/settings/storage/ExpandableRow";
+import { ProjectRows } from "@/app/settings/storage/ProjectRows";
+import { StorageSize } from "@/app/settings/storage/StorageSize";
+import { type UnusedFreeUp, UnusedRow } from "@/app/settings/storage/UnusedRow";
 import {
   PROJECTS_PAGE,
   PROJECT_SORTS,
   TOP_PROJECTS,
-  canGoBytes,
-  conversationsLine,
   count,
   isUnused,
   listProjects,
   projectParts,
   sharedParts,
-  size,
   unusedProjects,
-  usedWords,
   type Part,
   type ProjectSort,
 } from "@/app/settings/storage/model";
-
-
-import {
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  Folder,
-  FolderOpen,
-  Folders,
-  History,
-  Search,
-  Sparkles,
-  Spinner,
-  Stack,
-} from "@/components/icons";
-
-import { Button, SettingsSelect, RoundBadge } from "@/components/controls";
-
-import { SettingsCard, StateDot, UsageBar } from "@/components/shared";
-
-
-import { revealPath } from "@/ipc/client";
-
-import type { ProjectUsage, StorageReport } from "@/ipc/generated";
-
-import { shortPath } from "@/lib/format";
-
-import { cn } from "@/lib/utils";
-
-/** Each part's share of everything Brigadier uses, for a project's 200-wide bar. */
-function shares(parts: readonly Part[], total: number) {
-  return parts
-    .filter((part) => part.bytes > 0)
-    .map((part) => ({ key: part.key, value: total > 0 ? (part.bytes / total) * 100 : 0, className: part.color }));
-}
-
-/** How freeing up the projects not in use goes. */
-export type UnusedFreeUp =
-  | { phase: "idle" }
-  | { phase: "confirm" }
-  | { phase: "freeing" }
-  | { phase: "done"; title: string; line: string }
-  | { phase: "failed"; line: string };
+import { ChevronDown, ChevronRight, ChevronUp, Folders, Search, Stack } from "@/components/icons";
+import { Button, SettingsSelect } from "@/components/controls";
+import { SettingsCard, UsageBar } from "@/components/shared";
+import type { StorageReport } from "@/ipc/generated";
 
 /**
  * Disk use by project: the largest four, the rest in one row, and what all projects share;
@@ -205,7 +166,7 @@ export function ProjectsCard({
             )}
           </div>
           <UsageBar parts={shares(restParts, total)} size="md" className="w-50" />
-          <Size bytes={sumBytes(restParts)} />
+          <StorageSize bytes={sumBytes(restParts)} />
           <Button variant="link-blue" size="inline" onClick={() => setAll(true)}>
             Show all
             <ChevronRight aria-hidden />
@@ -229,244 +190,6 @@ export function ProjectsCard({
     </SettingsCard>
   );
 }
-
-/** A project's row and, open, what's in it with its own cleanup. */
-function ProjectRows({
-  project,
-  report,
-  compact = false,
-  nowMs,
-  open,
-  onToggle,
-  reveal,
-  onFreeUp,
-  cleaning,
-}: {
-  project: ProjectUsage;
-  report: StorageReport;
-  /** The full list's one-line row: name and when it was last used. */
-  compact?: boolean;
-  nowMs: number;
-  open: boolean;
-  onToggle: () => void;
-  reveal: string;
-  onFreeUp: (projectId: string) => void;
-  cleaning: boolean;
-}) {
-  const parts = projectParts(project);
-  const [brains, conversations, work] = parts as [Part, Part, Part];
-  const canGo = canGoBytes(report, project.projectId);
-  const items = report.items.filter(
-    (item) => item.projectId === project.projectId && item.checked && item.selectable,
-  ).length;
-  const leftover = report.items.filter(
-    (item) => item.projectId === project.projectId && item.category === "finishedWork" && item.selectable,
-  ).length;
-  const name = <span className="text-foreground font-mono text-xs font-medium">{project.name}</span>;
-  return (
-    <ExpandableRow
-      name={project.projectId}
-      compact={compact}
-      icon={<Folder aria-hidden className="text-foreground/65 size-4 shrink-0" />}
-      title={
-        compact ? (
-          <span className="flex min-w-0 items-center gap-2.5">
-            {name}
-            <span
-              className={cn(
-                "shrink-0 text-xs",
-                isUnused(project, nowMs) ? "text-warning" : "text-muted-foreground",
-              )}
-            >
-              {usedWords(project.lastUsedMs, nowMs)}
-            </span>
-          </span>
-        ) : (
-          name
-        )
-      }
-      line={compact ? undefined : project.path ? shortPath(project.path) : "No folder"}
-      parts={parts}
-      total={report.totalBytes}
-      open={open}
-      onToggle={onToggle}
-    >
-      <DetailRow part={brains} line="What agents have learned about this project" />
-      <DetailRow part={conversations} line={conversationsLine(project)} />
-      <DetailRow
-        part={work}
-        line={
-          leftover > 0
-            ? `${count(leftover, "left over from a finished session", "left over from finished sessions")}`
-            : work.bytes > 0
-              ? "Used by its open sessions"
-              : "None left over from finished sessions"
-        }
-      />
-      <div className="border-divider flex items-center gap-2 border-t pt-3">
-        <span className="text-foreground/65 min-w-0 flex-1 text-xs">
-          {items === 0
-            ? "Nothing of this project's can go"
-            : canGo > 0
-              ? `${size(canGo)} of this project's files can go`
-              : `${count(items, "small leftover", "small leftovers")} of this project's can go`}
-        </span>
-        {project.path && (
-          <Button variant="soft" size="sm" onClick={() => void revealPath(project.path!)}>
-            <FolderOpen aria-hidden />
-            {reveal}
-          </Button>
-        )}
-        {items > 0 && (
-          <Button variant="soft" size="sm" disabled={cleaning} onClick={() => onFreeUp(project.projectId)}>
-            <Sparkles aria-hidden />
-            {canGo > 0 ? `Free up ${size(canGo)}` : "Tidy up"}
-          </Button>
-        )}
-      </div>
-    </ExpandableRow>
-  );
-}
-
-/** A row that opens: icon, name (and line), share bar, size, chevron; open, its detail. */
-function ExpandableRow({
-  name,
-  compact = false,
-  icon,
-  title,
-  line,
-  parts,
-  total,
-  open,
-  onToggle,
-  children,
-}: {
-  name: string;
-  compact?: boolean;
-  icon: ReactNode;
-  title: ReactNode;
-  line?: string | undefined;
-  parts: Part[];
-  total: number;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div data-project={name} className={cn("flex flex-col", compact && "border-divider border-b")}>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className={cn("flex w-full items-center gap-4 text-left", compact ? "h-12" : "py-3.5")}
-      >
-        {icon}
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          {title}
-          {line && <span className="text-muted-foreground truncate text-xs">{line}</span>}
-        </span>
-        <UsageBar parts={shares(parts, total)} size="md" className="w-50" />
-        <Size bytes={sumBytes(parts)} />
-        {open ? (
-          <ChevronDown aria-hidden className="text-muted-foreground size-3.75 shrink-0" />
-        ) : (
-          <ChevronRight aria-hidden className="text-muted-foreground size-3.75 shrink-0" />
-        )}
-      </button>
-      {open && <div className="flex flex-col pb-3.5 ps-8">{children}</div>}
-    </div>
-  );
-}
-
-/** One part of what an opened row holds: its dot, name, line and size. */
-function DetailRow({ part, line }: { part: Part; line: string }) {
-  return (
-    <div data-part-row={part.key} className="border-divider flex items-center gap-3 border-t py-2.5">
-      <StateDot color={part.color} />
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-foreground text-xs font-medium">{part.label}</span>
-        <span className="text-foreground/65 text-xs">{line}</span>
-      </div>
-      <span
-        className={cn(
-          "w-18 shrink-0 text-right text-xs",
-          part.bytes > 0 ? "text-foreground" : "text-muted-foreground",
-        )}
-      >
-        {size(part.bytes)}
-      </span>
-    </div>
-  );
-}
-
-function Size({ bytes }: { bytes: number }) {
-  return <span className="text-foreground w-18 shrink-0 text-right text-xs font-medium">{size(bytes)}</span>;
-}
-
-/** The projects not used for three months: what their Brains and conversations take, and
- * freeing that up (after a confirmation) with the projects, their repositories and files kept. */
-function UnusedRow({
-  projects,
-  bytes,
-  state,
-  onState,
-  onFreeUp,
-}: {
-  projects: ProjectUsage[];
-  bytes: number;
-  state: UnusedFreeUp;
-  onState: (state: UnusedFreeUp) => void;
-  onFreeUp: () => void;
-}) {
-  const n = projects.length;
-  const title =
-    state.phase === "done"
-      ? state.title
-      : n === 0
-        ? "Projects not used in 3 months"
-        : `${count(n, "project", "projects")} not used in 3 months`;
-  const line =
-    state.phase === "confirm"
-      ? `Delete ${n === 1 ? "its" : "their"} ${count(
-          projects.reduce((total, project) => total + project.conversations, 0),
-          "conversation",
-          "conversations",
-        )} and move ${n === 1 ? "its Brain" : "their Brains"} to the Trash? The ${n === 1 ? "project" : "projects"}, your repositories and files stay.`
-      : state.phase === "done" || state.phase === "failed"
-        ? state.line
-        : `${n === 1 ? "Its" : "Their"} brains and conversations take ${size(bytes)}. Your repositories and files stay.`;
-  return (
-    <div data-unused className="border-divider flex items-center gap-4 border-b py-3.5">
-      <RoundBadge>
-        <History />
-      </RoundBadge>
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-foreground text-label font-medium">{title}</span>
-        <span className={cn("text-xs", state.phase === "failed" ? "text-destructive" : "text-foreground/65")}>
-          {line}
-        </span>
-      </div>
-      {state.phase === "confirm" ? (
-        <>
-          <Button variant="ghost" size="sm" onClick={() => onState({ phase: "idle" })}>Cancel</Button>
-          <Button size="sm" onClick={onFreeUp}>Free up {size(bytes)}</Button>
-        </>
-      ) : state.phase === "done" || n === 0 ? null : state.phase === "freeing" ? (
-        <Button variant="soft" size="sm" disabled>
-          <Spinner className="animate-spin motion-reduce:animate-none" />
-          Freeing up…
-        </Button>
-      ) : (
-        <Button variant="soft" size="sm" onClick={() => onState({ phase: "confirm" })}>
-          <Sparkles aria-hidden />
-          Free up {size(bytes)}
-        </Button>
-      )}
-    </div>
-  );
-}
-
-const sumBytes = (parts: readonly Part[]) => parts.reduce((total, part) => total + part.bytes, 0);
 
 /** Parts of several rows added up, part by part. */
 function sumParts(rows: Part[][]): Part[] {

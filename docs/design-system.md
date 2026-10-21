@@ -334,6 +334,12 @@ table is the current one.
 | Setup (app.pen) | `#837 ProjectCard` | `app/setup/onboarding/ProjectCard.tsx` | `ProjectCard` | |
 | Setup (app.pen) | `#840 ContinueButton` | `app/setup/onboarding/ContinueButton.tsx` | `ContinueButton` | |
 | Setup (app.pen) | `#841 NameForm (onboarding)` | `app/setup/onboarding/NameForm.tsx` | `NameForm` | |
+| Settings (settings.pen) | `#709 ProjectRows` | `app/settings/storage/ProjectRows.tsx` | `ProjectRows` | |
+| Settings (settings.pen) | `#711 ExpandableRow` | `app/settings/storage/ExpandableRow.tsx` | `ExpandableRow` | |
+| Settings (settings.pen) | `#712 DetailRow (storage part)` | `app/settings/storage/DetailRow.tsx` | `DetailRow` | |
+| Settings (settings.pen) | `#713 Size` | `app/settings/storage/StorageSize.tsx` | `StorageSize` | |
+| Settings (settings.pen) | `#714 UnusedRow` | `app/settings/storage/UnusedRow.tsx` | `UnusedRow` | |
+| Settings (settings.pen) | `#719 UsageCard` | `app/settings/storage/UsageCard.tsx` | `UsageCard` | |
 
 ## Icons
 
