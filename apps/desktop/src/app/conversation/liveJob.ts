@@ -19,8 +19,8 @@ import { type Board, liveRequest, useBoard } from "@/state/board";
 /** Which icon the card shows: a spinner, a raised hand, a red cross, a tick, a stop, a merge. */
 export type LiveTone = "running" | "waiting" | "failed" | "done" | "stopped" | "merged";
 
-/** A button of the card's: open the CI run, cancel the held merge. */
-export type LiveAction = { type: "openCi"; url: string } | { type: "cancelMerge" };
+/** A button of the card's: open the CI run, cancel the held merge, merge without the checks. */
+export type LiveAction = { type: "openCi"; url: string } | { type: "cancelMerge" } | { type: "mergeAnyway" };
 
 export type LiveJob = {
   tone: LiveTone;
@@ -40,7 +40,7 @@ export type LiveInput = Pick<
   Board,
   "tasks" | "approvals" | "questions" | "reviews" | "previews" | "integratedChecks" | "orchestratorSteps" | "requests"
 > &
-  Partial<Pick<Board, "headline">>;
+  Partial<Pick<Board, "headline" | "mergeRefused">>;
 
 type Kind = "waiting" | "failed" | "running" | "done";
 
@@ -167,7 +167,7 @@ function ciFacts(steps: readonly OrchestratorStep[]): Fact[] {
   return [];
 }
 
-function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[]): Fact[] {
+function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[], since: number): Fact[] {
   const facts: Fact[] = [];
   const steps = input.orchestratorSteps.filter((step) => !isRunRequest(step.requestId));
   const held = heldMerge(steps, input.tasks, Object.values(input.questions));
@@ -192,7 +192,11 @@ function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[]): Fact[
       rank: 7,
       tone: "running",
       headline: `Merging into ${last.kind.base}`,
-      detail: latest && passedOn([latest], latest.tip) ? `Checks passed on ${short(latest.tip)}` : `${last.kind.branch} into ${last.kind.base}`,
+      detail: last.kind.anyway
+        ? "Without the checks, as you said"
+        : latest && passedOn([latest], latest.tip)
+          ? `Checks passed on ${short(latest.tip)}`
+          : `${last.kind.branch} into ${last.kind.base}`,
       sinceMs: last.atMs,
       atMs: last.atMs,
       actions: [],
@@ -208,10 +212,25 @@ function mergeFacts(input: LiveInput, checks: readonly IntegratedCheck[]): Fact[
       rank: 0,
       tone: "merged",
       // Only checks that passed on the very commit that merged count: never claim a pass.
-      headline: `Merged into ${kind.base}${passedOn(checks, head) ? " · checks passed" : ""}`,
+      headline: `Merged into ${kind.base}${kind.checksSkipped ? " · checks skipped" : passedOn(checks, head) ? " · checks passed" : ""}`,
       detail,
       atMs: last.atMs,
       actions: [],
+    });
+  }
+  // The merge rule refused the merge (no run_checks pass on its commit): the user decides,
+  // unless they wrote since, or a merge came after it.
+  const refused = input.mergeRefused;
+  const mergedSince = steps.some((step) => step.kind.type === "merged" && refused && step.atMs > refused.atMs);
+  if (refused && refused.atMs >= since && !mergedSince) {
+    facts.push({
+      kind: refused.waivable ? "waiting" : "failed",
+      rank: 0,
+      tone: "waiting",
+      headline: "Can’t merge yet",
+      detail: refused.reason,
+      atMs: refused.atMs,
+      actions: refused.waivable ? [{ type: "mergeAnyway" }] : [],
     });
   }
   return facts;
@@ -317,7 +336,7 @@ function latestOf(facts: readonly Fact[]): Fact | undefined {
 export function liveJob(input: LiveInput): LiveJob | null {
   const since = lastMessageAtMs(input);
   const checks = sessionChecks(input);
-  const facts = [...waitingFacts(input), ...workFailures(input), ...checkFacts(checks), ...reviewFacts(input), ...ciFacts(input.orchestratorSteps), ...mergeFacts(input, checks), ...stopFacts(input)];
+  const facts = [...waitingFacts(input), ...workFailures(input), ...checkFacts(checks), ...reviewFacts(input), ...ciFacts(input.orchestratorSteps), ...mergeFacts(input, checks, since), ...stopFacts(input)];
   // The thread or a worker at work, with nothing more to say: Working, naming no worker (J3).
   const live = liveRequest(input);
   const workers = Object.values(input.tasks).filter((task) => isWorking(task) && !isRunRequest(task.requestId));
