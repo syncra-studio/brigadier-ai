@@ -50,6 +50,8 @@ export type SettingsRowCopy = {
   readonly target?: string;
   /** A tab within the page, shown below a search result. */
   readonly section?: string;
+  /** Where the row lives, after the page and section: "from steady-app", "project view". */
+  readonly detail?: string;
 };
 
 /** A group of the navigation; "end" is the last, set apart by its gap alone, without a title. */

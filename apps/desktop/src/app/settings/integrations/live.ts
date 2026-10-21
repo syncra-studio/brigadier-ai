@@ -1,12 +1,13 @@
 import type { IntegrationSnapshot, IntegrationAdapter } from "@/app/settings/integrations/adapter";
 import type {
   IntegrationAgent,
+  IntegrationKind,
   IntegrationServer,
   IntegrationSignIn,
   IntegrationSkill,
   IntegrationSource,
 } from "@/app/settings/integrations/types";
-import type { IntegrationsView, McpServerView, ProblemView, Project, ProviderKind, SignInState, SkillView } from "@/ipc/generated";
+import type { IntegrationsView, McpServerView, ProblemView, Project, ProjectSwitches, ProviderKind, Settings, SignInState, SkillView } from "@/ipc/generated";
 import { request, revealPath } from "@/ipc/client";
 import { shortPath } from "@/lib/format";
 import { editSettings } from "@/state/settings";
@@ -85,10 +86,11 @@ export function groupServers(views: McpServerView[]): McpServerView[][] {
   return groups;
 }
 
-/** The project an entry belongs to, by name when it is one of the user's projects. */
-function projectOf(path: string | null, projects: Project[]): { project?: string } {
+/** The project an entry belongs to, by name when it is one of the user's projects, with its id and folder. */
+function projectOf(path: string | null, projects: Project[]): { project?: string; projectId?: string; projectPath?: string } {
   if (!path) return {};
-  return { project: projects.find((project) => project.repos[0]?.path === path)?.name ?? shortPath(path) };
+  const project = projects.find((item) => item.repos[0]?.path === path);
+  return { project: project?.name ?? shortPath(path), ...(project ? { projectId: project.id } : {}), projectPath: shortPath(path) };
 }
 
 function server(members: McpServerView[], projects: Project[]): IntegrationServer {
@@ -106,8 +108,11 @@ function server(members: McpServerView[], projects: Project[]): IntegrationServe
     id: first.id,
     name: first.name,
     sources: members.map((member) => source(member.source)),
+    ids: members.map((member) => member.id),
     ...projectOf(first.project, projects),
-    transport: transport.type === "stdio" ? { kind: "stdio", command: transport.command, args: transport.args } : { kind: "http", url: transport.url },
+    transport: transport.type === "stdio"
+      ? { kind: "stdio", command: transport.command, args: transport.args, ...(transport.cwd ? { cwd: shortPath(transport.cwd) } : {}) }
+      : { kind: "http", url: transport.url },
     env: transport.type === "stdio" ? transport.env : [],
     headers: transport.type === "http" ? transport.headers : [],
     signIn: states,
@@ -137,10 +142,14 @@ function problem(view: ProblemView, projects: Project[]): IntegrationServer {
   };
 }
 
+/** Whether a daemon id names an item of the project at `root`: `claude:project:<root>:<name>`. */
+const ownedBy = (id: string, root: string) => id.includes(`:project:${root}:`);
+
 function skill(view: SkillView, projects: Project[]): IntegrationSkill {
+  // A user's skill linked into a project stays the user's: its id names its own root.
   const project = projects.find((item) => {
     const root = item.repos[0]?.path;
-    return root && view.locations.some((location) => location.path.startsWith(`${root}/`));
+    return root && ownedBy(view.id, root);
   });
   const locations = view.locations.length ? view.locations : [{ path: view.path, linkedTo: null, nativeTo: view.nativeTo }];
   return {
@@ -154,9 +163,10 @@ function skill(view: SkillView, projects: Project[]): IntegrationSkill {
       agents: location.nativeTo.map(agentOf),
     })),
     nativeAgents: view.nativeTo.map(agentOf),
-    ...(project ? { project: project.name } : {}),
+    ...(project ? { project: project.name, projectId: project.id, projectPath: shortPath(project.repos[0]!.path) } : {}),
     // Claude switches its own skills off by name, so every skill can be switched off.
     canSwitchOff: true,
+    claudeOffByName: view.claudeOffByName,
   };
 }
 
@@ -181,24 +191,55 @@ export function mergeViews(user: IntegrationsView, perProject: IntegrationsView[
 /** The daemon's server and project a sign-in request names. */
 export type SignInTarget = { serverId: string; projectId: string | null };
 
-/** The page's snapshot of the daemon's `view`, the daemon ids behind each server row and what a sign-in to it names. */
-export function snapshotOf(view: IntegrationsView, projects: Project[], untrusted: string[], trustedCount: number) {
+/**
+ * What sessions in the project at `root` find: its own catalog, with the items of the other
+ * trusted projects (`others`, by folder) that the user uses in every project.
+ */
+export function projectView(own: IntegrationsView, root: string, others: Map<string, IntegrationsView>, settings: Pick<Settings, "serversEverywhere" | "skillsEverywhere">): IntegrationsView {
+  const merged: IntegrationsView = { servers: [...own.servers], skills: [...own.skills], problems: [...own.problems] };
+  for (const [folder, view] of others) {
+    if (folder === root) continue;
+    merged.servers.push(...view.servers.filter((item) => item.project === folder && settings.serversEverywhere.includes(item.id) && !known(merged.servers, item.id)));
+    merged.skills.push(...view.skills.filter((item) => ownedBy(item.id, folder) && settings.skillsEverywhere.includes(item.id) && !known(merged.skills, item.id)));
+  }
+  return merged;
+}
+
+/** The rows of one catalog, with the daemon ids behind each server row and what a sign-in to it names. */
+function rowsOf(view: IntegrationsView, projects: Project[]) {
   const groups = groupServers(view.servers);
-  const members = new Map(groups.map((group) => [group[0]!.id, group.map((member) => member.id)]));
-  const targets = new Map<string, SignInTarget>(groups.map(([first]) => [first!.id, {
+  return {
+    groups,
+    servers: [...groups.map((group) => server(group, projects)), ...view.problems.map((item) => problem(item, projects))],
+    skills: view.skills.map((item) => skill(item, projects)),
+  };
+}
+
+/** The page's snapshot of the daemon's `view` (and each trusted project's, by id), the daemon ids behind each server row and what a sign-in to it names. */
+export function snapshotOf(view: IntegrationsView, projects: Project[], untrusted: string[], trustedCount: number, settings?: Settings, projectViews: Record<string, IntegrationsView> = {}) {
+  const rows = rowsOf(view, projects);
+  const perProject = Object.entries(projectViews).map(([id, item]) => [id, rowsOf(item, projects)] as const);
+  const allGroups = [...rows.groups, ...perProject.flatMap(([, item]) => item.groups)];
+  const members = new Map(allGroups.map((group) => [group[0]!.id, group.map((member) => member.id)]));
+  const targets = new Map<string, SignInTarget>(allGroups.map(([first]) => [first!.id, {
     serverId: first!.id,
     projectId: first!.project ? projects.find((project) => project.repos[0]?.path === first!.project)?.id ?? null : null,
   }]));
   const snapshot: IntegrationSnapshot = {
     catalog: {
-      servers: [...groups.map((group) => server(group, projects)), ...view.problems.map((item) => problem(item, projects))],
-      skills: view.skills.map((item) => skill(item, projects)),
+      servers: rows.servers,
+      skills: rows.skills,
       trustedProjectCount: trustedCount,
       untrustedProjects: untrusted,
+      projects: projects.map((project) => ({ id: project.id, name: project.name, path: shortPath(project.repos[0]!.path), trusted: trusted(project) })),
+      projectCatalogs: Object.fromEntries(perProject.map(([id, item]) => [id, { servers: item.servers, skills: item.skills }])),
     },
     switches: {
-      mcpServersOff: groups.filter((group) => group.every((member) => member.off)).map((group) => group[0]!.id),
+      mcpServersOff: rows.groups.filter((group) => group.every((member) => member.off)).map((group) => group[0]!.id),
       skillsOff: view.skills.filter((item) => item.off).map((item) => item.id),
+      projectSwitches: settings?.projectSwitches ?? [],
+      serversEverywhere: settings?.serversEverywhere ?? [],
+      skillsEverywhere: settings?.skillsEverywhere ?? [],
     },
   };
   return { snapshot, members, targets };
@@ -220,6 +261,63 @@ function toggle(list: string[], ids: string[], enabled: boolean): string[] {
   return enabled ? list.filter((id) => !ids.includes(id)) : [...list, ...ids.filter((id) => !list.includes(id))];
 }
 
+type SwitchKeys = { on: "serversOn" | "skillsOn"; off: "serversOff" | "skillsOff"; global: "mcpServersOff" | "skillsOff"; everywhere: "serversEverywhere" | "skillsEverywhere" };
+const KEYS: Record<IntegrationKind, SwitchKeys> = {
+  server: { on: "serversOn", off: "serversOff", global: "mcpServersOff", everywhere: "serversEverywhere" },
+  skill: { on: "skillsOn", off: "skillsOff", global: "skillsOff", everywhere: "skillsEverywhere" },
+};
+/** The settings an exception edit changes. */
+export type SwitchSettings = Pick<Settings, "mcpServersOff" | "skillsOff" | "projectSwitches" | "serversEverywhere" | "skillsEverywhere">;
+const emptySwitches = (entry: ProjectSwitches) => !entry.serversOn.length && !entry.serversOff.length && !entry.skillsOn.length && !entry.skillsOff.length;
+
+/** `settings` with `edit` applied to project `projectId`'s exceptions, dropping an entry left empty. */
+function editProject<S extends SwitchSettings>(settings: S, projectId: string, edit: (entry: ProjectSwitches) => ProjectSwitches): S {
+  const found = settings.projectSwitches.some((entry) => entry.projectId === projectId);
+  const entries = found ? settings.projectSwitches : [...settings.projectSwitches, { projectId, serversOn: [], serversOff: [], skillsOn: [], skillsOff: [] }];
+  return { ...settings, projectSwitches: entries.map((entry) => entry.projectId === projectId ? edit(entry) : entry).filter((entry) => !emptySwitches(entry)) };
+}
+
+/**
+ * Turns the item `ids` on or off in project `projectId`, or puts the project back on the
+ * default (`null`): an exception is kept only where it differs from an id's default.
+ */
+export function inProject<S extends SwitchSettings>(settings: S, kind: IntegrationKind, ids: string[], projectId: string, enabled: boolean | null): S {
+  const keys = KEYS[kind];
+  return editProject(settings, projectId, (entry) => {
+    const on = entry[keys.on].filter((id) => !ids.includes(id));
+    const off = entry[keys.off].filter((id) => !ids.includes(id));
+    for (const id of ids) {
+      if (enabled === null) continue;
+      const offByDefault = settings[keys.global].includes(id);
+      if (enabled && offByDefault) on.push(id);
+      if (!enabled && !offByDefault) off.push(id);
+    }
+    return { ...entry, [keys.on]: on, [keys.off]: off };
+  });
+}
+
+/**
+ * A project's own item used in every project (`on`), or kept in its project `origin` again.
+ * Used everywhere it is on by default, and stays off in `origin` if it was; kept in `origin`
+ * again, it keeps its on or off there and every project's exceptions to it go.
+ */
+export function everywhere<S extends SwitchSettings>(settings: S, kind: IntegrationKind, ids: string[], origin: string, on: boolean): S {
+  const keys = KEYS[kind];
+  if (on) {
+    const offInOrigin = ids.filter((id) => settings[keys.global].includes(id));
+    let next: S = { ...settings, [keys.global]: toggle(settings[keys.global], ids, true), [keys.everywhere]: toggle(settings[keys.everywhere], ids, false) };
+    if (offInOrigin.length) next = inProject(next, kind, offInOrigin, origin, false);
+    return next;
+  }
+  const entry = settings.projectSwitches.find((item) => item.projectId === origin);
+  const offInOrigin = ids.filter((id) => settings[keys.global].includes(id) ? !entry?.[keys.on].includes(id) : !!entry?.[keys.off].includes(id));
+  const projectSwitches = settings.projectSwitches
+    .map((item) => ({ ...item, [keys.on]: item[keys.on].filter((id) => !ids.includes(id)), [keys.off]: item[keys.off].filter((id) => !ids.includes(id)) }))
+    .filter((item) => !emptySwitches(item));
+  const global = [...settings[keys.global].filter((id) => !ids.includes(id)), ...offInOrigin];
+  return { ...settings, [keys.global]: global, [keys.everywhere]: settings[keys.everywhere].filter((id) => !ids.includes(id)), projectSwitches };
+}
+
 /** The Plugins page's connection to the daemon. */
 export function liveIntegrations(): IntegrationAdapter {
   let members = new Map<string, string[]>();
@@ -234,11 +332,15 @@ export function liveIntegrations(): IntegrationAdapter {
         request({ method: "getIntegrations", projectId: null }),
         ...trustedProjects.map((project) => request({ method: "getIntegrations", projectId: project.id })),
       ]);
-      const view = mergeViews(user.integrations, perProject.map((answer) => answer.integrations));
-      const result = snapshotOf(view, projects, projects.filter((project) => !trusted(project)).map((project) => project.name), trustedProjects.length);
+      const views = perProject.map((answer) => answer.integrations);
+      const view = mergeViews(user.integrations, views);
+      const settings = useApp.getState().settings;
+      const folders = new Map(trustedProjects.map((project, index) => [project.repos[0]!.path, views[index]!]));
+      const projectViews = Object.fromEntries(trustedProjects.map((project, index) => [project.id, projectView(views[index]!, project.repos[0]!.path, folders, settings)]));
+      const result = snapshotOf(view, projects, projects.filter((project) => !trusted(project)).map((project) => project.name), trustedProjects.length, settings, projectViews);
       members = result.members;
       targets = result.targets;
-      paths = pathsOf(view);
+      paths = new Map([view, ...Object.values(projectViews)].flatMap((item) => [...pathsOf(item)]));
       return result.snapshot;
     },
     subscribe: (onChange) => {
@@ -257,6 +359,12 @@ export function liveIntegrations(): IntegrationAdapter {
     },
     setSkillEnabled: async (id, enabled) => {
       await editSettings((settings) => ({ ...settings, skillsOff: toggle(settings.skillsOff, [id], enabled) }));
+    },
+    setInProject: async (kind, ids, projectId, enabled) => {
+      await editSettings((settings) => inProject(settings, kind, ids, projectId, enabled));
+    },
+    setEverywhere: async (kind, ids, origin, on) => {
+      await editSettings((settings) => everywhere(settings, kind, ids, origin, on));
     },
     showPath: (path) => revealPath(paths.get(path) ?? path.replace(/^~(?=\/)/, homeOf(paths))),
     signIn: async (id) => (await request({ method: "signInMcpServer", ...target(id) })).id,

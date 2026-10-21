@@ -22,6 +22,10 @@ const AGENTS = ["claude", "codex"] as const;
 const NAME: Record<IntegrationAgent, string> = { claude: "Claude Code", codex: "Codex" };
 const SHORT: Record<IntegrationAgent, string> = { claude: "Claude", codex: "Codex" };
 const REFUSED = "The server didn't accept the sign-in.";
+/** Why an attempt the daemon no longer knows (it restarted) ended. */
+const INTERRUPTED = "The sign-in was interrupted. Nothing was saved.";
+/** The daemon's answer for a sign-in it doesn't know: "no sign-in `<id>`". */
+const missing = (cause: unknown) => String(cause).includes("no sign-in");
 
 type Action = "signIn" | "tryAgain" | "reopen" | "cancel" | "signOut" | "askAgain" | "checkNow";
 type Status = {
@@ -72,8 +76,14 @@ function row(server: IntegrationServer, agent: IntegrationAgent, mac: boolean, w
   }
 }
 
-/** The status row, from the agents' states, a sign-in waiting for the browser or the last one's failure. */
-function status(server: IntegrationServer, mac: boolean, waiting: boolean, failed: string | null): Status {
+/** The status row, from the agents' states, a sign-in waiting for the browser or the last one's failure; off where workers don't get the server. */
+function status(server: IntegrationServer, mac: boolean, waiting: boolean, failed: string | null, enabled: boolean): Status {
+  const shown = signInStatus(server, mac, waiting, failed);
+  if (!mac || waiting || failed || enabled) return shown;
+  return { ...shown, tone: "muted", icon: Key, title: "Off", line: "Brigadier doesn't give it to workers." };
+}
+
+function signInStatus(server: IntegrationServer, mac: boolean, waiting: boolean, failed: string | null): Status {
   const agents = AGENTS.filter((agent) => server.signIn[agent]);
   const states = agents.map((agent) => server.signIn[agent]!);
   if (!mac) return { tone: "muted", icon: Info, title: "Can't check sign-ins on this system", line: "Brigadier reads saved sign-ins and signs in only on macOS for now. Each agent's own sign-in still works for its own workers.", actions: [] };
@@ -117,27 +127,38 @@ const TILE: Record<Status["tone"], string> = {
   muted: "bg-foreground/5 text-foreground/65",
 };
 
-export function SignInSection({ server, adapter, run, focus = false }: {
-  server: IntegrationServer; adapter: IntegrationAdapter | null; run: (action: () => Promise<unknown>) => void; focus?: boolean | undefined;
+/** `enabled`: whether workers get the server, in the project the page is shown for. */
+export function SignInSection({ server, adapter, run, enabled = true, focus = false }: {
+  server: IntegrationServer; adapter: IntegrationAdapter | null; run: (action: () => Promise<unknown>) => void; enabled?: boolean; focus?: boolean | undefined;
 }) {
   const mac = useApp((state) => state.info?.platform === "macos");
   const ref = useRef<HTMLDivElement>(null);
-  // The attempt this page started; the ids already finished, so a snapshot read before the
-  // daemon let one go doesn't bring it back; the last attempt's failure.
+  // The attempt this page started or found waiting, kept until its end has been read; the ids
+  // already finished, so a snapshot read before the daemon let one go doesn't bring it back;
+  // the last attempt's failure, and the agents that could use the server when it started.
   const [attempt, setAttempt] = useState<string | null>(null);
   const [done, setDone] = useState<string[]>([]);
   const [failed, setFailed] = useState<string | null>(null);
+  const [before, setBefore] = useState<IntegrationAgent[]>([]);
+  const able = AGENTS.filter((agent) => usable(server.signIn[agent]));
   const restored = server.pendingSignIn && !done.includes(server.pendingSignIn) ? server.pendingSignIn : null;
+  if (mac && restored && !attempt) {
+    setAttempt(restored);
+    setBefore(able);
+  }
   const pending = mac ? attempt ?? restored : null;
+  // A sign-in the agent's own way since the attempt started outdates its failure.
+  const failure = able.some((agent) => !before.includes(agent)) ? null : failed;
 
   useEffect(() => { if (focus) ref.current?.scrollIntoView({ block: "start" }); }, [focus]);
   useEffect(() => {
     if (!pending || !adapter) return;
     let live = true;
+    // A connection error is passing: only an attempt the daemon doesn't know has ended.
     const timer = setInterval(() => void adapter.signInStatus(pending).then((result) => {
       if (!live || result.type === "pending") return;
       finish(pending, result.type === "failed" ? result.reason : null);
-    }, () => {}), STATUS_MS);
+    }, (cause: unknown) => { if (live && missing(cause)) finish(pending, INTERRUPTED); }), STATUS_MS);
     return () => { live = false; clearInterval(timer); };
   }, [pending, adapter]);
 
@@ -151,16 +172,22 @@ export function SignInSection({ server, adapter, run, focus = false }: {
     if (!adapter) return;
     switch (action) {
       case "signIn":
-      case "tryAgain": return run(async () => { setFailed(null); setAttempt(await adapter.signIn(server.id)); });
-      case "reopen": return pending && run(() => adapter.reopenSignIn(pending));
-      case "cancel": return pending && run(async () => { await adapter.cancelSignIn(pending); finish(pending, null); });
+      case "tryAgain": return run(async () => { setFailed(null); setBefore(able); setAttempt(await adapter.signIn(server.id)); });
+      case "reopen": return pending && run(() => adapter.reopenSignIn(pending).catch((cause: unknown) => {
+        if (!missing(cause)) throw cause;
+        finish(pending, INTERRUPTED);
+      }));
+      case "cancel": return pending && run(async () => {
+        await adapter.cancelSignIn(pending).catch((cause: unknown) => { if (!missing(cause)) throw cause; });
+        finish(pending, null);
+      });
       case "signOut": return run(async () => { await adapter.signOut(server.id); useIntegrations.getState().refresh(); });
       case "askAgain":
       case "checkNow": return run(async () => { await adapter.askSignInAgain(server.id); useIntegrations.getState().refresh(); });
     }
   };
 
-  const shown = status(server, mac, !!pending, failed);
+  const shown = status(server, mac, !!pending, failure, enabled);
   const Icon = shown.icon;
   return <div ref={ref} className="scroll-mt-4">
     <IntegrationSection title="Sign-in" description="Each agent keeps its own sign-in. Brigadier reuses one from whichever agent has it, and never shows a token." aside="macOS only for now"><SettingsCard>

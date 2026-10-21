@@ -6,7 +6,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { SettingsNav } from "@/app/settings/SettingsNav";
 import { PluginsView } from "@/app/settings/integrations/PluginsPage";
 import { connectIntegrations, useIntegrations, type IntegrationAdapter, type IntegrationSnapshot } from "@/app/settings/integrations/adapter";
-import type { IntegrationServer, IntegrationSignIn, IntegrationSkill } from "@/app/settings/integrations/types";
+import { everywhere, inProject, type SwitchSettings } from "@/app/settings/integrations/live";
+import type { IntegrationProject, IntegrationServer, IntegrationSignIn, IntegrationSkill } from "@/app/settings/integrations/types";
 import { revealSetting, useReveal } from "@/app/settings/reveal";
 import { SettingsTitlebarStrip, TerminalButton, TitlebarNav } from "@/components/shared";
 import { TooltipProvider } from "@/components/overlays";
@@ -462,7 +463,93 @@ const SIGN_IN_STATES: Record<string, Partial<IntegrationServer>> = {
 };
 const SKILL_STATES = ["skills", "grill-me", "delegator", "claude-skills", "claude-skill", "empty-skills", "narrow-skills"];
 
+// The Plugins · Where it's used board: the user's projects, steady-app's own two servers and the exceptions it draws.
+const PROJECTS: IntegrationProject[] = [
+  { id: "brigadier-ai", name: "brigadier-ai", path: "~/Code/brigadier-ai", trusted: true },
+  { id: "northwind-site", name: "northwind-site", path: "~/Code/clients/northwind-site", trusted: true },
+  { id: "steady-app", name: "steady-app", path: "~/Code/steady-app", trusted: true },
+  { id: "scratch", name: "scratch", path: "~/scratch", trusted: false },
+  { id: "old-landing", name: "old-landing", path: "~/Code/old-landing", trusted: false },
+];
+const own = (project: IntegrationProject) => ({ project: project.name, projectId: project.id, projectPath: project.path });
+const steadyServer = (name: string, command: string, args: string[], cwd?: string): IntegrationServer => ({
+  id: `ClaudeProjectFile:steady-app:${name}`, name, sources: ["ClaudeProjectFile"], ...own(PROJECTS[2]!),
+  transport: { kind: "stdio", command, args, ...(cwd ? { cwd } : {}) }, env: [], headers: [], signIn: {}, nativeAgents: ["claude"], canSwitchOff: true,
+  sourceFiles: [{ source: "ClaudeProjectFile", path: "~/Code/steady-app/.mcp.json" }],
+});
+const steadyApi = steadyServer("steady-api", "node", ["./tools/steady-api-mcp/index.js"], "~/Code/steady-app");
+const steadyDb = steadyServer("steady-db", "npx", ["-y", "@supabase/mcp-server", "--project-ref", "steady"]);
+const ID = (name: string) => [...servers, steadyApi, steadyDb, ...skills].find((item) => item.name === name)!.id;
+/** Each where state: its tab, the item whose page it opens and the project picked in the toolbar. */
+const WHERE_STATES: Record<string, { tab?: "skills"; name?: string; project?: string }> = {
+  "where-servers": {},
+  "where-skills": { tab: "skills" },
+  "where-railway": { name: "railway" },
+  "where-pencil": { name: "pencil" },
+  "where-grilling": { tab: "skills", name: "grilling" },
+  "where-postgres": { name: "postgres" },
+  "where-steady-api": { name: "steady-api" },
+  "where-playwright": { name: "playwright" },
+  "where-untrusted": { name: "pencil" },
+  "where-runs-from": { name: "steady-api" },
+  "where-brigadier": { project: "brigadier-ai" },
+  "where-brigadier-skills": { tab: "skills", project: "brigadier-ai" },
+  "where-steady-app": { project: "steady-app" },
+  "where-linear-off": { name: "linear", project: "brigadier-ai" },
+  "where-linear-all": { name: "linear" },
+};
+
+function whereSnapshot(state: string): IntegrationSnapshot {
+  const users = structuredClone(servers.slice(0, 6));
+  const pencil = users.find((server) => server.name === "pencil")!;
+  if (state === "where-pencil" || state === "where-untrusted") pencil.transport = { kind: "stdio", command: "/Applications/Pencil.app/Contents/MacOS/pencil", args: ["mcp", "--stdio"] };
+  const postgres: IntegrationServer = { ...structuredClone(servers[6]!), ...own(PROJECTS[0]!), sourceFiles: [{ source: "ClaudeProjectFile", path: "~/Code/brigadier-ai/.mcp.json" }] };
+  const api = structuredClone(steadyApi);
+  // A working folder that isn't the project's root.
+  if (state === "where-runs-from" && api.transport.kind === "stdio") api.transport.cwd = "~/Code/steady-app/tools/steady-api-mcp";
+  const userSkills = structuredClone(skills.slice(0, 17));
+  const grilling = userSkills.find((skill) => skill.name === "grilling")!;
+  if (state === "where-grilling") {
+    Object.assign(grilling, {
+      description: "Grill you relentlessly about a plan, decision or idea.",
+      locations: ["~/.agents/skills/grilling", "~/.claude/skills/grilling"],
+      locationDetails: [{ path: "~/.agents/skills/grilling", agents: ["codex"] }, { path: "~/.claude/skills/grilling", linkedTo: "~/.agents/skills/grilling", agents: ["claude"] }],
+    });
+  }
+  const projectSkills = structuredClone(skills.slice(17)).map((skill) => ({ ...skill, ...own(PROJECTS[0]!) }));
+  const snapshot: IntegrationSnapshot = {
+    catalog: {
+      servers: [...users, api, postgres, structuredClone(steadyDb)],
+      skills: [...userSkills, ...projectSkills],
+      trustedProjectCount: 3,
+      untrustedProjects: ["scratch", "old-landing"],
+      projects: structuredClone(PROJECTS),
+      projectCatalogs: {
+        "brigadier-ai": { servers: [...users, postgres, api], skills: [...userSkills, ...projectSkills] },
+        "northwind-site": { servers: [...users, api], skills: userSkills },
+        "steady-app": { servers: [...users, api, structuredClone(steadyDb)], skills: userSkills },
+      },
+    },
+    switches: {
+      mcpServersOff: [ID("playwright")],
+      skillsOff: [ID("grilling")],
+      projectSwitches: [
+        { projectId: "brigadier-ai", serversOn: [], serversOff: [ID("steady-api")], skillsOn: [ID("grilling")], skillsOff: [] },
+        { projectId: "steady-app", serversOn: [], serversOff: [ID("pencil")], skillsOn: [ID("grilling")], skillsOff: [] },
+      ],
+      serversEverywhere: [ID("steady-api")],
+      skillsEverywhere: [],
+    },
+  };
+  // An exception kept for a project that is no longer trusted.
+  if (state === "where-untrusted") snapshot.switches.projectSwitches!.push({ projectId: "old-landing", serversOn: [], serversOff: [ID("pencil")], skillsOn: [], skillsOff: [] });
+  // linear, signed in and on by default, turned off in brigadier-ai.
+  if (state.startsWith("where-linear")) snapshot.switches.projectSwitches![0]!.serversOff.push(ID("linear"));
+  return snapshot;
+}
+
 function snapshotFor(state: string): IntegrationSnapshot {
+  if (state in WHERE_STATES) return whereSnapshot(state);
   const snapshot: IntegrationSnapshot = {
     catalog: { servers: structuredClone(servers), skills: structuredClone(skills), trustedProjectCount: 3, untrustedProjects: ["scratch", "old-landing"] },
     switches: { mcpServersOff: [servers[4]!.id], skillsOff: [skills[4]!.id] },
@@ -495,6 +582,8 @@ function snapshotFor(state: string): IntegrationSnapshot {
   return snapshot;
 }
 function viewFor(state: string) {
+  const where = WHERE_STATES[state];
+  if (where) return { initialTab: where.tab ?? "servers" as const, ...(where.name ? { initialId: ID(where.name) } : {}), ...(where.project ? { initialProject: where.project } : {}) };
   const tab = SKILL_STATES.includes(state) ? "skills" as const : "servers" as const;
   const name = state === "claude-skill" ? "higgsfield-websites" : state === "unreadable" ? "figma-dev" : state in SIGN_IN_STATES ? state.split("-")[0] : state;
   const item = (tab === "skills" ? skills : snapshotFor(state).catalog.servers).find((entry) => entry.name === name);
@@ -515,8 +604,20 @@ const shown: string[] = [];
 // The sign-in IPC the page sent, and how each sign-in the fake daemon started is going.
 const calls: string[] = [];
 const statuses = new Map<string, McpSignInStatus>();
+// Sign-ins the fake daemon forgot (it restarted), and how many status reads fail on a dropped connection first.
+const gone = new Set<string>();
+let flaky = 0;
 let signIns = 0;
 const emit = () => listeners.forEach((listener) => listener());
+/** The exception and everywhere edits the page sent, each applied as live.ts applies it to Settings. */
+const edits: string[] = [];
+function editSwitches(log: string, change: (settings: SwitchSettings) => SwitchSettings) {
+  edits.push(log);
+  const { mcpServersOff, skillsOff, projectSwitches = [], serversEverywhere = [], skillsEverywhere = [] } = current.switches;
+  current = { ...current, switches: change({ mcpServersOff, skillsOff, projectSwitches, serversEverywhere, skillsEverywhere }) };
+  emit();
+}
+const forget = (signInId: string) => { if (gone.has(signInId)) throw new Error(`no sign-in ${signInId}`); };
 const adapter: IntegrationAdapter = {
   read: async () => current,
   subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -530,6 +631,8 @@ const adapter: IntegrationAdapter = {
     current = { ...current, switches: { ...current.switches, skillsOff: enabled ? current.switches.skillsOff.filter((off) => off !== id) : [...current.switches.skillsOff, id] } };
     emit();
   },
+  setInProject: async (kind, ids, projectId, enabled) => editSwitches(`inProject ${kind} ${ids.join(",")} ${projectId} ${enabled}`, (settings) => inProject(settings, kind, ids, projectId, enabled)),
+  setEverywhere: async (kind, ids, origin, on) => editSwitches(`everywhere ${kind} ${ids.join(",")} ${origin} ${on}`, (settings) => everywhere(settings, kind, ids, origin, on)),
   showPath: async (path) => { shown.push(path); },
   signIn: async (id) => {
     const signInId = `sign-in-${++signIns}`;
@@ -537,9 +640,13 @@ const adapter: IntegrationAdapter = {
     statuses.set(signInId, { type: "pending" });
     return signInId;
   },
-  signInStatus: async (signInId) => statuses.get(signInId) ?? { type: "pending" },
-  cancelSignIn: async (signInId) => { calls.push(`cancelMcpSignIn ${signInId}`); statuses.set(signInId, { type: "cancelled" }); },
-  reopenSignIn: async (signInId) => { calls.push(`reopenMcpSignIn ${signInId}`); },
+  signInStatus: async (signInId) => {
+    if (flaky > 0) { flaky--; throw new Error("connection closed"); }
+    forget(signInId);
+    return statuses.get(signInId) ?? { type: "pending" };
+  },
+  cancelSignIn: async (signInId) => { calls.push(`cancelMcpSignIn ${signInId}`); forget(signInId); statuses.set(signInId, { type: "cancelled" }); },
+  reopenSignIn: async (signInId) => { calls.push(`reopenMcpSignIn ${signInId}`); forget(signInId); },
   signOut: async (id) => { calls.push(`signOutMcpServer ${id}`); },
   askSignInAgain: async (id) => { calls.push(`askMcpSignInAgain ${id}`); },
 };
