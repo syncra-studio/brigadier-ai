@@ -372,7 +372,8 @@ export const ChangesCard: FC<{ requestIds: readonly string[]; merge?: TurnMerge 
   } else {
     actions = (
       <>
-        {undoable && !reviewing && (
+        {/* A reviewed turn keeps Discard (the design's reviewed tally), its files all decided. */}
+        {undoable && (
           <Button variant="ghost" size="sm" className={QUIET}
             data-slot="turn-diff-undo"
             data-held={held.length || undefined}

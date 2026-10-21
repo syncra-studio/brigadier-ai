@@ -5,7 +5,7 @@ import { Spinner } from "@/components/icons";
 
 /**
  * The Changes card's footer row that asks before a merge is reverted: what Revert does, then
- * Cancel and Revert; "Reverting…" once sent.
+ * Cancel and Revert, 4 apart; "Reverting…" once sent.
  */
 export function RevertConfirmRow({
   merged,
@@ -33,12 +33,12 @@ export function RevertConfirmRow({
         </span>
       </div>
       {reverting ? (
-        <span role="status" className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-label">
+        <span role="status" data-slot="merge-reverting" className="text-muted-foreground flex shrink-0 items-center gap-1.5 px-3 text-label">
           <Spinner className="size-icon-sm animate-spin" />
           Reverting…
         </span>
       ) : (
-        <>
+        <span data-slot="merge-revert-actions" className="flex shrink-0 items-center gap-1">
           <Button variant="ghost" size="sm" className={QUIET} onClick={onCancel}>Cancel</Button>
           <Button size="sm" className={PRIMARY}
             data-slot="merge-revert-go"
@@ -46,7 +46,7 @@ export function RevertConfirmRow({
           >
             {fileCount === 0 ? "Revert" : fileCount === 1 ? "Revert 1 file" : `Revert ${fileCount} files`}
           </Button>
-        </>
+        </span>
       )}
     </div>
   );

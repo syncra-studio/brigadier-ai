@@ -18,6 +18,7 @@ type Look = {
   captions: string[];
   thumb: number | null;
   fit: string | null;
+  edge: number | null;
 };
 type Seen = {
   error?: string;
@@ -49,6 +50,8 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   assert.deepEqual(running.captions, CAPTIONS);
   assert.equal(running.thumb, 178);
   assert.equal(running.fit, "50% 0%");
+  // The split Open pill has the design's 1 px edge.
+  assert.equal(running.edge, 1);
   // Folded: the header counts the screenshots.
   assert.deepEqual([cases.collapsed.count, cases.collapsed.captions.length, cases.collapsed.buttons.at(-1)], ["2 screenshots", 0, "Show the proofs"]);
   assert.equal(seen.unfolded, 2);
@@ -71,7 +74,8 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   // Its page count unread, the card leaves it out.
   assert.deepEqual([cases["pdf-uncounted"].target, cases["pdf-uncounted"].pages], ["out/invoice.pdf", null]);
   const run = cases["test-run"];
-  assert.deepEqual([run.title, run.standing, run.target, run.buttons], ["Test run", "15 passed", "npm test", ["Run again", "Fold the proofs"]]);
+  // Its own output counts as its log, as the design's Test run card has it.
+  assert.deepEqual([run.title, run.standing, run.target, run.count, run.buttons], ["Test run", "15 passed", "npm test", "1 log", ["Run again", "Fold the proofs"]]);
   assert.deepEqual(run.shell, [
     "$ npm test",
     "✓ rejects a title longer than 200 characters\n✓ accepts years 0000 to 0099\n✓ marks a past due date as overdue\n✓ a todo due today is not overdue\n15 passing (412ms)",

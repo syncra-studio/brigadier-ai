@@ -14,6 +14,9 @@
  *   session reads Merged): git's revert alone reads it Reverted.
  * - `branch`: not merged yet, on its branch two commits ahead: Discard and Merge into main.
  * - `merge-only`: a turn that merged with nothing of its own counted: the merge's card.
+ * - `waiting`: on its branch, three files waiting for review: Undo All, Keep All, Review Changes;
+ *   a waiting row's Undo and Keep sit before its counts.
+ * - `reviewed`: on its branch, every file reviewed (kept 2, undid 1): Discard and Merge into main.
  *
  * `?case=<id>` shows one case alone (for a screenshot); `?drive=1` writes what each case shows,
  * then clicks through it, to `<pre id="changes-card-result">` (ChangesCardRender.test.ts);
@@ -29,7 +32,7 @@ import { ChangesCard } from "@/app/conversation/ChangesCard";
 import { ViewContext } from "@/app/conversation/viewContext";
 import { driveFold } from "@/fixtures/cardFold";
 import { TooltipProvider } from "@/components/overlays";
-import type { Conversation, FileStat, MergeRecord, OrchestratorStep, Request, ReviewRun, UserRequest } from "@/ipc/generated";
+import type { Conversation, FileReview, FileStat, MergeRecord, OrchestratorStep, Request, ReviewRun, UserRequest } from "@/ipc/generated";
 import { emptyBoard, useBoard } from "@/state/board";
 import { sessionTabs } from "@/state/sessionTabs";
 import { useApp } from "@/state/store";
@@ -48,12 +51,16 @@ const FILES: FileStat[] = [
   { path: "README.md", insertions: 2, deletions: 0, binary: false },
 ];
 
-const request = (id: string, conversationId = CHAT): UserRequest =>
+const request = (id: string, conversationId = CHAT, review?: Record<string, FileReview>): UserRequest =>
   ({
     id, conversationId, preview: "Due dates", state: { type: "done" }, startedAtMs: 0, endedAtMs: 1, steeredInto: null, steeredAfter: null,
-    undo: null, worked: [], quotaWait: false,
+    undo: null, worked: [], quotaWait: false, review,
     changes: { settled: true, stat: { files: FILES, insertions: 88, deletions: 7 } },
   }) as unknown as UserRequest;
+
+/** The first three files' review: all waiting, or kept, kept and undone. */
+const WAITING: Record<string, FileReview> = Object.fromEntries(FILES.slice(0, 3).map((file) => [file.path, "pending"]));
+const REVIEWED: Record<string, FileReview> = { "public/index.html": "kept", "src/server.js": "kept", "src/store.js": "undone" };
 
 const record = (open: number): MergeRecord => ({
   head: "a1b2c3d4",
@@ -96,7 +103,11 @@ useBoard.setState({
   board: {
     ...emptyBoard(CHAT),
     loaded: true,
-    requests: Object.fromEntries(["finding", "collapsed", "all", "confirm", "reverting", "reverted", "thread-reverted", "branch"].map((id) => [id, request(id)])),
+    requests: {
+      ...Object.fromEntries(["finding", "collapsed", "all", "confirm", "reverting", "reverted", "thread-reverted", "branch"].map((id) => [id, request(id)])),
+      waiting: request("waiting", CHAT, WAITING),
+      reviewed: request("reviewed", CHAT, REVIEWED),
+    },
     reviews: { [review.id]: review },
     orchestratorSteps: [step(1, MERGES.finding), step(2, MERGES.clean), step(3, MERGES.reverted)],
   },
@@ -139,6 +150,8 @@ const CASES: { id: string; conversation: string; node: ReactNode }[] = [
   { id: "thread-reverted", conversation: CHAT, node: <ChangesCard requestIds={["thread-reverted"]} merge={own(MERGES.threadReverted)} /> },
   { id: "branch", conversation: CHAT, node: <ChangesCard requestIds={["branch"]} /> },
   { id: "merge-only", conversation: CHAT, node: <ChangesCard requestIds={[]} merge={own(MERGES.clean)} /> },
+  { id: "waiting", conversation: CHAT, node: <ChangesCard requestIds={["waiting"]} /> },
+  { id: "reviewed", conversation: CHAT, node: <ChangesCard requestIds={["reviewed"]} /> },
 ];
 
 const only = query.get("case");
@@ -185,6 +198,34 @@ function look(id: string) {
   };
 }
 
+/**
+ * The measures the design (app.pen ChangesCard parts) sets that a look of words can't show: Cancel
+ * and Revert 4 apart, "Reverting…" 12 in, a row's counts right-aligned, and a waiting row's Undo
+ * and Keep before its counts, shown (and the row washed) while the row has focus.
+ */
+const px = (value: string | undefined) => (value === undefined ? null : Number.parseFloat(value));
+async function measure() {
+  const actions = at("confirm")?.querySelector<HTMLElement>("[data-slot=merge-revert-actions]");
+  const reverting = at("reverting")?.querySelector<HTMLElement>("[data-slot=merge-reverting]");
+  const counts = [...(at("all")?.querySelectorAll<HTMLElement>("[data-slot=turn-diff-file-counts] > span") ?? [])].map((each) => getComputedStyle(each).textAlign);
+  const row = at("waiting")?.querySelector<HTMLElement>("[data-slot=turn-diff-file]");
+  const rowActions = row?.querySelector<HTMLElement>("[data-slot=turn-diff-review-actions]");
+  const rowCounts = row?.querySelector("[data-slot=turn-diff-file-counts]");
+  const before = !!rowActions && !!rowCounts && (rowActions.compareDocumentPosition(rowCounts) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  const idle = row ? getComputedStyle(row).backgroundColor : null;
+  row?.querySelector<HTMLButtonElement>("button")?.focus();
+  await frame();
+  const focused = { shown: rowActions ? getComputedStyle(rowActions).display : null, washed: !!row && getComputedStyle(row).backgroundColor !== idle };
+  (document.activeElement as HTMLElement | null)?.blur();
+  return {
+    confirmGap: px(actions ? getComputedStyle(actions).columnGap : undefined),
+    revertingInset: px(reverting ? getComputedStyle(reverting).paddingInlineStart : undefined),
+    counts: [...new Set(counts)],
+    reviewBeforeCounts: before,
+    focused,
+  };
+}
+
 const activeTab = () => {
   const tabs = sessionTabs(CHAT);
   const tab = tabs.tabs.find((each) => each.id === tabs.active);
@@ -209,6 +250,7 @@ async function reach() {
 async function drive() {
   const out: Record<string, unknown> = {};
   out.cases = Object.fromEntries(CASES.map((each) => [each.id, look(each.id)]));
+  out.measured = await measure();
   // A file row opens that file's part of the merge, in a tab.
   at("merged-finding")?.querySelector<HTMLButtonElement>("[data-slot=turn-diff-file] button")?.click();
   await wait(50);

@@ -20,7 +20,7 @@ export const OpenPill: FC<{ url: string; conversationId: string | null }> = ({ u
   return (
     <span
       data-slot="preview-open"
-      className={cn(buttonVariants({ variant: "outline", size: "sm" }), "rounded-nav bg-foreground/5 text-label gap-0 overflow-hidden px-0 font-normal")}
+      className={cn(buttonVariants({ variant: "outline", size: "sm" }), "rounded-nav border-border bg-foreground/5 text-label gap-0 overflow-hidden border px-0 font-normal")}
     >
       <button type="button" onClick={open} title={url} className={cn(half, "gap-1.5 ps-3 pe-2")}>
         <ArrowUpRight aria-hidden className="size-icon-sm" />

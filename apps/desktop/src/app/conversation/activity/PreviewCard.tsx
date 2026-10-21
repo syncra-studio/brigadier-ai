@@ -9,7 +9,7 @@ import { Proofs } from "@/app/conversation/activity/Proofs";
 import { ShellBox } from "@/app/conversation/activity/StepDetail";
 import { useViewConversation } from "@/app/conversation/viewContext";
 import { Button, RoundBadge } from "@/components/controls";
-import { ArrowRotateCw, ArrowUpRight, ChevronDown, ChevronUp, Document, Globe, ImageSquare, Mobile, Play, Terminal } from "@/components/icons";
+import { ArrowUpRight, ChevronDown, ChevronUp, Document, Globe, ImageSquare, Mobile, Play, Reload, Terminal } from "@/components/icons";
 import { RowText, SettingsCard } from "@/components/shared";
 import type { Preview, PreviewKind } from "@/ipc/generated";
 import { openPdf, openSimulator } from "@/ipc/client";
@@ -168,7 +168,8 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
   const where = takenWhere(proofs.map(({ proof }) => proof));
   const logsOnly = proofs.length > 0 && proofs.every(({ proof }) => printed(proof));
   const lastLines = output?.trimEnd().split("\n").slice(-LAST_LINES).join("\n") ?? "";
-  const body = proofs.length > 0 || (ownLog && lastLines !== "");
+  const shownLog = ownLog && lastLines !== "";
+  const body = proofs.length > 0 || shownLog;
 
   let action: ReactNode = null;
   if (record && record.state.type === "paused" && viewed) {
@@ -183,7 +184,7 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
     const again = record.kind === "test";
     action = (
       <Button variant="soft" size="sm" data-slot="preview-start" onClick={() => void restartPreview(viewed, record.id).catch(failed)}>
-        {again ? <ArrowRotateCw aria-hidden className="size-icon-sm" /> : <Play aria-hidden className="size-icon-sm" />}
+        {again ? <Reload aria-hidden className="size-icon-sm" /> : <Play aria-hidden className="size-icon-sm" />}
         {again ? "Run again" : "Start again"}
       </Button>
     );
@@ -234,11 +235,13 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
       </span>,
     );
   }
-  // Folded, a card of proofs alone or another kind of preview, the header counts them.
-  if (counted && (!open || !url || preview)) {
+  // Folded, a card of proofs alone or another kind of preview, the header counts them; a test
+  // run's own output it shows counts as its log.
+  const headerCount = shownLog && !counted ? "1 log" : counted;
+  if (headerCount && (!open || !url || preview)) {
     line.push(
       <span key="count" data-slot="preview-count" className="text-muted-foreground shrink-0">
-        {counted}
+        {headerCount}
       </span>,
     );
   }
@@ -288,7 +291,7 @@ export function PreviewCard({ url: named, preview = null, steps, session }: { ur
                 <span data-slot="preview-proofs-count" className="text-muted-foreground">{counted}</span>
               </div>
             )}
-            {ownLog && lastLines && preview && (
+            {shownLog && preview && (
               <div data-slot="preview-run-output" className="flex flex-col gap-2">
                 <div className="flex items-center gap-2 text-xs">
                   <span className="text-foreground/65 font-medium">Test output</span>
