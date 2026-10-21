@@ -34,6 +34,7 @@ import type {
   RawEntry,
   ReviewRun,
   RunState,
+  SessionHeadline,
   StreamingMessage,
   ThinkingSegment,
   Task,
@@ -91,6 +92,8 @@ export type Board = {
   integratedChecks: Record<string, IntegratedCheck>;
   /** The thread's run / run_check commands still going after a minute, owned by the session, by id. */
   backgroundRuns: Record<string, BackgroundRun>;
+  /** What the session is doing now, in the thread's words (set_headline); null once the user wrote since. */
+  headline: SessionHeadline | null;
   /** The ended previews and runs the user dismissed or restarted from the Background rows (Q94), by id. */
   backgroundCleared: string[];
   /** The MCP servers of each agent whose CLI runs, by `mcpAgentKey` (its own model's, or a worker's task id). */
@@ -372,6 +375,7 @@ export function emptyBoard(conversationId: string): Board {
     previews: {},
     integratedChecks: {},
     backgroundRuns: {},
+    headline: null,
     backgroundCleared: [],
     mcpServers: {},
     overnight: {},
@@ -424,6 +428,7 @@ const REPLAYED = new Set<EventEnvelope["event"]["type"]>([
   "planUpdated",
   "reviewUpdated",
   "integratedCheckUpdated",
+  "headlineSet",
   "mcpServersUpdated",
   "previewUpdated",
   "previewsCleared",
@@ -492,6 +497,8 @@ export function boardFromView(
     integratedChecks: byId(view.integratedChecks ?? []),
     // Nor one from before the thread's long commands went to the background.
     backgroundRuns: byId(view.backgroundRuns ?? []),
+    // Nor one from before the thread wrote a headline.
+    headline: view.headline ?? null,
     backgroundCleared: view.backgroundCleared ?? [],
     // Nor one from before agents told their MCP servers.
     mcpServers: Object.fromEntries((view.mcpServers ?? []).map((agent) => [mcpAgentKey(agent.taskId), agent])),
@@ -701,6 +708,8 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
       return { ...board, integratedChecks: { ...board.integratedChecks, [event.check.id]: event.check } };
     case "backgroundRunUpdated":
       return { ...board, backgroundRuns: { ...board.backgroundRuns, [event.run.id]: event.run } };
+    case "headlineSet":
+      return { ...board, headline: event.headline };
     case "mcpServersUpdated": {
       const key = mcpAgentKey(event.taskId);
       const { [key]: _gone, ...others } = board.mcpServers;

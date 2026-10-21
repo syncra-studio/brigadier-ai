@@ -1862,6 +1862,19 @@ pub struct BackgroundRun {
     pub name: Option<String>,
 }
 
+/// What the session is doing now, in the thread's own words (`set_headline`): the Job card's
+/// headline and one detail line under it. It stays until the user's next message or the
+/// thread's next headline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionHeadline {
+    /// "Starting the dev server".
+    pub text: String,
+    /// One line under it: "Next: open the window".
+    pub detail: Option<String>,
+    pub at_ms: i64,
+}
+
 /// Where a background run stands.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(

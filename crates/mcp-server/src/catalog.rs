@@ -12,8 +12,8 @@ use brigadier_core::tools::{
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, ReadTerminal,
     RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, ReviewCandidate,
     ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory,
-    SaveReport, SearchTranscript, SettleStep, SettleWait, ShowSession, StartPreview, StartVerifier,
-    StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
+    SaveReport, SearchTranscript, SetHeadline, SettleStep, SettleWait, ShowSession, StartPreview,
+    StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
     SuggestFullAccess, SuggestSetting, TabChatCall, TabTools, TerminalRun, ThreadRunCheck,
     ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
@@ -320,6 +320,12 @@ your notes are no check, and without checked it shows as unverified, never as cl
 an open one that loses data, breaks the build or a security boundary. Brigadier only stores and \
 shows what you record: the review line counts your open and unverified ones, and finish_session \
 lists them for the user. Record again when a status changes.";
+
+const SET_HEADLINE: &str = "Say what the session is doing now, for the user's Job card: \
+`headline` in a few plain words (\"Starting the dev server\", \"The build failed\", \"It's up \
+again\"), and `detail`, one short line under it, usually what comes next (\"Next: open the \
+window\"). Call it when what you are doing changes, not for every step; it replaces the last one \
+and stays until the user's next message. Returns at once.";
 
 const LIST_SESSIONS: &str = "List the other sessions of your projects that message_session \
 can reach, newest activity first: each one's id, title, project, state (working, idle, \
@@ -911,6 +917,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             OFFER_SESSION,
             input_schema::<OfferSession>(),
         ),
+        tool("set_headline", SET_HEADLINE, input_schema::<SetHeadline>()),
         tool("list_tasks", LIST_TASKS, no_arguments()),
         tool("settle_step", SETTLE_STEP, input_schema::<SettleStep>()),
         tool("end_run", END_RUN, input_schema::<EndRun>()),
@@ -1053,6 +1060,7 @@ pub const THREAD_ALWAYS_LOADED: &[&str] = &[
     "read_artifact",
     "ask_user",
     "note_for_user",
+    "set_headline",
     "query_brain",
     "remember",
     "code_search",
@@ -1305,6 +1313,7 @@ pub fn parse_call(
                 "suggest_setting" => OrchestratorCall::SuggestSetting(args(name, arguments)?),
                 "offer_feedback" => OrchestratorCall::OfferFeedback(args(name, arguments)?),
                 "offer_session" => OrchestratorCall::OfferSession(args(name, arguments)?),
+                "set_headline" => OrchestratorCall::SetHeadline(args(name, arguments)?),
                 "list_tasks" => OrchestratorCall::ListTasks,
                 "settle_step" => OrchestratorCall::SettleStep(args(name, arguments)?),
                 "end_run" => OrchestratorCall::EndRun(args(name, arguments)?),

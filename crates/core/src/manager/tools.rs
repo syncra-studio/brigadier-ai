@@ -633,6 +633,7 @@ impl SessionManager {
             OrchestratorCall::OfferSession(args) => {
                 crate::heap(|| self.offer_session(id, args)).await
             }
+            OrchestratorCall::SetHeadline(args) => self.set_headline(id, args).await,
             OrchestratorCall::SettleStep(args) => crate::heap(|| self.settle_step(id, args)).await,
             OrchestratorCall::EndRun(args) => crate::heap(|| self.end_run_now(id, args)).await,
             OrchestratorCall::ProposeOvernight(args) => {
@@ -1077,6 +1078,37 @@ impl SessionManager {
         }
     }
 
+    /// `set_headline`: the session's headline and its one detail line, stored and sent as an
+    /// event for the Job card. The user's next message clears it.
+    pub(crate) async fn set_headline(
+        &self,
+        id: &ConversationId,
+        args: crate::tools::SetHeadline,
+    ) -> Result<String> {
+        let text = one_line(&args.headline, HEADLINE_MAX);
+        if text.is_empty() {
+            return Err(Error::Invalid("`headline` is empty".into()));
+        }
+        let detail = args
+            .detail
+            .map(|detail| one_line(&detail, HEADLINE_MAX * 2))
+            .filter(|detail| !detail.is_empty());
+        self.core
+            .record_conversation(
+                id,
+                vec![DomainEvent::HeadlineSet {
+                    conversation_id: id.clone(),
+                    headline: Some(crate::work::SessionHeadline {
+                        text,
+                        detail,
+                        at_ms: crate::now_ms(),
+                    }),
+                }],
+            )
+            .await?;
+        Ok("Headline set.".into())
+    }
+
     /// `suggest_full_access`: a notice in the thread, under the request the orchestrator serves,
     /// with a button that switches the session to Full access. Once per request, and only where
     /// the switch would change something: a session below Full access, in a trusted folder,
@@ -1494,6 +1526,18 @@ impl SessionManager {
 }
 
 /// The orchestrator's provider/model/effort override.
+/// The most a headline may hold; its detail line holds twice that.
+const HEADLINE_MAX: usize = 80;
+
+/// `text` on one line, its whitespace collapsed, cut at `max` characters.
+fn one_line(text: &str, max: usize) -> String {
+    let joined = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match joined.char_indices().nth(max) {
+        Some((at, _)) => format!("{}…", joined[..at].trim_end()),
+        None => joined,
+    }
+}
+
 fn pin(
     provider: Option<&str>,
     model: Option<String>,

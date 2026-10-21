@@ -1418,6 +1418,9 @@ pub struct ConversationView {
     /// The thread's commands that went to the background, oldest first.
     #[serde(default)]
     pub background_runs: Vec<crate::work::BackgroundRun>,
+    /// What the session is doing now, in the thread's words; none once the user wrote since.
+    #[serde(default)]
+    pub headline: Option<crate::work::SessionHeadline>,
     /// The ended previews and background runs the user dismissed or restarted from the
     /// Background rows (Q94), by id.
     #[serde(default)]
@@ -2456,6 +2459,12 @@ pub enum DomainEvent {
     IntegratedCheckUpdated {
         check: crate::work::IntegratedCheck,
     },
+    /// The thread set the session's headline (`set_headline`), or it was cleared (none) by
+    /// the user's next message.
+    HeadlineSet {
+        conversation_id: ConversationId,
+        headline: Option<crate::work::SessionHeadline>,
+    },
     /// A command of the thread's went to the background, or ended there (full snapshot).
     BackgroundRunUpdated {
         run: crate::work::BackgroundRun,
@@ -2755,6 +2764,7 @@ impl DomainEvent {
             Self::ReviewUpdated { .. } => "review.updated",
             Self::IntegratedCheckUpdated { .. } => "integrated_check.updated",
             Self::BackgroundRunUpdated { .. } => "background_run.updated",
+            Self::HeadlineSet { .. } => "headline.set",
             Self::McpServersUpdated { .. } => "mcp_servers.updated",
             Self::ThreadCommitsSeen { .. } => "thread.seen",
             Self::UnreviewedChanged { .. } => "thread.unreviewed",

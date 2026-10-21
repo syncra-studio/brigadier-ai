@@ -1256,6 +1256,17 @@ pub struct OfferSession {
     pub title: Option<String>,
 }
 
+/// `set_headline`: what the session is doing now, in the thread's words, for the Job card.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetHeadline {
+    /// A few plain words on what happens now ("Starting the dev server", "The build failed").
+    pub headline: String,
+    /// One short line under it, usually what comes next ("Next: open the window").
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
 /// `settle_step`: during an overnight run, the thread settles a step of the run's plan once it
 /// has judged the step's whole scope and every "done when" (its own edits too).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1367,6 +1378,7 @@ pub enum OrchestratorCall {
     SuggestSetting(SuggestSetting),
     OfferFeedback(OfferFeedback),
     OfferSession(OfferSession),
+    SetHeadline(SetHeadline),
     ListTasks,
     SettleStep(SettleStep),
     EndRun(EndRun),
@@ -1426,6 +1438,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "suggest_full_access",
     "offer_feedback",
     "offer_session",
+    "set_headline",
     "list_tasks",
     "settle_step",
     "end_run",
@@ -1512,6 +1525,7 @@ impl OrchestratorCall {
             Self::SuggestSetting(_) => "suggest_setting",
             Self::OfferFeedback(_) => "offer_feedback",
             Self::OfferSession(_) => "offer_session",
+            Self::SetHeadline(_) => "set_headline",
             Self::ListTasks => "list_tasks",
             Self::SettleStep(_) => "settle_step",
             Self::EndRun(_) => "end_run",

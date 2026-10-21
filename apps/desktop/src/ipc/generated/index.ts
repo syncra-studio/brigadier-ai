@@ -423,6 +423,7 @@ export type { SearchRange } from "./SearchRange";
 export type { SearchUpdate } from "./SearchUpdate";
 export type { SendOutcome } from "./SendOutcome";
 export type { ServerFrame } from "./ServerFrame";
+export type { SessionHeadline } from "./SessionHeadline";
 export type { SessionPhase } from "./SessionPhase";
 export type { SettingChange } from "./SettingChange";
 export type { Settings } from "./Settings";

@@ -208,6 +208,8 @@ pub(crate) struct Board {
     pub(crate) integrated_checks: HashMap<String, crate::work::IntegratedCheck>,
     /// The thread's commands that went to the background, by id.
     pub(crate) background_runs: HashMap<String, crate::work::BackgroundRun>,
+    /// The thread's headline for the session now (`set_headline`).
+    pub(crate) headline: Option<crate::work::SessionHeadline>,
     /// The MCP servers of each of its agents whose CLI runs (by task id; `None`: its own
     /// model's), with the daemon process that heard them ([`crate::boot_id`]).
     pub(crate) mcp_servers: HashMap<Option<String>, (String, crate::model::AgentMcpServers)>,
@@ -601,6 +603,9 @@ impl Board {
             }
             DomainEvent::BackgroundRunUpdated { run } => {
                 self.background_runs.insert(run.id.clone(), run.clone());
+            }
+            DomainEvent::HeadlineSet { headline, .. } => {
+                self.headline = headline.clone();
             }
             DomainEvent::McpServersUpdated {
                 task_id,

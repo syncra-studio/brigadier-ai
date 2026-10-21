@@ -389,6 +389,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "stop_merge" => ToolCall::Orchestrator(O::StopMerge(arg(name, args))),
         "propose_plan" => ToolCall::Orchestrator(O::ProposePlan(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
+        "set_headline" => ToolCall::Orchestrator(O::SetHeadline(arg(name, args))),
         "record_findings" => ToolCall::Orchestrator(O::RecordFindings(arg(name, args))),
         "suggest_full_access" => ToolCall::Orchestrator(O::SuggestFullAccess(arg(name, args))),
         "suggest_setting" => ToolCall::Orchestrator(O::SuggestSetting(arg(name, args))),
@@ -2066,8 +2067,9 @@ impl Flow {
 #[cfg(unix)]
 mod accounts_tests;
 #[cfg(unix)]
-mod answer_tests;
+mod agent_tools_tests;
 #[cfg(unix)]
+mod answer_tests;
 mod app_state_tests;
 #[cfg(unix)]
 mod auto_merge_tests;
