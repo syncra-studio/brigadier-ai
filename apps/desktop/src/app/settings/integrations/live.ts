@@ -38,23 +38,6 @@ function source(label: string): IntegrationSource {
   return SOURCES[label] ?? "ClaudeUser";
 }
 
-/** The config file a source reads, with the project's real folder; a plugin's own file. */
-function sourceFile(kind: IntegrationSource, project: string | null, file: string | null): string {
-  const root = project ? shortPath(project) : "";
-  switch (kind) {
-    case "ClaudePlugin":
-    case "CodexPlugin": return file ? shortPath(file) : "";
-    case "ClaudeUser":
-    case "ClaudeLocal": return "~/.claude.json";
-    case "ClaudeProjectFile": return `${root}/.mcp.json`;
-    case "CodexUser": return "~/.codex/config.toml";
-    case "CodexProject": return `${root}/.codex/config.toml`;
-    case "Desktop": return "~/Library/Application Support/Claude/claude_desktop_config.json";
-    case "CursorUser": return "~/.cursor/mcp.json";
-    case "CursorProject": return `${root}/.cursor/mcp.json`;
-  }
-}
-
 const agentOf = (provider: ProviderKind): IntegrationAgent => provider;
 
 /** How an agent's workers are signed in; one sign-in Brigadier can't reuse yet is needed. */
@@ -108,7 +91,7 @@ function server(members: McpServerView[], projects: Project[]): IntegrationServe
     signIn: states,
     nativeAgents: agents,
     canSwitchOff: true,
-    sourceFiles: members.map((member) => ({ source: source(member.source), path: sourceFile(source(member.source), member.project, member.file), ...(member.plugin ? { plugin: member.plugin } : {}) })),
+    sourceFiles: members.map((member) => ({ source: source(member.source), path: shortPath(member.file), ...(member.plugin ? { plugin: member.plugin } : {}) })),
   };
 }
 
@@ -202,7 +185,7 @@ function pathsOf(view: IntegrationsView): Map<string, string> {
     for (const location of item.locations) add(location.path);
   }
   for (const item of view.problems) add(item.file);
-  for (const item of view.servers) if (item.file) add(item.file);
+  for (const item of view.servers) add(item.file);
   return paths;
 }
 

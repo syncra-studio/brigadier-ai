@@ -1227,7 +1227,7 @@ fn claude_plugin_layout_and_servers() {
     let tool = catalog.server("claude:plugin:full@market:tool").unwrap();
     assert_eq!(tool.source, Source::ClaudePlugin);
     assert_eq!(tool.native_name(), "plugin_full_tool");
-    assert_eq!(tool.file.as_deref(), Some(full.join(".mcp.json").as_path()));
+    assert_eq!(tool.file, full.join(".mcp.json"));
     let (command, args, ..) = stdio(tool);
     assert_eq!(command, full.join("bin/tool").display().to_string());
     assert_eq!(args, ["--team", "blue"]);

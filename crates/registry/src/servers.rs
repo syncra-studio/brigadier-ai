@@ -324,7 +324,13 @@ fn json_servers(
             problem(name, None, "It has no command or url".into());
             continue;
         };
-        servers.push(server(name, origin.source, origin.project, transport));
+        servers.push(server(
+            name,
+            origin.source,
+            origin.project,
+            origin.file,
+            transport,
+        ));
     }
     servers
 }
@@ -437,13 +443,20 @@ fn toml_servers(
             name,
             source,
             layer.map(|(project, _)| project),
+            file,
             transport,
         ));
     }
     servers
 }
 
-fn server(name: &str, source: Source, project: Option<&Path>, transport: Transport) -> Server {
+fn server(
+    name: &str,
+    source: Source,
+    project: Option<&Path>,
+    file: &Path,
+    transport: Transport,
+) -> Server {
     let signs_in = matches!(&transport, Transport::Http { headers, .. }
         if !headers.iter().any(|(header, _)| header.eq_ignore_ascii_case("authorization")));
     Server {
@@ -454,7 +467,7 @@ fn server(name: &str, source: Source, project: Option<&Path>, transport: Transpo
         transport,
         signs_in,
         plugin: None,
-        file: None,
+        file: file.to_owned(),
     }
 }
 
@@ -519,7 +532,7 @@ pub(crate) fn plugin(
         server.id = format!("{}:{}", plugin.prefix(), server.name);
         server.project.clone_from(&plugin.project);
         server.plugin = Some(plugin.clone());
-        server.file = Some(file.clone());
+        server.file.clone_from(&file);
     }
     for problem in &mut problems[start..] {
         problem.id = format!("{}:{}", plugin.prefix(), problem.name);

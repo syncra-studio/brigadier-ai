@@ -29,9 +29,9 @@ project: string | null,
  */
 plugin: string | null, 
 /**
- * The file it is configured in, for a plugin's.
+ * The file it is configured in.
  */
-file: string | null, transport: TransportView, 
+file: string, transport: TransportView, 
 /**
  * A remote server that signs in with OAuth: how each agent's workers in the project are
  * signed in to it. `None`: it doesn't sign in.

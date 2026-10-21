@@ -82,8 +82,8 @@ pub struct McpServerView {
     pub project: Option<String>,
     /// The plugin it comes with, as its agent's switch names it (`<plugin>@<marketplace>`).
     pub plugin: Option<String>,
-    /// The file it is configured in, for a plugin's.
-    pub file: Option<String>,
+    /// The file it is configured in.
+    pub file: String,
     pub transport: TransportView,
     /// A remote server that signs in with OAuth: how each agent's workers in the project are
     /// signed in to it. `None`: it doesn't sign in.
@@ -261,7 +261,7 @@ pub(crate) fn view(
             source: server.source.label().to_owned(),
             project: server.project.as_ref().map(|p| p.display().to_string()),
             plugin: server.plugin.as_ref().map(|plugin| plugin.id.clone()),
-            file: server.file.as_ref().map(|file| file.display().to_string()),
+            file: server.file.display().to_string(),
             transport: match &server.transport {
                 Transport::Stdio {
                     command, args, env, ..
@@ -1062,8 +1062,8 @@ mod tests {
         assert_eq!(server.source, "Claude Code (plugin)");
         assert_eq!(server.plugin.as_deref(), Some("docs@market"));
         assert_eq!(
-            server.file.as_deref(),
-            Some(claude.join(".mcp.json").display().to_string().as_str())
+            server.file,
+            claude.join(".mcp.json").display().to_string()
         );
         let _ = std::fs::remove_dir_all(&home);
     }

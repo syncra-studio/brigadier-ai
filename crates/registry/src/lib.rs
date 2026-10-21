@@ -239,8 +239,8 @@ pub struct Server {
     pub signs_in: bool,
     /// The plugin it comes with ([`Source::ClaudePlugin`], [`Source::CodexPlugin`]).
     pub plugin: Option<Plugin>,
-    /// The file it is configured in, for a plugin's (its `.mcp.json` or manifest).
-    pub file: Option<PathBuf>,
+    /// The file it is configured in (a plugin's `.mcp.json` or manifest).
+    pub file: PathBuf,
 }
 
 impl Server {
@@ -618,7 +618,12 @@ impl Registry {
                 dirs.extend(plugin.root.parent().map(Path::to_owned));
             }
         }
-        files.extend(user.servers.iter().filter_map(|server| server.file.clone()));
+        files.extend(
+            user.servers
+                .iter()
+                .filter(|server| server.plugin.is_some())
+                .map(|server| server.file.clone()),
+        );
         // A skill reached through a symlink: its own folder, wherever it is.
         for skill in &user.skills {
             if !trees.iter().any(|tree| skill.dir.starts_with(tree)) {
