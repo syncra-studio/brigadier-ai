@@ -496,8 +496,10 @@ async fn settings_never_asks_and_reports_a_reusable_sign_in_only_once_read() {
         .unwrap();
     let quiet = auth.prober(&roots, catalog.codex_store, true);
     assert_eq!(state(notion, &quiet), SignIn::InBrigadier);
+    // A Claude worker's own entry can't serve once read, so Brigadier's serves it too.
+    let asking = auth.prober(&roots, catalog.codex_store, false);
     assert_eq!(
-        catalog.sign_in(notion, &session(Agent::Claude), &quiet),
+        catalog.sign_in(notion, &session(Agent::Claude), &asking),
         Some(SignIn::InBrigadier)
     );
 }
