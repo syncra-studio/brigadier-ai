@@ -27,6 +27,7 @@ export type SettingsPageId =
   | "general"
   | "configuration"
   | "memory"
+  | "plugins"
   | "providers"
   | "routing"
   | "git"
