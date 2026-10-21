@@ -8,6 +8,7 @@ export * from "./input";
 export * from "./kbd";
 export * from "./round-badge";
 export * from "./segmented";
+export * from "./send-button";
 export * from "./settings-select";
 export * from "./slot";
 export * from "./switch";

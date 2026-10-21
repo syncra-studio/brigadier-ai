@@ -115,7 +115,7 @@ table is the current one.
 | Primitives · Controls | `Button/Primary`, `Secondary`, `Outline`, `Ghost`, `Destructive`, `Link`, each `/xs` and `/sm` | `components/controls/button.tsx` | `Button` (`variant` default…link, `size` default/xs/sm) | |
 | Primitives · Controls | — | `components/controls/button.tsx` | `Button` variants `soft`, `soft-destructive`, `link-blue`, sizes `lg`, `inline` | code only (`soft` is drawn as SettingsButton, Shared app parts) |
 | Primitives · Controls | `Icon Button`, `Icon Button/xs`, `/sm`, `/lg` | `components/controls/tooltip-icon-button.tsx` | `TooltipIconButton` (`size`, `look` ghost/toolbar/strip, `pressed`, `dot`) | sizes come from `Button` `icon-*` |
-| Primitives · Controls | `Send Button` | `app/conversation/Composer.tsx` | `SendControls` (file-local) | in app |
+| Primitives · Controls | `Send Button` | `components/controls/send-button.tsx` | `SendButton` (`state`, `background`) | |
 | Primitives · Controls | `Input` | `components/controls/input.tsx` | `Input` | |
 | Primitives · Controls | `Settings Select` | `components/controls/settings-select.tsx` | `SettingsSelect`, `SettingsSelectTrigger`, `selectTrigger` (class string) | |
 | Primitives · Controls | `Switch/On`, `Switch/Off` | `components/controls/switch.tsx` | `Switch` | |
@@ -254,6 +254,18 @@ table is the current one.
 | Settings (settings.pen) | `#632 BrowserSiteSettings › inline: site row` | `app/settings/SiteRow.tsx` | `SiteRow` | |
 | Settings (settings.pen) | `#634 ClearForm` | `app/settings/ClearForm.tsx` | `ClearForm` | |
 | Settings (settings.pen) | `#635 ClearForm › inline: tick row` | `app/settings/TickRow.tsx` | `TickRow` | |
+| Conversation (app.pen) | `#289 ConversationComposer › inline: composer card` | `app/conversation/ComposerCard.tsx` | `ComposerCard` | |
+| Conversation (app.pen) | `#290 ComposerInput` | `app/conversation/ComposerInput.tsx` | `ComposerInput` | |
+| Conversation (app.pen) | `#292 ComposerContextRing` | `app/conversation/ComposerContextRing.tsx` | `ComposerContextRing` | |
+| Conversation (app.pen) | `#293 FullAccessNotice` | `app/conversation/FullAccessNotice.tsx` | `FullAccessNotice` | |
+| Conversation (app.pen) | `#294 UtilityBar` | `app/conversation/UtilityBar.tsx` | `UtilityBar` | |
+| Conversation (app.pen) | `#295 SendControls` | `app/conversation/SendControls.tsx` | `SendControls` | the button itself is `SendButton` (Primitives · Controls) |
+| Conversation (app.pen) | `#296 DictationNote` | `app/conversation/DictationNote.tsx` | `DictationNote` | |
+| Conversation (app.pen) | `#297 DictateButton` | `app/conversation/DictateButton.tsx` | `DictateButton` | |
+| Conversation (app.pen) | `#298 ComposerFooter` | `app/conversation/ComposerFooter.tsx` | `ComposerFooter` | |
+| Conversation (app.pen) | `#299 DictationBar` | `app/conversation/DictationBar.tsx` | `DictationBar` | |
+| Conversation (app.pen) | `#300 DictationBar › inline: waveform` | `app/conversation/DictationWaveform.tsx` | `DictationWaveform` | |
+| Conversation (app.pen) | `#301 ComposerHint` | `app/conversation/ComposerHint.tsx` | `ComposerHint` | |
 
 ## Icons
 

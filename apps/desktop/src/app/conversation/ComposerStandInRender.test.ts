@@ -8,7 +8,7 @@ import { createServer } from "vite";
 test("the field shown while the composer loads turns off the system's text substitutions, as the composer does", async () => {
   const server = await createServer({ server: { middlewareMode: true, ws: false }, appType: "custom", ssr: { noExternal: ["@openai/apps-sdk-ui"] } });
   try {
-    const { ComposerStandIn, keepTypedSpace } = await server.ssrLoadModule("/src/app/conversation/Composer.tsx");
+    const { ComposerStandIn, keepTypedSpace } = await server.ssrLoadModule("/src/app/conversation/ComposerStandIn.tsx");
     function Page() {
       const runtime = useLocalRuntime({ run: async () => ({ content: [] }) });
       const field = React.createElement(ComposerPrimitive.Root, null, React.createElement(ComposerStandIn, { placeholder: "Ask" }));
