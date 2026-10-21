@@ -331,6 +331,7 @@ jobs:
             os: windows-latest
             tauri-args: --bundles nsis
             app: ../dev-drive/target/release/brigadier.exe
+            bundle: ../dev-drive/target/release/bundle
           - name: Linux
             os: ubuntu-24.04
             tauri-args: --bundles deb
@@ -375,8 +376,59 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Windows updater settings
+        id: updater
+        if: runner.os == 'Windows'
+        # As the macOS job's nightly settings: with the updater key the installer is built with
+        # the same version scheme, feed and public key, and signed for the updater. Without it
+        # it is built unsigned. Nothing from Windows is published: the publish and release jobs
+        # take the macOS files only, as the installer has no Authenticode signature yet.
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          UPDATER_PUBKEY: ${{ secrets.UPDATER_PUBKEY }}
+          RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          base="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] || [ -z "$UPDATER_PUBKEY" ]; then
+            echo "::notice::Windows installer built without updater signing; missing secrets"
+            printf '%s\n' signed=false "version=$base" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          stamp="$(date -u +%Y%m%d%H%M)"
+          if [ "$RELEASE" = true ]; then
+            version="${GITHUB_REF_NAME#v}"
+            case "$version" in
+              "$base" | "$base"-*) ;;
+              *) echo "::error::Tag $GITHUB_REF_NAME doesn't match the app's version $base"; exit 1 ;;
+            esac
+            feed="https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.json"
+          else
+            version="$base-nightly.$stamp"
+            feed="https://github.com/$GITHUB_REPOSITORY/releases/download/nightly/latest.json"
+          fi
+          jq -n --arg version "$version" --arg pubkey "$UPDATER_PUBKEY" --arg feed "$feed" '{
+              version: $version,
+              bundle: { createUpdaterArtifacts: true },
+              plugins: { updater: { pubkey: $pubkey, endpoints: [$feed], requireSignedVersion: true } }
+            }' > "$RUNNER_TEMP/nightly.conf.json"
+          cat "$RUNNER_TEMP/nightly.conf.json"
+          printf '%s\n' signed=true "version=$version" >> "$GITHUB_OUTPUT"
       - name: Build the app bundle
-        run: pnpm tauri build ${{ matrix.tauri-args }} -- -p brigadier-desktop -p brigadier-daemon
+        # Empty variables must not be exported: the bundler treats a set-but-empty key as one to use.
+        env:
+          SIGNED: ${{ steps.updater.outputs.signed }}
+          SECRET_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          SECRET_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          args=(${{ matrix.tauri-args }})
+          if [ "$SIGNED" = true ]; then
+            for name in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
+              secret="SECRET_$name"
+              export "$name=${!secret}"
+            done
+            args+=(--config "$RUNNER_TEMP/nightly.conf.json")
+          fi
+          pnpm tauri build "${args[@]}" -- -p brigadier-desktop -p brigadier-daemon
       - name: Launch smoke check
         run: tools/ci/smoke.sh "${{ matrix.app }}"
       - name: Smoke report
@@ -393,6 +445,38 @@ jobs:
           elif pgrep -fl brigadierd; then
             echo "brigadierd is still running"; exit 1
           fi
+      - name: Windows installer files
+        if: runner.os == 'Windows'
+        # Named as a release names it, with its checksum, and with the updater's signature and
+        # feed entry when it was signed for the updater.
+        env:
+          SIGNED: ${{ steps.updater.outputs.signed }}
+          VERSION: ${{ steps.updater.outputs.version }}
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          out="$RUNNER_TEMP/installer"
+          mkdir -p "$out"
+          setup="$(ls "$BUNDLE"/nsis/*-setup.exe)"
+          name="Brigadier-$VERSION-x64-setup.exe"
+          cp "$setup" "$out/$name"
+          if [ "$SIGNED" = true ]; then
+            cp "$setup.sig" "$out/$name.sig"
+            jq -n --arg version "$VERSION" --rawfile signature "$setup.sig" --arg name "$name" '{
+                version: $version,
+                platforms: { "windows-x86_64": { signature: $signature, url: $name } }
+              }' > "$out/latest-windows.json"
+          fi
+          # As shasum writes it: two spaces, without the binary-mode star Git Bash's sha256sum adds.
+          (cd "$out" && printf '%s  %s\n' "$(sha256sum "$name" | cut -d ' ' -f 1)" "$name" > SHA256SUMS)
+          cat "$out/SHA256SUMS"
+          ls -l "$out"
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows'
+        with:
+          name: installer-Windows
+          path: ${{ runner.temp }}/installer
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v7
         if: always()
         with:
