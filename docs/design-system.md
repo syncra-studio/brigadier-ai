@@ -133,7 +133,7 @@ table is the current one.
 | Primitives · Controls | `RoundBadge/Plain`, `RoundBadge/Done` | `components/controls/round-badge.tsx` | `RoundBadge` (`tone`) | |
 | Primitives · Controls | `Dot` | `components/shared/state-dot.tsx` | `StateDot` (`color`) | |
 | Primitives · Controls | `ErrorLine` | `app/shell/dialogs/fields.tsx` | `ErrorLine` | in app |
-| Primitives · Controls | `Nav Row` | `app/shell/sidebar/nav.tsx` | `navRow` (class string) | in app |
+| Primitives · Controls | `Nav Row` | `components/controls/nav-row.tsx` | `NavRow` | |
 | Primitives · Menus, popovers & dialogs | `Menu`, `Menu Item`, `Menu Item/Check`, `Menu Item/Radio`, `Menu Item/Sub`, `Menu Label`, `Menu Separator` | `components/overlays/dropdown-menu.tsx` | `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuCheckboxItem`, `DropdownMenuRadioItem`, `DropdownMenuSubTrigger`, `DropdownMenuLabel` (`variant` caps/heading), `DropdownMenuSeparator` | |
 | Primitives · Menus, popovers & dialogs | — | `components/overlays/dropdown-menu.tsx` | `MenuRow` | code only (the two-line menu row) |
 | Primitives · Menus, popovers & dialogs | — | `components/overlays/context-menu.tsx` | `ContextMenu*` | code only (same look as the menu) |
@@ -149,7 +149,7 @@ table is the current one.
 | Glyphs & indicators | `StepIcon/read` … `StepIcon/stop` | `app/conversation/activity/ActivityGroup.tsx` | `StepIcon` (file-local) | in app |
 | Glyphs & indicators | `FileTypeIcon/Image`, `Document`, `Data`, `Code` | `components/conversation/elements/file-type-icon.tsx` | `FileTypeIcon` | |
 | Glyphs & indicators | `WorkerGlyph` | `app/conversation/WorkerChip.tsx` | `WorkerGlyph` | in app |
-| Glyphs & indicators | `SidebarActivityMark/Working`, `/Unread`, `SidebarError`, `SessionStatusLabel` | `app/shell/SessionStatus.tsx` | `SidebarActivityMark`, `SidebarError`, `SessionStatusLabel` | in app |
+| Glyphs & indicators | `SidebarActivityMark/Working`, `/Unread`, `SidebarError`, `SessionStatusLabel` | `components/shared/session-status.tsx` | `SidebarActivityMark`, `SidebarError`, `SessionStatusLabel` | |
 | Glyphs & indicators | `StateIcon/Running`, `StateIcon/Paused` | `app/conversation/Activities.tsx` | `StateIcon` (file-local) | in app |
 | Glyphs & indicators | `Donut` | `components/conversation/elements/donut.tsx` | `Donut` | |
 | Glyphs & indicators | `StepGlyph/Done`, `Failed`, `Stopped`, `Pending` | `components/conversation/elements/step-glyph.tsx` | `StepGlyph` | |
@@ -161,11 +161,11 @@ table is the current one.
 | Glyphs & indicators | `SourceCountBadge` | `components/controls/source-count-badge.tsx` | `SourceCountBadge` (`count`) | |
 | Glyphs & indicators | `Share` | `app/shell/BarStatus.tsx` | `Share` (file-local) | in app |
 | Shared app parts | `TitlebarNav` | `app/shell/AppSidebar.tsx` | `TitlebarNav` | in app |
-| Shared app parts | `RowAction`, `RowActionsSlot` | `app/shell/sidebar/nav.tsx`, `app/shell/AppSidebar.tsx` | `rowAction` (class string), `RowActionsSlot` (file-local) | in app |
-| Shared app parts | `ConversationRow` | `app/shell/AppSidebar.tsx` | `ConversationRow` (file-local, on `navRow`) | in app |
+| Shared app parts | `RowAction`, `RowActionsSlot` | `components/shared/row-action.tsx` | `RowAction`, `RowActionsSlot` | |
+| Shared app parts | `ConversationRow` | `components/shared/conversation-row.tsx` | `ConversationRow` (on `NavRow`), `RowStatus` | |
 | Shared app parts | `SidebarToggle/Open` | `app/shell/SidebarToggle.tsx` | `SidebarToggle` | in app |
 | Shared app parts | `TerminalButton` | `components/shared/terminal-button.tsx` | `TerminalButton` | |
-| Shared app parts | `NavHeader`, `NavSection` | `app/shell/sidebar/nav.tsx` | `NavHeader`, `NavSection` | in app |
+| Shared app parts | `NavHeader`, `NavSection` | `components/shared/nav.tsx` | `NavHeader`, `NavSection` (with `NavFold`, `NavList`) | |
 | Shared app parts | `CopyButton` | `components/shared/copy-button.tsx` | `CopyButton` | |
 | Shared app parts | `ModelSelector` | `components/shared/model-selector.tsx` | `ModelSelector` | |
 | Shared app parts | `ProgressLine` | `components/shared/progress-line.tsx` | `ProgressLine` | |

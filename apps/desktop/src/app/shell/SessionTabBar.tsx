@@ -13,7 +13,7 @@ import {
 
 import { TooltipIconButton, Badge } from "@/components/controls";
 import { useCheckoutRoot, FileTypeIcon } from "@/components/conversation";
-import { SidebarActivityMark, SidebarError, statusWords } from "@/app/shell/SessionStatus";
+import { SidebarActivityMark, SidebarError, statusWords } from "@/components/shared";
 import { UNTITLED } from "@/app/shell/TopBar";
 import {
   Archive,

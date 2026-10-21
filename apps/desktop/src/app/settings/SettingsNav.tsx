@@ -8,11 +8,10 @@ import {
   type SettingsSearchResult,
 } from "@/app/settings/pages";
 import { revealSetting } from "@/app/settings/reveal";
-import { navRow, NavHeader, NavList, NavSection } from "@/app/shell/sidebar/nav";
-import { cn } from "@/lib/utils";
 import { openSettings } from "@/state/actions";
 import { useApp } from "@/state/store";
-import { EmptyState, SettingsSearch } from "@/components/shared";
+import { NavRow } from "@/components/controls";
+import { EmptyState, NavHeader, NavList, NavSection, SettingsSearch } from "@/components/shared";
 
 /** Opens a result's page, then brings the setting it found into view. */
 function openResult({ page, row }: SettingsSearchResult) {
@@ -69,10 +68,9 @@ export function SettingsNav() {
                 const Icon = result.page.icon;
                 return (
                   <li key={`${result.page.id}:${result.row?.label ?? ""}`}>
-                    <button
-                      type="button"
+                    <NavRow
                       data-active={index === active}
-                      className={cn(navRow, "h-auto items-start py-2.5")}
+                      className="h-auto items-start py-2.5"
                       onMouseEnter={() => setActive(index)}
                       onClick={() => openResult(result)}
                     >
@@ -85,7 +83,7 @@ export function SettingsNav() {
                           </span>
                         )}
                       </span>
-                    </button>
+                    </NavRow>
                   </li>
                 );
               })}
@@ -99,17 +97,15 @@ export function SettingsNav() {
                   const Icon = page.icon;
                   return (
                     <li key={page.id}>
-                      <button
-                        type="button"
+                      <NavRow
                         aria-current={page.id === current ? "page" : undefined}
-                        className={navRow}
                         onPointerEnter={page.prefetch}
                         onFocus={page.prefetch}
                         onClick={() => openSettings(page.id)}
                       >
                         <Icon aria-hidden className="text-foreground/65" />
                         <span className="truncate">{page.label}</span>
-                      </button>
+                      </NavRow>
                     </li>
                   );
                 })}

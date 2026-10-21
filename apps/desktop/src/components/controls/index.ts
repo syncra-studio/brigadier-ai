@@ -6,6 +6,7 @@ export * from "./button";
 export * from "./checkbox";
 export * from "./input";
 export * from "./kbd";
+export * from "./nav-row";
 export * from "./round-badge";
 export * from "./segmented";
 export * from "./send-button";
