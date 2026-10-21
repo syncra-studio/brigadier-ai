@@ -1734,8 +1734,9 @@ echo "asked: $answer" > "$HOME/asked"
     }
 
     /// An extra account's sign-in, run in a terminal: the account is checked the moment its
-    /// login is stored, not only when the sign-in ends; one whose login can't be watched is
-    /// checked every `unwatched_poll` until it reads as signed in.
+    /// login is stored, again while it doesn't read as signed in yet, and once more when the
+    /// sign-in ends; one whose login can't be watched is checked every `unwatched_poll` until
+    /// it reads as signed in.
     #[tokio::test(flavor = "multi_thread")]
     async fn an_accounts_sign_in_is_checked_the_moment_its_login_is_stored() {
         let home = Home::new("account");
@@ -1745,10 +1746,12 @@ echo "asked: $answer" > "$HOME/asked"
         let (ended, exited) = tokio::sync::oneshot::channel::<()>();
         let checked = Arc::new(Mutex::new(Vec::new()));
         let follow = tokio::spawn({
-            let checked = checked.clone();
+            let (checked, read) = (checked.clone(), checked.clone());
             follow_sign_in(
                 move || checked.lock().unwrap().push(std::time::Instant::now()),
-                || false,
+                // Its status follows the store by a moment: it reads as signed in from the
+                // second check on.
+                move || read.lock().unwrap().len() >= 2,
                 Some(mark),
                 before,
                 async move {
@@ -1776,11 +1779,17 @@ echo "asked: $answer" > "$HOME/asked"
             lag.as_secs_f64()
         );
         assert!(lag < Duration::from_millis(250));
+        // Checked again until it reads as signed in, then left alone.
+        let settled = tokio::time::Instant::now() + Duration::from_secs(5);
+        while checked.lock().unwrap().len() < 2 && tokio::time::Instant::now() < settled {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(checked.lock().unwrap().len(), 2);
         // And once more as the sign-in ends.
-        let before_end = checked.lock().unwrap().len();
         ended.send(()).unwrap();
         follow.await.unwrap();
-        assert_eq!(checked.lock().unwrap().len(), before_end + 1);
+        assert_eq!(checked.lock().unwrap().len(), 3);
 
         // Not watched: asked every `unwatched_poll` until it reads as signed in.
         let (ended, exited) = tokio::sync::oneshot::channel::<()>();
