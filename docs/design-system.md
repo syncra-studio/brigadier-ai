@@ -209,6 +209,18 @@ table is the current one.
 | Inspector (settings.pen) | `#1058 BrainTab › toolbar` | `app/inspector/brain/BrainToolbar.tsx` | `BrainToolbar` | |
 | Inspector (settings.pen) | `#1060 ConversationName` | `app/inspector/brain/ConversationName.tsx` | `ConversationName` | |
 | Inspector (settings.pen) | `#1065 NodeDetail › node link` | `app/inspector/brain/NodeLink.tsx` | `NodeLink` | |
+| Inspector (settings.pen) | `#1067 ActionError` | `app/inspector/providers/ActionError.tsx` | `ActionError` | |
+| Inspector (settings.pen) | `#1073 StartSessionForm` | `app/inspector/providers/StartSessionForm.tsx` | `StartSessionForm` | |
+| Inspector (settings.pen) | `#1074 StartSessionForm › Record toggle` | `app/inspector/providers/RecordToggle.tsx` | `RecordToggle` | |
+| Inspector (settings.pen) | `#1075 SessionList` | `app/inspector/providers/SessionList.tsx` | `SessionList` | |
+| Inspector (settings.pen) | `#1076 SessionList › session row` | `app/inspector/providers/SessionRow.tsx` | `SessionRow` | |
+| Inspector (settings.pen) | `#1077 FixtureList` | `app/inspector/providers/FixtureList.tsx` | `FixtureList` | |
+| Inspector (settings.pen) | `#1078 FixtureList › fixture row` | `app/inspector/providers/FixtureRow.tsx` | `FixtureRow` | |
+| Inspector (settings.pen) | `#1080 RawSessionView › approvals tray` | `app/inspector/providers/ApprovalsTray.tsx` | `ApprovalsTray` | |
+| Inspector (settings.pen) | `#1081 SessionHeader` | `app/inspector/providers/SessionHeader.tsx` | `SessionHeader` | |
+| Inspector (settings.pen) | `#1082 TranscriptList` | `app/inspector/providers/TranscriptList.tsx` | `TranscriptList` | |
+| Inspector (settings.pen) | `#1083 ApprovalCard (RawSessionView)` | `app/inspector/providers/RawApprovalCard.tsx` | `RawApprovalCard` | |
+| Inspector (settings.pen) | `#1084 Composer (raw session)` | `app/inspector/providers/RawSessionComposer.tsx` | `RawSessionComposer` | |
 | Conversation (app.pen) | `#276 ApprovalAction › inline: Reply… button` | `app/conversation/ReplyButton.tsx` | `ReplyButton` | |
 | Conversation (app.pen) | `#279 CardDictate` | `app/conversation/CardDictate.tsx` | `CardDictate` | |
 | Conversation (app.pen) | `#280 ChoiceCard` | `app/conversation/ChoiceCard.tsx` | `ChoiceCard` | |
