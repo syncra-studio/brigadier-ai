@@ -34,7 +34,7 @@ export const StripRow = memo(function StripRow({ taskId }: { taskId: string }) {
         type="button"
         data-slot="workers-strip-row"
         onClick={() => setPanel(taskId)}
-        className="hover:bg-foreground/5 rounded-control flex min-w-0 flex-1 flex-col px-2 text-start text-sm"
+        className="hover:bg-foreground/5 rounded-control flex min-w-0 flex-1 flex-col items-stretch px-2 text-start text-sm"
       >
         <span className="min-h-row flex min-w-0 items-center gap-1.5">
           <WorkerGlyph taskId={taskId} className="size-4 shrink-0" />

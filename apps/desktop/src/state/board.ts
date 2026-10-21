@@ -429,6 +429,7 @@ export function boardFromView(
     notices: view.notices.filter(showConversationNotice).slice(-NOTICES).map(shownNotice),
     activity: keep?.activity ?? {},
     summaries: keep?.summaries ?? {},
+    ...(keep?.notes && { notes: keep.notes }),
     edits: keep?.edits ?? {},
     diffs: keep?.diffs ?? {},
     transcripts: keep?.transcripts ?? {},
@@ -748,7 +749,8 @@ export function applyToBoard(board: Board, envelope: EventEnvelope): Board {
         if (text) next = { ...next, summaries: { ...next.summaries, [taskId]: { text, atMs } } };
       } else if (reply.type === "toolCall" && toolName(reply.name) === "note_progress") {
         const text = progressNote(reply.input);
-        if (text && next.notes?.[taskId]?.text !== text) next = { ...next, notes: { ...next.notes, [taskId]: { text, atMs } } };
+        // Kept with when it came, so the same words posted again in a new attempt show too.
+        if (text) next = { ...next, notes: { ...next.notes, [taskId]: { text, atMs } } };
       } else if (
         (reply.type === "fileChanges" || reply.type === "command") &&
         reply.status !== "inProgress"

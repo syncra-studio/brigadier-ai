@@ -6,7 +6,7 @@ import { taskActivityLines } from "@/app/conversation/taskActivity";
 import night from "@/fixtures/boards/overnight-2026-10-03.json" with { type: "json" };
 import type { BackgroundRun, IntegratedCheck, OrchestratorStep, ProviderEvent, Question, Task, UserRequest, WaitingItem } from "@/ipc/generated";
 import { formatTime } from "@/lib/format";
-import { applyToBoard, type Board, doingOf, emptyBoard, type ShownApproval, workerNote } from "@/state/board";
+import { applyToBoard, type Board, boardFromView, doingOf, emptyBoard, type ShownApproval, workerNote } from "@/state/board";
 
 const base = Object.values(night.tasks)[0] as unknown as Task;
 let next = 0;
@@ -197,6 +197,11 @@ test("an integration's live line names its action, and a worker's progress note 
   assert.equal(taskActivityLines({ task: worker, note: workerNote(noted, worker.id) }, 20).second, "Scene 4 of 12: pricing section");
   const retried = { ...noted, tasks: byId([{ ...worker, attempts: [{ startedAtMs: 50 }] as never }]) };
   assert.equal(workerNote(retried, worker.id), undefined);
+  // The same words again in that new attempt show; a refresh of the board keeps them.
+  const again = apply(retried, toolCall("note_progress", { note: "Scene 4 of 12: pricing section" }), 60);
+  assert.equal(workerNote(again, worker.id), "Scene 4 of 12: pricing section");
+  const view = { conversation: { id: "c" }, tasks: [], approvals: [], questions: [], plans: [], overnight: [], requests: [], waiting: [], compactions: [], notices: [], memories: [] } as never;
+  assert.equal(boardFromView(view, again, []).notes?.[worker.id]?.text, "Scene 4 of 12: pricing section");
   // A note with no text, or input that isn't JSON yet, changes nothing.
   assert.equal(apply(designing, toolCall("note_progress", { note: "  " })).notes, undefined);
   assert.equal(apply(designing, { ...toolCall("note_progress", {}), input: "{\"no" }).notes, undefined);
