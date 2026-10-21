@@ -247,6 +247,17 @@ browserDownloadsDir: string,
  */
 browserAskDownloads: boolean, 
 /**
+ * MCP servers switched off for Brigadier, by catalog id (`claude:user:railway`): no thread
+ * or worker gets them, their agent's own included. A change takes effect at each
+ * session's next start or resume.
+ */
+mcpServersOff: Array<string>, 
+/**
+ * Skills switched off for Brigadier, by catalog id (`agents:user:<folder>`), as for
+ * [`Self::mcp_servers_off`].
+ */
+skillsOff: Array<string>, 
+/**
  * The shape saved settings were last brought up to ([`SETTINGS_VERSION`]). Settings saved
  * before it existed read as 0, so their conversions run.
  */

@@ -237,6 +237,8 @@ export const useApp = create<AppState>()(() => ({
     browserFullUrl: false,
     browserDownloadsDir: "",
     browserAskDownloads: false,
+    mcpServersOff: [],
+    skillsOff: [],
     settingsVersion: 1,
   },
   threads: {},
