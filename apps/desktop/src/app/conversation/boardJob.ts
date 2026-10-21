@@ -301,9 +301,6 @@ function currentPhase(input: JobInput): { plan: Plan; index: number; since: numb
   return { plan, index, since, until: Number.POSITIVE_INFINITY, state, tasks: task ? [task, ...others] : others };
 }
 
-/** An overnight run at work has its own card for its phases: no job beside it. */
-const RUN_AT_WORK = new Set(["preparing", "running", "waitingQuota", "windingDown", "reporting"]);
-
 /**
  * The session's job at work (`current`, null when there is none or it is all done) and the jobs
  * each earlier merge closed, newest first.
@@ -316,7 +313,6 @@ export function sessionJobs(input: JobInput): { current: BoardJob | null; past: 
     .map((merge, index) => windowJob(input, (merges[index - 1]?.atMs ?? -1) + 1, merge.atMs + 1, merge, null))
     .filter((job): job is BoardJob => job !== null)
     .toReversed();
-  if (Object.values(input.overnight).some((run) => RUN_AT_WORK.has(run.state))) return { current: null, past };
   const lastMerge = (merges.at(-1)?.atMs ?? -1) + 1;
   const phase = currentPhase(input);
   const current = phase

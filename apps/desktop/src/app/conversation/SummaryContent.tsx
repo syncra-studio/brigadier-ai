@@ -14,13 +14,7 @@ import { useAskRequest } from "@/app/conversation/activity/askRequest";
 import { revertPullRequest } from "@/app/conversation/activity/revert";
 import { connectorName } from "@/app/conversation/activity/words";
 import { isRunRequest } from "@/app/conversation/blocks";
-import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
-import {
-  overnightActions,
-  shownRun,
-  useOvernightCards,
-  useRunDiff,
-} from "@/app/conversation/overnightAdapter";
+import { shownRun, useOvernightCards, useRunDiff } from "@/app/conversation/overnightAdapter";
 import { ActivitiesSummary } from "@/app/conversation/Activities";
 import { AllLinksPopover } from "@/app/conversation/AllLinksPopover";
 import { BranchRow } from "@/app/conversation/BranchRow";
@@ -64,9 +58,6 @@ import { toast } from "@/state/toasts";
 
 const NO_TASKS: Readonly<Record<string, Task>> = {};
 const NO_WAITING: readonly WaitingItem[] = [];
-
-/** The run's card inside a summary card, which is its surface. */
-const BARE = "rounded-none border-0 bg-transparent";
 
 /** The branch's +N −N against its base, read again whenever a worker lands. */
 function useSessionDiff(
@@ -561,12 +552,6 @@ function SessionSummaryContent({
         </div>
       </SummaryCard>
       <JobStack conversationId={conversation.id} />
-      {/* The run's card sits right under the job's. */}
-      {overnight.map((model) => (
-        <SummaryCard key={model.run.id} scrollKey={`${conversation.id}/overnight-${model.run.id}`} active={active}>
-          <OvernightPlanCard model={model} actions={overnightActions} className={BARE} />
-        </SummaryCard>
-      ))}
     </>
   );
 }

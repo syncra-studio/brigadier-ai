@@ -7,7 +7,6 @@ export * from "./composerMarkdown";
 export * from "./context-ring";
 export * from "./elements/action-card";
 export * from "./elements/activity-row";
-export * from "./elements/agent-plan";
 export * from "./elements/attachment-tile";
 export * from "./elements/attachment-url";
 export * from "./elements/attachment";

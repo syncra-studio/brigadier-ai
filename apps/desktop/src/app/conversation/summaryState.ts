@@ -1,6 +1,5 @@
 import { create } from "zustand";
 
-import { jumpInThread } from "@/components/conversation/thread-scroll";
 import type { EventEnvelope } from "@/ipc/generated";
 import { useApp } from "@/state/store";
 import { useBoard } from "@/state/board";
@@ -19,49 +18,39 @@ export const useSummary = create<{
 export const keptScroll = new Map<string, number>();
 
 /**
- * Open a plan: an overnight run's card beside the thread or in the narrow window's summary, a
- * plan written as a document in its own tab, a plan of phases alone in the job's tab.
+ * Open a plan: an overnight run's part of the job's tab, a plan written as a document in its own
+ * tab, a plan of phases alone in the job's tab.
  */
 export function revealPlan(cardId: string): void {
   const board = useBoard.getState().board;
   const run = Object.values(board?.overnight ?? {}).find(
     (candidate) => candidate.state !== "superseded" && candidate.planId === cardId,
   );
-  if (run) return reveal(() => `overnight-${run.id}`);
+  if (run) return revealOvernight(run.id);
   const plan = board?.plans[cardId];
   if (!board || !plan) return;
   if (plan.body) openPlanTab(board.conversationId, { type: "plan", id: plan.id }, plan.title);
   else openPanelTab(board.conversationId, { type: "reviews" }, "Progress");
 }
 
-/** Open an overnight run's card, where its Start, Stop, Merge and Continue are. */
+/**
+ * Open an overnight run's plan (the Job card's Edit, a plan link in the thread): the run's part
+ * of the job's tab, each phase with its scope and "done when", scrolled to and focused.
+ */
 export function revealOvernight(runId: string): void {
-  reveal(() => `overnight-${runId}`);
-}
-
-function reveal(elementId: () => string): void {
-  const id = elementId();
-  // The session's cards open where the plan is, not where they were left.
-  const session = `${useBoard.getState().board?.conversationId}/`;
-  for (const key of keptScroll.keys()) if (key.startsWith(session)) keptScroll.delete(key);
-  if (useSummary.getState().layout === "float") useSummary.setState({ floating: true });
-  else setPinnedSummary(true);
-  requestAnimationFrame(() =>
-    requestAnimationFrame(() => {
-      const target = document.getElementById(id);
-      if (!target) return;
-      // Its section may be folded.
-      const section = target.closest<HTMLElement>("[data-slot=summary-section][data-folded]");
-      section?.querySelector<HTMLButtonElement>(":scope > header > button[aria-expanded]")?.click();
-      jumpInThread(target);
-      // Its top, in its own card; then that card, in the column.
-      const scroller = target.closest("[data-slot=summary-card]")?.firstElementChild;
-      if (scroller && target.offsetHeight > scroller.clientHeight)
-        scroller.scrollTop += target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      target.scrollIntoView({ block: "nearest" });
+  const board = useBoard.getState().board;
+  if (!board) return;
+  openPanelTab(board.conversationId, { type: "reviews" }, "Progress");
+  // The tab loads on demand: wait (a second at most) for the run's part to be drawn.
+  let frames = 0;
+  const find = () => {
+    const target = document.getElementById(`overnight-${runId}`);
+    if (target) {
+      target.scrollIntoView({ block: "start" });
       target.focus({ preventScroll: true });
-    }),
-  );
+    } else if (++frames < 60) requestAnimationFrame(find);
+  };
+  requestAnimationFrame(find);
 }
 
 /**

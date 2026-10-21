@@ -9,23 +9,14 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { OvernightPlanCard } from "@/app/conversation/cards/OvernightPlanCard";
-import { type RunStep, runSteps, type StepMark } from "@/app/conversation/phaseView";
 import { PlanCardLink } from "@/app/conversation/cards/PlanCardLink";
 import { PendingActionCard } from "@/app/conversation/ActionCards";
 import { PinnedSummary, PinnedSummaryToggle, SummaryFloat, SummaryPane } from "@/app/conversation/PinnedSummary";
 import { SlashCommands } from "@/app/conversation/SlashCommands";
 import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
-import {
-  useOvernightCards,
-  type OvernightActions,
-  type OvernightCardModel,
-  type OvernightCommand,
-} from "@/app/conversation/overnightAdapter";
 import { TooltipProvider } from "@/components/overlays";
 import type {
   Conversation,
-  OvernightRun,
   Plan,
   PlanState,
   Request,
@@ -201,291 +192,8 @@ mockIPC((command, payload) => {
   throw new Error(`Unexpected fixture request: ${req.method}`);
 });
 
-// Keep the active phase's link distinct from the normal plan's Windows-path worker. None of the
-// synthetic workers is a check.
-const fixtureBoard = useBoard.getState().board!;
-useBoard.setState({ board: { ...fixtureBoard, tasks: Object.fromEntries(Object.entries({
-  ...fixtureBoard.tasks,
-  "worker-phase-5": { ...fixtureBoard.tasks["worker-live"]!, id: "worker-phase-5",
-    title: "Review the whole Windows change", number: 5 },
-}).map(([taskId, task]) => [taskId, { ...task, gateLink: task.gateLink ?? null }])) } });
-
-const proposed: OvernightRun = {
-  id: "proposed",
-  conversationId: session.id,
-  segment: 1,
-  predecessor: null,
-  planId: null,
-  name: "Windows support",
-  words: "/overnight Windows support until 07:30",
-  goal: "Support Windows alongside macOS.",
-  rules: "Keep existing commands. Don't change the installer.",
-  sources: [],
-  phases: Array.from({ length: 6 }, (_, index) => ({
-    id: `phase-${index + 1}`,
-    number: index + 1,
-    name: [
-      "Read the platform code",
-      "Implement Windows paths",
-      "Verify the terminal",
-      "Build the desktop app",
-      "Review the whole change and check the Windows installer against the existing macOS behavior",
-      "Write the report",
-    ][index]!,
-    scope: "Keep the existing workflow and verify the platform differences.",
-    doneWhen: [
-      { id: `p${index + 1}-c1`, text: "The existing commands still work on both platforms." },
-      {
-        id: `p${index + 1}-c2`,
-        text: "The phase checks pass and the independent review is answered.",
-      },
-    ],
-    dependsOn: index ? [index] : [],
-  })),
-  directives: {
-    deadline: {
-      type: "at",
-      time: {
-        atMs: now + 8.5 * 3600000,
-        localDate: "2026-10-03",
-        localTime: "07:30",
-        day: "Sat 3 Oct",
-        offset: "+03:00",
-        timeZone: "Europe/Chisinau",
-      },
-    },
-    only: { from: 1, to: 6 },
-    stopAfter: { type: "phase", number: 5 },
-    skip: [3],
-    maxWorkers: 2,
-    ignored: ["Ignored: effort max (Brigadier picks this itself)"],
-    spans: [],
-  },
-  problems: [],
-  revision: 2,
-  generation: 1,
-  state: "proposed",
-  windDownAtMs: null,
-  workspace: null,
-  verifiedCommit: null,
-  gaps: [],
-  obstacles: [],
-  reportMessageId: null,
-  reportOutcome: null,
-  endCommit: null,
-  merged: null,
-  notification: null,
-  stop: null,
-  commands: [],
-  createdAtMs: now,
-  startedAtMs: null,
-  finishedAtMs: null,
-};
-const baseline: OvernightCardModel = {
-  run: proposed,
-  details: { waiting: 1, decided: 3, steps: runSteps(proposed, {}), phaseProgress: {}, remaining: 0 },
-};
-/** The proposal's phases as its plan would record them, marked `marks`. */
-function marked(marks: readonly StepMark[]): RunStep[] {
-  return proposed.phases.map((phase, index) => {
-    const mark = marks[index] ?? "pending";
-    const settled =
-      mark === "done" || mark === "partial" || mark === "blocked"
-        ? {
-            outcome: mark,
-            summary: mark === "done" ? `${phase.name}: every check passed.` : "",
-            left: mark === "done" ? [] : [mark === "blocked" ? "The installer needs your signing account ID." : "The Windows terminal check is left."],
-            tip: mark === "done" ? "abc1234" : null,
-            atMs: now + index * 3600000,
-          }
-        : null;
-    return {
-      number: phase.number,
-      position: index + 1,
-      name: phase.name,
-      mark,
-      settled,
-      startedAtMs: mark === "pending" || mark === "skipped" ? null : now + index * 3000000,
-      endedAtMs: settled?.atMs ?? null,
-    };
-  });
-}
-function variant(
-  id: string,
-  state: OvernightRun["state"],
-  progress: OvernightCardModel["details"]["phaseProgress"] = {},
-): OvernightCardModel {
-  return {
-    run: { ...proposed, id, state },
-    details: {
-      ...baseline.details,
-      steps: marked(["done", "done", "skipped", "done", "working", "pending"]),
-      phaseProgress: progress,
-    },
-  };
-}
-const overnight: { label: string; model: OvernightCardModel }[] = [
-  { label: "Overnight · proposed", model: baseline },
-  {
-    label: "Bare goal",
-    model: {
-      ...baseline,
-      run: {
-        ...proposed,
-        id: "bare-goal",
-        phases: [],
-        directives: {
-          ...proposed.directives,
-          deadline: { type: "untilDone" },
-          only: null,
-          stopAfter: null,
-          skip: [],
-        },
-      },
-    },
-  },
-  {
-    label: "Proposal · power risks",
-    model: {
-      ...baseline,
-      run: { ...proposed, id: "power" },
-      details: {
-        ...baseline.details,
-        power: { onBattery: true, lidWillPause: true, offerLidSetup: true },
-      },
-    },
-  },
-  {
-    label: "Proposal · invalid deadline",
-    model: {
-      ...baseline,
-      run: {
-        ...proposed,
-        id: "invalid",
-        problems: [
-          {
-            kind: "deadline",
-            message: "That deadline has passed. Say when the report should be ready.",
-          },
-        ],
-      },
-    },
-  },
-  { label: "Preparing", model: variant("preparing", "preparing") },
-  {
-    label: "Writing the plan",
-    model: {
-      run: { ...proposed, id: "writing-plan", state: "running", phases: [] },
-      details: { ...baseline.details, steps: [] },
-    },
-  },
-  {
-    label: "Running · lead working",
-    model: variant("running", "running", { 5: { workerTaskIds: ["worker-phase-5"] } }),
-  },
-  {
-    label: "Waiting for limits",
-    model: variant("quota", "waitingQuota", {
-      5: {
-        quota: { provider: "Claude", resetsAtMs: new Date("2026-10-03T03:40:00+03:00").getTime() },
-      },
-    }),
-  },
-  { label: "Winding down", model: variant("winding-down", "windingDown") },
-  { label: "Writing the report", model: variant("reporting", "reporting") },
-  {
-    label: "Finished · partial",
-    model: {
-      run: { ...proposed, id: "partial", state: "finished", stop: { type: "deadline" } },
-      details: {
-        ...baseline.details,
-        steps: marked(["done", "partial", "skipped", "blocked", "working", "pending"]),
-        outcome: [
-          "1 of 5 phases done",
-          "Windows paths are ready; the installer needs your account ID.",
-          "1 waiting on you · work saved on its own branch",
-        ],
-        reportMessageId: "report-partial",
-        verifiedSha: "abc1234",
-        remaining: 5,
-      },
-    },
-  },
-  {
-    label: "Finished · all verified",
-    model: {
-      run: { ...proposed, id: "complete", state: "finished", stop: { type: "done" } },
-      details: {
-        ...baseline.details,
-        steps: marked(["done", "done", "done", "done", "done", "done"]),
-        waiting: 0,
-        outcome: [
-          "6 of 6 phases done",
-          "Windows support is ready to merge.",
-          "All checks passed · work saved on its own branch",
-        ],
-        reportMessageId: "report-complete",
-        verifiedSha: "def5678",
-      },
-    },
-  },
-];
-
-async function record(method: string, command?: OvernightCommand, extra?: unknown) {
-  calls.push({ method, ...command, extra });
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  if (fixtureWindow.planFixtureFailNext) {
-    fixtureWindow.planFixtureFailNext = false;
-    throw new Error("Connection lost. Try again.");
-  }
-}
-
-function OvernightFixture({ initial }: { initial: OvernightCardModel }) {
-  const [model, setModel] = useState(initial);
-  const actions: OvernightActions = {
-    start: async (command) => {
-      await record("startOvernight", command);
-      setModel({
-        ...model,
-        run: { ...model.run, state: "running" },
-        details: {
-          ...model.details,
-          steps: model.details.steps.map((step, index) => (index === 0 ? { ...step, mark: "working" } : step)),
-        },
-      });
-    },
-    stop: (command) => record("stopOvernight", command),
-    continue: async (command, words) => {
-      await record("continueOvernight", command, words);
-      setModel({
-        ...model,
-        run: {
-          ...model.run,
-          state: "proposed",
-          directives: { ...model.run.directives, deadline: { type: "untilDone" } },
-        },
-        details: {
-          ...model.details,
-          steps: model.details.steps
-            .filter((step) => step.mark !== "done")
-            .map((step) => ({ ...step, mark: "pending", settled: null, startedAtMs: null, endedAtMs: null })),
-        },
-      });
-    },
-    merge: (command, sha) => record("mergeOvernight", command, sha),
-    openReport: (_conversationId, messageId) => {
-      calls.push({ method: "openReport", messageId });
-      document.getElementById("fixture-report")?.focus();
-    },
-    setUpLidClosed: () => record("setUpLidClosed"),
-    openNotificationSettings: () => record("openNotificationSettings"),
-  };
-  return <OvernightPlanCard model={model} actions={actions} />;
-}
-
 function FixturePage() {
   const [worker, setWorker] = useState<string | null | undefined>(undefined);
-  const cards = useOvernightCards(session.id);
   const runtime = useExternalStoreRuntime<ThreadMessage>({
     messages: [],
     onNew: async () => {
@@ -502,7 +210,7 @@ function FixturePage() {
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-lg">Plan card fixtures</h1>
               <span className="text-muted-foreground text-xs">
-                Synthetic data · no daemon calls · {cards.length} reachable overnight cards
+                Synthetic data · no daemon calls
               </span>
             </div>
             {worker && <p role="status">Worker thread opened: {worker}</p>}
@@ -539,16 +247,6 @@ function FixturePage() {
                     <PlanCardLink cardId={item.id} />
                   </section>
                 ))}
-                {overnight.map(({ label, model }) => (
-                  <section
-                    key={model.run.id}
-                    data-fixture={model.run.id}
-                    className="flex min-w-0 flex-col gap-2"
-                  >
-                    <h2 className="text-muted-foreground text-sm">{label}</h2>
-                    <OvernightFixture initial={model} />
-                  </section>
-                ))}
               </div>
             )}
             <div className="relative" data-fixture="slash">
@@ -563,9 +261,6 @@ function FixturePage() {
                 </ComposerPrimitive.Root>
               </ComposerPrimitive.Unstable_TriggerPopoverRoot>
             </div>
-            <p id="fixture-report" tabIndex={-1}>
-              Fixture report message: work is saved; no live run was started.
-            </p>
           </main>
         </AgentsPanelContext.Provider>
       </TooltipProvider>
