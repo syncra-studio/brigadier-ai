@@ -706,6 +706,121 @@ function readState() {
   };
 }
 
+/** Where it's used, the toolbar's project picker and the exception marks on the list, as the Where it's used board draws them. */
+function readWhere() {
+  const section = document.querySelector('main [data-setting="Where it\'s used"]');
+  const summary = section?.querySelector('[data-slot="where-used"]');
+  const select = document.querySelector('main [data-setting^="project:"]');
+  return {
+    labels: all("main label").filter((label) => label.querySelector('[role="switch"]')).map(text),
+    description: text(section?.querySelector("p") ?? null),
+    radios: all('[role="radio"]', section ?? document.createElement("div")).map((radio) => ({ title: text(radio.children[1]!.children[0]!), line: text(radio.children[1]!.children[1]!), checked: radio.getAttribute("aria-checked") })),
+    summary: summary ? { title: text(summary.firstElementChild!.children[0]!), line: text(summary.firstElementChild!.children[1]!), button: text(summary.querySelector("button")) } : null,
+    exceptions: all('[data-slot="exception-row"]').map((row) => {
+      const [name, path] = [...row.children[1]!.children];
+      return { name: text(name!), path: text(path!), badge: text(row.children[2]!) };
+    }),
+    chips: Object.fromEntries(all('[data-slot="integration-tile"]').flatMap((tile) => {
+      const chips = all('[data-slot="scope-chip"]', tile).map(text);
+      return chips.length ? [[tile.getAttribute("data-setting"), chips]] : [];
+    })),
+    groups: all("#integrations-list > section").map((group) => ({ title: text(group.querySelector("h2")), description: text(group.querySelector("header p")), aside: text(group.querySelector("header > span")) })),
+    // Each tile: its name, its line, and its switch's state or the words in its place.
+    lines: all('[data-slot="integration-tile"]').map((tile) => {
+      const end = tile.lastElementChild!;
+      return [text(tile.querySelector("button > span:nth-child(2) > span:first-child > span:first-child")), text(tile.querySelector("button > span:nth-child(2) > span:last-child")), end.getAttribute("role") === "switch" ? end.getAttribute("aria-checked")! : text(end)];
+    }),
+    tabs: all('[role="tab"]').map(text),
+    select: select ? { setting: select.getAttribute("data-setting"), value: text(select), washed: !!select.querySelector(".bg-foreground\\/10") } : null,
+    note: text(document.querySelector("#integrations-list > div.bg-foreground\\/5")),
+  };
+}
+/** The open project picker: its find field, label, each project and its footer. */
+function readPicker() {
+  const picker = document.querySelector('[role="dialog"]');
+  if (!picker) return null;
+  return {
+    name: picker.getAttribute("aria-label"),
+    placeholder: picker.querySelector("input")?.getAttribute("placeholder"),
+    label: text(picker.querySelector("p")),
+    projects: all("button", picker).map((button) => ({ name: text(button.querySelector("span > span")), path: text(button.querySelector("span > span + span")), state: text(button.querySelector(":scope > span:last-child:not(:nth-child(2))")), disabled: (button as HTMLButtonElement).disabled })),
+    footer: text(picker.querySelector("p:last-child")),
+  };
+}
+/** The tooltip a pointer over `node` shows. */
+async function hover(node: Element | null | undefined) {
+  if (!node) return null;
+  node.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }));
+  await pause();
+  const tip = text(document.querySelector('[role="tooltip"]'));
+  node.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true, pointerType: "mouse" }));
+  return tip;
+}
+const radio = (title: string) => {
+  const node = all<HTMLButtonElement>('[role="radio"]').find((item) => text(item).startsWith(title));
+  if (!node) throw new Error(`No radio: ${title}`);
+  node.click();
+};
+
+/** Every Where it's used state, then its actions: the picker, an exception's X, the radios, the project view's switches and search. */
+async function driveWhere(openState: (state: string) => Promise<void>) {
+  const seen: Record<string, unknown> = {};
+  const read = () => ({ ...readState(), where: readWhere() });
+  const settings = () => structuredClone(current.switches);
+  for (const state of Object.keys(WHERE_STATES)) {
+    await openState(state);
+    seen[state] = read();
+  }
+  // The chip and the X name what they do on hover.
+  await openState("where-skills");
+  seen.chipTip = await hover(all('[data-slot="scope-chip"]').find((chip) => text(chip) === "On in 2 projects"));
+  await openState("where-pencil");
+  seen.removeTip = await hover(document.querySelector('[aria-label="Remove steady-app\'s exception"]'));
+  // The picker: find a project, then pick one.
+  click("Turn off in a project…"); await pause();
+  seen.picker = readPicker();
+  input("Find a project", "north"); await pause();
+  seen.pickerFound = readPicker();
+  input("Find a project", ""); await pause();
+  const picked = all<HTMLButtonElement>('[role="dialog"] button').find((button) => text(button).startsWith("brigadier-ai"))!;
+  picked.click(); await pause();
+  seen.picked = { ...read(), settings: settings() };
+  click("Remove steady-app's exception"); await pause();
+  seen.removed = { ...read(), settings: settings() };
+  // A project's own item: used in every project, then kept in its project again; on, then off there.
+  await openState("where-postgres");
+  radio("Every project"); await pause();
+  seen.postgresEverywhere = { ...read(), settings: settings() };
+  radio("Only in brigadier-ai"); await pause();
+  seen.postgresOnly = { ...read(), settings: settings() };
+  click("postgres"); await pause();
+  seen.postgresOff = { ...read(), settings: settings() };
+  radio("Every project"); await pause();
+  seen.postgresOffEverywhere = { ...read(), settings: settings() };
+  radio("Only in brigadier-ai"); await pause();
+  seen.postgresOffOnly = { ...read(), settings: settings() };
+  await openState("where-steady-api");
+  radio("Only in steady-app"); await pause();
+  seen.steadyOnly = { ...read(), settings: settings() };
+  // The project view: a switch adds or removes brigadier-ai's exception; its own item's is its on or off there.
+  await openState("where-brigadier");
+  click("playwright"); await pause();
+  click("steady-api"); await pause();
+  seen.viewSwitched = { ...read(), settings: settings() };
+  click("postgres"); await pause();
+  seen.viewOwn = settings();
+  // Settings search finds servers by name with where they live, and the project.
+  await openState("where-servers");
+  input("Search settings", "steady"); await pause();
+  seen.search = all('[data-sidebar="sidebar"] button').map(text).filter((line) => line.startsWith("steady"));
+  click("steady-appPlugins · project view"); await pause();
+  seen.searchOpened = read();
+  input("Search settings", ""); await pause();
+  seen.edits = edits;
+  seen.writes = writes;
+  return seen;
+}
+
 async function drive(change: (state: string) => void) {
   const seen: Record<string, unknown> = {};
   const openState = async (state: string) => {
@@ -717,6 +832,7 @@ async function drive(change: (state: string) => void) {
     await pause();
   };
   if (params.get("drive") === "sign-in") return driveSignIn(openState);
+  if (params.get("drive") === "where-used") return driveWhere(openState);
   const skillMode = params.get("drive") === "skills";
   for (const state of skillMode ? SKILL_STATES : SERVER_STATES) {
     await openState(state);
@@ -821,7 +937,60 @@ async function driveSignIn(openState: (state: string) => Promise<void>) {
   statuses.set("sign-in-restored", { type: "signedIn" });
   await poll();
   seen.restoredDone = readState();
-  seen.calls = calls;
+  seen.calls = [...calls];
+  const signIn = () => readSignIn();
+  const latest = () => `sign-in-${signIns}`;
+  // A restored attempt keeps waiting after the catalog drops its id, until its end is read.
+  statuses.delete("sign-in-restored");
+  await openState("notion-needed");
+  await openState("notion-restored");
+  current = snapshotFor("notion-needed");
+  emit(); await pause();
+  seen.droppedWaiting = signIn();
+  statuses.set("sign-in-restored", { type: "failed", reason: "Timed out after 5 minutes. Nothing was saved." });
+  await poll();
+  seen.droppedFailed = signIn();
+  // A dropped connection keeps the attempt waiting; an attempt the daemon no longer knows has ended.
+  await openState("notion-needed");
+  click("Sign in in Brigadier"); await pause();
+  flaky = 1;
+  await poll();
+  seen.flakyWaiting = signIn();
+  gone.add(latest());
+  await poll();
+  seen.interrupted = signIn();
+  click("Try again"); await pause();
+  gone.add(latest());
+  click("Cancel"); await pause();
+  seen.cancelledGone = { ...signIn(), alert: text(document.querySelector('[role="alert"]')) };
+  click("Sign in in Brigadier"); await pause();
+  gone.add(latest());
+  click("Open the page again"); await pause();
+  seen.reopenGone = signIn();
+  // Switched off, a signed-in server doesn't say every worker can use it.
+  await openState("linear-reusing");
+  click("linear"); await pause();
+  seen.switchedOff = { ...readState(), off: current.switches.mcpServersOff.includes("ClaudeUser:linear") };
+  // A sign-in the agent's own way after a failed attempt outdates the failure, whichever lands first.
+  const codexSignedIn = () => {
+    current = { ...current, catalog: { ...current.catalog, servers: current.catalog.servers.map((server) => server.name === "linear" ? { ...server, signIn: { claude: native, codex: native } } : server) } };
+    emit();
+  };
+  await openState("linear-partial");
+  click("Sign in in Brigadier"); await pause();
+  statuses.set(latest(), { type: "failed", reason: "The server didn't accept the sign-in." });
+  await poll();
+  seen.partialFailed = signIn();
+  codexSignedIn(); await pause();
+  seen.recoveredAfter = signIn();
+  await openState("linear-reusing");
+  await openState("linear-partial");
+  click("Sign in in Brigadier"); await pause();
+  codexSignedIn(); await pause();
+  statuses.set(latest(), { type: "failed", reason: "The server didn't accept the sign-in." });
+  await poll();
+  seen.recoveredBefore = signIn();
+  seen.reviewCalls = calls.slice((seen.calls as string[]).length);
   return seen;
 }
 
