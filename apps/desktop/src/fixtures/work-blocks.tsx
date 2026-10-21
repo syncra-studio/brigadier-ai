@@ -180,7 +180,7 @@ useApp.setState((state) => ({
   summaryShown: { [ID]: drive === "background" },
   settings: { ...state.settings, followUp: "queue" },
 }));
-openConversation(ID);
+await openConversation(ID);
 
 function Page() {
   const selection = useApp((s) => s.selection);

@@ -153,8 +153,10 @@ async function exercise(mode: "rich" | "plain") {
   await clear();
 
   // A new chat: the @ menu has the other conversations, and no files.
+  const beforeChat = field();
   show({ type: "draft", kind: "chat" }, mode);
-  await until("the new chat's field", () => field() !== null);
+  // Its own field: the one shown before stays until the new view renders.
+  await until("the new chat's field", () => field() !== null && field() !== beforeChat);
   field()!.focus();
   await type("@");
   await until("the new chat's @ menu", () => menu().includes("# Chats"));
@@ -163,8 +165,10 @@ async function exercise(mode: "rich" | "plain") {
   await clear();
 
   // A new session: its project's files.
+  const beforeSession = field();
   show({ type: "draft", kind: "session", projectId: "p1" }, mode);
-  await until("the new session's field", () => field() !== null);
+  // Its own field: the one shown before stays until the new view renders.
+  await until("the new session's field", () => field() !== null && field() !== beforeSession);
   field()!.focus();
   await type("@men");
   await until("the new session's files", () => menu().includes("menu.ts"));

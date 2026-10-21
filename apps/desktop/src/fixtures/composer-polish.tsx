@@ -635,7 +635,7 @@ async function drive() {
   document.body.append(result);
 }
 
-select({ type: "conversation", id });
+await select({ type: "conversation", id });
 void drive();
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>

@@ -816,12 +816,14 @@ async fn a_follow_up_joins_waits_offers_a_session_or_goes_to_a_sibling() {
     );
     let notes = "Draft the release notes.";
     let heard_before = heard(&inputs, &folder_a, notes);
+    let requests_before = flow.board_of(&a).await.requests.len();
     flow.manager
         .run_queued_here(&a, &queue.items[0].id)
         .await
         .unwrap();
-    flow.until_in(&a, "the queue to empty", |board| {
-        board.queue.items.is_empty()
+    // Its request too: the queue drops the item a write before the request shows.
+    flow.until_in(&a, "the queued message to run", |board| {
+        board.queue.items.is_empty() && board.requests.len() > requests_before
     })
     .await;
     flow.settled_in(&a).await;

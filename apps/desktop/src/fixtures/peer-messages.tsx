@@ -517,7 +517,7 @@ mockIPC((command, payload) => {
 }, { shouldMockEvents: true });
 mockWindows("main");
 
-openConversation(query.get("open") === "docs" ? DOCS : query.get("open") === "notes" ? NOTES : API);
+await openConversation(query.get("open") === "docs" ? DOCS : query.get("open") === "notes" ? NOTES : API);
 
 /** The app's window layout (App.tsx) around the open session, without its dialogs. */
 function PeerPage() {
@@ -702,7 +702,7 @@ async function driveGallery(): Promise<object> {
   const toAnswerMs = await landed("m3b-reply", NOTES, late?.closest("[data-peer-message]") ?? null);
   const toAnswer = { ...landing("m3b-reply"), ms: toAnswerMs, text: text(one("[data-peer-message~=m3b-reply]")) };
 
-  openConversation(DOCS);
+  await openConversation(DOCS);
   await shown(DOCS);
   await wait(300);
   const blocks = all("[data-slot=peer-message]").map((block) => {
@@ -778,7 +778,7 @@ async function driveJump(): Promise<object> {
   }));
   await wait(200);
   const afterArrival = dots();
-  openConversation(DOCS);
+  await openConversation(DOCS);
   await shown(DOCS);
   await wait(200);
   const afterReopen = dots();

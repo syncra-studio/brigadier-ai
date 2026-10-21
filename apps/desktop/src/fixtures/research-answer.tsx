@@ -155,7 +155,7 @@ useApp.setState((s) => ({
   conversations: { [ID]: conversation },
   connection: { status: "connected", daemon: null, reason: null },
 }));
-openConversation(ID);
+await openConversation(ID);
 
 function Page() {
   const selection = useApp((s) => s.selection);

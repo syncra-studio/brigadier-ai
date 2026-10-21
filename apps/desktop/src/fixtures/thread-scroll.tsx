@@ -119,13 +119,23 @@ for (const list of Object.values(stored)) {
 
 /** A report's request changed code, so its answer keeps its Details (Q79). */
 function requests(id: string): UserRequest[] {
-  if (id !== "long") return [];
+  // Elsewhere only the requests of the messages sent here, answered at once (see `appended`).
+  if (id !== "long") return (stored[id] ?? []).filter((message) => message.id.startsWith("sent-")).map(sentRequest);
   return (stored[id] ?? []).filter((message) => message.role === "user").map((message) => ({
     id: message.requestId!, conversationId: id, preview: "", state: { type: "done" }, startedAtMs: message.createdAtMs,
     endedAtMs: message.createdAtMs + 30_000, steeredInto: null, steeredAfter: null, undo: null,
     worked: [{ fromMs: message.createdAtMs, toMs: message.createdAtMs + 30_000 }], quotaWait: false,
     changes: { stat: { files: [{ path: "src/scroll.ts", insertions: 1, deletions: 0, binary: false }], insertions: 1, deletions: 0 }, settled: true },
   }) as UserRequest);
+}
+
+/** The request of a message sent in the fixture, answered at once. */
+function sentRequest(message: Message): UserRequest {
+  return {
+    id: message.requestId!, conversationId: message.conversationId, preview: "", state: { type: "done" },
+    startedAtMs: message.createdAtMs, endedAtMs: message.createdAtMs, steeredInto: null, steeredAfter: null,
+    undo: null, worked: [], quotaWait: false,
+  } as unknown as UserRequest;
 }
 
 function view(id: string): View {
@@ -152,8 +162,17 @@ function appended(message: Message): void {
     seq: sequence++, stream: message.conversationId, streamSeq: message.seq, atMs: Date.now(),
     event: { type: "messageAppended", message },
   } as unknown as EventEnvelope;
+  // A user message's request comes with it, as the daemon writes them: here it is answered at once.
+  const request = message.role === "user" && message.requestId ? {
+    seq: sequence++, stream: message.conversationId, streamSeq: message.seq, atMs: Date.now(),
+    event: { type: "requestUpdated", request: sentRequest(message) },
+  } as unknown as EventEnvelope : null;
   applyEvents([envelope]);
-  useBoard.setState(({ board }) => (board?.conversationId === message.conversationId ? { board: applyToBoard(board, envelope) } : {}));
+  useBoard.setState(({ board }) => {
+    if (board?.conversationId !== message.conversationId) return {};
+    const next = applyToBoard(board, envelope);
+    return { board: request ? applyToBoard(next, request) : next };
+  });
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -291,7 +310,7 @@ async function userScroll(top: number): Promise<void> {
 }
 
 async function open(id: string): Promise<void> {
-  select({ type: "conversation", id });
+  await select({ type: "conversation", id });
   // It shows once its view and its cards' code are in, however late they come.
   for (let waited = 0; waited < 10_000 && !shownIs(id); waited += 50) await settle(50);
   await settle(LOAD_MS + BLOB_MS + 400);
@@ -461,7 +480,7 @@ const steps = {
     await open("other");
     // Gone from memory: it loads again, its long replies' full text after it.
     useApp.setState((state) => ({ threads: { ...state.threads, long: emptyThread } }));
-    select({ type: "conversation", id: "long" });
+    await select({ type: "conversation", id: "long" });
     const early: number[] = [];
     // While its history loads the column is empty: a screen reader's "Loading conversation", no placeholder lines.
     let loading = false;
@@ -680,7 +699,7 @@ const steps = {
    * placeholder lines or an empty column.
    */
   async coldOpen() {
-    select({ type: "conversation", id: "other" });
+    await select({ type: "conversation", id: "other" });
     for (let waited = 0; waited < 10_000 && !shownIs("other"); waited += 25) await wait(25);
     await frame();
     let empty = 0;

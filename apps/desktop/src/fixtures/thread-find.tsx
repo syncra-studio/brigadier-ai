@@ -405,7 +405,7 @@ function highlightRules(): string[] {
 const steps = {
   /** A single line selected in the thread, then ⌘F: the bar opens at the top right, with it as its text, focused. */
   async opened() {
-    select({ type: "conversation", id: "long" });
+    await select({ type: "conversation", id: "long" });
     await settle(LOAD_MS + 400);
     const rulesBefore = highlightRules();
     const foldedBefore = $('[data-slot="earlier-turns"]')?.textContent ?? null;
@@ -686,7 +686,7 @@ async function drive(): Promise<void> {
       host.remove();
     } else if (FOLDS) {
       // A word only in a closed work fold: counted, its fold left closed while typing; Enter opens it and goes there.
-      select({ type: "conversation", id: "long" });
+      await select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
       result["before"] = { wombat: headerOf(50), badger: headerOf(52), mounted: foldOf(50) };
       press(document.body, "KeyF", { meta: true });
@@ -713,7 +713,7 @@ async function drive(): Promise<void> {
       result["shut"] = { full: full > 0, midway: midway > 0, after: foldOf(50) };
     } else if (GROUPS) {
       // A word only in a closed group inside opened work: counted, the group left closed while typing; Enter opens it and goes there.
-      select({ type: "conversation", id: "long" });
+      await select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
       blockOf(50)!.querySelector<HTMLButtonElement>('button[data-slot="request-work-header"]')!.click();
       await settle(100);
@@ -733,7 +733,7 @@ async function drive(): Promise<void> {
       result["closed"] = { group: groupOf(50), kept: blockOf(50)?.querySelector('[data-slot="work-group-kept"]') !== null };
     } else if (CAPPED) {
       // 240 loaded matches; the next older page adds 300, passing the cap inside that page.
-      select({ type: "conversation", id: "long" });
+      await select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
       press(document.body, "KeyF", { meta: true });
       await until(() => bar() !== null);
@@ -767,7 +767,7 @@ async function drive(): Promise<void> {
       result["next"] = current();
     } else if (OLDER) {
       // Words in pages not loaded: counted with the thread's own without loading; a step to one loads down to it.
-      select({ type: "conversation", id: "long" });
+      await select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
       press(document.body, "KeyF", { meta: true });
       await until(() => bar() !== null);
@@ -789,7 +789,7 @@ async function drive(): Promise<void> {
       result["entered"] = { label: label(), active: activeMatch()?.toString() ?? null, turn: activeTurn(), place: activePlace(), loads };
     } else if (LATE_EDITOR) {
       // ⌘F while the plain field stands in for the editor; the editor then loads and mounts.
-      select({ type: "conversation", id: "long" });
+      await select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
       const editable = () => $(COMPOSER_EDITABLE);
       result["standIn"] = editable() === null && $('textarea[aria-label="Message input"]') !== null;
@@ -807,7 +807,7 @@ async function drive(): Promise<void> {
       await settle(100);
       result["focusedAfter"] = document.activeElement === field();
     } else if (SHORT || new URLSearchParams(location.search).get("drive") === "top") {
-      select({ type: "conversation", id: "long" });
+      await select({ type: "conversation", id: "long" });
       await settle(LOAD_MS + 400);
       $('[data-slot="earlier-turns"]')?.click();
       await settle(100);
