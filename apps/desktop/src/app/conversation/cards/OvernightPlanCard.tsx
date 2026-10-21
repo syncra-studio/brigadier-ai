@@ -1,5 +1,4 @@
-import { useContext, useRef, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
+import { useRef, useState } from "react";
 
 import {
   phaseOutcome,
@@ -10,9 +9,10 @@ import {
   runOver,
   type StepMark,
 } from "@/app/conversation/phaseView";
-import { taskState } from "@/app/conversation/rowWords";
+import { DoneWhen } from "@/app/conversation/cards/DoneWhen";
+import { PhaseMore } from "@/app/conversation/cards/PhaseMore";
+import { RulesAndSources } from "@/app/conversation/cards/RulesAndSources";
 import { useAction } from "@/app/conversation/useAction";
-import { AgentsPanelContext } from "@/app/conversation/WorkerChip";
 import {
   deadlineLabel,
   overnightCommand,
@@ -21,13 +21,11 @@ import {
   type OvernightCardModel,
   type OvernightCommand,
 } from "@/app/conversation/overnightAdapter";
-import { AgentPlan, type AgentPlanStep, type AgentPlanStepStatus, Timeline, type TimelineEvent, disclosureRow } from "@/components/conversation";
+import { AgentPlan, type AgentPlanStep, type AgentPlanStepStatus, Timeline, type TimelineEvent } from "@/components/conversation";
 import { ProgressLine, type ProgressOutcomeStatus } from "@/components/shared";
 import { Badge, Button } from "@/components/controls";
 import { Moon } from "@/components/icons";
 import type { OvernightPhase, OvernightRun } from "@/ipc/generated";
-import { cn } from "@/lib/utils";
-import { useBoard } from "@/state/board";
 
 const MARK: Record<StepMark, AgentPlanStepStatus> = {
   pending: "pending",
@@ -37,45 +35,6 @@ const MARK: Record<StepMark, AgentPlanStepStatus> = {
   blocked: "failed",
   skipped: "skipped",
 };
-
-const NUL = "\u0000";
-
-/** A phase's workers inside the run card, one line each, each opening its worker. */
-function PhaseWork({ taskIds }: { taskIds: readonly string[] }) {
-  const { setPanel } = useContext(AgentsPanelContext);
-  // Each line as "task id NUL state NUL title", so the card re-renders only when one changes.
-  const lines = useBoard(
-    useShallow((s) =>
-      taskIds.flatMap((id) => {
-        const task = s.board?.tasks[id];
-        // A check opens from what it checked; a phase's own checks list here.
-        if (!task || (task.gateLink !== null && task.gateLink.owner.type !== "phase")) return [];
-        return [[task.id, taskState(task).word, task.title].join(NUL)];
-      }),
-    ),
-  );
-  if (lines.length === 0) return null;
-  return (
-    <ul className="flex flex-col whitespace-normal">
-      {lines.map((line) => {
-        const [taskId = "", word = "", title = ""] = line.split(NUL);
-        return (
-          <li key={taskId} className="flex min-w-0">
-            <button
-              type="button"
-              title={title}
-              onClick={() => setPanel(taskId)}
-              className="hover:text-foreground rounded-control flex min-w-0 items-center gap-1 text-start"
-            >
-              <span className="text-foreground/80 min-w-0 truncate">{title}</span>
-              <span className="shrink-0">· {word}</span>
-            </button>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
 
 /** Which phases Merge takes (the done ones in a row from the first): "phase 1", "phases 1 and 2". */
 function mergedPhases(steps: readonly RunStep[]): string | null {
@@ -317,13 +276,7 @@ export function OvernightPlanCard({
               {run.directives.deadline.time.localTime} ({run.directives.deadline.time.timeZone})
             </p>
           )}
-          {(run.rules || run.sources.length > 0) && (
-            <details className="text-muted-foreground">
-              <summary className={disclosureRow}>Rules and sources</summary>
-              {run.rules && <p className="whitespace-pre-wrap">{run.rules}</p>}
-              {run.sources.map((source) => <p key={source.path}>{source.path}{source.sections ? ` · ${source.sections}` : ""}</p>)}
-            </details>
-          )}
+          {(run.rules || run.sources.length > 0) && <RulesAndSources rules={run.rules} sources={run.sources} />}
           {restrictions.map((line) => (
             <p key={line}>{line}</p>
           ))}
@@ -470,53 +423,3 @@ function phaseEvent(
   };
 }
 
-/** A phase's workers and what it covers; open while the phase is at work. */
-function PhaseMore({
-  phase,
-  open,
-  taskIds,
-}: {
-  phase: OvernightPhase | undefined;
-  open: boolean;
-  taskIds: readonly string[];
-}) {
-  const covers = phase && (phase.scope || phase.doneWhen.length > 0) && (
-    <details>
-      <summary className={cn(disclosureRow, "text-xs")}>What it covers</summary>
-      <div className="text-muted-foreground flex flex-col gap-1.5 pt-1 text-xs">
-        {phase.scope && <p>{phase.scope}</p>}
-        <DoneWhen lines={phase.doneWhen} />
-      </div>
-    </details>
-  );
-  if (taskIds.length === 0) return covers || null;
-  const work = <PhaseWork taskIds={taskIds} />;
-  return (
-    <div className="text-muted-foreground flex flex-col gap-1 pt-1 text-xs">
-      {open ? (
-        work
-      ) : (
-        <details>
-          <summary className={disclosureRow}>Workers</summary>
-          <div className="pt-1">{work}</div>
-        </details>
-      )}
-      {covers}
-    </div>
-  );
-}
-
-/** A phase's "done when" lines. */
-function DoneWhen({ lines }: { lines: readonly { id: string; text: string }[] }) {
-  if (lines.length === 0) return null;
-  return (
-    <div>
-      <p className="font-medium">Done when</p>
-      <ul className="list-inside list-disc space-y-1">
-        {lines.map((line) => (
-          <li key={line.id}>{line.text}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}

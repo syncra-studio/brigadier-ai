@@ -2,6 +2,8 @@ import { type FC, useRef, useState } from "react";
 
 import { useAction } from "@/app/conversation/useAction";
 import { ProjectDialog } from "@/app/shell/dialogs/ProjectDialog";
+import { StandInPill } from "@/app/shell/StandInPill";
+import { WaitingPill } from "@/app/shell/WaitingPill";
 import {
   ModelSelector,
   type ModelGroup,
@@ -9,7 +11,6 @@ import {
 import { composerPill } from "@/components/conversation";
 import {
   Check,
-  Clock,
   Dock,
   Folder,
   Globe,
@@ -17,19 +18,15 @@ import {
   Settings as SettingsIcon,
   ShieldExclamation,
   ShieldTerminal,
-  Shuffle,
   Warning,
 } from "@/components/icons";
 import { Button } from "@/components/controls";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger, Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
-import { useNow } from "@/hooks/use-now";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/overlays";
 import type {
   Conversation,
   ModelChoice,
-  ModelFallback,
   PermissionLevel,
   Project,
-  QuotaWait,
 } from "@/ipc/generated";
 import { openUrl } from "@/ipc/client";
 import {
@@ -43,7 +40,6 @@ import {
   useModelGroups,
   withChoice,
 } from "@/lib/setup";
-import { choiceName, formatResetAt, VENDOR_LABELS, withResetTime } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { openSettings, updateSetup } from "@/state/actions";
 import { useApp } from "@/state/store";
@@ -73,7 +69,6 @@ export function ProvidersButton() {
     </Button>
   );
 }
-
 
 // ----- permission ------------------------------------------------------------------------
 
@@ -376,84 +371,6 @@ export function ConversationModelPicker({
         }
       />
     </>
-  );
-}
-
-/**
- * The model standing in while the chosen one is at a limit: "On Codex gpt-6-sol until 21:10 ·
- * Claude limit", the reason on hover. The picker keeps showing the saved choice.
- */
-function StandInPill({
-  fallback,
-  groups,
-}: {
-  fallback: ModelFallback;
-  groups: readonly ModelGroup[];
-}) {
-  const now = useNow(60_000);
-  const until = fallback.untilMs !== null ? ` until ${formatResetAt(fallback.untilMs, now)}` : "";
-  const text = `On ${choiceName(groups, fallback.choice)}${until} · ${VENDOR_LABELS[fallback.replaces.provider]} limit`;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          data-slot="stand-in-model"
-          aria-label={`${text}. ${fallback.reason} Open Providers.`}
-          onClick={() => openSettings("providers")}
-          className="h-pill px-pill-x rounded-capsule bg-warning/15 text-warning hover:bg-warning/25 inline-flex max-w-sm min-w-0 shrink items-center gap-1 text-xs transition-colors"
-        >
-          <Shuffle aria-hidden className="size-icon-xs shrink-0" />
-          {/* A narrow composer keeps the icon; the rest is on hover. */}
-          <span className="@lg/composer:inline hidden truncate">{text}</span>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs flex-col items-start gap-0.5">
-        <span className="font-medium">{text}</span>
-        <span>{fallback.reason}</span>
-        <span className="text-muted-foreground text-xs">
-          Your choice, {choiceName(groups, fallback.replaces)}, takes over again
-          {fallback.untilMs !== null ? ` at ${formatResetAt(fallback.untilMs, now)}` : " when its limit resets"}.
-        </span>
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-/**
- * Messages waiting for quota: the model is at its limit and no model the user allows can stand
- * in. "Waiting for quota · 21:10", why on hover. They go on their own; Stop drops them.
- */
-function WaitingPill({ wait }: { wait: QuotaWait }) {
-  const now = useNow(60_000);
-  const until = wait.resetsAtMs !== null ? ` · ${formatResetAt(wait.resetsAtMs, now)}` : "";
-  const text = `Waiting for quota${until}`;
-  const reason = withResetTime(wait.reason, wait.resetsAtMs, now);
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          data-slot="quota-wait-pill"
-          aria-label={`${text}. ${reason} Open Routing settings.`}
-          onClick={() => openSettings("routing")}
-          className="h-pill px-pill-x rounded-capsule bg-warning/15 text-warning hover:bg-warning/25 inline-flex max-w-sm min-w-0 shrink items-center gap-1 text-xs transition-colors"
-        >
-          <Clock aria-hidden className="size-icon-xs shrink-0" />
-          {/* A narrow composer keeps the icon; the rest is on hover. */}
-          <span className="@lg/composer:inline hidden truncate">{text}</span>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs flex-col items-start gap-0.5">
-        <span className="font-medium">{text}</span>
-        <span>{reason}</span>
-        {wait.rule && <span>Your rule keeps it from other models: {wait.rule}</span>}
-        {wait.ranking && <span>Kept for the models in {wait.ranking}.</span>}
-        <span className="text-muted-foreground text-xs">
-          Your messages go on their own once a model can take them; Stop drops them.
-        </span>
-      </TooltipContent>
-    </Tooltip>
   );
 }
 

@@ -422,6 +422,17 @@ table is the current one.
 | Conversation (app.pen) | `#234 TeamSentence › Briefs` | `app/conversation/activity/Briefs.tsx` | `Briefs` | |
 | Conversation (app.pen) | `#236 TeamStep › Quiet` | `app/conversation/activity/QuietBrief.tsx` | `QuietBrief` | |
 | Conversation (app.pen) | `#334 WorkersStrip › StripRow` | `app/conversation/activity/StripRow.tsx` | `StripRow` | |
+| Conversation (app.pen) | `#382 PlanCard` | `app/conversation/cards/PlanCard.tsx` | `PlanCard` | |
+| Conversation (app.pen) | `#384 OvernightPlanCard › PhaseWork` | `app/conversation/cards/PhaseWork.tsx` | `PhaseWork` | |
+| Conversation (app.pen) | `#386 OvernightPlanCard › Rules and sources disclosure` | `app/conversation/cards/RulesAndSources.tsx` | `RulesAndSources` | |
+| Conversation (app.pen) | `#388 PhaseMore` | `app/conversation/cards/PhaseMore.tsx` | `PhaseMore` | |
+| Conversation (app.pen) | `#389 DoneWhen` | `app/conversation/cards/DoneWhen.tsx` | `DoneWhen` | |
+| Conversation (app.pen) | `#392 PlanRating` | `app/conversation/cards/PlanRating.tsx` | `PlanRating` | |
+| Conversation (app.pen) | `#393 PlanFrame` | `app/conversation/cards/PlanFrame.tsx` | `PlanFrame` | |
+| Conversation (app.pen) | `#395 PlanClip` | `app/conversation/cards/PlanClip.tsx` | `PlanClip` | |
+| Conversation (app.pen) | `PlanText` | `app/conversation/cards/PlanText.tsx` | `PlanText` | moved out of PlanDocument.tsx with PlanClip; PlanDocument re-exports it |
+| Conversation (app.pen) | `#326 StandInPill` | `app/shell/StandInPill.tsx` | `StandInPill` | |
+| Conversation (app.pen) | `#327 WaitingPill` | `app/shell/WaitingPill.tsx` | `WaitingPill` | |
 
 ## Icons
 
