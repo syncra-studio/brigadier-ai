@@ -148,7 +148,7 @@ function ruleSteps(stage: string): (() => void)[] {
   if (stage === "1") return steps;
   steps.push(...pick("What the rule does", "Prefer"));
   steps.push(...pick("The model the rule is about", stage === "2b" ? "Sonnet 5.5" : "GPT-6"));
-  steps.push(...pick("The kind of work the rule is about", stage === "2b" ? "Review changes" : "Write commit messages"));
+  steps.push(...pick("The kinds of work the rule is about", stage === "2b" ? "Review changes" : "Write commit messages"));
   if (stage === "3") steps.push(() => button("Add rule", form() ?? document)?.click());
   return steps;
 }
@@ -244,12 +244,23 @@ function Fixture() {
         },
         ...pick("What the rule does", "Prefer"),
         ...pick("The model the rule is about", "Sonnet 5.5"),
-        ...pick("The kind of work the rule is about", "Review changes"),
+        ...pick("The kinds of work the rule is about", "Review changes"),
         () => {
           seen.clash = note();
         },
         ...pick("The model the rule is about", "GPT-6"),
-        ...pick("The kind of work the rule is about", "Write commit messages"),
+        // #502: kinds tick together in the open menu; unticking the last is any work again.
+        ...pick("The kinds of work the rule is about", "Write commit messages"),
+        () => menuItem("Run checks")?.click(),
+        () => {
+          seen.several = {
+            shown: text(button("The kinds of work the rule is about")),
+            ticked: all('[role="menuitemcheckbox"][aria-checked="true"]').map(text),
+            note: note(),
+          };
+          menuItem("Review changes")?.click();
+        },
+        () => menuItem("Run checks")?.click(),
         () => {
           seen.preview = note();
           button("Add rule", form() ?? document)?.click();
