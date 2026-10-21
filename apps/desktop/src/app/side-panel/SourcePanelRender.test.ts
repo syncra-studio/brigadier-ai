@@ -49,4 +49,12 @@ test("the Source panel commits from its menu, merges a branch in, lists its conf
   assert.deepEqual([committed.message, committed.amend, committed.push], ["Merge branch 'main' into brigadier/912a9469/session", false, false]);
   assert.equal(seen.afterAbort, "", "an aborted merge's message leaves the box");
   assert.equal(seen.keptMessage, "Unsent message", "closing Source keeps the unsent commit message");
+  // Nothing to commit, the change already committed on the branch: the words say so, and only the branch shows (#490).
+  assert.deepEqual(seen.clean, {
+    box: false,
+    commit: false,
+    branch: "brigadier/912a9469/session1",
+    empty: ["Nothing to commit", "The changes are committed on this branch (1 commit not pushed)."],
+  });
+  assert.deepEqual(seen.changedAgain, { box: true, commit: "Commit" });
 });
