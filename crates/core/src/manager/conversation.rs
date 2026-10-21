@@ -3643,7 +3643,8 @@ impl SessionManager {
             // What the user switched off of its agent's own setup (`integrations`).
             switched_off: match conv.kind {
                 ConversationKind::Session => {
-                    self.thread_switched_off(&conv.id, choice.provider, &dir).await
+                    self.thread_switched_off(&conv.id, choice.provider, &dir)
+                        .await
                 }
                 ConversationKind::Chat => Default::default(),
             },

@@ -186,7 +186,11 @@ fn worker_session<'a>(provider: ProviderKind, project: Option<&'a Path>) -> Sess
 }
 
 /// The agents whose workers in `project` have `server` by themselves.
-fn server_native_to(catalog: &Catalog, server: &Server, project: Option<&Path>) -> Vec<ProviderKind> {
+fn server_native_to(
+    catalog: &Catalog,
+    server: &Server,
+    project: Option<&Path>,
+) -> Vec<ProviderKind> {
     [ProviderKind::Claude, ProviderKind::Codex]
         .into_iter()
         .filter(|provider| catalog.server_native(server, &worker_session(*provider, project)))
@@ -194,7 +198,11 @@ fn server_native_to(catalog: &Catalog, server: &Server, project: Option<&Path>) 
 }
 
 /// Settings' view of `catalog`, read for `project`.
-pub(crate) fn view(catalog: &Catalog, project: Option<&Path>, settings: &Settings) -> IntegrationsView {
+pub(crate) fn view(
+    catalog: &Catalog,
+    project: Option<&Path>,
+    settings: &Settings,
+) -> IntegrationsView {
     let names = |pairs: &[(String, brigadier_registry::Secret)]| {
         pairs.iter().map(|(name, _)| name.clone()).collect()
     };
@@ -207,7 +215,9 @@ pub(crate) fn view(catalog: &Catalog, project: Option<&Path>, settings: &Setting
             source: server.source.label().to_owned(),
             project: server.project.as_ref().map(|p| p.display().to_string()),
             transport: match &server.transport {
-                Transport::Stdio { command, args, env, .. } => TransportView::Stdio {
+                Transport::Stdio {
+                    command, args, env, ..
+                } => TransportView::Stdio {
                     command: command.clone(),
                     args: args.clone(),
                     env: names(env),
@@ -241,9 +251,7 @@ pub(crate) fn view(catalog: &Catalog, project: Option<&Path>, settings: &Setting
         .map(|skill| {
             let native_to: Vec<ProviderKind> = [ProviderKind::Claude, ProviderKind::Codex]
                 .into_iter()
-                .filter(|provider| {
-                    catalog.skill_native(skill, &worker_session(*provider, project))
-                })
+                .filter(|provider| catalog.skill_native(skill, &worker_session(*provider, project)))
                 .collect();
             SkillView {
                 id: skill.id.clone(),
@@ -266,7 +274,11 @@ pub(crate) fn resolve(
     settings: &Settings,
 ) -> std::result::Result<Vec<String>, String> {
     let mut ids = Vec::new();
-    for entry in entries.iter().map(|entry| entry.trim()).filter(|e| !e.is_empty()) {
+    for entry in entries
+        .iter()
+        .map(|entry| entry.trim())
+        .filter(|e| !e.is_empty())
+    {
         let server = match catalog.find(entry) {
             Ok(server) => server,
             Err(FindError::Unknown) => {
@@ -280,7 +292,11 @@ pub(crate) fn resolve(
                 known.dedup();
                 return Err(format!(
                     "unknown integration `{entry}`: no MCP server of Claude Code, Codex, Claude Desktop or Cursor has that name or id here (known: {})",
-                    if known.is_empty() { "none".into() } else { known.join(", ") }
+                    if known.is_empty() {
+                        "none".into()
+                    } else {
+                        known.join(", ")
+                    }
                 ));
             }
             Err(FindError::Ambiguous(ids)) => {
@@ -321,7 +337,11 @@ pub(crate) struct Shared {
 }
 
 /// What of its agent's own setup `session` goes without: what the user switched off.
-pub(crate) fn switched_off(catalog: &Catalog, session: &Session<'_>, settings: &Settings) -> SwitchedOff {
+pub(crate) fn switched_off(
+    catalog: &Catalog,
+    session: &Session<'_>,
+    settings: &Settings,
+) -> SwitchedOff {
     let mut off = SwitchedOff::default();
     for server in &catalog.servers {
         if settings.mcp_servers_off.contains(&server.id)
@@ -361,7 +381,13 @@ pub(crate) fn switched_off(catalog: &Catalog, session: &Session<'_>, settings: &
 /// The servers `ids` name that `session`'s agent doesn't have by itself, as it gets them: a
 /// name that is taken (by Brigadier's own, one of the agent's, or another named one) gets a
 /// number. Values go in [`Shared::secrets`] too.
-fn named_servers(catalog: &Catalog, ids: &[String], session: &Session<'_>, settings: &Settings, shared: &mut Shared) {
+fn named_servers(
+    catalog: &Catalog,
+    ids: &[String],
+    session: &Session<'_>,
+    settings: &Settings,
+    shared: &mut Shared,
+) {
     let native: Vec<&Server> = catalog
         .servers
         .iter()
@@ -394,7 +420,9 @@ fn named_servers(catalog: &Catalog, ids: &[String], session: &Session<'_>, setti
         }
         taken.insert(name.clone());
         let (transport, env) = match &server.transport {
-            Transport::Stdio { command, args, env, .. } => (
+            Transport::Stdio {
+                command, args, env, ..
+            } => (
                 McpTransport::Stdio {
                     command: PathBuf::from(command),
                     args: args.clone(),
@@ -410,9 +438,11 @@ fn named_servers(catalog: &Catalog, ids: &[String], session: &Session<'_>, setti
             .iter()
             .map(|(name, value)| (name.clone(), value.expose().to_owned()))
             .collect();
-        shared
-            .secrets
-            .extend(env.iter().map(|(_, value)| value.clone()).filter(|v| !v.is_empty()));
+        shared.secrets.extend(
+            env.iter()
+                .map(|(_, value)| value.clone())
+                .filter(|v| !v.is_empty()),
+        );
         shared.servers.push(McpServer {
             name,
             transport,
@@ -430,7 +460,12 @@ fn named_servers(catalog: &Catalog, ids: &[String], session: &Session<'_>, setti
 /// (named by its hash), made once and never changed, so a worker running on it keeps it as is.
 /// Two skills of one name are kept apart: the second is `<name>-2`, a folder of links to its
 /// files with its `SKILL.md` renamed.
-fn shared_skills(catalog: &Catalog, session: &Session<'_>, settings: &Settings, data_dir: &Path) -> std::io::Result<Option<PathBuf>> {
+fn shared_skills(
+    catalog: &Catalog,
+    session: &Session<'_>,
+    settings: &Settings,
+    data_dir: &Path,
+) -> std::io::Result<Option<PathBuf>> {
     let mut chosen = Vec::new();
     let mut names = HashSet::new();
     for skill in &catalog.skills {
@@ -503,9 +538,19 @@ fn shared_skills(catalog: &Catalog, session: &Session<'_>, settings: &Settings, 
 fn folder_name(name: &str) -> String {
     let name: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect();
-    if name.trim_matches('-').is_empty() { "skill".into() } else { name }
+    if name.trim_matches('-').is_empty() {
+        "skill".into()
+    } else {
+        name
+    }
 }
 
 /// `skill` under the name `name` at `at`: its files linked, its `SKILL.md` a copy with the
@@ -547,11 +592,16 @@ fn link(target: &Path, at: &Path) -> std::io::Result<()> {
 /// The thread's short list of the servers a worker gets only when named: every switched-on
 /// server that isn't native to both Claude and Codex workers in `project`, by name with the
 /// agents that have it. Empty when there are none.
-pub(crate) fn thread_section(catalog: &Catalog, project: Option<&Path>, settings: &Settings) -> String {
+pub(crate) fn thread_section(
+    catalog: &Catalog,
+    project: Option<&Path>,
+    settings: &Settings,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
     for server in &catalog.servers {
-        if settings.mcp_servers_off.contains(&server.id) || RESERVED.contains(&server.name.as_str()) {
+        if settings.mcp_servers_off.contains(&server.id) || RESERVED.contains(&server.name.as_str())
+        {
             continue;
         }
         let native = server_native_to(catalog, server, project);
@@ -563,7 +613,9 @@ pub(crate) fn thread_section(catalog: &Catalog, project: Option<&Path>, settings
         let same: Vec<&Server> = catalog
             .servers
             .iter()
-            .filter(|other| other.name == server.name && !settings.mcp_servers_off.contains(&other.id))
+            .filter(|other| {
+                other.name == server.name && !settings.mcp_servers_off.contains(&other.id)
+            })
             .collect();
         let differs = same.iter().any(|other| other.transport != server.transport);
         let mut agents: Vec<&str> = Vec::new();
@@ -586,7 +638,11 @@ pub(crate) fn thread_section(catalog: &Catalog, project: Option<&Path>, settings
                 lines.push(format!("- `{}`: {}", other.id, other.source.label()));
             }
         } else if agents.is_empty() {
-            lines.push(format!("- {}: neither ({})", server.name, server.source.label()));
+            lines.push(format!(
+                "- {}: neither ({})",
+                server.name,
+                server.source.label()
+            ));
         } else {
             lines.push(format!("- {}: {}", server.name, agents.join(", ")));
         }
@@ -603,7 +659,10 @@ pub(crate) fn thread_section(catalog: &Catalog, project: Option<&Path>, settings
 impl SessionManager {
     /// The catalog of servers and skills, kept current by its watcher.
     pub(crate) fn registry(&self) -> Arc<Registry> {
-        self.registry.read().unwrap_or_else(|p| p.into_inner()).clone()
+        self.registry
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     /// Tests: reads the catalog from `roots` instead.
@@ -646,11 +705,16 @@ impl SessionManager {
     }
 
     /// The ids of the servers a task's `integrations` name, in the session's trusted project.
-    pub(crate) async fn resolve_integrations(&self, id: &ConversationId, entries: &[String]) -> Result<Vec<String>> {
+    pub(crate) async fn resolve_integrations(
+        &self,
+        id: &ConversationId,
+        entries: &[String],
+    ) -> Result<Vec<String>> {
         if entries.iter().all(|entry| entry.trim().is_empty()) {
             return Ok(Vec::new());
         }
-        let (registry, settings, repo) = (self.registry(), self.core.settings(), self.trusted_repo(id));
+        let (registry, settings, repo) =
+            (self.registry(), self.core.settings(), self.trusted_repo(id));
         let entries = entries.to_vec();
         super::blocking(move || {
             let catalog = registry.catalog(repo.as_deref());
@@ -669,7 +733,11 @@ impl SessionManager {
         cwd: &Path,
         checkout: Option<&Path>,
     ) -> Shared {
-        let (registry, settings, repo) = (self.registry(), self.core.settings(), self.trusted_repo(conversation));
+        let (registry, settings, repo) = (
+            self.registry(),
+            self.core.settings(),
+            self.trusted_repo(conversation),
+        );
         let (ids, cwd, data_dir) = (ids.to_vec(), cwd.to_owned(), self.data_dir.clone());
         let in_checkout = checkout == Some(cwd.as_path());
         let made = super::blocking(move || {
@@ -685,8 +753,8 @@ impl SessionManager {
                 ..Shared::default()
             };
             named_servers(&catalog, &ids, &session, &settings, &mut shared);
-            shared.skills = shared_skills(&catalog, &session, &settings, &data_dir)
-                .unwrap_or_else(|err| {
+            shared.skills =
+                shared_skills(&catalog, &session, &settings, &data_dir).unwrap_or_else(|err| {
                     tracing::warn!(error = %err, "the shared skills' folder couldn't be made");
                     None
                 });
@@ -697,8 +765,17 @@ impl SessionManager {
     }
 
     /// What a thread of `provider` starting in `cwd` goes without of its agent's own setup.
-    pub(crate) async fn thread_switched_off(&self, conversation: &ConversationId, provider: ProviderKind, cwd: &Path) -> SwitchedOff {
-        let (registry, settings, repo) = (self.registry(), self.core.settings(), self.trusted_repo(conversation));
+    pub(crate) async fn thread_switched_off(
+        &self,
+        conversation: &ConversationId,
+        provider: ProviderKind,
+        cwd: &Path,
+    ) -> SwitchedOff {
+        let (registry, settings, repo) = (
+            self.registry(),
+            self.core.settings(),
+            self.trusted_repo(conversation),
+        );
         let cwd = cwd.to_owned();
         super::blocking(move || {
             let catalog = registry.catalog(repo.as_deref());
@@ -716,7 +793,11 @@ impl SessionManager {
 
     /// The thread's list of servers a worker gets only when named ([`thread_section`]).
     pub(crate) async fn thread_integrations(&self, conversation: &ConversationId) -> String {
-        let (registry, settings, repo) = (self.registry(), self.core.settings(), self.trusted_repo(conversation));
+        let (registry, settings, repo) = (
+            self.registry(),
+            self.core.settings(),
+            self.trusted_repo(conversation),
+        );
         super::blocking(move || {
             let catalog = registry.catalog(repo.as_deref());
             Ok(thread_section(&catalog, repo.as_deref(), &settings))

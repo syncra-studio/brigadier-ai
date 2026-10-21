@@ -174,8 +174,14 @@ fn claude_user_and_local_scopes_expand_variables() {
         in_checkout: false,
     };
     // Claude has it, and signs in by itself; how Codex could is not known yet.
-    assert_eq!(catalog.sign_in(oauth, &session(Agent::Claude)), Some(SignIn::Native));
-    assert_eq!(catalog.sign_in(oauth, &session(Agent::Codex)), Some(SignIn::Unknown));
+    assert_eq!(
+        catalog.sign_in(oauth, &session(Agent::Claude)),
+        Some(SignIn::Native)
+    );
+    assert_eq!(
+        catalog.sign_in(oauth, &session(Agent::Codex)),
+        Some(SignIn::Unknown)
+    );
     assert_eq!(catalog.sign_in(remote, &session(Agent::Codex)), None);
 
     let local = catalog.find("local").expect("one server is named local");

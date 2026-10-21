@@ -61,8 +61,8 @@ mod fusion;
 mod git_actions;
 mod inbox_store;
 mod instructions;
-pub mod integrations;
 mod integrated_checks;
+pub mod integrations;
 mod kept;
 #[cfg(all(test, unix))]
 mod kept_live_tests;
@@ -407,7 +407,9 @@ impl SessionManager {
             let vars: Vec<(String, String)> = env
                 .vars()
                 .into_iter()
-                .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+                .filter_map(|(name, value)| {
+                    Some((name.into_string().ok()?, value.into_string().ok()?))
+                })
                 .collect();
             #[cfg(test)]
             let vars = vec![(
