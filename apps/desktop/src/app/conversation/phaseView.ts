@@ -106,24 +106,6 @@ export function runSteps(run: OvernightRun, plans: Readonly<Record<string, Plan>
   }));
 }
 
-/** The mark beside a phase's state, as the report heads it: what it came to, never colour alone. */
-export function phaseMark(mark: StepMark, over: boolean): string {
-  switch (mark) {
-    case "done":
-      return "✓";
-    case "partial":
-      return "◐";
-    case "blocked":
-      return "✕";
-    case "skipped":
-      return "–";
-    case "pending":
-      return "";
-    case "working":
-      return over ? "◐" : "";
-  }
-}
-
 /** A phase's state in a word or two (the report's `phase_word`); `over` once the run has ended. */
 export function phaseWord(mark: StepMark, over: boolean): string {
   switch (mark) {
@@ -182,7 +164,7 @@ export function phaseOutcome(run: OvernightRun, step: RunStep, over: boolean): s
 }
 
 /** "Phase 2 of 3 · Fix": "of m" only when the plan numbers its phases from 1 in order. */
-export function phaseTitle(step: RunStep, total: number): string {
+function phaseTitle(step: RunStep, total: number): string {
   return `Phase ${step.number === step.position ? `${step.number} of ${total}` : step.number} · ${step.name}`;
 }
 
@@ -195,7 +177,7 @@ export function currentStep(steps: readonly RunStep[]): RunStep | null {
 }
 
 /** The phases settled done, and those worked on: phases the run left out don't count. */
-export function phasesDone(steps: readonly RunStep[]): { done: number; worked: number } {
+function phasesDone(steps: readonly RunStep[]): { done: number; worked: number } {
   const worked = steps.filter((step) => step.mark !== "skipped").length;
   return { done: steps.filter((step) => step.mark === "done").length, worked };
 }

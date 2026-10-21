@@ -13,7 +13,7 @@ import { emptyThread, useApp } from "@/state/store";
 import { toast } from "@/state/toasts";
 
 /** Run facts translated for the shared card. */
-export type OvernightDetails = {
+type OvernightDetails = {
   /**
    * What waits on the user and was decided for them: the same counts as the lists in the
    * context card right above, so the two never disagree.
@@ -78,7 +78,7 @@ export type OvernightActions = {
 };
 
 /** A continuation replaces only its own lineage, including bare goals without plan IDs. */
-export function currentRuns(runs: Readonly<Record<string, OvernightRun>>): OvernightRun[] {
+function currentRuns(runs: Readonly<Record<string, OvernightRun>>): OvernightRun[] {
   const continued = new Set(Object.values(runs).flatMap((run) => run.predecessor ? [run.predecessor] : []));
   return Object.values(runs)
     .filter((run) => run.state !== "superseded" && !continued.has(run.id))
@@ -88,7 +88,7 @@ export function currentRuns(runs: Readonly<Record<string, OvernightRun>>): Overn
 /** A worker still at its work, or yet to start. */
 const AT_WORK = new Set<TaskState>(["queued", "starting", "running", "blocked", "paused"]);
 
-export function projectOvernight(run: OvernightRun, board: Board, report?: string): OvernightCardModel {
+function projectOvernight(run: OvernightRun, board: Board, report?: string): OvernightCardModel {
   const waiting = Object.keys(board.waiting).length;
   const decided = board.decisions.length;
   const steps = runSteps(run, board.plans);
