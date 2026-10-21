@@ -7,10 +7,11 @@ const parse = (dump: string) =>
   JSON.parse(dump.replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&")) as Record<string, unknown>;
 
 // The real step in Chromium over a faked daemon: connected agents come first, each card offers
-// the one thing it needs next. Install opens the agent's install guide; once it is installed
-// (seen when the window comes back) the card offers Sign in and waits for the browser's sign-in;
-// hovered, Waiting… reads Cancel in the same room and stops it. The card says a failure on its
-// line, and turns Connected with its plan once the sign-in is noticed.
+// the one thing it needs next. Install is Connect, as in Settings › Providers: the agent's own
+// installer runs, the card says so and waits, then waits for the browser's sign-in; hovered,
+// Waiting… reads Cancel in the same room and stops it, the agent left installed and Sign in
+// offered. The card says a failure on its line, and turns Connected with its plan once the
+// sign-in is noticed. No install guide opens.
 // The cards keep their places; the line under the title follows what's connected.
 test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }, async (t) => {
   const seen = parse(await renderFixtureLive(t, "onboarding-agents.html?drive=1", "onboarding-agents-result", 30000));
@@ -24,7 +25,7 @@ test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }
     count: "1 of 2 connected",
     continue: true,
   });
-  assert.deepEqual(seen.found, { name: "Claude Code", line: "Found on this computer · Not signed in", action: "Sign in" });
+  assert.deepEqual(seen.installing, { name: "Claude Code", line: "Installing Claude Code…", action: "Waiting…" });
   assert.deepEqual(seen.waiting, { name: "Claude Code", line: "Complete sign-in in your browser", action: "Waiting…" });
   assert.deepEqual(seen.hover, {
     name: "Claude Code",
@@ -44,28 +45,29 @@ test("onboarding: an agent's card from Install to Connected", { timeout: 60000 }
     count: "2 of 2 connected",
     continue: true,
   });
-  assert.deepEqual(seen.asked, [
-    "openUrl https://code.claude.com/docs/en/setup",
-    "connectAgent claude",
-    "cancelConnect claude",
-    "connectAgent claude",
-    "connectAgent claude",
-  ]);
+  assert.deepEqual(seen.asked, ["connectAgent claude", "cancelConnect claude", "connectAgent claude", "connectAgent claude"]);
   assert.deepEqual(seen.jargon, []);
 });
 
-// On Windows Install is Connect, as in Settings › Providers: the agent's own installer runs, the
-// card says so and waits, then waits for the sign-in and turns Connected. No guide opens.
-test("onboarding: on Windows Install installs and signs in", { timeout: 60000 }, async (t) => {
-  const seen = parse(
-    await renderFixtureLive(t, "onboarding-agents.html?drive=1&windows=1", "onboarding-agents-result", 30000),
-  );
-  assert.equal(seen.error, undefined);
-  assert.deepEqual(seen.installing, { name: "Claude Code", line: "Installing Claude Code…", action: "Waiting…" });
-  assert.deepEqual(seen.waiting, { name: "Claude Code", line: "Complete sign-in in your browser", action: "Waiting…" });
-  assert.deepEqual(seen.connected, { name: "Claude Code", line: "Max plan", action: "Connected" });
-  assert.deepEqual(seen.asked, ["connectAgent claude"]);
-});
+// Install is Connect on every platform: the card installs, waits for the sign-in and turns
+// Connected, and no guide opens.
+for (const platform of ["macos", "linux", "windows"]) {
+  test(`onboarding: on ${platform} Install installs and signs in`, { timeout: 60000 }, async (t) => {
+    const seen = parse(
+      await renderFixtureLive(
+        t,
+        `onboarding-agents.html?drive=1&install=1&platform=${platform}`,
+        "onboarding-agents-result",
+        30000,
+      ),
+    );
+    assert.equal(seen.error, undefined);
+    assert.deepEqual(seen.installing, { name: "Claude Code", line: "Installing Claude Code…", action: "Waiting…" });
+    assert.deepEqual(seen.waiting, { name: "Claude Code", line: "Complete sign-in in your browser", action: "Waiting…" });
+    assert.deepEqual(seen.connected, { name: "Claude Code", line: "Max plan", action: "Connected" });
+    assert.deepEqual(seen.asked, ["connectAgent claude"]);
+  });
+}
 
 // With no agent connected, the one found on this computer comes first and Continue waits, on
 // Enter too.
