@@ -1,6 +1,7 @@
 import { type FC, useContext } from "react";
 
-import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
+import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip";
+import { WorkerGlyph } from "@/components/conversation";
 
 /**
  * A worker's name as a button that opens its thread, with its glyph unless the sentence shows

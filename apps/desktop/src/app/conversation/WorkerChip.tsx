@@ -1,7 +1,7 @@
 import { createContext, memo, useContext, useState } from "react";
 
 import { namedTasks, plainLine, workerName } from "@/app/conversation/rowWords";
-import { IdGlyph } from "@/components/icons";
+import { WorkerGlyph } from "@/components/conversation";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";
 import type { Task, TaskState } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
@@ -40,24 +40,6 @@ export const TASK_STATE_LABELS: Record<TaskState, string> = {
 /** A task's state in words; a task paused for quota waits for it rather than for the user. */
 export function taskStateLabel(task: Task): string {
   return task.state === "paused" && task.quotaWait ? "Waiting for quota" : TASK_STATE_LABELS[task.state];
-}
-
-/**
- * A worker's own glyph and colour, the same wherever it appears; `working` adds its status dot,
- * `tone` recolours it for a state.
- */
-export function WorkerGlyph({
-  taskId,
-  working,
-  tone,
-  className,
-}: {
-  taskId: string;
-  working?: boolean | undefined;
-  tone?: string | undefined;
-  className?: string | undefined;
-}) {
-  return <IdGlyph id={taskId} dot={working} className={cn(className, tone)} />;
 }
 
 /** What a worker is called (see `workerName`), rather than its `task-N`. */

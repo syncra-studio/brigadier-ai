@@ -3,7 +3,7 @@ import { type FC, useMemo, useState } from "react";
 import { lastReplies, type StripView, stripWords, workersStrip } from "@/app/conversation/activity/stripView";
 import { StripRow } from "@/app/conversation/activity/StripRow";
 import { useAction } from "@/app/conversation/useAction";
-import { WorkerGlyph } from "@/app/conversation/WorkerChip";
+import { WorkerGlyph } from "@/components/conversation";
 import { Button } from "@/components/controls";
 import { ChevronRight, StopCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/overlays";

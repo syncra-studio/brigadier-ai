@@ -1,8 +1,8 @@
-import { useAuiState, type TextMessagePartProps, type Unstable_TriggerItem, type ChipMention, ComposerMentions, type MentionGroup, MessageInlineImage, MessagePastedText, MarkdownBlock, InlineImageContext, InlinePasteContext, TaskMentionContext } from "@/components/conversation";
+import { type ChipMention, ComposerMentions, InlineImageContext, InlinePasteContext, MarkdownBlock, type MentionGroup, MessageInlineImage, MessagePastedText, TaskMentionContext, type TextMessagePartProps, type Unstable_TriggerItem, useAuiState, WorkerGlyph } from "@/components/conversation";
 import { type FC, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { WorkerChip, WorkerGlyph } from "@/app/conversation/WorkerChip";
+import { WorkerChip } from "@/app/conversation/WorkerChip";
 import { Chat, File, Folder, Globe } from "@/components/icons";
 import type { AttachmentRef, Conversation, Mention } from "@/ipc/generated";
 import { normalizedImages } from "@/lib/inlineImages";

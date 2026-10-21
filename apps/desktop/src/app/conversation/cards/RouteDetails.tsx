@@ -1,4 +1,4 @@
-import { Section } from "@/app/conversation/cards/common";
+import { Section } from "@/components/shared";
 import { PROVIDER_LABELS } from "@/app/inspector/providers/shared";
 import { RankingView } from "@/app/settings/RankingView";
 import type { ModelGroup } from "@/components/shared";

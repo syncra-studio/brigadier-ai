@@ -2,7 +2,8 @@ import { memo, useContext } from "react";
 
 import { workerDone, workerWorking, workerState, workerPreview } from "@/app/conversation/workerPresentation";
 import { StopWorker } from "@/app/conversation/activity/StopWorker";
-import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
+import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip";
+import { WorkerGlyph } from "@/components/conversation";
 import { RowTime } from "@/app/conversation/RowTime";
 import { cn } from "@/lib/utils";
 import { useBoard } from "@/state/board";

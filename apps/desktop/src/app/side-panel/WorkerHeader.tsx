@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import { StopWorker } from "@/app/conversation/activity/StopWorker";
-import { WorkerGlyph } from "@/app/conversation/WorkerChip";
+import { WorkerGlyph } from "@/components/conversation";
 import { WORKERS_LABEL } from "@/app/side-panel/workersLabel";
 import { TooltipIconButton } from "@/components/controls";
 import { ArrowLeft } from "@/components/icons";

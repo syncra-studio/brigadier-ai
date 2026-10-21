@@ -1,4 +1,4 @@
-import { Counts } from "@/app/conversation/Counts";
+import { Counts } from "@/components/shared";
 import type { FileStat } from "@/ipc/generated";
 import { cn } from "@/lib/utils";
 

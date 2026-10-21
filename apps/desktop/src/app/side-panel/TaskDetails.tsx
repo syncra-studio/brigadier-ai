@@ -2,7 +2,8 @@ import { useState } from "react";
 
 import { MarkdownBlock, mono } from "@/components/conversation";
 import { ArtifactDialog } from "@/app/side-panel/ArtifactDialog";
-import { DiffStatView, Section, short } from "@/app/conversation/cards/common";
+import { DiffStatView, short } from "@/app/conversation/cards/common";
+import { Section } from "@/components/shared";
 import { FileList } from "@/app/side-panel/FileList";
 import { useAction } from "@/app/conversation/useAction";
 import { RouteSections } from "@/app/conversation/cards/RouteDetails";

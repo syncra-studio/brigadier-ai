@@ -23,7 +23,7 @@ import { BarDivider } from "@/app/shell/BarDivider";
 import { ChatTab } from "@/app/shell/ChatTab";
 import { SessionTab } from "@/app/shell/SessionTab";
 import { OutputTab } from "@/app/side-panel/OutputTab";
-import { useMockupTab } from "@/app/conversation/MockupTabIcon";
+import { useMockupTab } from "@/app/conversation/MockupTab";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import type { Conversation } from "@/ipc/generated";
 import { preloadable } from "@/lib/preloadable";

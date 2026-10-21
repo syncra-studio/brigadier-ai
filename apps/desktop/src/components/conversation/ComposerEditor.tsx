@@ -35,7 +35,8 @@ import {
 } from "lexical";
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
-import { WorkerGlyph, useWorkerName } from "@/app/conversation/WorkerChip";
+import { useWorkerName } from "@/app/conversation/WorkerChip";
+import { WorkerGlyph } from "./elements/worker-glyph";
 import { type BlobAttachmentAdapter, FILES_UPLOADING, readingFiles, uploading } from "@/app/conversation/attachments";
 import { usePromptHistory } from "@/app/conversation/composerDraft";
 import { enterAction } from "@/app/conversation/composerKeys";

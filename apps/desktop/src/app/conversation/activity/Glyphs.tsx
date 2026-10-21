@@ -1,6 +1,6 @@
 import type { FC } from "react";
 
-import { WorkerGlyph } from "@/app/conversation/WorkerChip";
+import { WorkerGlyph } from "@/components/conversation";
 
 /** The glyphs of a sentence's workers, up front: one each, the first four. */
 export const Glyphs: FC<{ taskIds: readonly string[] }> = ({ taskIds }) => (

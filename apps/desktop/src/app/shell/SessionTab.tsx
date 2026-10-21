@@ -1,9 +1,9 @@
 import { useCallback, useLayoutEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
 
-import { MockupTabIcon, MockupTabStatus } from "@/app/conversation/MockupTabIcon";
+import { MockupTabStatus } from "@/app/conversation/MockupTab";
 import { BrowserTabIcon } from "@/app/conversation/BrowserTabIcon";
 import { TabMenu } from "@/app/shell/TabMenu";
-import { FileTypeIcon } from "@/components/conversation";
+import { FileTypeIcon, MockupTabIcon } from "@/components/conversation";
 import { ChatCompose, DiffGlyph, Dock, Document, FileDocument, Globe, Lightbulb, ShieldCheck, Terminal, X } from "@/components/icons";
 import type { useDragReorder } from "@/hooks/use-drag-reorder";
 import { cn } from "@/lib/utils";

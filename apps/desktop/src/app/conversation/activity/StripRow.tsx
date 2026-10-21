@@ -1,10 +1,11 @@
 import { memo, useContext } from "react";
 
 import { StopWorker } from "@/app/conversation/activity/StopWorker";
-import { Counts } from "@/app/conversation/Counts";
+import { Counts } from "@/components/shared";
 import { RowTime } from "@/app/conversation/RowTime";
 import { useTaskActivityLine } from "@/app/conversation/WorkerActivity";
-import { AgentsPanelContext, useWorkerName, WorkerGlyph } from "@/app/conversation/WorkerChip";
+import { AgentsPanelContext, useWorkerName } from "@/app/conversation/WorkerChip";
+import { WorkerGlyph } from "@/components/conversation";
 import { workerDone, workerState } from "@/app/conversation/workerPresentation";
 import { workerStat } from "@/app/side-panel/WorkerSummary";
 import { cn } from "@/lib/utils";

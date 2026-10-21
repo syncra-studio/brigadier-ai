@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import { COMPOSER_EDITABLE } from "@/app/conversation/composerTarget";
-import { Counts } from "@/app/conversation/Counts";
+import { Counts } from "@/components/shared";
 import { TooltipIconButton } from "@/components/controls";
 import {
   Check,

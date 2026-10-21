@@ -84,7 +84,7 @@ that draw nothing may name the file.
 | `controls/` | Primitives · Controls | button, icon button, badge, input, checkbox, switch, segmented, tabs, toggle, toggle group, key chip, source count badge |
 | `overlays/` | Primitives · Menus, popovers & dialogs | dialog, confirm dialog, popover, dropdown and context menus, tooltip, toast |
 | `layout/` | ScrollFade (Menus board), Skeleton (Controls board) | sidebar, sidebar layout, collapsible, scroll fade, skeleton |
-| `shared/` | Shared app parts | settings card and search, state dot, usage bar, banner, empty state, titlebar button, copy button, model selector, progress line, labeled divider, terminal button, site icon |
+| `shared/` | Shared app parts | settings card and search, state dot, usage bar, banner, empty state, titlebar button, copy button, model selector, progress line, labeled divider, terminal button, site icon, counts, section |
 | `conversation/` | (app.pen Conversation boards) | the conversation kit: thread, message rail, markdown, code blocks, composer parts, transcript; `kit.ts` is the one door to the chat library |
 | `views/<view>/` | (on their surface's boards) | views built on a drawing library, each its own folder so it loads on demand: `terminal` (xterm), `diff` (@pierre/diffs), `brain-graph` (sigma), `page-editor` (lexical) |
 
@@ -148,16 +148,16 @@ table is the current one.
 | Glyphs & indicators | `SidebarGlyph/Open`, `SidebarGlyph/Closed (floating)` | `components/shared/sidebar-toggle.tsx` | `SidebarGlyph` | |
 | Glyphs & indicators | `StepIcon/read` … `StepIcon/stop` | `components/conversation/elements/step-icon.tsx` | `StepIcon`, `stepIconName` | |
 | Glyphs & indicators | `FileTypeIcon/Image`, `Document`, `Data`, `Code` | `components/conversation/elements/file-type-icon.tsx` | `FileTypeIcon` | |
-| Glyphs & indicators | `WorkerGlyph` | `app/conversation/WorkerChip.tsx` | `WorkerGlyph` | in app |
+| Glyphs & indicators | `WorkerGlyph` | `components/conversation/elements/worker-glyph.tsx` | `WorkerGlyph` | |
 | Glyphs & indicators | `SidebarActivityMark/Working`, `/Unread`, `SidebarError`, `SessionStatusLabel` | `components/shared/session-status.tsx` | `SidebarActivityMark`, `SidebarError`, `SessionStatusLabel` | |
-| Glyphs & indicators | `StateIcon/Running`, `StateIcon/Paused` | `app/conversation/Activities.tsx` | `StateIcon` (file-local) | in app |
+| Glyphs & indicators | `StateIcon/Running`, `StateIcon/Paused` | `components/conversation/elements/state-icon.tsx` | `StateIcon` | |
 | Glyphs & indicators | `Donut` | `components/conversation/elements/donut.tsx` | `Donut` | |
 | Glyphs & indicators | `StepGlyph/Done`, `Failed`, `Stopped`, `Pending` | `components/conversation/elements/step-glyph.tsx` | `StepGlyph` | |
 | Glyphs & indicators | `CiGlyph/Passed` | `components/conversation/elements/ci-glyph.tsx` | `CiGlyph` | |
-| Glyphs & indicators | `MockupTabIcon` | `app/conversation/MockupTabIcon.tsx` | `MockupTabIcon` | in app |
-| Glyphs & indicators | `FaviconGlyph/Globe`, `Favicon`, `Loading`, `Loading with favicon` | `app/conversation/BrowserTabIcon.tsx` | `FaviconGlyph`, `BrowserTabIcon` | in app |
+| Glyphs & indicators | `MockupTabIcon` | `components/conversation/elements/mockup-tab-icon.tsx` | `MockupTabIcon` (with `useMockup`, `mockupBusy`) | the tab's own hooks stay in `app/conversation/MockupTab.tsx` |
+| Glyphs & indicators | `FaviconGlyph/Globe`, `Favicon`, `Loading`, `Loading with favicon` | `components/conversation/elements/favicon-glyph.tsx` | `FaviconGlyph` | its look is `favicon-glyph.css`; the browser tab's `BrowserTabIcon` stays in `app/conversation/BrowserTabIcon.tsx` |
 | Glyphs & indicators | `SiteIcon/Globe`, `SiteIcon/Favicon` | `components/shared/site-icon.tsx` | `SiteIcon` | its look is the New tab's `new-tab-site-icon` class (`app/side-panel/NewTabTools.css`) |
-| Glyphs & indicators | `Counts` | `app/conversation/Counts.tsx` | `Counts` (`dim`, `quiet`) | in app |
+| Glyphs & indicators | `Counts` | `components/shared/counts.tsx` | `Counts` (`dim`, `quiet`) | |
 | Glyphs & indicators | `SourceCountBadge` | `components/controls/source-count-badge.tsx` | `SourceCountBadge` (`count`) | |
 | Glyphs & indicators | `Share` | `components/shared/share.tsx` | `Share` | |
 | Shared app parts | `TitlebarNav` | `components/shared/titlebar-nav.tsx` | `TitlebarNav` | |
@@ -169,7 +169,7 @@ table is the current one.
 | Shared app parts | `CopyButton` | `components/shared/copy-button.tsx` | `CopyButton` | |
 | Shared app parts | `ModelSelector` | `components/shared/model-selector.tsx` | `ModelSelector` | |
 | Shared app parts | `ProgressLine` | `components/shared/progress-line.tsx` | `ProgressLine` | |
-| Shared app parts | `Section` | `app/conversation/cards/common.tsx` | `Section` | in app |
+| Shared app parts | `Section` | `components/shared/section.tsx` | `Section` | |
 | Shared app parts | `SettingsButton` | `components/controls/button.tsx` | `Button variant="soft" size="sm"` | |
 | Shared app parts | `SettingsSearch` | `components/shared/settings-search.tsx` | `SettingsSearch` | |
 | Shared app parts | `Settings Card`, `Settings Row` | `components/shared/settings-card.tsx`, `settings-row.tsx` | `SettingsCard`, `RowText`, `settingsRows`; `SettingsRow` | |
