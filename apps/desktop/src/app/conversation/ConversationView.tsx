@@ -433,7 +433,8 @@ export function ConversationView({
   const pending = useApp(
     useShallow((s) =>
       conversationId
-        ? s.pending.filter((entry) => entry.conversationId === conversationId)
+        // One sent to wait shows in the queue rail instead.
+        ? s.pending.filter((entry) => entry.conversationId === conversationId && !entry.queued)
         : NO_PENDING,
     ),
   );

@@ -30,6 +30,7 @@ import { deleteQueued, openQueuedAsSession, openQueuedInSideChat, resumeQueue, r
 import { HeldNote } from "@/app/conversation/HeldNote";
 import { MovedMessageNotice } from "@/app/conversation/MovedMessageNotice";
 import { useBoard } from "@/state/board";
+import { useQueueRows, type QueueRow } from "@/state/queueRows";
 import { setSetting } from "@/state/settings";
 import { useApp } from "@/state/store";
 
@@ -96,15 +97,18 @@ function attachmentLabel(attachments: readonly AttachmentRef[]): string | null {
  */
 export function QueueCard({ conversationId }: { conversationId: string }) {
   const aui = useAui();
-  const queue = useBoard((s) => (s.board?.conversationId === conversationId ? s.board.queue : null));
-  const items = queue?.items ?? NO_ITEMS;
+  // A message just sent shows at once; its row does nothing until the daemon has it.
+  const { queue, rows: items } = useQueueRows(conversationId);
   const moved = queue?.moved ?? NO_MOVED;
   // Behind the row now `to - 1` (the front for 0), in assistant-ui's terms.
   const moveTo = (id: string, to: number) => {
+    if (items.find((item) => item.id === id)?.local) return;
     const rest = items.filter((item) => item.id !== id);
-    aui.composer().queueItem({ id }).move({ lane: "queue", insertAfter: rest[to - 1]?.id ?? null });
+    const anchor = rest.slice(0, to).findLast((item) => !item.local);
+    aui.composer().queueItem({ id }).move({ lane: "queue", insertAfter: anchor?.id ?? null });
   };
-  const { listRef, shown, dragging, grip } = useDragReorder<QueuedMessage, HTMLOListElement>({
+  const stored = items.filter((item) => !item.local);
+  const { listRef, shown, dragging, grip } = useDragReorder<QueueRow, HTMLOListElement>({
     items,
     idOf: (item) => item.id,
     rowSelector: "[data-slot=message-queue-item]",
@@ -146,7 +150,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
               dragging={dragging === item.id}
               deciding={item.deciding}
               grip={
-                items.length > 1 && (
+                items.length > 1 && !item.local && (
                   <button
                     type="button"
                     aria-label="Drag to reorder"
@@ -206,7 +210,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 side="top"
                 size="xs"
                 className="text-muted-foreground w-auto"
-                onClick={() => aui.composer().queueItem({ id: item.id }).move({ lane: "steer", insertAfter: null })}
+                onClick={() => !item.local && aui.composer().queueItem({ id: item.id }).move({ lane: "steer", insertAfter: null })}
               >
                 <ArrowCurvedRight />
                 Steer
@@ -215,7 +219,7 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 tooltip="Delete queued message"
                 side="top"
                 className="text-muted-foreground"
-                onClick={() => aui.composer().queueItem({ id: item.id }).remove()}
+                onClick={() => !item.local && aui.composer().queueItem({ id: item.id }).remove()}
               >
                 <Trash />
               </TooltipIconButton>
@@ -232,14 +236,14 @@ export function QueueCard({ conversationId }: { conversationId: string }) {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem
-                    disabled={!pull || !composerEmpty}
-                    onSelect={() => action.run(async () => pull?.(items.indexOf(item)))}
+                    disabled={!pull || !composerEmpty || !!item.local}
+                    onSelect={() => action.run(async () => pull?.(stored.indexOf(item)))}
                   >
                     <Pencil />
                     Edit message
                   </DropdownMenuItem>
                   {sideChats && (
-                    <DropdownMenuItem onSelect={() => action.run(() => openQueuedInSideChat(conversationId, item))}>
+                    <DropdownMenuItem disabled={!!item.local} onSelect={() => action.run(() => openQueuedInSideChat(conversationId, item))}>
                       <ChatCompose />
                       Open in side chat
                     </DropdownMenuItem>

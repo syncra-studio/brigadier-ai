@@ -627,21 +627,27 @@ export async function send(
   const prepared = prepareTabChatSend(conversationId);
   if (prepared) await prepared;
   const board = boardOf(conversationId);
+  // A send still under way, or one whose turn the board doesn't show yet: the daemon is busy
+  // with it, so this one waits too.
+  const starting = board !== null && turnStarting(conversationId, board);
   const running = board !== null && (board.run === "running" || board.run === "starting");
   const session = useApp.getState().conversations[conversationId]?.kind === "session";
-  const working = session && board !== null && workingRequest(board) !== null;
+  const working = session && board !== null && (workingRequest(board) !== null || starting);
   const steer = lane === "steer";
   const queue = board?.queue ?? null;
   // Asked to queue with no slot: last.
   const slot = steer ? null : (queueIndex ?? (lane === "queue" ? (queue?.items.length ?? 0) : null));
-  // A message that waits shows in the queue, not the thread; a steered one arrives as an event.
-  const waits = running || working || (slot !== null && !!queue?.paused);
-  const localId = waits ? null : crypto.randomUUID();
+  const paused = slot !== null && !!queue?.paused;
+  // A message that waits shows in the queue at once, not the thread; a steered one arrives
+  // as an event.
+  const waits = running || starting || working || paused;
+  const queued = waits && !steer;
+  const localId = waits && steer ? null : crypto.randomUUID();
   // Whatever a Stop just showed, what it sends now shows as it really is.
   dropTurnStops(conversationId);
   if (localId) {
     // The thread places the turn it starts once it shows, under this id (see `shownIdOf`).
-    expectSentTurn(conversationId, localId);
+    if (!queued) expectSentTurn(conversationId, localId);
     useApp.setState((state) => ({
       pending: [
         ...state.pending,
@@ -653,6 +659,8 @@ export async function send(
           mentions: outgoing.mentions,
           createdAtMs: Date.now(),
           queuedIds: queue?.items.map((item) => item.id) ?? [],
+          // The daemon has the thread judge what is sent while a session's answer works.
+          ...(queued ? { queued: { index: slot, deciding: working && !paused } } : {}),
         },
       ],
     }));
@@ -668,7 +676,7 @@ export async function send(
       queueIndex: slot,
     });
     if (outcome.type === "sent") {
-      if (localId) confirmSent(conversationId, outcome.message, localId);
+      if (localId && !queued) confirmSent(conversationId, outcome.message, localId);
       updateThread(conversationId, (thread) => ({
         ...thread,
         items: mergeMessages(thread.items, [outcome.message]),
@@ -676,9 +684,11 @@ export async function send(
     } else {
       // Reconcile before publishing the rail item, including when the response beats its event.
       // Its echo, once its queue event removed it, needs no guard in the others.
+      let unseen = false;
       useApp.setState((state) => {
         const pending = state.pending.filter((entry) => entry.localId !== localId);
         if (localId && pending.length === state.pending.length) return state;
+        unseen = !!localId;
         return {
           pending: pending.map((entry) =>
             entry.conversationId === conversationId && !entry.queuedIds?.includes(outcome.item.id)
@@ -686,12 +696,14 @@ export async function send(
               : entry),
         };
       });
-      // Shown before its queue event arrives. If the queue changed meanwhile, the events are
-      // newer than this answer (the item may already be sent or deleted) and bring it anyway.
+      // Shown before its queue event arrives, in place of its row. Its row still showing means
+      // no event brought it yet, so none sent or deleted it either; without one, a queue that
+      // changed meanwhile has newer events, which bring it anyway.
       updateBoard(conversationId, (current) => {
-        if (current.queue !== queue) return current;
+        if (!unseen && current.queue !== queue) return current;
+        if (current.queue.items.some((entry) => entry.id === outcome.item.id)) return current;
         const items = [...current.queue.items];
-        items.splice(slot ?? items.length, 0, outcome.item);
+        items.splice(Math.min(slot ?? items.length, items.length), 0, outcome.item);
         return { ...current, queue: { ...current.queue, items } };
       });
     }
@@ -702,6 +714,27 @@ export async function send(
       }));
     }
   }
+}
+
+/** How long after the daemon took a message its turn may still be missing from the board. */
+const TURN_SHOWS_MS = 30_000;
+
+/**
+ * Whether a turn is starting that the board doesn't show yet: a send to the conversation is
+ * still under way, or the daemon took a message lately whose request hasn't reached the board.
+ * Its events can come seconds after the send's answer while the connection is busy.
+ */
+function turnStarting(conversationId: string, board: Board): boolean {
+  const { pending, threads } = useApp.getState();
+  if (pending.some((entry) => entry.conversationId === conversationId)) return true;
+  const since = Date.now() - TURN_SHOWS_MS;
+  return (threads[conversationId]?.items ?? []).some(
+    (message) =>
+      message.role === "user" &&
+      message.createdAtMs >= since &&
+      !!message.requestId &&
+      !board.requests[message.requestId],
+  );
 }
 
 /** Changes what can still change after creation: model, effort and permission level. */
