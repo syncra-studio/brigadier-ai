@@ -10,12 +10,12 @@ use brigadier_core::tools::{
     LandPhase, ListSessions, MessageSession, MessageWorker, NoteForUser, NoteProgress,
     OfferFeedback, OfferSession, OpenInApp, OrchestratorCall, PlanPhases, PreviewLog,
     ProposeOvernight, ProposePlan, QueryBrain, ReadArtifact, ReadPage, ReadSession, ReadTerminal,
-    RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RerunTask, ReviewCandidate,
-    ReviewPlan, Role, RouteFollowUp, RunCheck, RunCommand, RunTools, RunUnsandboxed, SaveMemory,
-    SaveReport, SearchTranscript, SettleStep, SettleWait, ShowSession, StartPreview, StartVerifier,
-    StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline, SubmitReport,
-    SuggestFullAccess, SuggestSetting, TabChatCall, TabTools, TerminalRun, ThreadRunCheck,
-    ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
+    RecordFindings, RecordNodes, Remember, ReportRef, RequestApproval, RequestReview, RerunTask,
+    ReviewPlan, Role, RouteFollowUp, RunCheck, RunChecks, RunCommand, RunTools, RunUnsandboxed,
+    SaveMemory, SaveReport, SearchTranscript, SetHeadline, SettleStep, SettleWait, ShowSession,
+    StartPreview, StartVerifier, StopMerge, StopPreview, StopWorker, StoreOutput, SubmitOutline,
+    SubmitReport, SuggestFullAccess, SuggestSetting, TabChatCall, TabTools, TerminalRun,
+    ThreadRunCheck, ToolCall, WaitForReplies, WorkerCall, WritePage, WriteTabFile,
 };
 use rmcp::model::{JsonObject, MetaObject, Tool};
 use serde::de::DeserializeOwned;
@@ -187,7 +187,7 @@ the lead's. Small work needs none: land the lead. With fresh: true it gets only 
 request, the user's constraints, done_when and the candidate commit (a task's, or commit for your \
 own work) and tries to break it. Returns at once.";
 
-const REVIEW_CANDIDATE: &str = "Ask the other vendor to review your candidate commit (your \
+const REQUEST_REVIEW: &str = "Ask the other vendor to review your candidate commit (your \
 checkout's HEAD by default), small changes too. What earlier reviews already cover isn't \
 reviewed again: only what came after, and after findings their fix is re-checked. It waits \
 for the findings (wait_seconds) and returns them in its reply; one still running then \
@@ -218,7 +218,7 @@ money, handling credentials yourself (a token, a password, the keychain directly
 something outside this session's own work. Not for pushes, pull requests or deploys (just do \
 those, on the git and gh sign-in the user set up) nor for work inside the session. Returns at once; the decision arrives later as a message.";
 
-const REVIEW_CODE: &str = "Start one review of your committed work by a model from the other \
+const WORKER_REQUEST_REVIEW: &str = "Start one review of your committed work by a model from the other \
 vendor, from where your work started to your last commit (uncommitted changes are committed for \
 you first). Returns at once: keep working, and the findings arrive later as a message from \
 Brigadier. Don't wait for them unless your task says so: report once your checks pass and your \
@@ -306,10 +306,19 @@ branches, ended reviews' checkouts), by Brigadier's own records, and says what w
 stayed and why. Brigadier already cleans up after you; never delete branches, worktrees or temp \
 folders by hand.";
 
-const RERUN_CHECKS: &str = "Runs the session's full checks again at its branch's tip, now and \
-without kept results. They already run on their own once after each landing (and after your \
-own commits), so call this only after [checks couldn't run …] once what stopped them is fixed, \
-or when a failure wasn't the code's (a flaky test, the machine). Their result comes as a message.";
+const RUN_CHECKS: &str = "Run the project's full checks (tests, lints, builds) on the session \
+branch's commit now, in a checkout of their own. Commit first: uncommitted changes aren't in it. \
+Brigadier never runs them by itself: call it before every merge into main, which goes through \
+only once they passed on that exact commit. Its reply has the verdict and, on a failure, the \
+command and its output; past a minute they go on in the background and the result comes as a \
+[checks … at <commit>] message. A pass at the same commit answers at once; `rerun` runs them \
+again (a flaky test, the machine).";
+
+const WORKER_RUN_CHECKS: &str = "Run the checks your change calls for (those of the packages you \
+changed) in your checkout, and get the verdict: the commands that passed, or the one that \
+failed with its output. Call it before submit_report and fix what fails. The full suite of the \
+whole project is the thread's to run, once, after landing. `rerun` runs them again rather than \
+answering from earlier runs.";
 
 const RECORD_FINDINGS: &str = "Record what became of a code review's findings, every one, in \
 one call, after its [review …] message: by the id the message lists (R3.2), fixed (with the task \
@@ -320,6 +329,12 @@ your notes are no check, and without checked it shows as unverified, never as cl
 an open one that loses data, breaks the build or a security boundary. Brigadier only stores and \
 shows what you record: the review line counts your open and unverified ones, and finish_session \
 lists them for the user. Record again when a status changes.";
+
+const SET_HEADLINE: &str = "Say what the session is doing now, for the user's Job card: \
+`headline` in a few plain words (\"Starting the dev server\", \"The build failed\", \"It's up \
+again\"), and `detail`, one short line under it, usually what comes next (\"Next: open the \
+window\"). Call it when what you are doing changes, not for every step; it replaces the last one \
+and stays until the user's next message. Returns at once.";
 
 const LIST_SESSIONS: &str = "List the other sessions of your projects that message_session \
 can reach, newest activity first: each one's id, title, project, state (working, idle, \
@@ -781,7 +796,7 @@ pub fn tools_for(role: &Role) -> &'static [Tool] {
                 .filter(|tool| {
                     !matches!(
                         tool.name.as_ref(),
-                        "ask_thread" | "submit_outline" | "review_code"
+                        "ask_thread" | "submit_outline" | "request_review"
                     )
                 })
                 .collect()
@@ -862,9 +877,9 @@ fn orchestrator_tools() -> Vec<Tool> {
             input_schema::<StartVerifier>(),
         ),
         tool(
-            "review_candidate",
-            REVIEW_CANDIDATE,
-            input_schema::<ReviewCandidate>(),
+            "request_review",
+            REQUEST_REVIEW,
+            input_schema::<RequestReview>(),
         ),
         tool("attach_proof", ATTACH_PROOF, input_schema::<AttachProof>()),
         tool(
@@ -911,6 +926,7 @@ fn orchestrator_tools() -> Vec<Tool> {
             OFFER_SESSION,
             input_schema::<OfferSession>(),
         ),
+        tool("set_headline", SET_HEADLINE, input_schema::<SetHeadline>()),
         tool("list_tasks", LIST_TASKS, no_arguments()),
         tool("settle_step", SETTLE_STEP, input_schema::<SettleStep>()),
         tool("end_run", END_RUN, input_schema::<EndRun>()),
@@ -918,7 +934,7 @@ fn orchestrator_tools() -> Vec<Tool> {
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
         tool("clean_up", CLEAN_UP, no_arguments()),
-        tool("rerun_checks", RERUN_CHECKS, no_arguments()),
+        tool("run_checks", RUN_CHECKS, input_schema::<RunChecks>()),
         tool("review_plan", REVIEW_PLAN, input_schema::<ReviewPlan>()),
         tool("read_page", READ_PAGE, input_schema::<ReadPage>()),
         tool("write_page", WRITE_PAGE, input_schema::<WritePage>()),
@@ -974,7 +990,7 @@ fn worker_tools() -> Vec<Tool> {
             SUBMIT_OUTLINE,
             input_schema::<SubmitOutline>(),
         ),
-        tool("review_code", REVIEW_CODE, no_arguments()),
+        tool("request_review", WORKER_REQUEST_REVIEW, no_arguments()),
         tool(
             "note_progress",
             NOTE_PROGRESS,
@@ -994,6 +1010,7 @@ fn worker_tools() -> Vec<Tool> {
         tool("code_refs", CODE_REFS, input_schema::<CodeRefs>()),
         tool("project_map", PROJECT_MAP, no_arguments()),
         tool("run_check", WORKER_RUN_CHECK, input_schema::<RunCheck>()),
+        tool("run_checks", WORKER_RUN_CHECKS, input_schema::<RunChecks>()),
         tool(
             "start_preview",
             WORKER_START_PREVIEW,
@@ -1050,9 +1067,11 @@ fn chat_tools() -> Vec<Tool> {
 /// no bench run called it.
 pub const THREAD_ALWAYS_LOADED: &[&str] = &[
     "run_check",
+    "run_checks",
     "read_artifact",
     "ask_user",
     "note_for_user",
+    "set_headline",
     "query_brain",
     "remember",
     "code_search",
@@ -1233,12 +1252,32 @@ pub enum ParseError {
     UnknownTool(String),
     /// The arguments do not match the tool's schema.
     BadArguments { tool: String, reason: String },
+    /// A tool that is gone, called by a session that started before: what to call instead.
+    Retired { tool: String, instead: &'static str },
 }
+
+/// Tools that are gone, and what a session that still calls one is told to do instead
+/// (BUILD-PLAN rule R).
+const RETIRED: &[(&str, &str)] = &[
+    (
+        "rerun_checks",
+        "call run_checks with rerun true. Brigadier no longer runs the checks by itself: run_checks runs them, and a merge into main needs them passed on its commit.",
+    ),
+    (
+        "review_candidate",
+        "call request_review, with the same commit and wait_seconds.",
+    ),
+    (
+        "review_code",
+        "call request_review: it starts the same review of your committed work, and its findings arrive as a message.",
+    ),
+];
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownTool(name) => write!(f, "There is no tool named {name:?} for you."),
+            Self::Retired { tool, instead } => write!(f, "{tool} is gone: {instead}"),
             Self::BadArguments { tool, reason } => {
                 write!(f, "Invalid arguments for {tool}: {reason}")
             }
@@ -1256,7 +1295,13 @@ pub fn parse_call(
     // Models sometimes send `null` for an optional argument; it means "left out".
     arguments.retain(|_, value| !value.is_null());
     let arguments = Value::Object(arguments);
-    let unknown = || ParseError::UnknownTool(name.to_owned());
+    let unknown = || match RETIRED.iter().find(|(tool, _)| *tool == name) {
+        Some((tool, instead)) => ParseError::Retired {
+            tool: (*tool).to_owned(),
+            instead,
+        },
+        None => ParseError::UnknownTool(name.to_owned()),
+    };
     if has_browser_tools(role)
         && let Some(call) = browser_call(name, &arguments)
     {
@@ -1289,7 +1334,7 @@ pub fn parse_call(
                 "propose_plan" => OrchestratorCall::ProposePlan(args(name, arguments)?),
                 "approve_outline" => OrchestratorCall::ApproveOutline(args(name, arguments)?),
                 "start_verifier" => OrchestratorCall::StartVerifier(args(name, arguments)?),
-                "review_candidate" => OrchestratorCall::ReviewCandidate(args(name, arguments)?),
+                "request_review" => OrchestratorCall::RequestReview(args(name, arguments)?),
                 "attach_proof" => OrchestratorCall::AttachProof(args(name, arguments)?),
                 "request_approval" => OrchestratorCall::RequestApproval(args(name, arguments)?),
                 "land_phase" => OrchestratorCall::LandPhase(args(name, arguments)?),
@@ -1305,6 +1350,7 @@ pub fn parse_call(
                 "suggest_setting" => OrchestratorCall::SuggestSetting(args(name, arguments)?),
                 "offer_feedback" => OrchestratorCall::OfferFeedback(args(name, arguments)?),
                 "offer_session" => OrchestratorCall::OfferSession(args(name, arguments)?),
+                "set_headline" => OrchestratorCall::SetHeadline(args(name, arguments)?),
                 "list_tasks" => OrchestratorCall::ListTasks,
                 "settle_step" => OrchestratorCall::SettleStep(args(name, arguments)?),
                 "end_run" => OrchestratorCall::EndRun(args(name, arguments)?),
@@ -1313,7 +1359,7 @@ pub fn parse_call(
                 "code_refs" => OrchestratorCall::CodeRefs(args(name, arguments)?),
                 "project_map" => OrchestratorCall::ProjectMap,
                 "clean_up" => OrchestratorCall::CleanUp,
-                "rerun_checks" => OrchestratorCall::RerunChecks,
+                "run_checks" => OrchestratorCall::RunChecks(args(name, arguments)?),
                 "review_plan" => OrchestratorCall::ReviewPlan(args(name, arguments)?),
                 "read_page" => OrchestratorCall::ReadPage(args(name, arguments)?),
                 "write_page" => OrchestratorCall::WritePage(args(name, arguments)?),
@@ -1344,13 +1390,14 @@ pub fn parse_call(
                 "submit_outline" if !checks => {
                     WorkerCall::SubmitOutline(args::<SubmitOutline>(name, arguments)?)
                 }
-                "review_code" if !checks => WorkerCall::ReviewCode,
+                "request_review" if !checks => WorkerCall::RequestReview,
                 "submit_report" => WorkerCall::SubmitReport(args::<SubmitReport>(name, arguments)?),
                 "query_brain" => WorkerCall::QueryBrain(args::<QueryBrain>(name, arguments)?),
                 "code_search" => WorkerCall::CodeSearch(args::<CodeSearch>(name, arguments)?),
                 "code_refs" => WorkerCall::CodeRefs(args::<CodeRefs>(name, arguments)?),
                 "project_map" => WorkerCall::ProjectMap,
                 "run_check" => WorkerCall::RunCheck(args::<RunCheck>(name, arguments)?),
+                "run_checks" => WorkerCall::RunChecks(args::<RunChecks>(name, arguments)?),
                 "start_preview" => WorkerCall::StartPreview(args(name, arguments)?),
                 "stop_preview" => WorkerCall::StopPreview(args(name, arguments)?),
                 "preview_log" => WorkerCall::PreviewLog(args(name, arguments)?),
@@ -2476,6 +2523,84 @@ mod tests {
         assert!(parse_call(&thread, "propose_merge", late.as_object().cloned()).is_err());
     }
 
+    /// rerun_checks is gone: run_checks takes its place, for the thread and for workers, and
+    /// a session that started before is told what to call instead (BUILD-PLAN rule R).
+    #[test]
+    fn run_checks_replaces_rerun_checks() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        for role in [thread.clone(), worker(false), worker(true)] {
+            let tools = tools_for(&role);
+            assert!(
+                tools.iter().any(|tool| tool.name == "run_checks"),
+                "{role:?}"
+            );
+            assert!(
+                tools.iter().all(|tool| tool.name != "rerun_checks"),
+                "{role:?}"
+            );
+        }
+        let rerun = serde_json::json!({ "rerun": true });
+        assert!(matches!(
+            parse_call(&thread, "run_checks", rerun.as_object().cloned()),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::RunChecks(args))) if args.rerun
+        ));
+        assert!(matches!(
+            parse_call(&worker(false), "run_checks", None),
+            Ok(ToolCall::Worker(WorkerCall::RunChecks(args))) if !args.rerun
+        ));
+        let late = parse_call(&thread, "rerun_checks", None).unwrap_err();
+        assert!(
+            late.to_string()
+                .starts_with("rerun_checks is gone: call run_checks with rerun true"),
+            "{late}"
+        );
+    }
+
+    /// review_candidate and review_code are gone: request_review takes both places, and a
+    /// session that started before is told what to call instead (BUILD-PLAN rule R).
+    #[test]
+    fn request_review_replaces_review_candidate_and_review_code() {
+        let thread = Role::Orchestrator {
+            conversation_id: brigadier_core::model::ConversationId("c1".into()),
+            run: RunTools::None,
+        };
+        for role in [thread.clone(), worker(false)] {
+            let names: Vec<_> = tools_for(&role)
+                .iter()
+                .map(|tool| tool.name.to_string())
+                .collect();
+            assert!(names.contains(&"request_review".to_owned()), "{role:?}");
+            for old in ["review_candidate", "review_code"] {
+                assert!(!names.contains(&old.to_owned()), "{role:?}");
+            }
+        }
+        let wait = serde_json::json!({ "commit": "abc", "wait_seconds": 0 });
+        assert!(matches!(
+            parse_call(&thread, "request_review", wait.as_object().cloned()),
+            Ok(ToolCall::Orchestrator(OrchestratorCall::RequestReview(args)))
+                if args.commit.as_deref() == Some("abc") && args.wait_seconds == Some(0)
+        ));
+        assert!(matches!(
+            parse_call(&worker(false), "request_review", None),
+            Ok(ToolCall::Worker(WorkerCall::RequestReview))
+        ));
+        let late = parse_call(&thread, "review_candidate", None).unwrap_err();
+        assert!(
+            late.to_string()
+                .starts_with("review_candidate is gone: call request_review"),
+            "{late}"
+        );
+        let late = parse_call(&worker(false), "review_code", None).unwrap_err();
+        assert!(
+            late.to_string()
+                .starts_with("review_code is gone: call request_review"),
+            "{late}"
+        );
+    }
+
     #[test]
     fn a_gate_member_cannot_ask_the_orchestrator() {
         let names = |role: &Role| -> Vec<String> {
@@ -2486,10 +2611,10 @@ mod tests {
         };
         assert!(names(&worker(false)).contains(&"ask_thread".to_owned()));
         assert!(!names(&worker(false)).contains(&"ask_orchestrator".to_owned()));
-        assert!(names(&worker(false)).contains(&"review_code".to_owned()));
+        assert!(names(&worker(false)).contains(&"request_review".to_owned()));
         let checker = names(&worker(true));
         assert!(!checker.contains(&"ask_thread".to_owned()));
-        assert!(!checker.contains(&"review_code".to_owned()));
+        assert!(!checker.contains(&"request_review".to_owned()));
         assert!(checker.contains(&"submit_report".to_owned()));
         let question = || {
             let mut arguments = JsonObject::new();

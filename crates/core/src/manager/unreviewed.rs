@@ -452,7 +452,7 @@ impl SessionManager {
         self.review_range_if_due(id, repo, range).await;
     }
 
-    /// `review_candidate` reviews up to `tip`: the thread's unreviewed range up to there is
+    /// `request_review` reviews up to `tip`: the thread's unreviewed range up to there is
     /// covered, and starts again after it.
     pub(crate) async fn mark_reviewed_to(&self, id: &ConversationId, tip: &Oid) {
         let Some(mut range) = self

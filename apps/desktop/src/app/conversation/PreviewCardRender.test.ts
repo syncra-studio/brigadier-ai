@@ -28,6 +28,7 @@ type Seen = {
   later: [string | null, string | null][][];
   turnStopped: [string | null, string | null, string | null, string[]];
   noRecord: boolean;
+  worker: [string | null, string | null][];
   opened: string | null;
   browserTabs: number;
   menu: string[];
@@ -106,6 +107,9 @@ test("the Preview card: running with screenshots, folded, paused, stopped, no sc
   assert.deepEqual(seen.later, [[["Web preview", "localhost:4100"]], [["Web preview", "localhost:4200"]]]);
   // The turn's page stopped: the card says so and offers Start again, never Open (#407).
   assert.deepEqual(seen.turnStopped, ["Web preview", "Stopped", "localhost:4400", ["Start again"]]);
+  // A worker's own fixture, stopped with its task, is no Web preview of the turn whose request
+  // started the worker (#507).
+  assert.deepEqual(seen.worker, []);
   // Proofs with no page left running: their card alone.
   const alone = cases["proofs-only"];
   assert.deepEqual([alone.title, alone.count, alone.buttons], ["Screenshots and recordings", "1 screenshot, 1 recording", ["Fold the proofs"]]);

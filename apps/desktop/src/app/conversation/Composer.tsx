@@ -33,6 +33,7 @@ import { ComposerFooter } from "@/app/conversation/ComposerFooter";
 import { ComposerHint } from "@/app/conversation/ComposerHint";
 import { ComposerInput } from "@/app/conversation/ComposerInput";
 import { ComposerStatusSlot } from "@/app/conversation/ComposerStatusSlot";
+import { Notices } from "@/app/conversation/Notices";
 import { DictationNote } from "@/app/conversation/DictationNote";
 import { FullAccessNotice } from "@/app/conversation/FullAccessNotice";
 import { QueueCard } from "@/app/conversation/QueueCard";
@@ -132,6 +133,7 @@ export const ConversationComposer: FC<ComposerProps> = ({ autoFocus, placeholder
             <StatusCard conversationId={conversation.id} onClose={() => statusCard.setOpen(false)} />
           )}
           {conversation && !archived && <ComposerStatusSlot conversationId={conversation.id} />}
+          {conversation && <Notices conversationId={conversation.id} />}
           {conversation && !archived && <QueueCard conversationId={conversation.id} />}
           {current && (
             <PendingActionCard

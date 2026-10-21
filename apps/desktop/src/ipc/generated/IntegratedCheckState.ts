@@ -7,7 +7,11 @@ export type IntegratedCheckState = { "type": "due" } | { "type": "running",
 /**
  * The command running now.
  */
-command: string | null, } | { "type": "passed", commands: Array<string>, } | { "type": "failed", command: string, status: string, 
+command: string | null, 
+/**
+ * How many of its commands ended so far, of `total` (0 of 0 while they are listed).
+ */
+done: number, total: number, } | { "type": "passed", commands: Array<string>, } | { "type": "failed", command: string, status: string, 
 /**
  * Its whole output, for `read_artifact`.
  */

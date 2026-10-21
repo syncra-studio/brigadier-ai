@@ -3446,7 +3446,7 @@ impl SessionManager {
         if Self::waits_for_go_ahead(&task) {
             return;
         }
-        // A verifier whose own review still runs (`review_code`) waits for its findings: they
+        // A verifier whose own review still runs (`request_review`) waits for its findings: they
         // start its next turn, and it triages them before it reports. Any other worker never
         // waits for its review: findings after its report go to the thread. Not while the
         // user has reviews off: nothing waits on one. The lock orders this with the switch,

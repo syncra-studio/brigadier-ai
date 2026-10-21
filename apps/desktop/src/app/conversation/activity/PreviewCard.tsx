@@ -355,7 +355,9 @@ function useTurnPreviews(requestIds: readonly string[], steps: readonly BlockOrc
       const to = requests.some((each) => each.endedAtMs === null) ? Infinity : Math.max(...requests.map((each) => each.endedAtMs ?? 0));
       return Object.values(s.board?.previews ?? {})
         .filter(which)
-        .filter((each) => named.includes(each.id) || (each.requestId !== undefined ? requestIds.includes(each.requestId) : each.startedAtMs >= from && each.startedAtMs <= to))
+        // A worker's own preview (its fixture, its dev server) is a Background row, never what
+        // the turn left to look at, unless the thread took proofs of it (#507).
+        .filter((each) => named.includes(each.id) || (each.taskId === undefined && (each.requestId !== undefined ? requestIds.includes(each.requestId) : each.startedAtMs >= from && each.startedAtMs <= to)))
         .map((each) => each.id);
     }),
   );

@@ -376,12 +376,10 @@ impl Runtime {
     }
 
     /// Where work on `from` goes on when `from` hit its limit: another account of the same
-    /// provider that can take it, when switching is on.
+    /// provider that can take it (with switching off, the one picked with Use first), so it
+    /// stays on its provider while one of its accounts has room (#505).
     pub fn switch_target(&self, from: &AccountRef, model: Option<&str>) -> Option<AccountRef> {
         let settings = self.core.settings();
-        if !settings.switches_accounts(from.provider) {
-            return None;
-        }
         let mut candidates = self.account_candidates(from.provider);
         if model.is_none() {
             // The CLI's own default model, unnamed here: a model's window that is used up on
@@ -406,7 +404,7 @@ impl Runtime {
                 })
             });
         }
-        crate::accounts::soonest_ready(
+        crate::accounts::ready(
             &settings,
             from.provider,
             model,
@@ -415,25 +413,17 @@ impl Runtime {
         )
     }
 
-    /// The signed-in accounts new work of `provider` can go to (only the default one with
-    /// switching off), and the soonest one of them can take work for `model` again, when known.
+    /// The signed-in accounts new work of `provider` can go to, and the soonest one of them
+    /// can take work for `model` again, when known.
     pub fn provider_back_at(
         &self,
         provider: ProviderKind,
         model: Option<&str>,
     ) -> (usize, Option<i64>) {
-        let settings = self.core.settings();
-        let default = settings
-            .default_account(provider)
-            .map(|account| account.id.clone());
         let usable: Vec<_> = self
             .account_candidates(provider)
             .into_iter()
-            .filter(|candidate| {
-                candidate.logged_in
-                    && (settings.switches_accounts(provider)
-                        || candidate.account.account == default)
-            })
+            .filter(|candidate| candidate.logged_in)
             .collect();
         let back = usable
             .iter()

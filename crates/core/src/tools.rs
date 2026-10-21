@@ -327,11 +327,11 @@ pub struct TaskRef {
     pub task: String,
 }
 
-/// `review_candidate`: the other vendor's review of the thread's candidate commit, reusing
+/// `request_review`: the other vendor's review of the thread's candidate commit, reusing
 /// what earlier reviews already cover.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ReviewCandidate {
+pub struct RequestReview {
     /// The candidate commit; your checkout's HEAD when absent.
     #[serde(default)]
     pub commit: Option<String>,
@@ -503,6 +503,17 @@ pub struct RunCommand {
     /// How long it may run, in seconds (default 600, at most 1800); it is stopped then.
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+}
+
+/// `run_checks`: the thread's runs the project's full checks (builds included) on the session
+/// branch's commit; a worker's runs the checks its change calls for, in its own checkout.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunChecks {
+    /// Run them again even where an earlier run's result would answer (a flaky test, the
+    /// machine).
+    #[serde(default)]
+    pub rerun: bool,
 }
 
 /// `run_check`: a check (tests, lint, typecheck, build) run in the caller's tree, its result
@@ -1256,6 +1267,17 @@ pub struct OfferSession {
     pub title: Option<String>,
 }
 
+/// `set_headline`: what the session is doing now, in the thread's words, for the Job card.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetHeadline {
+    /// A few plain words on what happens now ("Starting the dev server", "The build failed").
+    pub headline: String,
+    /// One short line under it, usually what comes next ("Next: open the window").
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
 /// `settle_step`: during an overnight run, the thread settles a step of the run's plan once it
 /// has judged the step's whole scope and every "done when" (its own edits too).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -1353,7 +1375,7 @@ pub enum OrchestratorCall {
     ProposePlan(ProposePlan),
     ApproveOutline(ApproveOutline),
     StartVerifier(StartVerifier),
-    ReviewCandidate(ReviewCandidate),
+    RequestReview(RequestReview),
     AttachProof(AttachProof),
     RequestApproval(RequestApproval),
     LandPhase(LandPhase),
@@ -1367,6 +1389,7 @@ pub enum OrchestratorCall {
     SuggestSetting(SuggestSetting),
     OfferFeedback(OfferFeedback),
     OfferSession(OfferSession),
+    SetHeadline(SetHeadline),
     ListTasks,
     SettleStep(SettleStep),
     EndRun(EndRun),
@@ -1375,7 +1398,7 @@ pub enum OrchestratorCall {
     CodeRefs(CodeRefs),
     ProjectMap,
     CleanUp,
-    RerunChecks,
+    RunChecks(RunChecks),
     ReviewPlan(ReviewPlan),
     ReadPage(ReadPage),
     WritePage(WritePage),
@@ -1413,7 +1436,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "propose_plan",
     "approve_outline",
     "start_verifier",
-    "review_candidate",
+    "request_review",
     "attach_proof",
     "request_approval",
     "land_phase",
@@ -1426,6 +1449,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "suggest_full_access",
     "offer_feedback",
     "offer_session",
+    "set_headline",
     "list_tasks",
     "settle_step",
     "end_run",
@@ -1434,7 +1458,7 @@ pub const THREAD_TOOLS: &[&str] = &[
     "code_refs",
     "project_map",
     "clean_up",
-    "rerun_checks",
+    "run_checks",
     "review_plan",
     "read_page",
     "write_page",
@@ -1498,7 +1522,7 @@ impl OrchestratorCall {
             Self::ProposePlan(_) => "propose_plan",
             Self::ApproveOutline(_) => "approve_outline",
             Self::StartVerifier(_) => "start_verifier",
-            Self::ReviewCandidate(_) => "review_candidate",
+            Self::RequestReview(_) => "request_review",
             Self::AttachProof(_) => "attach_proof",
             Self::RequestApproval(_) => "request_approval",
             Self::LandPhase(_) => "land_phase",
@@ -1512,6 +1536,7 @@ impl OrchestratorCall {
             Self::SuggestSetting(_) => "suggest_setting",
             Self::OfferFeedback(_) => "offer_feedback",
             Self::OfferSession(_) => "offer_session",
+            Self::SetHeadline(_) => "set_headline",
             Self::ListTasks => "list_tasks",
             Self::SettleStep(_) => "settle_step",
             Self::EndRun(_) => "end_run",
@@ -1520,7 +1545,7 @@ impl OrchestratorCall {
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
             Self::CleanUp => "clean_up",
-            Self::RerunChecks => "rerun_checks",
+            Self::RunChecks(_) => "run_checks",
             Self::ReviewPlan(_) => "review_plan",
             Self::ReadPage(_) => "read_page",
             Self::WritePage(_) => "write_page",
@@ -1816,15 +1841,16 @@ fn empty_item(item: &str) -> bool {
 pub enum WorkerCall {
     AskOrchestrator(AskOrchestrator),
     SubmitOutline(SubmitOutline),
-    /// `review_code`: one review of the worker's committed work by the other vendor; returns
+    /// `request_review`: one review of the worker's committed work by the other vendor; returns
     /// at once, and the findings arrive as a message.
-    ReviewCode,
+    RequestReview,
     SubmitReport(SubmitReport),
     QueryBrain(QueryBrain),
     CodeSearch(CodeSearch),
     CodeRefs(CodeRefs),
     ProjectMap,
     RunCheck(RunCheck),
+    RunChecks(RunChecks),
     StartPreview(StartPreview),
     StopPreview(StopPreview),
     PreviewLog(PreviewLog),
@@ -1837,13 +1863,14 @@ impl WorkerCall {
         match self {
             Self::AskOrchestrator(_) => "ask_thread",
             Self::SubmitOutline(_) => "submit_outline",
-            Self::ReviewCode => "review_code",
+            Self::RequestReview => "request_review",
             Self::SubmitReport(_) => "submit_report",
             Self::QueryBrain(_) => "query_brain",
             Self::CodeSearch(_) => "code_search",
             Self::CodeRefs(_) => "code_refs",
             Self::ProjectMap => "project_map",
             Self::RunCheck(_) => "run_check",
+            Self::RunChecks(_) => "run_checks",
             Self::StartPreview(_) => "start_preview",
             Self::StopPreview(_) => "stop_preview",
             Self::PreviewLog(_) => "preview_log",

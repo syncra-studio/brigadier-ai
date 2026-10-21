@@ -1029,7 +1029,7 @@ async fn the_review_line_is_150_lines_or_more_than_five_files_of_code() {
     flow.stop().await;
 }
 
-/// What review_candidate answered, and what the thread heard besides.
+/// What request_review answered, and what the thread heard besides.
 #[derive(Default)]
 struct Candidate {
     commits: Vec<String>,
@@ -1037,7 +1037,7 @@ struct Candidate {
     inputs: Vec<String>,
 }
 
-/// review_candidate on a 10-line change of the thread's own: the other vendor reviews it, and
+/// request_review on a 10-line change of the thread's own: the other vendor reviews it, and
 /// its finding comes back in the call's reply, never as a message. Asked again on the same
 /// commit, the review that covers it answers and nothing new starts. After the fix, only the
 /// fix's range is reviewed, as a re-check, and it comes back clean.
@@ -1070,12 +1070,12 @@ async fn review_candidate_reviews_a_small_change_reuses_coverage_and_rechecks_on
                     return Reply::text("[quiet]");
                 }
                 let one = commit(&turn, "a.txt", &lines("a", 10), "Ten lines");
-                let first = turn.call("review_candidate", json!({})).await;
+                let first = turn.call("request_review", json!({})).await;
                 assert!(!first.is_error, "{}", first.text);
-                let again = turn.call("review_candidate", json!({"commit": one})).await;
+                let again = turn.call("request_review", json!({"commit": one})).await;
                 assert!(!again.is_error, "{}", again.text);
                 let two = commit(&turn, "a.txt", "fixed\n", "Say it is fixed");
-                let fix = turn.call("review_candidate", json!({})).await;
+                let fix = turn.call("request_review", json!({})).await;
                 assert!(!fix.is_error, "{}", fix.text);
                 let mut seen = seen.lock().unwrap();
                 seen.commits.extend([one, two]);
@@ -1124,7 +1124,7 @@ async fn review_candidate_reviews_a_small_change_reuses_coverage_and_rechecks_on
     flow.stop().await;
 }
 
-/// With no other-vendor reviewer, and with reviews off, review_candidate says so as a fact:
+/// With no other-vendor reviewer, and with reviews off, request_review says so as a fact:
 /// the thread decides what to do.
 #[tokio::test]
 async fn review_candidate_says_when_no_reviewer_can_take_it_or_reviews_are_off() {
@@ -1142,7 +1142,7 @@ async fn review_candidate_says_when_no_reviewer_can_take_it_or_reviews_are_off()
                     return Reply::text("[quiet]");
                 }
                 commit(&turn, "a.txt", &lines(&turn.input, 3), "Three lines");
-                let reply = turn.call("review_candidate", json!({})).await;
+                let reply = turn.call("request_review", json!({})).await;
                 assert!(!reply.is_error, "{}", reply.text);
                 seen.lock().unwrap().replies.push(reply.text);
                 Reply::text("Changed it.")
@@ -1171,7 +1171,7 @@ async fn review_candidate_says_when_no_reviewer_can_take_it_or_reviews_are_off()
     flow.stop().await;
 }
 
-/// A review_candidate call cancelled just as its review ends (its CLI's bridge closes, a
+/// A request_review call cancelled just as its review ends (its CLI's bridge closes, a
 /// handoff), after the review's message stood aside for the call: the thread still hears the
 /// findings, as a message (#332).
 #[tokio::test]
@@ -1221,7 +1221,7 @@ async fn a_review_candidate_call_cancelled_as_its_review_ends_still_tells_the_fi
                 tokio::select! {
                     biased;
                     () = stood_aside => Reply::text("[quiet]"),
-                    reply = turn.call("review_candidate", json!({})) => {
+                    reply = turn.call("request_review", json!({})) => {
                         seen.lock().unwrap().replies.push(reply.text);
                         Reply::text("Reviewed.")
                     }

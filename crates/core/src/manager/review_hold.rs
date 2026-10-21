@@ -66,7 +66,7 @@ pub(crate) fn batch(board: &crate::board::Board, which: impl Fn(&Task) -> bool) 
 
 /// Why a fix of landed work's findings can't ask for a review: it gets none of its own, only
 /// the targeted re-check of a finding the thread marked high, after it lands (Q6.1).
-pub(crate) const NO_FIX_REVIEW: &str = "A fix of landed work's review findings gets no review of its own: once it lands, the thread has each finding it marked high re-checked. Don't call review_code; run the checks your fix affects and call submit_report.";
+pub(crate) const NO_FIX_REVIEW: &str = "A fix of landed work's review findings gets no review of its own: once it lands, the thread has each finding it marked high re-checked. Don't call request_review; run the checks your fix affects and call submit_report.";
 
 /// The line a resumed fix worker reads before its findings.
 pub(crate) fn workspace_line(

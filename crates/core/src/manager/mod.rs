@@ -228,7 +228,7 @@ pub struct SessionManager {
     /// The one-shot reviews running now, by id: their conversation, and what ends one when
     /// its conversation closes.
     running_reviews: Mutex<HashMap<String, (ConversationId, tokio_util::sync::CancellationToken)>>,
-    /// The reviews a `review_candidate` or `run_check` call waits on, by session and range,
+    /// The reviews a `request_review` or `run_check` call waits on, by session and range,
     /// with how many calls wait: their replies carry the outcome, so no message of it is
     /// delivered (#137, #193), unless all of them were cancelled (#332).
     review_replies: Mutex<review_runs::ReplyClaims>,

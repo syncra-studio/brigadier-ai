@@ -154,7 +154,7 @@ async fn fixed_once(name: &str, high: bool, refuse_resume: bool) -> (Flow, Arc<M
                     turn.write("NOTES.md", "notes v1\n");
                     turn.git(&["commit", "-qam", "Fix the notes"]);
                     // A resumed lead's old instructions ask for a review: a fix gets none.
-                    let review = turn.call("review_code", json!({})).await;
+                    let review = turn.call("request_review", json!({})).await;
                     assert!(review.is_error, "{}", review.text);
                     assert!(
                         review.text.contains("gets no review of its own"),
@@ -178,7 +178,7 @@ async fn fixed_once(name: &str, high: bool, refuse_resume: bool) -> (Flow, Arc<M
                     turn.write("NOTES.md", "notes v1\n");
                     turn.git(&["commit", "-qam", "Fix the notes"]);
                     // A resumed lead's old instructions ask for a review: a fix gets none.
-                    let review = turn.call("review_code", json!({})).await;
+                    let review = turn.call("request_review", json!({})).await;
                     assert!(review.is_error, "{}", review.text);
                     assert!(
                         review.text.contains("gets no review of its own"),
@@ -258,7 +258,7 @@ async fn findings_go_back_to_the_resumed_worker_and_its_fix_is_rechecked_only_wh
         assert_eq!(fix_worktree, worktree);
         assert_eq!(head, first.landed.clone().unwrap());
         assert!(input.starts_with("[workspace]"), "{input}");
-        assert!(input.contains("Don't call review_code"), "{input}");
+        assert!(input.contains("Don't call request_review"), "{input}");
         // Its new task's folders, not the landed task's.
         let fix = Flow::task(&board, 2);
         let scratch = fix.workspace.as_ref().unwrap().scratch.clone();

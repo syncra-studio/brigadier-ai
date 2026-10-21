@@ -110,7 +110,7 @@ test("one step is at work at a time, and the job never goes back to an earlier o
   const parts = {
     tasks: byId([task("t1", "landed", 10)]),
     reviews: byId([review("v1", 20, { type: "findings", count: 1 }, [finding])]),
-    integratedChecks: byId([check(1, 30, { type: "running", command: "npm test" })]),
+    integratedChecks: byId([check(1, 30, { type: "running", command: "npm test", done: 0, total: 1 })]),
   };
   assert.deepEqual(steps(parts), ["build:done", "review:done", "fix:done", "checks:active", "merge:pending"]);
   // While a review still runs, an earlier review's finding waits: Reviewing is the step at work.

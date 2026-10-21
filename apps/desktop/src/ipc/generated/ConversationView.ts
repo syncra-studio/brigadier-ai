@@ -21,6 +21,7 @@ import type { Question } from "./Question";
 import type { Rating } from "./Rating";
 import type { ReviewRun } from "./ReviewRun";
 import type { RunState } from "./RunState";
+import type { SessionHeadline } from "./SessionHeadline";
 import type { StreamingMessage } from "./StreamingMessage";
 import type { Task } from "./Task";
 import type { ThinkingSegment } from "./ThinkingSegment";
@@ -112,6 +113,10 @@ integratedChecks: Array<IntegratedCheck>,
  * The thread's commands that went to the background, oldest first.
  */
 backgroundRuns: Array<BackgroundRun>, 
+/**
+ * What the session is doing now, in the thread's words; none once the user wrote since.
+ */
+headline: SessionHeadline | null, 
 /**
  * The ended previews and background runs the user dismissed or restarted from the
  * Background rows (Q94), by id.

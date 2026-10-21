@@ -540,9 +540,9 @@ export function buildBlocks(
     }
     // Plumbing shows by what came of it: a worker's sentence, a card, the merge.
     if (step.kind.type === "tool" && isPlumbing(step.kind.name)) continue;
-    // A run's own steps show as its phases, but a refused message, a usage limit's reset and
-    // a proof the thread attached have no other trace.
-    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool" && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "proof")) continue;
+    // A run's own steps show as its phases, but a refused message, a usage limit's reset or
+    // switch and a proof the thread attached have no other trace.
+    if (ON_TASK_ROW.has(step.kind.type) || (isRunRequest(step.requestId) && step.kind.type !== "tool" && step.kind.type !== "messageRefused" && step.kind.type !== "quotaResumed" && step.kind.type !== "moment" && step.kind.type !== "proof")) continue;
     if (step.kind.type === "tool" && toolHasOwnResult(step.kind, authoredResults, step.requestId, step.position)) continue;
     placed.push({
       kind: "orchestrator",
@@ -1229,12 +1229,12 @@ export function endsWithPlan(sequence: readonly SequenceEntry[]): boolean {
 /**
  * Whether an entry of a finished block folds under "Worked for …": everything but its answer
  * and the cards, access notices and feedback offers that stay in view (decisions, failures, what
- * needs the user).
+ * needs the user), and the dividers of its limits and switches (#506).
  */
 export function foldsAway(entry: SequenceEntry, answer: number | null): boolean {
   // The answer, and the update lines after it, stay in view.
   if (entry.kind === "text") return answer === null || entry.index < answer;
-  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested" || step.kind.type === "settingSuggested" || step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered")) return false;
+  if (entry.kind === "orchestrator" && entry.steps.some((step) => step.kind.type === "fullAccessSuggested" || step.kind.type === "settingSuggested" || step.kind.type === "feedbackOffered" || step.kind.type === "sessionOffered" || step.kind.type === "moment")) return false;
   return entry.kind !== "card" || !entry.card.keep;
 }
 

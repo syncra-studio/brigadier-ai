@@ -1,13 +1,17 @@
 import { type ReactNode, useState } from "react";
 
-import { type Job, jobLabel } from "@/app/conversation/job";
+import type { PlanBar } from "@/app/conversation/boardJob";
+import type { LiveAction, LiveJob } from "@/app/conversation/liveJob";
 import type { OvernightActions, OvernightCardModel } from "@/app/conversation/overnightAdapter";
 import { runJob } from "@/app/conversation/runJob";
+import { useAction } from "@/app/conversation/useAction";
 import { useRunCommand } from "@/app/conversation/useRunCommand";
 import { JobProgress, ScheduleCard } from "@/components/conversation";
 import { Button } from "@/components/controls";
 import { ConfirmDialog } from "@/components/overlays";
+import { openUrl } from "@/ipc/client";
 import { cn } from "@/lib/utils";
+import { cancelMerge } from "@/state/actions";
 
 /**
  * A card of the summary's column beside the context card (Q88): the same surface, its own card.
@@ -44,38 +48,87 @@ function JobSurface({ label, onOpen, children }: { label: string; onOpen?: (() =
   );
 }
 
-/** "3 of 5" as a share of the step done; nothing to count reads as a step just begun. */
-function share(count: string | undefined): number {
-  const [done, of] = (count?.match(/^(\d+) of (\d+)/) ?? []).slice(1).map(Number);
-  return done !== undefined && of ? done / of : 0;
+/** How long the live job has gone on, or took: none while it waits on the user. */
+function elapsedOf(live: LiveJob, nowMs: number): number | undefined {
+  if (live.sinceMs === undefined || live.tone === "waiting") return undefined;
+  if (live.endedAtMs !== undefined) return live.endedAtMs > live.sinceMs ? live.endedAtMs - live.sinceMs : undefined;
+  return live.tone === "running" ? nowMs - live.sinceMs : undefined;
 }
 
 /**
- * The session's job while it works through steps: assistant-ui's job progress element with the
- * job's line ("Reviewing · 3 of 5", "Checks failed · fixing"), a bar of one segment per step, and
- * the step at work (or the one that failed) shimmering before the next. A spinner only while a
- * step is at work: a failure nothing works on yet shows still (#487). A click opens every step in
- * a tab.
+ * The live job's buttons (R2): Open CI for the push CI checks, Cancel for the merge held until
+ * workers finish. They were the composer rail's pills; now they are the card's.
  */
-export function JobCard({ job, onOpen }: { job: Job; onOpen?: () => void }) {
-  const at = job.steps.findIndex((step) => step.state === "active");
-  const next = job.steps.findIndex((step) => step.state !== "done");
-  const index = at !== -1 ? at : next !== -1 ? next : job.steps.length;
-  const current = job.steps[index];
-  const title = jobLabel(job);
+export function LiveButtons({ conversationId, actions }: { conversationId: string; actions: readonly LiveAction[] }) {
+  const cancel = useAction();
+  if (actions.length === 0) return null;
+  return (
+    <>
+      {actions.map((action) =>
+        action.type === "openCi" ? (
+          <Button key={action.type} type="button" size="xs" variant="secondary" data-slot="job-open-ci" onClick={() => void openUrl(action.url).catch(() => {})}>
+            Open CI
+          </Button>
+        ) : (
+          <Button
+            key={action.type}
+            type="button"
+            size="xs"
+            variant="secondary"
+            data-slot="merge-cancel"
+            disabled={cancel.busy}
+            onClick={() => cancel.run(() => cancelMerge(conversationId))}
+          >
+            Cancel
+          </Button>
+        ),
+      )}
+      {cancel.error && (
+        <p role="alert" className="text-destructive text-xs">
+          {cancel.error}
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * The session's Job card (J1): what is happening right now, in one headline and one detail line
+ * (J6), with the buttons its state needs. Only a real plan of several steps adds its phase bar
+ * (mockup 06): one segment per step, the step at work before the next. A click opens every step
+ * in a tab.
+ */
+export function JobCard({
+  conversationId,
+  live,
+  plan,
+  nowMs,
+  onOpen,
+}: {
+  conversationId: string;
+  live: LiveJob | null;
+  plan?: PlanBar | null | undefined;
+  nowMs: number;
+  onOpen?: () => void;
+}) {
+  const said = live && !(plan && live.plain) ? live : null;
+  const title = said?.headline ?? plan?.title ?? "";
+  const detail = plan ? [plan.words, said?.detail].filter(Boolean).join(" · ") : said?.detail;
+  const failedAt = plan ? plan.stages.findIndex((stage) => stage.state === "failed") : -1;
   return (
     <JobSurface label={`${title}: see every step`} onOpen={onOpen}>
       <JobProgress
+        data-live={live?.tone}
         title={title}
-        stageIndex={index}
-        stageProgress={current?.state === "active" ? share(current.count) : 0}
-        stalled={at === -1}
-        stages={job.steps.map((step, i) => ({
-          name: step.name,
-          weight: 1,
-          state: step.state,
-          description: (i === index && step.state === "active") || step.state === "failed" ? step.summary : undefined,
-        }))}
+        tone={live?.tone}
+        status={live ? title : undefined}
+        stages={plan?.stages ?? []}
+        stageIndex={plan?.index ?? 0}
+        stageProgress={0}
+        stalled={!live && plan ? !plan.stages.some((stage) => stage.state === "active") && failedAt !== -1 : false}
+        elapsedMs={live ? elapsedOf(live, nowMs) : undefined}
+        detail={detail || undefined}
+        actions={live && live.actions.length > 0 ? <LiveButtons conversationId={conversationId} actions={live.actions} /> : undefined}
       />
     </JobSurface>
   );
@@ -90,15 +143,24 @@ export function JobCard({ job, onOpen }: { job: Job; onOpen?: () => void }) {
 export function RunJobCard({
   model,
   actions,
+  conversationId = "",
+  live,
+  nowMs = 0,
   onOpen,
   onEdit,
 }: {
   model: OvernightCardModel;
+  /** The session's id, for the live buttons. */
+  conversationId?: string | undefined;
   actions: OvernightActions;
+  /** What the session waits on or does right now: its words go over the run's own (J5), its buttons with them. */
+  live?: LiveJob | null | undefined;
+  nowMs?: number | undefined;
   onOpen?: () => void;
   onEdit: () => void;
 }) {
   const job = runJob(model);
+  const said = live && !live.plain ? live : null;
   const { run } = model;
   const command = useRunCommand(run);
   const [asking, setAsking] = useState(false);
@@ -122,23 +184,33 @@ export function RunJobCard({
       {job.merge.merged ? "Merged" : "Merge"}
     </Button>
   ) : null;
+  const liveButtons = said && said.actions.length > 0 ? <LiveButtons conversationId={conversationId} actions={said.actions} /> : null;
   return (
     <>
       <JobSurface label={`${job.title}: see the run`} onOpen={onOpen}>
         <JobProgress
           data-run={run.id}
-          title={job.title}
+          title={said?.headline ?? job.title}
+          tone={said?.tone}
+          status={said?.headline}
           stages={job.stages}
           stageIndex={job.stageIndex}
           stageProgress={job.stageProgress}
           proposed={job.proposed}
           meta={job.meta}
           outcome={job.outcome}
-          elapsedMs={job.elapsedMs}
-          detail={job.detail}
+          elapsedMs={said ? elapsedOf(said, nowMs) : job.elapsedMs}
+          detail={said?.detail ?? job.detail}
           warning={job.warning}
           onCancel={job.stop && !stopped ? () => setAsking(true) : undefined}
-          actions={buttons}
+          actions={
+            buttons || liveButtons ? (
+              <>
+                {buttons}
+                {liveButtons}
+              </>
+            ) : null
+          }
         />
         {command.error && (
           <p role="alert" className="text-destructive text-xs">

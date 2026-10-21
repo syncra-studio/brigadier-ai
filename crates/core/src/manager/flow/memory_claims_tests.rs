@@ -118,7 +118,7 @@ async fn claims_reach_briefs_answers_and_rebirths_labelled_unverified() {
                             .call("run_check", json!({"command": "echo checked"}))
                             .await;
                         assert!(!check.is_error, "{}", check.text);
-                        let review = turn.call("review_code", json!({})).await;
+                        let review = turn.call("request_review", json!({})).await;
                         assert!(!review.is_error, "{}", review.text);
                         let reply = turn
                             .call(

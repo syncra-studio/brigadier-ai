@@ -171,4 +171,4 @@ title?: string,
 /**
  * Why, in the words the thread heard.
  */
-reason: string, } | { "type": "quotaResumed", provider: ProviderKind, };
+reason: string, } | { "type": "quotaResumed", provider: ProviderKind, } | { "type": "moment", text: string, };

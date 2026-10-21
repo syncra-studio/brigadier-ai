@@ -12,6 +12,7 @@ export * from "./LeadItemDetail";
 export * from "./LeadToolDetail";
 export * from "./MachineRow";
 export * from "./MergedRow";
+export * from "./Moment";
 export * from "./OpenPill";
 export * from "./PeerLink";
 export * from "./Proofs";

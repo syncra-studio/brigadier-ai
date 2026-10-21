@@ -2,6 +2,7 @@ import { useMemo } from "react";
 
 import { isRunRequest } from "@/app/conversation/blocks";
 import type { Job, JobStep, JobStepState } from "@/app/conversation/job";
+import type { JobStage } from "@/components/conversation/elements/job-progress";
 import { contextPlanId, contextPlanIds, latestPlanRequest, planStepStatus, stepStates } from "@/app/conversation/planProgress";
 import { batchReviews, type FindingRow, findingRows } from "@/app/conversation/reviewStatus";
 import type { IntegratedCheck, MergeRecord, OrchestratorStep, OrchestratorStepKind, Plan, ReviewRun, Task, TaskState } from "@/ipc/generated";
@@ -285,7 +286,9 @@ export function onwards(steps: readonly JobStep[]): JobStep[] {
 }
 
 /** The phase at work of the session's current plan of several phases, with its window. */
-function currentPhase(input: JobInput): { plan: Plan; index: number; since: number; until: number; state: JobStepState; tasks: Task[] } | null {
+function currentPhase(
+  input: Pick<JobInput, "tasks" | "plans" | "requests" | "overnight">,
+): { plan: Plan; index: number; since: number; until: number; state: JobStepState; tasks: Task[]; statuses: ReturnType<typeof planStepStatus>[] } | null {
   const runPlans = new Set(Object.values(input.overnight).flatMap((run) => (run.planId ? [run.planId] : [])));
   const ids = contextPlanIds(input.plans).filter((id) => !runPlans.has(id));
   const id = contextPlanId(input.plans, ids, latestPlanRequest(input.requests));
@@ -310,7 +313,36 @@ function currentPhase(input: JobInput): { plan: Plan; index: number; since: numb
   // The phase's other builds (its fixes): those since it started that no other phase leads.
   const leads = new Set(plan.steps.flatMap((step) => (step.taskId ? [step.taskId] : [])));
   const others = Object.values(input.tasks).filter((other) => !leads.has(other.id) && builds(other) && other.createdAtMs >= since);
-  return { plan, index, since, until: Number.POSITIVE_INFINITY, state, tasks: task ? [task, ...others] : others };
+  return { plan, index, since, until: Number.POSITIVE_INFINITY, state, tasks: task ? [task, ...others] : others, statuses };
+}
+
+/** A plan the thread wrote, of several steps: the Job card's phase bar (mockup 06). */
+export type PlanBar = { stages: JobStage[]; index: number; title: string; words: string };
+
+/**
+ * The phase bar of the session's approved plan of two steps or more while steps are left: one
+ * segment per step, named as the plan names it. Nothing else gets a bar: the Job card says what
+ * is happening in words.
+ */
+export function planBar(input: Pick<JobInput, "tasks" | "plans" | "requests" | "overnight">): PlanBar | null {
+  const phase = currentPhase(input);
+  if (!phase) return null;
+  const stages = phase.plan.steps.map((step, index) => {
+    const status = phase.statuses[index];
+    return { name: step.title, weight: 1, state: status === "stopped" ? "done" : (status ?? "pending") } satisfies JobStage;
+  });
+  return { stages, index: phase.index, title: phase.plan.steps[phase.index]!.title, words: `Step ${phase.index + 1} of ${stages.length}` };
+}
+
+/** The board's session's plan bar, live; null while there is none or the board is another conversation's. */
+export function usePlanBar(conversationId: string): PlanBar | null {
+  const json = useBoard((s) => {
+    const board = s.board;
+    if (!board || board.conversationId !== conversationId) return null;
+    const bar = planBar(board);
+    return bar ? JSON.stringify(bar) : null;
+  });
+  return useMemo(() => (json ? (JSON.parse(json) as PlanBar) : null), [json]);
 }
 
 /**

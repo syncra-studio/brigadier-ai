@@ -1569,6 +1569,12 @@ impl SessionManager {
 
     /// `run_check` with no command: the checks the changes since `caller`'s base call for.
     async fn affected_checks(&self, caller: &Caller) -> Result<String> {
+        let (plan, changed) = self.affected_plan(caller).await?;
+        Ok(plan.text(changed, caller.task_id.is_some()))
+    }
+
+    /// The checks the changes since `caller`'s base call for, and how many files changed.
+    async fn affected_plan(&self, caller: &Caller) -> Result<(Plan, usize)> {
         let tree = caller.tree.clone().ok_or_else(|| {
             Error::Invalid("there is no checkout here to look for changes in".into())
         })?;
@@ -1589,7 +1595,172 @@ impl SessionManager {
         };
         let learned = self.learned_checks(caller, &packages).await;
         let plan = affected(&changed, &packages, manager, &learned);
-        Ok(plan.text(changed.len(), caller.task_id.is_some()))
+        Ok((plan, changed.len()))
+    }
+
+    /// A worker's `run_checks`: each check its change calls for ([`Self::affected_plan`]), in
+    /// its checkout, one after another until one fails. Recorded as a run of checks of scope
+    /// `change`, its progress and verdict sent as events, and answered in the call.
+    pub(crate) async fn worker_run_checks(
+        &self,
+        id: &ConversationId,
+        task: &TaskId,
+        rerun: bool,
+    ) -> Result<String> {
+        let caller = self.check_caller(id, Some(task)).await?;
+        let tree = caller
+            .tree
+            .clone()
+            .ok_or_else(|| Error::Invalid("there is no checkout here to run checks in".into()))?;
+        let (plan, changed) = self.affected_plan(&caller).await?;
+        let commands: Vec<(String, String)> = plan
+            .groups
+            .iter()
+            .flat_map(|group| group.checks.iter().cloned())
+            .collect();
+        if commands.is_empty() {
+            return Ok(plan.text(changed, true));
+        }
+        let root = repo_root(&tree).unwrap_or_else(|| tree.clone());
+        let tip = self.head_of(&tree).await.unwrap_or_default();
+        let board = self.core.board(id).await?;
+        let branch = board
+            .tasks
+            .get(task)
+            .and_then(|task| task.workspace.as_ref())
+            .and_then(|workspace| workspace.branch.clone())
+            .unwrap_or_default();
+        let total = u32::try_from(commands.len()).unwrap_or(u32::MAX);
+        let mut check = crate::work::IntegratedCheck {
+            id: super::integrated_checks::next_check_id(&board),
+            conversation_id: id.clone(),
+            repo: root.to_string_lossy().into_owned(),
+            branch,
+            tip: tip.clone(),
+            state: crate::work::IntegratedCheckState::Running {
+                command: None,
+                done: 0,
+                total,
+            },
+            due_at_ms: now_ms(),
+            started_at_ms: Some(now_ms()),
+            ended_at_ms: None,
+            requests: self.request_for(id, Some(task)).await.into_iter().collect(),
+            tasks: Vec::new(),
+            rerun,
+            asked: Some(crate::work::ChecksAsked {
+                task_id: Some(task.clone()),
+                scope: crate::work::ChecksScope::Change,
+            }),
+        };
+        drop(board);
+        self.store_check(&check).await;
+        let mut passed: Vec<String> = Vec::new();
+        let mut failure = None;
+        for (command, workdir) in &commands {
+            check.state = crate::work::IntegratedCheckState::Running {
+                command: Some(command.clone()),
+                done: u32::try_from(passed.len()).unwrap_or(u32::MAX),
+                total,
+            };
+            self.store_check(&check).await;
+            let dir = if workdir.is_empty() {
+                root.clone()
+            } else {
+                root.join(workdir)
+            };
+            match self
+                .check_now(&caller, &dir, command, RUN_TIMEOUT_MAX, rerun, &[])
+                .await
+            {
+                Ok(done) if done.status == "exit 0" => passed.push(command.clone()),
+                Ok(done) => {
+                    check.state = if done.status.starts_with("stopped") {
+                        crate::work::IntegratedCheckState::Interrupted {
+                            reason: format!("`{command}` was stopped: {}", done.status),
+                        }
+                    } else {
+                        crate::work::IntegratedCheckState::Failed {
+                            command: command.clone(),
+                            status: done.status.clone(),
+                            output: Some(done.alias.clone()),
+                        }
+                    };
+                    failure = Some(done.reply);
+                    break;
+                }
+                Err(err) => {
+                    check.state = crate::work::IntegratedCheckState::Interrupted {
+                        reason: format!("`{command}` couldn't run: {err}"),
+                    };
+                    failure = Some(err.to_string());
+                    break;
+                }
+            }
+        }
+        if failure.is_none() {
+            check.state = crate::work::IntegratedCheckState::Passed {
+                commands: passed.clone(),
+            };
+        }
+        check.ended_at_ms = Some(now_ms());
+        self.store_check(&check).await;
+        let at = &tip[..tip.len().min(10)];
+        let quoted = |commands: &[String]| {
+            commands
+                .iter()
+                .map(|command| format!("`{command}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let dirty = {
+            let (git, at) = (self.git.clone(), tree.clone());
+            blocking(move || {
+                git.open(&at)
+                    .and_then(|repo| repo.read_only(&["status", "--porcelain"]))
+                    .map_err(git_error)
+            })
+            .await
+            .is_ok_and(|status| !status.trim().is_empty())
+        };
+        let uncommitted = if dirty {
+            " Uncommitted changes were in it too: commit them before you report."
+        } else {
+            ""
+        };
+        let left = if plan.left.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " Not covered here, for the thread's full checks after landing: {}.",
+                plan.left.join("; ")
+            )
+        };
+        Ok(match (&check.state, failure) {
+            (crate::work::IntegratedCheckState::Passed { .. }, _) => format!(
+                "[checks passed at {at}] Your change's checks pass: {}.{left}{uncommitted}",
+                quoted(&passed)
+            ),
+            (
+                crate::work::IntegratedCheckState::Failed {
+                    command, status, ..
+                },
+                Some(reply),
+            ) => {
+                format!(
+                    "[checks failed at {at}] `{command}` failed ({status}){}. Fix it, then call run_checks again.\n{reply}",
+                    if passed.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; passed before it: {}", quoted(&passed))
+                    }
+                )
+            }
+            (_, reply) => format!(
+                "[checks couldn't run at {at}] {}. Fix what stopped them if it's yours, then call run_checks again.",
+                reply.unwrap_or_default()
+            ),
+        })
     }
 
     /// What the project's Brain learned of checks per package folder.

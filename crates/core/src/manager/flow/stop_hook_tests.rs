@@ -222,7 +222,7 @@ async fn a_verifier_waiting_for_its_own_review_ends_its_turn() {
                     return report(&turn).await;
                 }
                 if turn.prompt.contains("You verify this phase") {
-                    let started = turn.call("review_code", json!({})).await;
+                    let started = turn.call("request_review", json!({})).await;
                     assert!(!started.is_error, "{}", started.text);
                     let waiting = turn.stop_decision(false).await;
                     log.lock().unwrap().push(("review".into(), waiting));

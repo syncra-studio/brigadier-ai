@@ -381,7 +381,9 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "plan_phases" => ToolCall::Orchestrator(O::PlanPhases(arg(name, args))),
         "approve_outline" => ToolCall::Orchestrator(O::ApproveOutline(arg(name, args))),
         "start_verifier" => ToolCall::Orchestrator(O::StartVerifier(arg(name, args))),
-        "review_candidate" => ToolCall::Orchestrator(O::ReviewCandidate(arg(name, args))),
+        "request_review" if orchestrator => {
+            ToolCall::Orchestrator(O::RequestReview(arg(name, args)))
+        }
         "attach_proof" => ToolCall::Orchestrator(O::AttachProof(arg(name, args))),
         "request_approval" => ToolCall::Orchestrator(O::RequestApproval(arg(name, args))),
         "land_phase" => ToolCall::Orchestrator(O::LandPhase(arg(name, args))),
@@ -389,6 +391,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "stop_merge" => ToolCall::Orchestrator(O::StopMerge(arg(name, args))),
         "propose_plan" => ToolCall::Orchestrator(O::ProposePlan(arg(name, args))),
         "note_for_user" => ToolCall::Orchestrator(O::NoteForUser(arg(name, args))),
+        "set_headline" => ToolCall::Orchestrator(O::SetHeadline(arg(name, args))),
         "record_findings" => ToolCall::Orchestrator(O::RecordFindings(arg(name, args))),
         "suggest_full_access" => ToolCall::Orchestrator(O::SuggestFullAccess(arg(name, args))),
         "suggest_setting" => ToolCall::Orchestrator(O::SuggestSetting(arg(name, args))),
@@ -401,7 +404,7 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "ask_thread" | "ask_orchestrator" => ToolCall::Worker(W::AskOrchestrator(arg(name, args))),
         "submit_outline" => ToolCall::Worker(W::SubmitOutline(arg(name, args))),
         "submit_report" => ToolCall::Worker(W::SubmitReport(arg(name, args))),
-        "review_code" => ToolCall::Worker(W::ReviewCode),
+        "request_review" => ToolCall::Worker(W::RequestReview),
         "note_progress" => ToolCall::Worker(W::NoteProgress(arg(name, args))),
         "review_plan" => ToolCall::Orchestrator(O::ReviewPlan(arg(name, args))),
         "read_page" => ToolCall::Orchestrator(O::ReadPage(arg(name, args))),
@@ -420,7 +423,8 @@ fn tool_call(name: &str, args: Value, orchestrator: bool) -> ToolCall {
         "preview_log" => ToolCall::Worker(W::PreviewLog(arg(name, args))),
         "project_map" if orchestrator => ToolCall::Orchestrator(O::ProjectMap),
         "clean_up" => ToolCall::Orchestrator(O::CleanUp),
-        "rerun_checks" => ToolCall::Orchestrator(O::RerunChecks),
+        "run_checks" if orchestrator => ToolCall::Orchestrator(O::RunChecks(arg(name, args))),
+        "run_checks" => ToolCall::Worker(W::RunChecks(arg(name, args))),
         "project_map" => ToolCall::Worker(W::ProjectMap),
         "list_sessions" => ToolCall::Orchestrator(O::ListSessions(arg(name, args))),
         "message_session" => ToolCall::Orchestrator(O::MessageSession(arg(name, args))),
@@ -2066,8 +2070,9 @@ impl Flow {
 #[cfg(unix)]
 mod accounts_tests;
 #[cfg(unix)]
-mod answer_tests;
+mod agent_tools_tests;
 #[cfg(unix)]
+mod answer_tests;
 mod app_state_tests;
 #[cfg(unix)]
 mod auto_merge_tests;
@@ -2255,6 +2260,8 @@ mod spare_worktree_tests;
 mod status_tests;
 #[cfg(unix)]
 mod stop_hook_tests;
+#[cfg(unix)]
+mod stopped_run_tests;
 #[cfg(unix)]
 mod subfolder_rules_tests;
 // Uses the debug fault injections (`manager::fault`), built in debug only, where tests run.

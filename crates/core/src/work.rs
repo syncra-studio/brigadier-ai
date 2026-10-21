@@ -1543,7 +1543,7 @@ pub struct Plan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ReviewKind {
-    /// The commits `base..tip`: a landing's, or a worker's own (`review_code`).
+    /// The commits `base..tip`: a landing's, or a worker's own (`request_review`).
     Code,
     /// A lead's outline, with the code it starts from (`tip`) checked out.
     Plan,
@@ -1579,7 +1579,7 @@ pub enum ReviewState {
 pub enum ReviewFor {
     /// The orchestrator: a landing's review, an outline's.
     Orchestrator,
-    /// The worker that asked for it (`review_code`); the orchestrator once it has reported or
+    /// The worker that asked for it (`request_review`); the orchestrator once it has reported or
     /// ended.
     Worker { task_id: TaskId },
 }
@@ -1794,6 +1794,31 @@ pub struct IntegratedCheck {
     /// Asked for again by the thread: kept results don't answer it.
     #[serde(default)]
     pub rerun: bool,
+    /// Who asked for it with `run_checks`, and what it checks. None on a run Brigadier started
+    /// by itself (before 10-21): such a run never counts for a merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub asked: Option<ChecksAsked>,
+}
+
+/// Who called `run_checks`, and what its run checks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecksAsked {
+    /// The worker that asked; none for the thread.
+    pub task_id: Option<TaskId>,
+    pub scope: ChecksScope,
+}
+
+/// What a `run_checks` run checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ChecksScope {
+    /// The project's full checks, builds included, on the session branch's commit (the
+    /// thread's).
+    Full,
+    /// The checks of the packages a worker's change touched, in its own checkout.
+    Change,
 }
 
 /// Where an integrated check stands.
@@ -1809,6 +1834,11 @@ pub enum IntegratedCheckState {
     Running {
         /// The command running now.
         command: Option<String>,
+        /// How many of its commands ended so far, of `total` (0 of 0 while they are listed).
+        #[serde(default)]
+        done: u32,
+        #[serde(default)]
+        total: u32,
     },
     /// Every command passed.
     Passed { commands: Vec<String> },
@@ -1860,6 +1890,19 @@ pub struct BackgroundRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub name: Option<String>,
+}
+
+/// What the session is doing now, in the thread's own words (`set_headline`): the Job card's
+/// headline and one detail line under it. It stays until the user's next message or the
+/// thread's next headline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionHeadline {
+    /// "Starting the dev server".
+    pub text: String,
+    /// One line under it: "Next: open the window".
+    pub detail: Option<String>,
+    pub at_ms: i64,
 }
 
 /// Where a background run stands.
@@ -2567,6 +2610,10 @@ pub enum OrchestratorStepKind {
     /// The usage limit a turn waited for reset and the turn went on (#128): a divider across
     /// the thread where its work went on, "Claude usage limit reset · 9:39 PM".
     QuotaResumed { provider: ProviderKind },
+    /// A moment of the conversation that is no work of its own (#506): a usage limit, a move
+    /// to another model, provider or account, the chosen model back. The thread says it across
+    /// the column as a divider where it happened.
+    Moment { text: String },
 }
 
 impl OrchestratorStepKind {
