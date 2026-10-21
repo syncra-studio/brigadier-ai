@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { ciPill, ciWatches, heldMerge, mergeWords, runFailed, shortSha } from "@/app/conversation/activity/slotView";
 import { isRunRequest, isWorking } from "@/app/conversation/blocks";
 import { questionOpen } from "@/app/conversation/cards/questionRound";
-import type { IntegratedCheck, IntegratedCheckState, OrchestratorStep, ProviderKind } from "@/ipc/generated";
+import type { IntegratedCheck, OrchestratorStep, ProviderKind } from "@/ipc/generated";
 import { type Board, liveRequest, useBoard } from "@/state/board";
 
 /**
@@ -55,18 +55,10 @@ const firstLine = (text: string | null | undefined) => text?.split("\n").find((l
 
 const checkNumber = (check: IntegratedCheck) => Number(check.id.replace(/^check-/, "")) || 0;
 
-/**
- * A check run as `run_checks` records it: who asked (no task: the thread) and what it checks, and
- * while it runs how many of its commands ended. Read as optional until every daemon sends them.
- */
-type Asked = { taskId: string | null; scope: "full" | "change" };
-const askedOf = (check: IntegratedCheck): Asked | undefined => (check as IntegratedCheck & { asked?: Asked }).asked;
-const countOf = (state: IntegratedCheckState): { done?: number; total?: number } => state as { done?: number; total?: number };
-
 /** The thread's checks, newest last: a worker's own are its row's, an overnight run's its card's. */
 function sessionChecks(input: LiveInput): IntegratedCheck[] {
   return Object.values(input.integratedChecks)
-    .filter((check) => !check.requests.some(isRunRequest) && !askedOf(check)?.taskId)
+    .filter((check) => !check.requests.some(isRunRequest) && !check.asked?.taskId)
     .toSorted((a, b) => checkNumber(a) - checkNumber(b));
 }
 
@@ -74,7 +66,7 @@ function sessionChecks(input: LiveInput): IntegratedCheck[] {
 function passedOn(checks: readonly IntegratedCheck[], sha: string | undefined): boolean {
   if (!sha) return false;
   return checks.some(
-    (check) => check.tip === sha && askedOf(check)?.scope === "full" && check.state.type === "passed" && check.state.commands.length > 0,
+    (check) => check.tip === sha && check.asked?.scope === "full" && check.state.type === "passed" && check.state.commands.length > 0,
   );
 }
 
@@ -82,24 +74,26 @@ function checkFacts(checks: readonly IntegratedCheck[]): Fact[] {
   const latest = checks.at(-1);
   if (!latest) return [];
   const sinceMs = latest.startedAtMs ?? latest.dueAtMs;
-  const progress = countOf(latest.state);
   const ended = { sinceMs, endedAtMs: latest.endedAtMs ?? undefined, atMs: latest.endedAtMs ?? sinceMs, actions: [] };
   switch (latest.state.type) {
     case "due":
       return [{ kind: "running", rank: 2, tone: "running", headline: "Checks are next", detail: `They run on ${short(latest.tip)} once the work lands`, sinceMs: latest.dueAtMs, atMs: latest.dueAtMs, actions: [] }];
-    case "running":
+    case "running": {
+      // run_checks counts its commands: "3 of 5" is the third at work; one alone needs no count.
+      const { done, total } = latest.state;
       return [
         {
           kind: "running",
           rank: 3,
           tone: "running",
-          headline: progress.total ? `Running checks · ${Math.min(progress.total, (progress.done ?? 0) + 1)} of ${progress.total}` : "Running checks",
+          headline: total > 1 ? `Running checks · ${Math.min(total, done + 1)} of ${total}` : "Running checks",
           detail: latest.state.command ? `Now: ${latest.state.command}` : `On ${short(latest.tip)}`,
           sinceMs,
           atMs: sinceMs,
           actions: [],
         },
       ];
+    }
     case "passed": {
       const count = latest.state.commands.length;
       if (count === 0) return [];
