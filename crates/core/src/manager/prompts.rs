@@ -1276,11 +1276,6 @@ pub(crate) const REVISIONS: &[Revision] = &[
         thread: "From now on, when the user asks you to report something to Brigadier's developers (\"report this\", \"file that as a bug\"), call offer_feedback with asked true, drafted from this conversation in their words: its card's Send files it on GitHub as them.",
         worker: "",
     },
-    Revision {
-        number: PROGRESS_NOTE_REVISION,
-        thread: "",
-        worker: "From now on, on work of several steps, say where you are with note_progress as you start each one (\"Step 3 of 5: wiring the exporter\"): the user sees it under your name until your next note.",
-    },
 ];
 
 /// The instructions' current revision.
@@ -1858,9 +1853,6 @@ pub(crate) const SEPARATE_FOLLOW_UP_REVISION: u32 = 122;
 /// The user may ask the thread to report something to Brigadier's developers ("report this"):
 /// it offers the feedback card with `asked`, which an earlier offer doesn't refuse (#471).
 pub(crate) const FEEDBACK_ASKED_REVISION: u32 = 123;
-/// A worker says where it is in its plan with note_progress, shown under its name in the
-/// Workers strip and the context card.
-pub(crate) const PROGRESS_NOTE_REVISION: u32 = 124;
 
 /// How the thread handles its workers, sent with the first worker message (BUILD-PLAN C1).
 pub(crate) const WORKER_RULES: &str = "[instructions] How you handle workers, from now on:
