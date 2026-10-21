@@ -563,6 +563,20 @@ if ($APP_ENTRY -and (Test-Path -LiteralPath $APP)) {
     else { Removed "app $APP (its uninstaller)" }
   }
 }
+# The installer's own key, the folder the app went in (macOS's Preferences plist is its counterpart).
+# The app's uninstaller removes it only with "Delete app data", which a silent run never ticks.
+$INSTALLER_KEY = 'HKCU:\Software\SYNCRA SRL\Brigadier'
+if ($ID -ceq 'ai.brigadier.app' -and (Test-Path -LiteralPath $INSTALLER_KEY)) {
+  if ((Test-Path -LiteralPath $UNINSTALL_KEY) -and -not ($DryRun -and $APP_ENTRY)) {
+    Kept "registry key $INSTALLER_KEY (the app is still installed)"
+  } elseif ($DryRun) { Say "DRY RUN: remove registry key $INSTALLER_KEY" }
+  else {
+    try { Remove-Item -LiteralPath $INSTALLER_KEY -Recurse -Force -ErrorAction Stop; Removed "registry key $INSTALLER_KEY" }
+    catch { Uncertain "registry key left: $INSTALLER_KEY" }
+    $vendor = Get-Item -LiteralPath (Split-Path $INSTALLER_KEY) -ErrorAction SilentlyContinue
+    if ($vendor -and $vendor.SubKeyCount -eq 0 -and $vendor.ValueCount -eq 0) { Remove-Item -LiteralPath $vendor.PSPath -Force }
+  }
+}
 
 Say ''; Say 'Summary:'
 Say "  Removed directly: $($script:REMOVED.Count)"
