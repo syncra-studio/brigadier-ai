@@ -446,9 +446,12 @@ fn pay(tab: &str) -> BrowserToolCall {
     })
 }
 
-/// Waits for the `count`th browser card.
+/// Waits for the `count`th browser card, as long as the flow waits for anything: a worker's
+/// card comes once its process has started, which takes over 5 s on Windows beside the
+/// module's other flows.
 async fn card_number(flow: &Flow, count: usize) -> crate::work::Approval {
-    for _ in 0..200 {
+    let deadline = tokio::time::Instant::now() + *super::PATIENCE;
+    while tokio::time::Instant::now() < deadline {
         let cards = browser_cards(flow).await;
         if cards.len() >= count {
             return cards[count - 1].clone();
