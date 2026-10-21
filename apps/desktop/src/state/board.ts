@@ -324,7 +324,7 @@ export function workingRequest(board: Board): string | null {
  * The newest request's id and the request of its steer chain that still works or waits, if any
  * (see [`workingRequest`]).
  */
-export function liveRequest(board: Board): { newest: string; live: UserRequest } | null {
+export function liveRequest(board: Pick<Board, "requests">): { newest: string; live: UserRequest } | null {
   const requests = Object.values(board.requests);
   const latest = requests.reduce<UserRequest | null>(
     (newest, request) =>
