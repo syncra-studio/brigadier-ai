@@ -40,7 +40,11 @@ const SKIP = new Map([
 ]);
 
 const pen = JSON.parse(readFileSync(varsFile, "utf8"));
-const css = readFileSync(tokensFile, "utf8");
+// Read with \n line ends and written back with the file's own: a Windows checkout has \r\n, which
+// the block's generated lines (joined with \n) would never match.
+const raw = readFileSync(tokensFile, "utf8");
+const eol = raw.includes("\r\n") ? "\r\n" : "\n";
+const css = raw.replaceAll("\r\n", "\n");
 // A changed colour can change what the colours mixed from it come to, so write until nothing moves.
 let next = css;
 for (let pass = 0; pass < 9; pass++) {
@@ -59,7 +63,7 @@ if (check) {
   console.error(`  differs: ${differs.join(" ")}`);
   process.exit(1);
 }
-if (next !== css) writeFileSync(tokensFile, next);
+if (next !== css) writeFileSync(tokensFile, next.replaceAll("\n", eol));
 
 /** tokens.css with the block written from Pen. */
 function generate(text) {
