@@ -193,6 +193,10 @@ table is the current one.
 | Side panel (app.pen) | `#500 RebaseStep` | `app/side-panel/RebaseStep.tsx` | `RebaseStep` | |
 | Side panel (app.pen) | `#509 Steps` | `app/side-panel/ReviewSteps.tsx` | `ReviewSteps` | |
 | Side panel (app.pen) | `#974 OpenInMenu` | `app/side-panel/OpenInMenu.tsx` | `OpenInMenu` | |
+| Side panel (app.pen) | `#960 CodeLines › find / go-to-line box` | `app/side-panel/FindLineBox.tsx` | `FindLineBox` | |
+| Side panel (app.pen) | `#422 FileBrowser` | `app/side-panel/FileBrowser.tsx` | `FileBrowser` | |
+| Side panel (app.pen) | `#962 FilePill › images menu` | `app/side-panel/ImagesMenu.tsx` | `ImagesMenu` | |
+| Side panel (app.pen) | `#963 NotesList` | `app/side-panel/NotesList.tsx` | `NotesList` | |
 | Inspector (settings.pen) | `#1005 OrchestratorTab › session bar` | `app/inspector/SessionBar.tsx` | `SessionBar` | |
 | Inspector (settings.pen) | `#1006 OrchestratorLogView` | `app/inspector/OrchestratorLogView.tsx` | `OrchestratorLogView` | |
 | Inspector (settings.pen) | `#1007 OrchestratorLogView › load earlier line` | `app/inspector/LoadEarlierLine.tsx` | `LoadEarlierLine` | |

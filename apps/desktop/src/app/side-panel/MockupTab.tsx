@@ -1,8 +1,10 @@
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import { ImagesMenu } from "@/app/side-panel/ImagesMenu";
 import { type ImageState, type LoadedImage, loadImage, markedScreenshot, useStoredImage } from "@/app/side-panel/mockupImages";
+import { NotesList } from "@/app/side-panel/NotesList";
 import { Button, type Choice, Segmented } from "@/components/controls";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Popover, PopoverContent, PopoverTrigger, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/overlays";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/overlays";
 import { ArrowUp, Check, ChevronDown, Comment, Grid, ImageSquare, SquareImage, Trash, X } from "@/components/icons";
 import { EmptyState } from "@/components/shared";
 import type { ArtifactRef } from "@/ipc/generated";
@@ -39,8 +41,6 @@ function itemsOf(mockup: Mockup, shown: readonly Shot[]): Item[] {
       .flatMap(([kind, ref]) => ref ? [{ key: `${kind}-${number}`, screen: number, kind, ref }] : []);
   });
 }
-
-const nameOf = (ref: ArtifactRef) => ref.fileName ?? ref.title;
 
 const STATUS_WORDS: Record<Mockup["status"], string> = {
   building: "Building", ready: "Ready", stopped: "Stopped", matching: "Being built for real", compared: "Compared with the app",
@@ -192,15 +192,7 @@ function FilePill({ mockup, version, items, current, onPick }: {
           </button>
         </DropdownMenuTrigger>
       </Tip>
-      <DropdownMenuContent align="start">
-        {items.map((item) => (
-          <DropdownMenuItem key={item.key} onSelect={() => onPick(item.key)}>
-            <ImageSquare className="size-icon-sm" />
-            <span className="flex-1 truncate">{nameOf(item.ref)}</span>
-            <Check className={cn("size-icon-sm", item.key !== current?.key && "invisible")} />
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
+      <ImagesMenu items={items} current={current} onPick={onPick} />
     </DropdownMenu>
   );
 }
@@ -551,32 +543,6 @@ function Toolbar({ conversationId, notes, commenting, canComment, working, revis
       {failed && <span role="alert" className="bg-popover text-destructive rounded-capsule px-3 py-1 text-xs">Could not send the comments. Try again.</span>}
       {content}
     </div>
-  );
-}
-
-/** "{n} comments"; hovering lists them per image, as they will be sent. */
-function NotesList({ notes }: { notes: MockupNote[] }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button type="button" className="text-muted-foreground hover:text-foreground px-2.5" onPointerEnter={() => setOpen(true)} onPointerLeave={() => setOpen(false)}>
-          {notes.length === 1 ? "1 comment" : `${notes.length} comments`}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent side="top" className="w-mockup-list flex flex-col gap-3 p-3 text-sm" onOpenAutoFocus={(event) => event.preventDefault()}>
-        {notesByScreen(notes).map(({ screen, notes: own }, index) => (
-          <div key={screen} className="flex flex-col gap-2">
-            <span className="font-medium">Image {index + 1}</span>
-            <ol className="flex flex-col gap-2">
-              {own.map((note, number) => (
-                <li key={note.id} className="flex gap-2"><span className="text-muted-foreground">{number + 1}.</span>{note.text}</li>
-              ))}
-            </ol>
-          </div>
-        ))}
-      </PopoverContent>
-    </Popover>
   );
 }
 

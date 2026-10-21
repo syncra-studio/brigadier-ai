@@ -3,7 +3,11 @@
 
 export * from "./AgentRow";
 export * from "./EntryView";
+export * from "./FileBrowser";
 export * from "./FileGlyph";
+export * from "./FindLineBox";
+export * from "./ImagesMenu";
+export * from "./NotesList";
 export * from "./OpenInMenu";
 export * from "./PaneViewTabs";
 export * from "./RebaseStep";
