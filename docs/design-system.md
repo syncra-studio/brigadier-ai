@@ -159,7 +159,7 @@ table is the current one.
 | Glyphs & indicators | `SiteIcon/Globe`, `SiteIcon/Favicon` | `components/shared/site-icon.tsx` | `SiteIcon` | its look is the New tab's `new-tab-site-icon` class (`app/side-panel/NewTabTools.css`) |
 | Glyphs & indicators | `Counts` | `app/conversation/Counts.tsx` | `Counts` (`dim`, `quiet`) | in app |
 | Glyphs & indicators | `SourceCountBadge` | `components/controls/source-count-badge.tsx` | `SourceCountBadge` (`count`) | |
-| Glyphs & indicators | `Share` | `app/shell/BarStatus.tsx` | `Share` (file-local) | in app |
+| Glyphs & indicators | `Share` | `components/shared/share.tsx` | `Share` | |
 | Shared app parts | `TitlebarNav` | `components/shared/titlebar-nav.tsx` | `TitlebarNav` | |
 | Shared app parts | `RowAction`, `RowActionsSlot` | `components/shared/row-action.tsx` | `RowAction`, `RowActionsSlot` | |
 | Shared app parts | `ConversationRow` | `components/shared/conversation-row.tsx` | `ConversationRow` (on `NavRow`), `RowStatus` | |
@@ -185,6 +185,11 @@ table is the current one.
 | App shell (app.pen) | `#69 AppSidebar › projects empty prompt` | `app/shell/ProjectsEmptyPrompt.tsx` | `ProjectsEmptyPrompt` | |
 | App shell (app.pen) | `#74 ProjectRow` | `app/shell/ProjectRow.tsx` | `ProjectRow` | |
 | App shell (app.pen) | `#943 Flyout` | `app/shell/Flyout.tsx` | `Flyout` | its lists (`ProjectsFlyout`, `ChatsFlyout`, `FlyoutConversation`) stay in `app/shell/AppSidebar.tsx` |
+| App shell (app.pen) | `#948 ProviderUsage` | `app/shell/ProviderUsage.tsx` | `ProviderUsage` | |
+| App shell (app.pen) | `#92 BarDivider` | `app/shell/BarDivider.tsx` | `BarDivider` | |
+| App shell (app.pen) | `#94 SessionTabBar › Chat tab` | `app/shell/ChatTab.tsx` | `ChatTab` | |
+| App shell (app.pen) | `#95 SessionTabBar › session tab` | `app/shell/SessionTab.tsx` | `SessionTab` | |
+| App shell (app.pen) | `#975 TabMenu` | `app/shell/TabMenu.tsx` | `TabMenu` | |
 | Side panel (app.pen) | `#412 AgentRow` | `app/side-panel/AgentRow.tsx` | `AgentRow` | |
 | Side panel (app.pen) | `#414 WorkerList` | `app/side-panel/WorkerList.tsx` | `WorkerList` | |
 | Side panel (app.pen) | `#416 WorkerDetail › worker header` | `app/side-panel/WorkerHeader.tsx` | `WorkerHeader` | |
