@@ -336,10 +336,12 @@ function seen(column: Element) {
 const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
 async function until(check: () => boolean, what: string): Promise<void> {
-  for (let tries = 0; tries < 100; tries++) {
+  // Ten seconds however busy the machine: a loaded one stretches each wait.
+  for (const end = performance.now() + 10_000; performance.now() < end; ) {
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  if (check()) return;
   const alert = document.querySelector('[data-column="live"] [role="alert"]')?.textContent;
   throw new Error(`Timed out waiting for ${what} (asked: ${calls.map((call) => call.method).join(", ")}${alert ? `; it said: ${alert}` : ""})`);
 }
