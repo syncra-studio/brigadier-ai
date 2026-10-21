@@ -26,6 +26,8 @@ export function SettingsPage({
   back,
   wide = false,
   scrollable = true,
+  className,
+  sectionsClassName,
   children,
 }: {
   /** Its name; a node when something sits beside it (an agent's plan). */
@@ -41,6 +43,8 @@ export function SettingsPage({
   /** Disable page scrolling when the content owns its bounded scroll areas. */
   scrollable?: boolean;
   children: ReactNode;
+  className?: string;
+  sectionsClassName?: string;
 }) {
   return (
     <div data-slot="settings-page" className="relative flex h-full flex-col">
@@ -59,6 +63,7 @@ export function SettingsPage({
             "mx-auto flex w-full flex-col px-5 pt-4",
             wide ? "max-w-settings-wide" : "max-w-settings",
             scrollable ? "pb-12" : "min-h-0 flex-1",
+            className,
           )}
         >
           {back && <BackLink label={back.label} onBack={back.onBack} />}
@@ -72,7 +77,7 @@ export function SettingsPage({
             </div>
             {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
           </header>
-          <div className={cn("flex flex-col", scrollable ? "gap-10 pt-5" : "min-h-0 flex-1")}>
+          <div className={cn("flex flex-col", scrollable ? "gap-10 pt-5" : "min-h-0 flex-1", sectionsClassName)}>
             {children}
           </div>
         </div>
