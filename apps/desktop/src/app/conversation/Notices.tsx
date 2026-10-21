@@ -4,7 +4,7 @@ import { ABOVE_LINE } from "@/app/conversation/aboveLine";
 import { Info, Warning, X } from "@/components/icons";
 import type { Notice } from "@/ipc/generated";
 
-/** Notices (environment problems, fallbacks), newest last; each can be dismissed. */
+/** Notices (environment problems, failed work), newest last; each can be dismissed. Limits and switches are dividers in the thread (#506). */
 export function Notices({ notices }: { notices: readonly Notice[] }) {
   const [dismissed, setDismissed] = useState<ReadonlySet<number>>(new Set());
   const shown = notices.filter((notice) => !dismissed.has(notice.atMs)).slice(-3);

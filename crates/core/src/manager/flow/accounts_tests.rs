@@ -63,6 +63,21 @@ async fn notices(flow: &Flow) -> Vec<String> {
         .collect()
 }
 
+/// What the thread says across its column (#506): limits and switches are no notices.
+async fn moments(flow: &Flow) -> Vec<String> {
+    flow.events()
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            DomainEvent::OrchestratorStepped { step } => match step.kind {
+                crate::work::OrchestratorStepKind::Moment { text } => Some(text),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 fn orchestrator(flow: &Flow) -> ModelChoice {
     match flow.core.conversation(&flow.conversation).unwrap().setup {
         Some(Setup::Session { orchestrator, .. }) => orchestrator,
@@ -114,19 +129,14 @@ async fn a_limit_moves_the_chat_to_another_account_and_its_work_is_done_once() {
     assert_eq!(*done.lock().unwrap(), 1, "the work is done once");
     // The chat now runs on that account, and says so.
     assert_eq!(orchestrator(&flow).account.as_deref(), Some("acct-b"));
+    let moments = moments(&flow).await;
+    assert_eq!(
+        moments,
+        ["Claude Code hit its usage limit on this computer's login; continuing on Account acct-b."],
+    );
+    // Only that divider: the CLI's own limit message is not shown, nor any notice of it.
     let notices = notices(&flow).await;
-    assert!(
-        notices.iter().any(|text| text
-            == "Claude Code hit its usage limit on this computer's login; continuing on Account acct-b."),
-        "{notices:#?}"
-    );
-    // Only that note: the CLI's own limit message is not shown once the chat went on.
-    assert!(
-        !notices
-            .iter()
-            .any(|text| text.contains("hit your usage limit")),
-        "{notices:#?}"
-    );
+    assert!(notices.is_empty(), "{notices:#?}");
     // The note to carry on is the CLI's input only, never a message of the chat's.
     let messages = flow.core.all_messages(&flow.conversation).await.unwrap();
     assert!(
@@ -158,11 +168,11 @@ async fn a_switch_notice_masks_an_account_named_by_its_email() {
     flow.manager.runtime.sync_accounts().await;
     flow.say("Do the thing.").await;
     flow.settled().await;
-    let notices = notices(&flow).await;
+    let moments = moments(&flow).await;
     assert!(
-        notices.iter().any(|text| text
+        moments.iter().any(|text| text
             == "Claude Code hit its usage limit on this computer's login; continuing on wor•••••@•••••.io."),
-        "{notices:#?}"
+        "{moments:#?}"
     );
     flow.stop().await;
 }
@@ -209,16 +219,17 @@ async fn with_every_account_at_its_limit_the_chat_falls_back_to_the_other_provid
         .fallback
         .expect("Codex stands in");
     assert_eq!(fallback.choice.provider, ProviderKind::Codex);
-    // The last account's limit is shown as before, since no account took the chat over.
-    let notices = notices(&flow).await;
-    assert_eq!(
-        notices
-            .iter()
-            .filter(|text| *text == "You've hit your usage limit.")
-            .count(),
-        1,
-        "{notices:#?}"
+    // One divider per move, and the CLI's own limit message is no card above the composer:
+    // the move to Codex says the limit (#506).
+    let moments = moments(&flow).await;
+    assert_eq!(moments.len(), 2, "{moments:#?}");
+    assert!(
+        moments[1]
+            .starts_with("Every Claude Code account hit its usage limit; continuing on Codex "),
+        "{moments:#?}"
     );
+    let notices = notices(&flow).await;
+    assert!(notices.is_empty(), "{notices:#?}");
     flow.stop().await;
 }
 
@@ -265,16 +276,71 @@ async fn the_stand_in_names_codex_and_the_soonest_reset_of_every_account() {
         .expect("Codex stands in");
     assert_eq!(fallback.until_ms, Some(soon));
     let clock = super::super::conversation::reset_clock(soon, crate::now_ms());
-    let notices = notices(&flow).await;
-    let said = notices
+    let moments = moments(&flow).await;
+    let said = moments
         .iter()
         .find(|text| text.starts_with("Every Claude Code account hit its usage limit;"))
-        .unwrap_or_else(|| panic!("{notices:#?}"));
+        .unwrap_or_else(|| panic!("{moments:#?}"));
     assert!(said.contains("; continuing on Codex "), "{said}");
     assert!(
         said.ends_with(&format!(" until {clock}, then back on Claude Code.")),
         "{said}"
     );
+    flow.stop().await;
+}
+
+/// A stand-in and the chosen model back are each one divider in the thread, never a notice
+/// above the composer (#506).
+#[tokio::test]
+async fn a_stand_in_and_the_chosen_model_back_are_dividers_in_the_thread() {
+    let log = Log::default();
+    let limited = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let first = limited.clone();
+    let flow = Flow::start(
+        "accounts-stand-in-back",
+        Options::default(),
+        logging(&log, move |turn| match turn.provider {
+            ProviderKind::Claude if !first.swap(true, std::sync::atomic::Ordering::SeqCst) => {
+                let mut reply = Reply::limited();
+                if let Some(limit) = &mut reply.limit {
+                    limit.resets_at_ms = Some(crate::now_ms() + 1500);
+                }
+                reply
+            }
+            ProviderKind::Claude => Reply::text("Back on Claude."),
+            ProviderKind::Codex => Reply::text("Done on Codex."),
+        }),
+    )
+    .await;
+    flow.say("Do the thing.").await;
+    flow.until("a Codex turn", |_| {
+        seen(&log)
+            .iter()
+            .any(|turn| turn.provider == ProviderKind::Codex)
+    })
+    .await;
+    flow.settled().await;
+    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+    flow.say("And the next thing.").await;
+    flow.until("Claude again", |_| {
+        seen(&log)
+            .last()
+            .is_some_and(|turn| turn.provider == ProviderKind::Claude)
+    })
+    .await;
+    flow.settled().await;
+    let moments = moments(&flow).await;
+    assert_eq!(moments.len(), 2, "{moments:#?}");
+    assert!(
+        moments[0].starts_with("Claude Code hit its usage limit; continuing on Codex "),
+        "{moments:#?}"
+    );
+    assert_eq!(
+        moments[1],
+        "Claude Code is available again; continuing with it."
+    );
+    let notices = notices(&flow).await;
+    assert!(notices.is_empty(), "{notices:#?}");
     flow.stop().await;
 }
 
@@ -335,15 +401,15 @@ async fn with_switching_off_a_limit_moves_the_session_to_the_picked_account() {
         conversation.fallback
     );
     assert_eq!(orchestrator(&flow).account.as_deref(), Some("acct-c"));
-    let notices = notices(&flow).await;
+    let moments = moments(&flow).await;
     assert!(
-        notices.iter().any(|text| text
+        moments.iter().any(|text| text
             == "Claude Code hit its usage limit on Account acct-b; continuing on Account acct-c."),
-        "{notices:#?}"
+        "{moments:#?}"
     );
     assert!(
-        !notices.iter().any(|text| text.contains("Codex")),
-        "{notices:#?}"
+        !moments.iter().any(|text| text.contains("Codex")),
+        "{moments:#?}"
     );
     flow.stop().await;
 }
@@ -383,11 +449,11 @@ async fn with_switching_off_and_every_account_at_its_limit_codex_stands_in() {
             (ProviderKind::Codex, None),
         ]
     );
-    let notices = notices(&flow).await;
+    let moments = moments(&flow).await;
     assert!(
-        notices.iter().any(|text| text
+        moments.iter().any(|text| text
             .starts_with("Every Claude Code account hit its usage limit; continuing on Codex ")),
-        "{notices:#?}"
+        "{moments:#?}"
     );
     flow.stop().await;
 }
@@ -705,11 +771,11 @@ async fn a_workers_task_carries_on_with_another_account_of_its_provider() {
     assert_eq!(turns[0].account, None);
     assert_eq!(turns[1].provider, turns[0].provider);
     assert!(turns[1].account.is_some(), "{turns:#?}");
-    let notices = notices(&flow).await;
+    let moments = moments(&flow).await;
     assert!(
-        notices.iter().any(|text| text
+        moments.iter().any(|text| text
             .contains("hit its usage limit on this computer's login; task 1 continues on")),
-        "{notices:#?}"
+        "{moments:#?}"
     );
     flow.stop().await;
 }
@@ -1110,7 +1176,7 @@ async fn with_switching_to_another_agent_off_a_limit_waits_on_its_own_agent() {
     // limit, Codex isn't asked: the message waits for Claude's reset.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
     let told = loop {
-        let told = notices(&flow).await;
+        let told = moments(&flow).await;
         if told
             .iter()
             .any(|notice| notice.contains("Your message waits"))

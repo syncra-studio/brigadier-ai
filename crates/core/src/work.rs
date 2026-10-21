@@ -2580,6 +2580,10 @@ pub enum OrchestratorStepKind {
     /// The usage limit a turn waited for reset and the turn went on (#128): a divider across
     /// the thread where its work went on, "Claude usage limit reset · 9:39 PM".
     QuotaResumed { provider: ProviderKind },
+    /// A moment of the conversation that is no work of its own (#506): a usage limit, a move
+    /// to another model, provider or account, the chosen model back. The thread says it across
+    /// the column as a divider where it happened.
+    Moment { text: String },
 }
 
 impl OrchestratorStepKind {

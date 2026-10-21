@@ -799,6 +799,14 @@ impl SessionManager {
         self.orchestrator_step_in(id, request, kind).await;
     }
 
+    /// Says a moment of the conversation (a usage limit, a switch of model, provider or
+    /// account) as a divider in the thread, under the request it happened in (`task`'s own).
+    pub(crate) async fn moment(&self, id: &ConversationId, task: Option<&TaskId>, text: String) {
+        let request = self.request_for(id, task).await;
+        self.orchestrator_step_in(id, request, OrchestratorStepKind::Moment { text })
+            .await;
+    }
+
     /// Files a row for the thread under `request`.
     pub(crate) async fn orchestrator_step_in(
         &self,

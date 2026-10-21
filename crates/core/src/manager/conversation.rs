@@ -4865,16 +4865,9 @@ impl SessionManager {
                             },
                         }));
                 }
-                // A limit another account of the provider takes over from: the chat goes on
-                // there, and only the note saying so is shown (see `switch_account`).
-                let switching = limited
-                    && self
-                        .runtime
-                        .switch_target(&cli.account, cli.model.model.as_deref())
-                        .is_some();
                 // An error that ends a request's turn is said once, by the failed request in
-                // the thread; a limit has its own hand-over, and an error with no request to
-                // carry it is a notice.
+                // the thread; a limit has its own hand-over, which says it in the thread
+                // (#506), and an error with no request to carry it is a notice.
                 let unshown = !error.will_retry && {
                     let mut state = conv.state.lock().await;
                     state.turn_error = Some(error.message.clone());
@@ -4884,7 +4877,7 @@ impl SessionManager {
                     }
                     carried
                 };
-                if !error.will_retry && !switching && !unshown {
+                if !error.will_retry && !limited && !unshown {
                     self.notice(
                         &conv.id,
                         brigadier_providers::NoticeLevel::Warning,
@@ -5650,13 +5643,21 @@ impl SessionManager {
                 }
             }
             // Nowhere to go: the turn fails (unless the user stopped it meanwhile).
-            let mut state = conv.state.lock().await;
-            let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
-            if let Some(request) = &served
-                && let Some(ended) = ended
-                && !stopped
-            {
-                state.outcomes.insert(request.clone(), ended);
+            let unserved = {
+                let mut state = conv.state.lock().await;
+                let stopped = state.hand_over.take().is_some_and(|over| over.stopped);
+                match (&served, ended) {
+                    (Some(request), Some(ended)) if !stopped => {
+                        state.outcomes.insert(request.clone(), ended);
+                        None
+                    }
+                    // No request says the limit: the thread does.
+                    (None, Some(RequestState::Failed { error })) if !stopped => Some(error),
+                    _ => None,
+                }
+            };
+            if let Some(error) = unserved {
+                self.moment(&conv.id, None, error).await;
             }
         }
         self.set_run(&conv.id, RunState::Idle, None).await;
@@ -5958,10 +5959,10 @@ impl SessionManager {
             Some(at) => format!("until {}", reset_clock(at, now_ms())),
             None => "until its limit resets".into(),
         };
-        self.notice(
+        self.moment(
             &conv.id,
-            brigadier_providers::NoticeLevel::Info,
-            &format!("{reason}; continuing on {stand_in} {until}, then back on {vendor}."),
+            None,
+            format!("{reason}; continuing on {stand_in} {until}, then back on {vendor}."),
         )
         .await;
         conv.restarting(WriteCause::Reroute).await;
@@ -6022,10 +6023,10 @@ impl SessionManager {
                 "was stopped by a spend limit or a failed sign-in"
             }
         };
-        self.notice(
+        self.moment(
             &conv.id,
-            brigadier_providers::NoticeLevel::Info,
-            &format!(
+            None,
+            format!(
                 "{} {stopped} on {from}; continuing on {to}.",
                 cli.provider.label()
             ),
@@ -6119,10 +6120,10 @@ impl SessionManager {
         };
         if first {
             crate::logging::private_trace!(conv.private_logs, info, "messages wait for quota"; conversation = %conv.id, reason = %waiting.reason);
-            self.notice(
+            self.moment(
                 &conv.id,
-                brigadier_providers::NoticeLevel::Info,
-                &format!(
+                None,
+                format!(
                     "{}. Your message waits and goes on its own once a model you allow can take it.",
                     waiting.reason.trim_end_matches('.')
                 ),
@@ -6484,10 +6485,10 @@ impl SessionManager {
             state.reseed = true;
         }
         if !changed {
-            self.notice(
+            self.moment(
                 &conv.id,
-                brigadier_providers::NoticeLevel::Info,
-                &format!(
+                None,
+                format!(
                     "{} is available again; continuing with it.",
                     fallback.replaces.provider.label()
                 ),
