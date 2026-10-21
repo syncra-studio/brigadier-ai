@@ -287,6 +287,10 @@ table is the current one.
 | Conversation (app.pen) | `#311 CiPill` | `app/conversation/CiPill.tsx` | `CiPill` | |
 | Conversation (app.pen) | `#312 MergePill` | `app/conversation/MergePill.tsx` | `MergePill` | |
 | Conversation (app.pen) | `#314 ComposerStatusSlot › inline: folded count badge` | `app/conversation/FoldedCountBadge.tsx` | `FoldedCountBadge` | |
+| Settings (settings.pen) | `#755 Installation` | `app/settings/providers/Installation.tsx` | `Installation` | |
+| Settings (settings.pen) | `#756 AgentModels` | `app/settings/providers/AgentModels.tsx` | `AgentModels` | |
+| Settings (settings.pen) | `#758 AgentModelRow` | `app/settings/providers/AgentModelRow.tsx` | `AgentModelRow` | |
+| Settings (settings.pen) | `#763 AgentRow` | `app/settings/providers/ProviderAgentRow.tsx` | `ProviderAgentRow` | |
 
 ## Icons
 
