@@ -30,6 +30,7 @@
  * - `turn-two-servers`: the app's server, then a smoke-test server, the answer naming the app's:
  *   the app's card (#451).
  * - `turn-stopped`: the turn's server stopped, its answer naming it: Stopped, Start again, no Open (#407).
+ * - `turn-worker`: a worker's own fixture under the turn's request, stopped with its task: no card (#507).
  *
  * `?case=<id>` shows one case alone (for a screenshot); `?drive=1` writes what each case shows,
  * then clicks through it, to `<pre id="preview-card-result">` (PreviewCardRender.test.ts).
@@ -122,6 +123,7 @@ const LATER_TURNS: Preview[] = [
   { ...preview("preview-t4-app", 4200, { type: "running" }), startedAtMs: 13100, requestId: "turn-4" },
   { ...preview("preview-t4-smoke", 4300, { type: "running" }), startedAtMs: 13500, requestId: "turn-4" },
   { ...preview("preview-t5", 4400, { type: "stopped", reason: "stopped" }), startedAtMs: 16100, requestId: "turn-5" },
+  { ...preview("preview-t6-worker", 4500, { type: "stopped", reason: "its worker's task ended" }), startedAtMs: 19100, requestId: "turn-6", taskId: "task-1" },
 ];
 const turnRequest = (id: string, startedAtMs: number, endedAtMs: number) => ({
   id, conversationId: CHAT, preview: "", state: { type: "done" }, startedAtMs, endedAtMs, steeredInto: null, steeredAfter: null, undo: null, worked: [], quotaWait: false,
@@ -149,6 +151,7 @@ useBoard.setState({
       "turn-3": turnRequest("turn-3", 10000, 12000),
       "turn-4": turnRequest("turn-4", 13000, 15000),
       "turn-5": turnRequest("turn-5", 16000, 18000),
+      "turn-6": turnRequest("turn-6", 19000, 21000),
     } as unknown as ReturnType<typeof emptyBoard>["requests"],
   },
 });
@@ -207,6 +210,7 @@ const CASES: { id: string; node: ReactNode }[] = [
   { id: "turn-later-no-url", node: <Turn request="turn-3" /> },
   { id: "turn-two-servers", node: <Turn request="turn-4" answer="The app is up at http://localhost:4200/." /> },
   { id: "turn-stopped", node: <Turn request="turn-5" answer="It ran at http://localhost:4400/." /> },
+  { id: "turn-worker", node: <Turn request="turn-6" answer="The pages worker is still building." /> },
 ];
 
 const only = query.get("case");
@@ -307,6 +311,8 @@ async function drive() {
   const stopped = look("turn-stopped");
   out.turnStopped = [stopped.title, stopped.standing, stopped.target, stopped.buttons];
   out.noRecord = !!at("no-record")?.querySelector("[data-slot=preview-card]");
+  // A worker's own preview is a Background row, not the turn's page (#507).
+  out.worker = cards("turn-worker");
   out.calls = calls;
   return out;
 }
