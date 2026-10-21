@@ -297,6 +297,11 @@ table is the current one.
 | Settings (settings.pen) | `#756 AgentModels` | `app/settings/providers/AgentModels.tsx` | `AgentModels` | |
 | Settings (settings.pen) | `#758 AgentModelRow` | `app/settings/providers/AgentModelRow.tsx` | `AgentModelRow` | |
 | Settings (settings.pen) | `#763 AgentRow` | `app/settings/providers/ProviderAgentRow.tsx` | `ProviderAgentRow` | |
+| Conversation (app.pen) | `#147 LoadEarlier` | `app/conversation/LoadEarlier.tsx` | `LoadEarlier` | |
+| Conversation (app.pen) | `#148 UserAttachments` | `app/conversation/UserAttachments.tsx` | `UserAttachments` | |
+| Conversation (app.pen) | `#270 Notices` | `app/conversation/Notices.tsx` | `Notices` | |
+| Conversation (app.pen) | `#271 AboveComposer` | `app/conversation/AboveComposer.tsx` | `AboveComposer` | |
+| Conversation (app.pen) | `#272 AboveComposer › inline: archived bar` | `app/conversation/ArchivedBar.tsx` | `ArchivedBar` | |
 
 ## Icons
 
