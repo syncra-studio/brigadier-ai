@@ -140,7 +140,8 @@ public static class BrigadierUninstall {
     return rows;
   }
 
-  [StructLayout(LayoutKind.Sequential)]
+  // BY_HANDLE_FILE_INFORMATION: its FILETIMEs are 4-byte aligned, so the longs must be too.
+  [StructLayout(LayoutKind.Sequential, Pack = 4)]
   struct FileInfo {
     public uint Attributes; public long Created, Accessed, Written;
     public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
@@ -217,14 +218,15 @@ if ($DATA -match '[\r\n\x1f]') { Stop-Uninstall 'data directory contains unsuppo
 $DATA_ID = Get-FileId $DATA
 if (-not $DATA_ID) { Stop-Uninstall 'cannot identify the data directory' }
 
-# The app's uninstall entry: the one whose folder is APP (the installed app's is named Brigadier).
+# The app's uninstall entry: the one whose folder is APP. The installed app's is named Brigadier,
+# and only ai.brigadier.app is that one (on macOS the bundle identifier must match -AppId).
 function Get-AppEntry([string]$folder) {
   foreach ($root in 'HKCU:', 'HKLM:') {
     foreach ($key in Get-ChildItem "$root\Software\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue) {
       $entry = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
       if (-not $entry -or -not $entry.PSObject.Properties['InstallLocation'] -or -not $entry.PSObject.Properties['UninstallString']) { continue }
       if (-not (Same $entry.InstallLocation.Trim('"').TrimEnd('\') $folder)) { continue }
-      if ($ID -ceq 'ai.brigadier.app' -and $key.PSChildName -ne 'Brigadier') { continue }
+      if (($ID -ceq 'ai.brigadier.app') -ne ($key.PSChildName -eq 'Brigadier')) { continue }
       if (-not (Same $entry.UninstallString.Trim('"') "$folder\uninstall.exe")) { continue }
       return $key.PSPath
     }
@@ -232,12 +234,14 @@ function Get-AppEntry([string]$folder) {
   return $null
 }
 $APP_ENTRY = $null; $APP_ID = $null
+# Removed already (Settings › Apps): its uninstaller leaves the folder while the data is in it.
+if ($APP -and -not $APP_EXPLICIT -and -not (Test-Path -LiteralPath "$APP\brigadier.exe")) { $APP = $null }
 if ($APP -and (Test-Path -LiteralPath $APP)) {
   if (-not (Test-NoLinks $APP)) { Stop-Uninstall 'app folder path contains a link or unsafe component' }
   $APP = [IO.Path]::GetFullPath($APP).TrimEnd('\')
   if (-not (Test-Path -LiteralPath "$APP\brigadier.exe" -PathType Leaf)) { Stop-Uninstall 'app folder holds no brigadier.exe' }
   $APP_ENTRY = Get-AppEntry $APP
-  if (-not $APP_ENTRY) { Stop-Uninstall 'app folder is not the installation of --app-id (no matching uninstall entry)' }
+  if (-not $APP_ENTRY) { Stop-Uninstall 'app folder is not the installation of -AppId (no matching uninstall entry)' }
   $APP_ID = Get-FileId $APP
   if (-not $APP_ID) { Stop-Uninstall 'cannot identify the app folder' }
 }
@@ -561,6 +565,19 @@ if ($APP_ENTRY -and (Test-Path -LiteralPath $APP)) {
     }
     if ((Test-Path -LiteralPath "$APP\brigadier.exe") -or (Test-Path -LiteralPath $APP_ENTRY)) { Uncertain "the app's uninstaller left $APP in place" }
     else { Removed "app $APP (its uninstaller)" }
+  }
+}
+# The folder an already removed app kept for its data, once that is gone too.
+$APP_FOLDER = Join-Path $env:LOCALAPPDATA 'Brigadier'
+if ($ID -ceq 'ai.brigadier.app' -and -not $APP_ENTRY -and -not (Test-Path -LiteralPath $UNINSTALL_KEY) -and
+  (Test-Path -LiteralPath $APP_FOLDER -PathType Container) -and -not (Test-Link $APP_FOLDER)) {
+  $left = @(Get-ChildItem -LiteralPath $APP_FOLDER -Force)
+  if ($DryRun) {
+    if (-not $left -or ($left.Count -eq 1 -and (Same $left[0].FullName $DATA) -and $script:TRASHED -contains $DATA)) {
+      Say "DRY RUN: remove empty folder $APP_FOLDER"
+    }
+  } elseif (-not $left) {
+    try { Remove-Item -LiteralPath $APP_FOLDER -ErrorAction Stop; Removed $APP_FOLDER } catch { Uncertain "empty folder left: $APP_FOLDER" }
   }
 }
 # The installer's own key, the folder the app went in (macOS's Preferences plist is its counterpart).

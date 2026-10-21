@@ -374,8 +374,7 @@ The installer isn't Authenticode-signed yet: Windows SmartScreen warns before it
 `scripts/install.ps1` accepts it on its checksum alone. Signing needs a code-signing certificate
 for SYNCRA SRL, named in `tauri.windows.conf.json` (`bundle.windows.certificateThumbprint` for
 one in the build machine's certificate store, or `bundle.windows.signCommand` for a signing
-service). The
-nightly's Windows job uploads the installer and its `SHA256SUMS` as the `installer-Windows`
+service). The nightly's Windows job uploads the installer and its `SHA256SUMS` as the `installer-Windows`
 artifact on every run. With the updater key secrets (`TAURI_SIGNING_PRIVATE_KEY`,
 `UPDATER_PUBKEY`) it builds it with the nightly's or the tag's version and feed, and adds the
 updater's `.sig` and a `windows-x86_64` feed entry (`latest-windows.json`). The publish and
@@ -419,10 +418,12 @@ powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1 -AppId ai.brigadi
 
 Its default data directory is `$env:BRIGADIER_DATA_DIR` or `%LOCALAPPDATA%\Brigadier\Data`, and
 its default app is the installed folder (from its uninstall entry, else
-`%LOCALAPPDATA%\Brigadier`). It reads the event store with Windows' own `winsqlite3.dll`, counts
+`%LOCALAPPDATA%\Brigadier`); an app already removed in Settings › Apps is skipped, and the folder
+it left for the data goes once that is empty. Only `ai.brigadier.app` matches the installed
+app's uninstall entry. It reads the event store with Windows' own `winsqlite3.dll`, counts
 junctions and other reparse points as symlinks, and moves to the Recycle Bin what uninstall.sh
 moves to the Trash: the data, `%APPDATA%\<id>` and `%LOCALAPPDATA%\<id>`, and the recorded
 session files. The app goes by its own uninstaller (`uninstall.exe /S`), which leaves a kept
 data folder in place; then the script removes the installer's `HKCU\Software\SYNCRA SRL\Brigadier`
-key, as uninstall.sh trashes the app's Preferences plist. Windows has no keep-awake rule or microphone permission to reset, and
-Brigadier makes no session temp folders there.
+key, as uninstall.sh trashes the app's Preferences plist. Windows has no keep-awake rule or
+microphone permission to reset, and Brigadier makes no session temp folders there.
