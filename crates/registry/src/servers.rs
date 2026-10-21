@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::{Roots, Secret, Server, Source, Transport, server_id};
+use crate::{Problem, Roots, Secret, Server, Source, Transport, server_id};
 
 /// How a source writes variables in its values.
 #[derive(Clone, Copy)]
@@ -25,13 +25,19 @@ struct Origin<'a> {
     /// Where relative paths resolve from.
     base: Option<&'a Path>,
     variables: Variables,
+    /// The config file.
+    file: &'a Path,
 }
 
 /// The user's servers: Claude Code's user and local scopes, Codex's, Claude Desktop's and
 /// Cursor's.
-pub(crate) fn user(roots: &Roots, codex: Option<&toml::Table>) -> Vec<Server> {
+pub(crate) fn user(
+    roots: &Roots,
+    codex: Option<&toml::Table>,
+    problems: &mut Vec<Problem>,
+) -> Vec<Server> {
     let mut servers = Vec::new();
-    if let Some(claude) = read_json(&roots.claude_json) {
+    if let Some(claude) = read_json(&roots.claude_json, Source::ClaudeUser, None, problems) {
         if let Some(own) = claude.get("mcpServers").and_then(Value::as_object) {
             servers.extend(json_servers(
                 own,
@@ -40,8 +46,10 @@ pub(crate) fn user(roots: &Roots, codex: Option<&toml::Table>) -> Vec<Server> {
                     project: None,
                     base: None,
                     variables: Variables::Claude,
+                    file: &roots.claude_json,
                 },
                 roots,
+                problems,
             ));
         }
         for (path, project) in claude
@@ -61,15 +69,26 @@ pub(crate) fn user(roots: &Roots, codex: Option<&toml::Table>) -> Vec<Server> {
                     project: Some(path),
                     base: Some(path),
                     variables: Variables::Claude,
+                    file: &roots.claude_json,
                 },
                 roots,
+                problems,
             ));
         }
     }
     if let Some(codex) = codex {
-        servers.extend(toml_servers(codex, Source::CodexUser, None, roots));
+        let file = roots.codex_home.join("config.toml");
+        servers.extend(toml_servers(
+            codex,
+            Source::CodexUser,
+            None,
+            &file,
+            roots,
+            problems,
+        ));
     }
-    if let Some(desktop) = roots.desktop_config.as_deref().and_then(read_json)
+    if let Some(file) = roots.desktop_config.as_deref()
+        && let Some(desktop) = read_json(file, Source::Desktop, None, problems)
         && let Some(own) = desktop.get("mcpServers").and_then(Value::as_object)
     {
         servers.extend(json_servers(
@@ -79,11 +98,14 @@ pub(crate) fn user(roots: &Roots, codex: Option<&toml::Table>) -> Vec<Server> {
                 project: None,
                 base: None,
                 variables: Variables::None,
+                file,
             },
             roots,
+            problems,
         ));
     }
-    if let Some(cursor) = read_json(&roots.cursor_dir.join("mcp.json"))
+    let file = roots.cursor_dir.join("mcp.json");
+    if let Some(cursor) = read_json(&file, Source::CursorUser, None, problems)
         && let Some(own) = cursor.get("mcpServers").and_then(Value::as_object)
     {
         servers.extend(json_servers(
@@ -93,17 +115,20 @@ pub(crate) fn user(roots: &Roots, codex: Option<&toml::Table>) -> Vec<Server> {
                 project: None,
                 base: None,
                 variables: Variables::Cursor,
+                file: &file,
             },
             roots,
+            problems,
         ));
     }
     servers
 }
 
 /// A project's servers: its `.mcp.json`, its Codex layers and its Cursor config.
-pub(crate) fn project(roots: &Roots, project: &Path) -> Vec<Server> {
+pub(crate) fn project(roots: &Roots, project: &Path, problems: &mut Vec<Problem>) -> Vec<Server> {
     let mut servers = Vec::new();
-    if let Some(config) = read_json(&project.join(".mcp.json"))
+    let file = project.join(".mcp.json");
+    if let Some(config) = read_json(&file, Source::ClaudeProject, Some(project), problems)
         && let Some(own) = config.get("mcpServers").and_then(Value::as_object)
     {
         servers.extend(json_servers(
@@ -113,12 +138,15 @@ pub(crate) fn project(roots: &Roots, project: &Path) -> Vec<Server> {
                 project: Some(project),
                 base: Some(project),
                 variables: Variables::Claude,
+                file: &file,
             },
             roots,
+            problems,
         ));
     }
-    servers.extend(codex_layers(roots, project, project));
-    if let Some(config) = read_json(&project.join(".cursor").join("mcp.json"))
+    servers.extend(codex_layers(roots, project, project, problems));
+    let file = project.join(".cursor").join("mcp.json");
+    if let Some(config) = read_json(&file, Source::CursorProject, Some(project), problems)
         && let Some(own) = config.get("mcpServers").and_then(Value::as_object)
     {
         servers.extend(json_servers(
@@ -128,8 +156,10 @@ pub(crate) fn project(roots: &Roots, project: &Path) -> Vec<Server> {
                 project: Some(project),
                 base: Some(project),
                 variables: Variables::Cursor,
+                file: &file,
             },
             roots,
+            problems,
         ));
     }
     servers
@@ -138,12 +168,24 @@ pub(crate) fn project(roots: &Roots, project: &Path) -> Vec<Server> {
 /// The servers of the project's `.codex/config.toml` layers that a session working in `dir`
 /// loads: every folder from `dir` up to the project's root, the nearest winning for a name, as
 /// Codex merges them. Each starts in its layer's folder unless it names its own.
-pub(crate) fn codex_layers(roots: &Roots, project: &Path, dir: &Path) -> Vec<Server> {
+pub(crate) fn codex_layers(
+    roots: &Roots,
+    project: &Path,
+    dir: &Path,
+    problems: &mut Vec<Problem>,
+) -> Vec<Server> {
     let mut servers: Vec<Server> = Vec::new();
     for folder in dir.ancestors() {
-        if let Some(layer) = read_toml(&folder.join(".codex").join("config.toml")) {
-            for server in toml_servers(&layer, Source::CodexProject, Some((project, folder)), roots)
-            {
+        let file = folder.join(".codex").join("config.toml");
+        if let Some(layer) = read_toml(&file, Source::CodexProject, Some(project), problems) {
+            for server in toml_servers(
+                &layer,
+                Source::CodexProject,
+                Some((project, folder)),
+                &file,
+                roots,
+                problems,
+            ) {
                 if !servers.iter().any(|known| known.name == server.name) {
                     servers.push(server);
                 }
@@ -157,8 +199,13 @@ pub(crate) fn codex_layers(roots: &Roots, project: &Path, dir: &Path) -> Vec<Ser
 }
 
 /// `$CODEX_HOME/config.toml`, read once for its servers, skills and trust.
-pub(crate) fn codex_config(roots: &Roots) -> Option<toml::Table> {
-    read_toml(&roots.codex_home.join("config.toml"))
+pub(crate) fn codex_config(roots: &Roots, problems: &mut Vec<Problem>) -> Option<toml::Table> {
+    read_toml(
+        &roots.codex_home.join("config.toml"),
+        Source::CodexUser,
+        None,
+        problems,
+    )
 }
 
 /// The user's own `skills.config` entries.
@@ -188,8 +235,23 @@ pub(crate) fn codex_trusted(config: &toml::Table) -> Vec<PathBuf> {
 }
 
 /// `mcpServers` of a JSON config (Claude Code, Claude Desktop, Cursor).
-fn json_servers(own: &Map<String, Value>, origin: &Origin<'_>, roots: &Roots) -> Vec<Server> {
+fn json_servers(
+    own: &Map<String, Value>,
+    origin: &Origin<'_>,
+    roots: &Roots,
+    problems: &mut Vec<Problem>,
+) -> Vec<Server> {
     let expand = |text: &str| expand(text, origin.variables, roots, origin.project);
+    let mut problem = |name: &str, read: Option<String>, error: String| {
+        problems.push(entry_problem(
+            name,
+            origin.source,
+            origin.project,
+            origin.file,
+            read,
+            error,
+        ));
+    };
     let mut servers = Vec::new();
     for (name, config) in own {
         let Some(config) = config.as_object() else {
@@ -205,14 +267,29 @@ fn json_servers(own: &Map<String, Value>, origin: &Origin<'_>, roots: &Roots) ->
             if kind == Some("sse") {
                 continue;
             }
+            let url = expand(url);
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                let scheme = url.split_once("://").map_or("", |(scheme, _)| scheme);
+                problem(
+                    name,
+                    Some(url.clone()),
+                    format!("Unsupported address “{scheme}://”: only http and https"),
+                );
+                continue;
+            }
             Transport::Http {
-                url: expand(url),
+                url,
                 headers: string_map(config.get("headers"))
                     .map(|(header, value)| (header, Secret::new(expand(&value))))
                     .collect(),
             }
         } else if let Some(command) = config.get("command").and_then(Value::as_str) {
-            if kind.is_some_and(|kind| kind != "stdio") {
+            if let Some(kind) = kind.filter(|kind| *kind != "stdio") {
+                problem(
+                    name,
+                    Some(expand(command)),
+                    format!("Unknown type “{kind}”"),
+                );
                 continue;
             }
             let base = origin.base;
@@ -236,6 +313,7 @@ fn json_servers(own: &Map<String, Value>, origin: &Origin<'_>, roots: &Roots) ->
                 base: base.map(Path::to_owned),
             }
         } else {
+            problem(name, None, "It has no command or url".into());
             continue;
         };
         servers.push(server(name, origin.source, origin.project, transport));
@@ -249,7 +327,9 @@ fn toml_servers(
     config: &toml::Table,
     source: Source,
     layer: Option<(&Path, &Path)>,
+    file: &Path,
     roots: &Roots,
+    problems: &mut Vec<Problem>,
 ) -> Vec<Server> {
     let Some(own) = config.get("mcp_servers").and_then(toml::Value::as_table) else {
         return Vec::new();
@@ -335,6 +415,14 @@ fn toml_servers(
                 base: base.map(Path::to_owned),
             }
         } else {
+            problems.push(entry_problem(
+                name,
+                source,
+                layer.map(|(project, _)| project),
+                file,
+                None,
+                "It has no command or url".into(),
+            ));
             continue;
         };
         servers.push(server(
@@ -433,18 +521,74 @@ fn expand(text: &str, variables: Variables, roots: &Roots, project: Option<&Path
     out
 }
 
-fn read_json(path: &Path) -> Option<Value> {
+/// A server entry of `file` that can't be used.
+fn entry_problem(
+    name: &str,
+    source: Source,
+    project: Option<&Path>,
+    file: &Path,
+    read: Option<String>,
+    error: String,
+) -> Problem {
+    Problem {
+        id: server_id(source, project, name),
+        name: name.to_owned(),
+        source,
+        project: project.map(Path::to_owned),
+        file: file.to_owned(),
+        line: None,
+        read,
+        error,
+    }
+}
+
+/// A config file that can't be parsed: none of its servers can be read.
+fn file_problem(
+    path: &Path,
+    source: Source,
+    project: Option<&Path>,
+    line: Option<usize>,
+) -> Problem {
+    Problem {
+        id: format!("{}:file:{}", source.prefix(), path.display()),
+        name: path
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+        source,
+        project: project.map(Path::to_owned),
+        file: path.to_owned(),
+        line,
+        read: None,
+        error: match line {
+            Some(line) => format!("The file couldn't be parsed (line {line})"),
+            None => "The file couldn't be parsed".into(),
+        },
+    }
+}
+
+fn read_json(
+    path: &Path,
+    source: Source,
+    project: Option<&Path>,
+    problems: &mut Vec<Problem>,
+) -> Option<Value> {
     let text = std::fs::read_to_string(path).ok()?;
     match serde_json::from_str(&text) {
         Ok(value) => Some(value),
         Err(error) => {
             tracing::warn!(path = %path.display(), %error, "unreadable MCP config");
+            problems.push(file_problem(path, source, project, Some(error.line())));
             None
         }
     }
 }
 
-fn read_toml(path: &Path) -> Option<toml::Table> {
+fn read_toml(
+    path: &Path,
+    source: Source,
+    project: Option<&Path>,
+    problems: &mut Vec<Problem>,
+) -> Option<toml::Table> {
     let text = std::fs::read_to_string(path).ok()?;
     match text.parse::<toml::Table>() {
         Ok(table) => Some(table),
@@ -456,6 +600,11 @@ fn read_toml(path: &Path) -> Option<toml::Table> {
                 at = ?error.span(),
                 "unreadable Codex config"
             );
+            let line = error
+                .span()
+                .and_then(|span| text.get(..span.start))
+                .map(|before| before.matches('\n').count() + 1);
+            problems.push(file_problem(path, source, project, line));
             None
         }
     }

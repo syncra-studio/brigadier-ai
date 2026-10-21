@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::Roots;
+use crate::{Agent, Roots, Session};
 
 /// A skill folder, wherever it is found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,9 +16,9 @@ pub struct Skill {
     pub dir: PathBuf,
     /// Every root it is found in, in [`SkillRoot`]'s order.
     pub roots: Vec<SkillRoot>,
-    /// Each folder it is found at, as found (a link into a root is not resolved): Codex knows
-    /// a skill by the path it found it at.
-    pub entries: Vec<PathBuf>,
+    /// Each folder it is found at, as found (a link into a root is not resolved), with its
+    /// root: Codex knows a skill by the path it found it at.
+    pub entries: Vec<(SkillRoot, PathBuf)>,
 }
 
 impl Skill {
@@ -43,6 +43,21 @@ pub enum SkillRoot {
 }
 
 impl SkillRoot {
+    /// Whether `session`'s agent finds the skills in this root by itself.
+    pub fn native(&self, session: &Session<'_>) -> bool {
+        match (self, session.agent) {
+            (Self::ClaudeUser, Agent::Claude)
+            | (Self::AgentsUser | Self::CodexUser, Agent::Codex) => true,
+            (Self::ClaudeProject(project), Agent::Claude) => {
+                Some(project.as_path()) == session.project
+            }
+            (Self::AgentsProject(project), Agent::Codex) => {
+                Some(project.as_path()) == session.project && session.in_checkout
+            }
+            _ => false,
+        }
+    }
+
     fn prefix(&self) -> String {
         match self {
             Self::AgentsUser => "agents:user".into(),
@@ -102,7 +117,7 @@ fn scan(skills: &mut Vec<Skill>, folder: &Path, root: SkillRoot) {
             if !known.roots.contains(&root) {
                 known.roots.push(root.clone());
             }
-            known.entries.push(entry.path());
+            known.entries.push((root.clone(), entry.path()));
             continue;
         }
         let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) else {
@@ -115,7 +130,7 @@ fn scan(skills: &mut Vec<Skill>, folder: &Path, root: SkillRoot) {
             description: description.unwrap_or_default(),
             dir,
             roots: vec![root.clone()],
-            entries: vec![entry.path()],
+            entries: vec![(root.clone(), entry.path())],
         });
     }
 }

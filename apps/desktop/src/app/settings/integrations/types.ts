@@ -1,4 +1,4 @@
-/** Local view contract until GetIntegrations lands in the generated IPC types. */
+/** The Plugins page's view of the daemon's catalog (`live.ts` maps `IntegrationsView` to it). */
 export type IntegrationAgent = "claude" | "codex";
 
 export type IntegrationSource =

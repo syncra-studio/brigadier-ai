@@ -43,6 +43,27 @@ const PLUGIN_NAME: &str = "brigadier-shared";
 pub struct IntegrationsView {
     pub servers: Vec<McpServerView>,
     pub skills: Vec<SkillView>,
+    /// The servers and config files that couldn't be read, which no worker gets.
+    pub problems: Vec<ProblemView>,
+}
+
+/// A server, or a whole config file, that couldn't be read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemView {
+    /// Source-qualified like a server's.
+    pub id: String,
+    /// The server's name, or the file's.
+    pub name: String,
+    /// Where it is configured, as [`McpServerView::source`].
+    pub source: String,
+    pub project: Option<String>,
+    /// The config file.
+    pub file: String,
+    pub line: Option<u32>,
+    /// What was read of it (an address or command), if anything.
+    pub read: Option<String>,
+    pub error: String,
 }
 
 /// One MCP server, as one source configures it.
@@ -141,6 +162,8 @@ pub struct SkillView {
     pub description: String,
     /// Its folder.
     pub path: String,
+    /// Each folder it is found at, as found.
+    pub locations: Vec<SkillLocationView>,
     /// The agents whose workers in the project find it by themselves; every other worker gets
     /// it from Brigadier.
     pub native_to: Vec<ProviderKind>,
@@ -149,6 +172,17 @@ pub struct SkillView {
     /// Claude Code switches its own skills off by name: switching this one off hides every
     /// skill Claude finds by itself under the same name.
     pub claude_off_by_name: bool,
+}
+
+/// One folder a skill is found at.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillLocationView {
+    pub path: String,
+    /// The skill's own folder, when this one is a link to it.
+    pub linked_to: Option<String>,
+    /// The agents whose workers in the project find it here by themselves.
+    pub native_to: Vec<ProviderKind>,
 }
 
 fn agent(provider: ProviderKind) -> Agent {
@@ -258,13 +292,45 @@ pub(crate) fn view(
                 name: skill.name.clone(),
                 description: skill.description.clone(),
                 path: skill.dir.display().to_string(),
+                locations: skill
+                    .entries
+                    .iter()
+                    .map(|(root, path)| SkillLocationView {
+                        path: path.display().to_string(),
+                        linked_to: std::fs::symlink_metadata(path)
+                            .is_ok_and(|meta| meta.file_type().is_symlink())
+                            .then(|| skill.dir.display().to_string()),
+                        native_to: [ProviderKind::Claude, ProviderKind::Codex]
+                            .into_iter()
+                            .filter(|provider| root.native(&worker_session(*provider, project)))
+                            .collect(),
+                    })
+                    .collect(),
                 claude_off_by_name: native_to.contains(&ProviderKind::Claude),
                 native_to,
                 off: settings.skills_off.contains(&skill.id),
             }
         })
         .collect();
-    IntegrationsView { servers, skills }
+    let problems = catalog
+        .problems
+        .iter()
+        .map(|problem| ProblemView {
+            id: problem.id.clone(),
+            name: problem.name.clone(),
+            source: problem.source.label().to_owned(),
+            project: problem.project.as_ref().map(|p| p.display().to_string()),
+            file: problem.file.display().to_string(),
+            line: problem.line.and_then(|line| u32::try_from(line).ok()),
+            read: problem.read.clone(),
+            error: problem.error.clone(),
+        })
+        .collect();
+    IntegrationsView {
+        servers,
+        skills,
+        problems,
+    }
 }
 
 /// The ids of the servers `entries` name (a name or an id each), or why one can't be given.
@@ -368,7 +434,7 @@ pub(crate) fn switched_off(
             // checkout it finds the project's skills there, not in the project's own folder.
             Agent::Codex => {
                 let in_checkout = session.project.filter(|_| session.in_checkout);
-                for dir in skill.entries.iter().chain([&skill.dir]) {
+                for dir in skill.entries.iter().map(|(_, dir)| dir).chain([&skill.dir]) {
                     let moved = in_checkout
                         .and_then(|project| dir.strip_prefix(project).ok())
                         .map(|relative| session.cwd.join(relative));
@@ -708,17 +774,19 @@ impl SessionManager {
         }
     }
 
-    /// Settings' catalog: the user's servers and skills, and `project`'s (its first repository).
+    /// Settings' catalog: the user's servers and skills, and `project`'s (its first repository)
+    /// once the user trusts its folder.
     pub async fn integrations_view(&self, project: Option<ProjectId>) -> Result<IntegrationsView> {
         let repo = match project {
-            Some(id) => Some(
-                self.core
-                    .project(&id)?
+            Some(id) => {
+                let project = self.core.project(&id)?;
+                let repo = project
                     .repos
                     .first()
-                    .map(|repo| PathBuf::from(&repo.path))
-                    .ok_or_else(|| Error::Invalid("the project has no repository".into()))?,
-            ),
+                    .map(|repo| repo.path.clone())
+                    .ok_or_else(|| Error::Invalid("the project has no repository".into()))?;
+                project.counts_trusted(&repo).then(|| PathBuf::from(repo))
+            }
             None => None,
         };
         let (registry, settings) = (self.registry(), self.core.settings());

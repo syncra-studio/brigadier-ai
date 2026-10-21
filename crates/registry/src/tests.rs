@@ -295,6 +295,97 @@ fn project_mcp_json_and_cursor_configs() {
 }
 
 #[test]
+fn unreadable_configs_and_entries_are_problems() {
+    let home = fixture("problems");
+    let project = home.join("app");
+    write(
+        &home.join(".cursor/mcp.json"),
+        r#"{"mcpServers": {
+            "figma": {"url": "ws://127.0.0.1:3845/mcp"},
+            "odd": {"type": "websocket", "command": "odd-mcp"},
+            "empty": {"args": ["x"]},
+            "ok": {"command": "ok-mcp"}}}"#,
+    );
+    write(
+        &project.join(".mcp.json"),
+        "{\n  \"mcpServers\": {\n    oops\n}",
+    );
+    write(
+        &home.join(".codex/config.toml"),
+        "[mcp_servers.fine]\ncommand = \"fine\"\n\n[mcp_servers.bad\n",
+    );
+    let roots = roots(&home, &[]);
+    let catalog = Catalog::read(&roots, Some(&project));
+    assert_eq!(ids(&catalog), ["cursor:user:ok"]);
+    let found: Vec<_> = catalog
+        .problems
+        .iter()
+        .map(|p| {
+            (
+                p.id.as_str(),
+                p.name.as_str(),
+                p.read.as_deref(),
+                p.line,
+                p.error.as_str(),
+            )
+        })
+        .collect();
+    let codex_file = format!(
+        "codex:user:file:{}",
+        home.join(".codex/config.toml").display()
+    );
+    let mcp_file = format!(
+        "claude:project:file:{}",
+        project.join(".mcp.json").display()
+    );
+    assert_eq!(
+        found,
+        [
+            (
+                codex_file.as_str(),
+                "config.toml",
+                None,
+                Some(4),
+                "The file couldn't be parsed (line 4)"
+            ),
+            (
+                "cursor:user:empty",
+                "empty",
+                None,
+                None,
+                "It has no command or url"
+            ),
+            (
+                "cursor:user:figma",
+                "figma",
+                Some("ws://127.0.0.1:3845/mcp"),
+                None,
+                "Unsupported address “ws://”: only http and https"
+            ),
+            (
+                "cursor:user:odd",
+                "odd",
+                Some("odd-mcp"),
+                None,
+                "Unknown type “websocket”"
+            ),
+            (
+                mcp_file.as_str(),
+                ".mcp.json",
+                None,
+                Some(3),
+                "The file couldn't be parsed (line 3)"
+            ),
+        ]
+    );
+    assert_eq!(catalog.problems[1].file, home.join(".cursor/mcp.json"));
+    assert_eq!(
+        catalog.problems[4].project.as_deref(),
+        Some(project.as_path())
+    );
+}
+
+#[test]
 fn codex_user_config_servers_skills_and_trust() {
     let home = fixture("codex");
     let codex_home = home.join("codex-home");
@@ -397,7 +488,7 @@ fn codex_project_layers_nearest_first() {
         &nested.join(".codex/config.toml"),
         "[mcp_servers.tool]\ncommand = \"./pkg-tool\"\n",
     );
-    let servers = servers::codex_layers(&roots(&home, &[]), &project, &nested);
+    let servers = servers::codex_layers(&roots(&home, &[]), &project, &nested, &mut Vec::new());
     let tool: Vec<&Server> = servers.iter().filter(|s| s.name == "tool").collect();
     assert_eq!(tool.len(), 1);
     assert_eq!(
@@ -647,6 +738,13 @@ fn skills_dedupe_by_real_folder_and_keep_same_names_apart() {
     let shared = catalog.skill("agents:user:shared").unwrap();
     assert_eq!(shared.roots, [SkillRoot::AgentsUser, SkillRoot::ClaudeUser]);
     assert_eq!(shared.dir, home.join(".agents/skills/shared"));
+    assert_eq!(
+        shared.entries,
+        [
+            (SkillRoot::AgentsUser, home.join(".agents/skills/shared")),
+            (SkillRoot::ClaudeUser, home.join(".claude/skills/shared")),
+        ]
+    );
 
     let worktree = home.join("worktrees/t");
     let claude = Session {

@@ -227,6 +227,25 @@ pub struct Server {
     pub signs_in: bool,
 }
 
+/// A server, or a whole config file, that couldn't be read: no session gets it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Problem {
+    /// The server's id, or for a file that couldn't be parsed, its source and path.
+    pub id: String,
+    /// The server's name, or the file's.
+    pub name: String,
+    pub source: Source,
+    pub project: Option<PathBuf>,
+    /// The config file.
+    pub file: PathBuf,
+    /// Its 1-based line in [`Self::file`], when known.
+    pub line: Option<usize>,
+    /// What was read of it (an address or command), if anything.
+    pub read: Option<String>,
+    /// Why, never quoting the config's text (it may hold a secret).
+    pub error: String,
+}
+
 /// How a session's agent is signed in to a server that [`Server::signs_in`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignIn {
@@ -266,6 +285,8 @@ pub enum FindError {
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
     pub servers: Vec<Server>,
+    /// The servers and config files that couldn't be read.
+    pub problems: Vec<Problem>,
     pub skills: Vec<Skill>,
     /// The user's own Codex `skills.config` entries (as JSON), which a session that switches
     /// skills off must keep: Codex's `skills.config` override replaces the whole list.
@@ -285,9 +306,11 @@ impl Catalog {
     }
 
     fn user(roots: &Roots) -> Self {
-        let codex = servers::codex_config(roots);
+        let mut problems = Vec::new();
+        let codex = servers::codex_config(roots, &mut problems);
         let mut catalog = Self {
-            servers: servers::user(roots, codex.as_ref()),
+            servers: servers::user(roots, codex.as_ref(), &mut problems),
+            problems,
             skills: Vec::new(),
             codex_skill_config: codex
                 .as_ref()
@@ -303,7 +326,8 @@ impl Catalog {
     }
 
     fn add_project(&mut self, roots: &Roots, project: &Path) {
-        self.servers.extend(servers::project(roots, project));
+        self.servers
+            .extend(servers::project(roots, project, &mut self.problems));
         skills::add_project(&mut self.skills, project);
     }
 
@@ -327,17 +351,7 @@ impl Catalog {
 
     /// Whether `session`'s agent finds `skill` by itself.
     pub fn skill_native(&self, skill: &Skill, session: &Session<'_>) -> bool {
-        skill.roots.iter().any(|root| match (root, session.agent) {
-            (SkillRoot::ClaudeUser, Agent::Claude)
-            | (SkillRoot::AgentsUser | SkillRoot::CodexUser, Agent::Codex) => true,
-            (SkillRoot::ClaudeProject(project), Agent::Claude) => {
-                Some(project.as_path()) == session.project
-            }
-            (SkillRoot::AgentsProject(project), Agent::Codex) => {
-                Some(project.as_path()) == session.project && session.in_checkout
-            }
-            _ => false,
-        })
+        skill.roots.iter().any(|root| root.native(session))
     }
 
     /// How `session`'s agent is signed in to `server`; `None` for one that doesn't sign in.
