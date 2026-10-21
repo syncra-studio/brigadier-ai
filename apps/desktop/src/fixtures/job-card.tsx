@@ -30,6 +30,15 @@ const FAILED: Job = {
   ],
 };
 
+// The checks failed and nothing works on them yet: the job waits, no step at work (#487).
+const STALLED: Job = {
+  steps: [
+    { id: "build", name: "Building", state: "done", startedAtMs: NOW - 50 * MIN, summary: "A worker built it" },
+    { id: "fix", name: "Fixing", state: "pending" },
+    { id: "checks", name: "Checks", state: "failed", startedAtMs: NOW - 19 * MIN, summary: "tools/full-checks.sh: exit 101" },
+  ],
+};
+
 const PHASED: Job = {
   phase: { number: 2, of: 4, title: "Implement Windows paths" },
   steps: [
@@ -89,6 +98,7 @@ function Fixture() {
           shimmer: [...column.querySelectorAll<HTMLElement>("[data-stage].shimmer")].map((name) => name.textContent),
           bar: column.querySelector('[data-slot="job-progress"] [role="progressbar"]')?.getAttribute("aria-valuenow") ?? null,
           red: column.querySelector('[data-slot="job-progress"] .text-destructive') !== null,
+          spinning: column.querySelector('[data-slot="job-progress"] [class*="animate-spin"]') !== null,
           schedule: column.querySelector('[data-slot="schedule-card"]')?.textContent ?? null,
         },
       ]),
@@ -117,6 +127,10 @@ function Fixture() {
       <Column id="failed">
         <ContextCard />
         {show(FAILED)}
+      </Column>
+      <Column id="stalled">
+        <ContextCard />
+        {show(STALLED)}
       </Column>
       <Column id="phased">
         <ContextCard />
